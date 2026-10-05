@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791239434605,
+  "lastUpdate": 1791240423521,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2394,6 +2394,48 @@ window.BENCHMARK_DATA = {
             "value": 101.399489,
             "unit": "ms",
             "extra": "median of 5 runs: 100.807, 100.971, 101.399, 101.788, 102.516 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "51996375944338391ef5d1c219dfe34f12f0937d",
+          "message": "Rename the rest of the tracker text: comments, PRs, labels, repo descriptions\n\ntools/tracker-rename-rest.mjs renames, from charter to purlis, what\ntools/tracker-rename.mjs (RN-12) leaves: issue and PR comments, PR review\ncomments, PR reviews' own text, PR titles and bodies, label names and\ndescriptions, and the\nrepos' descriptions. It imports RN-12's renameText, so the rules and the\nkeep-rules are RN-12's own (D-RN12-1..9), and it works the same way: a\nread-only dry run by default that prints a diff per item, counts by kind\nand by rule, and accounts for every occurrence; and `--apply --from\n<plan>`, which re-reads everything and refuses the whole run if any\nplanned item changed or is gone, re-reads each item just before its\nwrite, skips what already reads as done (so a rerun resumes), PATCHes\nonly the changed fields, waits --delay-ms (7.5s) between writes and\nhonours Retry-After.\n\nDecided in implementation:\n- D-RN12b-1 / D-RN12b-9: in the shared rules, every HTML comment stays\n  byte for byte, for every kind, RN-12's issues and milestones included.\n  That covers <!-- charter-save --> (what forge::pr::is_ours reads), the\n  BEGIN/END charter change markers that `change push` finds, the\n  <!-- mutants-report dirty: [...] --> record tools/mutants-report.py\n  parses (issue 480), and quoted fixtures (issue 712).\n- D-RN12b-2: labels the code finds by name keep their names\n  (CODE_LABELS: bug, enhancement, type:adr from the issue templates,\n  dependencies and github_actions for Dependabot, ws:* and\n  charter::ws::* from `ws todo promote`); their descriptions are\n  renamed. None of them says charter today. No code or workflow in\n  either repo reads via-charter-report or gap, so both are renamed.\n  --keep-label adds one.\n- D-RN12b-3: a repo description names the moved repos by their new\n  slugs (diazoxide/charter becomes purlis/purlis), as #1274 asks. The\n  old slug stays as history everywhere else.\n- D-RN12b-4: in the shared rules, `-p charter-app` / `--package\n  charter-app` is the app crate and becomes purlis-app (RN-13, V93c),\n  not the repo's name. This also changes RN-12's own plan for a\n  handful of issues, so its dry run should be run again before apply.\n- D-RN12b-5: comments on M60 issues and PRs in M60 stay as written,\n  as RN-12 leaves M60's issues.\n- D-RN12b-6: in the shared rules, a line where two different old names\n  would read the same afterwards (\"called charter, not charter-app\" as\n  \"called purlis, not purlis\") stays as written, counted as `collapse`\n  and listed in both dry runs for a person to word by hand.\n- D-RN12b-7: in the shared rules, old-plugin-id also keeps `charter-app`\n  said as a plugin's name (\"the plugin is called ..., not charter-app\",\n  \"the bundled `charter-app` plugin\"), short of a sentence's end.\n- D-RN12b-10: the collapse check leaves `cli` edits out (a command\n  names no product), and \"the Python charter\" / \"the old charter\" are\n  kept as retired-python, so the rest of such a line is still renamed.\n- D-RN12b-11: RN-12 rule misses, now kept: the persona's charter as\n  \"the charter body/prose/concatenation\", \"charter-format\" and \"the\n  charter (or personas/<name>/...)\"; `op-item: charter-<persona>`\n  (1Password titles still say charter, issue 1275); and the GitLab label\n  `charter::ws::<name>` the code still writes.\n- D-RN12b-8: a PR review's own text is covered (GET/PUT\n  pulls/{n}/reviews/{id}). One paginated GraphQL read finds the PRs\n  that have reviews, and only those are listed through the paginated\n  reviews endpoint.\n\nTested in node:test against a stand-in gh, per item kind. The real\napply waits for the operator's approval of the dry run.\n\nRefs #1274\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T02:45:48+04:00",
+          "tree_id": "c0bad4d2fe962e2c49864673f0e11955a0c8e15e",
+          "url": "https://github.com/purlis/purlis/commit/51996375944338391ef5d1c219dfe34f12f0937d"
+        },
+        "date": 1791240422743,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.496493,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.469, 0.492, 0.496, 0.510, 0.537 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.103396500000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.511, 16.809, 17.103, 17.198, 17.222 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.227304,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.225, 103.849, 104.227, 104.372, 104.723 ms"
           }
         ]
       }
