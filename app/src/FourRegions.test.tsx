@@ -672,7 +672,7 @@ describe("the status line", () => {
             severity: "warn",
             subject: "reinit",
             detail: "1 workspace is behind the current layout: beta",
-            remedy: "charter ws reinit --all",
+            way: { kind: "fix", id: "workspace-reinit" },
           },
         ],
         stopped: null,
@@ -688,7 +688,7 @@ describe("the status line", () => {
     const drawer = await screen.findByRole("dialog", { name: "Alerts" });
     const plane = within(drawer).getByRole("region", { name: "Alerts in plane" });
     expect(plane).toHaveTextContent("1 workspace is behind the current layout: beta");
-    expect(plane).toHaveTextContent("charter ws reinit --all");
+    expect(within(plane).getByRole("button", { name: "Reinit" })).toBeVisible();
     // Opening it asked again, so it lists what is true when it is looked at.
     await vi.waitFor(() =>
       expect(asked.filter((one) => one.cmd === "alerts_everywhere").length).toBeGreaterThan(before),

@@ -68,10 +68,17 @@ function reading(raw: unknown): Reading {
  * keeps them here, one per subject, and the drawer draws them above the projects.
  */
 /**
- * One thing said about this machine: an alert, and — when its fix is a setting — the Settings
- * group it is made in, by the group's address (`you.text`; SE-22), which the drawer links to.
+ * One thing said about this machine: an alert and its way out (NO-6) — when its fix is a
+ * setting, the Settings group it is made in, by the group's address (`you.text`; SE-22), which
+ * the drawer links to; for the theme file, Use built-in. One with neither can be dismissed for
+ * this launch. `remedy` is a sentence, never a command: the drawer reads it after the detail.
  */
-export type MachineAlert = AlertRow & { settings?: string };
+export type MachineAlert = Pick<AlertRow, "severity" | "subject" | "detail"> & {
+  remedy: string;
+  settings?: string;
+  /** The theme file's way out: move it aside and draw the built-in ({@link usingTheBuiltIn}). */
+  builtIn?: true;
+};
 
 const said = new Map<string, MachineAlert>();
 let listed: MachineAlert[] = [];
@@ -120,6 +127,15 @@ export function forgetTheirTheme() {
 }
 
 /**
+ * **The theme file was moved aside** (NO-6, Use built-in): from here on the window has no theme
+ * of the operator's, and nothing more to say about one. The caller redraws what is in force.
+ */
+export function usingTheBuiltIn() {
+  theirs = { theme: undefined };
+  sayAboutThisMachine("theme", undefined);
+}
+
+/**
  * **The operator's own theme, or none** (M6.7) — `charter/theme.json`, the address
  * `docs/design-system.md` gave it, and until now read by nothing.
  *
@@ -137,7 +153,8 @@ export function theirTheme(reading: Reading = atCreation().theme): Theme | undef
     sayAboutThisMachine("theme", {
       severity: "warn",
       detail: `${reading.trouble} — the window is drawn in the built-in theme`,
-      remedy: `fix ${where}, or delete it to keep the built-in`,
+      remedy: `fix ${where}, or use the built-in, which moves it aside`,
+      builtIn: true,
     });
     return undefined;
   }
@@ -148,6 +165,7 @@ export function theirTheme(reading: Reading = atCreation().theme): Theme | undef
       severity: "warn",
       detail: `${where}: ${complaints.map((one) => one.said).join("; ")}`,
       remedy: `fix ${where}; everything else in it is drawn`,
+      builtIn: true,
     });
   }
   return theme;

@@ -663,6 +663,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
         reading={{ at: "read", planes: [{ plane: "/home/dev/plane", stopped: null, alerts: [] }] }}
         planes={["/home/dev/plane"]}
         nameOf={() => "plane"}
+        does={{ openSettings() {}, openProject() {}, openSaving() {}, reread() {} }}
       />,
     );
     expect(await reachableByKeyboard()).toEqual(['button "Close"']);

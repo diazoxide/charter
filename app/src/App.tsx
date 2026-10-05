@@ -54,7 +54,7 @@ import {
   type Ran,
 } from "./actions";
 import { countOf, useAlerts } from "./alerts";
-import { AlertsDrawer } from "./AlertsDrawer";
+import { AlertsDrawer, type AlertsDrawerDoes } from "./AlertsDrawer";
 import { useAboutThisMachine } from "./windowprefs";
 import { ApprovePlane } from "./ApprovePlane";
 import { drawThemeFor, Extensions } from "./Extensions";
@@ -834,20 +834,38 @@ function App() {
   );
 
   /**
-   * **Follows a link into a You group** (SE-22, `settings/links.ts`) — the only level the
-   * window's own notices name. The project in front opens Settings at You on its strip
-   * (`PlaneView`'s `settingsLinkAsked`); with none, the group is shown at You's place and
-   * Settings is drawn where the opener is. Never through Settings… (⌘,), which opens at the
-   * level that is focused rather than the one the link names.
+   * **Follows a link into a You group, or into a project's** (SE-22, `settings/links.ts`). A You
+   * group opens on the strip of the project in front (`PlaneView`'s `settingsLinkAsked`); with
+   * none, the group is shown at You's place and Settings is drawn where the opener is. A
+   * project's group — what an Alerts-drawer row about that project names (NO-6) — brings that
+   * project to the front and opens its Settings there. Never through Settings… (⌘,), which
+   * opens at the level that is focused rather than the one the link names.
    */
-  const openSettingsAt = useCallback((group: string) => {
-    if (levelOf(group) !== "you") return;
+  const openSettingsAt = useCallback((group: string, about?: PlaneId) => {
+    const level = levelOf(group);
+    if (level === "project" && about !== undefined) {
+      setShowing({ at: "plane", plane: about });
+      setSettingsLinkAsk((was) => ({ plane: about, link: { group }, at: (was?.at ?? 0) + 1 }));
+      return;
+    }
+    if (level !== "you") return;
     const plane = inFrontNow.current;
     if (plane === undefined) {
       linkToGroup(settingsPlace("you"), group);
       setSettingsAlone(true);
     } else setSettingsLinkAsk((was) => ({ plane, link: { group }, at: (was?.at ?? 0) + 1 }));
   }, []);
+
+  /** What the Alerts drawer's rows do in the window (NO-6). */
+  const alertsDo = useMemo<AlertsDrawerDoes>(
+    () => ({
+      openSettings: openSettingsAt,
+      openProject: (path: string) => void openInto(path, true),
+      openSaving: windowDoes.openSaving,
+      reread: rereadAlerts,
+    }),
+    [openInto, openSettingsAt, rereadAlerts, windowDoes],
+  );
 
   // Which plane this launch opened — asked once, and the answer the first tab is built from.
   // The core resolved the working directory once to get it; nothing asks again.
@@ -1938,7 +1956,7 @@ function App() {
         aboutThisMachine={aboutThisMachine}
         planes={planes}
         nameOf={calledOn}
-        onOpenSettings={openSettingsAt}
+        does={alertsDo}
       />
 
       {/* No project in front: the opener, and nothing else. "No sessions" would be true and

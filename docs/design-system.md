@@ -166,7 +166,10 @@ first. `theme.ts`'s `load` judges it token by token, and whatever it had to put 
 misspelled token, a value that is not hex, a file that is not JSON — is said in the alerts
 drawer under **This machine**, with the file's path. **It wins over an extension's theme**: it
 is the one theme the operator wrote for this machine themselves, so an approved extension's
-contribution does not repaint over it. Delete the file to have the extension's.
+contribution does not repaint over it. Delete the file to have the extension's. The drawer's
+row about it offers **Use built-in…** (NO-6 #1238), which asks first and then moves the file
+aside to `theme.aside.json` (or the next free `theme.aside-N.json`), never over another file,
+and draws what is in force without it.
 
 **A theme switched while the window is up reaches the terminal too.** The stylesheet follows by
 itself — `apply` rewrites the custom properties it reads — but xterm was handed an object when a

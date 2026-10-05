@@ -5,12 +5,16 @@ import { userEvent } from "@testing-library/user-event";
 import type { AlertRow, PlaneAlerts } from "./bindings";
 import type { AlertsReading } from "./alerts";
 import { AlertsDrawer } from "./AlertsDrawer";
+import type { MachineAlert } from "./windowprefs";
 
 /**
  * **The alerts drawer**, on the component: what it lists for each project, and the states in
  * which charter has less than a full answer. The window's wiring — the status line's button
- * opening it, the core asked for every project — is in `FourRegions.test.tsx`.
+ * opening it, the core asked for every project — is in `FourRegions.test.tsx`, and what each
+ * row's way out does in the window is `AlertsDrawer.window.test.tsx`'s.
  */
+
+const DOES = { openSettings() {}, openProject() {}, openSaving() {}, reread() {} };
 
 afterEach(cleanup);
 
@@ -23,7 +27,7 @@ function row(over: Partial<AlertRow> = {}): AlertRow {
     severity: "warn",
     subject: "front door",
     detail: "ghost — no such persona",
-    remedy: "charter persona default <name>",
+    way: { kind: "settings", group: "project.general" },
     ...over,
   };
 }
@@ -34,35 +38,45 @@ function plane(at: string, alerts: AlertRow[], stopped: string | null = null): P
 
 function draw(reading: AlertsReading, planes: string[] = [A, B]) {
   return render(
-    <AlertsDrawer open onOpenChange={() => {}} reading={reading} planes={planes} nameOf={nameOf} />,
+    <AlertsDrawer
+      open
+      onOpenChange={() => {}}
+      reading={reading}
+      planes={planes}
+      nameOf={nameOf}
+      does={DOES}
+    />,
   );
 }
 
 const project = (name: string) => screen.getByRole("region", { name: `Alerts in ${name}` });
 
 describe("what the window says about this machine", () => {
-  it("is listed above the projects, with what fixes it", () => {
+  it("is listed above the projects, with what to do about it in words", () => {
     render(
       <AlertsDrawer
         open
         onOpenChange={() => {}}
         reading={{ at: "read", planes: [plane(A, [])] }}
         aboutThisMachine={[
-          row({
+          {
+            severity: "warn",
             subject: "layout",
             detail: 'layout.json: "minimap" is not a region this charter has',
             remedy: "fix layout.json",
-          }),
+          } satisfies MachineAlert,
         ]}
         planes={[A]}
         nameOf={nameOf}
+        does={DOES}
       />,
     );
 
     const machine = screen.getByRole("region", { name: "Alerts about this machine" });
     expect(machine).toHaveTextContent("This machine");
     expect(machine).toHaveTextContent('"minimap" is not a region this charter has');
-    expect(within(machine).getByText("fix layout.json").tagName).toBe("CODE");
+    expect(machine).toHaveTextContent("fix layout.json");
+    expect(machine.querySelector("code")).toBeNull();
     const regions = screen.getAllByRole("region");
     expect(regions.indexOf(machine)).toBeLessThan(regions.indexOf(project("alpha-plane")));
   });
@@ -75,7 +89,7 @@ describe("what the window says about this machine", () => {
 });
 
 describe("the alerts drawer", () => {
-  it("lists every project the window holds, each with its own alerts and what fixes them", () => {
+  it("lists every project the window holds, each with its own alerts and their ways out", () => {
     draw({
       at: "read",
       planes: [
@@ -85,7 +99,7 @@ describe("the alerts drawer", () => {
             severity: "bad",
             subject: "plane root",
             detail: "beta-plane · memory commit not pushed",
-            remedy: "save the plane, or move the work to a workspace clone",
+            way: { kind: "saving" },
           }),
         ]),
       ],
@@ -97,7 +111,8 @@ describe("the alerts drawer", () => {
     const alpha = project("alpha-plane");
     expect(alpha).toHaveTextContent("front door");
     expect(alpha).toHaveTextContent("ghost — no such persona");
-    expect(within(alpha).getByText("charter persona default <name>").tagName).toBe("CODE");
+    expect(within(alpha).getByRole("button", { name: "Fix it in Settings" })).toBeVisible();
+    expect(alpha.querySelector("code")).toBeNull();
     expect(alpha).not.toHaveTextContent("memory commit");
 
     const beta = project("beta-plane");
@@ -178,6 +193,7 @@ describe("the alerts drawer", () => {
             reading={{ at: "read", planes: [plane(A, [])] }}
             planes={[A]}
             nameOf={nameOf}
+            does={DOES}
           />
         </>
       );

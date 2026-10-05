@@ -169,7 +169,8 @@ primitive, only a native element and native buttons (`tabIndex={0}` on each, for
 argument above about props being the primitive's own does not apply; its props are the line's
 own words instead. What it adds is a type that refuses a line with no way out: `fixes`, `link`,
 `copy` or `onDismiss`, at least one, and always a `cause`. `at="pane"` draws it in a pane's
-corner, over the terminal and taking no row; the default is the band under the strip.
+corner, over the terminal and taking no row; `at="drawer"` draws it as a row of the alerts
+drawer (NO-6 #1238); the default is the band under the strip.
 `Notice.guard.test.ts` fails on a hand-built one.
 
 Under the strip, Notices are stacked by `NoticeBand` (V91i, NO-2 #1229): at most two stand, the
@@ -292,7 +293,10 @@ shadcn's token names and would have emitted no CSS here (`design-system.md`). It
 parts from the four dialogs below on one decision: **a click outside closes it**, because a
 drawer asks nothing and a stray click cannot answer anything. Radix hands focus back only to a
 `Dialog.Trigger`, and the button that opens this lives in a project's status line while the drawer
-is the window's, so the drawer remembers where the keyboard was and puts it back itself.
+is the window's, so the drawer remembers where the keyboard was and puts it back itself. Each
+of its rows is a Notice with the way out the core gives that kind of alert (NO-6 #1238): a
+Settings group, a fix of the doctor's registry, another project or the Saving view. A press that
+leaves the drawer closes it first; a fix keeps it open and says on the row why it was refused.
 
 And the **question a relaunch asks** (`app/src/RelaunchAsk.tsx`, charter-app#250): an
 `AlertDialog`, because it arrives without being asked for. **"Reopen all sessions" is the

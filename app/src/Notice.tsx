@@ -34,7 +34,8 @@ import { createPortal } from "react-dom";
  * `tone` is `news` (nothing is wrong, the operator is being told) or `trouble` (something went
  * wrong), and it is only the look: a Notice is always a polite `status`, because it stands
  * until it is dealt with and an `alert` would interrupt a screen reader on every relaunch. `at` is where it stands: under the strip (`band`, the
- * default), or in a pane's corner over its terminal, where it takes no row (`pane`).
+ * default), in a pane's corner over its terminal, where it takes no row (`pane`), or as a row of
+ * the Alerts drawer (`drawer`, NO-6).
  *
  * `guard.test` in this folder fails on a standing line built any other way, so a new dead end
  * cannot come back in.
@@ -67,7 +68,7 @@ export type NoticeProps = WayOut & {
   /** What the line is about, stably: what a dismissal will be keyed by. */
   cause: string;
   tone?: "news" | "trouble";
-  at?: "band" | "pane";
+  at?: "band" | "pane" | "drawer";
   /** The accessible name, where the sentence alone would not make a good one. */
   label?: string;
   /** The sentence (and anything else the line says before its ways out). */

@@ -110,6 +110,54 @@ pub fn theme_path(config_root: &Path) -> PathBuf {
     crate::machine::dir(config_root).join(THEME)
 }
 
+/// **Use built-in** (NO-6): the operator's theme file moved aside to `theme.aside.json`, or
+/// the next free `theme.aside-N.json`, **never over anything** and never deleted, so the next
+/// launch draws what is in force without it and the file is still there to mend. Answers where
+/// it went. Only on the operator's press, after the window asked. Refused, moving nothing, when
+/// there is no theme file or it is not a plain file (a link is moved by nobody here).
+pub fn use_built_in_theme(config_root: &Path) -> Result<String, String> {
+    let file = theme_path(config_root);
+    match file.symlink_metadata() {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!(
+                "there is no theme file at {}, so the built-in is already in force",
+                file.display()
+            ));
+        }
+        Err(e) => return Err(format!("charter could not look at {}: {e}", file.display())),
+        Ok(meta) if !meta.is_file() => {
+            return Err(format!(
+                "{} is not a plain file, so charter moves nothing",
+                file.display()
+            ));
+        }
+        Ok(_) => {}
+    }
+    let dir = crate::machine::dir(config_root);
+    for n in 1..=99 {
+        let to = if n == 1 {
+            dir.join("theme.aside.json")
+        } else {
+            dir.join(format!("theme.aside-{n}.json"))
+        };
+        match crate::guest::rename_new(&file, &to) {
+            Ok(true) => return Ok(to.display().to_string()),
+            Ok(false) => continue,
+            Err(e) => {
+                return Err(format!(
+                    "charter could not move {} aside: {e}",
+                    file.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "every name from theme.aside.json to theme.aside-99.json is taken beside {}, so nothing \
+         was moved",
+        file.display()
+    ))
+}
+
 /// The window's layout, as a document the window can load, or why not.
 ///
 /// **This never fails**, because its only caller is a launch. No file is a first launch; a file
@@ -533,6 +581,46 @@ mod tests {
 
         put(home.path(), THEME, "\"charter-light\"");
         assert!(trouble(&read_theme(home.path())).contains("not a JSON object"));
+    }
+
+    // ---------------------------------------------------------------- use the built-in
+
+    /// **Use built-in** (NO-6): the operator's theme file is moved aside, never deleted and
+    /// never over another file, so the next launch draws what is in force without it and the
+    /// file is still theirs to mend.
+    #[test]
+    fn using_the_built_in_moves_the_theme_aside_and_never_over_a_file() {
+        let home = home();
+        put(home.path(), THEME, "[[[ not json");
+        let dir = crate::machine::dir(home.path());
+
+        let first = use_built_in_theme(home.path()).expect("moved aside");
+        assert_eq!(first, dir.join("theme.aside.json").display().to_string());
+        assert!(!read_theme(home.path()).found);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "[[[ not json");
+
+        put(home.path(), THEME, "{}");
+        let second = use_built_in_theme(home.path()).expect("moved aside again");
+        assert_eq!(second, dir.join("theme.aside-2.json").display().to_string());
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "[[[ not json");
+    }
+
+    #[test]
+    fn using_the_built_in_with_no_theme_file_or_a_link_moves_nothing() {
+        let home = home();
+        let none = use_built_in_theme(home.path()).expect_err("nothing to move");
+        assert!(none.contains("no theme file"), "{none}");
+
+        #[cfg(unix)]
+        {
+            let target = home.path().join("elsewhere.json");
+            std::fs::write(&target, "{}").unwrap();
+            std::fs::create_dir_all(crate::machine::dir(home.path())).unwrap();
+            std::os::unix::fs::symlink(&target, theme_path(home.path())).unwrap();
+            let link = use_built_in_theme(home.path()).expect_err("a link is not moved");
+            assert!(link.contains("not a plain file"), "{link}");
+            assert!(theme_path(home.path()).symlink_metadata().is_ok());
+        }
     }
 
     // ---------------------------------------------------------------- write

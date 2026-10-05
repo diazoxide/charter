@@ -27,8 +27,45 @@ pub(crate) struct AlertRow {
     subject: String,
     /// What is wrong.
     detail: String,
-    /// The command, or the step, that fixes it.
-    remedy: String,
+    /// **What fixes it, in the window** (NO-6, #1238): the drawer draws it as the row's button,
+    /// in place of the command the terminal status line names.
+    way: AlertWay,
+}
+
+/// **An alert's way out**, decided by the core's kind of alert ([`way_out`]) and never by its
+/// words: the drawer turns each into one button.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub(crate) enum AlertWay {
+    /// A Settings group of the project the alert is about, by its address (SE-22).
+    Settings { group: String },
+    /// A fix of the doctor's registry, by the id `charter doctor --fix` takes (FX-1).
+    Fix { id: String },
+    /// Another project to open: the one whose `workspaces/` this one is nested in.
+    OpenProject { path: String },
+    /// The project's Saving view, where a save is resolved.
+    Saving,
+}
+
+/// The way out of one of the core's alerts.
+fn way_out(alert: &alerts::Alert) -> AlertWay {
+    use charter_core::doctor::{SettingsGroup, fix::FixId};
+    match alert {
+        // The version lock, the update channel and the default persona's picker are all in
+        // Project › General — where the doctor's `version lock` and `front door` rows link too.
+        alerts::Alert::PinBesideDev { .. }
+        | alerts::Alert::PinDrift { .. }
+        | alerts::Alert::FrontDoor { .. } => AlertWay::Settings {
+            group: SettingsGroup::General.id().to_owned(),
+        },
+        alerts::Alert::Reinit { .. } => AlertWay::Fix {
+            id: FixId::WorkspaceReinit.id().to_owned(),
+        },
+        alerts::Alert::NestedPlane { outer, .. } => AlertWay::OpenProject {
+            path: outer.display().to_string(),
+        },
+        alerts::Alert::PlaneRoot { .. } => AlertWay::Saving,
+    }
 }
 
 /// One open project's alerts.
@@ -109,7 +146,7 @@ fn save_blocked(root: &Path, now: f64) -> Option<AlertRow> {
         severity: "bad".to_owned(),
         subject: "save".to_owned(),
         detail: format!("the plane's save is blocked: {why}"),
-        remedy: "Open the Saving tab: resolve it in a chat, or in a terminal".to_owned(),
+        way: AlertWay::Saving,
     })
 }
 
@@ -145,7 +182,7 @@ fn rows(root: &Path) -> (Vec<AlertRow>, Option<String>) {
                     .to_owned(),
                     subject: shown.subject,
                     detail: shown.detail,
-                    remedy: shown.remedy,
+                    way: way_out(&alert),
                 }
             })
             .chain(save_blocked(root, now()))
@@ -173,7 +210,63 @@ mod tests {
         assert_eq!(alerts[0].severity, "warn");
         assert_eq!(alerts[0].subject, "front door");
         assert_eq!(alerts[0].detail, "ghost — no such persona");
-        assert_eq!(alerts[0].remedy, "charter persona default <name>");
+        assert_eq!(
+            alerts[0].way,
+            AlertWay::Settings {
+                group: "project.general".to_owned()
+            }
+        );
+    }
+
+    /// **Each row carries its way out** (NO-6, #1238): where the window mends it, by the core's
+    /// own kind of alert rather than by its words.
+    #[test]
+    fn each_kind_of_alert_has_its_way_out() {
+        let general = AlertWay::Settings {
+            group: "project.general".to_owned(),
+        };
+        let way = |alert: alerts::Alert| way_out(&alert);
+        assert_eq!(
+            way(alerts::Alert::PinBesideDev {
+                pinned: "1.0.0".into()
+            }),
+            general
+        );
+        assert_eq!(
+            way(alerts::Alert::PinDrift {
+                running: "2.0.0".into(),
+                pinned: "1.0.0".into()
+            }),
+            general
+        );
+        // The same fix id `charter doctor --fix` takes, so the drawer and the CLI do one thing.
+        assert_eq!(
+            way(alerts::Alert::Reinit {
+                stale: vec!["ide".into()]
+            }),
+            AlertWay::Fix {
+                id: "workspace-reinit".to_owned()
+            }
+        );
+        assert_eq!(
+            way(alerts::Alert::NestedPlane {
+                inner: "/home/dev/outer/workspaces/inner".into(),
+                outer: "/home/dev/outer".into(),
+            }),
+            AlertWay::OpenProject {
+                path: "/home/dev/outer".to_owned()
+            }
+        );
+        assert_eq!(
+            way(alerts::Alert::PlaneRoot {
+                name: "plane".into(),
+                dirty: false,
+                detached: true,
+                off: None,
+                memory: None,
+            }),
+            AlertWay::Saving
+        );
     }
 
     #[test]
@@ -266,6 +359,7 @@ mod tests {
             (row.severity.as_str(), row.subject.as_str()),
             ("bad", "save")
         );
+        assert_eq!(row.way, AlertWay::Saving);
         assert!(row.detail.contains("secret-shaped"), "{row:?}");
     }
 

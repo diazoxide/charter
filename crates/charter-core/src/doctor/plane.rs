@@ -164,7 +164,10 @@ pub(super) fn front_door(d: &Doctor) -> Row {
                  and every session starts with no identity"
             ),
             format!("charter persona default <name>  (or `charter persona create {value}`)"),
-        );
+        )
+        // The default persona is picked in Project › General, where the Alerts drawer's
+        // front-door row links too (NO-6).
+        .in_settings(super::SettingsGroup::General);
     }
     let others = super::memory::list_personas(&d.root)
         .unwrap_or_default()

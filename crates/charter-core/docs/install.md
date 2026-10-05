@@ -150,6 +150,17 @@ Fix button, because it goes over the network. It is offered when the inventory i
 `charter.toml` declares a forge. It runs `charter discover`, which asks that forge, adds the
 repos it lists to `inventory/repos.json`, and rewrites charter's generated `docs/topology.md`.
 
+**`workspace-reinit` is applied by name**, as `charter doctor --fix workspace-reinit` or the
+Alerts drawer's Reinit button on its `reinit` row. No doctor row offers it yet, so bare `--fix`
+does not run it. It runs `charter workspace reinit --all`, which brings every workspace behind
+the current layout up to it and never removes your content. It writes each workspace's missing
+baseline files and its structure stamp, refreshes the live block charter manages in the
+project's `.gitignore`, and rewires charter's harness layer in each workspace and in each clone
+and worktree under it, including charter's lines in a clone's `.git/info/exclude`. It removes
+only the layer files charter generated and the project no longer declares; a file charter did
+not write is left untouched. `charter reinit` (the `reinit` fix) is the project root's and
+never looks inside a workspace.
+
 `charter doctor --fix <id>` applies only the fix a row names: `charter doctor --json` prints
 that id as the row's `fix`, and `charter doctor --help` lists the ids. Each fix says what it
 changed, or why it refused. On a project this charter can only read, `--fix` is refused and

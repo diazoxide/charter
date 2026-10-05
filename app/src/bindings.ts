@@ -1620,6 +1620,12 @@ export const commands = {
 	 *  dismissing in different projects both keep theirs. An empty list takes the project out.
 	 */
 	setDismissed: (plane: PlaneId, causes: string[]) => typedError<null, string>(__TAURI_INVOKE("set_dismissed", { plane, causes })),
+	/**
+	 *  **Use built-in** (NO-6): moves the operator's theme file aside to `theme.aside.json`, never
+	 *  over another file, so what is in force without it is drawn from here on. Answers where the
+	 *  file went.
+	 */
+	useBuiltInTheme: () => typedError<string, string>(__TAURI_INVOKE("use_built_in_theme")),
 	/**  One secret's value, to show in the window for a while ([`reveal`]). */
 	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
 	/**
@@ -1686,9 +1692,26 @@ export type AlertRow = {
 	subject: string,
 	/**  What is wrong. */
 	detail: string,
-	/**  The command, or the step, that fixes it. */
-	remedy: string,
+	/**
+	 *  **What fixes it, in the window** (NO-6, #1238): the drawer draws it as the row's button,
+	 *  in place of the command the terminal status line names.
+	 */
+	way: AlertWay,
 };
+
+/**
+ *  **An alert's way out**, decided by the core's kind of alert ([`way_out`]) and never by its
+ *  words: the drawer turns each into one button.
+ */
+export type AlertWay = 
+/**  A Settings group of the project the alert is about, by its address (SE-22). */
+{ kind: "settings"; group: string } | 
+/**  A fix of the doctor's registry, by the id `charter doctor --fix` takes (FX-1). */
+{ kind: "fix"; id: string } | 
+/**  Another project to open: the one whose `workspaces/` this one is nested in. */
+{ kind: "open-project"; path: string } | 
+/**  The project's Saving view, where a save is resolved. */
+{ kind: "saving" };
 
 /**
  *  One memory in a store's `archive/`, as the window's archive tab lists it and reads it

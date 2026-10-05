@@ -351,8 +351,23 @@ fn strerror(e: &std::io::Error) -> String {
 /// write nothing (FR-24); the read-only check leaves it to them, because reading through the
 /// link would answer a file that is not the project's.
 pub fn manifest_escapes(root: &Path) -> bool {
-    occupied(&crate::names::manifest(root))
-        && gate(root, crate::names::manifest_name(root)).is_err()
+    escaping_manifest(root).is_some()
+}
+
+/// The refusal of a `charter.toml` that is a link out of the project or into its `.git`, in
+/// the words that name the link, or `None` when it is not one ([`manifest_escapes`]).
+pub fn escaping_manifest(root: &Path) -> Option<String> {
+    let (rel, lands) = gate(root, crate::names::manifest_name(root)).err()?;
+    if !occupied(&crate::names::manifest(root)) {
+        return None;
+    }
+    Some(format!(
+        "{} resolves to {}, which is outside this project or inside its .git — charter reads \
+         and writes nothing through it. Point it inside the project or remove it yourself, then \
+         run the command again. Nothing was written.",
+        crate::shown::readable(&rel, 1024),
+        crate::shown::readable(&lands, 1024)
+    ))
 }
 
 /// The refusal a command meets on a plane whose format this charter cannot place
@@ -362,18 +377,9 @@ fn refused(root: &Path) -> Option<Outcome> {
     // `charter.toml` is the format gate (V5, FR-24). One that is a link out of the project, or into
     // its `.git`, is somebody else's file: charter reads nothing through it, and writes nothing
     // at all, because every other file would belong to a project whose format it cannot see.
-    if let Err((rel, lands)) = gate(root, crate::names::manifest_name(root)) {
-        if !occupied(&crate::names::manifest(root)) {
-            return None;
-        }
+    if let Some(why) = escaping_manifest(root) {
         return Some(Outcome {
-            said: vec![Say::Err(format!(
-                "{} resolves to {}, which is outside this project or inside its .git — charter \
-                 reads and writes nothing through it. Point it inside the project or remove it \
-                 yourself, then run the command again. Nothing was written.",
-                crate::shown::readable(&rel, 1024),
-                crate::shown::readable(&lands, 1024)
-            ))],
+            said: vec![Say::Err(why)],
             code: 1,
             asks_forge: None,
         });

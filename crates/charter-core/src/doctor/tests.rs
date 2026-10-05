@@ -3062,6 +3062,20 @@ fn a_row_whose_fix_is_a_setting_names_its_settings_group() {
     assert_eq!(one(&root, "git identity").settings, None);
 }
 
+/// **The rows the Alerts drawer also draws link where the drawer does** (NO-6): a pin this
+/// charter does not meet and a front door naming no persona are both mended in Project ›
+/// General, where the version lock and the default persona's picker are. A pin that is fine
+/// names nothing.
+#[test]
+fn the_rows_the_alerts_drawer_also_draws_name_the_group_it_links_to() {
+    assert_eq!(pinned("9.0.0").settings, Some(SettingsGroup::General));
+    assert_eq!(pinned(crate::adopt::app_version()).settings, None);
+    let (_d, root) = plane("[persona]\ndefault = \"ghost\"\n");
+    let r = one(&root, "front door");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(r.settings, Some(SettingsGroup::General));
+}
+
 #[test]
 fn a_state_folder_under_both_names_is_left_to_rename_local() {
     // RN-2a: the state folders are this machine's, and `rename-local` reconciles them; the

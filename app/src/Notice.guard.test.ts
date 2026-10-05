@@ -38,7 +38,9 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "AlertsDrawer.tsx": {
     count: 2,
-    why: "the Alerts drawer's own read refusals; its rows get their ways out in NO-6 (#1238)",
+    why:
+      "the Alerts drawer's own read refusals, in place of a project's rows; the rows themselves " +
+      "are Notices with their ways out (NO-6)",
   },
   "App.tsx": {
     count: 1,
@@ -325,6 +327,16 @@ function copyOnly(source: string): string[] {
     );
 }
 
+/** The Notices in `source` built with a spread (`{...props}`), by cause. */
+function spreadNotices(source: string): string[] {
+  return tags(source, (tag) => tag === "Notice")
+    .filter(({ attrs }) => /\{\s*\.\.\./.test(attrs))
+    .map(
+      ({ attrs }) =>
+        /cause=(?:"([^"]*)"|\{`([^`]*)`\}|\{([^}]*)\})/.exec(attrs)?.slice(1).find(Boolean) ?? "?",
+    );
+}
+
 describe("the window's standing lines", () => {
   it("are all Notices, but for the live regions listed with why", () => {
     const counted: Record<string, number> = {};
@@ -363,6 +375,15 @@ describe("the window's standing lines", () => {
     expect(rules).toEqual([]);
   });
 
+  it("name their ways out on the Notice, never spread into it", () => {
+    // The debt list reads a Notice's own attributes, so one whose ways come in a spread could
+    // be copy-only and never be listed (NO-6).
+    const spread = sources().flatMap(({ name, text }) =>
+      spreadNotices(text).map((cause) => `${name}: ${cause}`),
+    );
+    expect(spread).toEqual([]);
+  });
+
   it("whose only way out is Copy command are listed as debt", () => {
     const debt = sources().flatMap(({ name, text }) =>
       copyOnly(text).map((cause) => `${name}: ${cause}`),
@@ -396,5 +417,9 @@ describe("the window's standing lines", () => {
     expect(copyOnly("<Notice cause={`gone:${name}`} copy={command}>x</Notice>")).toEqual([
       "gone:${name}",
     ]);
+    expect(spreadNotices(`<Notice {...ways} cause="alert:x" at="drawer">x</Notice>`)).toEqual([
+      "alert:x",
+    ]);
+    expect(spreadNotices(`<Notice cause="x" link={go}>x</Notice>`)).toEqual([]);
   });
 });

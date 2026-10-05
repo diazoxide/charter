@@ -96,11 +96,21 @@ pub enum FixId {
     /// a project with uncommitted changes, outside git, or with a file under both names
     /// ([`rename_plane`]).
     RenamePlane,
+    /// `charter workspace reinit --all`: brings every workspace behind the current layout up to
+    /// it (NO-6), never removing your content. It writes each workspace's missing baseline
+    /// files and its structure stamp, refreshes the live block charter manages in the project's
+    /// `.gitignore`, and rewires charter's harness layer in each workspace and in each clone and
+    /// worktree under it, including the lines charter keeps in a clone's `.git/info/exclude`. It
+    /// removes only layer files charter generated and the project no longer declares, as
+    /// recorded in charter's own record; a file charter did not write is left untouched. Not
+    /// [`FixId::Reinit`], which is the project root's baseline and never looks inside a
+    /// workspace. Offered by the Alerts drawer's `reinit` row; no doctor row offers it yet.
+    WorkspaceReinit,
 }
 
 impl FixId {
     /// Every fix, in the order `charter doctor --fix` applies them.
-    pub const ALL: [FixId; 8] = [
+    pub const ALL: [FixId; 9] = [
         FixId::RenameLocal,
         FixId::PluginInstall,
         FixId::Reinit,
@@ -109,6 +119,7 @@ impl FixId {
         FixId::Discover,
         FixId::GitIdentity,
         FixId::RenamePlane,
+        FixId::WorkspaceReinit,
     ];
 
     /// The id, as `charter doctor --fix <id>`, `--json` and the window spell it.
@@ -122,6 +133,7 @@ impl FixId {
             Self::Discover => "discover",
             Self::GitIdentity => "git-identity",
             Self::RenamePlane => "rename-plane",
+            Self::WorkspaceReinit => "workspace-reinit",
         }
     }
 
@@ -217,7 +229,7 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
     if id == FixId::RenameLocal {
         return rename_local(root);
     }
-    if let Some(why) = refusal(root) {
+    if let Some(why) = refusal(root, id) {
         return Fixed::Refused(why);
     }
     match id {
@@ -230,6 +242,7 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
         FixId::Discover => discover(root),
         FixId::GitIdentity => needs_input(id),
         FixId::RenamePlane => rename_plane::apply(root),
+        FixId::WorkspaceReinit => workspace_reinit(root),
         FixId::PluginInstall | FixId::RenameLocal => unreachable!("answered above"),
     }
 }
@@ -405,6 +418,19 @@ fn discover(root: &Path) -> Fixed {
     }
 }
 
+fn workspace_reinit(root: &Path) -> Fixed {
+    use crate::wscmd::reinit::{Scope, reinit};
+    let mut said: Vec<String> = Vec::new();
+    let mut sink = |line: crate::repocmd::Say| said.push(line.to_string());
+    let code = reinit(root, Scope::All, chrono::Utc::now(), &mut sink);
+    // It writes workspace by workspace, so a failure part way is a fix that half-ran, said in
+    // `said`, and never a refusal: the workspaces before it were brought up.
+    Fixed::Ran {
+        said,
+        complete: code == 0,
+    }
+}
+
 /// The refusal of a fix that [takes input](FixId::takes_input), asked for by its id alone.
 fn needs_input(id: FixId) -> Fixed {
     Fixed::Refused(match id {
@@ -413,12 +439,13 @@ fn needs_input(id: FixId) -> Fixed {
     })
 }
 
-/// Why no fix may write at `root`, or `None` when one may.
-fn refusal(root: &Path) -> Option<String> {
-    // A `charter.toml` that is a link out of the project: reinit's own containment gate refuses
-    // it with the words that name the link, and writes nothing.
-    if crate::scaffold::manifest_escapes(root) {
-        return None;
+/// Why the fix `id` may not write at `root`, or `None` when it may.
+fn refusal(root: &Path, id: FixId) -> Option<String> {
+    // A `charter.toml` that is a link out of the project is somebody else's file, and charter
+    // writes nothing at all there. `reinit` meets its own containment gate, which refuses with
+    // the same words; every other fix is refused here, before it writes anything.
+    if let Some(why) = crate::scaffold::escaping_manifest(root) {
+        return (id != FixId::Reinit).then_some(why);
     }
     if !crate::names::has_manifest(root) {
         return Some(format!(
