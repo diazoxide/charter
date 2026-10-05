@@ -607,8 +607,71 @@ fn a_pasted_token_is_kept_under_a_random_item_and_pins_the_binding_and_the_op_on
     assert_eq!(identity::pinned_op(&bare, &v).unwrap(), Some(op));
 }
 
+/// Put `items` (`(service, value)`, account `OP_TEAM_TOKEN`) in the stub keyring in place of
+/// whatever it held.
+fn plant(tmp: &tempfile::TempDir, items: &[(String, &str)]) {
+    let map: serde_json::Map<String, serde_json::Value> = items
+        .iter()
+        .map(|(service, value)| {
+            (
+                format!("{service}\nOP_TEAM_TOKEN"),
+                serde_json::json!(value),
+            )
+        })
+        .collect();
+    std::fs::write(
+        tmp.path().join(".charter/keyring-stub.json"),
+        serde_json::Value::Object(map).to_string(),
+    )
+    .unwrap();
+}
+
+/// Set (or with `None`, remove) the identity record's `base` field.
+fn set_base(ctx: &Ctx, base: Option<&str>) {
+    let mut local = registry::load_local(ctx).unwrap();
+    let rec = local["vaults"]["team"]["config"]["identity"]
+        .as_object_mut()
+        .unwrap();
+    match base {
+        Some(b) => rec.insert("base".into(), serde_json::json!(b)),
+        None => rec.remove("base"),
+    };
+    registry::save_local(ctx, &local).unwrap();
+}
+
 #[test]
-fn an_identity_kept_under_the_old_charter_prefix_is_still_read_and_purlis_wins_over_it() {
+fn a_new_identity_record_names_the_purlis_base_and_reads_only_there() {
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    let rec = identity_record(&ctx);
+    assert_eq!(rec["base"], "purlis");
+    let id = rec["ids"]["OP_TEAM_TOKEN"].as_str().unwrap().to_owned();
+
+    // The field survives the record being read and written again.
+    let local = registry::load_local(&ctx).unwrap();
+    registry::save_local(&ctx, &local).unwrap();
+    assert_eq!(identity_record(&ctx)["base"], "purlis");
+
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let read = || identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN").unwrap();
+    assert_eq!(read().as_deref(), Some(PASTED_TOKEN));
+
+    // A `charter/` item beside it is never read in its place, nor instead of a missing one.
+    plant(
+        &tmp,
+        &[
+            (format!("charter/@identity/{id}"), "old-token"),
+            (format!("purlis/@identity/{id}"), PASTED_TOKEN),
+        ],
+    );
+    assert_eq!(read().as_deref(), Some(PASTED_TOKEN));
+    plant(&tmp, &[(format!("charter/@identity/{id}"), "old-token")]);
+    assert_eq!(read(), None);
+}
+
+#[test]
+fn a_record_from_before_the_rename_reads_only_its_charter_item() {
     let (tmp, bin, _op, v) = pinned_plane("");
     let ctx = on_path(tmp.path(), bin.path());
     identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
@@ -616,42 +679,33 @@ fn an_identity_kept_under_the_old_charter_prefix_is_still_read_and_purlis_wins_o
         .as_str()
         .unwrap()
         .to_owned();
-    let stub_path = tmp.path().join(".charter/keyring-stub.json");
+    // A record a build from before the rename wrote: no `base`.
+    set_base(&ctx, None);
     let bare = Ctx::new(tmp.path(), Env::of(&[]));
-    let read = || identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN").unwrap();
+    let read = || identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN");
 
-    // An install from before the rename kept the item under `charter/@identity/<id>`.
-    std::fs::write(
-        &stub_path,
-        serde_json::json!({ format!("charter/@identity/{id}\nOP_TEAM_TOKEN"): "old-token" })
-            .to_string(),
-    )
-    .unwrap();
-    assert_eq!(read().as_deref(), Some("old-token"));
+    plant(&tmp, &[(format!("charter/@identity/{id}"), "old-token")]);
+    assert_eq!(read().unwrap().as_deref(), Some("old-token"));
 
-    // Both there: the purlis item wins.
-    std::fs::write(
-        &stub_path,
-        serde_json::json!({
-            format!("charter/@identity/{id}\nOP_TEAM_TOKEN"): "old-token",
-            format!("purlis/@identity/{id}\nOP_TEAM_TOKEN"): PASTED_TOKEN,
-        })
-        .to_string(),
-    )
-    .unwrap();
-    assert_eq!(read().as_deref(), Some(PASTED_TOKEN));
+    // An item planted under the purlis name never shadows it, nor stands in for a missing one.
+    plant(
+        &tmp,
+        &[
+            (format!("charter/@identity/{id}"), "old-token"),
+            (format!("purlis/@identity/{id}"), "planted"),
+        ],
+    );
+    assert_eq!(read().unwrap().as_deref(), Some("old-token"));
+    plant(&tmp, &[(format!("purlis/@identity/{id}"), "planted")]);
+    assert_eq!(read().unwrap(), None);
 
-    // Under neither, and under a lookalike of either: nothing.
-    std::fs::write(
-        &stub_path,
-        serde_json::json!({
-            format!("charterx/@identity/{id}\nOP_TEAM_TOKEN"): "x",
-            format!("purlis-/@identity/{id}\nOP_TEAM_TOKEN"): "y",
-        })
-        .to_string(),
-    )
-    .unwrap();
-    assert_eq!(read(), None);
+    // The switch (the keychain copy's, RN-6) is the field, and only the field.
+    set_base(&ctx, Some("purlis"));
+    assert_eq!(read().unwrap().as_deref(), Some("planted"));
+
+    // A base charter does not know is refused, never guessed.
+    set_base(&ctx, Some("charterx"));
+    assert!(read().is_err());
 }
 
 #[test]

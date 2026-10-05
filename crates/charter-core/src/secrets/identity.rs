@@ -9,8 +9,9 @@
 //! pinned in this machine's registry half beside it.** A record is written only by an operator
 //! action (the vault tab's password box, or a move from the app's own environment). It holds:
 //!
-//! - a **random item id per (vault, plane)** — the keyring item is `purlis/@identity/<id>`
-//!   (`charter/@identity/<id>` from before the rename is still read),
+//! - a **random item id per (vault, plane)** — the keyring item is `purlis/@identity/<id>`, or
+//!   `charter/@identity/<id>` for a record made before the rename (the record's `base` says
+//!   which, [`READ_BASES`]),
 //!   account the source variable's name. Random and local, so a chat cannot name another plane's
 //!   item, and two planes that both bind `$OP_TEAM_TOKEN` never share one (#271 review, U2);
 //! - the **binding the move was made against** — the `env` map, the op-vault, the account. The
@@ -38,12 +39,45 @@ use crate::names::KEYCHAIN_IDENTITY_PREFIX;
 /// never accepts one as a vault's secret item (#271 review, U4).
 pub const SERVICE_BASE: &str = KEYCHAIN_IDENTITY_PREFIX.write;
 
-/// The services an identity item is read under, newest first: [`SERVICE_BASE`], then the old
-/// `charter/@identity` while the rename window lasts (#1261, V93e: the purlis item wins).
-pub const READ_BASES: [&str; 2] = [
-    KEYCHAIN_IDENTITY_PREFIX.write,
-    KEYCHAIN_IDENTITY_PREFIX.reads[0],
+/// The service bases an identity item can live under, each with the word the record's
+/// [`BASE`] field names it by: [`SERVICE_BASE`] (`purlis`), and the old `charter/@identity`
+/// while the rename window lasts (#1261).
+///
+/// **The record says which, and charter reads that one alone** (D-RN4-6). A record without the
+/// field was written before the rename and reads only `charter/@identity/<id>`; a move made now
+/// writes `"base": "purlis"`. The switch is explicit, made by the keychain copy after it has
+/// verified the copy (RN-6, V93h), never by an item merely existing under the new name — so an
+/// item planted at `purlis/@identity/<id>` cannot shadow the one the record was made for.
+pub const READ_BASES: [(&str, &str); 2] = [
+    ("purlis", KEYCHAIN_IDENTITY_PREFIX.write),
+    ("charter", KEYCHAIN_IDENTITY_PREFIX.reads[0]),
 ];
+
+/// The record's field naming the base its items live under.
+pub const BASE: &str = "base";
+
+/// What a move made now writes into [`BASE`].
+const BASE_NOW: &str = READ_BASES[0].0;
+
+/// The base a record's items are read under: its [`BASE`] field's, or the old base when it has
+/// none. A value charter does not know is an error, never a guess.
+fn base_of(rec: &Map<String, Value>, vault: &Vault) -> Result<&'static str, VaultError> {
+    let word = match rec.get(BASE) {
+        None => READ_BASES[1].0,
+        Some(Value::String(w)) => w.as_str(),
+        Some(_) => "",
+    };
+    READ_BASES
+        .iter()
+        .find(|(w, _)| *w == word)
+        .map(|(_, base)| *base)
+        .ok_or_else(|| {
+            VaultError::new(format!(
+                "vault '{}' has a moved identity whose record names a keyring base charter does                  not know. Put the token in again from the vault's tab.",
+                vault.name
+            ))
+        })
+}
 
 /// The segment after the product's keyring prefix that marks an identity item.
 pub const OWNER: &str = "@identity";
@@ -190,15 +224,11 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
     else {
         return Ok(None);
     };
-    // The first base that holds the item wins, even an empty one (V93e); an old item is read
-    // only where the purlis one is absent.
-    let store = keyring::store(ctx);
-    for base in READ_BASES {
-        if let Some(found) = store.get(&format!("{base}/{id}"), source)? {
-            return Ok(Some(found.into_inner()).filter(|v| !v.is_empty()));
-        }
-    }
-    Ok(None)
+    let base = base_of(&rec, vault)?;
+    Ok(keyring::store(ctx)
+        .get(&format!("{base}/{id}"), source)?
+        .map(keyring::Secret::into_inner)
+        .filter(|v| !v.is_empty()))
 }
 
 /// The absolute `op` a keyring-held read must run, verified against the pinned path and Team id;
@@ -311,6 +341,7 @@ fn write_record(
     let (env, op_vault, account) = fingerprint(vault);
     let mut rec = Map::new();
     rec.insert("held".into(), Value::String(IN_KEYRING.into()));
+    rec.insert(BASE.into(), Value::String(BASE_NOW.into()));
     rec.insert(
         "bindings".into(),
         Value::Object(

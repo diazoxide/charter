@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value};
 
 use super::VaultError;
-use super::keyring::{Held, SERVICE_PREFIX, own_service};
+use super::keyring::{Held, OWN_PREFIXES, own_service};
 
 /// The argument that starts the app's binary as the one-item writer.
 pub const HOLD_ARG: &str = "charter-hold-a-keyring-item";
@@ -94,7 +94,8 @@ pub fn asked(input: &[u8]) -> Result<Item, String> {
         || item.account.chars().any(char::is_control)
     {
         return Err(format!(
-            "charter writes only its own items, under '{SERVICE_PREFIX}…'"
+            "charter writes only its own items, under '{}…' or '{}…'",
+            OWN_PREFIXES[0], OWN_PREFIXES[1]
         ));
     }
     Ok(item)
@@ -404,7 +405,11 @@ mod tests {
             "edm/ops/3f9a2c1b",
         ] {
             let input = format!(r#"{{"service": "{service}", "account": "K", "value": "v"}}"#);
-            assert!(asked(input.as_bytes()).is_err(), "{service:?}");
+            let refused = asked(input.as_bytes()).expect_err(service);
+            assert!(
+                refused.contains("'purlis/…'") && refused.contains("'charter/…'"),
+                "{refused}"
+            );
         }
     }
 

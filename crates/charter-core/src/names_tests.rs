@@ -99,9 +99,12 @@ fn a_prefix_recognises_what_starts_with_any_of_its_names() {
     );
     assert_eq!(
         crate::secrets::identity::READ_BASES,
-        ["purlis/@identity", "charter/@identity"]
+        [
+            ("purlis", "purlis/@identity"),
+            ("charter", "charter/@identity")
+        ]
     );
-    for (base, prefix) in crate::secrets::identity::READ_BASES
+    for ((_, base), prefix) in crate::secrets::identity::READ_BASES
         .iter()
         .zip(crate::secrets::keyring::OWN_PREFIXES)
     {
