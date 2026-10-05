@@ -336,6 +336,9 @@ pub const STATE_DIR: Name = name("state-dir", Kind::Folder, ".purlis", &[".chart
 pub const CONFIG_HOME: Name = name("config-home", Kind::Folder, "purlis", &["charter"], &[]);
 /// The data home's folder name (`$XDG_DATA_HOME/<this>`).
 pub const DATA_HOME: Name = name("data-home", Kind::Folder, "purlis", &["charter"], &[]);
+/// The session host's folder inside the config home: its socket and one credential file per
+/// human client scope (V93a: product-owned, so renamed, and moved by rename-local).
+pub const DAEMON_DIR: Name = name("daemon-dir", Kind::Folder, "purlisd", &["charterd"], &[]);
 
 // ---- markers -------------------------------------------------------------------------- //
 
@@ -613,6 +616,7 @@ pub const ALL: &[Name] = &[
     STATE_DIR,
     CONFIG_HOME,
     DATA_HOME,
+    DAEMON_DIR,
     GENERATED_KEY,
     MERGE_RULES_BEGIN,
     MERGE_RULES_END,

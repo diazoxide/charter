@@ -628,30 +628,29 @@ impl Denied {
             machine.env.get("XDG_CONFIG_HOME").map(Into::into),
             machine.home.clone(),
         );
+        // Under EVERY spelling of the config home, there or not (RN-5): which one is the home
+        // is decided by which is there, so a chat that could make `purlis/` beside `charter/`
+        // would be writing the approvals charter reads next.
         if let Some(config_root) = config_root {
-            deny(
-                Class::HumanPowers,
-                crate::machine::dir(&config_root),
-                Access::Write,
-            );
-            // The human client scopes' credentials (FD-27, V16a): a chat neither reads nor
-            // writes anything there, so it holds no person's credential. This does not stop a
-            // connect to `charterd.sock` beside them, which a sandbox judges as network: each
-            // compiler allows no unix socket but the hook socket for that. `charterd` also
-            // refuses those scopes to a chat's processes.
-            deny(
-                Class::HumanPowers,
-                crate::machine::charterd(&config_root),
-                Access::ReadWrite,
-            );
-            // What the human's forge sign-in fetched: the native transport's ETag store holds
-            // raw answers, private repos' among them, so a chat neither reads nor writes it
-            // (ADR 0070 §3 and §4).
-            deny(
-                Class::HumanPowers,
-                crate::forge::etag::root(&config_root),
-                Access::ReadWrite,
-            );
+            for home in crate::machine::dirs_spelled(&config_root) {
+                deny(Class::HumanPowers, home.clone(), Access::Write);
+                // The human client scopes' credentials (FD-27, V16a): a chat neither reads nor
+                // writes anything there, so it holds no person's credential. This does not stop
+                // a connect to `charterd.sock` beside them, which a sandbox judges as network:
+                // each compiler allows no unix socket but the hook socket for that. `charterd`
+                // also refuses those scopes to a chat's processes. Every spelling of the folder.
+                for daemon in crate::names::DAEMON_DIR.spellings() {
+                    deny(Class::HumanPowers, home.join(daemon), Access::ReadWrite);
+                }
+                // What the human's forge sign-in fetched: the native transport's ETag store
+                // holds raw answers, private repos' among them, so a chat neither reads nor
+                // writes it (ADR 0070 §3 and §4).
+                deny(
+                    Class::HumanPowers,
+                    home.join(crate::forge::etag::DIR),
+                    Access::ReadWrite,
+                );
+            }
         }
 
         // 5. Later code: what a protected config points at elsewhere, resolved now (V73d).
@@ -842,13 +841,15 @@ impl Homes {
                 .filter(|dir| dir.is_absolute())
         };
         named(crate::datahome::HOME_VAR)
-            .or_else(|| named("XDG_DATA_HOME").map(|xdg| xdg.join("charter")))
+            .or_else(|| named("XDG_DATA_HOME").map(|xdg| crate::names::DATA_HOME.folder_at(&xdg)))
             .or_else(|| {
                 let home = machine.home.as_ref()?;
-                Some(match machine.os {
-                    Os::MacOs => home.join("Library/Application Support/charter"),
-                    Os::Linux | Os::Windows | Os::Other => home.join(".local/share/charter"),
-                })
+                let base = match machine.os {
+                    Os::MacOs => home.join("Library/Application Support"),
+                    Os::Linux | Os::Windows | Os::Other => home.join(".local/share"),
+                };
+                // The folder rename-local moved it to, once it has (RN-5).
+                Some(crate::names::DATA_HOME.folder_at(&base))
             })
     }
 

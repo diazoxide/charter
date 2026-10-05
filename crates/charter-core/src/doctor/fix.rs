@@ -36,6 +36,15 @@ pub mod rename_plane;
 /// Declared in the order `charter doctor --fix` applies them, which is also their sort order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FixId {
+    /// `purlis migrate` (RN-5, V93f): moves this machine's local state to the purlis names — the
+    /// config home's folder and the session host's folder in it, the data home, the app's log
+    /// folder, and in this project and each one this machine remembers, `charter.local.toml`
+    /// and `.charter/`. It writes no committed file: git is made to ignore the new names through
+    /// the repository's own `info/exclude`. Every move is journalled, and `purlis migrate --undo`
+    /// puts each one back. A name that is there under both spellings is left as it is, never
+    /// merged. It refuses, moving nothing, while a running charter has a project open. Applied
+    /// only by name ([`FixId::by_name_only`]): it moves this machine's folders, not one project's.
+    RenameLocal,
     /// `charter plugin install`: makes charter's plugin load in the chats started outside the
     /// app. It writes this machine's harness configuration and no project file. It copies the
     /// plugin into charter's own folder and enables it in Claude Code's user `settings.json`.
@@ -91,7 +100,8 @@ pub enum FixId {
 
 impl FixId {
     /// Every fix, in the order `charter doctor --fix` applies them.
-    pub const ALL: [FixId; 7] = [
+    pub const ALL: [FixId; 8] = [
+        FixId::RenameLocal,
         FixId::PluginInstall,
         FixId::Reinit,
         FixId::LocalIgnore,
@@ -104,6 +114,7 @@ impl FixId {
     /// The id, as `charter doctor --fix <id>`, `--json` and the window spell it.
     pub const fn id(self) -> &'static str {
         match self {
+            Self::RenameLocal => "rename-local",
             Self::PluginInstall => "plugin-install",
             Self::Reinit => "reinit",
             Self::LocalIgnore => "local-ignore",
@@ -118,9 +129,10 @@ impl FixId {
     /// button — and never from a bare `charter doctor --fix` (D-FX2-9). The fixes bare `--fix`
     /// applies are local and additive; `discover` asks a forge over the network and writes the
     /// inventory and the docs, so it waits to be asked. `rename-plane` makes a commit every
-    /// teammate pulls, so it is never automatic (V93g).
+    /// teammate pulls, so it is never automatic (V93g). `rename-local` moves this machine's
+    /// folders, not the project's, so it waits to be asked too (D-RN5-5).
     pub const fn by_name_only(self) -> bool {
-        matches!(self, Self::Discover | Self::RenamePlane)
+        matches!(self, Self::Discover | Self::RenamePlane | Self::RenameLocal)
     }
 
     /// Whether this fix needs the operator's input before it can be applied (FX-3, D-FX3-1).
@@ -202,6 +214,9 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
             None => Fixed::Refused("charter cannot tell this machine's harnesses".to_owned()),
         };
     }
+    if id == FixId::RenameLocal {
+        return rename_local(root);
+    }
     if let Some(why) = refusal(root) {
         return Fixed::Refused(why);
     }
@@ -215,7 +230,7 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
         FixId::Discover => discover(root),
         FixId::GitIdentity => needs_input(id),
         FixId::RenamePlane => rename_plane::apply(root),
-        FixId::PluginInstall => unreachable!("answered above"),
+        FixId::PluginInstall | FixId::RenameLocal => unreachable!("answered above"),
     }
 }
 
@@ -246,6 +261,38 @@ fn plugin_install(machine: &crate::plugin_install::Machine) -> Fixed {
             .map(str::to_owned)
             .collect(),
         complete: !install::failed(&outcomes),
+    }
+}
+
+/// `rename-local`: this machine's local state, with the project at `root` among the projects
+/// moved when it is one. A project this charter may not write is left as it is by the move
+/// itself, which asks each project.
+fn rename_local(root: &Path) -> Fixed {
+    let here: Vec<std::path::PathBuf> = crate::names::has_manifest(root)
+        .then(|| root.to_path_buf())
+        .into_iter()
+        .collect();
+    let Some(local) = crate::renamelocal::Local::of_this_machine(&here) else {
+        return Fixed::Refused(
+            "charter cannot tell where this machine's config home is, so there is nowhere to \
+             journal a move; nothing was moved"
+                .to_owned(),
+        );
+    };
+    moved(crate::renamelocal::run(
+        &local,
+        &crate::renamelocal::Seams::real(),
+    ))
+}
+
+/// A [`crate::renamelocal::Moved`] as a fix's answer.
+pub fn moved(moved: crate::renamelocal::Moved) -> Fixed {
+    match moved.refused {
+        Some(why) => Fixed::Refused(why),
+        None => Fixed::Ran {
+            said: moved.said,
+            complete: moved.complete,
+        },
     }
 }
 

@@ -312,7 +312,11 @@ fn a_chat_never_writes_the_approvals_a_person_gave() {
     let (_plane, denied) = denied_with(None, Os::Linux);
     assert_eq!(
         paths(&denied, Class::HumanPowers, Access::Write),
-        [std::path::PathBuf::from("/home/op/.config/charter")]
+        // Under both names, there or not: whichever is there is the config home (RN-5).
+        [
+            std::path::PathBuf::from("/home/op/.config/purlis"),
+            std::path::PathBuf::from("/home/op/.config/charter"),
+        ]
     );
 }
 
@@ -324,7 +328,12 @@ fn a_chat_never_reads_or_writes_the_forge_answers_the_humans_token_fetched() {
     assert_eq!(
         paths(&denied, Class::HumanPowers, Access::ReadWrite),
         [
-            // The human client scopes' credentials and `charterd.sock` (FD-27).
+            // The human client scopes' credentials and `charterd.sock` (FD-27), under every
+            // name the folder and the config home have (RN-5).
+            std::path::PathBuf::from("/home/op/.config/purlis/purlisd"),
+            std::path::PathBuf::from("/home/op/.config/purlis/charterd"),
+            std::path::PathBuf::from("/home/op/.config/purlis/forge-etags"),
+            std::path::PathBuf::from("/home/op/.config/charter/purlisd"),
             std::path::PathBuf::from("/home/op/.config/charter/charterd"),
             std::path::PathBuf::from("/home/op/.config/charter/forge-etags"),
         ]

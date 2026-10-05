@@ -254,24 +254,28 @@ pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
             both.join(" and ")
         })
         .collect();
-    // The state folder is this machine's and `rename-local` reconciles it; the files are the
-    // project's and `rename-plane` does (RN-2a).
-    let is_state = |at: &crate::names::At| {
-        at.path()
-            .file_name()
-            .is_some_and(|name| crate::names::STATE_DIR.is(name))
+    // The state folder and the local settings are this machine's, and `rename-local` moves
+    // them; the committed files are the project's and `rename-plane` does (RN-2a, RN-5). Neither
+    // ever merges two spellings, so the row says which one to keep is the operator's call.
+    let is_local = |at: &crate::names::At| {
+        at.path().file_name().is_some_and(|name| {
+            crate::names::STATE_DIR.is(name) || crate::names::LOCAL_SETTINGS.is(name)
+        })
     };
-    let state = leftovers.iter().any(is_state);
-    let files = leftovers.iter().any(|at| !is_state(at));
-    let fix = match (files, state) {
+    let local = leftovers.iter().any(is_local);
+    let files = leftovers.iter().any(|at| !is_local(at));
+    let fix = match (files, local) {
         (true, true) => {
             "keep the file you mean under its purlis name and move what you need out of the \
-             other, then `charter doctor --fix rename-plane` renames the rest of the project; \
-             the `rename-local` fix will reconcile the state folders into the purlis name."
+             other, then `charter doctor --fix rename-plane` renames the rest of the project. \
+             The `rename-local` fix moves this machine's state and settings only where the \
+             purlis name is not there yet, so keep the one you want, move the other out of \
+             the project, then run it."
         }
         (false, true) => {
-            "the `rename-local` fix will reconcile the state folders into the \
-                          purlis name."
+            "the `rename-local` fix moves this machine's state and settings only where the \
+             purlis name is not there yet, and never merges two. Keep the one you want, move \
+             the other out of the project, then run it."
         }
         _ => {
             "keep the file you mean under its purlis name and move what you need out of the \

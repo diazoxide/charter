@@ -287,6 +287,20 @@ enum Command {
         email: Option<String>,
     },
 
+    /// Move this machine's local state to the purlis names, or put it back with --undo.
+    ///
+    /// The config home and the session host's folder in it, the data home, the app's log
+    /// folder, and in this project and each one this machine remembers, `charter.local.toml`
+    /// and `.charter/`. Git is made to ignore the new names through the repository's own
+    /// `info/exclude`; no committed file changes. Every move is journalled, and a move that
+    /// fails leaves the old name where it was. Nothing moves while a running charter has a
+    /// project open. The app does this at launch; `--undo` stops that until this is run again.
+    Migrate {
+        /// Put back every move since the last undo, newest first.
+        #[arg(long)]
+        undo: bool,
+    },
+
     /// Refresh the forge state the CI column is drawn from: each clone's open PR/MR and the
     /// last pipeline on the branch it is actually on.
     ///
@@ -670,6 +684,9 @@ enum ReadOnly {
 fn read_only_standing(command: &Command) -> ReadOnly {
     match command {
         Command::Doctor { fix: None, .. }
+        // It moves this machine's folders, and asks each project whether it may move its
+        // state itself (`renamelocal`), so a read-only project here refuses nothing else.
+        | Command::Migrate { .. }
         | Command::Update { .. }
         | Command::Version { .. }
         | Command::News(_)
@@ -2495,6 +2512,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Status { .. }
         | Command::Docs { .. }
         | Command::Doctor { .. }
+        | Command::Migrate { .. }
         | Command::GlRefresh { .. }
         | Command::Statusline { .. }
         | Command::Save { .. }
@@ -3028,6 +3046,42 @@ fn plugin_machine(
 }
 
 /// `charter plugin install|uninstall`: needs no plane, and acts on this machine's harnesses.
+/// `migrate [--undo]`: rename-local on this machine, with the project the current directory is
+/// in among the projects it moves (RN-5). What it did goes to stdout, one line a step; a
+/// refusal, which moved nothing, to stderr. Exit 1 when anything was refused or failed.
+fn migrate(undo: bool) -> ExitCode {
+    use charter_core::renamelocal::{self, Local, Seams};
+    let here: Vec<std::path::PathBuf> = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| charter_core::plane::find_root(&cwd).ok())
+        .into_iter()
+        .collect();
+    let Some(local) = Local::of_this_machine(&here) else {
+        eprintln!(
+            "charter: cannot tell where this machine's config home is, so there is nowhere to \
+             journal a move; nothing was moved"
+        );
+        return ExitCode::FAILURE;
+    };
+    let moved = if undo {
+        renamelocal::undo(&local, &Seams::real())
+    } else {
+        renamelocal::run(&local, &Seams::real())
+    };
+    if let Some(why) = &moved.refused {
+        eprintln!("charter: {why}");
+        return ExitCode::FAILURE;
+    }
+    for line in &moved.said {
+        println!("{line}");
+    }
+    if moved.complete {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn plugin(verb: &PluginCommand) -> ExitCode {
     use charter_core::plugin_install::{self as install, Verb};
     let (verb, harness, dry_run, from) = match verb {
@@ -3214,6 +3268,10 @@ fn main() -> ExitCode {
     }
     // After the gate: on a project this charter cannot write, the server is refused whole.
     if let Command::Mcp = &cli.command {
+        // A chat holds this server for its whole life: the config home stays where it is until
+        // it ends (`renamelocal::busy::LOCK`, D-RN5-11).
+        let _holds = charter_core::machine::config_root_if_there()
+            .and_then(|root| charter_core::renamelocal::busy::hold_shared(&root));
         return match mcp::serve() {
             Ok(code) => ExitCode::from(code),
             Err(why) => {
@@ -3292,6 +3350,7 @@ fn main() -> ExitCode {
                 identity,
             );
         }
+        Command::Migrate { undo } => return migrate(*undo),
         Command::Plugin(verb) => return plugin(verb),
         // A background refresh and a footer: neither is a plane write, and both choose their
         // own exit status as their Python counterparts do.

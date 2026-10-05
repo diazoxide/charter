@@ -116,19 +116,18 @@ pub fn state_name_with(dir: &Path, moved: impl FnOnce(&Path) -> bool) -> &'stati
 }
 
 /// Where this machine's rename-local record lists the projects whose state folder it moved to
-/// `.purlis/`, inside charter's directory in the config home: one project root per line, as it
-/// resolves. **RN-5 writes it**; nothing here does. Kept in the config home, never the project,
+/// `.purlis/`, inside charter's directory in the config home ([`crate::machine::dir`], which
+/// follows that directory's own move): one project root per line, as it resolves.
+/// [`crate::renamelocal`] writes it; nothing here does. Kept in the config home, never the project,
 /// because a record a chat could write would be no better than the folder it vouches for.
 pub const STATE_MOVED_RECORD: &str = "rename-local/state-moved";
 
 /// Whether this machine's rename-local record says the project at `dir` moved its state folder
 /// to `.purlis/`. No config home, no record, or no line for `dir`: it did not.
 pub fn moved_by_rename_local(dir: &Path) -> bool {
-    let Some(config) = crate::machine::rooted(
-        std::env::var_os(crate::machine::HOME_VAR),
-        std::env::var_os("XDG_CONFIG_HOME"),
-        dirs::home_dir(),
-    ) else {
+    // `machine`'s own lookup and its own folder, so the record is found wherever the config
+    // home is, before rename-local moves it and after (RN-5).
+    let Some(config) = crate::machine::config_root_unheld() else {
         return false;
     };
     // A fenced (test) build never reads a store outside its fence, and a record it cannot read

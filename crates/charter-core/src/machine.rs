@@ -246,11 +246,7 @@ pub const HOME_VAR: &str = "PURLIS_CONFIG_HOME";
 /// standard answer, it is already in this workspace's lockfile (Tauri depends on it), and it
 /// knows the cases a hand-rolled `$HOME` does not.
 pub fn config_root() -> Option<PathBuf> {
-    let found = rooted(
-        crate::envvar::var_os(HOME_VAR),
-        std::env::var_os("XDG_CONFIG_HOME"),
-        dirs::home_dir(),
-    );
+    let found = config_root_unheld();
     // The store is the OTHER thing a run reaches past its own fixture into, and it is not in
     // a plane: a launcher that pinned `$CHARTER_ROOT` and forgot `$CHARTER_CONFIG_HOME` wrote
     // its throwaway projects and their trust into the operator's `~/.config/charter`, which
@@ -262,16 +258,25 @@ pub fn config_root() -> Option<PathBuf> {
     found
 }
 
+/// [`config_root`]'s ladder as this process's environment answers it, with no fence asked:
+/// the one lookup every reader of the config home shares, so `$PURLIS_CONFIG_HOME`, its
+/// `CHARTER_` fallback and `$XDG_CONFIG_HOME` are read the same way everywhere. A caller that
+/// reads a store through it holds the fence itself, or, like
+/// [`crate::names::moved_by_rename_local`], asks the fence and treats outside as nothing.
+pub(crate) fn config_root_unheld() -> Option<PathBuf> {
+    rooted(
+        crate::envvar::var_os(HOME_VAR),
+        std::env::var_os("XDG_CONFIG_HOME"),
+        dirs::home_dir(),
+    )
+}
+
 /// [`config_root`], for `charter doctor`'s plugin rows, which read the copy `charter plugin
 /// install` keeps under it: fenced once there is a directory there to read, as
 /// [`config_root_if_there`] is, and otherwise the answer with nothing asked — a directory that
 /// does not exist holds no copy, and a doctor run in a fixture must still be able to say so.
 pub fn config_root_to_read_the_plugin_copy() -> Option<PathBuf> {
-    let found = rooted(
-        crate::envvar::var_os(HOME_VAR),
-        std::env::var_os("XDG_CONFIG_HOME"),
-        dirs::home_dir(),
-    )?;
+    let found = config_root_unheld()?;
     if found.is_dir() {
         crate::fence::hold(crate::fence::Act::Store, &found);
     }
@@ -286,11 +291,7 @@ pub fn config_root_to_read_the_plugin_copy() -> Option<PathBuf> {
 /// that is not there yet cannot be shown to be inside it — its path does not resolve — so the
 /// fence is asked only about a store that exists. Nothing is read from one that does not.
 pub fn config_root_if_there() -> Option<PathBuf> {
-    let found = rooted(
-        crate::envvar::var_os(HOME_VAR),
-        std::env::var_os("XDG_CONFIG_HOME"),
-        dirs::home_dir(),
-    )?;
+    let found = config_root_unheld()?;
     if !found.is_dir() {
         return None;
     }
@@ -348,18 +349,39 @@ pub(crate) fn rooted(
     home.map(|home| home.join(".config"))
 }
 
-/// charter's directory inside `config_root`.
+/// charter's directory inside `config_root`: `purlis/` once rename-local has moved it there (or
+/// it is the one there), else `charter/` ([`crate::names::Name::folder_at`], V93e).
+///
+/// **The one source of truth for the config home's folder.** Everything under it — the store,
+/// the kill switch, the window's prefs, the session host's folder and rename-local's own record
+/// ([`crate::names::moved_by_rename_local`]) — is joined to this, so all of it follows the move
+/// together, and nothing reads one spelling while writing the other.
 pub fn dir(config_root: &Path) -> PathBuf {
-    config_root.join(DIR)
+    crate::names::CONFIG_HOME.folder_at(config_root)
 }
+
+/// Every spelling of charter's directory inside `config_root`, the purlis one first: for a
+/// sandbox, which must hold each one, there or not — a folder a chat could make under the
+/// purlis name would be read as the config home the moment it is there (V93e).
+pub fn dirs_spelled(config_root: &Path) -> Vec<PathBuf> {
+    crate::names::CONFIG_HOME
+        .spellings()
+        .map(|name| config_root.join(name))
+        .collect()
+}
+
+/// The session host's folder's old name inside [`dir`] (`names::DAEMON_DIR`).
+pub const DAEMON_DIR: &str = "charterd";
 
 /// Where `charterd` keeps `charterd.sock` and one credential file per human client scope
 /// (`<config>/charterd/<scope>`, ADR 0068 §5, plane-format.md): a directory a chat's sandbox
 /// denies reading and writing (ADR 0067 §5, class 3; FD-27). That denial holds the credentials,
 /// not the socket: a connect to a unix socket is network to a sandbox, and the socket is held by
 /// each compiler allowing no unix socket but the hook socket.
+///
+/// `purlisd/` once rename-local has moved it, else `charterd/` (V93a, RN-5).
 pub fn charterd(config_root: &Path) -> PathBuf {
-    dir(config_root).join("charterd")
+    crate::names::DAEMON_DIR.folder_at(&dir(config_root))
 }
 
 /// The store's own path inside `config_root`.

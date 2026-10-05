@@ -24,8 +24,33 @@ pub fn root() -> Option<PathBuf> {
     Some(found)
 }
 
-/// The data home's folder under `$XDG_DATA_HOME` or the OS data directory.
+/// The data home's folder's old name under `$XDG_DATA_HOME` or the OS data directory. Read
+/// through `names::DATA_HOME` now ([`in_base`]); kept for the test that pins the name module's
+/// old spelling to the one this module had.
+#[cfg(test)]
 pub(crate) const DIR: &str = "charter";
+
+/// The data home's folder in `base` (`$XDG_DATA_HOME` or the OS data directory): `purlis/` once
+/// rename-local has moved it there, else `charter/` (V93e, RN-5).
+pub(crate) fn in_base(base: &Path) -> PathBuf {
+    crate::names::DATA_HOME.folder_at(base)
+}
+
+/// Where the data home's folder sits, when no variable names `<data>` itself: what rename-local
+/// moves the folder within. `None` when `$PURLIS_DATA_HOME` names it, which is the operator's
+/// own choice of folder and moved by nobody.
+pub fn base_in(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let named = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if named(HOME_VAR).is_some() {
+        return None;
+    }
+    let base = named("XDG_DATA_HOME").or_else(dirs::data_dir)?;
+    std::path::absolute(base).ok()
+}
 
 /// `<data>` as the environment `env` answers it. An empty value names nothing.
 pub fn root_in(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
@@ -35,8 +60,8 @@ pub fn root_in(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
             .map(PathBuf::from)
     };
     let found = named(HOME_VAR)
-        .or_else(|| named("XDG_DATA_HOME").map(|xdg| xdg.join(DIR)))
-        .or_else(|| dirs::data_dir().map(|dir| dir.join(DIR)))?;
+        .or_else(|| named("XDG_DATA_HOME").map(|xdg| in_base(&xdg)))
+        .or_else(|| dirs::data_dir().map(|dir| in_base(&dir)))?;
     // A relative value is taken from the directory charter was started in, so the answer is
     // always an absolute path.
     std::path::absolute(found).ok()

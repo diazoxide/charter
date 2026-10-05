@@ -447,8 +447,9 @@ scaffold, `inventory/repos.json`, `docs/topology.md`, and the generated README r
   only old names is written as before. The state folder is `.purlis/` only when it is the one
   there, or when both are there and this machine's rename-local record says the project moved;
   otherwise it is `.charter/` (RN-2a). A name held under both spellings is named by the doctor's
-  `renamed leftovers` row: `rename-plane` reconciles the files and `rename-local` the state
-  folders. Every name the rename moves, with its old spellings, is in `crates/charter-core/src/names.rs`.
+  `renamed leftovers` row: `rename-plane` reconciles the committed files; `rename-local` moves
+  `.charter/` and `charter.local.toml` only where the purlis name is not there yet, and never
+  merges two. Every name the rename moves, with its old spellings, is in `crates/charter-core/src/names.rs`.
 - **Resolution order** (`charter/root.py:32`, `find_root`):
   1. `$CHARTER_ROOT` wins outright; it is `expanduser`'d and `resolve`'d, and a value with no
      `charter.toml` under it **raises** rather than falling back to the walk
@@ -5060,8 +5061,15 @@ semantics below.
 **What charter-app keeps outside the plane** (ADR 0034, ADR 0069). `<config>` is the machine
 store's directory: `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then
 `charter/`, `0700`, and every file in it `0600` (`crates/charter-core/src/machine.rs`). On a
-platform that is not unix none of it is written (ADR 0031). The Tauri directories are the app's,
-identifier `dev.charter.app`. The keyring rows are the operating system's store (ADR 0047).
+platform that is not unix none of it is written (ADR 0031). **Rename window (RN-5):** the
+folder is `purlis/` once `rename-local` has moved it (or it is the one there), else `charter/`;
+the same rule holds for the session host's `purlisd/`/`charterd/` in it, for `<data>`'s folder and
+for the app's log folder (`dev.purlis.app`/`dev.charter.app`). `rename-local` journals every move
+in `<config>/rename-local/journal.jsonl` and lists each project whose state folder it moved in
+`<config>/rename-local/state-moved`, one resolved root a line; `purlis migrate --undo` replays the
+journal backwards. `.purlis.lock`, beside `<config>` in the config root, is an empty advisory lock:
+the app and `mcp` hold it shared while they run, and `rename-local` takes it exclusively, so it
+never moves the folders under them. The Tauri directories are the app's, identifier `dev.charter.app`. The keyring rows are the operating system's store (ADR 0047).
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
 `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
 Support/charter` on macOS, `~/.local/share/charter` on Linux). The host's event log is written
