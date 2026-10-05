@@ -166,22 +166,72 @@ fn write_quietly(_item: &Item) -> Result<(), Refused> {
 #[cfg(target_os = "macos")]
 const NOT_THE_OWNER: i32 = -25244;
 
-/// The item deleted and made again by this process, so it is this program's alone.
-fn make_here(service: &str, account: &str, value: &str) -> Result<(), Refused> {
-    let entry = ::keyring::Entry::new(service, account)
-        .map_err(|e| Refused::Failed(super::keyring::failure("reach", service, &e)))?;
-    match entry.delete_credential() {
-        Ok(()) | Err(::keyring::Error::NoEntry) => {}
-        Err(e) if owned_by_another(&e) => return Err(Refused::Owned),
-        Err(e) => {
-            return Err(Refused::Failed(super::keyring::failure(
+/// The two calls an item is made fresh with: a delete, and an add that never updates.
+trait Items {
+    /// Delete the item; `Ok` when there was none.
+    fn delete(&self, service: &str, account: &str) -> Result<(), Refused>;
+    /// Make a NEW item: [`Refused::Owned`] when one is there already, which is then left
+    /// exactly as it is (D-RN6-9).
+    fn add(&self, service: &str, account: &str, value: &str) -> Result<(), Refused>;
+}
+
+/// The item deleted and made again, add-only: one put there between the delete and the add,
+/// by anyone, is never updated in place and reported as this program's own.
+fn remake(items: &dyn Items, service: &str, account: &str, value: &str) -> Result<(), Refused> {
+    items.delete(service, account)?;
+    items.add(service, account, value)
+}
+
+/// The operating system's store, as [`remake`] asks it.
+struct OsItems;
+
+impl Items for OsItems {
+    fn delete(&self, service: &str, account: &str) -> Result<(), Refused> {
+        let entry = ::keyring::Entry::new(service, account)
+            .map_err(|e| Refused::Failed(super::keyring::failure("reach", service, &e)))?;
+        match entry.delete_credential() {
+            Ok(()) | Err(::keyring::Error::NoEntry) => Ok(()),
+            Err(e) if owned_by_another(&e) => Err(Refused::Owned),
+            Err(e) => Err(Refused::Failed(super::keyring::failure(
                 "write", service, &e,
-            )));
+            ))),
         }
     }
-    entry
-        .set_password(value)
-        .map_err(|e| Refused::Failed(super::keyring::failure("write", service, &e)))
+
+    #[cfg(target_os = "macos")]
+    fn add(&self, service: &str, account: &str, value: &str) -> Result<(), Refused> {
+        use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
+        let failed = |e: security_framework::base::Error| {
+            Refused::Failed(VaultError::new(format!(
+                "charter could not write '{service}' in {}: {e}",
+                super::keyring::STORE_NAME
+            )))
+        };
+        // The user's keychain, the one the `keyring` crate reads and writes.
+        let added = SecKeychain::default_for_domain(SecPreferencesDomain::User)
+            .and_then(|keychain| keychain.add_generic_password(service, account, value.as_bytes()));
+        match added {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == DUPLICATE => Err(Refused::Owned),
+            Err(e) => Err(failed(e)),
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn add(&self, service: &str, account: &str, value: &str) -> Result<(), Refused> {
+        ::keyring::Entry::new(service, account)
+            .and_then(|entry| entry.set_password(value))
+            .map_err(|e| Refused::Failed(super::keyring::failure("write", service, &e)))
+    }
+}
+
+/// `errSecDuplicateItem`: an add found the item there already.
+#[cfg(target_os = "macos")]
+const DUPLICATE: i32 = -25299;
+
+/// The item deleted and made again by this process, so it is this program's alone.
+fn make_here(service: &str, account: &str, value: &str) -> Result<(), Refused> {
+    remake(&OsItems, service, account, value)
 }
 
 /// Whether the store refused a delete because another program owns the item.
@@ -266,11 +316,22 @@ pub fn app_beside(exe: &std::path::Path) -> Option<PathBuf> {
 }
 
 /// Why an item is written: a new value, or the same value moved under the rule (ruling V90d),
-/// which is pointless to write again in place when it cannot be held.
+/// which is pointless to write again in place when it cannot be held, or a copy the keychain
+/// copy makes (RN-6), which must never be written into another program's item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Why {
     Write,
     Move,
+    /// A fresh item or nothing: an item another program owns is an error, and nothing is
+    /// written to it. One this command owns is still deleted and made again by the app.
+    Copy,
+}
+
+/// What a [`Why::Copy`] write says when another program's item is in the way.
+fn not_ours(service: &str) -> VaultError {
+    VaultError::new(format!(
+        "another program's item is under '{service}', so charter wrote nothing there"
+    ))
 }
 
 /// Write the item held to charter's app, from whichever charter this is. See the module header.
@@ -279,6 +340,8 @@ pub fn set(service: &str, account: &str, value: &str, why: Why) -> Result<Held, 
     let in_place = || match why {
         Why::Write => super::keyring::set_here(service, account, value).map(|()| Held::NotYet),
         Why::Move => Ok(Held::NotYet),
+        // Never into an item this process did not just make.
+        Why::Copy => Err(not_ours(service)),
     };
     if THE_APP.load(Ordering::SeqCst) {
         return match make_here(service, account, value) {
@@ -307,11 +370,14 @@ pub fn set(service: &str, account: &str, value: &str, why: Why) -> Result<Held, 
     if let Ok(entry) = ::keyring::Entry::new(service, account) {
         match entry.delete_credential() {
             Ok(()) | Err(::keyring::Error::NoEntry) => {}
+            // Not the command's own either: another program's, which a copy never writes into.
             Err(_) => return in_place(),
         }
     }
     match through(&app, &item) {
         Ok(()) => Ok(Held::ToTheApp),
+        // The command's own item is gone by now, so this makes a new one, the command's: never
+        // another program's. A copy is refused for it all the same (not held to the app).
         Err(_) => super::keyring::set_here(service, account, value).map(|()| Held::NotYet),
     }
 }
@@ -549,6 +615,79 @@ mod tests {
             );
             assert!(!said.contains("survived"), "{said}");
         }
+    }
+
+    /// Items in memory, with `planted` put there by another program right after each delete.
+    struct Planting {
+        items: std::sync::Mutex<std::collections::BTreeMap<(String, String), String>>,
+        planted: Option<&'static str>,
+    }
+
+    impl Items for Planting {
+        fn delete(&self, service: &str, account: &str) -> Result<(), Refused> {
+            let mut items = self.items.lock().unwrap();
+            let key = (service.to_owned(), account.to_owned());
+            items.remove(&key);
+            if let Some(planted) = self.planted {
+                items.insert(key, planted.to_owned());
+            }
+            Ok(())
+        }
+        fn add(&self, service: &str, account: &str, value: &str) -> Result<(), Refused> {
+            let mut items = self.items.lock().unwrap();
+            let key = (service.to_owned(), account.to_owned());
+            if items.contains_key(&key) {
+                return Err(Refused::Owned);
+            }
+            items.insert(key, value.to_owned());
+            Ok(())
+        }
+    }
+
+    fn planting(planted: Option<&'static str>) -> Planting {
+        let mut items = std::collections::BTreeMap::new();
+        items.insert(
+            ("purlis/ops/x".to_owned(), "K".to_owned()),
+            "old".to_owned(),
+        );
+        Planting {
+            items: std::sync::Mutex::new(items),
+            planted,
+        }
+    }
+
+    #[test]
+    fn an_item_is_made_again_add_only_and_one_planted_meanwhile_is_never_written_into() {
+        let calm = planting(None);
+        assert!(remake(&calm, "purlis/ops/x", "K", "new").is_ok());
+        assert_eq!(
+            calm.items.lock().unwrap()[&("purlis/ops/x".to_owned(), "K".to_owned())],
+            "new"
+        );
+
+        let raced = planting(Some("planted"));
+        assert!(matches!(
+            remake(&raced, "purlis/ops/x", "K", "new"),
+            Err(Refused::Owned)
+        ));
+        assert_eq!(
+            raced.items.lock().unwrap()[&("purlis/ops/x".to_owned(), "K".to_owned())],
+            "planted",
+            "the planted item was written into"
+        );
+    }
+
+    #[test]
+    fn a_copy_never_falls_back_to_a_write_in_place() {
+        // Outside the app and with no app beside this test binary, a write has no writer to
+        // hold it: a value is written in place, a move is left, and a copy refuses.
+        assert!(!is_the_app());
+        let refused = set("purlis/ops/3f9a2c1b", "K", "v", Why::Copy).unwrap_err();
+        assert!(
+            refused.message.contains("wrote nothing"),
+            "{}",
+            refused.message
+        );
     }
 
     #[test]
