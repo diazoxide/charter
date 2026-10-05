@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791176233874,
+  "lastUpdate": 1791177092005,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1932,6 +1932,48 @@ window.BENCHMARK_DATA = {
             "value": 105.10152099999999,
             "unit": "ms",
             "extra": "median of 5 runs: 102.869, 105.020, 105.102, 105.238, 106.275 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "340c80a910098059b5264b211afabb8d36fbe036",
+          "message": "Docs site: http-cache-semantics 4.2.0 -> 4.3.0; sharp alerts are the stand-in\n\nhttp-cache-semantics (Dependabot alert 12, GHSA-ch52-4w7c-c8xp, range <= 4.2.0):\n- 4.3.0 was published 2026-10-04, after the advisory. astro@7.3.5 asks for\n  ^4.2.0, so this is a lockfile-only bump: the one entry changes, nothing else.\n- 4.3.0 does not change max-stale handling; its diff is Vary matching (wildcard,\n  inherited properties) and a status() accessor. The upstream maintainer calls\n  the report bogus (kornelski/http-cache-semantics issue 56: RFC 9111 7.3 lets a\n  shared cache reuse a Set-Cookie response; Cache-Control: private is the guard),\n  and github/advisory-database issue 10139 disputes it. The alert should still\n  go away, since 4.3.0 is outside the vulnerable range.\n- Reachability, either way: the only user is astro/dist/assets/build/remote.js,\n  which builds a CachePolicy for a remote image astro fetches itself during\n  `astro build`, to decide how long to keep it in the local build cache. Its\n  requests carry no max-stale, the cache serves no other user, and the site has\n  no remote images (astro.config.mjs uses passthroughImageService, no\n  remotePatterns or domains). The advisory's path is not reachable here.\n\nsharp (alerts 7, 8, 9, 10): no change, and none is possible by a bump. The site\ninstalls no sharp: package.json maps sharp to the local stand-in no-sharp\n(MIT, 0.0.0-not-installed) and overrides every sharp to it, because sharp's\nprebuilt libvips is LGPL-3.0. astro already asks for sharp ^0.35.4 as an\noptional dependency, so a real sharp would be a patched one, but bringing it\nback would bring the LGPL binary with it. osv-scanner.toml already skips sharp\nfor the same reason, and test/no-sharp.test.mjs pins the two together.\nDependabot reads the stand-in as a vulnerable sharp. These four alerts are\nfalse positives, to dismiss as \"vulnerable code is not used\" with that reason.\n\nChecks in site/: npm ci, npm test (27 pass), npm run build (79 pages, links\nvalid). node ../tools/npm-licences.mjs from app/ passes; it covers\napp/package-lock.json only, and the licence here is unchanged (BSD-2-Clause).\n\nRefs #1217\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T08:58:51+04:00",
+          "tree_id": "4313eb917f128f4c1f60ca39c2aa1ee3015280bf",
+          "url": "https://github.com/diazoxide/charter/commit/340c80a910098059b5264b211afabb8d36fbe036"
+        },
+        "date": 1791177090676,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.38640399999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.359, 0.363, 0.386, 0.392, 0.418 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.6901535,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.670, 16.681, 16.690, 16.703, 16.793 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.7695425,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.964, 101.732, 101.770, 102.491, 102.732 ms"
           }
         ]
       }
