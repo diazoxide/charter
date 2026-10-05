@@ -12,7 +12,9 @@
 //!
 //! * in each of those projects, the keychain items of its keyring vaults and of its identity
 //!   records, copied from `charter/…` to `purlis/…` and read back before anything reads them
-//!   there ([`keychain`], RN-6, V93h). The old items are kept.
+//!   there ([`keychain`], RN-6, V93h). The old items are kept. The copy never lets the Keychain
+//!   ask: a vault whose items would ask waits ([`Waiting`]) until the person finishes it
+//!   ([`finish`], #1306).
 //!
 //! And **the harness plugin** (RN-8, #1266), where `local.plugin` says which charter and bundle
 //! to install it from: every harness charter's plugin is installed for is installed again under
@@ -162,6 +164,24 @@ pub struct Moved {
     pub refused: Option<String>,
     /// Whether anything on disk changed.
     pub changed: bool,
+    /// The vaults and identity records left on the old prefix because reading their items
+    /// would have asked the person (#1306): [`finish`] moves them when the person asks.
+    pub waiting: Vec<Waiting>,
+}
+
+/// A keyring vault, or a vault's identity record, that waits to move: it still reads its items
+/// under `charter/…`, where they keep working, because reading them would make the system ask
+/// the person for each (#1306).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Waiting {
+    /// The project it is in, as it resolves.
+    pub plane: PathBuf,
+    /// The vault's name.
+    pub vault: String,
+    /// Whether it is the vault's identity record, rather than its keyring items.
+    pub identity: bool,
+    /// How many items it has: how many times the system may ask when it is finished.
+    pub items: usize,
 }
 
 impl Moved {
@@ -191,6 +211,11 @@ impl Moved {
 
     fn note(&mut self, line: String) {
         self.said.push(format!("– {line}"));
+    }
+
+    fn waits(&mut self, waiting: Waiting, line: String) {
+        self.note(line);
+        self.waiting.push(waiting);
     }
 }
 
@@ -421,7 +446,15 @@ pub fn run(local: &Local, seams: &Seams) -> Moved {
     // is the one it reads.
     let written = keychain::written(&read_journal(local));
     for plane in &planes {
-        keychain::copy_plane(local, seams, &mut moved, plane, &written);
+        keychain::copy_plane(
+            local,
+            seams,
+            &mut moved,
+            plane,
+            &written,
+            keychain::Asking::Never,
+            None,
+        );
     }
     if let Some(m) = &local.plugin {
         move_plugin(local, &mut moved, m);
@@ -1069,6 +1102,55 @@ fn undo_one(local: &Local, seams: &Seams, moved: &mut Moved, entry: &Entry) {
     }
 }
 
+/// Finish moving the vaults and records a run left `waiting` (#1306), on the person's word: the
+/// same copy, with the Keychain's dialogs on, so the system asks once for each item, and only
+/// for those. Anything else on the old prefix is left as the run left it.
+///
+/// **It takes no lock**: the app it runs in holds the config home for its life, so no run or
+/// undo of a terminal starts meanwhile, and the switch itself refuses a vault whose keys changed
+/// while it was copied. After an undo it moves nothing, as the launch does not.
+pub fn finish(local: &Local, seams: &Seams, waiting: &[Waiting]) -> Moved {
+    if undone(local) {
+        return Moved::refused(
+            "the last thing done here was an undo, so nothing moves until `purlis migrate` is \
+             run"
+            .into(),
+        );
+    }
+    let mut moved = Moved::new();
+    let written = keychain::written(&read_journal(local));
+    let mut planes: Vec<&Path> = Vec::new();
+    for waits in waiting {
+        if !planes.contains(&waits.plane.as_path()) {
+            planes.push(&waits.plane);
+        }
+    }
+    for plane in planes {
+        keychain::copy_plane(
+            local,
+            seams,
+            &mut moved,
+            plane,
+            &written,
+            keychain::Asking::Allowed,
+            Some(waiting),
+        );
+    }
+    // What the person may finish again: each that is still on the old prefix, for whatever
+    // reason (an item the person did not allow is one).
+    moved.waiting = waiting
+        .iter()
+        .filter(|waits| keychain::still_waits(waits))
+        .cloned()
+        .collect();
+    if moved.changed {
+        moved.note(format!(
+            "every move is journalled; `{UNDO_COMMAND}` puts them back"
+        ));
+    }
+    moved
+}
+
 /// The app's launch, by the app whose identifier is `identifier`: [`run`] on this machine, unless the last thing done was an undo (finished
 /// or not), or the environment names the project twice over (the app refuses that launch
 /// itself). `None` when nothing was said; what was said is for the app's log.
@@ -1095,5 +1177,6 @@ pub fn at_launch(
         return None;
     }
     let moved = run(&local, &Seams::real());
-    (moved.changed || !moved.complete || moved.refused.is_some()).then_some(moved)
+    (moved.changed || !moved.complete || moved.refused.is_some() || !moved.waiting.is_empty())
+        .then_some(moved)
 }

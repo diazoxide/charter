@@ -39,6 +39,19 @@ export const commands = {
 	 *  it offers them back — and the new launch is started last, at `Exit` ([`restart_if_asked`]).
 	 */
 	restartOnTheSessionBus: () => typedError<null, string>(__TAURI_INVOKE("restart_on_the_session_bus")),
+	/**  The vaults this launch's keychain copy left waiting, or nothing. */
+	vaultsToMove: () => __TAURI_INVOKE<{
+	/**  How many wait: keyring vaults and vaults' identity records. */
+	vaults: number,
+	/**  How many items they hold: the most times the system asks when they are finished. */
+	items: number,
+} | null>("vaults_to_move"),
+	/**
+	 *  Finish moving the vaults that wait, on the person's press: the copy with the Keychain's
+	 *  dialogs on, so the system asks once for each item. On a blocking thread, because each ask
+	 *  waits for the person; one press at a time.
+	 */
+	finishMovingVaults: () => typedError<FinishedMoving, string>(__TAURI_INVOKE("finish_moving_vaults")),
 	/**
 	 *  Where charter's title bar may start.
 	 * 
@@ -2407,6 +2420,14 @@ export type FilesSearched = {
 	ended: SearchEnd | null,
 };
 
+/**  What finishing them came to. */
+export type FinishedMoving = {
+	/**  What still waits, if anything: an item the person did not allow keeps its vault here. */
+	left: VaultsToMove | null,
+	/**  One line a step, as `purlis migrate` says them. */
+	said: string[],
+};
+
 /**  What the first-run screen shows about this machine. */
 export type FirstRunFound = {
 	harnesses: HarnessRow[],
@@ -4725,6 +4746,14 @@ export type VaultSummary = {
 	provider: string,
 	count: number | null,
 	health: VaultHealth,
+};
+
+/**  What the window says about the vaults that wait. */
+export type VaultsToMove = {
+	/**  How many wait: keyring vaults and vaults' identity records. */
+	vaults: number,
+	/**  How many items they hold: the most times the system asks when they are finished. */
+	items: number,
 };
 
 /**

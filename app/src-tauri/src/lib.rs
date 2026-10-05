@@ -69,6 +69,7 @@ mod todos;
 mod updates;
 mod usage;
 mod vaults;
+mod vaultswaiting;
 mod views;
 mod watchset;
 mod windowprefs;
@@ -2284,13 +2285,22 @@ pub fn run() {
             // migrates, and before any project, chat or watch opens a file under one. Anything
             // else of charter's still running makes it wait for the next launch (D-RN5-11).
             // Off in the scenario build, whose specs name the old folders (D-RN5-7).
+            // The vaults it left waiting, because macOS would have asked about their items, are
+            // the window's to offer (`vaultswaiting.rs`, #1306).
             #[cfg(not(feature = "e2e"))]
-            if let Some(renamed) = charter_core::renamelocal::at_launch(
+            let waiting = match charter_core::renamelocal::at_launch(
                 &app.config().identifier,
                 plugin_to_move(app.handle()),
             ) {
-                log_the_rename(&renamed);
-            }
+                Some(renamed) => {
+                    log_the_rename(&renamed);
+                    renamed.waiting
+                }
+                None => Vec::new(),
+            };
+            #[cfg(feature = "e2e")]
+            let waiting = Vec::new();
+            app.manage(vaultswaiting::VaultsWaiting::of(waiting));
             // From here on this app holds the config home: no rename-local of a later launch,
             // or of a terminal, moves it while the app runs.
             if let Some(root) = charter_core::machine::config_root()

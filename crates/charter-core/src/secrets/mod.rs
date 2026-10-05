@@ -53,6 +53,9 @@ pub enum Kind {
     Unavailable,
     /// A terminating signal arrived while a resolver ran, and it was stopped.
     Interrupted,
+    /// The store would have asked the person, and its dialogs were off: nothing was read or
+    /// written (the keychain copy at the app's launch, #1306).
+    WouldAsk,
     /// Any other vault failure — `VaultError`.
     Other,
 }
@@ -99,6 +102,13 @@ impl VaultError {
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self {
             kind: Kind::Unavailable,
+            message: message.into(),
+        }
+    }
+
+    pub fn would_ask(message: impl Into<String>) -> Self {
+        Self {
+            kind: Kind::WouldAsk,
             message: message.into(),
         }
     }

@@ -5084,7 +5084,10 @@ journal backwards. The keychain copy (RN-6) journals each item it writes under `
 (`copied`), each keyring vault whose index it points from its `charter/…` service to the purlis
 one (`switched`, with each key's `updated` then) and each identity record it gives
 `"base": "purlis"` (`rebased`), each only after every item read back the same; the undo points
-them back and keeps every item under both names. `.purlis.lock`, beside `<config>` in the config root, is an empty advisory lock:
+them back and keeps every item under both names. The copy never lets the Keychain ask (#1306): a
+vault or record whose items would ask stays on `charter/…` and waits, held only in the app's
+memory, until the window's *Finish moving* copies it with the Keychain's dialogs on; a terminal
+copies only a vault whose index marks no key `held`. `.purlis.lock`, beside `<config>` in the config root, is an empty advisory lock:
 the app and `mcp` hold it shared while they run, and `rename-local` takes it exclusively, so it
 never moves the folders under them. The Tauri directories are the app's, identifier `dev.charter.app`. The keyring rows are the operating system's store (ADR 0047).
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else

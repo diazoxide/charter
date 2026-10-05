@@ -150,6 +150,14 @@ pub trait Store: Send + Sync {
     fn make_fresh(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
         self.set(service, account, value)
     }
+    /// The entry made as a fresh item by THIS process, never through the app's writer (#1306):
+    /// what a terminal's keychain copy writes, so that it reads its copy back without anyone
+    /// being asked. Where this store holds items, an item there that is not this program's is
+    /// an error and nothing is written into it; the answer is [`Held::ToTheApp`] in the app and
+    /// [`Held::NotYet`] anywhere else.
+    fn make_own(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        self.make_fresh(service, account, value)
+    }
 }
 
 /// The store this build talks to. See the module header: a fenced build never reaches the
@@ -230,6 +238,13 @@ impl Store for OsStore {
         }
         self.set(service, account, value)
     }
+
+    fn make_own(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        if cfg!(target_os = "macos") {
+            return super::keyhold::make_own(service, account, value);
+        }
+        self.set(service, account, value)
+    }
 }
 
 /// Create or replace the entry from this process, with whatever access the store gives an
@@ -258,9 +273,69 @@ pub(super) fn failure(what: &str, service: &str, e: &::keyring::Error) -> VaultE
         ::keyring::Error::Invalid(name, reason) => format!("the {name} {reason}"),
         _ => "the store refused it".into(),
     };
-    VaultError::new(format!(
-        "charter could not {what} '{service}' in {STORE_NAME}: {why}"
-    ))
+    let said = format!("charter could not {what} '{service}' in {STORE_NAME}: {why}");
+    if would_have_asked(e) {
+        return VaultError::would_ask(said);
+    }
+    VaultError::new(said)
+}
+
+/// `errSecInteractionNotAllowed`: the Keychain would have asked the person, and its dialogs are
+/// off ([`DialogsOff`]).
+#[cfg(target_os = "macos")]
+const INTERACTION_NOT_ALLOWED: i32 = -25308;
+
+/// Whether the store refused only because it would have asked the person.
+#[cfg(target_os = "macos")]
+fn would_have_asked(e: &::keyring::Error) -> bool {
+    match e {
+        ::keyring::Error::NoStorageAccess(inner) | ::keyring::Error::PlatformFailure(inner) => {
+            inner
+                .downcast_ref::<security_framework::base::Error>()
+                .is_some_and(|e| e.code() == INTERACTION_NOT_ALLOWED)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn would_have_asked(_e: &::keyring::Error) -> bool {
+    false
+}
+
+/// The Keychain's dialogs, off for this process while this lives, and as they were after
+/// (#1306): a read or write that would ask the person fails with [`Kind::WouldAsk`] instead.
+/// Elsewhere a store has no dialogs, and this does nothing.
+///
+/// [`Kind::WouldAsk`]: super::Kind::WouldAsk
+pub struct DialogsOff {
+    #[cfg(target_os = "macos")]
+    _off: Option<security_framework::os::macos::keychain::KeychainUserInteractionLock>,
+}
+
+impl DialogsOff {
+    /// Turn them off, or `Err` when the Keychain would not say it did.
+    pub fn now() -> Result<Self, VaultError> {
+        #[cfg(target_os = "macos")]
+        {
+            use security_framework::os::macos::keychain::SecKeychain;
+            let failed = |e: security_framework::base::Error| {
+                VaultError::new(format!(
+                    "charter could not turn off {STORE_NAME}'s dialogs: {e}"
+                ))
+            };
+            // Already off (by whoever turned them off): left so, and so when this ends.
+            if !SecKeychain::user_interaction_allowed().map_err(failed)? {
+                return Ok(Self { _off: None });
+            }
+            let off = SecKeychain::disable_user_interaction().map_err(failed)?;
+            Ok(Self { _off: Some(off) })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(Self {})
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------

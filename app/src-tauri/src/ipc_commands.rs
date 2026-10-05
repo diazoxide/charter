@@ -28,6 +28,8 @@ macro_rules! app_commands {
                 first_frame,
                 portal::session_bus,
                 portal::restart_on_the_session_bus,
+                vaultswaiting::vaults_to_move,
+                vaultswaiting::finish_moving_vaults,
                 title_bar_room,
                 plane_at_launch,
                 open_planes,
