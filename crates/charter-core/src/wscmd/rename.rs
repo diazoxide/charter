@@ -318,6 +318,16 @@ fn read_journal(root: &Path) -> Option<Journal> {
     .then_some(journal)
 }
 
+/// The two names of a workspace rename that is in progress, or was interrupted, as
+/// `(from, to)`: what the journal says, or `None` when there is none.
+///
+/// For a reader that must not take either name for a workspace that is gone while the rename
+/// is between its steps: the directory moves first and the pins follow last (`finish`), so in
+/// between a pin names a directory that is not there yet, or no longer.
+pub fn in_flight(root: &Path) -> Option<(String, String)> {
+    read_journal(root).map(|journal| (journal.from, journal.to))
+}
+
 fn write_journal(root: &Path, journal: &Journal) -> std::io::Result<()> {
     let dir = root.join(".charter");
     crate::plane::private_dir(root, &dir)?;

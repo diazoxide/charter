@@ -258,7 +258,7 @@ describe("view tabs", function () {
 
       await $(`button*=Delete memory`).click();
 
-      const undo = await $('[data-testid="memory-undo"]');
+      const undo = await $('[data-cause="memory-deleted"]');
       await undo.waitForExist({ timeout: 20_000 });
       await browser.waitUntil(async () => !(await tabNames()).includes(MEMORY), {
         timeout: 20_000,
@@ -366,7 +366,7 @@ describe("view tabs", function () {
 
       // Delete, and Undo.
       await $(`button*=Delete memory: ${TITLE}`).click();
-      const undo = await $('[data-testid="memory-undo"]');
+      const undo = await $('[data-cause="memory-deleted"]');
       await undo.waitForExist({ timeout: 20_000 });
       await untilTheSection(TITLE, false);
       expect(made(plane)).toBeUndefined();

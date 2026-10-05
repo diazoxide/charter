@@ -38,6 +38,7 @@ import type { ForgeAsk } from "./ForgeQuestion";
 type RepoTried = { refused?: string; asksForge?: string };
 import { UnsavedMark } from "./SavingView";
 import { SessionBusNotice } from "./SessionBusNotice";
+import { Notice } from "./Notice";
 import { tellSaved, useRepoSaving } from "./saving";
 import {
   catalogue,
@@ -1829,17 +1830,9 @@ function App() {
           line charter writes while it waits goes to standard error, which they do not have.
           Dismissible, because the launch is over and the news does not improve. */}
       {slowStart && (
-        <p className="came-back trouble" role="status">
-          {slowStart}{" "}
-          <button
-            type="button"
-            className="dismiss"
-            tabIndex={0}
-            onClick={() => setSlowStart(undefined)}
-          >
-            Dismiss
-          </button>
-        </p>
+        <Notice cause="slow-start" tone="trouble" onDismiss={() => setSlowStart(undefined)}>
+          {slowStart}
+        </Notice>
       )}
 
       {/* A launch without the session bus, and what that run has not got (charter#746). */}
@@ -1850,9 +1843,13 @@ function App() {
           Said up here rather than on the opener, because the window may well have come back
           on another project and the operator would never see it there. */}
       {notRestored.map((line) => (
-        <p className="came-back" role="status" key={line}>
+        <Notice
+          key={line}
+          cause={`not-restored:${line}`}
+          onDismiss={() => setNotRestored((was) => was.filter((one) => one !== line))}
+        >
           {line}
-        </p>
+        </Notice>
       ))}
 
       {/* Every project this window holds. Only the one in front draws anything; the rest keep

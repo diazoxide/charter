@@ -104,6 +104,17 @@ What keeps it from becoming the library this file forbids:
   label, a line of help and its settings (`app/src/settings/groups.ts`) — and the layout draws
   them. A new setting is a few lines of data, and it cannot look different from its neighbours.
 
+## The Notice is a house piece too, by its own amendment
+
+ADR 0037's amendment of 2026-10-05 (V91d, NO-1 #1223) adds **Notice** (`app/src/Notice.tsx`)
+beside the settings set: the one way to draw a standing line in a project's window. It wraps no
+primitive, only a native element and native buttons (`tabIndex={0}` on each, for #186), so the
+argument above about props being the primitive's own does not apply; its props are the line's
+own words instead. What it adds is a type that refuses a line with no way out: `fixes`, `link`,
+`copy` or `onDismiss`, at least one, and always a `cause`. `at="pane"` draws it in a pane's
+corner, over the terminal and taking no row; the default is the band under the strip.
+`Notice.guard.test.ts` fails on a hand-built one.
+
 ## Why Radix, and why not the other two
 
 **Not Material (MUI).** Material is the wrong visual language for a dense terminal-adjacent

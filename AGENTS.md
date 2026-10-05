@@ -52,6 +52,10 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
   and V89j). Another piece needs a new amendment.
   `docs/ui-primitives.md` says which, why, and what it costs; `docs/design-system.md` says what a
   copy has to satisfy.
+- **A standing line in the window is a `Notice`** (`app/src/Notice.tsx`; ADR 0037, amended
+  2026-10-05, V91d): its props require a way out (a fix, a link, Copy command or Dismiss) and a
+  cause key. `app/src/Notice.guard.test.ts` fails on one built by hand, and lists every Notice
+  whose only remedy is Copy command as debt.
 - **No colour is written anywhere but `app/src/theme/`.** A theme is a data file; the CSS
   custom properties and xterm's theme object are both generated from it. Semantic tokens only,
   no arbitrary Tailwind values, and a test fails the build on either.

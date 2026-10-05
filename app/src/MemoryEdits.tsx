@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Notice } from "./Notice";
 import type { Doing, Ran } from "./actions";
 import { commands, type MemoryScope, type MemoryView, type PlaneId } from "./bindings";
 import { settled } from "./PlaneEdits";
@@ -174,17 +175,14 @@ export function useMemoryEdits({
 
   const line =
     undoing === undefined ? null : (
-      <p
-        className={undoing.trouble === undefined ? "came-back" : "came-back trouble"}
-        role="status"
-        data-testid="memory-undo"
+      <Notice
+        cause="memory-deleted"
+        tone={undoing.trouble === undefined ? "news" : "trouble"}
+        fixes={[{ label: "Undo", onPress: () => void undo() }]}
       >
         {undoing.trouble ??
-          `Deleted “${undoing.title}” — it is in the archive now, out of every list.`}{" "}
-        <button type="button" className="dismiss" tabIndex={0} onClick={() => void undo()}>
-          Undo
-        </button>
-      </p>
+          `Deleted “${undoing.title}” — it is in the archive now, out of every list.`}
+      </Notice>
     );
 
   return { doing, changed, onSaved, undo: line };

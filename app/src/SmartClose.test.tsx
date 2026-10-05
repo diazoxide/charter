@@ -502,8 +502,10 @@ describe("a chat put into the background (SI-8f)", () => {
     await step(2, "closed", PLANE, record);
 
     await waitFor(() => expect(chipOf("two")).toBeUndefined());
-    const notice = await screen.findByText(/^Session saved — Ship it/);
-    expect(notice.closest('[role="status"]')).not.toBeNull();
+    const notice = (await screen.findByText(/^Session saved — Ship it/)).closest<HTMLElement>(
+      '[role="status"]',
+    );
+    if (notice === null) throw new Error("the notice is not a status");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await userEvent.click(within(notice).getByRole("button", { name: "Open record" }));
     await waitFor(() => expect(tabOf("Session · Ship it")).toBeDefined());

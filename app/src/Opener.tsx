@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { commands, type ForgeRow, type Recents, type TemplateChoice } from "./bindings";
 import type { ForgeAsk } from "./ForgeQuestion";
 import { FirstRun } from "./FirstRun";
+import { Notice } from "./Notice";
 
 /**
  * The screen a window with no project open draws.
@@ -70,6 +71,8 @@ export function Opener({
   repoForgeAsk?: ForgeAsk;
 }) {
   const [recents, setRecents] = useState<Recents>();
+  /** The Notices dismissed here, by cause, for this run (NO-2 keeps them across a relaunch). */
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
   /** Whether the recent list has answered at all, so the first run is never drawn over a
    *  machine whose list simply has not arrived yet, and never over one that could not say. */
   const [heard, setHeard] = useState(false);
@@ -224,19 +227,28 @@ export function Opener({
 
       {/* A project that has moved or gone is dropped with a line saying so, never an error
           dialog (ADR 0034): the record is a convenience and the project is the truth. */}
-      {recents?.dropped?.map((line) => (
-        <p className="came-back" role="status" key={line}>
-          {line}
-        </p>
-      ))}
+      {recents?.dropped
+        ?.filter((line) => !dismissed.has(`project-gone:${line}`))
+        .map((line) => (
+          <Notice
+            key={line}
+            cause={`project-gone:${line}`}
+            onDismiss={() => setDismissed((was) => new Set(was).add(`project-gone:${line}`))}
+          >
+            {line}
+          </Notice>
+        ))}
 
       {/* A machine with no store — Windows, where `0600` has no expression, so charter's guard
           refuses rather than degrades (ADR 0031). The app works; it just cannot remember. */}
-      {recents?.forgetful && (
-        <p className="came-back" role="status">
+      {recents?.forgetful && !dismissed.has("no-machine-store") && (
+        <Notice
+          cause="no-machine-store"
+          onDismiss={() => setDismissed((was) => new Set(was).add("no-machine-store"))}
+        >
           charter cannot remember projects on this machine ({recents.forgetful}), so there is no
           recent list and it will ask about every project you open.
-        </p>
+        </Notice>
       )}
     </section>
   );

@@ -1,0 +1,362 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import { describe, expect, it } from "vitest";
+
+/**
+ * **Every standing line in the window is a Notice** (NO-1 #1223, rulings V91b, V91d, V91q).
+ *
+ * A Notice is a standing line about something true now (CONTEXT.md), and `Notice.tsx` is the
+ * one way to draw one: its props will not take a line with no way out. Before it, each line was
+ * a `<p className="came-back" role="status">` written by hand, and about thirty of the window's
+ * messages left the operator reading a problem with nothing to press. This fails when one is
+ * built that way again:
+ *
+ * - **a hand-built standing line**: any live region (a `status` or `alert` role, one picked by
+ *   an expression, or `aria-live`) in any source file under `src/`, whatever its class. The
+ *   ones that are not Notices (a dialog's refusal, a live count) are listed in `NOT_NOTICES`,
+ *   each with why, by exact count per file, so a new one fails and a removed one is crossed off;
+ * - **a hand-built way out**: a `dismiss` or `offer` button class, or a `notice*` class, named
+ *   anywhere but `Notice.tsx`, or a stylesheet rule that draws `dismiss` or `offer`.
+ *
+ * And it **lists the debt** (V91q): every Notice whose only remedy is Copy command, a command to
+ * type somewhere else. The list is `COPY_ONLY`, exactly, so adding to it is a visible change.
+ *
+ * Read as text, as `settings/oldFormClasses.test.ts` (DS-3e) and `paint.test.ts` read theirs:
+ * jsdom computes no stylesheet, and a rendered window shows only the lines its test set up.
+ */
+
+/**
+ * **Every live region that is not a Notice, with why. Exact counts per file**: a new one in any
+ * file fails until it is a Notice or is listed here with its reason, and a removed one is
+ * crossed off. A refusal inside a dialog stays an inline error (V91n), and a live value (a count,
+ * progress) is not a standing line.
+ */
+const NOT_NOTICES: Record<string, { count: number; why: string }> = {
+  "About.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "AlertsDrawer.tsx": {
+    count: 2,
+    why: "the Alerts drawer's own read refusals; its rows get their ways out in NO-6 (#1238)",
+  },
+  "App.tsx": {
+    count: 1,
+    why: "what the last action answered: replaced by the next action, not about something true now",
+  },
+  "BottomBar.tsx": {
+    count: 2,
+    why: "the repos bar's read refusal and a branch it cannot read, in that region (NO-4, #1231)",
+  },
+  "ChangeActions.tsx": {
+    count: 4,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "Cockpit.tsx": {
+    count: 1,
+    why: "a branch's apart count, said as it changes: a live value, not a line",
+  },
+  "DeleteVault.tsx": {
+    count: 2,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "DeleteWorkspace.tsx": {
+    count: 2,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "Doctor.tsx": {
+    count: 1,
+    why: "the Doctor dialog's own refusal; its rows get fix ids in the fix registry ticket",
+  },
+  "Explorer.tsx": {
+    count: 1,
+    why: "the explorer's read refusal, inside that region (NO-4, #1231)",
+  },
+  "ExtensionAction.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "FindBar.tsx": { count: 1, why: "the find bar's match count, a live value" },
+  "FirstRun.tsx": { count: 2, why: "the first-run page's progress and refusal, inside its tab" },
+  "FirstTaskTab.tsx": {
+    count: 1,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "HarnessSetupTab.tsx": {
+    count: 1,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "KillSwitch.tsx": {
+    count: 1,
+    why: "the kill switch's refusal, on the title bar control it belongs to",
+  },
+  "LinkWorkItem.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "LiveDialog.tsx": {
+    count: 2,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "MemoryArchiveTab.tsx": {
+    count: 3,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "MemoryTab.tsx": {
+    count: 4,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "NewBranch.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "NewPersona.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "NewProject.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "NewVault.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "NewWorkspace.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "Opener.tsx": {
+    count: 4,
+    why: "the opener's explanation under its heading (three) and its open refusal: the page's own prose",
+  },
+  "Palette.tsx": {
+    count: 7,
+    why: "the palette's answers, counts and refusals, inside the palette dialog",
+  },
+  "Panels.tsx": { count: 3, why: "a panel's read refusal and its blocks' tone, inside the panel" },
+  "ProfileApproval.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "QuitWarning.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "RemovePersona.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "RenameWorkspace.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "RepoInstructionsTab.tsx": {
+    count: 2,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "RepoPicker.tsx": {
+    count: 2,
+    why: "the repo picker's refusals, inside the dialog that holds it",
+  },
+  "SandboxOffer.tsx": { count: 1, why: "the answer's refusal, inside the sandbox offer's Notice" },
+  "SavingView.tsx": {
+    count: 3,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "SearchTab.tsx": { count: 1, why: "the search's progress, a live value" },
+  "SessionRecordTab.tsx": {
+    count: 1,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "StartChat.tsx": {
+    count: 3,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "TabRename.tsx": { count: 1, why: "a rename's refusal, beside the box being typed in" },
+  "Updates.tsx": {
+    count: 4,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "VaultTab.tsx": {
+    count: 7,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "Vaults.tsx": {
+    count: 1,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "Views.tsx": {
+    count: 5,
+    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
+  "editor/BranchTree.tsx": { count: 1, why: "the branch tree's read refusal, inside the editor" },
+  "editor/PieceFiles.tsx": { count: 1, why: "the piece files' read refusal, inside the editor" },
+  "references.tsx": {
+    count: 1,
+    why: "the reference picker saying it found no chat, inside its menu",
+  },
+  "settings/RawToml.tsx": {
+    count: 2,
+    why: "Edit as TOML's own answer and refusal, inside Settings (NO-7, #1232)",
+  },
+  "settings/SettingsTab.tsx": {
+    count: 1,
+    why: "Settings' read refusal, inside its tab (NO-7, #1232)",
+  },
+  "settings/components.tsx": {
+    count: 3,
+    why: "the settings set's filter count, a row's refusal and a range's value: inline, per field",
+  },
+};
+
+/** Notices whose only way out is Copy command (V91q's debt): `file: cause`. None yet. */
+const COPY_ONLY: string[] = [];
+
+const SRC = join(process.cwd(), "src");
+
+function files(dir: string, keep: (name: string) => boolean): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return files(path, keep);
+    return keep(entry.name) ? [path] : [];
+  });
+}
+
+/** Every source file the window is drawn from: not tests, which name the classes to deny them. */
+const sources = () =>
+  files(SRC, (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)).map((path) => ({
+    name: relative(SRC, path),
+    text: readFileSync(path, "utf8"),
+  }));
+
+/**
+ * Every JSX opening tag in `source` whose name `named` takes, as its tag name and its attribute
+ * text. Braces are counted, so an arrow's `>` inside `onClick={() => …}` does not end the tag.
+ */
+function tags(source: string, named: (tag: string) => boolean): { tag: string; attrs: string }[] {
+  const found: { tag: string; attrs: string }[] = [];
+  for (const start of source.matchAll(/<([A-Za-z][\w.]*)(?=[\s>/])/g)) {
+    const tag = start[1];
+    if (!named(tag)) continue;
+    let depth = 0;
+    let at = (start.index ?? 0) + start[0].length;
+    for (; at < source.length; at++) {
+      const char = source[at];
+      if (char === "{") depth++;
+      else if (char === "}") depth--;
+      else if (char === ">" && depth === 0) break;
+    }
+    found.push({ tag, attrs: source.slice((start.index ?? 0) + start[0].length, at) });
+  }
+  return found;
+}
+
+const html = (tag: string) => /^[a-z]/.test(tag);
+/** A live region: a `status` or `alert` role (or one picked by an expression), or `aria-live`. */
+const live = (attrs: string) =>
+  /\brole=(?:"(?:status|alert)"|\{)/.test(attrs) || /\baria-live=/.test(attrs);
+
+/** The class names an attribute text's `className` can hold: every string in its value. */
+function classNames(attrs: string): string[] {
+  const value = /className=(?:"([^"]*)"|\{([\s\S]*)\})/.exec(attrs);
+  if (!value) return [];
+  const strings =
+    value[1] !== undefined
+      ? [value[1]]
+      : [...value[2].matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`/g)].map(([, a, b, c]) =>
+          (a ?? b ?? c ?? "").replace(/\$\{[^}]*\}/g, " "),
+        );
+  return strings.flatMap((one) => one.split(/\s+/)).filter(Boolean);
+}
+
+/** The classes only `Notice.tsx` may name: its look and its ways out. */
+const noticeOnly = (name: string) =>
+  name === "dismiss" || name === "offer" || name === "notice" || name.startsWith("notice-");
+
+/**
+ * The Notices in `source` whose only remedy is Copy command, by cause: a `copy` with no fix and
+ * no link. A Dismiss beside it does not count, because it hides the problem and fixes nothing.
+ */
+function copyOnly(source: string): string[] {
+  return tags(source, (tag) => tag === "Notice")
+    .filter(({ attrs }) => /\bcopy=/.test(attrs) && !/\b(?:fixes|link)=/.test(attrs))
+    .map(
+      ({ attrs }) =>
+        /cause=(?:"([^"]*)"|\{`([^`]*)`\}|\{([^}]*)\})/.exec(attrs)?.slice(1).find(Boolean) ?? "?",
+    );
+}
+
+describe("the window's standing lines", () => {
+  it("are all Notices, but for the live regions listed with why", () => {
+    const counted: Record<string, number> = {};
+    for (const { name, text } of sources()) {
+      if (name === "Notice.tsx") continue;
+      const n = tags(text, (tag) => tag !== "Notice").filter(({ attrs }) => live(attrs)).length;
+      if (n > 0) counted[name] = n;
+    }
+    const listed = Object.fromEntries(
+      Object.entries(NOT_NOTICES).map(([name, { count }]) => [name, count]),
+    );
+    expect(counted).toEqual(listed);
+  });
+
+  it("have their ways out drawn by Notice alone", () => {
+    const named = sources()
+      .filter(({ name }) => name !== "Notice.tsx")
+      .flatMap(({ name, text }) =>
+        tags(text, html)
+          .flatMap(({ attrs }) => classNames(attrs))
+          .filter(noticeOnly)
+          .map((one) => `${name}: ${one}`),
+      );
+    expect(named).toEqual([]);
+
+    const rules = files(SRC, (name) => name.endsWith(".css")).flatMap((path) =>
+      [
+        ...readFileSync(path, "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .matchAll(/([^{}]+)\{/g),
+      ]
+        .map(([, selectors]) => selectors.trim())
+        .filter((selectors) => /\.(?:dismiss|offer)\b/.test(selectors))
+        .map((selectors) => `${relative(SRC, path)}: ${selectors}`),
+    );
+    expect(rules).toEqual([]);
+  });
+
+  it("whose only way out is Copy command are listed as debt", () => {
+    const debt = sources().flatMap(({ name, text }) =>
+      copyOnly(text).map((cause) => `${name}: ${cause}`),
+    );
+    expect(debt).toEqual(COPY_ONLY);
+  });
+
+  it("would be caught if one came back", () => {
+    // The readers above are what the guard rests on, so they are held to what a screen writes.
+    const lines = (source: string) =>
+      tags(source, (tag) => tag !== "Notice").filter(({ attrs }) => live(attrs));
+    expect(lines(`<p className="came-back" role="status">Gone.</p>`)).toHaveLength(1);
+    // The reviewer's injection into SessionBusNotice.tsx: any class, a live role.
+    expect(lines(`<p className="warning" role="status">The bus is gone.</p>`)).toHaveLength(1);
+    expect(lines(`<p className={bad ? "trouble" : "came-back"} role={r}>x</p>`)).toHaveLength(1);
+    expect(lines(`<span aria-live="polite">3 found</span>`)).toHaveLength(1);
+    expect(
+      lines(`<AlertDialog.Description role="alert">No.</AlertDialog.Description>`),
+    ).toHaveLength(1);
+    // A muted sentence with no live role is not a standing line, and a Notice is the way to draw one.
+    expect(lines(`<p className="came-back">Prose.</p>`)).toHaveLength(0);
+    expect(lines(`<Notice cause="x" onDismiss={hide}>Gone.</Notice>`)).toHaveLength(0);
+    const arrow = `<button className="dismiss" onClick={() => go(a > b)}>Dismiss</button>`;
+    expect(tags(arrow, html).flatMap(({ attrs }) => classNames(attrs))).toEqual(["dismiss"]);
+    expect(
+      copyOnly(`<Notice cause="slow" copy="env X=1 charter" onDismiss={() => hide()}>x</Notice>`),
+    ).toEqual(["slow"]);
+    expect(
+      copyOnly(`<Notice cause="slow" copy="env X=1 charter" fixes={[retry]}>x</Notice>`),
+    ).toEqual([]);
+    expect(copyOnly("<Notice cause={`gone:${name}`} copy={command}>x</Notice>")).toEqual([
+      "gone:${name}",
+    ]);
+  });
+});

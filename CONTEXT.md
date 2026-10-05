@@ -553,6 +553,15 @@ title bar's ✋ menu, and each is counted in red on its tab and on any show-more
 **Ignore** clears a chat's items until the next one arrives (ADR 0076).
 _Avoid_: notification, alert (alerts are a separate drawer), waiting (for the state)
 
+**Notice**:
+A standing line in a project's window about something that is true now, such as a pin to a
+workspace that is gone or a repo that could not be cloned. A Notice always offers a way out:
+the fix itself when charter can do it, or a link to the place where it is fixed. Dismiss
+hides it until its cause changes. A reference to something gone is set aside, never removed,
+and comes back when its target does. Not an **Alert**, which is an event in the drawer, and not
+**Needs you**, which is a chat waiting on the operator.
+_Avoid_: notification, banner, toast, message (for the thing itself)
+
 **Ask**:
 A chat's harness handing control to a human: a permission, a question, or a nudge. Every
 harness's own form of it is read into one shape: what it would do, the options as the harness

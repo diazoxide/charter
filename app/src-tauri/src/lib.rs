@@ -1451,29 +1451,65 @@ struct Pins {
     /// **Named rather than dropped silently**, and never drawn as a workspace: a window that
     /// drew one would be offering a workspace the plane does not have. This is ADR 0034's
     /// own hazard for a trust entry keyed on a path, one scope down.
+    ///
+    /// **A dormant pin** (V91c as amended, NO-1): kept in the store, in its place, and drawn
+    /// again when its workspace comes back. The window says so with a Notice that offers
+    /// Forget, so this names a pin only when the workspace is gone for certain (`pins_in`).
     missing: Vec<String>,
+    /// Every pin, gone ones included, in the order the store keeps them.
+    ///
+    /// What an Undo of a Forget needs to put a pin back in its own place: `workspaces` and
+    /// `missing` are each in order, but not in order with each other.
+    order: Vec<String>,
 }
 
 /// What this operator has pinned in this project.
 #[tauri::command]
 #[specta::specta]
 fn plane_pins(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Pins, String> {
-    let held = planes.held(&plane)?;
-    let root = held.root().to_path_buf();
+    let root = planes.held(&plane)?.root().to_path_buf();
+    Ok(pins_in(&planes.remembered().store, &root))
+}
+
+/// [`plane_pins`]'s answer for the plane at `root`, given the machine store.
+///
+/// **A pin is named gone only when the disk says so for certain** (NO-1), because the window
+/// tells the operator about each one and offers to forget it (V91c as amended). Nothing is named gone when the root or its
+/// `workspaces/` is not there (an unmounted volume, a checkout in progress), when the listing
+/// could not be read whole, or while a workspace rename is between its steps (its journal).
+/// And a name is gone only when NOTHING is at `workspaces/<name>`: a symlink whose target is
+/// missing is unreadable, not gone, since an unmounted target comes back (D-NO1-9).
+fn pins_in(store: &charter_core::machine::Store, root: &std::path::Path) -> Pins {
     // The plane's own list, read off the disk the same way the sidebar is: what workspaces
     // exist is the plane's answer and never the store's, so a pin is only ever matched
     // against it.
-    let there = charter_core::workspaces::Plane::open(&root)
-        .workspaces()
-        .unwrap_or_default();
+    let under = root.join("workspaces");
+    let read = charter_core::workspaces::Plane::open(root).read_workspaces();
+    let whole = under.is_dir() && matches!(&read, Ok((_, unread)) if unread.is_empty());
+    let renaming = charter_core::wscmd::rename::in_flight(root);
+    let there = read.map(|(names, _)| names).unwrap_or_default();
     let names: Vec<&str> = there.iter().map(String::as_str).collect();
-    let store = planes.remembered().store;
-    let (kept, missing) = store.pinned_workspaces(&root, &names);
-    Ok(Pins {
-        project: store.recent(&root).is_some_and(|entry| entry.pinned),
+    let (kept, missing) = store.pinned_workspaces(root, &names);
+    let gone = |name: &String| {
+        renaming
+            .as_ref()
+            .is_none_or(|(from, to)| name != from && name != to)
+            && std::fs::symlink_metadata(under.join(name))
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    };
+    Pins {
+        project: store.recent(root).is_some_and(|entry| entry.pinned),
         workspaces: kept.into_iter().map(str::to_owned).collect(),
-        missing,
-    })
+        missing: if whole {
+            missing.into_iter().filter(gone).collect()
+        } else {
+            Vec::new()
+        },
+        order: store
+            .recent(root)
+            .map(|entry| entry.pinned_workspaces.clone())
+            .unwrap_or_default(),
+    }
 }
 
 /// Pins or unpins the project itself.
@@ -2397,6 +2433,131 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A store that remembers the plane at `root` with `pins`, in that order.
+    fn store_pinning(root: &std::path::Path, pins: &[&str]) -> charter_core::machine::Store {
+        let mut store = charter_core::machine::Store::default();
+        store.remember(root, 1);
+        for pin in pins {
+            store
+                .pin_workspace(root, pin, true)
+                .expect("the pin is written");
+        }
+        store
+    }
+
+    #[test]
+    fn a_pin_whose_workspace_is_gone_is_named_with_its_place_in_the_order() {
+        let plane = tempfile::tempdir().expect("a plane");
+        for name in ["beta", "gamma"] {
+            std::fs::create_dir_all(plane.path().join("workspaces").join(name)).expect("made");
+        }
+        let store = store_pinning(plane.path(), &["beta", "was-here", "gamma"]);
+
+        let pins = pins_in(&store, plane.path());
+
+        assert_eq!(pins.workspaces, ["beta", "gamma"]);
+        assert_eq!(pins.missing, ["was-here"]);
+        assert_eq!(pins.order, ["beta", "was-here", "gamma"]);
+    }
+
+    /// A plane with `beta` and `gamma` under `workspaces/`, and a store pinning `pins`.
+    fn plane_pinning(pins: &[&str]) -> (tempfile::TempDir, charter_core::machine::Store) {
+        let plane = tempfile::tempdir().expect("a plane");
+        for name in ["beta", "gamma"] {
+            std::fs::create_dir_all(plane.path().join("workspaces").join(name)).expect("made");
+        }
+        let store = store_pinning(plane.path(), pins);
+        (plane, store)
+    }
+
+    #[test]
+    fn no_pin_is_named_gone_when_the_workspaces_directory_is_not_there() {
+        let (plane, store) = plane_pinning(&["beta", "gamma"]);
+        std::fs::remove_dir_all(plane.path().join("workspaces")).expect("removed");
+
+        assert_eq!(pins_in(&store, plane.path()).missing, Vec::<String>::new());
+    }
+
+    #[test]
+    fn no_pin_is_named_gone_when_the_plane_root_is_not_there() {
+        let (plane, store) = plane_pinning(&["beta", "gamma"]);
+        let root = plane.path().to_path_buf();
+        drop(plane);
+
+        let pins = pins_in(&store, &root);
+
+        assert_eq!(pins.missing, Vec::<String>::new());
+        assert_eq!(pins.order, ["beta", "gamma"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_pin_is_named_gone_when_the_workspaces_directory_cannot_be_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let (plane, store) = plane_pinning(&["beta", "was-here"]);
+        let under = plane.path().join("workspaces");
+        std::fs::set_permissions(&under, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        // Root reads anything, so on a runner that is root there is nothing to refuse.
+        let refused = std::fs::read_dir(&under).is_err();
+
+        let pins = pins_in(&store, plane.path());
+
+        std::fs::set_permissions(&under, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        if refused {
+            assert_eq!(pins.missing, Vec::<String>::new());
+        }
+    }
+
+    #[test]
+    fn neither_name_of_a_rename_in_progress_is_named_gone() {
+        // `wscmd::rename` moves the directory first and the pins last, so in between the old
+        // name's pin names nothing: its journal says the rename is not done.
+        let (plane, store) = plane_pinning(&["beta", "old-name", "new-name"]);
+        let journal = plane.path().join(charter_core::wscmd::rename::JOURNAL);
+        std::fs::create_dir_all(journal.parent().expect("a parent")).expect("made");
+        std::fs::write(
+            &journal,
+            r#"{"from":"old-name","to":"new-name","moved":true}"#,
+        )
+        .expect("written");
+
+        assert_eq!(pins_in(&store, plane.path()).missing, Vec::<String>::new());
+
+        std::fs::remove_file(&journal).expect("removed");
+        assert_eq!(
+            pins_in(&store, plane.path()).missing,
+            ["old-name", "new-name"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_workspace_whose_symlink_target_is_missing_is_not_named_gone() {
+        // D-NO1-9: an unmounted target comes back, so the pin is not charter's to drop.
+        let (plane, store) = plane_pinning(&["beta", "mounted", "was-here"]);
+        std::os::unix::fs::symlink(
+            plane.path().join("not-mounted"),
+            plane.path().join("workspaces").join("mounted"),
+        )
+        .expect("linked");
+
+        assert_eq!(pins_in(&store, plane.path()).missing, ["was-here"]);
+    }
+
+    #[test]
+    fn no_pin_is_named_gone_when_the_workspaces_cannot_be_listed() {
+        // The window offers to forget what `missing` names (V91c), so a listing that failed
+        // must not read as every workspace having gone.
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::write(plane.path().join("workspaces"), "not a directory").expect("written");
+        let store = store_pinning(plane.path(), &["beta", "gamma"]);
+
+        let pins = pins_in(&store, plane.path());
+
+        assert_eq!(pins.missing, Vec::<String>::new());
+        assert_eq!(pins.order, ["beta", "gamma"]);
+    }
 
     /// Writes `BINDINGS`, for when the commands above change:
     /// `cargo test -p charter-app -- --ignored`.

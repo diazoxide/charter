@@ -351,7 +351,7 @@ export function StartChat({
                       Install it with <code>{sandbox.install}</code>. It needs sudo, so charter
                       types it in a shell tab and leaves running it to you.{" "}
                       {onInstall && (
-                        <button type="button" className="dismiss" tabIndex={0} onClick={onInstall}>
+                        <button type="button" tabIndex={0} onClick={onInstall}>
                           Type it in a shell tab
                         </button>
                       )}

@@ -1095,12 +1095,13 @@ button.show-more:focus-visible {
   opacity: 0.92;
 }
 
-/* **A harness started by hand in a shell tab** (ADR 0062): one line in the pane's top-left
+/* **A Notice in a pane's corner** (`Notice` with `at="pane"`), first for a harness started by
+   hand in a shell tab (ADR 0062): one line in the pane's top-left
    corner, over the terminal and taking no row, for the gauge's reason — a pane does not change
    height because charter has something to say. Bordered in the waiting colour so it reads as
    charter speaking to the operator and not as the shell's output, and quieter than a needs-you
    item: nothing is waiting, and the harness is running whatever is pressed. */
-.pane-by-hand {
+.notice-pane {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1112,7 +1113,7 @@ button.show-more:focus-visible {
   border-radius: 4px;
 }
 
-.pane-by-hand button {
+.notice-pane button {
   padding: 0 0.4rem;
   font: inherit;
   color: var(--text-primary);
@@ -1122,11 +1123,11 @@ button.show-more:focus-visible {
   cursor: pointer;
 }
 
-.pane-by-hand button:hover {
+.notice-pane button:hover {
   border-color: var(--accent-base);
 }
 
-.pane-by-hand button.dismiss {
+.notice-pane button.notice-dismiss {
   color: var(--text-secondary);
   background: none;
 }
@@ -2239,12 +2240,35 @@ h2.sidebar-title .node-icon {
   opacity: 0.7;
 }
 
-/* Puts away a line about something that has already finished — the notice about a launch
-   that took longer than the limit, or one without the session bus (charter-app#24) — and
-   offers that one's restart. Inline, in the line's own colour, so each reads as part of the
-   sentence rather than as an action. */
-.came-back .dismiss,
-.came-back .offer {
+/* **A Notice under the strip** (`Notice.tsx`, V91a–d): a standing line about something true
+   now, with its ways out — a fix, a link, Copy command, Dismiss — inline, in the line's own
+   colour, so each reads as part of the sentence rather than as a toolbar. */
+.notice-band {
+  margin: 0;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  background: var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.notice-band.notice-trouble {
+  color: var(--danger-text);
+  background: var(--danger-surface);
+}
+
+.notice-band .notice-says {
+  display: inline;
+}
+
+.notice-band code {
+  opacity: 0.7;
+}
+
+.notice-band p {
+  margin: 0 0 0.25rem;
+}
+
+.notice-band button {
   margin-left: 0.4rem;
   padding: 0;
   font: inherit;

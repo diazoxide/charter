@@ -3142,8 +3142,19 @@ export type Pins = {
 	 *  **Named rather than dropped silently**, and never drawn as a workspace: a window that
 	 *  drew one would be offering a workspace the plane does not have. This is ADR 0034's
 	 *  own hazard for a trust entry keyed on a path, one scope down.
+	 * 
+	 *  **A dormant pin** (V91c as amended, NO-1): kept in the store, in its place, and drawn
+	 *  again when its workspace comes back. The window says so with a Notice that offers
+	 *  Forget, so this names a pin only when the workspace is gone for certain (`pins_in`).
 	 */
 	missing: string[],
+	/**
+	 *  Every pin, gone ones included, in the order the store keeps them.
+	 * 
+	 *  What an Undo of a Forget needs to put a pin back in its own place: `workspaces` and
+	 *  `missing` are each in order, but not in order with each other.
+	 */
+	order: string[],
 };
 
 /**  One open project's alerts. */
