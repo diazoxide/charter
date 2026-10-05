@@ -850,7 +850,7 @@ mod tests {
             "workspace.json",
             "memory/MEMORY.md",
             "refs/README.md",
-            ".charter-structure",
+            ".purlis-structure",
         ] {
             assert!(
                 made.join(rel).exists(),

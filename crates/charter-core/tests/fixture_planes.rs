@@ -38,7 +38,7 @@ fn every_fixture_manifest_is_owned_by_charter_because_our_digest_is_the_one_it_s
         let stored = doc
             .get("charter_generated")
             .and_then(|v| v.as_str())
-            .expect("charter writes charter_generated on every write");
+            .expect("the fixtures were stamped before the rename, under charter_generated");
 
         assert_eq!(
             charter_core::manifest::digest(&doc),
@@ -360,6 +360,10 @@ fn a_written_manifest_carries_the_digest_of_what_it_now_says() {
         "the stale digest was replaced: {text}"
     );
     assert_eq!(back["description"], "Ship the widget — fast");
+    assert!(
+        back.get("charter_generated").is_some() && back.get("purlis_generated").is_none(),
+        "a plane not yet migrated keeps charter's key, so an older build still reads it: {text}"
+    );
     assert!(
         text.ends_with("}\n"),
         "indent=2 with one trailing newline: {text}"

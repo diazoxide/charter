@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(doc["repos"][0]["branch"], "main");
         assert_eq!(doc["updated_at"], "2026-05-04T11:32:17+00:00");
         assert!(
-            doc.get(crate::manifest::KEY).is_some(),
+            doc.get(crate::manifest::key_for(dir.path())).is_some(),
             "charter stamps what it wrote"
         );
         assert!(said.iter().any(|l| l.contains("  svc @ main")), "{said:?}");

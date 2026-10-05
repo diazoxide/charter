@@ -173,10 +173,12 @@ impl std::fmt::Display for NotPrivate {
 impl std::error::Error for NotPrivate {}
 
 /// Every temp file [`replace`] writes starts with this, so one pattern names all of them:
-/// `.charter-generated.<name>.<pid>.<tag>.tmp`. It is the prefix the generated layer's temps
-/// have always had, which a guest checkout's exclude block hides (`guest::TEMP_PATTERN`) and
-/// its "temps left" check looks for. It is [`crate::layer::MARKER`] and a dot.
-pub const TEMP_PREFIX: &str = ".charter-generated.";
+/// `.purlis-generated.<name>.<pid>.<tag>.tmp` ([`crate::names::GENERATED_TEMP_PREFIX`]; an
+/// older charter's were `.charter-generated.…`, and are still recognised). It is the prefix
+/// the generated layer's temps have, which a guest checkout's exclude block hides
+/// (`guest::TEMP_PATTERN`) and its "temps left" check looks for. It is
+/// [`crate::layer::MARKER`] and a dot.
+pub const TEMP_PREFIX: &str = crate::names::GENERATED_TEMP_PREFIX.write;
 
 /// Replace `path` with `bytes`, whole or not at all.
 ///
@@ -578,7 +580,7 @@ mod tests {
         let _hook = hook::set(|_, temp| {
             let name = temp.file_name().unwrap().to_string_lossy().into_owned();
             assert!(
-                name.starts_with(".charter-generated.settings.json."),
+                name.starts_with(".purlis-generated.settings.json."),
                 "{name}"
             );
             assert!(name.ends_with(".tmp"), "{name}");

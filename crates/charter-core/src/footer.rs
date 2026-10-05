@@ -473,8 +473,8 @@ const BASELINE: [&str; 4] = [
     "refs/README.md",
 ];
 const STRUCTURE_VERSION: i64 = 5;
-const STRUCTURE_MARKER: &str = ".charter-structure";
-const LEGACY_STRUCTURE_MARKER: &str = ".edm-structure";
+#[cfg(test)]
+const STRUCTURE_MARKER: &str = crate::names::STRUCTURE_STAMP.write;
 
 /// Is the active workspace's on-disk structure behind the current layout?
 ///
@@ -560,11 +560,9 @@ fn structure_version(dir: &Path) -> i64 {
     // reads the legacy one only when the current one is absent (it renames it into place and
     // reads that), so a current marker that is a directory answers 0 rather than falling
     // through to an older stamp beside it.
-    let current = dir.join(STRUCTURE_MARKER);
-    let path = match std::fs::symlink_metadata(&current) {
-        Ok(_) => current,
-        Err(_) => dir.join(LEGACY_STRUCTURE_MARKER),
-    };
+    let path = crate::names::STRUCTURE_STAMP
+        .in_dir(dir, |p| p.symlink_metadata().is_ok())
+        .name;
     // `O_NOFOLLOW`'s rule, as a check charter can make without opening: a version read through
     // a link is not charter's, because charter never writes the stamp through one. `is_file`
     // of a `symlink_metadata` is false for a link, a directory and a FIFO alike — and the FIFO

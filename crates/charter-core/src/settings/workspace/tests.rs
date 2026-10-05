@@ -25,7 +25,7 @@ fn on_disk(root: &Path) -> String {
 fn charters(doc: serde_json::Value) -> String {
     let mut doc = doc;
     let digest = manifest::digest(&doc);
-    doc[manifest::KEY] = serde_json::Value::String(digest);
+    doc["charter_generated"] = serde_json::Value::String(digest);
     crate::pyjson::dumps_indent2(&doc)
 }
 
@@ -118,7 +118,7 @@ fn a_hand_written_manifest_stays_the_operators_after_a_save() {
     save(dir.path(), "alpha", Some(hand), &[off()]).unwrap();
     let text = on_disk(dir.path());
     assert_eq!(manifest::ownership(Some(&text)), Ownership::Operator);
-    assert!(!text.contains(manifest::KEY), "{text}");
+    assert!(!text.contains("_generated"), "{text}");
 }
 
 #[test]

@@ -1304,7 +1304,7 @@ impl Opencode {
         let Ok(text) = String::from_utf8(bytes) else {
             return Ok(Author::Other);
         };
-        Ok(if text.starts_with(crate::opencode::MARK) {
+        Ok(if crate::opencode::is_own(&text) {
             Author::Charter(text)
         } else if text.starts_with(crate::opencode::PYTHON_MARK) {
             Author::Python

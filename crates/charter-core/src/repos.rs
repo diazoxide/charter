@@ -75,7 +75,7 @@ pub fn clones(plane: &Path, ws: &str) -> Result<Clones, Trouble> {
     let mut found = Clones::default();
     for name in names {
         // charter's own directories under a workspace all start with a dot — `.worktrees`,
-        // `.claude`, `.charter-generated` — and none of them is a repo.
+        // `.claude`, `.purlis-generated` — and none of them is a repo.
         if name.starts_with('.') {
             continue;
         }

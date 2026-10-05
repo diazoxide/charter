@@ -318,7 +318,7 @@ impl<'a> Linter<'a> {
                 )]
             };
         };
-        if !current.contains(super::agents::MARKER) {
+        if !super::agents::carries_marker(&current) {
             return Vec::new();
         }
         let rendered = super::agents::render(self.root, self.state, name, &def);

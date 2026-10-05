@@ -48,6 +48,7 @@ use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::names;
 use crate::repocmd::{Say, Sink};
 
 pub mod create;
@@ -80,13 +81,15 @@ pub fn cannot_check_workspace(at: &Path, code: Option<i32>) -> String {
     )
 }
 
-/// The delimiters of the managed `.gitignore` block that records which workspaces are LIVE.
-///
-/// Liveness lives in `.gitignore` and nowhere else, so it is git-visible and travels with
-/// the control plane — there is no second file to disagree with it.
-pub const LIVE_BEGIN: &str =
-    "# >>> charter live workspaces (managed by `charter workspace live`) >>>";
-pub const LIVE_END: &str = "# <<< charter live workspaces <<<";
+// The delimiters of the managed `.gitignore` block that records which workspaces are LIVE.
+//
+// Liveness lives in `.gitignore` and nowhere else, so it is git-visible and travels with
+// the control plane — there is no second file to disagree with it.
+//
+// The block is read between either name's lines ([`names::LIVE_BEGIN`],
+// [`names::LIVE_END`]) and written under the ones the plane writes
+// ([`names::Name::writes_for`]): the block is committed, so it keeps charter's markers until
+// the plane is migrated, and is rewritten in place under purlis's after (V93g, V93i).
 
 /// The workspaces marked LIVE — `workspace.live_workspaces`.
 ///
@@ -105,9 +108,9 @@ fn live_in(text: &str) -> BTreeSet<String> {
     let mut inside = false;
     for line in crate::mdsection::split_lines(text) {
         let line = crate::memstore::py_strip(line);
-        if line == LIVE_BEGIN {
+        if names::LIVE_BEGIN.recognises(line) {
             inside = true;
-        } else if line == LIVE_END {
+        } else if names::LIVE_END.recognises(line) {
             inside = false;
         } else if inside && let Some(name) = live_line(line) {
             out.insert(name);
@@ -144,8 +147,8 @@ fn live_line(line: &str) -> Option<String> {
 /// per host without a lock, and is committed **never**. Re-ignoring works only because its
 /// parent was re-included two lines above — git cannot re-include a file whose parent
 /// directory is excluded — which is why the three lines are written together.
-pub fn live_block<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
-    let mut lines = vec![LIVE_BEGIN.to_string()];
+pub fn live_block<'a>(root: &Path, names: impl IntoIterator<Item = &'a str>) -> String {
+    let mut lines = vec![self::names::LIVE_BEGIN.writes_for(root).to_string()];
     let mut sorted: Vec<&str> = names.into_iter().collect();
     sorted.sort_unstable();
     for n in sorted {
@@ -167,7 +170,7 @@ pub fn live_block<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
             lines.push(line);
         }
     }
-    lines.push(LIVE_END.to_string());
+    lines.push(self::names::LIVE_END.writes_for(root).to_string());
     lines.join("\n")
 }
 
@@ -184,7 +187,7 @@ pub fn write_live_block<'a>(
     root: &Path,
     names: impl IntoIterator<Item = &'a str>,
 ) -> io::Result<()> {
-    let block = live_block(names);
+    let block = live_block(root, names);
     rewrite_gitignore(root, |text| Some(with_block(text, &block))).map(|_| ())
 }
 
@@ -195,7 +198,7 @@ pub fn refresh_live_block(root: &Path) -> io::Result<()> {
         let names = live_in(text);
         Some(with_block(
             text,
-            &live_block(names.iter().map(String::as_str)),
+            &live_block(root, names.iter().map(String::as_str)),
         ))
     })
     .map(|_| ())
@@ -213,7 +216,7 @@ fn rewrite_gitignore(root: &Path, change: impl FnOnce(&str) -> Option<String>) -
 
 /// `text` with the managed block set to `block`.
 fn with_block(text: &str, block: &str) -> String {
-    if text.contains(LIVE_BEGIN) {
+    if first_of(text, &names::LIVE_BEGIN).is_some() {
         replace_every_block(text, block)
     } else if let Some(at) = text.find("!/workspaces/.gitkeep\n") {
         let cut = at + "!/workspaces/.gitkeep\n".len();
@@ -241,17 +244,26 @@ fn with_block(text: &str, block: &str) -> String {
 fn replace_every_block(text: &str, block: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(start) = rest.find(LIVE_BEGIN) {
-        let Some(offset) = rest[start..].find(LIVE_END) else {
+    while let Some((start, _)) = first_of(rest, &names::LIVE_BEGIN) {
+        let Some((offset, len)) = first_of(&rest[start..], &names::LIVE_END) else {
             break;
         };
-        let end = start + offset + LIVE_END.len();
+        let end = start + offset + len;
         out.push_str(&rest[..start]);
         out.push_str(block);
         rest = &rest[end..];
     }
     out.push_str(rest);
     out
+}
+
+/// Where the first spelling of `marker` starts in `text`, and how long it is there — either
+/// name's, whichever comes first.
+fn first_of(text: &str, marker: &names::Name) -> Option<(usize, usize)> {
+    marker
+        .spellings()
+        .filter_map(|s| text.find(s).map(|at| (at, s.len())))
+        .min_by_key(|&(at, len)| (at, std::cmp::Reverse(len)))
 }
 
 /// Mark `name` LIVE or LOCAL; `true` when the liveness actually changed.
@@ -271,7 +283,7 @@ pub fn set_live(root: &Path, name: &str, live: bool) -> io::Result<bool> {
         }
         Some(with_block(
             text,
-            &live_block(names.iter().map(String::as_str)),
+            &live_block(root, names.iter().map(String::as_str)),
         ))
     })
 }
@@ -288,7 +300,7 @@ pub fn rename_live(root: &Path, old: &str, new: &str) -> io::Result<bool> {
         names.insert(new.to_string());
         Some(with_block(
             text,
-            &live_block(names.iter().map(String::as_str)),
+            &live_block(root, names.iter().map(String::as_str)),
         ))
     })
 }
@@ -576,6 +588,15 @@ pub(crate) fn say_each(say: Sink, lines: impl IntoIterator<Item = String>) {
 mod tests {
     use super::*;
 
+    /// What a plane that is not migrated writes: charter's markers (V93g).
+    const LIVE_BEGIN: &str = names::LIVE_BEGIN.reads[0];
+    const LIVE_END: &str = names::LIVE_END.reads[0];
+
+    /// A plane nobody migrated — no manifest at all to say otherwise.
+    fn unmigrated() -> &'static Path {
+        Path::new("/nonexistent-plane")
+    }
+
     fn plane() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("charter.toml"), "").unwrap();
@@ -584,7 +605,7 @@ mod tests {
 
     #[test]
     fn the_block_lists_each_path_twice_and_re_ignores_the_landing_log() {
-        let block = live_block(["beta"]);
+        let block = live_block(unmigrated(), ["beta"]);
         let lines: Vec<&str> = block.lines().collect();
         assert_eq!(lines[0], LIVE_BEGIN);
         assert_eq!(lines[lines.len() - 1], LIVE_END);
@@ -602,7 +623,7 @@ mod tests {
 
     #[test]
     fn the_block_publishes_a_live_workspaces_session_records_with_it() {
-        let block = live_block(["beta"]);
+        let block = live_block(unmigrated(), ["beta"]);
         assert!(
             block.contains("!/workspaces/beta/sessions\n!/workspaces/beta/sessions/**\n"),
             "{block}"
@@ -681,13 +702,100 @@ mod tests {
         );
     }
 
+    /// The block exactly as charter wrote it before the rename, between somebody's lines.
+    const CHARTERS_BLOCK: &str = "head\n\
+        # >>> charter live workspaces (managed by `charter workspace live`) >>>\n\
+        !/workspaces/alpha/workspace.json\n\
+        # <<< charter live workspaces <<<\n\
+        tail\n";
+
+    #[test]
+    fn a_live_block_charter_wrote_is_read_and_rewritten_in_place_under_the_purlis_markers() {
+        let dir = plane();
+        // Migrated: the committed block takes purlis's markers on its next write.
+        std::fs::write(dir.path().join("purlis.toml"), "").unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, CHARTERS_BLOCK).unwrap();
+        assert_eq!(
+            live_workspaces(dir.path()),
+            BTreeSet::from(["alpha".to_string()]),
+            "the old block is recognised"
+        );
+
+        assert!(set_live(dir.path(), "beta", true).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("charter live workspaces"), "{text}");
+        assert_eq!(
+            text,
+            format!(
+                "head\n{}\ntail\n",
+                live_block(dir.path(), ["alpha", "beta"])
+            ),
+            "rewritten where it stood, once"
+        );
+        assert!(
+            text.contains(
+                "\n# >>> purlis live workspaces (managed by `purlis workspace live`) >>>\n"
+            ),
+            "{text}"
+        );
+        assert_eq!(
+            live_workspaces(dir.path()),
+            BTreeSet::from(["alpha".to_string(), "beta".to_string()]),
+            "the purlis block is recognised"
+        );
+    }
+
+    #[test]
+    fn a_plane_not_yet_migrated_keeps_charters_live_block_and_its_markers() {
+        let dir = plane();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, CHARTERS_BLOCK).unwrap();
+        // Already what the block would be: not a byte moves.
+        assert!(!set_live(dir.path(), "alpha", true).unwrap());
+        refresh_live_block(dir.path()).unwrap();
+        let refreshed = std::fs::read_to_string(&path).unwrap();
+        assert!(!refreshed.contains("purlis"), "{refreshed}");
+
+        assert!(set_live(dir.path(), "beta", true).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "head\n{}\ntail\n",
+                live_block(dir.path(), ["alpha", "beta"])
+            )
+        );
+        assert!(text.contains(&format!("\n{LIVE_BEGIN}\n")), "{text}");
+        assert!(!text.contains("purlis"), "{text}");
+        assert_eq!(text.matches("live workspaces (managed by").count(), 1);
+    }
+
+    #[test]
+    fn a_block_opened_under_one_name_and_closed_under_the_other_is_one_block() {
+        let dir = plane();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(
+            &path,
+            CHARTERS_BLOCK.replace("# <<< charter live workspaces <<<", names::LIVE_END.write),
+        )
+        .unwrap();
+        assert!(set_live(dir.path(), "alpha", false).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            format!("head\n{}\ntail\n", live_block(unmigrated(), [])),
+            "{text}"
+        );
+    }
+
     #[test]
     fn a_second_managed_block_is_rewritten_too_and_never_left_behind() {
         // The differential found this: Python's `re.sub` replaces EVERY span, and a first
         // port replaced one. A `live --off` then left the workspace un-ignored by the block
         // further down, so the next `charter save` would have committed its memory.
         let dir = plane();
-        let block = live_block(["alpha"]);
+        let block = live_block(unmigrated(), ["alpha"]);
         std::fs::write(
             dir.path().join(".gitignore"),
             format!("head\n{block}\nmiddle\n{block}\ntail\n"),

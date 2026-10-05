@@ -8,7 +8,7 @@
 //! | Target | Module | Extra |
 //! |---|---|---|
 //! | a checkout with a git root of its own | [`crate::guest`] | `.git/info/exclude`, the mirrored walk-up dirs, the machine-local document |
-//! | a `workspaces/<ws>/` directory | [`crate::wslayer`] | the `.charter-structure` stamp |
+//! | a `workspaces/<ws>/` directory | [`crate::wslayer`] | the `.purlis-structure` stamp |
 //!
 //! What they share is everything that decides **what charter may overwrite**, and that is
 //! what lives here. It was `guest.rs`'s alone until M2.22 needed the second target;
@@ -45,7 +45,88 @@ use crate::contain;
 /// harness; an unknown key in it is charter making a claim on somebody else's document, and
 /// a validator that rejects unknown keys would turn charter's bookkeeping into a startup
 /// failure.
-pub const MARKER: &str = ".charter-generated";
+///
+/// This is the name written ([`crate::names::GENERATED_SIDECAR`]). A record charter wrote as
+/// `.charter-generated` is read while it is the only one, and moved to this name, bytes
+/// unchanged, the next time the layer is wired ([`carry_over`]) — so every file it vouched
+/// for is still charter's afterwards (V93i).
+pub const MARKER: &str = crate::names::GENERATED_SIDECAR.write;
+
+/// The sidecar's name in `base` that is read: the newest spelling there (V93e), or [`MARKER`].
+/// "There" is the link node, so a link at the purlis name is never passed over for an older
+/// file.
+pub fn marker_in(base: &Path) -> PathBuf {
+    crate::names::GENERATED_SIDECAR
+        .in_dir(base, |p| p.symlink_metadata().is_ok())
+        .name
+}
+
+/// Whether `name` is the sidecar under any of its names.
+pub fn is_marker(name: &str) -> bool {
+    crate::names::GENERATED_SIDECAR.recognises(name)
+}
+
+/// A hook a test sets to run between finding the old record and moving it.
+#[cfg(test)]
+mod race {
+    use std::cell::RefCell;
+    use std::path::Path;
+
+    type Hook = Box<dyn Fn(&Path)>;
+    thread_local!(static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) });
+
+    pub struct Set;
+    impl Drop for Set {
+        fn drop(&mut self) {
+            HOOK.with(|h| *h.borrow_mut() = None);
+        }
+    }
+
+    pub fn set(f: impl Fn(&Path) + 'static) -> Set {
+        HOOK.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+        Set
+    }
+
+    pub fn run(base: &Path) {
+        HOOK.with(|h| {
+            if let Some(f) = h.borrow().as_ref() {
+                f(base);
+            }
+        });
+    }
+}
+
+/// Move a record charter wrote under an older name to [`MARKER`], bytes unchanged, when it is
+/// the only one in `base`. `Ok(true)` when it moved.
+///
+/// The same bytes under the new name (a hard link, then the old name removed), so what it
+/// vouches for — torn, pending or settled — is exactly what it vouched for before, and a record
+/// already at the new name is never replaced. Only a regular file is moved: a link is nobody's
+/// record to carry, and stays where it is for [`publish`] to refuse.
+pub fn carry_over(base: &Path) -> std::io::Result<bool> {
+    let at = crate::names::GENERATED_SIDECAR.in_dir(base, |p| p.symlink_metadata().is_ok());
+    if at.found != crate::names::Found::Old
+        || !at.name.symlink_metadata().is_ok_and(|m| m.is_file())
+    {
+        return Ok(false);
+    }
+    let to = base.join(MARKER);
+    #[cfg(test)]
+    race::run(base);
+    contain::no_link_on_the_way(base, &to)
+        .map_err(|_| std::io::Error::other("the record is reached through a symlink"))?;
+    // Never over a record at the purlis name: another launch may have published one between
+    // the look above and here, and `rename` would replace it with the older record. A hard
+    // link fails when the name is taken, so the old record is left as a leftover, which the
+    // next publish removes.
+    match std::fs::hard_link(&at.name, &to) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) => return Err(e),
+    }
+    std::fs::remove_file(&at.name)?;
+    Ok(true)
+}
 
 /// The generated document carrying the plane's `env` (and so `$CHARTER_HARNESS`), its
 /// `enabledPlugins`, and its shared ask/deny rules. Both targets want exactly this one.
@@ -219,12 +300,12 @@ impl Record {
 /// dropped rather than half of it. Charter writes a fresh one through the containment check,
 /// so nothing that was really charter's is lost.
 ///
-/// Whether a repository *commits* a `.charter-generated` — which would make it somebody's
+/// Whether a repository *commits* a layer record — which would make it somebody's
 /// content rather than charter's record — is a question about a CHECKOUT and lives in
 /// [`crate::guest::tracked`]. A workspace directory is inside the plane's own repository and
 /// `/workspaces/*/*` already ignores it, so there is nothing to ask there.
 pub fn read_record(base: &Path) -> Record {
-    let Ok(text) = std::fs::read_to_string(base.join(MARKER)) else {
+    let Ok(text) = std::fs::read_to_string(marker_in(base)) else {
         return Record::new();
     };
     parse_record(&text)
@@ -499,7 +580,7 @@ pub fn write_into(base: &Path, rel: &str, text: &str) -> Result<(), String> {
 /// somebody else's edit: the plane's new `deny` never arrived there, and `doctor` said all
 /// current.
 ///
-/// The temp is `.charter-generated.<name>.<pid>.<tag>.tmp` ([`crate::rewrite::TEMP_PREFIX`]) —
+/// The temp is `.purlis-generated.<name>.<pid>.<tag>.tmp` ([`crate::rewrite::TEMP_PREFIX`]) —
 /// beside the target, so the rename is a rename, and private to this writer.
 pub fn write_whole(path: &Path, text: &str) -> Result<(), String> {
     write_whole_io(path, text).map_err(|e| e.to_string())
@@ -534,19 +615,38 @@ pub fn publish_io(base: &Path, record: &Record) -> std::io::Result<()> {
     let path = base.join(MARKER);
     if record.is_empty() {
         // `remove_file` never follows a symlink, so a hostile marker LINK is removed at the
-        // link node, never through it — no containment needed on this branch.
-        return match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        };
+        // link node, never through it — no containment needed on this branch. Every name the
+        // record has had goes: one left under an older name would be read again.
+        return remove_older(base).and(remove(&path));
     }
     if contain::no_link_on_the_way(base, &path).is_err() {
         return Err(std::io::Error::other(
             "the record is reached through a symlink",
         ));
     }
-    write_whole_io(&path, &crate::pyjson::dumps_indent2(&record.document()))
+    write_whole_io(&path, &crate::pyjson::dumps_indent2(&record.document()))?;
+    // Published under the purlis name, so a record left under an older one is a leftover that
+    // would contradict it: gone, never beside it.
+    remove_older(base)
+}
+
+/// Remove the record under every older name in `base`, at the link node.
+fn remove_older(base: &Path) -> std::io::Result<()> {
+    let names = &crate::names::GENERATED_SIDECAR;
+    names
+        .reads
+        .iter()
+        .chain(names.history)
+        .try_for_each(|old| remove(&base.join(old)))
+}
+
+/// `remove_file`, where a file that is not there is already removed.
+fn remove(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Remove `dir` and its parents up to (never including) `stop`, while they are empty AND
@@ -807,6 +907,100 @@ mod tests {
              then refused"
         );
         assert!(!outside.path().join("agents").join("steward.md").exists());
+    }
+
+    // ---- the rename (V93i) ----------------------------------------------------------- //
+
+    /// A record exactly as charter wrote it before the rename.
+    const CHARTERS_RECORD: &str = "{\n  \"a.json\": \"abc\"\n}\n";
+
+    #[test]
+    fn a_record_charter_wrote_is_read_under_its_old_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".charter-generated"), CHARTERS_RECORD).unwrap();
+        assert_eq!(read_record(dir.path()).recorded("a.json"), ["abc"]);
+    }
+
+    #[test]
+    fn carrying_over_moves_the_old_record_to_the_purlis_name_bytes_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".charter-generated"), CHARTERS_RECORD).unwrap();
+        assert!(carry_over(dir.path()).unwrap());
+        assert!(!dir.path().join(".charter-generated").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".purlis-generated")).unwrap(),
+            CHARTERS_RECORD
+        );
+        assert_eq!(read_record(dir.path()).recorded("a.json"), ["abc"]);
+        assert!(!carry_over(dir.path()).unwrap(), "once is all");
+    }
+
+    #[test]
+    fn with_both_names_there_the_purlis_record_is_read_and_publishing_leaves_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".charter-generated"), CHARTERS_RECORD).unwrap();
+        std::fs::write(dir.path().join(MARKER), "{\"b.json\": \"def\"}").unwrap();
+        let record = read_record(dir.path());
+        assert!(
+            !record.names("a.json"),
+            "the old record is a leftover, never merged"
+        );
+        assert_eq!(record.recorded("b.json"), ["def"]);
+        assert!(
+            !carry_over(dir.path()).unwrap(),
+            "never over the purlis one"
+        );
+
+        publish(dir.path(), &record).unwrap();
+        assert!(!dir.path().join(".charter-generated").exists());
+        assert!(dir.path().join(MARKER).is_file());
+    }
+
+    #[test]
+    fn a_record_that_names_nothing_removes_the_record_under_every_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".charter-generated"), CHARTERS_RECORD).unwrap();
+        publish(dir.path(), &Record::new()).unwrap();
+        assert!(!dir.path().join(".charter-generated").exists());
+        assert!(!dir.path().join(MARKER).exists());
+    }
+
+    #[test]
+    fn carrying_over_never_replaces_a_record_that_arrived_at_the_purlis_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".charter-generated"), CHARTERS_RECORD).unwrap();
+        // What another launch published between the look and the move: the hook runs where
+        // the move would, after the old record was found and before it moved.
+        let newer = "{\"b.json\": \"def\"}";
+        let _hook = race::set(move |base| std::fs::write(base.join(MARKER), newer).unwrap());
+        assert!(!carry_over(dir.path()).unwrap(), "nothing moved");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(MARKER)).unwrap(),
+            newer,
+            "the newer record stands"
+        );
+        assert!(
+            dir.path().join(".charter-generated").is_file(),
+            "the old one is left as a leftover"
+        );
+        drop(_hook);
+        publish(dir.path(), &read_record(dir.path())).unwrap();
+        assert!(
+            !dir.path().join(".charter-generated").exists(),
+            "and the next publish removes it"
+        );
+    }
+
+    #[test]
+    fn an_old_record_that_is_a_link_is_not_carried_over() {
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("record.json");
+        std::fs::write(&victim, CHARTERS_RECORD).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, dir.path().join(".charter-generated")).unwrap();
+        assert!(!carry_over(dir.path()).unwrap());
+        assert!(!dir.path().join(MARKER).exists());
     }
 
     #[test]

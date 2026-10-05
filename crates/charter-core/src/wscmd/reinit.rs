@@ -516,11 +516,7 @@ mod tests {
     fn an_old_stamp_is_bumped_and_the_line_names_both_versions() {
         let dir = plane();
         made(dir.path(), "gamma");
-        std::fs::write(
-            dir.path().join("workspaces/gamma/.charter-structure"),
-            "3\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("workspaces/gamma/.purlis-structure"), "3\n").unwrap();
         let (_code, lines) = run(dir.path(), Scope::One("gamma"));
         assert_eq!(
             lines,

@@ -158,30 +158,8 @@ impl Plane {
     /// Whether `name` is LIVE — un-ignored in the plane's `.gitignore` managed block, so its
     /// memory is committed and shared (`workspace.live_workspaces`).
     pub fn is_live(&self, name: &str) -> bool {
-        const BEGIN: &str =
-            "# >>> charter live workspaces (managed by `charter workspace live`) >>>";
-        const END: &str = "# <<< charter live workspaces <<<";
-        let Ok(text) = std::fs::read_to_string(self.root.join(".gitignore")) else {
-            return false;
-        };
-        let mut inside = false;
-        for line in crate::mdsection::split_lines(&text) {
-            let line = memstore::py_strip(line);
-            if line == BEGIN {
-                inside = true;
-            } else if line == END {
-                inside = false;
-            } else if inside
-                && let Some(rest) = line.strip_prefix("!/workspaces/")
-                && let Some((live, tail)) = rest.split_once('/')
-                && !live.is_empty()
-                && tail.starts_with("workspace.json")
-                && live == name
-            {
-                return true;
-            }
-        }
-        false
+        // One reader of the block, which knows both names' markers (V93i).
+        crate::wscmd::live_workspaces(&self.root).contains(name)
     }
 
     /// One workspace of this plane, by name.
@@ -522,9 +500,10 @@ impl Workspace {
 
     /// Write `workspace.json`, stamping the digest last and replacing the file atomically.
     ///
-    /// `charter_generated` is inserted rather than appended when it is already there, so a
+    /// The stamp takes the place of the key already there ([`manifest::stamp`]), so a
     /// document charter wrote keeps its key order and one a hand wrote keeps the position it
-    /// chose — which is what Python's `dict` assignment does.
+    /// chose. The key is the plane's ([`manifest::key_for`]): charter's until it is migrated,
+    /// and after that the old key is renamed in place.
     pub fn write_manifest(&self, doc: &serde_json::Value) -> io::Result<()> {
         self.write_manifest_as(doc, true)
     }
@@ -535,12 +514,7 @@ impl Workspace {
     pub fn write_manifest_as(&self, doc: &serde_json::Value, stamped: bool) -> io::Result<()> {
         self.writable(&self.dir.join("workspace.json"))?;
         let mut doc = doc.clone();
-        let digest = manifest::digest(&doc);
-        if let Some(map) = doc.as_object_mut()
-            && stamped
-        {
-            map.insert(manifest::KEY.to_string(), serde_json::Value::String(digest));
-        }
+        manifest::stamp(&mut doc, stamped, manifest::key_for(&self.plane_root));
         std::fs::create_dir_all(&self.dir)?;
         // Whole or not at all: one of this file's readers is `git add`, so half a manifest is
         // not a glitch somebody re-runs past — it is half a manifest a teammate pulls. Gated
@@ -887,7 +861,7 @@ fn file_name(path: &Path) -> std::borrow::Cow<'_, str> {
 /// Twelve hex characters no other writer in this process will produce, so the temp name is
 /// unique per CALL and not merely per process.
 ///
-/// charter's own temp is `.charter-generated.<target>.<pid>.<12 random hex>.tmp`
+/// charter's own temp is `.purlis-generated.<target>.<pid>.<12 random hex>.tmp`
 /// ([`crate::rewrite::replace`]): the pid separates two
 /// processes (#893 — two commands scaffolding one workspace used to share a single
 /// `workspace.json.tmp`) and the random half separates two writers inside one, which threads

@@ -10,8 +10,8 @@
 //!
 //! # What this target has that a checkout does not
 //!
-//! The `.charter-structure` stamp — the durable upgrade anchor. A workspace created by an
-//! older charter can lack files a newer one expects, so the layout version it was built to is
+//! The `.purlis-structure` stamp (`.charter-structure` before the rename) — the durable
+//! upgrade anchor. A workspace created by an older charter can lack files a newer one expects, so the layout version it was built to is
 //! stamped in a small local file; a workspace whose stamp is missing or older, or that is
 //! missing a baseline file, reads as stale and is flagged until `charter workspace reinit`
 //! heals it.
@@ -88,15 +88,14 @@ use crate::layer::{self, Record};
 /// v5: every workspace has a `workspace.json`, from birth (charter#884).
 pub const STRUCTURE_VERSION: u32 = 5;
 
-/// Where that version is stamped.
-pub const STRUCTURE_MARKER: &str = ".charter-structure";
-
-/// The pre-rename spelling, migrated in place the first time it is read.
+/// Where that version is stamped ([`crate::names::STRUCTURE_STAMP`]). Its older spellings —
+/// charter's `.charter-structure`, and `.edm-structure` before it — are migrated in place the
+/// first time one is read ([`structure_marker`]).
 ///
 /// Renaming the marker without moving it would silently reset every existing workspace to
 /// v0: the new name is not there, so a fully up-to-date workspace reads as stale. Harmless
 /// (reinit is additive) but wrong, noisy, and on a LIVE workspace it manufactures a commit.
-pub const LEGACY_STRUCTURE_MARKER: &str = ".edm-structure";
+pub const STRUCTURE_MARKER: &str = crate::names::STRUCTURE_STAMP.write;
 
 /// The baseline files every workspace should have, in the order `reinit` names them.
 pub const BASELINE: [&str; 4] = [
@@ -535,6 +534,9 @@ pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
             did: Did::Blocked,
         }];
     }
+    // A record charter wrote under its old name is charter's record still: moved to the
+    // purlis name before it is read, bytes unchanged, so what it vouched for stays charter's.
+    let _ = layer::carry_over(dir);
     let mut record = layer::read_record(dir);
     let before = record.clone();
     let mut rows = withdraw(plane, dir, &want_all, &mut record);
@@ -955,24 +957,22 @@ pub fn unlisted_fix(tree: &Path) -> String {
 // the structure stamp                                                                       //
 // --------------------------------------------------------------------------------------- //
 
-/// The stamp's path, migrating a pre-rename `.edm-structure` the first time it is read.
+/// The stamp's path, migrating an older spelling (`.charter-structure`, `.edm-structure`) the
+/// first time it is read.
 ///
 /// Rename rather than re-stamp, so a genuinely older marker keeps its own version instead of
-/// being claimed as current.
+/// being claimed as current. The newest spelling there wins (V93e) and is the one moved; any
+/// older one beside it is a leftover, removed.
 pub fn structure_marker(dir: &Path) -> PathBuf {
     let new = dir.join(STRUCTURE_MARKER);
-    let legacy = dir.join(LEGACY_STRUCTURE_MARKER);
-    let (here, there) = (
-        new.symlink_metadata().is_ok(),
-        legacy.symlink_metadata().is_ok(),
-    );
-    if !here && there && std::fs::rename(&legacy, &new).is_err() {
+    let at = crate::names::STRUCTURE_STAMP.in_dir(dir, |p| p.symlink_metadata().is_ok());
+    if at.found == crate::names::Found::Old && std::fs::rename(&at.name, &new).is_err() {
         // Unreadable, or across devices: still read the old one.
-        return legacy;
+        return at.name;
     }
-    if here && there {
-        // Both present: the new one already won.
-        let _ = std::fs::remove_file(&legacy);
+    for leftover in at.leftovers {
+        // The newest one already won.
+        let _ = std::fs::remove_file(&leftover);
     }
     new
 }
@@ -1793,12 +1793,53 @@ mod tests {
 
     #[test]
     fn a_legacy_stamp_is_renamed_rather_than_restamped() {
+        for legacy in [".edm-structure", ".charter-structure"] {
+            let (_plane, ws) = plane();
+            std::fs::write(ws.join(legacy), "3\n").unwrap();
+            // The version it really is, not the one charter is shipping.
+            assert_eq!(stamp(&ws).0, 3, "{legacy}");
+            assert_eq!(
+                std::fs::read_to_string(ws.join(".purlis-structure")).unwrap(),
+                "3\n"
+            );
+            assert!(!ws.join(legacy).exists(), "{legacy}");
+        }
+    }
+
+    #[test]
+    fn with_charters_stamp_and_an_older_one_the_charter_one_wins_and_moves() {
         let (_plane, ws) = plane();
-        std::fs::write(ws.join(LEGACY_STRUCTURE_MARKER), "3\n").unwrap();
-        // The version it really is, not the one charter is shipping.
-        assert_eq!(stamp(&ws).0, 3);
-        assert!(ws.join(STRUCTURE_MARKER).exists());
-        assert!(!ws.join(LEGACY_STRUCTURE_MARKER).exists());
+        std::fs::write(ws.join(".edm-structure"), "2\n").unwrap();
+        std::fs::write(ws.join(".charter-structure"), "4\n").unwrap();
+        assert_eq!(stamp(&ws).0, 4);
+        assert!(ws.join(STRUCTURE_MARKER).is_file());
+        assert!(!ws.join(".edm-structure").exists());
+        assert!(!ws.join(".charter-structure").exists());
+    }
+
+    #[test]
+    fn a_layer_record_charter_wrote_moves_to_the_purlis_name_and_its_files_stay_charters() {
+        let (plane, ws) = plane();
+        wire(plane.path(), &ws);
+        let record = std::fs::read_to_string(ws.join(layer::MARKER)).unwrap();
+        // As charter left it before the rename.
+        std::fs::rename(ws.join(layer::MARKER), ws.join(".charter-generated")).unwrap();
+        let before = std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap();
+
+        let rows = wire(plane.path(), &ws);
+        assert!(
+            rows.iter().all(|r| r.did == Did::Present),
+            "every file is still charter's: {rows:?}"
+        );
+        assert!(!ws.join(".charter-generated").exists());
+        assert_eq!(
+            std::fs::read_to_string(ws.join(layer::MARKER)).unwrap(),
+            record
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap(),
+            before
+        );
     }
 
     #[test]

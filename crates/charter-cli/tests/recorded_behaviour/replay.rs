@@ -548,7 +548,9 @@ fn run(
                 if facts::platform_neutral(&got) != facts::platform_neutral(want) {
                     problems.push(format!("    the {kind} facts differ:"));
                     problems.extend(text::diff(want, &got));
-                    new["expect"]["facts"]["text"] = json!(got);
+                    // Recorded without the keys only macOS's `git init` writes, so a row
+                    // re-recorded on a Mac reads as one recorded anywhere else.
+                    new["expect"]["facts"]["text"] = json!(facts::platform_neutral(&got));
                 }
             }
         }

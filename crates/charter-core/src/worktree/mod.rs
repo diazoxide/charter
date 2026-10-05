@@ -921,7 +921,13 @@ pub fn list(plane: &Path, ws: &str, repo: &str) -> Result<Vec<Piece>, Refusal> {
     //
     // A call that failed to run at all is not evidence the layer is charter's either, so only
     // a clear "tracked" takes the label away.
-    if out.iter().any(|p| p.wired) && crate::guest::tracked(&clone, crate::guest::MARKER) {
+    // Under any name the record has had: a committed `.charter-generated` is read as a record
+    // as surely as a committed `.purlis-generated`.
+    if out.iter().any(|p| p.wired)
+        && crate::names::GENERATED_SIDECAR
+            .spellings()
+            .any(|name| crate::guest::tracked(&clone, name))
+    {
         for piece in &mut out {
             piece.wired = false;
         }
