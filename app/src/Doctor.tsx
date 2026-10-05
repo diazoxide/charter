@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoaderCircle, Stethoscope } from "lucide-react";
+import { FIXES_WITH_A_FORM, GitIdentityForm, type IdentityRefused } from "./GitIdentityForm";
 import {
   commands,
   type DoctorFixed,
@@ -63,6 +64,9 @@ import {
  * Fix button for it. The button calls the same core entry point `charter doctor --fix <id>`
  * does, says what the fix changed or why it was refused, and then checks again, so the row is
  * redrawn from what is true after the fix rather than assumed fixed.
+ *
+ * A fix that takes input (`git-identity`, FX-3) opens its form under the row instead, and is
+ * applied when the form is sent: see `GitIdentityForm.tsx`.
  */
 
 /** What the window knows about the doctor for one project. */
@@ -79,6 +83,9 @@ export type DoctorState = {
   /** Apply the fix a row carries, by its id, then check again (the full doctor: the dialog
    *  is open). Absent where nothing can apply one. */
   fix?: (id: string) => void;
+  /** Apply `git-identity` with the form's name and email, then check again. Resolves with
+   *  each field's refusal, or `undefined` once the fix ran or was refused as a whole. */
+  fixIdentity?: (name: string, email: string) => Promise<IdentityRefused | undefined>;
   /** The fix on its way, by its id. */
   fixing?: string;
   /** What the last fix came to: its lines, or why it was refused. */
@@ -186,6 +193,36 @@ export function useDoctor(plane: PlaneId): DoctorState {
     },
     [plane, run],
   );
+  const fixIdentity = useCallback(
+    async (name: string, email: string): Promise<IdentityRefused | undefined> => {
+      const id = "git-identity";
+      const mine = ++newestFix.current;
+      setLastFix({ plane, fixing: id });
+      const landed = (fixed: DoctorFixed) => {
+        if (mine !== newestFix.current) return;
+        setLastFix({ plane, fixed });
+        run(true);
+      };
+      try {
+        const answer = await commands.planeDoctorFixIdentity(plane, name, email);
+        if (answer.status !== "ok") {
+          landed({ fix: id, refused: answer.error, said: [], complete: false });
+          return undefined;
+        }
+        if (answer.data.kind === "fixed") {
+          landed(answer.data.fixed);
+          return undefined;
+        }
+        // Refused field by field: nothing was written, and nothing is said over the rows.
+        if (mine === newestFix.current) setLastFix(undefined);
+        return { name: answer.data.name, email: answer.data.email };
+      } catch (err: unknown) {
+        landed({ fix: id, refused: String(err), said: [], complete: false });
+        return undefined;
+      }
+    },
+    [plane, run],
+  );
   const forget = useCallback(() => {
     newestFix.current += 1;
     setLastFix(undefined);
@@ -198,6 +235,7 @@ export function useDoctor(plane: PlaneId): DoctorState {
     trouble,
     run,
     fix,
+    fixIdentity,
     fixing: ours?.fixing,
     fixed: ours?.fixed,
     forget,
@@ -250,7 +288,48 @@ export function onTheLine(doctor: DoctorState): { said?: string; tone: string; l
 const GLYPH: Record<DoctorRow["status"], string> = { ok: "✓", warn: "!", fail: "✗" };
 
 /** What a row's Fix button needs: the doctor's `fix`, and whether one may be pressed now. */
-type Fixer = { apply: (id: string) => void; busy: boolean };
+type Fixer = {
+  apply: (id: string) => void;
+  busy: boolean;
+  /** The git identity form's submit; absent where no form can be sent. */
+  identity?: (name: string, email: string) => Promise<IdentityRefused | undefined>;
+};
+
+/** A row's Fix button, and the form under it for a fix that takes input (FX-3). */
+function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fixer }) {
+  const [form, setForm] = useState(false);
+  const withForm = FIXES_WITH_A_FORM.has(row.fix);
+  if (withForm && !fixer.identity) return null;
+  return (
+    <>
+      <button
+        type="button"
+        className="doctor-fix"
+        tabIndex={0}
+        // Named by the row, as the operator reads it; the id is the CLI's word for the
+        // same fix, kept where a pointer can read it.
+        aria-label={`Fix ${row.name}`}
+        aria-expanded={withForm ? form : undefined}
+        title={`charter doctor --fix ${row.fix}`}
+        disabled={fixer.busy}
+        onClick={() => (withForm ? setForm((open) => !open) : fixer.apply(row.fix))}
+      >
+        Fix
+      </button>
+      {withForm && form && fixer.identity && (
+        <GitIdentityForm
+          busy={fixer.busy}
+          onCancel={() => setForm(false)}
+          submit={async (name, email) => {
+            const refused = await fixer.identity?.(name, email);
+            if (refused === undefined) setForm(false);
+            return refused;
+          }}
+        />
+      )}
+    </>
+  );
+}
 
 /**
  * The rows of one heading. A row whose fix is a setting names that setting's group
@@ -292,19 +371,7 @@ function Rows({
             </button>
           )}
           {row.status !== "ok" && row.fix && fixer && (
-            <button
-              type="button"
-              className="doctor-fix"
-              tabIndex={0}
-              // Named by the row, as the operator reads it; the id is the CLI's word for the
-              // same fix, kept where a pointer can read it.
-              aria-label={`Fix ${row.name}`}
-              title={`charter doctor --fix ${row.fix}`}
-              disabled={fixer.busy}
-              onClick={() => fixer.apply(row.fix as string)}
-            >
-              Fix
-            </button>
+            <FixButton row={{ ...row, fix: row.fix }} fixer={fixer} />
           )}
         </li>
       ))}
@@ -346,6 +413,7 @@ export function Health({
   const fixer: Fixer | undefined = doctor.fix && {
     apply: doctor.fix,
     busy: running || fixing !== undefined,
+    identity: doctor.fixIdentity,
   };
   const ours = report?.app_rows ?? [];
 

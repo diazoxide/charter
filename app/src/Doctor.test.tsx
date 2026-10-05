@@ -487,3 +487,109 @@ describe("the Fix button", () => {
     expect(within(dialog).queryByRole("button", { name: /^Fix index lock$/ })).toBeNull();
   });
 });
+
+describe("the git identity form (FX-3)", () => {
+  function Wired() {
+    return <Health doctor={useDoctor(PLANE)} />;
+  }
+
+  const unset = row("git identity", "fail", {
+    detail: "not set: user.name, user.email",
+    fix: "git-identity",
+  });
+  const set = row("git identity", "ok", { detail: "Ann Example <ann@example.invalid>" });
+
+  async function openForm() {
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    const blockers = await within(dialog).findByRole("region", { name: "Blockers" });
+    await userEvent.click(within(blockers).getByRole("button", { name: /^Fix git identity$/ }));
+    const form = await within(dialog).findByRole("form", { name: "Git identity" });
+    return { dialog, form };
+  }
+
+  it("opens a form for the name and the email, writes them, says so and checks again", async () => {
+    const asked: Array<[string, unknown]> = [];
+    let fixed = false;
+    mockIPC((cmd, args) => {
+      asked.push([cmd, args]);
+      if (cmd === "plane_doctor") return report([fixed ? set : unset]);
+      if (cmd === "plane_doctor_fix_identity") {
+        fixed = true;
+        return {
+          kind: "fixed",
+          fixed: {
+            fix: "git-identity",
+            refused: null,
+            said: ["✓ set user.name = Ann Example (global git config)"],
+            complete: true,
+          },
+        };
+      }
+      return null;
+    });
+    render(<Wired />);
+    const { dialog, form } = await openForm();
+    // A fix that takes input is not applied by the button alone.
+    expect(asked.map(([cmd]) => cmd)).not.toContain("plane_doctor_fix");
+
+    await userEvent.type(within(form).getByLabelText("Name"), "Ann Example");
+    await userEvent.type(within(form).getByLabelText("Email"), "ann@example.invalid");
+    await userEvent.click(within(form).getByRole("button", { name: "Set identity" }));
+
+    expect(asked).toContainEqual([
+      "plane_doctor_fix_identity",
+      { plane: PLANE, name: "Ann Example", email: "ann@example.invalid" },
+    ]);
+    expect(
+      await within(dialog).findByText("✓ set user.name = Ann Example (global git config)"),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(
+        within(within(dialog).getByRole("region", { name: "Passed" })).getByText("git identity"),
+      ).toBeInTheDocument(),
+    );
+    expect(within(dialog).queryByRole("form", { name: "Git identity" })).toBeNull();
+  });
+
+  it("shows the core's refusal under the field it is about, and keeps what was typed", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "plane_doctor") return report([unset]);
+      if (cmd === "plane_doctor_fix_identity")
+        return {
+          kind: "invalid",
+          name: [],
+          email: ["That does not look like an email."],
+        };
+      return null;
+    });
+    render(<Wired />);
+    const { dialog, form } = await openForm();
+    await userEvent.type(within(form).getByLabelText("Name"), "Ann");
+    await userEvent.type(within(form).getByLabelText("Email"), "nope");
+    await userEvent.click(within(form).getByRole("button", { name: "Set identity" }));
+
+    const email = within(form).getByLabelText("Email");
+    await waitFor(() => expect(email).toHaveAccessibleDescription(/does not look like an email/));
+    expect(within(form).getByRole("alert")).toHaveTextContent("That does not look like an email.");
+    expect(within(form).getByLabelText("Name")).not.toHaveAccessibleDescription(/email/);
+    expect(email).toHaveValue("nope");
+    // Nothing was fixed, so nothing says it was.
+    expect(within(dialog).queryByRole("status", { name: "Fix" })).toBeNull();
+  });
+
+  it("goes away on Cancel without asking the core", async () => {
+    const asked: string[] = [];
+    mockIPC((cmd) => {
+      asked.push(cmd);
+      return cmd === "plane_doctor" ? report([unset]) : null;
+    });
+    render(<Wired />);
+    const { dialog, form } = await openForm();
+
+    await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+
+    expect(within(dialog).queryByRole("form", { name: "Git identity" })).toBeNull();
+    expect(asked).not.toContain("plane_doctor_fix_identity");
+  });
+});

@@ -1451,6 +1451,15 @@ export const commands = {
 	 */
 	planeDoctorFix: (plane: PlaneId, fix: string) => typedError<DoctorFixed, string>(__TAURI_INVOKE("plane_doctor_fix", { plane, fix })),
 	/**
+	 *  Apply the `git-identity` fix with the name and email the Doctor's form was given (FX-3):
+	 *  the core checks both, then writes them to git's global config, as `charter doctor --fix
+	 *  git-identity --name … --email …` does. Answers the fix's outcome, or each field's refusal.
+	 * 
+	 *  The plane is the window's: the identity is not the project's, but the answer is kept to
+	 *  the dialog that asked, as every fix's is.
+	 */
+	planeDoctorFixIdentity: (plane: PlaneId, name: string, email: string) => typedError<DoctorIdentityFixed, string>(__TAURI_INVOKE("plane_doctor_fix_identity", { plane, name, email })),
+	/**
 	 *  Both of this plane's settings files, and what charter says about each.
 	 * 
 	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
@@ -1953,6 +1962,14 @@ export type DoctorFixed = {
 	 */
 	complete: boolean,
 };
+
+/**
+ *  What the git identity form's submit came to (FX-3): the fix's outcome, or the input the
+ *  core refused, field by field, with nothing written.
+ */
+export type DoctorIdentityFixed = { kind: "fixed"; fixed: DoctorFixed } | 
+/**  Each field's reasons, in the core's words; empty for a field that is fine. */
+{ kind: "invalid"; name: string[]; email: string[] };
 
 /**  What the doctor said, and what it was asked with. */
 export type DoctorReport = {

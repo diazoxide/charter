@@ -6082,3 +6082,9 @@ textarea.ui-field {
 .ui-choice-says .needs-approval {
   color: var(--danger-base);
 }
+
+/* The form a fix that takes input opens under its row (FX-3, the git identity). */
+.doctor-form {
+  grid-column: 2 / -1;
+  margin-top: 0.4rem;
+}

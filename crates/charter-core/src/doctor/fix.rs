@@ -28,6 +28,8 @@ use std::path::Path;
 
 use crate::scaffold::Say;
 
+pub mod identity;
+
 /// A fix charter can make, by the id every surface names it with.
 ///
 /// Declared in the order `charter doctor --fix` applies them, which is also their sort order.
@@ -66,16 +68,22 @@ pub enum FixId {
     /// empty and the project declares a forge. Applied only by name ([`FixId::by_name_only`]):
     /// it goes over the network, so bare `charter doctor --fix` never runs it.
     Discover,
+    /// The git identity a commit is made with (FX-3): `user.name` and `user.email`, written to
+    /// git's global config, the scope the `git identity` row's hint names. Offered by that row
+    /// when either is unset. **It takes input** ([`FixId::takes_input`]): a name and an email,
+    /// from the window's form or `--name`/`--email`, applied through [`identity::apply`].
+    GitIdentity,
 }
 
 impl FixId {
     /// Every fix, in the order `charter doctor --fix` applies them.
-    pub const ALL: [FixId; 5] = [
+    pub const ALL: [FixId; 6] = [
         FixId::PluginInstall,
         FixId::Reinit,
         FixId::LocalIgnore,
         FixId::MemoryOptimize,
         FixId::Discover,
+        FixId::GitIdentity,
     ];
 
     /// The id, as `charter doctor --fix <id>`, `--json` and the window spell it.
@@ -86,6 +94,7 @@ impl FixId {
             Self::LocalIgnore => "local-ignore",
             Self::MemoryOptimize => "memory-optimize",
             Self::Discover => "discover",
+            Self::GitIdentity => "git-identity",
         }
     }
 
@@ -95,6 +104,14 @@ impl FixId {
     /// inventory and the docs, so it waits to be asked.
     pub const fn by_name_only(self) -> bool {
         matches!(self, Self::Discover)
+    }
+
+    /// Whether this fix needs the operator's input before it can be applied (FX-3, D-FX3-1).
+    /// Such a fix is applied through its own entry point with that input — the window draws a
+    /// form for it, the CLI takes flags — and [`apply`] by its id alone refuses, saying what to
+    /// give.
+    pub const fn takes_input(self) -> bool {
+        matches!(self, Self::GitIdentity)
     }
 
     /// The fix an id names, or `None` for an id that names no fix.
@@ -158,6 +175,10 @@ pub fn apply_for(root: &Path, id: FixId, machine: &crate::plugin_install::Machin
 }
 
 fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machine>) -> Fixed {
+    // A fix that takes input has nothing to write without it, project or not: said first.
+    if id.takes_input() {
+        return needs_input(id);
+    }
     if id == FixId::PluginInstall {
         return match machine {
             Some(machine) => plugin_install(machine),
@@ -175,6 +196,7 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
         FixId::LocalIgnore => local_ignore(root),
         FixId::MemoryOptimize => memory_optimize(root),
         FixId::Discover => discover(root),
+        FixId::GitIdentity => needs_input(id),
         FixId::PluginInstall => unreachable!("answered above"),
     }
 }
@@ -305,6 +327,14 @@ fn discover(root: &Path) -> Fixed {
         said,
         complete: true,
     }
+}
+
+/// The refusal of a fix that [takes input](FixId::takes_input), asked for by its id alone.
+fn needs_input(id: FixId) -> Fixed {
+    Fixed::Refused(match id {
+        FixId::GitIdentity => identity::NEEDS_INPUT.to_owned(),
+        other => format!("{other} needs input this caller did not give"),
+    })
 }
 
 /// Why no fix may write at `root`, or `None` when one may.
