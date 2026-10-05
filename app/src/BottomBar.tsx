@@ -226,6 +226,8 @@ function absentSaid(clone: CloneState | undefined): string {
       return "waiting to be cloned";
     case "cloning":
       return "cloning…";
+    case "cloned":
+      return "cloned";
     case "failed":
       return `not cloned here — the clone failed: ${clone.said}`;
     default:

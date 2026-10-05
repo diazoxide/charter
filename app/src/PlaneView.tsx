@@ -94,7 +94,7 @@ import { NewWorkspace } from "./NewWorkspace";
 import { NewBranch } from "./NewBranch";
 import { LinkWorkItem } from "./LinkWorkItem";
 import { RenameWorkspace } from "./RenameWorkspace";
-import { cloneRepos, useRepoClones } from "./repoClones";
+import { cloneRepos, settleRepoClones, useRepoClones } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import {
@@ -3279,8 +3279,9 @@ export const PlaneView = memo(function PlaneView({
    */
   const cloneMissing = useCallback(
     async (workspace: string, repos: string[]): Promise<Ran> => {
-      const failed = await cloneRepos(plane, workspace, repos);
-      rereadPanels();
+      // Read again as each repo lands, so a repo that is cloned leaves "Not cloned here" while
+      // the rest of a Clone all is still running.
+      const failed = await cloneRepos(plane, workspace, repos, rereadPanels);
       return failed.length === 0
         ? { ok: true, said: `Cloned ${repos.join(", ")} into ${workspace}.` }
         : {
@@ -3493,13 +3494,16 @@ export const PlaneView = memo(function PlaneView({
    *  "Not cloned here" draws its own progress and failure from it. */
   const cloning = useRepoClones(plane, ofWorkspace ?? OUTSIDE);
   const absentHere = workspaceState.panels?.absent;
+  // A repo that has cloned stays busy until the panels drop it, so its Clone cannot be pressed
+  // again in between; once they do, the window forgets it (`settleRepoClones`).
   const cloningNow = useMemo(
-    () =>
-      [...cloning]
-        .filter(([, one]) => one.state === "waiting" || one.state === "cloning")
-        .map(([repo]) => repo),
+    () => [...cloning].filter(([, one]) => one.state !== "failed").map(([repo]) => repo),
     [cloning],
   );
+  useEffect(() => {
+    if (ofWorkspace !== undefined && absentHere !== undefined)
+      settleRepoClones(plane, ofWorkspace, absentHere);
+  }, [plane, ofWorkspace, absentHere]);
 
   /** The repo whose clone the chat being picked would start in, if it would: what the picker's
    *  branch box names (GL-1). The same directory `startOn` sends, compared with the path the
