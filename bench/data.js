@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791226270166,
+  "lastUpdate": 1791236000081,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2268,6 +2268,48 @@ window.BENCHMARK_DATA = {
             "value": 101.196714,
             "unit": "ms",
             "extra": "median of 5 runs: 101.090, 101.095, 101.197, 101.802, 101.938 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "697dc80cbcbc0d0daee72d3cb112c9eb54f85b5c",
+          "message": "rename-plane review fold-in: the consent guard asks the session's folder too (RN-7)\n\nThe host loads its settings for the folder the session started in, and a\n`cd` in the shell does not move that. `settings::twin_in_force` used to\nanchor its layer lookup on the payload's `cwd` alone. It now takes the\ndirectories the host's settings may come from: `$CLAUDE_PROJECT_DIR`, when\nthe hook is given it, and the call's `cwd`. It requires the purlis twin in\nthe layer at or above each of them, as well as in the project's settings\nand opencode's file. With neither directory present it keeps refusing the\npurlis spelling.\n\n`toolgate::Plane` carries `session_dir`, which the CLI guard reads from\n`CLAUDE_PROJECT_DIR`. A new test covers a session started in a workspace\nwhose layer lacks the twin, with the call's cwd at the project root: it is\nrefused, and so is a call with no folder at all.\n\nRefs #1265\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T01:32:03+04:00",
+          "tree_id": "ee9e6a35b6ce0fd226962ddd03f66016301299b5",
+          "url": "https://github.com/purlis/purlis/commit/697dc80cbcbc0d0daee72d3cb112c9eb54f85b5c"
+        },
+        "date": 1791235999473,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.371544,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.353, 0.355, 0.372, 0.375, 0.384 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.474576,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.434, 16.459, 16.475, 16.491, 16.551 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.060102,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.351, 101.689, 102.060, 102.121, 102.620 ms"
           }
         ]
       }
