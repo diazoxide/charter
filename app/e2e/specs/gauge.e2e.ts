@@ -156,7 +156,8 @@ describe("a chat's context gauge", () => {
     ) as { name: string };
     expect(manifest.name).toBe("charter");
     expect(existsSync(join(pluginDir, "hooks", "hooks.json"))).toBe(true);
-    expect(realpathSync(now[`hookbinary-${chat}`])).toBe(realpathSync(built("charter")));
+    // RN-3: the app runs its hooks through the `purlis` beside it; `charter` is only the alias.
+    expect(realpathSync(now[`hookbinary-${chat}`])).toBe(realpathSync(built("purlis")));
     expect(settings.enabledPlugins).toEqual({
       "charter@charter": false,
       "charter@inline": true,
@@ -177,7 +178,7 @@ describe("a chat's context gauge", () => {
       );
     }
     expect(settings.statusLine?.type).toBe("command");
-    expect(settings.statusLine?.command).toMatch(/charter'? statusline$/);
+    expect(settings.statusLine?.command).toMatch(/purlis'? statusline$/);
     // Nothing is drawn before a turn has been recorded — never `ctx 0%`.
     expect(await gauges()).toEqual([]);
 
