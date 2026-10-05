@@ -170,6 +170,7 @@ function doing(): Doing & { calls: string[] } {
     switchLive: note("switchLive"),
     renameWorkspace: note("renameWorkspace"),
     openSettingsTab: note("openSettingsTab"),
+    openYourSettings: note("openYourSettings"),
     openMemory: vi.fn((ref: MemoryRef, title: string, keep: boolean) => {
       calls.push(`openMemory:${memoryKey(ref)},${title},${keep}`);
     }),
@@ -453,8 +454,9 @@ describe("the one list of actions", () => {
   });
 
   it("offers Settings everywhere, with no project open too, because You is the machine's", async () => {
-    // SE-16: Settings opens at the You level, this machine's, so the row does not wait for a
-    // plane — and no row says Preferences any more.
+    // SE-16: with no project open, Settings opens at the You level, this machine's (SE-23: the
+    // focused level otherwise), so the row does not wait for a plane — and no row says
+    // Preferences any more.
     for (const offers of [catalogue(now()), catalogue(now({ plane: "/p/one" }))]) {
       const hands = doing();
       const row = by(offers, "settings.show");
@@ -463,6 +465,19 @@ describe("the one list of actions", () => {
       await run(offers, "settings.show", hands);
       expect(hands.calls).toEqual(["openSettingsTab"]);
       expect(offers.filter((one) => /preferences/i.test(one.title))).toEqual([]);
+    }
+  });
+
+  it("offers Your settings… everywhere, so You is reachable with a project open (SE-23)", async () => {
+    // Settings… opens at the focused level, so the machine's own level needs a row of its own
+    // while a project is in front (V89c: Settings is a palette action per level).
+    for (const offers of [catalogue(now()), catalogue(now({ plane: "/p/one" }))]) {
+      const hands = doing();
+      const row = by(offers, "settings.you");
+      expect(row?.title).toBe("Your settings…");
+      expect(row?.available).toBe(true);
+      await run(offers, "settings.you", hands);
+      expect(hands.calls).toEqual(["openYourSettings"]);
     }
   });
 
@@ -1237,6 +1252,7 @@ describe("carrying out a row", () => {
         "createProject",
         "showExtensions",
         "openSettingsTab",
+        "openYourSettings",
         "installCli",
         "createWorkspace",
         "removeWorkspace:alpha",
@@ -1681,9 +1697,10 @@ describe("the palette at fifty chats", () => {
       // and `New persona…` (SI-3) are rows that make/land near the creates. One more since
       // SI-9c: `Open shared memory` (`shared` has `re`). And one more under `r` since FR-27:
       // `Switch project…` (`project` has an `r`). One up under both since SE-16: `Settings…`
-      // took `Preferences…`'s place, and has neither an `re` nor an `r`.
+      // took `Preferences…`'s place, and has neither an `re` nor an `r`. One more under `r`
+      // since SE-23: `Your settings…` (`your` has an `r`).
       expect(at("re", loaded())).toBe(7);
-      expect(at("r", loaded())).toBe(11);
+      expect(at("r", loaded())).toBe(12);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1790,8 +1807,9 @@ describe("the palette at fifty chats", () => {
     // 582 since FM-5: Focus on each of the 50 branches.
     // 592 since KN-4: the archive of the focused workspace's journal, of each of the 8
     // personas' stores and of the shared store.
+    // 593 since SE-23: Your settings…, one row.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(592);
+    expect(offers).toHaveLength(593);
   });
 
   /**

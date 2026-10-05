@@ -296,6 +296,8 @@ describe("the window's tab order", () => {
       // The title bar, left to right (ADR 0054). The project strip first: ONE stop for its
       // tabs, then its own controls…
       "tab plane2",
+      // The project in front's settings gear (SE-23): one stop, because only that tab has one.
+      "button Project settings…",
       "button Open a project…",
       "button New project…",
       // …then the right-hand end: the needs-you button (charter-app#249), the kill switch (OV-1),
@@ -306,6 +308,8 @@ describe("the window's tab order", () => {
       "button Updates — … channel, nothing new known",
       // The workspace strip.
       "tab alpha32",
+      // The focused workspace's settings gear (SE-23), for the same reason.
+      "button Workspace settings…",
       "button New workspace…",
       // The chat strip: the selected chat's tab, and the `+`. A tab's `×` is not a stop.
       "tab steward two",

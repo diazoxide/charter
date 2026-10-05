@@ -8,6 +8,8 @@ declare global {
   interface Window {
     __TAURI__: {
       core: { invoke: (command: string, args?: unknown) => Promise<unknown> };
+      /** What the app menu says as an event, sent the way the core sends it (SE-23). */
+      event: { emit: (event: string, payload?: unknown) => Promise<void> };
       window: { getCurrentWindow: () => { close: () => Promise<void>; show: () => Promise<void> } };
     };
   }

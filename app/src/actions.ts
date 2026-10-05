@@ -349,9 +349,13 @@ export type Does =
    *  the move are the core's (`workspace_rename`, `wscmd::rename`), as they are for
    *  `charter workspace rename` (charter#367). */
   | { verb: "renameWorkspace"; workspace: string }
-  /** Opens the Settings tab (SE-16) on the project in front. It writes nothing by itself: a
-   *  value is changed on the tab. */
+  /** Opens the Settings tab (SE-16) at the focused level (SE-23): the focused workspace's, else
+   *  the project in front's, else You. It writes nothing by itself: a value is changed on the
+   *  tab. */
   | { verb: "openSettingsTab" }
+  /** Opens the Settings tab at the You level (SE-23): this machine's settings, whatever is
+   *  focused, so they stay one palette row away while a project is in front (V89c). */
+  | { verb: "openYourSettings" }
   /** Opens a new chat for one curation action on one subject, with the action's prompt typed
    *  into it and never sent (ADR 0061). It carries the action's id and nothing of its text: the
    *  core resolves the subject again (`curate`), so what is typed is the core's prompt now. */
@@ -667,8 +671,10 @@ export type Doing = {
   switchLive: (workspace: string) => void;
   /** Opens the rename dialog for one workspace. Nothing is renamed until it is answered. */
   renameWorkspace: (workspace: string) => void;
-  /** Opens the Settings tab, or brings forward the one already open. */
+  /** Opens the Settings tab at the focused level, or brings forward the one already open. */
   openSettingsTab: () => void;
+  /** Opens the Settings tab at the You level, or brings forward the one already open. */
+  openYourSettings: () => void;
   /** Opens a curation chat. The core can refuse — the action gone, a harness that cannot be
    *  typed into — so it answers a `Ran`. */
   curate: (subject: string, action: string) => Promise<Ran>;
@@ -1313,10 +1319,18 @@ export function catalogue(now: Now): Offer[] {
     ...projects.back,
   );
   // **Settings, beside the projects' own settings** (SE-16; charter-app#283 before it): it
-  // opens at the You level, which is the machine's and not a project's, so the row is there
-  // with no project open too, as `extensions.show` is.
+  // opens at the focused level (SE-23, V89g) — the focused workspace's, else the project's, else
+  // You, which is the machine's and not a project's, so the row is there with no project open
+  // too, as `extensions.show` is. The app menu's Settings… (`⌘,`) runs the same verb.
   offers.push({
     ...can("settings.show", "Settings…", { verb: "openSettingsTab" }),
+    note: "At the workspace you are in, else the project, else this machine's.",
+  });
+  // **And the You level by name** (SE-23, D-SE23e as amended): Settings… lands on the focused
+  // level, so this machine's own settings get a row of their own, there with or without a
+  // project, as Settings… is.
+  offers.push({
+    ...can("settings.you", "Your settings…", { verb: "openYourSettings" }),
     note: "Your text sizes and your editor, on this machine.",
   });
 
@@ -2049,6 +2063,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "openSettingsTab":
       doing.openSettingsTab();
+      return DID;
+    case "openYourSettings":
+      doing.openYourSettings();
       return DID;
     case "curate":
       return doing.curate(does.subject, does.action);

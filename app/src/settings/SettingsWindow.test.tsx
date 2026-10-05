@@ -11,7 +11,8 @@ import { GLOBAL } from "../windowprefs";
 
 /**
  * **Reaching Settings from the window** (SE-16, #1166): the palette, the app menu's Settings…
- * (`⌘,`, which the core says with an event), and with no project open. What the tab shows is
+ * (`⌘,`, which the core says with an event), and with no project open. Both open it at the
+ * focused level (SE-23): `SettingsGears.test.tsx` has the ladder. What the tab shows is
  * `SettingsTab.test.tsx`'s. "Preferences" is gone from all of them, and so is the old Project
  * settings page (SE-19): the project's menu and its palette row open Settings at the Project
  * level, and a tab of the old page an older launch left open comes back as that.
@@ -103,33 +104,34 @@ describe("Settings, from the window", () => {
     expect(settingsTabs()).toHaveLength(1);
   });
 
-  it("moves its own tab to Project, and to a level whose tab is open brings that tab forward", async () => {
+  it("moves its own tab to You, and to a level whose tab is open brings that tab forward", async () => {
     core(PLANE);
     render(<App />);
     await screen.findByRole("tab", { name: /plane/ });
+    // Settings… opens at the focused level (SE-23): with no workspace focused, the project's.
     await palette("Settings…");
     await userEvent.keyboard("{Enter}");
-    await waitFor(() => expect(groups()).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Project" })).toBeChecked());
 
-    await userEvent.click(screen.getByRole("radio", { name: "Project" }));
+    await userEvent.click(screen.getByRole("radio", { name: "You" }));
 
     expect(
       await within(screen.getByRole("navigation", { name: "Groups" })).findByRole("button", {
-        name: "General",
+        name: "Text",
       }),
     ).toBeInTheDocument();
     expect(settingsTabs()).toHaveLength(1);
 
-    // Settings… opens at You, which no tab shows now; its switcher then finds Project's tab.
+    // Settings… opens at Project again, which no tab shows now; its switcher then finds You's.
     await palette("Settings…");
     await userEvent.keyboard("{Enter}");
-    await waitFor(() => expect(screen.getByRole("radio", { name: "You" })).toBeChecked());
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Project" })).toBeChecked());
     expect(settingsTabs()).toHaveLength(2);
-    await userEvent.click(screen.getByRole("radio", { name: "Project" }));
+    await userEvent.click(screen.getByRole("radio", { name: "You" }));
 
     expect(
       await within(screen.getByRole("navigation", { name: "Groups" })).findByRole("button", {
-        name: "General",
+        name: "Text",
       }),
     ).toBeInTheDocument();
     expect(settingsTabs()).toHaveLength(2);

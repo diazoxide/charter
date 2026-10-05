@@ -29,6 +29,7 @@ import {
   MessageSquarePlus,
   Pin as PinMark,
   Plus,
+  Settings as SettingsMark,
   SquareSplitHorizontal,
   SquareSplitVertical,
   SquareTerminal,
@@ -324,6 +325,7 @@ export const PlaneView = memo(function PlaneView({
   savingAsked,
   settingsTabAsked,
   settingsLinkAsked,
+  yourSettingsAsked,
   firstChatAsked,
   shellAsked,
   fileAsked,
@@ -367,6 +369,8 @@ export const PlaneView = memo(function PlaneView({
   /** A link into a Settings group the window followed (SE-22), once per `at`: Settings opens
    *  at the link's level and group on THIS project's strip. */
   settingsLinkAsked?: { link: SettingsLink; at: number };
+  /** The same, for the Settings tab at the You level (`WindowDoing.openYourSettings`, SE-23). */
+  yourSettingsAsked?: number;
   /** A file ⌘P found in THIS project (FM-7), opened in its file tab once per `at`; with a
    *  `line`, a jump to it (a search hit, FM-8), opened in the branch's file tab at that line. */
   fileAsked?: { place: Place; path: string; line?: number; at: number };
@@ -2120,13 +2124,33 @@ export const PlaneView = memo(function PlaneView({
     openSettingsAt(settingsLinkAsked.link);
   }, [settingsLinkAsked, openSettingsAt]);
 
-  /** The Settings tab, opened the same way and for the same reason (SE-16). */
+  /**
+   * The Settings tab, opened the same way and for the same reason (SE-16), **at the focused
+   * level** (SE-23, V89g): the focused workspace's, else this project's. The app menu's
+   * Settings… (`⌘,`, `Ctrl+,` off a Mac) and the palette's Settings… both land here; You is the
+   * window's answer when no project is open (`App.tsx`), and one press of the level switcher
+   * from here. The plane root is not a workspace, so it is the project's level.
+   */
   const settingsTabHandled = useRef(settingsTabAsked);
   useEffect(() => {
     if (settingsTabAsked === undefined || settingsTabHandled.current === settingsTabAsked) return;
     settingsTabHandled.current = settingsTabAsked;
+    const workspace = focused === OUTSIDE ? undefined : focused;
+    const open =
+      workspace === undefined
+        ? () => showView(settingsView("project"), SETTINGS_TAB_TITLE)
+        : () => openWorkspaceSettings(workspace);
+    open();
+  }, [focused, openWorkspaceSettings, settingsTabAsked, showView]);
+
+  /** Settings at the You level (SE-23's Your settings…), opened the same way. */
+  const yourSettingsHandled = useRef(yourSettingsAsked);
+  useEffect(() => {
+    if (yourSettingsAsked === undefined || yourSettingsHandled.current === yourSettingsAsked)
+      return;
+    yourSettingsHandled.current = yourSettingsAsked;
     showView(settingsView("you"), SETTINGS_TAB_TITLE);
-  }, [settingsTabAsked, showView]);
+  }, [yourSettingsAsked, showView]);
 
   /**
    * Focuses a workspace: the strip below it shows that workspace's chats, and one of them
@@ -3226,6 +3250,7 @@ export const PlaneView = memo(function PlaneView({
       switchLive: (workspace: string) => setLiveAsk(workspace),
       renameWorkspace,
       openSettingsTab: windowDoes.openSettingsTab,
+      openYourSettings: windowDoes.openYourSettings,
       curate,
       quit: windowDoes.quit,
       ...fileDoing,
@@ -3922,48 +3947,65 @@ export const PlaneView = memo(function PlaneView({
                     return (
                       <SortableTab key={workspace} id={workspace} fixed={workspace === OUTSIDE}>
                         {({ sortable, style }) => (
-                          /* Right-click is the third reader of the catalogue (`Menus.tsx`):
-                             focus, pin, make one, and — under the line — delete this one.
-                             `asChild`, so the strip gains no wrapper: the trigger IS the tab,
-                             which is what #171's `flex: 1 1 0` cells require. */
-                          <Menued
-                            on={root ? { on: "root" } : { on: "workspace", workspace }}
-                            offers={found}
-                            onPress={press}
+                          /* The cell: the tab and, on the focused workspace's, its gear
+                             (SE-23). A wrapper, as a project's tab and its `×` have, because a
+                             button cannot hold a button. It is what is dragged; it carries the
+                             tab's tint too, so the gear sits on the tab's own shade. */
+                          <span
+                            className="workspace"
+                            ref={sortable.setNodeRef}
+                            data-dragging={sortable.isDragging || undefined}
+                            style={{ ...tintOf(workspace), ...style }}
                           >
-                            <RovingFocusGroup.Item
-                              asChild
-                              tabStopId={workspace}
-                              active={workspace === focused}
+                            {/* Right-click is the third reader of the catalogue (`Menus.tsx`):
+                                focus, pin, make one, and — under the line — delete this one.
+                                `asChild`, and on the tab and not the cell: the context-menu
+                                key opens a menu only on the trigger that has the keyboard
+                                (`openFromTheKeyboard`), and that is the tab. */}
+                            <Menued
+                              on={root ? { on: "root" } : { on: "workspace", workspace }}
+                              offers={found}
+                              onPress={press}
                             >
-                              <button
-                                ref={sortable.setNodeRef}
-                                role="tab"
-                                className={root ? "plane-root" : undefined}
-                                aria-label={root ? OUTSIDE_TITLE : undefined}
-                                aria-selected={workspace === focused}
-                                aria-describedby={
-                                  root ? undefined : sortable.attributes["aria-describedby"]
-                                }
-                                data-dragging={sortable.isDragging || undefined}
-                                title={root ? ROOT_TIP : offer?.title}
-                                // Its own colour, in front or not (charter-app#281): its shade and its
-                                // mark are its tint, set on the tab and nowhere else.
-                                data-colour={colourOf(workspace) ?? undefined}
-                                style={{ ...tintOf(workspace), ...style }}
-                                {...sortable.listeners}
-                                onKeyDown={(event) => {
-                                  keepsTheFocus(event, sortable.isDragging);
-                                  sortable.listeners?.onKeyDown?.(event);
-                                }}
-                                onClick={() => {
-                                  if (offer?.available) press(offer);
-                                }}
+                              <RovingFocusGroup.Item
+                                asChild
+                                tabStopId={workspace}
+                                active={workspace === focused}
                               >
-                                {workspaceMarks(workspace)}
-                              </button>
-                            </RovingFocusGroup.Item>
-                          </Menued>
+                                <button
+                                  role="tab"
+                                  className={root ? "plane-root" : undefined}
+                                  aria-label={root ? OUTSIDE_TITLE : undefined}
+                                  aria-selected={workspace === focused}
+                                  aria-describedby={
+                                    root ? undefined : sortable.attributes["aria-describedby"]
+                                  }
+                                  title={root ? ROOT_TIP : offer?.title}
+                                  // Its own colour, in front or not (charter-app#281): its shade and its
+                                  // mark are its tint, set on the tab and the cell around it.
+                                  data-colour={colourOf(workspace) ?? undefined}
+                                  style={tintOf(workspace)}
+                                  {...sortable.listeners}
+                                  onKeyDown={(event) => {
+                                    keepsTheFocus(event, sortable.isDragging);
+                                    sortable.listeners?.onKeyDown?.(event);
+                                  }}
+                                  onClick={() => {
+                                    if (offer?.available) press(offer);
+                                  }}
+                                >
+                                  {workspaceMarks(workspace)}
+                                </button>
+                              </RovingFocusGroup.Item>
+                            </Menued>
+                            {/* Its settings (SE-23, V89i): on the focused workspace only, and
+                                quiet until its tab is under the pointer or the keyboard. The
+                                row its menu's Workspace settings… runs. The plane root is not
+                                a workspace and has none. */}
+                            {workspace === focused && !root && (
+                              <Gear offer={by(`workspace.settings:${workspace}`)} onPress={press} />
+                            )}
+                          </span>
                         )}
                       </SortableTab>
                     );
@@ -4875,9 +4917,13 @@ export type WindowDoing = {
   openSettings: (plane: string) => void;
   /** Brings a project to the front and opens its Saving tab (charter-app#294). */
   openSaving: (plane: string) => void;
-  /** Opens the Settings tab (SE-16) on the project in front, or draws it where the opener is
-   *  when there is none. The window's, because which project is in front is. */
+  /** Opens the Settings tab (SE-16) on the project in front, at its focused level (SE-23), or
+   *  draws it at You where the opener is when there is none. The window's, because which
+   *  project is in front is. */
   openSettingsTab: () => void;
+  /** Opens the Settings tab at the You level (SE-23): on the project in front, or where the
+   *  opener is when there is none. */
+  openYourSettings: () => void;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
    *  in front draws nothing, and its pin still has to be on that strip (ADR 0039). */
   pinProject: (plane: string, pinned: boolean) => Promise<Ran>;
@@ -5446,6 +5492,37 @@ export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
       onClick={() => onPress(offer)}
     >
       <X />
+    </button>
+  );
+}
+
+/**
+ * **A tab's settings gear** (SE-23, #1173; V89i): the same catalogue row its right-click menu
+ * and the palette run — `project.settings:<plane>` on the project in front's tab,
+ * `workspace.settings:<name>` on the focused workspace's — drawn as a gear, so its accessible
+ * name and its tooltip are the row's words and the glyph is only the glyph, as `Closer`'s `×` is.
+ *
+ * **Quiet**: drawn on one tab per strip, the one you are on, and invisible there until that tab
+ * is under the pointer or the keyboard (`App.css`, `.gear`). No gear is always on, and the title
+ * bar has no settings button of its own — the operator's "it must not be noisy".
+ *
+ * **A Tab stop, unlike `Closer`.** A `×` per tab in the sequence would be fifty stops; this is
+ * one, right after the strip's one stop, because only the tab you are on carries one.
+ */
+export function Gear({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
+  if (!offer) return null;
+  return (
+    <button
+      className="gear"
+      // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written down
+      // (`docs/ui-primitives.md`, charter-app#189).
+      tabIndex={0}
+      disabled={!offer.available}
+      aria-label={offer.title}
+      title={offer.reason || offer.title}
+      onClick={() => onPress(offer)}
+    >
+      <SettingsMark />
     </button>
   );
 }

@@ -206,7 +206,8 @@ enum Item {
     /// charter's own Quit, with the accelerator it carries.
     Quit(&'static str),
     /// Settings… (SE-16; charter-app#283 as Preferences…), with the accelerator it carries: the
-    /// Settings tab, which opens at the You level — this machine's text sizes and editor.
+    /// Settings tab, which opens at the focused level (SE-23) — the focused workspace's, else
+    /// the project's, else You.
     Settings(&'static str),
     Hide,
     Separator,
