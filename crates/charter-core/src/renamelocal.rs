@@ -10,7 +10,11 @@
 //! * in each project this machine remembers (and the one a doctor fix is run in):
 //!   `charter.local.toml` → `purlis.local.toml`, and `.charter/` → `.purlis/`.
 //!
-//! Nothing else: keychain items are RN-6's, committed project files RN-7's.
+//! * in each of those projects, the keychain items of its keyring vaults and of its identity
+//!   records, copied from `charter/…` to `purlis/…` and read back before anything reads them
+//!   there ([`keychain`], RN-6, V93h). The old items are kept.
+//!
+//! Nothing else: committed project files are RN-7's.
 //!
 //! **A move is a rename, so it is whole or not at all.** Each is written to the journal before it
 //! is made, and the journal is what undo replays backwards. A rename that fails leaves the old
@@ -47,7 +51,9 @@
 //! before any is replayed, and a journal holding any other is refused whole.
 
 pub mod busy;
+pub mod keychain;
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -180,6 +186,9 @@ pub struct Seams<'a> {
     /// `None` ([`busy::why`]). The config home's lock ([`busy::LOCK`]) is asked as well,
     /// whatever this says.
     pub busy: &'a Busy,
+    /// The keychain a project's items are copied in, or `None` where reading them could ask
+    /// the person ([`keychain::real`]).
+    pub keyring: &'a keychain::Keyring,
 }
 
 fn real_rename(from: &Path, to: &Path) -> io::Result<()> {
@@ -192,6 +201,7 @@ impl Seams<'static> {
         Self {
             rename: &real_rename,
             busy: &busy::why,
+            keyring: &keychain::real,
         }
     }
 }
@@ -216,6 +226,26 @@ enum Entry {
     },
     /// The folder `path` is about to be made.
     Made { path: PathBuf },
+    /// The keychain item `service`/`account` is about to be written by the keychain copy: an
+    /// item there that differs from its original later is this copy's, out of date, and not
+    /// one planted (RN-6). Undo leaves it.
+    Copied { service: String, account: String },
+    /// The keyring vault `vault` of `plane` is about to read its items under `to` instead of
+    /// `from`, every one copied and read back; `keys` is each key's `updated` then.
+    Switched {
+        plane: PathBuf,
+        vault: String,
+        from: String,
+        to: String,
+        keys: BTreeMap<String, String>,
+    },
+    /// The identity record of vault `vault` in `plane`, with item ids `ids` by source, is about
+    /// to be read under the purlis base, every item copied and read back.
+    Rebased {
+        plane: PathBuf,
+        vault: String,
+        ids: BTreeMap<String, String>,
+    },
     /// Every entry before this one was undone.
     Undone,
     /// An undo began and is not finished: the launch moves nothing while this is the last word.
@@ -363,6 +393,12 @@ pub fn run(local: &Local, seams: &Seams) -> Moved {
     }
     for plane in &planes {
         move_plane(local, seams, &mut moved, plane);
+    }
+    // After every move, so the journal is read where it is now and each project's state folder
+    // is the one it reads.
+    let written = keychain::written(&read_journal(local));
+    for plane in &planes {
+        keychain::copy_plane(local, seams, &mut moved, plane, &written);
     }
     if moved.said.is_empty() {
         moved.note(
@@ -768,6 +804,7 @@ fn planes_in(local: &Local, pending: &[&Entry]) -> Vec<PathBuf> {
             Entry::Move { from, .. } if in_plane(from).is_some() => {
                 from.parent().map(Path::to_path_buf)
             }
+            Entry::Switched { plane, .. } | Entry::Rebased { plane, .. } => Some(plane.clone()),
             _ => None,
         })
         .collect();
@@ -832,6 +869,9 @@ fn only_our_moves(local: &Local, planes: &[PathBuf], pending: &[&Entry]) -> Resu
                         .all(|line| line.is_empty() || lines.iter().any(|l| l == line))
             }),
             Entry::Made { path } => made.contains(path),
+            Entry::Copied { .. } | Entry::Switched { .. } | Entry::Rebased { .. } => {
+                keychain::ours(entry)
+            }
             Entry::Undone | Entry::Undoing => true,
         };
         if !ours {
@@ -900,6 +940,16 @@ fn undo_one(local: &Local, seams: &Seams, moved: &mut Moved, entry: &Entry) {
                 moved.changed = true;
             }
         }
+        // The copy is kept, as the original was (D-RN6-2).
+        Entry::Copied { .. } => {}
+        Entry::Switched {
+            plane,
+            vault,
+            from,
+            to,
+            keys,
+        } => keychain::switch_back(seams, moved, plane, vault, from, to, keys),
+        Entry::Rebased { plane, vault, ids } => keychain::rebase_back(moved, plane, vault, ids),
         Entry::Undone | Entry::Undoing => {}
     }
 }

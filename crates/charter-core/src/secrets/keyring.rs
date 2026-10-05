@@ -504,6 +504,34 @@ pub fn service_ok_for(service: &str, vault: &str) -> bool {
         .is_some_and(id_ok)
 }
 
+/// The purlis spelling of `service` when it is one of charter's own under the old prefix:
+/// `charter/<owner>/<id>` → `purlis/<owner>/<id>`. `None` for anything else, a purlis service
+/// included. What the keychain copy (RN-6, V93h) copies an item to.
+pub fn renamed(service: &str) -> Option<String> {
+    let tail = service.strip_prefix(KEYCHAIN_PREFIX.reads[0])?;
+    let new = format!("{SERVICE_PREFIX}{tail}");
+    (own_service(service) && own_service(&new)).then_some(new)
+}
+
+/// Point the vault's index at `to` instead of `from`, and nothing else in it: `false`, with the
+/// index untouched, when it does not name `from` now. Both must be this vault's own
+/// ([`service_ok_for`]). The keychain copy's switch (RN-6), and its undo's.
+pub fn switch_service(ctx: &Ctx, vault: &Vault, from: &str, to: &str) -> Result<bool, VaultError> {
+    if !service_ok_for(from, &vault.name) || !service_ok_for(to, &vault.name) {
+        return Err(VaultError::new(format!(
+            "vault '{}' cannot be pointed from '{from}' to '{to}': each must be its own service",
+            vault.name
+        )));
+    }
+    let mut index = load_index(ctx, vault)?;
+    if index.service.as_deref() != Some(from) {
+        return Ok(false);
+    }
+    index.service = Some(to.to_owned());
+    save_index(ctx, vault, &index)?;
+    Ok(true)
+}
+
 /// Whether `key` can name a keyring item: not empty, and no control character.
 fn key_ok(key: &str) -> bool {
     !key.is_empty() && !key.chars().any(char::is_control)

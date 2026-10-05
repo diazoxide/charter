@@ -123,3 +123,77 @@ fn a_bare_fix_never_moves_this_machines_folders() {
     assert!(m.plane.join(".charter").is_dir());
     assert!(!m.plane.join(".purlis").exists());
 }
+
+/// The project's stub keyring (a test build never reaches the operating system's store), as JSON.
+fn stub_of(m: &Machine, state: &str) -> serde_json::Map<String, serde_json::Value> {
+    serde_json::from_str(&read(&m.plane.join(state).join("keyring-stub.json"))).unwrap()
+}
+
+#[test]
+fn migrate_copies_a_keyring_vaults_items_and_undo_reads_the_old_ones_again() {
+    let m = machine();
+    let out = charter(&m, &["vault", "add", "ops"]);
+    assert!(out.status.success(), "{}", said(&out));
+    let out = Command::new(env!("CARGO_BIN_EXE_charter"))
+        .args(["secret", "set", "ops", "API_TOKEN", "--stdin"])
+        .current_dir(&m.plane)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &m.home)
+        .env("CHARTER_ROOT", &m.plane)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(b"kr-cli-5e8a")?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(out.status.success(), "{}", said(&out));
+    // As a build from before the rename left it.
+    for file in [
+        ".charter/vaults/ops.keys.json",
+        ".charter/keyring-stub.json",
+    ] {
+        let path = m.plane.join(file);
+        std::fs::write(
+            &path,
+            read(&path).replace("\"purlis/ops/", "\"charter/ops/"),
+        )
+        .unwrap();
+    }
+
+    let out = charter(&m, &["migrate"]);
+
+    assert!(out.status.success(), "{}", said(&out));
+    assert!(
+        said(&out).contains("vault 'ops': 1 secret(s) copied"),
+        "{}",
+        said(&out)
+    );
+    let stub = stub_of(&m, ".purlis");
+    let names: Vec<&str> = stub.keys().map(|k| k.split('/').next().unwrap()).collect();
+    assert!(
+        names.contains(&"charter") && names.contains(&"purlis"),
+        "{names:?}"
+    );
+    assert!(read(&m.plane.join(".purlis/vaults/ops.keys.json")).contains("\"purlis/ops/"));
+    let get = charter(
+        &m,
+        &["secret", "get", "ops", "API_TOKEN", "--reveal", "--force"],
+    );
+    assert!(said(&get).contains("kr-cli-5e8a"), "{}", said(&get));
+
+    let out = charter(&m, &["migrate", "--undo"]);
+
+    assert!(out.status.success(), "{}", said(&out));
+    assert!(read(&m.plane.join(".charter/vaults/ops.keys.json")).contains("\"charter/ops/"));
+    assert_eq!(stub_of(&m, ".charter").len(), 2, "both items are kept");
+    let get = charter(
+        &m,
+        &["secret", "get", "ops", "API_TOKEN", "--reveal", "--force"],
+    );
+    assert!(said(&get).contains("kr-cli-5e8a"), "{}", said(&get));
+}

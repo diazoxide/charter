@@ -63,6 +63,12 @@ pub fn this_process_is_the_app() {
     THE_APP.store(true, Ordering::SeqCst);
 }
 
+/// Whether this process is charter's app: an item it writes is held to it, so it reads that
+/// item back without the person being asked.
+pub fn is_the_app() -> bool {
+    THE_APP.load(Ordering::SeqCst)
+}
+
 /// One item to write, as the writer is handed it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Item {

@@ -343,6 +343,7 @@ fn a_move_that_fails_leaves_the_old_name_in_place_and_read() {
     let seams = Seams {
         rename: &refuse,
         busy: &|_, _| None,
+        keyring: &renamelocal::keychain::real,
     };
 
     let moved = renamelocal::run(&m.local, &seams);
