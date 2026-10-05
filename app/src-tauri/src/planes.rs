@@ -533,7 +533,7 @@ impl Held {
                 "charter: plane {}, {back} of {wanted} chats back",
                 self.root.display()
             );
-            for (name, why) in self.chats.would_not_start() {
+            for crate::chats::NotStarted { name, why, .. } in self.chats.would_not_start() {
                 tracing::warn!("charter: {name} did not start ({why}); it is still recorded");
             }
         } else {
@@ -568,6 +568,25 @@ impl Held {
         charter_core::handback::orphan(&self.root, session);
         (self.tell)(gone);
         closed
+    }
+
+    /// **Start fresh** (NO-3): chat `session` started again on the plane as it is now
+    /// ([`crate::chats::Chats::start_fresh`]), and then the old one ended here, as a close ends
+    /// it — off the board, its program gone — so nothing the window does or fails to do can leave
+    /// it running. A refused start ends nothing. The new one takes the old one's place in front.
+    pub fn start_chat_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
+        let started = self.chats.start_fresh(session, &self.root, size)?;
+        let in_front = self.chats.front() == Some(session);
+        // The new one has started, so it is the answer whatever the old one's end says: a
+        // program that had already ended answers its close with an error, and the new chat
+        // must still reach the window.
+        if let Err(why) = self.close_chat(session) {
+            tracing::warn!("charter: chat {session}, started fresh, did not end cleanly ({why})");
+        }
+        if in_front {
+            self.chats.bring_to_front(Some(started));
+        }
+        Ok(started)
     }
 
     /// A chat `session` handed work to, shown as `from`, has reported back to it — a needs-you
@@ -6506,6 +6525,52 @@ mod tests {
             held.plane_updated(),
             Vec::new(),
             "a closed chat is not marked"
+        );
+        planes.close(&plane).expect("it closes");
+    }
+
+    #[test]
+    fn a_chat_started_fresh_runs_on_the_new_instructions_and_the_old_one_is_ended_here() {
+        // NO-3: Start fresh. The core ends the old chat itself once the new one has started —
+        // the window's close is not what ends it — and the new one read what is there now.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        std::fs::write(root.join("CLAUDE.md"), "be kind\n").expect("instructions");
+        a_record_naming(&root, "/bin/cat");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+        let held = planes.held(&plane).expect("it is held");
+        let was = held.chats().open_now()[0].session;
+        std::fs::write(root.join("CLAUDE.md"), "be kinder\n").expect("instructions change");
+        assert_eq!(held.plane_updated().len(), 1, "it is marked");
+
+        let started = held
+            .start_chat_fresh(
+                was,
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+            .expect("it starts again");
+
+        let open: Vec<u32> = held
+            .chats()
+            .open_now()
+            .iter()
+            .map(|one| one.session)
+            .collect();
+        assert_eq!(
+            open,
+            vec![started],
+            "the old one is ended, the new one runs"
+        );
+        assert_eq!(
+            held.plane_updated(),
+            Vec::new(),
+            "the new one read what is there now"
         );
         planes.close(&plane).expect("it closes");
     }

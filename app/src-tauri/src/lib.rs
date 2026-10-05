@@ -1398,14 +1398,15 @@ fn opened_chats(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<
         .collect())
 }
 
-/// The chats this launch could not start, by name and reason. They are still recorded, and
-/// will be tried again at the next launch.
+/// The chats this launch could not start, by id, name and reason. They are still recorded, and
+/// will be tried again at the next launch — or now, by Retry now — until the operator forgets
+/// one.
 #[tauri::command]
 #[specta::specta]
 fn chats_that_would_not_start(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<chats::NotStarted>, String> {
     Ok(planes.held(&plane)?.chats().would_not_start())
 }
 
@@ -1420,43 +1421,51 @@ fn drawn(held: &planes::Held, session: u32) -> Result<OpenChat, String> {
         .ok_or_else(|| format!("chat {session} ended as it started"))
 }
 
-/// Retry now (NO-3): starts the chat named `name` that this launch could not start, the way
+/// Retry now (NO-3): starts the chat with id `id` that this launch could not start, the way
 /// the launch tried to. It is the chat as the window draws it, or why it still did not start —
 /// and then it is still recorded, with that reason.
+///
+/// On a blocking thread, as `start_chat` is: a chat on a profile resolves its launch and checks
+/// its program before it runs, and the window must not wait on that.
 #[tauri::command]
 #[specta::specta]
-fn retry_chat_that_did_not_start(
+async fn retry_chat_that_did_not_start(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
-    name: String,
+    id: String,
     columns: u16,
     rows: u16,
 ) -> Result<OpenChat, String> {
     let held = planes.held(&plane)?;
-    let session = held
-        .chats()
-        .retry(&name, held.root(), Size { columns, rows })?;
-    drawn(&held, session)
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = held
+            .chats()
+            .retry(&id, held.root(), Size { columns, rows })?;
+        drawn(&held, session)
+    })
+    .await
+    .map_err(|err| format!("charter could not start the chat: {err}"))?
 }
 
-/// Forget this chat (NO-3): drops the chat named `name` that this launch could not start from
+/// Forget this chat (NO-3): drops the chat with id `id` that this launch could not start from
 /// the record. Kept otherwise, on purpose, so a moved directory never deletes a chat.
 #[tauri::command]
 #[specta::specta]
 fn forget_chat_that_did_not_start(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
-    name: String,
+    id: String,
 ) -> Result<(), String> {
-    planes.held(&plane)?.chats().forget(&name)
+    planes.held(&plane)?.chats().forget(&id)
 }
 
 /// Start fresh (NO-3): chat `session` started again on the plane's instructions as they are
 /// now — the same chat, in a new run with no conversation resumed (ADR 0066). The answer is the
-/// new one as the window draws it; the window then closes the old one, which ends its program.
+/// new one as the window draws it. The old one is ended here once the new one has started; a
+/// refused start ends nothing. On a blocking thread, as `start_chat` is.
 #[tauri::command]
 #[specta::specta]
-fn start_chat_fresh(
+async fn start_chat_fresh(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     session: u32,
@@ -1464,10 +1473,12 @@ fn start_chat_fresh(
     rows: u16,
 ) -> Result<OpenChat, String> {
     let held = planes.held(&plane)?;
-    let started = held
-        .chats()
-        .start_fresh(session, held.root(), Size { columns, rows })?;
-    drawn(&held, started)
+    tauri::async_runtime::spawn_blocking(move || {
+        let started = held.start_chat_fresh(session, Size { columns, rows })?;
+        drawn(&held, started)
+    })
+    .await
+    .map_err(|err| format!("charter could not start the chat: {err}"))?
 }
 
 /// Every chat this plane has open that is running on instructions the plane has changed since

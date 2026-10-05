@@ -56,7 +56,7 @@ type Asked = { cmd: string; args: Record<string, unknown> };
 
 /** What the core holds, and how it answers the three NO-3 commands. */
 let open: ReturnType<typeof chat>[];
-let waiting: [string, string][];
+let waiting: { id: string; name: string; why: string }[];
 let updated: { session: number; files: string[] }[];
 let refuse: Partial<Record<string, string>>;
 
@@ -84,14 +84,15 @@ function core(): Asked[] {
     if (cmd === "retry_chat_that_did_not_start") {
       // A refusal is a THROWN value, which is what arrives as `{ status: "error" }`.
       if (refuse[cmd] !== undefined) throw refuse[cmd];
-      waiting = waiting.filter(([name]) => name !== given.name);
-      const started = chat(7, given.name as string);
+      const was = waiting.find((one) => one.id === given.id);
+      waiting = waiting.filter((one) => one.id !== given.id);
+      const started = chat(7, was?.name ?? "?");
       open = [...open, started];
       return started;
     }
     if (cmd === "forget_chat_that_did_not_start") {
       if (refuse[cmd] !== undefined) throw refuse[cmd];
-      waiting = waiting.filter(([name]) => name !== given.name);
+      waiting = waiting.filter((one) => one.id !== given.id);
       return null;
     }
     if (cmd === "start_chat_fresh") {
@@ -103,10 +104,31 @@ function core(): Asked[] {
       return started;
     }
     if (cmd === "close_session") return null;
+    // What a split asks, to start the chat beside the first one.
+    if (cmd === "start_options") return START_OPTIONS;
+    if (cmd === "start_chat") return { session: 2 };
     return null;
   });
   return asked;
 }
+
+const START_OPTIONS = {
+  profiles: [
+    {
+      name: "claude",
+      kind: "claude",
+      shown: "claude",
+      source: "built-in",
+      is_default: true,
+      approval: null,
+    },
+  ],
+  refused: [],
+  personas: ["steward"],
+  persona: "steward",
+  ignore_fix: null,
+  declares_none: true,
+};
 
 const sent = (asked: Asked[], cmd: string) =>
   asked.filter((one) => one.cmd === cmd).map((one) => one.args);
@@ -133,7 +155,7 @@ afterEach(() => {
 
 describe("a chat that did not start", () => {
   beforeEach(() => {
-    waiting = [["ide", "no such directory: /home/dev/gone"]];
+    waiting = [{ id: "id-ide", name: "ide", why: "no such directory: /home/dev/gone" }];
   });
 
   it("is started by Retry now, and its tab opens", async () => {
@@ -146,9 +168,9 @@ describe("a chat that did not start", () => {
 
     await waitFor(() => expect(tabNames()).toContain("ide"));
     expect(sent(asked, "retry_chat_that_did_not_start")).toEqual([
-      expect.objectContaining({ plane: PLANE, name: "ide" }),
+      expect.objectContaining({ plane: PLANE, id: "id-ide" }),
     ]);
-    expect(notice("chat-did-not-start:ide")).toBeNull();
+    expect(notice("chat-did-not-start:id-ide")).toBeNull();
   });
 
   it("stays, saying why, when Retry now is refused", async () => {
@@ -160,7 +182,7 @@ describe("a chat that did not start", () => {
     await userEvent.click(within(said).getByRole("button", { name: "Retry now" }));
 
     await waitFor(() =>
-      expect(notice("chat-did-not-start:ide")?.textContent).toContain("/home/dev/still-gone"),
+      expect(notice("chat-did-not-start:id-ide")?.textContent).toContain("/home/dev/still-gone"),
     );
     expect(tabNames()).not.toContain("ide");
   });
@@ -177,15 +199,15 @@ describe("a chat that did not start", () => {
 
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(sent(asked, "forget_chat_that_did_not_start")).toEqual([]);
-    expect(notice("chat-did-not-start:ide")).not.toBeNull();
+    expect(notice("chat-did-not-start:id-ide")).not.toBeNull();
 
     await userEvent.click(within(said).getByRole("button", { name: "Forget this chat…" }));
     await userEvent.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Forget chat" }),
     );
 
-    await waitFor(() => expect(notice("chat-did-not-start:ide")).toBeNull());
-    expect(sent(asked, "forget_chat_that_did_not_start")).toEqual([{ plane: PLANE, name: "ide" }]);
+    await waitFor(() => expect(notice("chat-did-not-start:id-ide")).toBeNull());
+    expect(sent(asked, "forget_chat_that_did_not_start")).toEqual([{ plane: PLANE, id: "id-ide" }]);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
@@ -203,7 +225,58 @@ describe("a chat that did not start", () => {
       "the record could not be written",
     );
     await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
-    expect(notice("chat-did-not-start:ide")).not.toBeNull();
+    expect(notice("chat-did-not-start:id-ide")).not.toBeNull();
+  });
+});
+
+describe("two waiting chats with one name (NO-3 review)", () => {
+  it("are two Notices, and Forget on the second forgets only the second", async () => {
+    // A split's chat takes its tab's name and tab numbers start again at every launch, so two
+    // waiting chats can share a name. Each Notice is its chat's, by id.
+    waiting = [
+      { id: "id-a", name: "3", why: "no such directory: /a" },
+      { id: "id-b", name: "3", why: "no such directory: /b" },
+    ];
+    const asked = core();
+    render(<App />);
+    await screen.findAllByText(/did not start/);
+    const second = notice("chat-did-not-start:id-b") as HTMLElement;
+
+    await userEvent.click(within(second).getByRole("button", { name: "Forget this chat…" }));
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Forget chat" }),
+    );
+
+    await waitFor(() => expect(notice("chat-did-not-start:id-b")).toBeNull());
+    expect(sent(asked, "forget_chat_that_did_not_start")).toEqual([{ plane: PLANE, id: "id-b" }]);
+    expect(notice("chat-did-not-start:id-a")?.textContent).toContain("/a");
+  });
+
+  it("are retried and dismissed one at a time", async () => {
+    waiting = [
+      { id: "id-a", name: "3", why: "no such directory: /a" },
+      { id: "id-b", name: "3", why: "no such directory: /b" },
+    ];
+    const asked = core();
+    render(<App />);
+    await screen.findAllByText(/did not start/);
+
+    await userEvent.click(
+      within(notice("chat-did-not-start:id-a") as HTMLElement).getByRole("button", {
+        name: "Dismiss",
+      }),
+    );
+    expect(notice("chat-did-not-start:id-a")).toBeNull();
+    await userEvent.click(
+      within(notice("chat-did-not-start:id-b") as HTMLElement).getByRole("button", {
+        name: "Retry now",
+      }),
+    );
+
+    await waitFor(() => expect(notice("chat-did-not-start:id-b")).toBeNull());
+    expect(sent(asked, "retry_chat_that_did_not_start")).toEqual([
+      expect.objectContaining({ id: "id-b" }),
+    ]);
   });
 });
 
@@ -241,7 +314,8 @@ describe("a chat the project's instructions changed under", () => {
     expect(sent(asked, "start_chat_fresh")).toEqual([
       expect.objectContaining({ plane: PLANE, session: 1 }),
     ]);
-    expect(sent(asked, "close_session")).toEqual([{ plane: PLANE, session: 1 }]);
+    // The core ends the old one itself; the window only puts the new one in its pane.
+    expect(sent(asked, "close_session")).toEqual([]);
     expect(tabNames()).toEqual(["one"]);
   });
 
@@ -280,6 +354,39 @@ describe("a chat the project's instructions changed under", () => {
     );
     expect(sent(asked, "close_session")).toEqual([]);
     expect(screen.getByTestId("pane").textContent).toBe("session 1");
+  });
+
+  it("on a split tab, replaces only its own pane and leaves the chat beside it running", async () => {
+    // The reviewer's probe: the old tab closed, and the chat split beside it was left running
+    // with no tab. Now the new session takes the old one's pane, and the tab stays (D-NO3-8).
+    const asked = core();
+    render(<App />);
+    await screen.findByRole("button", { name: /Start chat one fresh/ });
+    await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("pane").map((p) => p.textContent)).toEqual([
+        "session 1",
+        "session 2",
+      ]),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /Start chat one fresh/ }));
+    const question = await screen.findByRole("alertdialog");
+    expect(question.textContent).toContain("Start one fresh?");
+    await userEvent.click(within(question).getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("pane").map((p) => p.textContent)).toEqual([
+        "session 9",
+        "session 2",
+      ]),
+    );
+    expect(sent(asked, "start_chat_fresh")).toEqual([
+      expect.objectContaining({ plane: PLANE, session: 1 }),
+    ]);
+    expect(sent(asked, "close_session")).toEqual([]);
+    expect(tabNames()).toEqual(["one"]);
   });
 
   it("is not offered for a chat the instructions did not change under", async () => {

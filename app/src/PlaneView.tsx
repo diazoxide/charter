@@ -42,6 +42,7 @@ import {
   type PlaneSaving,
   type ChatWorktree,
   type HarnessGlance,
+  type NotStarted,
   type OpenChat,
   type PlaneId,
   type Refused,
@@ -168,6 +169,7 @@ import {
   firstTaskView,
   panesOf,
   putViewBack,
+  replaceSession,
   setSplit,
   showInstead,
   splitOf,
@@ -440,10 +442,15 @@ export const PlaneView = memo(function PlaneView({
    */
   const { dismissed, dismiss, settle: settleNotices, showAgain } = useDismissals(plane);
   /** Chats this launch could not start, by name and why. They are still recorded. */
-  const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
+  const [wouldNotStart, setWouldNotStart] = useState<NotStarted[]>([]);
   /** **Forget this chat…** (NO-3): the chat whose record is about to be dropped, while the
    *  question is up, and the core's refusal of the last answer. */
-  const [forgetting, setForgetting] = useState<{ name: string; busy: boolean; trouble?: string }>();
+  const [forgetting, setForgetting] = useState<{
+    id: string;
+    name: string;
+    busy: boolean;
+    trouble?: string;
+  }>();
   /**
    * **Start fresh** (NO-3, charter#369): the tab whose chat is about to be started again on the
    * project's instructions as they are now, while the question is up. The tab mark and the
@@ -3223,57 +3230,63 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
-   * **A chat the window started in place of one** — a Retry now, or a Start fresh (NO-3) — drawn
-   * the way a chat a relaunch put back is: its tab opens in front, its notes say how it came
-   * back, and its pin and its shell's mark come with it.
+   * **A chat the window started again** — a Retry now, or a Start fresh (NO-3) — known the way a
+   * chat a relaunch put back is: where it is filed, its notes on how it came back, and its pin
+   * and its shell's mark.
    */
-  const drawStarted = useCallback(
+  const noteStarted = useCallback(
     (chat: OpenChat) => {
       setStartedIn((was) => ({ ...was, [chat.session]: filedFor(chat.cwd, focused) }));
       setReopened((was) => [...was.filter((one) => one.session !== chat.session), chat]);
       if (chat.pinned) setPinnedChats((was) => [...was, chat.session]);
       if (isShell(chat)) setShells((was) => new Set(was).add(chat.session));
+    },
+    [focused],
+  );
+
+  /** The waiting chats a Retry now is under way for, by id, so a second press starts nothing. */
+  const retrying = useRef(new Set<string>());
+  /**
+   * **Retry now** on a chat this launch could not start (NO-3), by its id: the core starts it
+   * again the way the launch tried to (`retry_chat_that_did_not_start`). Started, its tab opens
+   * in front and its Notice goes; refused, the Notice stays and says the new reason.
+   */
+  const retryChat = useCallback(
+    async (id: string) => {
+      if (retrying.current.has(id)) return;
+      retrying.current.add(id);
+      const said = await commands
+        .retryChatThatDidNotStart(plane, id, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      retrying.current.delete(id);
+      if (said.status === "error") {
+        setWouldNotStart((was) =>
+          was.map((one) => (one.id === id ? { ...one, why: said.error } : one)),
+        );
+        return;
+      }
+      const chat = said.data;
+      setWouldNotStart((was) => was.filter((one) => one.id !== id));
+      noteStarted(chat);
       change((tabs) =>
         openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
       );
     },
-    [change, focused],
-  );
-
-  /**
-   * **Retry now** on a chat this launch could not start (NO-3): the core starts it again the
-   * way the launch tried to (`retry_chat_that_did_not_start`). Started, its tab opens and its
-   * Notice goes; refused, the Notice stays and says the new reason.
-   */
-  const retryChat = useCallback(
-    async (name: string) => {
-      const said = await commands
-        .retryChatThatDidNotStart(plane, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
-        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (said.status === "error") {
-        setWouldNotStart((was) =>
-          was.map(([one, why]) => (one === name ? [one, said.error] : [one, why])),
-        );
-        return;
-      }
-      setWouldNotStart((was) => was.filter(([one]) => one !== name));
-      drawStarted(said.data);
-    },
-    [drawStarted, plane],
+    [change, noteStarted, plane],
   );
 
   const forgetChat = useCallback(
-    async (name: string) => {
-      setForgetting({ name, busy: true });
+    async (id: string, name: string) => {
+      setForgetting({ id, name, busy: true });
       const said = await commands
-        .forgetChatThatDidNotStart(plane, name)
+        .forgetChatThatDidNotStart(plane, id)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (said.status === "error") {
-        setForgetting({ name, busy: false, trouble: said.error });
+        setForgetting({ id, name, busy: false, trouble: said.error });
         return;
       }
       setForgetting(undefined);
-      setWouldNotStart((was) => was.filter(([one]) => one !== name));
+      setWouldNotStart((was) => was.filter((one) => one.id !== id));
     },
     [plane],
   );
@@ -3293,9 +3306,10 @@ export const PlaneView = memo(function PlaneView({
     [planeUpdates],
   );
   /**
-   * The core starts the same chat again, fresh (`start_chat_fresh`); then the old tab closes,
-   * which ends the old program, and the new one opens in front. Refused, nothing is closed and
-   * the question says why.
+   * The core starts the same chat again, fresh (`start_chat_fresh`), and ends the old one itself
+   * once the new one runs. **Only the pane that showed it changes** (D-NO3-8): the new session
+   * takes that pane, so the tab keeps its place and a chat split beside it runs on, untouched.
+   * Refused, nothing changes and the question says why.
    */
   const startFresh = useCallback(async () => {
     const asked = freshening;
@@ -3308,13 +3322,13 @@ export const PlaneView = memo(function PlaneView({
       setFreshening({ ...asked, busy: false, trouble: said.error });
       return;
     }
+    const chat = said.data;
     setFreshening(undefined);
-    change((tabs) => closeTab(tabs, asked.tab, filedIn, isPinned));
-    void commands.closeSession(plane, asked.session);
     setReopened((was) => was.filter((one) => one.session !== asked.session));
     setPinnedChats((was) => was.filter((one) => one !== asked.session));
-    drawStarted(said.data);
-  }, [change, drawStarted, filedIn, freshening, isPinned, plane]);
+    noteStarted(chat);
+    change((tabs) => replaceSession(tabs, asked.session, chat.session));
+  }, [change, freshening, noteStarted, plane]);
 
   // A resumed chat whose harness ended without a word — it could not find the conversation — is
   // replaced by a fresh chat with the same record, once (SI-8d). Everything else a resumed chat
@@ -4682,16 +4696,21 @@ export const PlaneView = memo(function PlaneView({
         {/* A memory's Delete, which can be undone for a few seconds (SI-9b, ADR 0065 Q8). */}
         {memoryEdits.undo}
 
-        {wouldNotStart.map(([name, why]) => (
+        {/* By the chat's id, never its name: two waiting chats can share a name (a split's chat
+            takes its tab's), and each Notice acts on its own chat alone. */}
+        {wouldNotStart.map(({ id, name, why }) => (
           <Notice
-            key={name}
-            cause={`chat-did-not-start:${name}`}
+            key={id}
+            cause={`chat-did-not-start:${id}`}
             tone="trouble"
             fixes={[
-              { label: "Retry now", onPress: () => void retryChat(name) },
-              { label: "Forget this chat…", onPress: () => setForgetting({ name, busy: false }) },
+              { label: "Retry now", onPress: () => void retryChat(id) },
+              {
+                label: "Forget this chat…",
+                onPress: () => setForgetting({ id, name, busy: false }),
+              },
             ]}
-            onDismiss={() => setWouldNotStart((was) => was.filter(([one]) => one !== name))}
+            onDismiss={() => setWouldNotStart((was) => was.filter((one) => one.id !== id))}
           >
             <strong>{name}</strong> did not start ({why}). It is still recorded, and will be tried
             again at the next launch.
@@ -5038,7 +5057,7 @@ export const PlaneView = memo(function PlaneView({
           answer="Forget chat"
           trouble={forgetting.trouble}
           busy={forgetting.busy}
-          onAnswer={() => void forgetChat(forgetting.name)}
+          onAnswer={() => void forgetChat(forgetting.id, forgetting.name)}
           onCancel={() => setForgetting(undefined)}
         />
       )}
