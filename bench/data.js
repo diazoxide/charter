@@ -1,6 +1,6 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791193485045,
-  "repoUrl": "https://github.com/diazoxide/charter",
+  "lastUpdate": 1791209636260,
+  "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
       {
@@ -2100,6 +2100,48 @@ window.BENCHMARK_DATA = {
             "value": 104.35280800000001,
             "unit": "ms",
             "extra": "median of 5 runs: 103.336, 103.826, 104.353, 104.627, 105.698 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "dc37c4d0ff80e00998358505e5664f5157343ed1",
+          "message": "train 45: the updater tests' manifest server counts a request before it answers\n\n`the_real_check_lists_its_read_in_the_network_log` failed twice in a row on this train's CI\nwith 0 served, expected 1, and `a_release_without_a_weekly_manifest_still_answers_the_check`\nfailed the same way on the first run. Both pass on their own. The stub server bumped its count\nonly after writing the reply, so a client that had read the reply could assert before the\ncount moved. It now counts each request before it writes the reply. Test code only; refs\nissue 1222.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T18:09:16+04:00",
+          "tree_id": "98d5eded6e53b80fa3bbacc46a2c8e771c9df6f1",
+          "url": "https://github.com/purlis/purlis/commit/dc37c4d0ff80e00998358505e5664f5157343ed1"
+        },
+        "date": 1791209635192,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.410767,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.386, 0.398, 0.411, 0.421, 0.425 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.4801145,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.184, 16.435, 16.480, 16.602, 16.866 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.824378,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.878, 101.220, 101.824, 101.891, 102.641 ms"
           }
         ]
       }
