@@ -11,8 +11,8 @@ import { describe, expect, it } from "vitest";
  * (V89j). Before it, two hand-built styles drew the same row and had drifted: `settings-*` on the
  * settings pages, and `asks` / `choices` / `choice` / `who` / `picking` in the dialogs. They were
  * deleted once nothing used them. A screen that reaches for one again would bring the drift back,
- * so this fails on any rule in `App.css` whose selector names one, and on any `className` in the
- * source that does.
+ * so this fails on any rule in a stylesheet under `src/` whose selector names one — `App.css`,
+ * `styles.css`, and any added later — and on any `className` in the source that does.
  *
  * jsdom computes no stylesheet, so the rules are read as text, as `paint.test.ts` does.
  */
@@ -25,13 +25,29 @@ const gone = (name: string) => GONE.includes(name) || name.startsWith("settings-
 
 const SRC = join(process.cwd(), "src");
 
-/** Every source file the window is drawn from: not tests, which name the classes to deny them. */
-function sources(dir: string): string[] {
+/** Every file under `dir` whose name `keep` takes. */
+function files(dir: string, keep: (name: string) => boolean): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) return sources(path);
-    return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
+    if (entry.isDirectory()) return files(path, keep);
+    return keep(entry.name) ? [path] : [];
   });
+}
+
+/** Every source file the window is drawn from: not tests, which name the classes to deny them. */
+const sources = (dir: string) =>
+  files(dir, (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name));
+
+/** Every stylesheet the window can import. */
+const stylesheets = (dir: string) => files(dir, (name) => name.endsWith(".css"));
+
+/** The selectors in `css` that name one of the old classes. */
+function oldRules(css: string): string[] {
+  return [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{[^{}]*\}/g)]
+    .map(([, selectors]) => selectors.trim())
+    .filter((selectors) =>
+      (selectors.match(/\.[\w-]+/g) ?? []).some((token) => gone(token.slice(1))),
+    );
 }
 
 /** The class names a `className` attribute can hold: every string in its value. */
@@ -49,13 +65,15 @@ function classNames(source: string): string[] {
 }
 
 describe("the old hand-built form classes", () => {
-  it("have no rule in the stylesheet", () => {
-    const css = readFileSync(join(SRC, "App.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-    const named = [...css.matchAll(/([^{}]+)\{[^{}]*\}/g)]
-      .map(([, selectors]) => selectors.trim())
-      .filter((selectors) =>
-        (selectors.match(/\.[\w-]+/g) ?? []).some((token) => gone(token.slice(1))),
-      );
+  it("have no rule in any stylesheet", () => {
+    const sheets = stylesheets(SRC);
+    // App.css and styles.css at least: a reader that found none would pass on nothing.
+    expect(sheets.map((path) => relative(SRC, path))).toEqual(
+      expect.arrayContaining(["App.css", "styles.css"]),
+    );
+    const named = sheets.flatMap((path) =>
+      oldRules(readFileSync(path, "utf8")).map((rule) => `${relative(SRC, path)}: ${rule}`),
+    );
     expect(named).toEqual([]);
   });
 
@@ -78,5 +96,9 @@ describe("the old hand-built form classes", () => {
     ]);
     expect(classNames("<p className={`who ${extra}`} />")).toEqual(["who"]);
     expect(classNames(`<div className="ui-choice-radio" />`).filter(gone)).toEqual([]);
+    expect(oldRules(".asks {}\n.ui-choice-option {}\n.warning .choice label {}")).toEqual([
+      ".asks",
+      ".warning .choice label",
+    ]);
   });
 });

@@ -213,11 +213,20 @@ describe("the first task", () => {
     await waitFor(() => expect(claude).toBeChecked());
     claude.focus();
 
-    await userEvent.keyboard("{ArrowDown>}");
+    // A quick press, down and up: Radix alone moved the focus and picked nothing (the defect
+    // Choice repairs); only a held key picked.
+    await userEvent.keyboard("{ArrowDown}");
     await new Promise((done) => setTimeout(done, 80));
-    await userEvent.keyboard("{/ArrowDown}");
 
+    expect(within(run1).getByRole("radio", { name: "codex" })).toHaveFocus();
     expect(within(run1).getByRole("radio", { name: "codex" })).toBeChecked();
+    expect(calls("first_task_run")).toHaveLength(0);
+    expect(calls("approve_profile")).toHaveLength(0);
+
+    // Held, it still starts nothing: the pick waits for the button.
+    await userEvent.keyboard("{ArrowUp>}");
+    await new Promise((done) => setTimeout(done, 80));
+    await userEvent.keyboard("{/ArrowUp}");
     expect(calls("first_task_run")).toHaveLength(0);
     expect(calls("approve_profile")).toHaveLength(0);
   });

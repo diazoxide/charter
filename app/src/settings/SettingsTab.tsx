@@ -532,7 +532,9 @@ function Place({
           onClick={() => {
             onMove(pick);
             // The button goes once it is pressed; the focus goes to the file the value went to.
-            document.getElementById(`${id}-${pick}`)?.focus();
+            // A Choice names its options by place (D-DS3e-10).
+            const at = PLACES.findIndex((one) => one.value === pick);
+            document.getElementById(`${id}-${at}`)?.focus();
           }}
         >
           {pick === "local"
