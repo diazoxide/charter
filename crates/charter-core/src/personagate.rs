@@ -269,13 +269,20 @@ const HYPHENATED_DELETIONS: [(&str, &[&str]); 2] = [
 
 /// `_is_dangerous`: any word of any argument is one of the binary's destructive subcommands, or
 /// one of its hyphenated deletion command words ([`HYPHENATED_DELETIONS`]).
+///
+/// **The binary's name in any case** (#1279), as the leak guard and the floor read it: on a
+/// filesystem that folds case `CHARTER` and `Kubectl` run the same programs, and a row matched
+/// only as written would let a Shift key skip the prompt.
 pub fn dangerous(binary: &str, args: &[String]) -> bool {
-    let Some((_, bad)) = DANGEROUS.iter().find(|(b, _)| *b == binary) else {
+    let Some((_, bad)) = DANGEROUS
+        .iter()
+        .find(|(b, _)| b.eq_ignore_ascii_case(binary))
+    else {
         return false;
     };
     let hyphenated: &[&str] = HYPHENATED_DELETIONS
         .iter()
-        .find(|(b, _)| *b == binary)
+        .find(|(b, _)| b.eq_ignore_ascii_case(binary))
         .map_or(&[], |(_, words)| words);
     args.iter()
         .any(|tok| word().find_iter(tok).any(|w| bad.contains(&w.as_str())))
@@ -288,8 +295,10 @@ pub fn dangerous(binary: &str, args: &[String]) -> bool {
 /// write unless the installed extension's manifest declares that command `"writes": false`; an
 /// extension that is not installed, a command it does not declare and a config home charter
 /// cannot find all read as writes. A core command is not decided here ([`dangerous`] is).
+///
+/// The binary's name is read in any case, as [`dangerous`] reads it.
 pub fn writes_through_an_extension(binary: &str, args: &[String]) -> bool {
-    if !crate::cliname::is_installed(binary) {
+    if !crate::cliname::is_installed(&binary.to_ascii_lowercase()) {
         return false;
     }
     let Some((id, command)) = crate::extension::cli::extension_command(args) else {
@@ -1317,7 +1326,8 @@ mod tests {
             !installed
         );
         for line in ["probe push", "probe", "other list"] {
-            for name in ["charter", "purlis"] {
+            // …in any case, as the leak guard reads the program (#1279).
+            for name in ["charter", "purlis", "PURLIS", "Charter"] {
                 assert!(
                     writes_through_an_extension(name, &words(line)),
                     "`{name} {line}` read as one that only reads"
