@@ -144,6 +144,14 @@ that id as the row's `fix`, and `charter doctor --help` lists the ids. Each fix 
 changed, or why it refused. On a project this charter can only read, `--fix` is refused and
 writes nothing.
 
+One fix takes input. When `user.name` or `user.email` is unset, the `git identity` row offers
+`git-identity`, which needs a name and an email:
+`charter doctor --fix git-identity --name "Your Name" --email you@example.com`. It writes both
+to git's global config, the scope the row's hint names, because charter commits in the project
+and in every clone. Each value is checked first, and a refused one writes nothing. A bare
+`--fix` without `--name` and `--email` says what to give. In the window, its Fix button opens a
+small form for the two values.
+
 ### Rules that always ask, or stop asking
 
 `charter guard ask '<pattern>'` makes every harness prompt before a command, and

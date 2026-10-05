@@ -453,6 +453,7 @@ impl Doctor {
             profiles::harness_profiles(self),
             memory::memory_indexes(self),
             inventory::inventory(self),
+            git::identity(self),
         ]
         .into_iter()
         .filter_map(|row| row.fix)

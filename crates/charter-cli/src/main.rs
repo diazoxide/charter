@@ -278,6 +278,12 @@ enum Command {
             ),
         )]
         fix: Option<Option<String>>,
+        /// The name `--fix git-identity` sets as git's global `user.name`.
+        #[arg(long, value_name = "NAME", requires = "fix")]
+        name: Option<String>,
+        /// The email `--fix git-identity` sets as git's global `user.email`.
+        #[arg(long, value_name = "EMAIL", requires = "fix")]
+        email: Option<String>,
     },
 
     /// Refresh the forge state the CI column is drawn from: each clone's open PR/MR and the
@@ -3218,7 +3224,23 @@ fn main() -> ExitCode {
             json,
             preflight,
             fix,
-        } => return doctor(*json, *preflight, fix.as_ref().map(Option::as_deref)),
+            name,
+            email,
+        } => {
+            // FX-3: either flag is the git identity's input; the core says what is missing.
+            let identity = (name.is_some() || email.is_some()).then(|| {
+                (
+                    name.as_deref().unwrap_or_default(),
+                    email.as_deref().unwrap_or_default(),
+                )
+            });
+            return doctor(
+                *json,
+                *preflight,
+                fix.as_ref().map(Option::as_deref),
+                identity,
+            );
+        }
         Command::Plugin(verb) => return plugin(verb),
         // A background refresh and a footer: neither is a plane write, and both choose their
         // own exit status as their Python counterparts do.
@@ -3424,8 +3446,25 @@ fn with_here(f: impl FnOnce(&Here) -> u8) -> ExitCode {
 ///
 /// `fix` is `None` without `--fix`, `Some(None)` for a bare `--fix`, and `Some(Some(id))` for
 /// one fix.
-fn doctor(json: bool, preflight: bool, fix: Option<Option<&str>>) -> ExitCode {
+///
+/// `identity` is `--name` and `--email`, the input `git-identity` takes (FX-3); a fix that
+/// takes input and was given none is refused by the registry, which says what to give.
+fn doctor(
+    json: bool,
+    preflight: bool,
+    fix: Option<Option<&str>>,
+    identity: Option<(&str, &str)>,
+) -> ExitCode {
     use std::io::IsTerminal;
+
+    // `--name`/`--email` with `--fix <id>` for another fix would be dropped without a word.
+    if identity.is_some()
+        && let Some(Some(id)) = fix
+        && id != charter_core::doctor::fix::FixId::GitIdentity.id()
+    {
+        eprintln!("charter doctor: --name and --email go with --fix git-identity, not --fix {id}");
+        return ExitCode::from(2);
+    }
 
     let mut fix_failed = false;
     let cwd = match std::env::current_dir() {
@@ -3458,12 +3497,33 @@ fn doctor(json: bool, preflight: bool, fix: Option<Option<&str>>) -> ExitCode {
             }
         };
         for id in ids {
-            let fixed = registry::apply(doctor.root(), id);
+            let lines = match (id, identity) {
+                (FixId::GitIdentity, Some((name, email))) => {
+                    match registry::identity::apply(name, email) {
+                        Ok(fixed) => {
+                            fix_failed |= !fixed.complete();
+                            fixed.lines()
+                        }
+                        Err(invalid) => {
+                            fix_failed = true;
+                            invalid
+                                .lines()
+                                .into_iter()
+                                .map(|why| format!("✗ refused: {why}"))
+                                .collect()
+                        }
+                    }
+                }
+                _ => {
+                    let fixed = registry::apply(doctor.root(), id);
+                    fix_failed |= !fixed.complete();
+                    fixed.lines()
+                }
+            };
             eprintln!("fix {id}:");
-            for line in fixed.lines() {
+            for line in lines {
                 eprintln!("  {line}");
             }
-            fix_failed |= !fixed.complete();
         }
     }
     // The plane repair: the ask rule a report is filed behind (ADR 0059, amended 2026-09-26).

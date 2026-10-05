@@ -195,13 +195,21 @@ fn a_stale_index_lock_is_reported_and_never_offered_as_a_fix() {
 fn the_doctor_offers_exactly_the_fixes_its_rows_carry() {
     charter_core::unsteered!();
     let (_d, root) = project("schema = 1\n");
-    let doctor = Doctor::at(&root, &root, false, true);
-    assert_eq!(doctor.fixes(), vec![FixId::Reinit]);
+    // Without git-identity, which the machine's own git config decides (FX-3's tests set it
+    // on a temporary home).
+    let offered = |root: &Path| -> Vec<FixId> {
+        Doctor::at(root, root, false, true)
+            .fixes()
+            .into_iter()
+            .filter(|id| *id != FixId::GitIdentity)
+            .collect()
+    };
+    assert_eq!(offered(&root), vec![FixId::Reinit]);
 
     for dir in ["personas", "inventory", "workspaces"] {
         std::fs::create_dir_all(root.join(dir)).unwrap();
     }
-    assert_eq!(Doctor::at(&root, &root, false, true).fixes(), vec![]);
+    assert_eq!(offered(&root), vec![]);
 }
 
 #[test]
@@ -210,6 +218,8 @@ fn a_fix_id_is_spelled_one_way_and_read_back_the_same() {
     assert_eq!(FixId::Reinit.id(), "reinit");
     assert_eq!(FixId::parse("reinit"), Some(FixId::Reinit));
     assert_eq!(FixId::parse("index-lock"), None);
+    assert_eq!(FixId::GitIdentity.id(), "git-identity");
+    assert_eq!(FixId::parse("git-identity"), Some(FixId::GitIdentity));
     assert_eq!(
         FixId::ALL.map(FixId::id),
         [
@@ -217,7 +227,8 @@ fn a_fix_id_is_spelled_one_way_and_read_back_the_same() {
             "reinit",
             "local-ignore",
             "memory-optimize",
-            "discover"
+            "discover",
+            "git-identity"
         ]
     );
     for id in FixId::ALL {
@@ -241,9 +252,12 @@ fn every_fix_but_discover_is_applied_by_bare_fix() {
             "plugin-install",
             "reinit",
             "local-ignore",
-            "memory-optimize"
+            "memory-optimize",
+            "git-identity"
         ]
     );
+    // git-identity is chosen by bare --fix too, and refused there: it takes input
+    // (D-FX3-1), and saying what to give is the honest answer.
     assert!(FixId::Discover.by_name_only());
 }
 

@@ -194,7 +194,13 @@ fn fixed(
         },
         _ => registry::apply(root, id),
     };
-    Ok(match applied {
+    Ok(answered(id, applied))
+}
+
+/// A fix's outcome, as the dialog draws it.
+fn answered(id: charter_core::doctor::fix::FixId, outcome: charter_core::doctor::fix::Fixed) -> DoctorFixed {
+    use charter_core::doctor::fix::Fixed;
+    match outcome {
         Fixed::Ran { said, complete } => DoctorFixed {
             fix: id.id().to_owned(),
             refused: None,
@@ -207,7 +213,56 @@ fn fixed(
             said: Vec::new(),
             complete: false,
         },
-    })
+    }
+}
+
+/// What the git identity form's submit came to (FX-3): the fix's outcome, or the input the
+/// core refused, field by field, with nothing written.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum DoctorIdentityFixed {
+    Fixed {
+        fixed: DoctorFixed,
+    },
+    /// Each field's reasons, in the core's words; empty for a field that is fine.
+    Invalid {
+        name: Vec<String>,
+        email: Vec<String>,
+    },
+}
+
+/// Apply the `git-identity` fix with the name and email the Doctor's form was given (FX-3):
+/// the core checks both, then writes them to git's global config, as `charter doctor --fix
+/// git-identity --name … --email …` does. Answers the fix's outcome, or each field's refusal.
+///
+/// The plane is the window's: the identity is not the project's, but the answer is kept to
+/// the dialog that asked, as every fix's is.
+#[tauri::command]
+#[specta::specta]
+pub async fn plane_doctor_fix_identity(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+    email: String,
+) -> Result<DoctorIdentityFixed, String> {
+    planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(move || identity_fixed(&name, &email))
+        .await
+        .map_err(|err| format!("the fix did not finish: {err}"))
+}
+
+/// [`plane_doctor_fix_identity`], on the calling thread.
+fn identity_fixed(name: &str, email: &str) -> DoctorIdentityFixed {
+    use charter_core::doctor::fix::{FixId, identity};
+    match identity::apply(name, email) {
+        Ok(outcome) => DoctorIdentityFixed::Fixed {
+            fixed: answered(FixId::GitIdentity, outcome),
+        },
+        Err(invalid) => DoctorIdentityFixed::Invalid {
+            name: invalid.name,
+            email: invalid.email,
+        },
+    }
 }
 
 /// The report for one plane. The command above is this on a blocking thread.
@@ -567,6 +622,27 @@ mod tests {
                 .is_some_and(|why| why.contains("no `charter` beside it")),
             "{done:?}"
         );
+    }
+
+    #[test]
+    fn the_identity_form_s_bad_input_is_answered_field_by_field() {
+        // Only refusals here: a write would reach this process's own HOME, the operator's.
+        // The write is the core's test, on a temporary home (FX-3).
+        assert_eq!(
+            identity_fixed("Ann", "nope"),
+            DoctorIdentityFixed::Invalid {
+                name: vec![],
+                email: vec![
+                    "That does not look like an email: one @ with something on each side, as \
+                     in you@example.com."
+                        .to_owned()
+                ],
+            }
+        );
+        let DoctorIdentityFixed::Invalid { name, email } = identity_fixed(" ", "") else {
+            panic!("an empty form was written");
+        };
+        assert_eq!((name.len(), email.len()), (1, 1));
     }
 
     #[test]

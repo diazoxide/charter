@@ -80,6 +80,8 @@ pub(super) fn identity(d: &Doctor) -> Row {
          user.name \"Your Name\"  — otherwise a commit (memory, workspace notes, dispatch \
          tallies) silently never happens.",
     )
+    // FX-3: the window's form, or `--fix git-identity --name … --email …`, sets both.
+    .fixed_by(super::fix::FixId::GitIdentity)
 }
 
 /// `git auth`: golden rule 0 — does every repo in scope carry ITS forge's token-only policy.

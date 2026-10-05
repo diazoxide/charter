@@ -217,8 +217,10 @@ fn json_names_the_fix_on_a_fixable_row_and_on_no_other() {
         ["name", "status", "detail", "hint", "fix"],
         "the four keys first, as they always were"
     );
+    // And the identity row, whose fix takes a name and an email (FX-3): this home has none.
+    assert_eq!(row(&rows, "git identity")["fix"], "git-identity");
     let with_fix: Vec<_> = rows.iter().filter(|r| r.get("fix").is_some()).collect();
-    assert_eq!(with_fix.len(), 1, "{with_fix:?}");
+    assert_eq!(with_fix.len(), 2, "{with_fix:?}");
 }
 
 #[test]
@@ -522,4 +524,79 @@ fn fix_discover_by_name_asks_the_forge_and_builds_the_inventory() {
     let inventory = std::fs::read_to_string(root.join("inventory/repos.json")).unwrap();
     assert!(inventory.contains("\"widget\""), "{inventory}");
     assert_eq!(row(&rows(&out), "inventory")["status"], "ok");
+}
+
+// ---- git-identity (FX-3): a fix that takes a name and an email ----------------------------
+
+#[test]
+fn fix_git_identity_with_a_name_and_an_email_sets_the_global_identity_and_reports_it_clean() {
+    let (_d, root) = plane();
+    let home = root.join("home");
+    let out = doctor(
+        &root,
+        &home,
+        &[
+            "--json",
+            "--fix",
+            "git-identity",
+            "--name",
+            "Ann Example",
+            "--email",
+            "ann@example.invalid",
+        ],
+    );
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix git-identity:"), "{said}");
+    assert!(said.contains("user.email = ann@example.invalid"), "{said}");
+    let identity = row(&rows(&out), "git identity").clone();
+    assert_eq!(identity["status"], "ok", "{identity}");
+    assert_eq!(identity["detail"], "Ann Example <ann@example.invalid>");
+    assert!(identity.get("fix").is_none(), "{identity}");
+    let written = std::fs::read_to_string(home.join(".gitconfig")).expect("the global config");
+    assert!(written.contains("Ann Example"), "{written}");
+    assert_eq!(out.status.code(), Some(0), "{said}");
+}
+
+#[test]
+fn fix_git_identity_with_a_bad_email_is_refused_by_field_and_writes_nothing() {
+    let (_d, root) = plane();
+    let home = root.join("home");
+    let out = doctor(
+        &root,
+        &home,
+        &["--fix", "git-identity", "--name", "Ann", "--email", "nope"],
+    );
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("✗ refused: --email:"), "{said}");
+    assert!(!said.contains("--name:"), "the name was fine: {said}");
+    assert!(!out.status.success());
+    assert!(
+        !home.join(".gitconfig").exists(),
+        "a refusal wrote the config"
+    );
+}
+
+#[test]
+fn fix_git_identity_without_a_name_and_an_email_says_what_to_give() {
+    let (_d, root) = plane();
+    let home = root.join("home");
+    let out = doctor(&root, &home, &["--fix", "git-identity"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("--name") && said.contains("--email"),
+        "{said}"
+    );
+    assert!(!out.status.success());
+    assert!(!home.join(".gitconfig").exists());
+}
+
+#[test]
+fn a_name_and_an_email_for_another_fix_are_refused_rather_than_dropped() {
+    let (_d, root) = bare_project();
+    let home = root.join("home");
+    let out = doctor(&root, &home, &["--fix", "reinit", "--name", "Ann"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{said}");
+    assert!(said.contains("--fix git-identity"), "{said}");
+    assert!(!root.join("personas").exists(), "nothing was fixed");
 }
