@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791172843415,
+  "lastUpdate": 1791175458065,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1848,6 +1848,48 @@ window.BENCHMARK_DATA = {
             "value": 103.62584799999999,
             "unit": "ms",
             "extra": "median of 5 runs: 102.598, 102.861, 103.626, 104.104, 105.994 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "e28d6aa9041758c1b0ec5be5afd27e3cdba919ea",
+          "message": "mutants: an unreadable alert record holds the whole crate (HY-7b review)\n\nReview fixes to 9cc724c.\n\nMust-fix: `notice` read a malformed record of dirty files as clean. With a clean slice\nover a.rs of {a.rs, b.rs}, the records {}, \"xyz\", [1] and [\"*\"] each produced `close`,\nand null and 5 crashed with a TypeError. `recorded` now accepts only two shapes: a JSON\nlist of path strings, none of which is \"*\", or exactly the string \"*\". Anything else,\nincluding a decode error, counts as the whole crate. A hand-written [] still means no\nfile is left. New tests cover each malformed record (plus \"[\" and a list holding a\nnumber); each one must produce `edit`, never `close`, and never crash.\n\nD-HY7b-6, amended: `notice` runs on `schedule` only, as in HY-7, so a dispatched run,\nfull or not, never touches the alert. Only a full cycle of clean Sunday slices shuts it.\nFor the record-less alert that is open today, that means 13 weeks of clean slices; a\ndispatched full run does not count. The trigger is unchanged. The wording is corrected\nin the workflow's header and `notice` job comments, in AGENTS.md, in the issue body text\nand in mutants-report.py's docstrings.\n\nFold-in: a missing space in `add_parser(\"notice\", help=...)`.\n\nChecks: node --test tools/*.test.mjs (66/66), actionlint mutants.yml (clean).\n\nRefs #1200\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T08:41:42+04:00",
+          "tree_id": "c3f38247541ccf13001003e058a57a9bff3b9a11",
+          "url": "https://github.com/diazoxide/charter/commit/e28d6aa9041758c1b0ec5be5afd27e3cdba919ea"
+        },
+        "date": 1791175456923,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.422231,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.393, 0.421, 0.422, 0.431, 0.451 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.398059500000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.296, 16.315, 16.398, 16.546, 16.905 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.69546,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.368, 101.582, 101.695, 101.865, 103.198 ms"
           }
         ]
       }
