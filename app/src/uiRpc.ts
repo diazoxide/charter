@@ -1460,6 +1460,11 @@ export const commands = {
 	 */
 	planeDoctorFixIdentity: (plane: PlaneId, name: string, email: string) => typedError<DoctorIdentityFixed, string>(__TAURI_INVOKE("plane_doctor_fix_identity", { plane, name, email })),
 	/**
+	 *  What git's global identity holds now: the form locks the keys that are set, because the
+	 *  fix writes only what is missing. The core reads it again before it writes.
+	 */
+	planeDoctorIdentity: (plane: PlaneId) => typedError<DoctorIdentityNow, string>(__TAURI_INVOKE("plane_doctor_identity", { plane })),
+	/**
 	 *  Both of this plane's settings files, and what charter says about each.
 	 * 
 	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
@@ -1970,6 +1975,15 @@ export type DoctorFixed = {
 export type DoctorIdentityFixed = { kind: "fixed"; fixed: DoctorFixed } | 
 /**  Each field's reasons, in the core's words; empty for a field that is fine. */
 { kind: "invalid"; name: string[]; email: string[] };
+
+/**
+ *  git's global identity as it stands, for the form to show a key that is set, locked
+ *  (FX-3, D-FX3-8). Each value is one display line; empty when unset.
+ */
+export type DoctorIdentityNow = {
+	name: string,
+	email: string,
+};
 
 /**  What the doctor said, and what it was asked with. */
 export type DoctorReport = {

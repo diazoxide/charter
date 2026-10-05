@@ -251,10 +251,44 @@ pub async fn plane_doctor_fix_identity(
         .map_err(|err| format!("the fix did not finish: {err}"))
 }
 
+/// git's global identity as it stands, for the form to show a key that is set, locked
+/// (FX-3, D-FX3-8). Each value is one display line; empty when unset.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DoctorIdentityNow {
+    pub name: String,
+    pub email: String,
+}
+
+/// What git's global identity holds now: the form locks the keys that are set, because the
+/// fix writes only what is missing. The core reads it again before it writes.
+#[tauri::command]
+#[specta::specta]
+pub async fn plane_doctor_identity(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<DoctorIdentityNow, String> {
+    planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(|| {
+        charter_core::doctor::fix::identity::current().map(|now| DoctorIdentityNow {
+            name: charter_core::shown::line(&now.name),
+            email: charter_core::shown::line(&now.email),
+        })
+    })
+    .await
+    .map_err(|err| format!("reading git's identity did not finish: {err}"))?
+}
+
 /// [`plane_doctor_fix_identity`], on the calling thread.
 fn identity_fixed(name: &str, email: &str) -> DoctorIdentityFixed {
-    use charter_core::doctor::fix::{FixId, identity};
-    match identity::apply(name, email) {
+    identity_answer(charter_core::doctor::fix::identity::apply(name, email))
+}
+
+/// The core's answer to the form, as the window reads it.
+fn identity_answer(
+    answer: Result<charter_core::doctor::fix::Fixed, charter_core::doctor::fix::identity::Invalid>,
+) -> DoctorIdentityFixed {
+    use charter_core::doctor::fix::FixId;
+    match answer {
         Ok(outcome) => DoctorIdentityFixed::Fixed {
             fixed: answered(FixId::GitIdentity, outcome),
         },
@@ -625,24 +659,32 @@ mod tests {
     }
 
     #[test]
-    fn the_identity_form_s_bad_input_is_answered_field_by_field() {
-        // Only refusals here: a write would reach this process's own HOME, the operator's.
-        // The write is the core's test, on a temporary home (FX-3).
+    fn the_identity_form_reads_the_cores_answer_as_a_fix_or_as_field_refusals() {
+        // The core's answer, not a call: the core writes git's global config, and this
+        // process's HOME is the operator's. The write is the core's test, on a temporary home.
+        use charter_core::doctor::fix::{Fixed, identity::Invalid};
+        let refused = Invalid {
+            name: vec![],
+            email: vec!["not an email".to_owned()],
+        };
         assert_eq!(
-            identity_fixed("Ann", "nope"),
+            identity_answer(Err(refused)),
             DoctorIdentityFixed::Invalid {
                 name: vec![],
-                email: vec![
-                    "That does not look like an email: one @ with something on each side, as \
-                     in you@example.com."
-                        .to_owned()
-                ],
+                email: vec!["not an email".to_owned()],
             }
         );
-        let DoctorIdentityFixed::Invalid { name, email } = identity_fixed(" ", "") else {
-            panic!("an empty form was written");
-        };
-        assert_eq!((name.len(), email.len()), (1, 1));
+        assert_eq!(
+            identity_answer(Ok(Fixed::Refused("already set".to_owned()))),
+            DoctorIdentityFixed::Fixed {
+                fixed: DoctorFixed {
+                    fix: "git-identity".to_owned(),
+                    refused: Some("already set".to_owned()),
+                    said: vec![],
+                    complete: false,
+                }
+            }
+        );
     }
 
     #[test]
