@@ -582,3 +582,24 @@ fn a_text_save_of_a_workspace_that_is_gone_never_makes_it_again() {
     assert!(save_text(dir.path(), "alpha", None, "{}").is_err());
     assert!(!dir.path().join("workspaces/alpha").exists());
 }
+
+#[test]
+fn a_secret_is_refused_as_the_manifest_reads_it_not_only_as_typed() {
+    // `\u0041` is `A`: what is read, and what charter's own writer puts on disk, is the secret.
+    let typed = r#"{"name": "alpha", "description": "\u0041KIAIOSFODNN7EXAMPLE"}"#;
+    let hand = "{\n  \"name\": \"alpha\",\n  \"repos\": []\n}\n";
+    for (whose, before) in [("the operator's", hand.to_owned()), ("charter's", old())] {
+        let dir = plane(Some(&before));
+        let refused = save_text(dir.path(), "alpha", Some(&before), typed).unwrap_err();
+        assert_eq!(refused.len(), 1, "{whose}: {refused:?}");
+        assert!(
+            refused[0].contains("AWS access key"),
+            "{whose}: {refused:?}"
+        );
+        assert!(
+            !refused[0].contains("KIAIOSFODNN7EXAMPLE"),
+            "{whose}: {refused:?}"
+        );
+        assert_eq!(on_disk(dir.path()), before, "{whose}");
+    }
+}

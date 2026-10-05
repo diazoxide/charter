@@ -1259,3 +1259,24 @@ fn with_both_names_the_purlis_file_is_read_and_written_and_the_old_one_left_alon
     assert_eq!(text(root, "purlis.toml"), shared);
     assert_eq!(text(root, "charter.toml"), "schema = 1\n# old\n");
 }
+
+#[test]
+fn a_secret_is_refused_as_the_file_reads_it_not_only_as_typed() {
+    // `\u0041` is `A`, and `\u0077` is `w`: what charter reads is the secret, so it is refused
+    // the way Edit as JSON refuses a manifest's.
+    let dir = plane(COMMENTED);
+    for body in [
+        "[workspace]\ndefault = \"\\u0041KIAIOSFODNN7EXAMPLE\"\n",
+        "[extensions.stats.settings]\n\"pass\\u0077ord\" = \"hunter2hunter2\"\n",
+    ] {
+        let why = refusals(dir.path(), Which::Shared, body);
+        assert_eq!(why.len(), 1, "{body}: {why:?}");
+        assert!(why[0].contains("vault"), "{body}: {why:?}");
+        let err = save(dir.path(), Which::Shared, Some(COMMENTED), body).unwrap_err();
+        assert!(err.iter().any(|one| one == &why[0]), "{err:?}");
+    }
+    assert_eq!(
+        fs::read_to_string(dir.path().join("charter.toml")).unwrap(),
+        COMMENTED
+    );
+}

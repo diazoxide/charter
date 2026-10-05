@@ -64,14 +64,15 @@ function dotted(text: string): [string[], string] | undefined {
 export function keyOfRefusal(why: string, file: string, under?: string): string[] | undefined {
   let keys: string[];
   if (why.startsWith("[")) {
-    // `[table] key = …`, `[table] key …` or `[table.id] in <file> …`
+    // `[table] key = …` or `[table.id] in <file> …`. A name is a key only when ` =` follows it:
+    // in `[harness.x] is in charter.toml …` the word after the table is the sentence's.
     const header = dotted(why.slice(1));
     if (header === undefined || !header[1].startsWith("]")) return undefined;
     keys = header[0];
     const after = header[1].slice(1);
     if (!after.startsWith(` in ${file}`)) {
       const name = after.startsWith(" ") ? oneKey(after.slice(1)) : undefined;
-      if (name === undefined || !/^ (=|in |is |names )/.test(name[1])) return undefined;
+      if (name === undefined || !name[1].startsWith(" =")) return undefined;
       keys = [...keys, name[0]];
     }
   } else {
