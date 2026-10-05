@@ -48,6 +48,8 @@ function core(
     held?: Promise<void>;
     /** Holds only that repo's clone until the promise settles. */
     holds?: Record<string, Promise<void>>;
+    /** Repos whose clone answers ok and that the next read still lists as not cloned. */
+    stillAbsent?: string[];
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -102,6 +104,10 @@ function core(
       if (failing && failing.times > 0) {
         failing.times -= 1;
         throw failing.said;
+      }
+      if (over.stillAbsent?.includes(repo)) {
+        over.stillAbsent.splice(over.stillAbsent.indexOf(repo), 1);
+        return [`${repo}: already cloned in 'alpha'`];
       }
       missing.splice(missing.indexOf(repo), 1);
       cloned.push(repo);
@@ -171,6 +177,26 @@ describe("a repo that is not cloned here", () => {
     await userEvent.click(within(await absent()).getByRole("button", { name: "Clone charter" }));
 
     expect(await within(absentRow("charter")).findByRole("alert")).toHaveTextContent(said);
+    await userEvent.click(
+      within(absentRow("charter")).getByRole("button", { name: "Retry charter" }),
+    );
+
+    expect(await screen.findByTestId("clone-charter")).toBeInTheDocument();
+    expect(clones().map((one) => one.args.repo)).toEqual(["charter", "charter"]);
+  });
+
+  it("fails, with Retry, when the clone answered and the workspace still does not list it", async () => {
+    // V91b: a standing state has a way out. A row left saying "Cloned" with nothing to press
+    // would be a dead end.
+    const { clones } = core({ stillAbsent: ["charter"] });
+    render(<App />);
+
+    await userEvent.click(within(await absent()).getByRole("button", { name: "Clone charter" }));
+
+    const alert = await within(absentRow("charter")).findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "charter was cloned, but charter does not see it in alpha. charter said: charter: already cloned in 'alpha'",
+    );
     await userEvent.click(
       within(absentRow("charter")).getByRole("button", { name: "Retry charter" }),
     );

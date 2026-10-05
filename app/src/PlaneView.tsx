@@ -94,7 +94,7 @@ import { NewWorkspace } from "./NewWorkspace";
 import { NewBranch } from "./NewBranch";
 import { LinkWorkItem } from "./LinkWorkItem";
 import { RenameWorkspace } from "./RenameWorkspace";
-import { cloneRepos, settleRepoClones, useRepoClones } from "./repoClones";
+import { cloneRepos, settleRepoClones, useRepoClones, type CloneState } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import {
@@ -3280,8 +3280,27 @@ export const PlaneView = memo(function PlaneView({
   const cloneMissing = useCallback(
     async (workspace: string, repos: string[]): Promise<Ran> => {
       // Read again as each repo lands, so a repo that is cloned leaves "Not cloned here" while
-      // the rest of a Clone all is still running.
-      const failed = await cloneRepos(plane, workspace, repos, rereadPanels);
+      // the rest of a Clone all is still running. A clone that answered while the workspace
+      // still lists the repo as not cloned is a failure with a Retry, never a row left saying
+      // "Cloned" with nothing to press (V91b).
+      const landed = async (repo: string, state: CloneState): Promise<CloneState | undefined> => {
+        try {
+          if (state.state !== "cloned") return;
+          const read = await commands
+            .workspacePanels(plane, workspace)
+            .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+          if (read.status !== "ok" || !read.data.absent.includes(repo)) return;
+          return {
+            state: "failed",
+            said:
+              `${repo} was cloned, but charter does not see it in ${workspace}.` +
+              (state.said ? ` charter said: ${state.said}` : ""),
+          };
+        } finally {
+          rereadPanels();
+        }
+      };
+      const failed = await cloneRepos(plane, workspace, repos, landed);
       return failed.length === 0
         ? { ok: true, said: `Cloned ${repos.join(", ")} into ${workspace}.` }
         : {
