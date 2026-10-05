@@ -122,7 +122,9 @@ const STILL_SPELLED: &[(&str, usize, Why)] = &[
     ("crates/charter-core/src/fence.rs", 1, Why::TestVariable),
     ("crates/session-protocol/src/bin/charter-session-peer.rs", 1, Why::TestVariable),
     // Names a shipped non-Rust artifact carries: RN-8 (#1266), #1284.
-    ("crates/charter-core/src/opencode.rs", 3, Why::ArtifactContract),
+    // The variable the plugin's hooks and the opencode shim read keeps its old name until 1.0
+    // (D-RN8-1), as the hook commands do (D-RN7-11).
+    ("crates/charter-core/src/opencode.rs", 2, Why::ArtifactContract),
     ("crates/charter-core/src/plugin.rs", 1, Why::ArtifactContract),
     ("crates/persona-statistics/src/lib.rs", 2, Why::ArtifactContract),
     // Not in the name module yet: #1284.
@@ -162,13 +164,20 @@ fn old_spellings() -> Vec<&'static str> {
         | Kind::KeychainPrefix
         | Kind::EnvPrefix
         | Kind::BranchPrefix
-        | Kind::Trailer => true,
-        // Not yet: RN-8 (plugin), RN-9 (bundle id), RN-11a (program name, themes); #1284.
-        Kind::PluginId | Kind::BundleId | Kind::Binary | Kind::ThemeId => false,
+        | Kind::Trailer
+        // The plugin's ids, skill namespace and tool prefix: RN-8 (#1266) moved every caller
+        // onto them, so an old one spelled anywhere else is a leak (#1284).
+        | Kind::PluginId => true,
+        // Not yet: RN-9 (bundle id), RN-11a (program name, themes); #1284.
+        Kind::BundleId | Kind::Binary | Kind::ThemeId => false,
     };
     let mut out: Vec<&'static str> = names::ALL
         .iter()
         .filter(|n| guarded(n.kind))
+        // The marketplace's old name alone, `charter-app`, is also the old app repository's,
+        // and prose cites its issues by it (`charter-app#274`). Its one use as a name is inside
+        // the installed id, `charter@charter-app`, which is looked for.
+        .filter(|n| n.id != names::PLUGIN_MARKETPLACE.id)
         .flat_map(|n| n.reads.iter().chain(n.history.iter()).copied())
         .filter(|s| !s.chars().all(char::is_alphanumeric))
         .collect();
@@ -184,13 +193,18 @@ fn word(c: char) -> bool {
 /// The first old spelling `text` holds, at a word boundary: nothing word-like before it, and
 /// nothing word-like after one that ends in a letter (`.charterx` is not `.charter`;
 /// `dev.charter.app` is not `.charter`).
+///
+/// A namespace that ends in a colon (the skill namespace, `charter:`) counts only with a name
+/// after it (`charter:handoff`): "charter: the app did not take this" is a sentence that starts
+/// with the product's name, which is RN-11a's, not a skill.
 fn spells<'s>(text: &str, spellings: &[&'s str]) -> Option<&'s str> {
     spellings.iter().copied().find(|s| {
         text.match_indices(s).any(|(at, _)| {
             let before = text[..at].chars().next_back();
             let after = text[at + s.len()..].chars().next();
             let open_ended = s.ends_with(|c: char| !c.is_alphanumeric());
-            !before.is_some_and(word) && (open_ended || !after.is_some_and(word))
+            let names_one = !s.ends_with(':') || after.is_some_and(|c| c.is_ascii_lowercase());
+            !before.is_some_and(word) && (open_ended || !after.is_some_and(word)) && names_one
         })
     })
 }
@@ -728,6 +742,12 @@ fn every_kind_the_ticket_names_is_looked_for_and_the_bare_product_name_is_not() 
         "Charter-Change",
         "<!-- charter-save -->",
         "# >>> charter merge rules (managed by charter) >>>",
+        // The plugin's (RN-8, #1266).
+        "charter@inline",
+        "charter-app@inline",
+        "charter@charter-app",
+        "charter:",
+        "mcp__charter__",
     ] {
         assert!(spellings.contains(&wanted), "{wanted} is not looked for");
     }
@@ -752,6 +772,10 @@ fn a_spelling_counts_only_at_a_word_boundary() {
         "CHARTER_ROOT=1",
         "charter/ops/db",
         "Charter-Chat: 3",
+        "charter@inline",
+        "{\"charter@charter-app\": true}",
+        "charter:handoff",
+        "mcp__charter__todo_add",
     ] {
         assert!(spells(hit, &s).is_some(), "{hit} should count");
     }
@@ -763,6 +787,12 @@ fn a_spelling_counts_only_at_a_word_boundary() {
         "purlis.toml",
         "PURLIS_ROOT",
         "acharter/",
+        "charter: the app did not take this",
+        "charter:",
+        "purlis:handoff",
+        "purlis@inline",
+        "mcp__purlis__todo_add",
+        "charter-app#274",
     ] {
         assert_eq!(spells(miss, &s), None, "{miss} should not count");
     }

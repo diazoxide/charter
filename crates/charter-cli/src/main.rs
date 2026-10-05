@@ -3064,11 +3064,11 @@ fn migrate(undo: bool) -> ExitCode {
         return ExitCode::FAILURE;
     };
     // The harness plugin moves with the rest, installed from this charter and the plugin
-    // shipped beside it, as `plugin install` installs it (RN-8). Without them the plugin is
-    // left alone, and the undo says it could not put it back.
-    local.plugin = charter_core::doctor::fix::this_machine(None)
-        .ok()
-        .filter(|m| m.bundle.is_some());
+    // shipped beside it, as `plugin install` installs it (RN-8). Without a plugin beside it,
+    // Claude Code's registration is still pointed at the copy where it moved (D-RN8-13).
+    if let Ok(machine) = charter_core::doctor::fix::this_machine(None) {
+        local.plugin = Some(machine);
+    }
     let moved = if undo {
         renamelocal::undo(&local, &Seams::real())
     } else {

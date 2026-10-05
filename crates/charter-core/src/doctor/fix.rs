@@ -207,8 +207,9 @@ pub fn apply(root: &Path, id: FixId) -> Fixed {
         };
     }
     if id == FixId::RenameLocal {
-        // The harness plugin moves with the rest where this charter ships one (RN-8).
-        let machine = this_machine(None).ok().filter(|m| m.bundle.is_some());
+        // The harness plugin moves with the rest (RN-8): installed where this charter ships it,
+        // and its registration kept pointing at the moved copy where it does not (D-RN8-13).
+        let machine = this_machine(None).ok();
         return applied(root, id, machine.as_ref());
     }
     applied(root, id, None)
@@ -299,7 +300,9 @@ fn rename_local(root: &Path, machine: Option<&crate::plugin_install::Machine>) -
     };
     // The harness plugin moves with the rest (RN-8), installed from the charter the doctor
     // was handed, as its `plugin-install` fix installs it.
-    local.plugin = machine.cloned();
+    if let Some(machine) = machine {
+        local.plugin = Some(machine.clone());
+    }
     moved(crate::renamelocal::run(
         &local,
         &crate::renamelocal::Seams::real(),
