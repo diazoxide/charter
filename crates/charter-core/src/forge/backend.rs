@@ -337,7 +337,7 @@ pub fn workspace_label(kind: Kind, ws: &str) -> String {
 }
 
 /// Work items: issues, epics and the rest of FI4 (ADR 0070 §1, ADR 0088 §6). FW-5 brings the
-/// area with its first method; FW-6a and FW-6b map the rest of the neutral model onto it.
+/// area with its first method; FW-6a and FW-6b map each forge's reads onto the neutral model.
 pub trait WorkItems {
     /// Issue `number` of the repo at `path` (GitLab's `iid`), as `caller`, in the neutral model:
     /// its fields, how it stands to other items, and the tracker's own boards that hold it.
@@ -538,11 +538,14 @@ pub enum Capability {
     Dependencies,
     /// Why a closed issue was closed: completed, not planned, a duplicate.
     CloseReasons,
+    /// A status of the item's own, apart from any board's: GitLab's work item status. Without
+    /// it, an item's status is a board's ([`crate::work::WorkItem::status`]).
+    ItemStatus,
 }
 
 impl Capability {
     /// Every capability, for a test that walks them.
-    pub const ALL: [Capability; 9] = [
+    pub const ALL: [Capability; 10] = [
         Capability::AutoMerge,
         Capability::MergeQueue,
         Capability::SubIssues,
@@ -552,6 +555,7 @@ impl Capability {
         Capability::Boards,
         Capability::Dependencies,
         Capability::CloseReasons,
+        Capability::ItemStatus,
     ];
 
     /// What charter does instead when this capability is unavailable or unknown.
@@ -569,6 +573,8 @@ impl Capability {
             }
             // No boards, or no reason a closed item was closed: neither is shown.
             Capability::Boards | Capability::CloseReasons => Fallback::Hidden,
+            // No status of its own: the item shows its board's.
+            Capability::ItemStatus => Fallback::BoardStatus,
         }
     }
 }
@@ -652,6 +658,9 @@ pub enum Fallback {
     ParentLinkInBody,
     HumanClick,
     Hidden,
+    /// The status of a board that holds the item: a Projects v2 board's `Status` field, the
+    /// label list of a GitLab issue board.
+    BoardStatus,
 }
 
 /// Everything a forge backend answers. It grows as each area lands (ADR 0070 §1).

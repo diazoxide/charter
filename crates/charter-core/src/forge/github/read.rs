@@ -190,6 +190,10 @@ impl GitHub {
             if item.iteration.is_none() {
                 item.iteration = iteration.clone();
             }
+            // An issue has no status of its own on GitHub: it is its first board's that has one.
+            if item.status.is_none() {
+                item.status = status.clone();
+            }
             item.placements.push(Placement {
                 board: ForgeRef(on.project.id),
                 board_title: on.project.title,

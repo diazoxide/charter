@@ -761,10 +761,11 @@ impl Capabilities for GitHub {
     fn support(&self, _caller: &Caller, at: &Reach, what: Capability) -> Support {
         let dotcom = self.0.forge.host.eq_ignore_ascii_case("github.com");
         match what {
-            Capability::Epics => Support::Unavailable(Unavailable::because(
-                Capability::Epics,
-                Reason::NotOnThisForge,
-            )),
+            // GitHub has no epics, and an issue has no status of its own, only a Projects v2
+            // board's.
+            Capability::Epics | Capability::ItemStatus => {
+                Support::Unavailable(Unavailable::because(what, Reason::NotOnThisForge))
+            }
             Capability::SubIssues
             | Capability::Dependencies
             | Capability::Boards
@@ -837,6 +838,26 @@ mod capability_tests {
             );
         }
         assert_eq!(Capability::CloseReasons.fallback(), Fallback::Hidden);
+    }
+
+    #[test]
+    fn an_issue_has_no_status_of_its_own_on_any_github_only_its_boards() {
+        for host in ["github.com", "ghe.example.com"] {
+            let said =
+                on(host).support(&Caller::window(), &Reach::Instance, Capability::ItemStatus);
+            assert_eq!(
+                said,
+                Support::Unavailable(Unavailable::because(
+                    Capability::ItemStatus,
+                    Reason::NotOnThisForge
+                )),
+                "{host}"
+            );
+            assert_eq!(
+                said.taken(Capability::ItemStatus),
+                Taken::Fallback(Fallback::BoardStatus)
+            );
+        }
     }
 
     #[test]

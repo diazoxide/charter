@@ -20,8 +20,9 @@ use super::{
     listed_id, listed_str, listed_topics, mapped, quote, truthy, word_of,
 };
 
-// FW-6b is the first caller of the work items; until it lands only their tests reach them, so
-// the compiler would call them dead.
+mod read;
+// `read` calls the boards listing; the rest of the work items wait for their first caller
+// (#1202), and until then only their tests reach them, so the compiler would call them dead.
 #[allow(dead_code)]
 pub(crate) mod work;
 
@@ -257,21 +258,7 @@ impl WorkItems for GitLab {
         path: &str,
         number: u64,
     ) -> Result<crate::work::WorkItem, ForgeError> {
-        let doing = format!("reading issue #{number} of {path}");
-        let call = Call::get(
-            format!("projects/{}/issues/{number}", quote(path)),
-            LIST_TIMEOUT,
-        );
-        let issue = self.0.ask(caller, &call, &doing)?;
-        let mut item = item_of(&issue, None, &doing)?;
-        // FW-6b (#734) maps the rest of GitLab's issue: type, iteration, child items, links.
-        item.assignees = issue["assignees"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|a| a["username"].as_str().map(str::to_string))
-            .collect();
-        Ok(item)
+        self.read_item(caller, path, number)
     }
 }
 
@@ -708,11 +695,13 @@ impl Requests for GitLab {
 
 impl Capabilities for GitLab {
     /// What GitLab is known to have without asking. gitlab.com has epics, iterations, boards,
-    /// child items and blocking links, said of the instance only: epics, iterations and blocking
-    /// links need a Premium namespace, and whether one group or repo has them turns on its plan
-    /// and settings, which FG-2's probes ask, so a narrower reach is `Unknown` until then and
-    /// takes its fallback. A self-managed GitLab has what its edition, licence and version have,
-    /// which it shows a non-admin nowhere: `Unknown`.
+    /// child items, blocking links, work item types, an item's own status and close reasons, said
+    /// of the instance only: epics, iterations, blocking links and work item status (whose
+    /// category says why a closed item was closed) need a Premium namespace, and whether one
+    /// group or repo has them turns on its plan and settings, which FG-2's probes ask, so a
+    /// narrower reach is `Unknown` until then and takes its fallback. On Free, an item marked a
+    /// duplicate is still read as one. A self-managed GitLab has what its edition, licence and
+    /// version have, which it shows a non-admin nowhere: `Unknown`.
     fn support(&self, _caller: &Caller, at: &Reach, what: Capability) -> Support {
         let dotcom = self.0.forge.host.eq_ignore_ascii_case("gitlab.com");
         match what {
@@ -721,6 +710,9 @@ impl Capabilities for GitLab {
             | Capability::Boards
             | Capability::SubIssues
             | Capability::Dependencies
+            | Capability::IssueTypes
+            | Capability::CloseReasons
+            | Capability::ItemStatus
                 if dotcom && *at == Reach::Instance =>
             {
                 Support::Available
@@ -757,6 +749,9 @@ mod capability_tests {
             Capability::Epics,
             Capability::Iterations,
             Capability::Boards,
+            Capability::IssueTypes,
+            Capability::CloseReasons,
+            Capability::ItemStatus,
         ] {
             assert_eq!(
                 gitlab.support(&me, &Reach::Instance, what),
@@ -780,53 +775,6 @@ mod capability_tests {
                 "{what:?}"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod read_mapping_tests {
-    use std::sync::Arc;
-
-    use serde_json::json;
-
-    use crate::forge::Forge;
-    use crate::forge::Kind;
-    use crate::forge::backend::Caller;
-    use crate::forge::recorded::Recorded;
-
-    fn read(answer: serde_json::Value) -> Result<crate::work::WorkItem, crate::forge::ForgeError> {
-        let call = json!({"endpoint": {"rest": {"method": null, "path": "projects/acme%2Fapi/issues/12"}},
-                          "fields": []});
-        let text = json!({"source": "GitLab REST API v4, issues: Single project issue",
-                          "exchanges": [{"call": call, "reply": {"code": 0, "out": answer.to_string()}}]});
-        let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
-        Forge::default_of(Kind::GitLab).backend_over(recorded).read(
-            &Caller::command(),
-            "acme/api",
-            12,
-        )
-    }
-
-    fn issue() -> serde_json::Value {
-        json!({"id": 84012, "iid": 12, "title": "Port the picker", "state": "opened",
-               "labels": [], "assignees": [{"username": "octocat"}],
-               "web_url": "https://gitlab.com/acme/api/-/issues/12",
-               "references": {"full": "acme/api#12"}})
-    }
-
-    #[test]
-    fn an_issue_is_read_with_its_assignees() {
-        let item = read(issue()).unwrap();
-        assert_eq!(item.title, "Port the picker");
-        assert_eq!(item.assignees, ["octocat"]);
-    }
-
-    #[test]
-    fn an_answer_with_no_title_is_refused_as_malformed() {
-        let mut answer = issue();
-        answer.as_object_mut().unwrap().remove("title");
-        let refused = read(answer).unwrap_err();
-        assert!(refused.said().contains("no title"), "{}", refused.said());
     }
 }
 

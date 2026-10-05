@@ -1,5 +1,5 @@
 {
-  "source": "GitLab 19.4 REST API docs (gitlab-org/gitlab 19-4-stable-ee, doc/api), issues.md: Single project issue",
+  "source": "GitLab 19.4 docs (gitlab-org/gitlab 19-4-stable-ee): REST doc/api/issues.md Single project issue and doc/api/boards.md List all project issue boards; GraphQL doc/api/graphql/reference: Project.workItems, WorkItemWidgetHierarchy, WorkItemWidgetLinkedItems, WorkItemWidgetIteration, WorkItemWidgetStatus, WorkItemWidgetDevelopment",
   "exchanges": [
     {
       "call": {
@@ -14,6 +14,52 @@
       "reply": {
         "code": 0,
         "out": "{\"id\": 84012, \"iid\": 12, \"project_id\": 1, \"title\": \"Port the picker\", \"state\": \"closed\", \"labels\": [\"charter::ws::alpha\"], \"assignees\": [{\"id\": 1, \"username\": \"octocat\", \"name\": \"Octo Cat\"}], \"milestone\": {\"id\": 501, \"iid\": 1, \"title\": \"v1\", \"state\": \"active\", \"due_date\": \"2026-10-31\"}, \"web_url\": \"https://gitlab.com/acme/api/-/issues/12\", \"references\": {\"short\": \"#12\", \"relative\": \"#12\", \"full\": \"acme/api#12\"}}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": "graphql",
+        "fields": [
+          {
+            "text": [
+              "query",
+              "query($path:ID!,$iid:String!){project(fullPath:$path){workItems(iid:$iid,first:1){nodes{workItemType{name} duplicatedToWorkItemUrl widgets{__typename ... on WorkItemWidgetHierarchy{parent{webUrl} children(first:100){pageInfo{hasNextPage} nodes{webUrl}}} ... on WorkItemWidgetLinkedItems{linkedItems(first:100){pageInfo{hasNextPage} nodes{linkType workItem{webUrl}}}} ... on WorkItemWidgetIteration{iteration{id title startDate dueDate}} ... on WorkItemWidgetStatus{status{name category}} ... on WorkItemWidgetDevelopment{closingMergeRequests(first:100){pageInfo{hasNextPage} nodes{mergeRequest{iid webUrl state}}}}}}}}}"
+            ]
+          },
+          {
+            "text": [
+              "path",
+              "acme/api"
+            ]
+          },
+          {
+            "text": [
+              "iid",
+              "12"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"data\": {\"project\": {\"workItems\": {\"nodes\": [{\"workItemType\": {\"name\": \"Issue\"}, \"duplicatedToWorkItemUrl\": null, \"widgets\": [{\"__typename\": \"WorkItemWidgetAssignees\"}, {\"__typename\": \"WorkItemWidgetHierarchy\", \"parent\": {\"webUrl\": \"https://gitlab.com/acme/api/-/issues/3\"}, \"children\": {\"pageInfo\": {\"hasNextPage\": false}, \"nodes\": [{\"webUrl\": \"https://gitlab.com/acme/api/-/work_items/14\"}]}}, {\"__typename\": \"WorkItemWidgetLinkedItems\", \"linkedItems\": {\"pageInfo\": {\"hasNextPage\": false}, \"nodes\": [{\"linkType\": \"is_blocked_by\", \"workItem\": {\"webUrl\": \"https://gitlab.com/acme/api/-/issues/11\"}}, {\"linkType\": \"blocks\", \"workItem\": {\"webUrl\": \"https://gitlab.com/acme/api/-/issues/15\"}}]}}, {\"__typename\": \"WorkItemWidgetIteration\", \"iteration\": {\"id\": \"gid://gitlab/Iteration/41\", \"title\": \"Sprint 3\", \"startDate\": \"2026-10-05T00:00:00Z\", \"dueDate\": \"2026-10-18T00:00:00Z\"}}, {\"__typename\": \"WorkItemWidgetStatus\", \"status\": {\"name\": \"Done\", \"category\": \"DONE\"}}, {\"__typename\": \"WorkItemWidgetDevelopment\", \"closingMergeRequests\": {\"pageInfo\": {\"hasNextPage\": false}, \"nodes\": [{\"mergeRequest\": {\"iid\": \"20\", \"state\": \"merged\", \"webUrl\": \"https://gitlab.com/acme/api/-/merge_requests/20\"}}]}}]}]}}}}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "projects/acme%2Fapi/boards?per_page=100&page=1"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": 1, \"name\": \"Roadmap\", \"hide_backlog_list\": false, \"hide_closed_list\": false, \"project\": {\"id\": 1, \"path_with_namespace\": \"acme/api\", \"web_url\": \"https://gitlab.com/acme/api\"}, \"milestone\": null, \"lists\": [{\"id\": 1, \"label\": {\"name\": \"workflow::doing\", \"color\": \"#F0AD4E\", \"description\": null}, \"position\": 1, \"max_issue_count\": 0, \"max_issue_weight\": 0, \"limit_metric\": null}]}]",
         "err": ""
       }
     }
