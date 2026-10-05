@@ -16,9 +16,11 @@ So the two questions are asked separately and answered separately:
   Equal, the shard ran to the end; short, it was killed, and by how much says whether the
   budget is wrong or the runner went away. Surviving mutants do NOT enter into it: a shard
   that tested everything it was given did its job, whatever it found.
-* **`gather`** — is there anything to REPORT? Survivors and timeouts from every shard,
-  collected into one table, with the shards that never reported named rather than quietly
-  dropped from the denominator.
+* **`gather`** — is there anything to REPORT? Survivors from every shard, collected into one
+  table, with the shards that never reported named rather than quietly dropped from the
+  denominator, and the mutants that hung the suite listed apart as caught.
+* **`notice`** — what does the nightly's one issue say? Opened or updated on a red night,
+  closed only on a clean full one.
 
 Each mode writes GitHub's step summary when `$GITHUB_STEP_SUMMARY` is set, so the answer is
 on the run's own page rather than at the end of a 6,000-line log.
@@ -41,6 +43,14 @@ SURVIVING = ("MissedMutant", "Timeout")
 COUNTED = ("CaughtMutant", "MissedMutant", "Timeout", "Unviable", "Success", "Failure")
 
 
+def test_seconds(outcome: dict) -> float | None:
+    """How long one mutant's test phase ran, or None when it never reached one."""
+    for phase in outcome.get("phase_results") or []:
+        if phase.get("phase") == "Test" and isinstance(phase.get("duration"), (int, float)):
+            return float(phase["duration"])
+    return None
+
+
 def read_shard(out_dir: pathlib.Path, shard: str) -> dict:
     """The verdict for one shard, as data. Never raises on a missing or truncated file:
     a shard whose runner disappeared mid-write is exactly the case this has to describe."""
@@ -50,6 +60,10 @@ def read_shard(out_dir: pathlib.Path, shard: str) -> dict:
         "tested": 0,
         "counts": {},
         "survivors": [],
+        # The longest test phase of a mutant no test caught: every test binary ran to the end,
+        # so this is what the whole suite costs on this runner. `gather` compares a TIMEOUT
+        # against it.
+        "suite_seconds": None,
         "status": "no-output",
         "why": f"{out_dir} does not exist — cargo-mutants never started, or the runner went "
         "away before it wrote anything",
@@ -93,6 +107,7 @@ def read_shard(out_dir: pathlib.Path, shard: str) -> dict:
 
     counts: dict[str, int] = {}
     survivors: list[dict] = []
+    suite_seconds = None
     baseline_failed = None
     for outcome in outcomes.get("outcomes", []):
         scenario = outcome.get("scenario")
@@ -102,6 +117,10 @@ def read_shard(out_dir: pathlib.Path, shard: str) -> dict:
                 baseline_failed = summary
             continue
         counts[summary] = counts.get(summary, 0) + 1
+        if summary == "MissedMutant":
+            tested_for = test_seconds(outcome)
+            if tested_for is not None:
+                suite_seconds = max(suite_seconds or 0.0, tested_for)
         if summary in SURVIVING:
             mutant = (scenario or {}).get("Mutant", {})
             survivors.append(
@@ -114,6 +133,7 @@ def read_shard(out_dir: pathlib.Path, shard: str) -> dict:
 
     verdict["counts"] = counts
     verdict["survivors"] = survivors
+    verdict["suite_seconds"] = suite_seconds
     verdict["tested"] = sum(counts.values())
 
     if baseline_failed is not None:
@@ -183,6 +203,20 @@ def cmd_shard(args: argparse.Namespace) -> int:
     return 1
 
 
+# How far `--timeout` has to sit above the whole suite before a TIMEOUT counts as a hang. A
+# mutant that turns `i += 1` into `i *= 1` loops for ever, and is caught in every sense that
+# matters, yet no test can ever retire it from a list of survivors (#480). But a TIMEOUT on a
+# runner slow enough that the suite itself nears the limit is a suite cut short, and says
+# nothing: on 2026-09-25 ten slow shards reported 432 of them and 0 MISSED. So a TIMEOUT is a
+# hang only when the slowest whole suite of the same run fits in two thirds of the limit; any
+# closer and every TIMEOUT stays a survivor.
+HANG_MARGIN = 1.5
+
+
+def hangs_are_caught(timeout: float | None, suite: float | None) -> bool:
+    return timeout is not None and suite is not None and suite * HANG_MARGIN <= timeout
+
+
 def key_of(survivor: dict) -> str:
     """The name a survivor is remembered by, between nights.
 
@@ -227,7 +261,19 @@ def cmd_gather(args: argparse.Namespace) -> int:
     silent = [str(n) for n in range(args.shards) if str(n) not in reported]
     complete = [v for v in verdicts if v["status"] == "complete"]
     whole_crate = len(complete) == args.shards
-    survivors = [s for v in verdicts for s in v["survivors"]]
+    suite = max((v.get("suite_seconds") or 0.0 for v in verdicts), default=0.0) or None
+    caught_hangs = hangs_are_caught(args.timeout, suite)
+    survivors = [
+        s
+        for v in verdicts
+        for s in v["survivors"]
+        if not (caught_hangs and s["summary"] == "Timeout")
+    ]
+    hangs = sorted(
+        {key_of(s) for v in verdicts for s in v["survivors"] if s["summary"] == "Timeout"}
+        if caught_hangs
+        else set()
+    )
     tested = sum(v["tested"] for v in verdicts)
     planned = sum(v["planned"] or 0 for v in verdicts)
 
@@ -268,6 +314,28 @@ def cmd_gather(args: argparse.Namespace) -> int:
         if verdict["status"] != "complete":
             summary(f"* shard {verdict['shard']}: **{verdict['status']}** — {verdict['why']}")
     if any(v["status"] != "complete" for v in verdicts):
+        summary("")
+
+    if hangs:
+        summary(f"## {len(hangs)} hang{'' if len(hangs) == 1 else 's'}")
+        summary("")
+        summary(
+            f"These ran past the {args.timeout:.0f} s limit, while the slowest whole suite in "
+            f"this run took {suite:.0f} s: the mutant made a loop that never ends, and the "
+            "suite never finishing is how it was caught. Not survivors, and not red."
+        )
+        summary("")
+        for item in hangs:
+            summary(f"* `{item}`")
+        summary("")
+    elif args.timeout is not None and any(
+        s["summary"] == "Timeout" for v in verdicts for s in v["survivors"]
+    ):
+        measured = f"took {suite:.0f} s" if suite else "was never measured"
+        summary(
+            f"> The TIMEOUTs below stay survivors: the slowest whole suite in this run {measured},"
+            f" too close to the {args.timeout:.0f} s limit to tell a hang from a suite cut short."
+        )
         summary("")
 
     if mended:
@@ -327,6 +395,94 @@ def cmd_gather(args: argparse.Namespace) -> int:
     return 1
 
 
+# ---------------------------------------------------------------------------- #
+# the nightly's one issue                                                        #
+# ---------------------------------------------------------------------------- #
+
+
+def night_report(args: argparse.Namespace) -> list[str] | None:
+    """What is wrong with this night, one line per job that says so: an empty list for a clean
+    night, and None for a night that tested nothing because nothing changed."""
+    if args.plan != "success":
+        return [
+            f"- **The run could not decide what to test** (`plan`: {args.plan}), so nothing "
+            "was tested."
+        ]
+    if args.scope == "none":
+        return None
+    if args.baseline != "success":
+        # The root cause and the only line worth printing: with the baseline red the shards
+        # never ran, so `core` and `survivors` are `skipped`, and saying they failed would
+        # send the reader after the wrong thing.
+        return [
+            f"- **charter-core's own tests do not pass** (`baseline`: {args.baseline}). "
+            "Mutation testing says nothing about a tree that is already red, so nothing else "
+            "ran. Fix this first."
+        ]
+    lines = []
+    if args.core != "success":
+        lines.append(
+            f"- **At least one shard did not finish** (`core`: {args.core}). Each shard's "
+            "verdict on the run summary says whether it ran out of budget or lost its runner. "
+            "Shards reporting `incomplete` mean a mutant costs more than `PER_SHARD` in "
+            "`.github/workflows/mutants.yml` was sized for — the fix is a smaller `PER_SHARD`."
+        )
+    if args.survivors != "success":
+        lines.append(
+            f"- **There are surviving mutants that were not there before** (`survivors`: "
+            f"{args.survivors}). The table is on the run summary: each row is a change to "
+            "charter-core that no test noticed. Accepting one means adding its line to "
+            "`.github/mutants-survivors.txt`, with a reason."
+        )
+    return lines
+
+
+def cmd_notice(args: argparse.Namespace) -> int:
+    """Decide what the nightly's one issue is told, and print it as one action a line for the
+    workflow to carry out: `create`, `edit N`, `close N`, or `duplicate N KEPT`.
+
+    The open issues come on stdin, one JSON object a line, as `gh api --paginate` prints them.
+    All of them: `gh issue list` stops at a page, and with more issues open than one page
+    holds the nightly's own fell off it, so two red nights filed #973 and #1140 as copies of
+    #480 rather than telling it. Matched on the exact title, never `--search`, whose relevance
+    matching would happily return somebody else's issue and get it edited."""
+    ours = []
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        issue = json.loads(line)
+        if issue.get("title") == args.title:
+            ours.append(int(issue["number"]))
+    ours.sort()
+
+    wrong = night_report(args)
+    if wrong is None:
+        print("nothing in charter-core changed since the last green run", file=sys.stderr)
+        return 0
+    if not wrong:
+        if args.scope != "full":
+            # A clean DIFF says the new code is covered, not that the crate is. Only a full
+            # run may close the issue; an open one stays open, and nothing new is said.
+            print(f"a clean {args.scope} run; only a full run closes the issue", file=sys.stderr)
+            return 0
+        for number in ours:
+            print(f"close {number}")
+        return 0
+
+    pathlib.Path(args.body_file).write_text(
+        f"Last run: {args.run_url}\n\n" + "\n".join(wrong) + "\n"
+    )
+    if not ours:
+        print("create")
+        return 0
+    kept, copies = ours[0], ours[1:]
+    print(f"edit {kept}")
+    for number in copies:
+        print(f"duplicate {number} {kept}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="mode", required=True)
@@ -351,11 +507,26 @@ def main() -> int:
         help="where to write this run's full survivor set, for re-seeding --known",
     )
     gather.add_argument(
+        "--timeout",
+        type=float,
+        help="the run's `cargo mutants --timeout`, in seconds; without it every TIMEOUT is a "
+        "survivor",
+    )
+    gather.add_argument(
         "--partial",
         action="store_true",
         help="the run tested a diff and not the whole crate, so nothing absent is 'now caught'",
     )
     gather.set_defaults(func=cmd_gather)
+
+    notice = sub.add_parser("notice", help="decide what the nightly's one issue is told")
+    notice.add_argument("--title", required=True, help="the issue's exact title")
+    notice.add_argument("--run-url", required=True, help="this run's page")
+    for job in ("plan", "baseline", "core", "survivors"):
+        notice.add_argument(f"--{job}", default="", help=f"the `{job}` job's result")
+    notice.add_argument("--scope", default="", help="`plan`'s scope: diff, full or none")
+    notice.add_argument("--body-file", required=True, help="where to write the issue's body")
+    notice.set_defaults(func=cmd_notice)
 
     args = parser.parse_args()
     return args.func(args)

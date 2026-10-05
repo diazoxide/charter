@@ -474,6 +474,21 @@ mod tests {
     }
 
     #[test]
+    fn a_clone_key_is_sixteen_lowercase_hex_characters_and_nothing_else() {
+        let key = CloneKey::of_canonical(Path::new("/some/clone"));
+        assert_eq!(CloneKey::parse(key.as_str()), Some(key.clone()));
+        for word in [
+            "abc",
+            "0123456789abcdef0",
+            "0123456789abcdeg",
+            "0123456789ABCDEF",
+            "",
+        ] {
+            assert_eq!(CloneKey::parse(word), None, "{word:?}");
+        }
+    }
+
+    #[test]
     fn a_directory_holding_the_manifest_is_its_own_root() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();

@@ -1033,3 +1033,77 @@ mod unknown_field_tests {
         assert_eq!(written["a-future-key"]["kept"], true, "{written}");
     }
 }
+
+/// What a project template's starter does to `workspace.md` (FR-17), and the refusals a todo
+/// is recorded with.
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+
+    fn workspace() -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+        let ws = Plane::open(&root).workspace("alpha").unwrap();
+        (dir, ws)
+    }
+
+    fn charter(ws: &Workspace) -> String {
+        std::fs::read_to_string(ws.dir.join("workspace.md")).unwrap()
+    }
+
+    #[test]
+    fn a_starter_fills_the_sections_charter_wrote_and_never_one_a_person_did() {
+        let (_d, ws) = workspace();
+        ws.scaffold_charter().unwrap();
+        let fresh = charter(&ws);
+
+        assert!(
+            ws.seed_sections(&[("Glossary", "`svc` — the service")])
+                .unwrap()
+        );
+        let seeded = charter(&ws);
+        assert_eq!(
+            crate::mdsection::section_body(&seeded, "Glossary"),
+            "`svc` — the service"
+        );
+        assert_eq!(
+            crate::mdsection::section_body(&seeded, "Vision"),
+            crate::mdsection::section_body(&fresh, "Vision"),
+            "a section the starter does not name is left as it was"
+        );
+
+        // The glossary is somebody's now: a second starter leaves it, and says nothing changed.
+        assert!(
+            !ws.seed_sections(&[("Glossary", "`web` — the site")])
+                .unwrap()
+        );
+        assert_eq!(charter(&ws), seeded);
+    }
+
+    #[test]
+    fn a_starter_with_no_charter_to_fill_does_nothing_and_an_unreadable_one_says_why() {
+        let (_d, ws) = workspace();
+        assert!(!ws.seed_sections(&[("Glossary", "words")]).unwrap());
+        assert!(!ws.dir.join("workspace.md").exists());
+
+        std::fs::create_dir_all(ws.dir.join("workspace.md")).unwrap();
+        assert!(ws.seed_sections(&[("Glossary", "words")]).is_err());
+    }
+
+    #[test]
+    fn a_refused_todo_says_why_in_words() {
+        assert_eq!(
+            RecordRefused::Empty.to_string(),
+            "a todo needs some words to say what is to be done"
+        );
+        assert_eq!(
+            RecordRefused::AlreadyListed("Ship it".into()).to_string(),
+            "already on the list: Ship it"
+        );
+        assert_eq!(
+            RecordRefused::Io(io::Error::other("disk full")).to_string(),
+            "disk full"
+        );
+    }
+}

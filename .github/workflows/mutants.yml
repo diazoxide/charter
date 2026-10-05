@@ -50,6 +50,13 @@ name: mutants
 #    across rows (5,641 operand probes over 230 distinct ones, 3,413 target probes over 188,
 #    1,912 default-branch probes over 6 roots), and each distinct one is now asked once. 25 s
 #    to 6 s on a 14-core laptop; `PER_SHARD` is left where it is until a night measures it.
+#    A night measured it on 2026-10-03 (run 37112271904, 19 shards of ~116): 131 s a mutant
+#    on average, but 164 s on the slowest shard, whose build alone took 90-120 s a mutant.
+#    Shards 2 and 10 were cut at 300 minutes with 89 and 109 of 116 done, and the rest took
+#    3 h 12 m to 4 h 22 m. 80 mutants at 164 s is ~3 h 40 m, so the slowest shard finishes
+#    with over an hour to spare. Eight more shards of that run lost their runners to "The
+#    runner has received a shutdown signal" 32 minutes to 3 h 20 m into their jobs, which no
+#    budget prevents; a smaller shard loses less when it happens.
 # 2. **The baseline is checked ONCE.** With a per-shard baseline, 24 shards is 24 rolls of
 #    the same flaky dice: three separate deadline-bound tests were caught failing an
 #    unmutated charter-core while this was being written. One job asks the question, every
@@ -116,7 +123,11 @@ env:
   # one number becomes the matrix, the `--shard N/K` denominator, and the count of verdicts
   # the report checks it received — so a drift between them is visible rather than a silent
   # hole in the coverage.
-  PER_SHARD: "120"
+  PER_SHARD: "80"
+  # `cargo mutants --timeout`, in seconds: how long one mutant's tests may run. The `core` step
+  # below says how it was sized. `survivors` reads it too, to tell a mutant that hung the suite
+  # (caught) from one that outran a suite cut short (not known to be caught).
+  MUTANT_TIMEOUT: "240"
   # The weekly full run's cron line, as `github.event.schedule` reports it.
   FULL_CRON: "17 3 * * 0"
   # Pinned on purpose. An unpinned tool in a nightly changes its own answers, and "the
@@ -312,7 +323,7 @@ jobs:
           --shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }}
           --sharding round-robin
           --baseline skip
-          --timeout 240
+          --timeout ${{ env.MUTANT_TIMEOUT }}
           --build-timeout 900
           ${{ needs.plan.outputs.scope == 'diff' && '--in-diff mutants.diff' || '' }}
       # `always()`, so this runs after a timeout, after a crash, and after a clean run. It is
@@ -360,6 +371,7 @@ jobs:
           --shards ${{ needs.plan.outputs.shards }}
           --known .github/mutants-survivors.txt
           --write-current mutants-survivors.current.txt
+          --timeout ${{ env.MUTANT_TIMEOUT }}
           ${{ needs.plan.outputs.scope == 'diff' && '--partial' || '' }}
       # Always, and especially when the step above went red: this is the file you copy over
       # `.github/mutants-survivors.txt` once you have decided the new entries are acceptable.
@@ -374,9 +386,10 @@ jobs:
     # The part that failed on 2026-09-21 was not the testing, it was that nobody looked. A
     # scheduled workflow's red X is on a page no one opens; an issue is in the repo.
     #
-    # One issue, found by its exact title, with its BODY rewritten each night — never a new
-    # issue and never a comment, so this cannot become noise — and closed the moment the
-    # nightly is clean again.
+    # One issue, found by its exact title among EVERY open issue, with its BODY rewritten each
+    # red night — never a new issue while one is open and never a comment, so this cannot
+    # become noise — and closed only when a FULL run is clean. A copy filed by an older
+    # version of this job is closed as a duplicate of the oldest.
     name: say so where someone will see it
     needs: [plan, baseline, core, survivors]
     if: always() && github.event_name == 'schedule'
@@ -385,6 +398,9 @@ jobs:
       contents: read
       issues: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # What to say is decided by `tools/mutants-report.py notice`, which has tests; this step
+      # only fetches every open issue and carries the decision out.
       - name: Open, update or close the nightly's issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -400,73 +416,28 @@ jobs:
           TITLE='nightly mutation testing is not clean'
           BODY_FILE="$RUNNER_TEMP/body.md"
 
-          : > "$BODY_FILE"
-          {
-            echo "Last run: $RUN_URL"
-            echo
-          } >> "$BODY_FILE"
+          # EVERY open issue, every page of them. `gh issue list --limit 200` stopped at the
+          # 200 newest, and once more than 200 were open the nightly's own issue was not among
+          # them, so red nights filed copies (#973, #1140) instead of telling #480.
+          gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" \
+            --jq '.[] | select(.pull_request | not) | {number, title}' > "$RUNNER_TEMP/issues.jsonl"
 
-          CLEAN=1
-          if [ "$PLAN" != success ]; then
-            CLEAN=0
-            echo "- **The run could not decide what to test** (\`plan\`: $PLAN), so nothing" \
-                 "was tested." >> "$BODY_FILE"
-          elif [ "$SCOPE" = none ]; then
-            # Nothing in charter-core changed since the last green run: nothing to say, and
-            # no reason to touch the issue either way.
-            echo 'nothing in charter-core changed since the last green run'
-            exit 0
-          elif [ "$BASELINE" != success ]; then
-            # The root cause, and the only line worth printing: with the baseline red the
-            # shards never ran, so `core` and `survivors` are `skipped` and saying they failed
-            # would send the reader after the wrong thing.
-            CLEAN=0
-            echo "- **charter-core's own tests do not pass** (\`baseline\`: $BASELINE)." \
-                 "Mutation testing says nothing about a tree that is already red, so nothing" \
-                 "else ran. Fix this first." >> "$BODY_FILE"
-          else
-            if [ "$CORE" != success ]; then
-              CLEAN=0
-              echo "- **At least one shard did not finish** (\`core\`: $CORE)." \
-                   "Each shard's verdict on the run summary says whether it ran out of budget or" \
-                   "lost its runner. Shards reporting \`incomplete\` mean a mutant costs more than" \
-                   "\`PER_SHARD\` in \`.github/workflows/mutants.yml\` was sized for — the fix is a" \
-                   "smaller \`PER_SHARD\`." >> "$BODY_FILE"
-            fi
-            if [ "$SURVIVORS" != success ]; then
-              CLEAN=0
-              echo "- **There are surviving mutants that were not there before.** The table is on" \
-                   "the run summary: each row is a change to charter-core that no test noticed." \
-                   "Accepting one means adding its line to \`.github/mutants-survivors.txt\`," \
-                   "with a reason." >> "$BODY_FILE"
-            fi
-          fi
+          python3 tools/mutants-report.py notice \
+            --title "$TITLE" --run-url "$RUN_URL" \
+            --plan "$PLAN" --scope "$SCOPE" --baseline "$BASELINE" \
+            --core "$CORE" --survivors "$SURVIVORS" \
+            --body-file "$BODY_FILE" \
+            < "$RUNNER_TEMP/issues.jsonl" > "$RUNNER_TEMP/actions.txt"
 
-          # Found by exact title rather than by `--search`, whose relevance matching would
-          # happily return somebody else's issue and get it edited. Written to a file first so
-          # that `awk` finishing early cannot SIGPIPE `gh` into tripping `pipefail`.
-          gh issue list --state open --limit 200 --json number,title \
-            --template '{{range .}}{{.number}} {{.title}}{{"\n"}}{{end}}' > "$RUNNER_TEMP/issues.txt"
-          EXISTING="$(awk -v t="$TITLE" \
-            '{n=$1; $1=""; sub(/^ /,""); if ($0 == t) {print n; exit}}' "$RUNNER_TEMP/issues.txt")"
-
-          if [ "$CLEAN" = 1 ] && [ "$SCOPE" != full ]; then
-            # A clean DIFF says the new code is covered, not that the crate is. Only a full
-            # run may close the issue; an open one stays open, and nothing new is said.
-            echo "a clean $SCOPE run; only a full run closes the issue"
-            exit 0
-          fi
-          if [ "$CLEAN" = 1 ]; then
-            if [ -n "$EXISTING" ]; then
-              gh issue close "$EXISTING" --comment "The nightly is clean again: $RUN_URL"
-            fi
-            echo 'nightly is clean; nothing to report'
-            exit 0
-          fi
-
-          cat "$BODY_FILE"
-          if [ -n "$EXISTING" ]; then
-            gh issue edit "$EXISTING" --body-file "$BODY_FILE"
-          else
-            gh issue create --title "$TITLE" --body-file "$BODY_FILE"
-          fi
+          if [ -f "$BODY_FILE" ]; then cat "$BODY_FILE"; fi
+          while read -r verb number kept; do
+            case "$verb" in
+              create) gh issue create --title "$TITLE" --body-file "$BODY_FILE" ;;
+              edit) gh issue edit "$number" --body-file "$BODY_FILE" ;;
+              close) gh issue close "$number" --comment "The nightly is clean again: $RUN_URL" ;;
+              duplicate)
+                gh issue close "$number" --reason "not planned" \
+                  --comment "Duplicate of #$kept, which carries the nightly from now on: $RUN_URL" ;;
+              *) echo "::error::unknown action from mutants-report.py notice: $verb"; exit 1 ;;
+            esac
+          done < "$RUNNER_TEMP/actions.txt"

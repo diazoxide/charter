@@ -544,6 +544,10 @@ mod tests {
         model.apply(root, Some(&[change(Kind::Project, None, "charter.toml")]));
         assert_eq!(model.default_persona(), Some("scribe"));
         assert!(model.is_live("alpha"));
+        assert!(
+            !model.is_live("beta"),
+            "only the workspaces the block names are live"
+        );
         assert_eq!(model, Model::read(root));
     }
 

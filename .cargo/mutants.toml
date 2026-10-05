@@ -154,4 +154,15 @@ exclude_re = [
     # `harness_plugin::Adapter::pinned`'s default is `&[]`, and `Vec::leak(Vec::new())` is the
     # same empty slice: every caller only iterates what it answers. The site says so.
     'src/harness_plugin\.rs:\d+:\d+: replace Adapter::pinned -> &.static\[Pin\] with Vec::leak\(Vec::new\(\)\)$',
+    # #480. `doctor::git::probe`'s `status.code.unwrap_or(-1)`: `git_in` turns a run with no
+    # exit code into `Err`, so the default is never taken and its "delete -" changes nothing.
+    'src/doctor/git\.rs:\d+:\d+: delete - in probe$',
+    # `doctor::git::default_branch`'s `head.ok() && !remote_head.is_empty()` and `git_dir_of`'s
+    # `!run.ok() || out.is_empty()`: git prints its answer on stdout exactly when it succeeds,
+    # so the swapped operator asks the same question. The sites say so.
+    'src/doctor/git\.rs:\d+:\d+: replace && with \|\| in default_branch$',
+    'src/doctor/git\.rs:\d+:\d+: replace \|\| with && in git_dir_of$',
+    # `doctor::session::trust_gates`: only Claude Code has a layer and a trust gate, so no gate
+    # repeats and none is empty. The site says so.
+    'src/doctor/session\.rs:\d+:\d+: replace && with \|\| in trust_gates$',
 ]
