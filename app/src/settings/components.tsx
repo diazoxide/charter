@@ -522,24 +522,25 @@ export function Choice(props: ChoiceProps) {
         aria-labelledby={ids.labelledBy}
         aria-describedby={ids.describedBy}
       >
-        {props.options.map((one) => (
-          <div className="ui-choice-option" key={one.value}>
+        {props.options.map((one, at) => (
+          // By place, not by value: two options can share one (two owners' `api`, D-DS3e-10).
+          <div className="ui-choice-option" key={at}>
             <Checkbox.Root
-              id={`${ids.id}-${one.value}`}
+              id={`${ids.id}-${at}`}
               className="box"
               // #186: WebKit leaves a `<button>` out of the Tab order without `tabIndex`.
               tabIndex={0}
               checked={props.checked.has(one.value)}
               disabled={one.disabled}
               title={one.title}
-              aria-describedby={one.says ? `${ids.id}-${one.value}-says` : undefined}
+              aria-describedby={one.says ? `${ids.id}-${at}-says` : undefined}
               onCheckedChange={(to) => props.onCheckedChange(one.value, to === true)}
             >
               <Checkbox.Indicator>✓</Checkbox.Indicator>
             </Checkbox.Root>
-            <label htmlFor={`${ids.id}-${one.value}`}>{one.label}</label>
+            <label htmlFor={`${ids.id}-${at}`}>{one.label}</label>
             {one.says && (
-              <div className="ui-choice-says" id={`${ids.id}-${one.value}-says`}>
+              <div className="ui-choice-says" id={`${ids.id}-${at}-says`}>
                 {one.says}
               </div>
             )}
@@ -591,15 +592,16 @@ export function Choice(props: ChoiceProps) {
         });
       }}
     >
-      {props.options.map((one) => (
-        <div className="ui-choice-option" key={one.value}>
+      {props.options.map((one, at) => (
+        // By place, not by value: two options can share one (two owners' `api`, D-DS3e-10).
+        <div className="ui-choice-option" key={at}>
           <RadioGroup.Item
             className="dot"
             value={one.value}
-            id={`${ids.id}-${one.value}`}
+            id={`${ids.id}-${at}`}
             disabled={one.disabled}
             title={one.title}
-            aria-describedby={one.says ? `${ids.id}-${one.value}-says` : undefined}
+            aria-describedby={one.says ? `${ids.id}-${at}-says` : undefined}
             onFocus={() => {
               if (arrowing.current && !props.disabled && !one.disabled && one.value !== props.value)
                 props.onValueChange(one.value);
@@ -607,9 +609,9 @@ export function Choice(props: ChoiceProps) {
           >
             <RadioGroup.Indicator className="dot-mark" />
           </RadioGroup.Item>
-          <label htmlFor={`${ids.id}-${one.value}`}>{one.label}</label>
+          <label htmlFor={`${ids.id}-${at}`}>{one.label}</label>
           {one.says && (
-            <span className="ui-choice-says" id={`${ids.id}-${one.value}-says`}>
+            <span className="ui-choice-says" id={`${ids.id}-${at}-says`}>
               {one.says}
             </span>
           )}
