@@ -56,19 +56,20 @@ export function underWay(state: CloneState | undefined): boolean {
  * Add `repos` to the plane's inventory, then clone them into `workspace` one after another,
  * after any clone this window already asked for there. A repo already under way is left to
  * the call that asked first. `onEach` hears each repo as it finishes, so a list can be read
- * again as it lands rather than once the batch ends; it may answer a state to put in its place
- * — a clone that answered but is not where the workspace looks is a failure, not a success.
- * The next repo waits for it. Resolves with the ones that failed, once every one has been
- * tried.
+ * again as it lands rather than once the batch ends.
+ *
+ * **A clone that answered is checked against the workspace before it counts** (V91b): if the
+ * workspace's panels still list the repo as not cloned, it is a failure — with a Retry wherever
+ * failures are drawn — and never a "Cloned" row with nothing to press. Here, so every caller
+ * gets it: the explorer's rows, a new workspace's repos and Settings › Repos.
+ *
+ * Resolves with the ones that failed, once every one has been tried.
  */
 export function cloneRepos(
   plane: PlaneId,
   workspace: string,
   repos: string[],
-  onEach?: (
-    repo: string,
-    state: CloneState,
-  ) => CloneState | undefined | Promise<CloneState | undefined>,
+  onEach?: (repo: string, state: CloneState) => void,
 ): Promise<Failed> {
   const key = keyOf(plane, workspace);
   const mine = repos.filter((repo) => !underWay(byWorkspace.get(key)?.get(repo)));
@@ -87,10 +88,7 @@ async function cloneInTurn(
   plane: PlaneId,
   workspace: string,
   repos: string[],
-  onEach?: (
-    repo: string,
-    state: CloneState,
-  ) => CloneState | undefined | Promise<CloneState | undefined>,
+  onEach?: (repo: string, state: CloneState) => void,
 ): Promise<Failed> {
   if (repos.length === 0) return [];
   const taken = await commands
@@ -111,12 +109,39 @@ async function cloneInTurn(
             state: "failed",
             said: taken.status === "error" ? `${answer.error}\n${taken.error}` : answer.error,
           };
-    set(plane, workspace, repo, cloned);
-    const state = (await onEach?.(repo, cloned)) ?? cloned;
-    if (state !== cloned) set(plane, workspace, repo, state);
+    const state = cloned.state === "cloned" ? await seen(plane, workspace, repo, cloned) : cloned;
+    set(plane, workspace, repo, state);
     if (state.state === "failed") failed.push({ repo, said: state.said });
+    onEach?.(repo, state);
   }
   return failed;
+}
+
+/**
+ * A clone that answered, as the workspace now reads: still `cloned`, or `failed` when the
+ * workspace's panels still list the repo as not cloned here. A read that does not answer
+ * leaves the clone as it said — the panels read again will draw what is there.
+ */
+async function seen(
+  plane: PlaneId,
+  workspace: string,
+  repo: string,
+  cloned: Extract<CloneState, { state: "cloned" }>,
+): Promise<CloneState> {
+  const read = await commands
+    .workspacePanels(plane, workspace)
+    .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+  // `data` can be absent from an answer the window was not built against (a test's core), and
+  // that reads as "nothing to say", never as a failure.
+  const absent =
+    read.status === "ok" ? ((read.data as Partial<typeof read.data> | null)?.absent ?? []) : [];
+  if (!absent.includes(repo)) return cloned;
+  return {
+    state: "failed",
+    said:
+      `${repo} was cloned, but charter does not see it in ${workspace}.` +
+      (cloned.said ? ` charter said: ${cloned.said}` : ""),
+  };
 }
 
 function subscribe(listener: () => void) {
