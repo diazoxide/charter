@@ -71,7 +71,12 @@ pub(super) fn still_holds(root: &Path, rec: &serde_json::Value, head: &str) -> b
     // hand, to get past another clone's commits — is not about this plane any more.
     let landed = rec.get("landed").and_then(serde_json::Value::as_str);
     let plane = crate::planesave::Settings::read(root).plane;
-    if landed.is_some_and(|landed| landed != save_branch(root, &plane)) {
+    // This clone's own default under any prefix it has had is still this plane's: a block
+    // about the request a pre-rename save opened from `charter/save/…` holds until the next
+    // save, as it did before the rename (V93j).
+    if landed.is_some_and(|landed| {
+        landed != save_branch(root, &plane) && !is_own_default(root, &plane, landed)
+    }) {
         return false;
     }
     is_object_name(head)
@@ -111,21 +116,36 @@ fn resolve(root: &Path, rev: &str) -> Option<String> {
 /// merges or closes, so the rename never opens a second one beside it (V93j). Once it is
 /// settled, the next push goes to the purlis name. A `save_branch` set by hand is always used
 /// as it is.
+///
+/// What ends the old branch is a settle that SAW its request merged or closed
+/// ([`forget_old_branch`]), never merely a forgotten request: a plane moved off the request's
+/// commit by hand forgets the request while it may still be open on the forge, and pushing
+/// to the purlis name then would open a second one beside it.
 pub(super) fn save_branch(root: &Path, plane: &Plane) -> String {
     let fresh = plane.save_branch_or_default(root);
-    if plane.save_branch.value.is_some() {
-        return fresh;
-    }
-    let kept = Kept::read(root);
-    let rest = crate::planesave::default_rest(root);
-    match kept.branch {
-        Some(branch)
-            if kept.pr.is_some()
-                && crate::names::BRANCH_PREFIX.strip(&branch) == Some(rest.as_str()) =>
-        {
-            branch
-        }
+    match Kept::read(root).branch {
+        Some(branch) if branch != fresh && is_own_default(root, plane, &branch) => branch,
         _ => fresh,
+    }
+}
+
+/// Whether `branch` is this clone's default save branch under any prefix the product has used,
+/// for a plane that names no save_branch of its own.
+fn is_own_default(root: &Path, plane: &Plane, branch: &str) -> bool {
+    plane.save_branch.value.is_none()
+        && crate::names::BRANCH_PREFIX.strip(branch)
+            == Some(crate::planesave::default_rest(root).as_str())
+}
+
+/// After a settle saw the request merged or closed: a pre-rename save branch has carried its
+/// last request, so what is kept stops naming it and the next push goes to the purlis name.
+fn forget_old_branch(root: &Path, plane: &Plane, kept: &mut Kept) {
+    if kept
+        .branch
+        .as_deref()
+        .is_some_and(|b| b != plane.save_branch_or_default(root) && is_own_default(root, plane, b))
+    {
+        *kept = Kept::default();
     }
 }
 
@@ -669,6 +689,7 @@ pub(super) fn settle(
         if forget {
             let mut kept = Kept::read(root);
             kept.pr = None;
+            forget_old_branch(root, plane, &mut kept);
             kept.write(root);
         }
         Settled::Blocked(record_push(
@@ -825,6 +846,7 @@ pub(super) fn settle(
         }
     }
     kept.pr = None;
+    forget_old_branch(root, plane, &mut kept);
     kept.write(root);
     let _ = std::fs::remove_file(push_record_path(root));
     say(Say::Done(format!(
