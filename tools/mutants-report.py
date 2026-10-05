@@ -208,8 +208,11 @@ def cmd_shard(args: argparse.Namespace) -> int:
 # matters, yet no test can ever retire it from a list of survivors (#480). But a TIMEOUT on a
 # runner slow enough that the suite itself nears the limit is a suite cut short, and says
 # nothing: on 2026-09-25 ten slow shards reported 432 of them and 0 MISSED. So a TIMEOUT is a
-# hang only when the slowest whole suite of the same run fits in two thirds of the limit; any
-# closer and every TIMEOUT stays a survivor.
+# hang only when the slowest whole suite of the same SHARD fits in two thirds of the limit; any
+# closer, or no whole suite measured on that shard at all, and its TIMEOUTs stay survivors.
+# Per shard because shards run on different runners: the 2026-09-25 slow shards sat beside
+# fast ones that did report MISSED mutants, and a suite timed on a fast runner would have
+# called those 432 suites cut short hangs. This rule is what keeps that night red.
 HANG_MARGIN = 1.5
 
 
@@ -261,18 +264,20 @@ def cmd_gather(args: argparse.Namespace) -> int:
     silent = [str(n) for n in range(args.shards) if str(n) not in reported]
     complete = [v for v in verdicts if v["status"] == "complete"]
     whole_crate = len(complete) == args.shards
-    suite = max((v.get("suite_seconds") or 0.0 for v in verdicts), default=0.0) or None
-    caught_hangs = hangs_are_caught(args.timeout, suite)
-    survivors = [
-        s
-        for v in verdicts
-        for s in v["survivors"]
-        if not (caught_hangs and s["summary"] == "Timeout")
-    ]
-    hangs = sorted(
-        {key_of(s) for v in verdicts for s in v["survivors"] if s["summary"] == "Timeout"}
-        if caught_hangs
-        else set()
+    def hung(verdict: dict, survivor: dict) -> bool:
+        return survivor["summary"] == "Timeout" and hangs_are_caught(
+            args.timeout, verdict.get("suite_seconds")
+        )
+
+    survivors = [s for v in verdicts for s in v["survivors"] if not hung(v, s)]
+    hangs = sorted({key_of(s) for v in verdicts for s in v["survivors"] if hung(v, s)})
+    # The slowest whole suite of a shard that hung a mutant, for the sentence below.
+    suite = max(
+        (v["suite_seconds"] for v in verdicts if any(hung(v, s) for s in v["survivors"])),
+        default=None,
+    )
+    cut_short = any(
+        s["summary"] == "Timeout" and not hung(v, s) for v in verdicts for s in v["survivors"]
     )
     tested = sum(v["tested"] for v in verdicts)
     planned = sum(v["planned"] or 0 for v in verdicts)
@@ -320,21 +325,19 @@ def cmd_gather(args: argparse.Namespace) -> int:
         summary(f"## {len(hangs)} hang{'' if len(hangs) == 1 else 's'}")
         summary("")
         summary(
-            f"These ran past the {args.timeout:.0f} s limit, while the slowest whole suite in "
-            f"this run took {suite:.0f} s: the mutant made a loop that never ends, and the "
+            f"These ran past the {args.timeout:.0f} s limit, on shards whose slowest whole suite "
+            f"took at most {suite:.0f} s: the mutant made a loop that never ends, and the "
             "suite never finishing is how it was caught. Not survivors, and not red."
         )
         summary("")
         for item in hangs:
             summary(f"* `{item}`")
         summary("")
-    elif args.timeout is not None and any(
-        s["summary"] == "Timeout" for v in verdicts for s in v["survivors"]
-    ):
-        measured = f"took {suite:.0f} s" if suite else "was never measured"
+    if args.timeout is not None and cut_short:
         summary(
-            f"> The TIMEOUTs below stay survivors: the slowest whole suite in this run {measured},"
-            f" too close to the {args.timeout:.0f} s limit to tell a hang from a suite cut short."
+            "> The TIMEOUTs below stay survivors: on their shards the slowest whole suite was "
+            f"too close to the {args.timeout:.0f} s limit, or was never measured (no MISSED "
+            "mutant ran every test there), to tell a hang from a suite cut short."
         )
         summary("")
 
