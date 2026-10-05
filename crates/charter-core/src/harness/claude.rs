@@ -55,6 +55,7 @@ impl HarnessAdapter for ClaudeCode {
                 "--settings",
                 &settings(
                     kit.binary,
+                    cwd,
                     crate::footerclaim::status_line(cwd).free(),
                     plugins,
                     sandbox,
@@ -149,6 +150,7 @@ impl HarnessAdapter for ClaudeCode {
 /// file a chat can write; it rides on this argument instead.
 fn settings(
     binary: &std::path::Path,
+    cwd: Option<&std::path::Path>,
     may_fill_the_footer: bool,
     plugins: &crate::harness_plugin::Chosen,
     sandbox: Option<&crate::sandbox::claude::Settings>,
@@ -212,9 +214,46 @@ fn settings(
         settings.insert("sandbox".to_owned(), sandbox.sandbox.clone());
         permissions["deny"] = serde_json::json!(sandbox.deny);
     }
+    // **The operator's ask and deny on charter's tools, under the server's new name**
+    // (D-RN8-12). The server is `purlis` now (#1266), so a project's or a layer's rule on
+    // `mcp__charter__<tool>` matches nothing; its `mcp__purlis__<tool>` twin rides here, beside
+    // the rule, so the operator's ask or deny still wins (ADR 0064). Only asks and denies, which
+    // can only make a chat ask more; an allow gets no twin.
+    let (ask, deny) = crate::scaffold::settings::mcp_rule_twins_in(&project_settings_files(cwd));
+    for (bucket, twins) in [("ask", ask), ("deny", deny)] {
+        if twins.is_empty() {
+            continue;
+        }
+        let mut rules: Vec<serde_json::Value> = permissions
+            .get(bucket)
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        rules.extend(twins.into_iter().map(serde_json::Value::String));
+        permissions[bucket] = serde_json::Value::Array(rules);
+    }
     settings.insert("permissions".to_owned(), permissions);
     settings.insert("hooks".to_owned(), permission_hook(binary));
     serde_json::Value::Object(settings).to_string()
+}
+
+/// The Claude Code settings files a chat at `cwd` reads from its project: `.claude/settings.json`
+/// and `.claude/settings.local.json` in `cwd` and in each folder above it, up to the project's
+/// root (the first holding a project manifest or a `.git`).
+fn project_settings_files(cwd: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Some(cwd) = cwd else {
+        return out;
+    };
+    for dir in cwd.ancestors().take(64) {
+        for file in [".claude/settings.json", ".claude/settings.local.json"] {
+            out.push(dir.join(file));
+        }
+        if crate::names::has_manifest(dir) || dir.join(".git").exists() {
+            break;
+        }
+    }
+    out
 }
 
 /// Claude Code's `PermissionRequest` hook, pointed at `charter hook permissionrequest` for THIS

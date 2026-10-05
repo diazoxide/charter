@@ -1012,6 +1012,62 @@ mod tests {
     }
 
     #[test]
+    fn an_ask_or_deny_on_charters_tools_by_the_old_server_name_gets_its_purlis_twin() {
+        // D-RN8-12: the server is `purlis` now (#1266), so a project's or a layer's ask or deny
+        // on `mcp__charter__<tool>` would match nothing. The chat is handed its twin beside it,
+        // so the operator's rule still wins (ADR 0064). An allow gets no twin.
+        let project = tempfile::tempdir().expect("a project");
+        std::fs::create_dir_all(project.path().join(".git")).expect(".git");
+        let layer = project.path().join("workspaces/alpha");
+        std::fs::create_dir_all(layer.join(".claude")).expect("the layer");
+        std::fs::create_dir_all(project.path().join(".claude")).expect(".claude");
+        std::fs::write(
+            project.path().join(".claude/settings.json"),
+            r#"{"permissions": {"ask": ["mcp__charter__todo_add", "Bash(ls)"],
+                "allow": ["mcp__charter__todo_list"]}}"#,
+        )
+        .expect("the project's settings");
+        std::fs::write(
+            layer.join(".claude/settings.local.json"),
+            r#"{"permissions": {"deny": ["mcp__charter__ask_operator", "mcp__charter"]}}"#,
+        )
+        .expect("the layer's settings");
+
+        let (args, _) = claude("/bin/charter", &layer);
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
+
+        assert_eq!(
+            settings["permissions"]["ask"],
+            serde_json::json!(["mcp__purlis__todo_add"])
+        );
+        assert_eq!(
+            settings["permissions"]["deny"],
+            serde_json::json!(["mcp__purlis__ask_operator", "mcp__purlis"])
+        );
+        let allowed = settings["permissions"]["allow"].as_array().expect("allow");
+        assert_eq!(
+            allowed
+                .iter()
+                .filter(|rule| rule
+                    .as_str()
+                    .is_some_and(|r| r.starts_with("mcp__purlis__")))
+                .count(),
+            crate::chattools::PRE_ALLOWED.len(),
+            "no allow is twinned: {allowed:?}"
+        );
+    }
+
+    #[test]
+    fn a_chat_whose_project_names_no_old_tool_is_handed_no_ask_or_deny() {
+        let project = tempfile::tempdir().expect("a project");
+        std::fs::create_dir_all(project.path().join(".git")).expect(".git");
+        let (args, _) = claude("/bin/charter", project.path());
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
+        assert!(settings["permissions"].get("ask").is_none(), "{settings}");
+        assert!(settings["permissions"].get("deny").is_none(), "{settings}");
+    }
+
+    #[test]
     fn an_unsandboxed_codex_chat_is_handed_no_approval_or_sandbox_setting() {
         // Codex has no per-session rule for one command: its approval policy and its sandbox
         // are whole-session switches, and loosening either would be far broader than the one

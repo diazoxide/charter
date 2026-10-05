@@ -357,9 +357,74 @@ pub fn renamed_to_purlis(root: &Path) -> Result<Option<String>, String> {
 
 /// `Bash(purlis …)` for a rule `Bash(charter …)`, else `None`.
 fn purlis_rule_twin(rule: &str) -> Option<String> {
+    if let Some(twin) = mcp_rule_twin(rule) {
+        return Some(twin);
+    }
     let inner = rule.strip_prefix("Bash(")?.strip_suffix(')')?;
     let pattern = consent_pattern_for(inner, crate::cliname::PRIMARY)?;
     Some(format!("Bash({pattern})"))
+}
+
+/// The purlis twin of a permission rule on charter's own MCP server under its old name (#1266,
+/// D-RN8-12): `mcp__charter__<tool>` → `mcp__purlis__<tool>`, and the server-wide
+/// `mcp__charter` → `mcp__purlis`. The server is the plugin's name, so an operator's `ask` or
+/// `deny` on the old one matches nothing once it is renamed. `None` for any other rule.
+pub fn mcp_rule_twin(rule: &str) -> Option<String> {
+    let old = crate::names::MCP_TOOL_PREFIX.newest_old();
+    let new = crate::names::MCP_TOOL_PREFIX.write;
+    if let Some(tool) = rule.strip_prefix(old) {
+        return (!tool.is_empty()).then(|| format!("{new}{tool}"));
+    }
+    (rule == old.trim_end_matches('_')).then(|| new.trim_end_matches('_').to_owned())
+}
+
+/// Every `ask` and `deny` rule in the Claude Code settings files `paths` that names charter's
+/// MCP server by its old name, as its purlis twin, by bucket: what a chat the app starts is
+/// handed beside them (D-RN8-12), so the operator's ask or deny still holds (ADR 0064). Allow
+/// rules get none: a missing allow only asks. A file that is missing or unreadable adds none.
+pub fn mcp_rule_twins_in(paths: &[std::path::PathBuf]) -> (Vec<String>, Vec<String>) {
+    let mut ask: Vec<String> = Vec::new();
+    let mut deny: Vec<String> = Vec::new();
+    for path in paths {
+        let Some(map) = read(path).map else {
+            continue;
+        };
+        let Some(perms) = map.get("permissions").and_then(Value::as_object) else {
+            continue;
+        };
+        for (bucket, out) in [("ask", &mut ask), ("deny", &mut deny)] {
+            let rules = perms.get(bucket).and_then(Value::as_array);
+            for twin in rules
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter_map(mcp_rule_twin)
+            {
+                if !out.contains(&twin) {
+                    out.push(twin);
+                }
+            }
+        }
+    }
+    (ask, deny)
+}
+
+/// Every `ask` and `deny` rule in the Claude Code settings file at `path`; empty for a file
+/// that is missing or unreadable.
+pub fn permission_rules_in(path: &Path) -> Vec<String> {
+    let Some(map) = read(path).map else {
+        return Vec::new();
+    };
+    let Some(perms) = map.get("permissions").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    ["ask", "deny"]
+        .iter()
+        .filter_map(|bucket| perms.get(*bucket).and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The `ask` and `deny` globs in `opencode.json`'s `permission.bash` that spell `charter …`,

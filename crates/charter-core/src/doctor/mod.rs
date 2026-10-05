@@ -513,6 +513,7 @@ impl Doctor {
         rows.push(plugin::plugin(self));
         rows.push(plugin::plugin_files(self));
         rows.push(plugin::superseded_plugin(self));
+        rows.extend(plugin::renamed_tool_rules(self));
         rows
     }
 }

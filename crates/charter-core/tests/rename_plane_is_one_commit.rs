@@ -58,10 +58,15 @@ const SETTINGS: &str = r#"{
     "ask": [
       "Bash(charter handoff *)",
       "Bash(charter report *--yes*)",
-      "Bash(charter *todo*promote*)"
+      "Bash(charter *todo*promote*)",
+      "mcp__charter__todo_add"
+    ],
+    "deny": [
+      "mcp__charter__ask_operator"
     ],
     "allow": [
-      "Bash(charter status)"
+      "Bash(charter status)",
+      "mcp__charter__todo_list"
     ]
   },
   "hooks": {
@@ -328,12 +333,20 @@ fn rename_plane_is_one_commit_with_exactly_the_renames() {
             "Bash(charter report *--yes*)",
             "Bash(purlis report *--yes*)",
             "Bash(charter *todo*promote*)",
-            "Bash(purlis *todo*promote*)"
+            "Bash(purlis *todo*promote*)",
+            "mcp__charter__todo_add",
+            "mcp__purlis__todo_add"
         ])
+    );
+    // D-RN8-12: an ask or deny on charter's MCP tools gets the twin for the server's new name;
+    // an allow does not.
+    assert_eq!(
+        doc["permissions"]["deny"],
+        serde_json::json!(["mcp__charter__ask_operator", "mcp__purlis__ask_operator"])
     );
     assert_eq!(
         doc["permissions"]["allow"],
-        serde_json::json!(["Bash(charter status)"])
+        serde_json::json!(["Bash(charter status)", "mcp__charter__todo_list"])
     );
     for pattern in settings::PURLIS_CONSENT_PATTERNS {
         assert!(

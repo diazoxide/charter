@@ -288,3 +288,39 @@ pub(super) fn superseded_plugin(d: &Doctor) -> Row {
         ),
     )
 }
+
+/// `renamed tool rules`, shown only when it warns (D-RN8-12): an `ask` or `deny` rule on
+/// charter's MCP tools under the server's old name in the operator's own Claude Code user
+/// settings. The server is `purlis` now (#1266), so such a rule matches nothing. A chat the app
+/// starts is handed the twin of a project's or a layer's rule, and `rename-plane` writes it into
+/// the project's files; the user settings are the operator's, so this names them instead.
+pub(super) fn renamed_tool_rules(d: &Doctor) -> Option<Row> {
+    const NAME: &str = "renamed tool rules";
+    let m = d.machine.as_ref()?;
+    let file = m.claude_config.join("settings.json");
+    let (ask, deny) = crate::scaffold::settings::mcp_rule_twins_in(std::slice::from_ref(&file));
+    let missing: Vec<String> = {
+        let have = crate::scaffold::settings::permission_rules_in(&file);
+        ask.into_iter()
+            .chain(deny)
+            .filter(|twin| !have.contains(twin))
+            .collect()
+    };
+    if missing.is_empty() {
+        return None;
+    }
+    Some(Row::warn(
+        NAME,
+        format!(
+            "{} has ask or deny rules on charter's tools under their old name, which no longer \
+             match",
+            fsx::path_field(&file)
+        ),
+        format!(
+            "charter's MCP server is `{}` now. Add each twin beside its rule, in the same list: \
+             {}.",
+            crate::chattools::SERVER,
+            missing.join(", ")
+        ),
+    ))
+}
