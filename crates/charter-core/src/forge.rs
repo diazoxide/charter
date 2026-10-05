@@ -525,13 +525,18 @@ fn declared(cfg: &toml::Table) -> BTreeMap<String, Forge> {
 /// Every host the plane's one-credential policy covers: each kind's default host, widened
 /// by the declared ones. Python's `registry.known_forges`, never raising.
 pub fn known(root: &Path) -> BTreeMap<String, Forge> {
+    known_in(&load_config(root).unwrap_or_default())
+}
+
+/// [`known`], of a `charter.toml` already read: each kind's default host, widened by the blocks
+/// `cfg` declares. What a removal of a block is asked against, before and after
+/// ([`crate::settings::forges`]).
+pub fn known_in(cfg: &toml::Table) -> BTreeMap<String, Forge> {
     let mut out: BTreeMap<String, Forge> = KINDS
         .iter()
         .map(|k| (k.default_host().to_string(), Forge::default_of(*k)))
         .collect();
-    if let Ok(cfg) = load_config(root) {
-        out.extend(declared(&cfg));
-    }
+    out.extend(declared(cfg));
     out
 }
 

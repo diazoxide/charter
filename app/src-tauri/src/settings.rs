@@ -237,6 +237,140 @@ pub(crate) fn move_keys(
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// Settings collections: adding and removing an entry (ST-3, #1227)
+// ---------------------------------------------------------------------------------------
+
+/// One field of an entry the core refused, and why: the field is the entry's own key.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct EntryFieldRefusal {
+    pub field: String,
+    pub why: String,
+}
+
+/// Something that uses an entry, which stops its removal. `group` is the Settings group it is
+/// changed in (`project.saving`) when it is a setting.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct EntryReferrer {
+    pub what: String,
+    pub group: Option<String>,
+}
+
+/// What adding or removing a collection entry answered: the file as it now stands, or every
+/// reason nothing was written — by field, by what uses the entry, and for the whole write
+/// (`charter_core::settings::collection::Refusal`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EntryWritten {
+    Saved {
+        file: SettingsFile,
+    },
+    Refused {
+        fields: Vec<EntryFieldRefusal>,
+        referrers: Vec<EntryReferrer>,
+        reasons: Vec<String>,
+    },
+}
+
+/// A `[[forge]]` block as the Add form sends it, each field as typed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
+pub struct ForgeEntry {
+    pub kind: String,
+    pub owner: String,
+    pub host: String,
+    pub exclude: Vec<String>,
+}
+
+/// Add a `[[forge]]` block to `charter.toml`, checked whole by the core
+/// (`charter_core::settings::forges::add`).
+///
+/// `base` is the text the window read (`null`: not there), so a file changed on disk since is
+/// refused rather than overwritten.
+#[tauri::command]
+#[specta::specta]
+pub async fn add_project_forge(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    base: Option<String>,
+    entry: ForgeEntry,
+) -> Result<EntryWritten, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || add_forge(&root, base.as_deref(), entry))
+        .await
+        .map_err(|err| format!("adding the forge did not finish: {err}"))?
+}
+
+/// [`add_project_forge`], without a runtime.
+pub(crate) fn add_forge(
+    root: &std::path::Path,
+    base: Option<&str>,
+    entry: ForgeEntry,
+) -> Result<EntryWritten, String> {
+    let entry = settings::forges::Entry {
+        kind: entry.kind,
+        owner: entry.owner,
+        host: entry.host,
+        exclude: entry.exclude,
+    };
+    written(root, settings::forges::add(root, base, &entry))
+}
+
+/// Remove `[[forge]]` block `index` (from 0) of `charter.toml` — refused, naming them, while a
+/// repo or a setting uses it (`charter_core::settings::forges::remove`).
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_project_forge(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    base: Option<String>,
+    index: u32,
+) -> Result<EntryWritten, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || remove_forge(&root, base.as_deref(), index))
+        .await
+        .map_err(|err| format!("removing the forge did not finish: {err}"))?
+}
+
+/// [`remove_project_forge`], without a runtime.
+pub(crate) fn remove_forge(
+    root: &std::path::Path,
+    base: Option<&str>,
+    index: u32,
+) -> Result<EntryWritten, String> {
+    written(root, settings::forges::remove(root, base, index as usize))
+}
+
+/// A collection write's answer, for the wire: `charter.toml` as it now stands, or the refusal.
+fn written(
+    root: &std::path::Path,
+    said: Result<(), settings::collection::Refusal>,
+) -> Result<EntryWritten, String> {
+    match said {
+        Ok(()) => Ok(EntryWritten::Saved {
+            file: file_of(root, SettingsWhich::Shared)?,
+        }),
+        Err(refusal) => Ok(EntryWritten::Refused {
+            fields: refusal
+                .fields
+                .into_iter()
+                .map(|one| EntryFieldRefusal {
+                    field: one.field.to_owned(),
+                    why: one.why,
+                })
+                .collect(),
+            referrers: refusal
+                .referrers
+                .into_iter()
+                .map(|one| EntryReferrer {
+                    what: one.what,
+                    group: one.group.map(str::to_owned),
+                })
+                .collect(),
+            reasons: refusal.file,
+        }),
+    }
+}
+
 pub(crate) fn file_of(
     root: &std::path::Path,
     which: SettingsWhich,
@@ -556,6 +690,54 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("charter.toml"), shared).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_forge_is_added_and_its_field_refusals_and_users_reach_the_wire_by_name() {
+        let text = "schema = 1\n";
+        let dir = plane(text);
+        let entry = |kind: &str, host: &str| ForgeEntry {
+            kind: kind.into(),
+            owner: "acme".into(),
+            host: host.into(),
+            exclude: vec![],
+        };
+        let EntryWritten::Refused { fields, .. } =
+            add_forge(dir.path(), Some(text), entry("svn", "")).unwrap()
+        else {
+            panic!("an unknown kind is refused");
+        };
+        assert_eq!(fields[0].field, "kind");
+
+        let EntryWritten::Saved { file } =
+            add_forge(dir.path(), Some(text), entry("gitlab", "git.acme.dev")).unwrap()
+        else {
+            panic!("a good forge is written");
+        };
+        assert!(
+            file.text.contains("host = \"git.acme.dev\""),
+            "{}",
+            file.text
+        );
+
+        std::fs::create_dir_all(dir.path().join("inventory")).unwrap();
+        std::fs::write(
+            dir.path().join("inventory/repos.json"),
+            r#"{"repos": [{"name": "billing", "ssh_url": "git@git.acme.dev:acme/billing.git"}]}"#,
+        )
+        .unwrap();
+        let EntryWritten::Refused { referrers, .. } =
+            remove_forge(dir.path(), Some(&file.text), 0).unwrap()
+        else {
+            panic!("a forge a repo is on is not removed");
+        };
+        assert_eq!(
+            referrers,
+            [EntryReferrer {
+                what: "The repo billing (inventory/repos.json) is on git.acme.dev.".into(),
+                group: None,
+            }]
+        );
     }
 
     #[test]

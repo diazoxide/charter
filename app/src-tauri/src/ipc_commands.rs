@@ -216,6 +216,8 @@ macro_rules! app_commands {
                 settings::project_settings,
                 settings::save_project_settings,
                 settings::move_project_settings,
+                settings::add_project_forge,
+                settings::remove_project_forge,
                 settings::project_saving_in_force,
                 settings::workspace_settings,
                 settings::save_workspace_settings,

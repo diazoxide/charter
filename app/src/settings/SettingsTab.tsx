@@ -16,6 +16,7 @@ import {
   type FileSetting,
   type Level,
   type LiveSetting,
+  type Setting,
   type SettingsFileId,
   type SettingsGroup,
 } from "./groups";
@@ -24,6 +25,7 @@ import { KEPT, projectGroups, useProjectLevel } from "./project";
 import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
+import { CollectionView } from "./Collection";
 
 /**
  * **Settings** (SE-16, #1166; the spec on #558, rulings V89a–i): the one tab where a setting is
@@ -316,7 +318,8 @@ function Shown({
   }
   const choose = (group: string) => chooseGroup(place, group);
   const groups = narrowed(
-    declared.filter((one) => one.settings.length > 0),
+    // A collection is offered while it has no entry: that is where one is added.
+    declared.filter((one) => one.settings.length > 0 || one.collection !== undefined),
     filter,
   );
   const group = groups.find((one) => one.id === shown?.group) ?? groups[0];
@@ -393,7 +396,20 @@ function Shown({
               }
             />
           ) : (
-            group && <ShownGroup key={group.id} group={group} driver={driver} onNew={create} />
+            group && (
+              <ShownGroup
+                key={group.id}
+                group={group}
+                driver={driver}
+                onNew={create}
+                onGo={(to) => {
+                  // A link clears the filter, so the group it names is in the nav.
+                  setFilter("");
+                  setEditing(undefined);
+                  choose(to);
+                }}
+              />
+            )
           )}
         </>
       )}
@@ -426,11 +442,20 @@ function ShownGroup({
   group,
   driver,
   onNew,
+  onGo,
 }: {
   group: SettingsGroup;
   driver?: Driven<unknown>;
   onNew?: OnNew;
+  /** Opens another group of this level: a link a collection's refusal carries. */
+  onGo: (group: string) => void;
 }) {
+  const row = (setting: Setting) =>
+    inAFile(setting) ? (
+      driver && <FileRow key={setting.id} setting={setting} driver={driver} onNew={onNew} />
+    ) : (
+      <LiveRow key={setting.id} setting={setting} />
+    );
   return (
     <SettingGroup label={group.label} help={group.help}>
       {group.notes?.map((why, at) => (
@@ -438,12 +463,17 @@ function ShownGroup({
           {why}
         </p>
       ))}
-      {group.settings.map((setting) =>
-        inAFile(setting) ? (
-          driver && <FileRow key={setting.id} setting={setting} driver={driver} onNew={onNew} />
-        ) : (
-          <LiveRow key={setting.id} setting={setting} />
-        ),
+      {group.collection && driver ? (
+        <CollectionView
+          id={group.id}
+          collection={group.collection}
+          settings={group.settings}
+          driver={driver}
+          row={row}
+          onGo={onGo}
+        />
+      ) : (
+        group.settings.map(row)
       )}
     </SettingGroup>
   );

@@ -104,6 +104,34 @@ What keeps it from becoming the library this file forbids:
   label, a line of help and its settings (`app/src/settings/groups.ts`) — and the layout draws
   them. A new setting is a few lines of data, and it cannot look different from its neighbours.
 
+### A collection is data too, and adds no piece (ST-3)
+
+Settings › Forges is the first **collection**: a list of entries in a settings file that a group
+adds to and takes from (V91e–g, the spec on #1221). It is drawn from the set's pieces and adds
+none: `CollectionView` (`app/src/settings/Collection.tsx`) lays out, as `FileRow` does, an entry's
+heading and Remove over the entry's own `SettingRow`s, and an Add form whose fields are
+`SettingRow`s around a `Field` or a `Choice`, ending in `SettingActions`' Add and Cancel. ST-4 (harness profiles) and every later
+collection follow the same shape, in three layers:
+
+- **The core: one module per collection, `add` and `remove`.** `charter_core::settings::forges`
+  is the model (`crates/charter-core/src/settings/collection.rs` says the contract). `add(root,
+  base, &Entry)` checks the whole entry and writes it to the collection's home file; `remove(root,
+  base, <entry>)` takes it out unless something uses it. Both take `base`, the text the window
+  read, and end in `settings::save`, so a file changed since is refused and the next read's
+  refusals still apply. A refusal (`collection::Refusal`) has three parts: `fields` (by the
+  entry's own key, said under that field of the Add form), `referrers` (who uses the entry, each
+  with the Settings group it is changed in, as a deep link), and `file` (the whole write). The
+  window keeps no rules of its own (V91l).
+- **The wire: one command per write**, `add_project_forge` and `remove_project_forge`, answering
+  `EntryWritten`: the file as it now stands, or the three-part refusal.
+- **The window: the group declares a `collection`** (`groups.ts`'s `Collection`: its name, the
+  noun Add and Remove say, its entries with the ids of their settings, and the Add form's
+  fields), the level maps its name to the commands (`project.ts`'s `entry`), and the driver
+  writes it (`driver.ts`'s `entry`), in the same queue as every key. A written add or remove
+  has the one-level Undo, which puts the file's text back as it was through the level's
+  whole-text write: exact, comments included, and refused if the file moved since. A collection
+  group is offered in the nav while it has no entry, since that is where one is added.
+
 ## The Notice is a house piece too, by its own amendment
 
 ADR 0037's amendment of 2026-10-05 (V91d, NO-1 #1223) adds **Notice** (`app/src/Notice.tsx`)

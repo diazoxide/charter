@@ -5715,6 +5715,42 @@ h2.sidebar-title .node-icon {
   border-radius: 3px;
 }
 
+/* A collection (ST-3): each entry a heading with its Remove over its rows, then Add, whose form
+   is setting rows with SettingActions' Add and Cancel under them. */
+.ui-collection-entry {
+  margin-top: 0.8rem;
+}
+
+.ui-collection-head,
+.ui-collection-done {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ui-collection-head h4 {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.ui-collection-done {
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.ui-collection-add {
+  margin-top: 0.8rem;
+}
+
+.ui-collection-form {
+  margin-top: 0.8rem;
+  padding-inline-start: 0.8rem;
+  border-inline-start: 2px solid var(--border-subtle);
+}
+
 /* A row: the label, then the control with its reset beside it, then the line of help. */
 .ui-setting-row {
   display: grid;

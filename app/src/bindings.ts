@@ -1411,6 +1411,19 @@ export const commands = {
 	 */
 	moveProjectSettings: (plane: PlaneId, to: SettingsWhich, sharedBase: string | null, localBase: string | null, paths: SettingsStep[][]) => typedError<SettingsMoved, string>(__TAURI_INVOKE("move_project_settings", { plane, to, sharedBase, localBase, paths })),
 	/**
+	 *  Add a `[[forge]]` block to `charter.toml`, checked whole by the core
+	 *  (`charter_core::settings::forges::add`).
+	 * 
+	 *  `base` is the text the window read (`null`: not there), so a file changed on disk since is
+	 *  refused rather than overwritten.
+	 */
+	addProjectForge: (plane: PlaneId, base: string | null, entry: ForgeEntry) => typedError<EntryWritten, string>(__TAURI_INVOKE("add_project_forge", { plane, base, entry })),
+	/**
+	 *  Remove `[[forge]]` block `index` (from 0) of `charter.toml` — refused, naming them, while a
+	 *  repo or a setting uses it (`charter_core::settings::forges::remove`).
+	 */
+	removeProjectForge: (plane: PlaneId, base: string | null, index: number) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_project_forge", { plane, base, index })),
+	/**
 	 *  The plane's and each repo's save settings in force — `planesave::Settings`, the one
 	 *  resolver every save asks, shaped for the wire.
 	 * 
@@ -1904,6 +1917,12 @@ export type DoctorRow = {
 /**  A row's verdict, as the window draws it. */
 export type DoctorStatus = "ok" | "warn" | "fail";
 
+/**  One field of an entry the core refused, and why: the field is the entry's own key. */
+export type EntryFieldRefusal = {
+	field: string,
+	why: string,
+};
+
 /**  What one entry of a branch's folder is. */
 export type EntryKind = "folder" | "file" | 
 /**
@@ -1911,6 +1930,22 @@ export type EntryKind = "folder" | "file" |
  *  branch offers.
  */
 "link";
+
+/**
+ *  Something that uses an entry, which stops its removal. `group` is the Settings group it is
+ *  changed in (`project.saving`) when it is a setting.
+ */
+export type EntryReferrer = {
+	what: string,
+	group: string | null,
+};
+
+/**
+ *  What adding or removing a collection entry answered: the file as it now stands, or every
+ *  reason nothing was written — by field, by what uses the entry, and for the whole write
+ *  (`charter_core::settings::collection::Refusal`).
+ */
+export type EntryWritten = { kind: "saved"; file: SettingsFile } | { kind: "refused"; fields: EntryFieldRefusal[]; referrers: EntryReferrer[]; reasons: string[] };
 
 /**
  *  The question charter asks before an extension contributes anything.
@@ -2241,6 +2276,14 @@ export type FolderListing = {
 	entries: FolderEntry[],
 	/**  How many entries past those are not listed. */
 	more: number,
+};
+
+/**  A `[[forge]]` block as the Add form sends it, each field as typed. */
+export type ForgeEntry = {
+	kind: string,
+	owner: string,
+	host: string,
+	exclude: string[],
 };
 
 /**  A forge, as the window is told it. */

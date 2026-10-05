@@ -17,6 +17,7 @@ import {
   answered,
   entries,
   EXTENSIONS,
+  forgeBlocks,
   harnessPluginGroups,
   key,
   listAt,
@@ -34,8 +35,16 @@ import {
   type Saving,
   type Shown,
 } from "./fileControls";
-import { asked, fileSetting, useSettingsDriver, type Driven, type Wrote } from "./driver";
-import type { FileSetting, SettingsFileId, SettingsGroup } from "./groups";
+import {
+  asked,
+  fileSetting,
+  useSettingsDriver,
+  type Driven,
+  type EntryOp,
+  type EntryWrote,
+  type Wrote,
+} from "./driver";
+import type { Collection, FileSetting, SettingsFileId, SettingsGroup } from "./groups";
 import { settled } from "../PlaneEdits";
 
 /**
@@ -128,6 +137,66 @@ function assistedBy(path: string[]): Control {
     choices: ["full", "llm"],
     hint: "How a commit an agent made names it: full is the harness and its model, llm the bare LLM.",
   });
+}
+
+/** What each kind's own host is, when a block names none — `forge::Kind::default_host`. */
+const KIND_HOST: Readonly<Record<string, string>> = {
+  gitlab: "gitlab.com",
+  github: "github.com",
+};
+
+/**
+ * **Forges as a collection** (ST-3): each `[[forge]]` block an entry over its own rows, and the
+ * Add form's four fields, written by `charter_core::settings::forges` (`add_project_forge`,
+ * `remove_project_forge`).
+ */
+function forgesCollection(shared: Shown, settings: readonly FileSetting[]): Collection {
+  return {
+    name: "forges",
+    noun: "forge",
+    entries: forgeBlocks(shared).map((index) => {
+      const at = (key: string) =>
+        shown(valueAt(shared, [{ key: "forge" }, { index }, { key }])).trim();
+      const kind = at("kind") || "gitlab";
+      const owner = at("group") || at("owner");
+      const host = at("host") || KIND_HOST[kind] || kind;
+      return {
+        label: `Forge ${index + 1}: ${kind}${owner ? ` ${owner}` : ""} at ${host}`,
+        index,
+        settings: settings
+          .filter((one) => one.key[0]?.key === "forge" && one.key[1]?.index === index)
+          .map((one) => one.id),
+      };
+    }),
+    fields: [
+      {
+        field: "kind",
+        label: "Kind",
+        help: "Which forge it is.",
+        kind: "choice",
+        choices: ["gitlab", "github"],
+        initial: "gitlab",
+      },
+      {
+        field: "owner",
+        label: "Owner",
+        help: "The GitLab group or GitHub org whose repos discover lists.",
+        kind: "text",
+      },
+      {
+        field: "host",
+        label: "Host",
+        help: "A bare host, with a port if it needs one. Empty is the kind's own: gitlab.com or github.com.",
+        kind: "text",
+      },
+      {
+        field: "exclude",
+        label: "Repos never listed",
+        help: "One repo name per line.",
+        kind: "lines",
+      },
+    ],
+  };
 }
 
 /** `[sandbox] mode`, which this tab turns on and never back off (D-SE17g). */
@@ -242,6 +311,7 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
   const plugins = harnessPluginGroups(read.harnesses, "project").map((group) =>
     asked(group, shared, read),
   );
+  const forgeSettings = fromShared("project.forges", asked(forges, shared, read).controls);
 
   return [
     {
@@ -288,8 +358,9 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
     {
       id: "project.forges",
       label: "Forges",
-      help: "Where the project's repos are found: one block per [[forge]] in charter.toml. A block is added or taken out in the file itself.",
-      settings: fromShared("project.forges", asked(forges, shared, read).controls),
+      help: "Where the project's repos are found: one block per [[forge]] in charter.toml.",
+      settings: forgeSettings,
+      ...(sharedOk ? { collection: forgesCollection(shared, forgeSettings) } : {}),
     },
     {
       id: "project.extensions",
@@ -441,6 +512,39 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
             : { saved: { ...both, [which]: said.data.file } },
       );
 
+  /** An add or a remove in one of the level's collections, through the core's function for it. */
+  const entry = (op: EntryOp, both: ProjectFiles): Promise<EntryWrote<ProjectFiles>> => {
+    const base = both.shared.exists ? both.shared.text : null;
+    if (op.collection !== "forges")
+      return Promise.resolve({
+        refused: {
+          fields: {},
+          referrers: [],
+          reasons: [`No collection is called ${op.collection}.`],
+        },
+      });
+    const asked =
+      "add" in op
+        ? commands.addProjectForge(plane, base, {
+            kind: op.add.kind ?? "",
+            owner: op.add.owner ?? "",
+            host: op.add.host ?? "",
+            exclude: entries(op.add.exclude ?? ""),
+          })
+        : commands.removeProjectForge(plane, base, op.remove);
+    return asked.then((said): EntryWrote<ProjectFiles> => {
+      if (said.status === "error")
+        return { refused: { fields: {}, referrers: [], reasons: [said.error] } };
+      if (said.data.kind === "saved")
+        return { saved: { ...both, shared: said.data.file }, file: "shared" };
+      const fields: Record<string, string[]> = {};
+      for (const one of said.data.fields) (fields[one.field] ??= []).push(one.why);
+      return {
+        refused: { fields, referrers: said.data.referrers, reasons: said.data.reasons },
+      };
+    });
+  };
+
   const driver = useSettingsDriver<ProjectFiles>(plane, {
     plane,
     read: () =>
@@ -451,6 +555,7 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
     save: (which, base, edits, both) => saveFile(which, base, { kind: "edits", edits }, both),
     saveRaw: (which, base, text, both) => saveFile(which, base, { kind: "raw", text }, both),
     inForce: readInForce,
+    entry,
     // Nothing here takes the sandbox back off (D-SE17g): not an Undo, whichever setting's change
     // it undoes, nor a reset, nor a move out of charter.toml (D-SE18e).
     mayUndo: (back) => !loosensTheSandbox(back),
