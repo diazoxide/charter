@@ -2562,8 +2562,8 @@ with `", "` (`:907`-`:908`).
   [--shared]` and the window's memory tab (`memstore::edit`), and moved to and from `archive/`
   by `persona archive-memory|unarchive-memory` — the rules are
   [Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app) — and moved in
-  from or out to another scope by `persona move-memory`, `workspace move-memory` and the window's Move
-  ([Moving a memory between scopes](#moving-a-memory-between-scopes-charter-app)).
+  from or out to another scope by `persona move-memory`, `workspace move-memory` and the
+  window's Move ([Moving a memory between scopes](#moving-a-memory-between-scopes-charter-app)).
 - **Read by:** `charter/memstore.py:169`/`:197` (`files`/`read_files` — the one gate),
   `:289` (`entries`), `:367` (`search`), `:408` (`duplicates`), `:429` (`resolve`);
   `charter/persona.py:2330`/`:2356`/`:2411`; `charter/recall.py:204` (`charter recall`);

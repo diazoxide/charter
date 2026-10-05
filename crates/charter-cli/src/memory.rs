@@ -1005,9 +1005,9 @@ fn way_back(
     }
 }
 
-/// `workspace move-memory` and `persona move-memory` — move one memory from `from` to `to` (KN-3):
-/// renamed whole, its title and stamp kept, its index line moved with it. A slug typed is made
-/// exact as `edit` makes it.
+/// `workspace move-memory` and `persona move-memory` — move one memory from `from` to `to`
+/// (KN-3): renamed whole, its title and stamp kept, its index line moved with it. A slug typed is
+/// made exact as `edit` makes it.
 pub fn move_memory(
     plane: &Plane,
     from: &Scope,

@@ -1,5 +1,5 @@
-//! `charter workspace move-memory` and `charter persona move-memory` (KN-3): a memory moved from one
-//! scope to another through the binary, on a copy of the committed `daily` fixture plane.
+//! `charter workspace move-memory` and `charter persona move-memory` (KN-3): a memory moved from
+//! one scope to another through the binary, on a copy of the committed `daily` fixture plane.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
