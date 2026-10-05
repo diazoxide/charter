@@ -558,3 +558,268 @@ fn a_store_that_would_ask_for_each_item_leaves_the_copy_to_the_app() {
     assert_eq!(record(&m).1, None);
     reads_everything(&m);
 }
+
+/// The stub as a store that holds items to the app, as macOS's does: each write is answered by
+/// `answer`, told whether an item was there before it; `writes` counts them.
+struct Holding {
+    under: FileStore,
+    answer: fn(bool) -> Held,
+    writes: AtomicUsize,
+}
+
+impl Store for Holding {
+    fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError> {
+        self.under.get(service, account)
+    }
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        let was_there = self.under.get(service, account)?.is_some();
+        self.under.set(service, account, value)?;
+        Ok((self.answer)(was_there))
+    }
+    fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
+        self.under.delete(service, account)
+    }
+    fn holds(&self) -> bool {
+        true
+    }
+}
+
+fn holding(ctx: &Ctx, answer: fn(bool) -> Held) -> Box<dyn Store> {
+    Box::new(Holding {
+        under: FileStore::at(ctx.state.join(keyring::STUB_FILE)),
+        answer,
+        writes: AtomicUsize::new(0),
+    })
+}
+
+#[test]
+fn a_copy_the_store_could_not_hold_to_the_app_is_never_switched_to() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    let not_yet = |ctx: &Ctx, _: Asking| Some(holding(ctx, |_| Held::NotYet));
+
+    let moved = renamelocal::run(
+        &m.local,
+        &Seams {
+            keyring: &not_yet,
+            ..nobody_running()
+        },
+    );
+
+    assert!(!moved.complete, "{:#?}", moved.said);
+    let failed = failures(&moved);
+    assert_eq!(failed.len(), 2, "{failed:#?}");
+    assert!(
+        failed
+            .iter()
+            .all(|l| l.contains("could not be made the app's own")),
+        "{failed:#?}"
+    );
+    assert_eq!(service(&m), old);
+    assert_eq!(record(&m).1, None);
+    reads_everything(&m);
+}
+
+#[test]
+fn an_undo_whose_copy_back_the_store_could_not_hold_keeps_reading_the_copies() {
+    charter_core::unsteered!();
+    let m = machine();
+    assert!(renamelocal::run(&m.local, &nobody_running()).complete);
+    let new = service(&m);
+    let (ctx, ops) = (ctx(&m.plane), vault(&m.plane, "ops"));
+    keyring::set_with(
+        &stub(&m.plane),
+        &ctx,
+        &ops,
+        "NEW_KEY",
+        "added-3",
+        "2026-10-06T09:00:00Z",
+    )
+    .unwrap();
+    let not_yet = |ctx: &Ctx, _: Asking| Some(holding(ctx, |_| Held::NotYet));
+
+    let undone = renamelocal::undo(
+        &m.local,
+        &Seams {
+            keyring: &not_yet,
+            ..nobody_running()
+        },
+    );
+
+    assert!(!undone.complete, "{:#?}", undone.said);
+    assert!(
+        failures(&undone)
+            .iter()
+            .any(|l| l.contains("could not be made the app's own")),
+        "{:#?}",
+        undone.said
+    );
+    assert_eq!(service(&m), new);
+    let ctx = self::ctx(&m.plane);
+    assert_eq!(keyring::get(&ctx, &ops, "NEW_KEY").unwrap(), "added-3");
+    // A second undo, through a store that holds it, finishes it.
+    assert!(renamelocal::undo(&m.local, &nobody_running()).complete);
+    assert!(service(&m).starts_with("charter/ops/"));
+    assert_eq!(
+        keyring::get(&self::ctx(&m.plane), &ops, "NEW_KEY").unwrap(),
+        "added-3"
+    );
+}
+
+#[test]
+fn where_items_are_held_an_item_there_with_the_same_value_is_made_again_by_the_app() {
+    charter_core::unsteered!();
+    let m = machine();
+    let new = service(&m).replacen("charter/", "purlis/", 1);
+    stub(&m.plane).set(&new, "API_TOKEN", API).unwrap();
+    // Whatever was there before is another program's: the app cannot make it its own.
+    let foreign = |ctx: &Ctx, _: Asking| {
+        Some(holding(ctx, |was_there| {
+            if was_there {
+                Held::NotYet
+            } else {
+                Held::ToTheApp
+            }
+        }))
+    };
+
+    let moved = renamelocal::run(
+        &m.local,
+        &Seams {
+            keyring: &foreign,
+            ..nobody_running()
+        },
+    );
+
+    let failed = failures(&moved);
+    assert_eq!(failed.len(), 1, "{:#?}", moved.said);
+    assert!(failed[0].contains("vault 'ops'") && failed[0].contains("API_TOKEN"));
+    assert!(service(&m).starts_with("charter/ops/"));
+    // The identity, with nothing there before, moved.
+    assert_eq!(record(&m).1.as_deref(), Some("purlis"));
+
+    // An app that can make it its own writes a fresh item over the same value, then switches.
+    let writes = std::sync::Arc::new(AtomicUsize::new(0));
+    let counted = {
+        let writes = writes.clone();
+        move |ctx: &Ctx, _: Asking| {
+            Some(Box::new(Counted {
+                under: FileStore::at(ctx.state.join(keyring::STUB_FILE)),
+                writes: writes.clone(),
+            }) as Box<dyn Store>)
+        }
+    };
+    let moved = renamelocal::run(
+        &m.local,
+        &Seams {
+            keyring: &counted,
+            ..nobody_running()
+        },
+    );
+    assert!(moved.complete, "{:#?}", moved.said);
+    assert_eq!(service(&m), new);
+    assert_eq!(
+        writes.load(Ordering::SeqCst),
+        2,
+        "each of the vault's items was made again"
+    );
+    reads_everything(&m);
+}
+
+/// A holding store that always holds, counting writes across every store it is asked for.
+struct Counted {
+    under: FileStore,
+    writes: std::sync::Arc<AtomicUsize>,
+}
+
+impl Store for Counted {
+    fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError> {
+        self.under.get(service, account)
+    }
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.under.set(service, account, value)?;
+        Ok(Held::ToTheApp)
+    }
+    fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
+        self.under.delete(service, account)
+    }
+    fn holds(&self) -> bool {
+        true
+    }
+}
+
+/// The stub, over which a `secret set` of `DB_PASSWORD` lands right after its copy is written:
+/// while the index still names the old service, so it writes there.
+struct SetDuringTheCopy {
+    under: FileStore,
+    plane: PathBuf,
+}
+
+impl Store for SetDuringTheCopy {
+    fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError> {
+        self.under.get(service, account)
+    }
+    fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        let held = self.under.set(service, account, value)?;
+        if account == "DB_PASSWORD" && service.starts_with("purlis/ops/") {
+            keyring::set_with(
+                &self.under,
+                &ctx(&self.plane),
+                &vault(&self.plane, "ops"),
+                "DB_PASSWORD",
+                "rotated-mid-copy",
+                "2026-10-06T10:00:00Z",
+            )?;
+        }
+        Ok(held)
+    }
+    fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
+        self.under.delete(service, account)
+    }
+}
+
+#[test]
+fn a_secret_written_between_its_copy_and_the_switch_is_never_left_behind() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    let racing = |ctx: &Ctx, _: Asking| {
+        Some(Box::new(SetDuringTheCopy {
+            under: FileStore::at(ctx.state.join(keyring::STUB_FILE)),
+            plane: ctx.root.clone(),
+        }) as Box<dyn Store>)
+    };
+
+    let moved = renamelocal::run(
+        &m.local,
+        &Seams {
+            keyring: &racing,
+            ..nobody_running()
+        },
+    );
+
+    assert!(
+        failures(&moved)
+            .iter()
+            .any(|l| l.contains("vault 'ops'") && l.contains("changed while it was copied")),
+        "{:#?}",
+        moved.said
+    );
+    assert_eq!(service(&m), old);
+    let (ctx, ops) = (ctx(&m.plane), vault(&m.plane, "ops"));
+    assert_eq!(
+        keyring::get(&ctx, &ops, "DB_PASSWORD").unwrap(),
+        "rotated-mid-copy"
+    );
+
+    // The next run copies the newer value and switches.
+    assert!(renamelocal::run(&m.local, &nobody_running()).complete);
+    assert!(service(&m).starts_with("purlis/ops/"));
+    assert_eq!(
+        keyring::get(&self::ctx(&m.plane), &ops, "DB_PASSWORD").unwrap(),
+        "rotated-mid-copy"
+    );
+}
