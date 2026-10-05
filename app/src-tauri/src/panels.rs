@@ -678,8 +678,9 @@ pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRe
 ///
 /// 1. **Their rows carry `runs`** — a persona row runs `persona.show:<name>` and a todo row
 ///    `todo.open:<slug>` (#1214), each a catalogue row the palette and a context menu already
-///    run (charter-app#174). A declared or answered row may not (`panel::NO_VERB`): a row that ran a charter verb on an extension's
-///    say-so would be charter acting with nothing in front of it.
+///    run (charter-app#174). A declared or answered row may not (`panel::NO_VERB`): a row that
+///    ran a charter verb on an extension's say-so would be charter acting with nothing in front
+///    of it.
 /// 2. **What a persona row opens is a view charter itself draws** — the persona's view tab,
 ///    which reads the plane. A stranger's row opens a card of its own words and nothing else.
 ///
