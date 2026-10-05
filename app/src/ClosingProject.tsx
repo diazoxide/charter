@@ -78,7 +78,7 @@ export function ClosingProject({
               {chats.map((chat) => (
                 <li key={chat.key}>
                   <span className="what">{chat.harness ?? "shell"}</span>
-                  <span className="who">{chat.name}</span>
+                  <span>{chat.name}</span>
                   <ChatState state={chat.state} />
                   {chat.cwd && <code className="where">{chat.cwd}</code>}
                 </li>

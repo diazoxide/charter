@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import * as Checkbox from "@radix-ui/react-checkbox";
 import { LoaderCircle } from "lucide-react";
 import { commands, type PlaneId, type ReachableRepos } from "./bindings";
+import { Choice, Field } from "./settings/components";
 
 /**
  * **The repos this operator can reach on the plane's forges, to tick** (ADR 0055).
@@ -12,6 +12,10 @@ import { commands, type PlaneId, type ReachableRepos } from "./bindings";
  *
  * A forge that did not answer says so in its CLI's own words (`gh auth login`, most often), and
  * the rest still list. Nothing here stops a workspace being made with no repos at all.
+ *
+ * Drawn from the settings set (DS-3e): the filter is a `Field`, and the repos are a `Choice` of
+ * boxes, each named by the repo's name — what the workspace calls its clone — with where it
+ * lives on the forge, and what the forge says it is, on the line under it.
  */
 const NOTHING: ReachableRepos = { repos: [], trouble: [] };
 
@@ -28,6 +32,9 @@ export function RepoPicker({
   const [found, setFound] = useState<ReachableRepos | { refused: string }>();
   const [filter, setFilter] = useState("");
   const filterId = useId();
+  const filterLabel = useId();
+  const listId = useId();
+  const listLabel = useId();
   /** The newest listing out: an older answer arriving late is dropped. */
   const asking = useRef(0);
   const ask = useCallback(() => {
@@ -64,14 +71,15 @@ export function RepoPicker({
   return (
     <div className="repo-picker" data-testid="repo-picker">
       <div className="repo-picker-head">
-        <label htmlFor={filterId}>Repos</label>
-        <input
-          id={filterId}
+        <label id={filterLabel} htmlFor={filterId}>
+          Repos
+        </label>
+        <Field
+          ids={{ id: filterId, labelledBy: filterLabel }}
+          kind="text"
           value={filter}
           placeholder="Filter"
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(event) => setFilter(event.target.value)}
+          onChange={setFilter}
         />
         <button type="button" tabIndex={0} onClick={refresh} disabled={found === undefined}>
           Refresh
@@ -98,53 +106,24 @@ export function RepoPicker({
               Your forge login reaches no repos under this plane&apos;s owners.
             </p>
           )}
-          <ul className="repo-picks" aria-label="Repos you can reach">
-            {shown.map((repo) => (
-              <RepoRow
-                key={repo.path}
-                name={repo.name}
-                path={repo.path}
-                description={repo.description}
-                checked={picked.has(repo.name)}
-                onChecked={(on) => toggle(repo.name, on)}
-              />
-            ))}
-          </ul>
+          <span id={listLabel} hidden>
+            Repos you can reach
+          </span>
+          <div className="repo-picks">
+            <Choice
+              ids={{ id: listId, labelledBy: listLabel }}
+              kind="checks"
+              options={shown.map((repo) => ({
+                value: repo.name,
+                label: repo.name,
+                says: repo.description ? `${repo.path} · ${repo.description}` : repo.path,
+              }))}
+              checked={picked}
+              onCheckedChange={toggle}
+            />
+          </div>
         </>
       )}
     </div>
-  );
-}
-
-function RepoRow({
-  name,
-  path,
-  description,
-  checked,
-  onChecked,
-}: {
-  name: string;
-  path: string;
-  description: string;
-  checked: boolean;
-  onChecked: (on: boolean) => void;
-}) {
-  const id = useId();
-  return (
-    <li className="choice">
-      <Checkbox.Root
-        id={id}
-        className="box"
-        checked={checked}
-        onCheckedChange={(next) => onChecked(next === true)}
-        tabIndex={0}
-        aria-label={name}
-      >
-        <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-      </Checkbox.Root>
-      <label className="who" htmlFor={id} title={description || undefined}>
-        {path}
-      </label>
-    </li>
   );
 }

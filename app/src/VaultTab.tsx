@@ -1,13 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-  type Ref,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Menu from "@radix-ui/react-dropdown-menu";
@@ -22,6 +13,7 @@ import {
   type VaultSecret,
 } from "./bindings";
 import { useTabStop } from "./roving";
+import { Field, SettingActions, SettingRow } from "./settings/components";
 import { counted } from "./Vaults";
 
 /**
@@ -669,9 +661,9 @@ function ValueDialog({
   const [trouble, setTrouble] = useState<string>();
   const [writing, setWriting] = useState(false);
   const busy = writing;
-  const nameId = useId();
-  const valueId = useId();
-  const nameBox = useRef<HTMLInputElement>(null);
+  // The dialog, so its first box can be found in it on opening: the rows draw the boxes, and a
+  // setting's field takes no ref.
+  const content = useRef<HTMLDivElement>(null);
   const valueBox = useRef<HTMLInputElement>(null);
   const key = secret ?? name.trim();
   const ready = key !== "" && filled && !writing;
@@ -702,62 +694,62 @@ function ValueDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content
+          ref={content}
           className="warning"
           aria-describedby={undefined}
           // A click outside answers nothing (`docs/ui-primitives.md`). Escape is Cancel.
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            (secret === undefined ? nameBox : valueBox).current?.focus();
+            // The name box when a new secret is asked for, else the value box.
+            content.current?.querySelector("input")?.focus();
           }}
         >
           <Dialog.Title>{title}</Dialog.Title>
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               void submit();
             }}
           >
             {secret === undefined && (
-              <>
-                <label htmlFor={nameId}>Name</label>
-                <input
-                  id={nameId}
-                  ref={nameBox}
-                  value={name}
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </>
+              <SettingRow
+                label="Name"
+                control={(ids) => <Field ids={ids} kind="text" value={name} onChange={setName} />}
+              />
             )}
-            <label htmlFor={valueId}>{secret === undefined ? "Value" : "New value"}</label>
-            <input
-              id={valueId}
-              ref={valueBox}
-              type="password"
-              // What keeps a password manager from filling it; WebKit ignores `off` here.
-              autoComplete="new-password"
-              spellCheck={false}
-              onChange={(event) => setFilled(event.target.value !== "")}
+            <SettingRow
+              label={secret === undefined ? "Value" : "New value"}
+              help="It goes into the vault and nowhere else. charter never shows it here."
+              control={(ids) => (
+                // **A native box in the row's control slot, not a `Field`**: a `Field` is
+                // controlled, and a secret's value is never held in React state (see above).
+                <input
+                  id={ids.id}
+                  ref={valueBox}
+                  className="ui-field"
+                  type="password"
+                  // What keeps a password manager from filling it; WebKit ignores `off` here.
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  aria-describedby={ids.describedBy}
+                  onChange={(event) => setFilled(event.target.value !== "")}
+                />
+              )}
             />
-            <p className="came-back">
-              It goes into the vault and nowhere else. charter never shows it here.
-            </p>
             {trouble && (
               <p className="trouble" role="alert">
                 {trouble}
               </p>
             )}
-            <div className="doing">
+            <SettingActions>
               <button type="submit" tabIndex={0} disabled={!ready}>
                 {doing}
               </button>
               <button type="button" tabIndex={0} disabled={busy} onClick={onCancel}>
                 Cancel
               </button>
-            </div>
+            </SettingActions>
           </form>
         </Dialog.Content>
       </Dialog.Portal>
@@ -779,8 +771,9 @@ function RenameDialog({
   const [trouble, setTrouble] = useState<string>();
   const [writing, setWriting] = useState(false);
   const busy = writing;
-  const nameId = useId();
-  const box = useRef<HTMLInputElement>(null);
+  // The dialog, so the box can be found in it on opening: the row draws the box, and a
+  // setting's field takes no ref.
+  const content = useRef<HTMLDivElement>(null);
   const to = name.trim();
   const ready = to !== "" && to !== secret && !writing;
 
@@ -804,44 +797,39 @@ function RenameDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content
+          ref={content}
           className="warning"
           aria-describedby={undefined}
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            box.current?.select();
+            content.current?.querySelector("input")?.select();
           }}
         >
           <Dialog.Title>Rename {secret}</Dialog.Title>
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               void submit();
             }}
           >
-            <label htmlFor={nameId}>New name</label>
-            <input
-              id={nameId}
-              ref={box}
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => setName(event.target.value)}
+            <SettingRow
+              label="New name"
+              control={(ids) => <Field ids={ids} kind="text" value={name} onChange={setName} />}
             />
             {trouble && (
               <p className="trouble" role="alert">
                 {trouble}
               </p>
             )}
-            <div className="doing">
+            <SettingActions>
               <button type="submit" tabIndex={0} disabled={!ready}>
                 Rename
               </button>
               <button type="button" tabIndex={0} disabled={busy} onClick={onCancel}>
                 Cancel
               </button>
-            </div>
+            </SettingActions>
           </form>
         </Dialog.Content>
       </Dialog.Portal>

@@ -1,7 +1,7 @@
-import { useEffect, useId, useState } from "react";
-import * as Checkbox from "@radix-ui/react-checkbox";
+import { useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { commands, type InstructionFile, type PlaneId } from "./bindings";
+import { Choice, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * **The agent instructions a workspace's repo carries, offered to its memory** (FR-18a, #612):
@@ -128,14 +128,14 @@ export function RepoInstructionsTab({
       </ul>
 
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189). */}
-      <div className="doing">
+      <SettingActions>
         <button type="button" tabIndex={0} disabled={ticked.length === 0 || adding} onClick={add}>
           Add to memory
         </button>
         <button type="button" tabIndex={0} onClick={onClose}>
           {added === undefined ? "Not now" : "Done"}
         </button>
-      </div>
+      </SettingActions>
     </div>
   );
 }
@@ -188,34 +188,26 @@ function FileRow({
   ticked: boolean;
   onTicked: (on: boolean) => void;
 }) {
-  const id = useId();
   const name = named(file);
   const { standing } = file;
+  // An offered file is a row of the settings set (DS-3e): its name, its box, and the core's
+  // caution as the row's help. One charter will not offer says why, in place of a box.
   return (
-    <li className="choice">
+    <li>
       {standing.kind === "offered" ? (
-        <>
-          <Checkbox.Root
-            id={id}
-            className="box"
-            checked={ticked}
-            onCheckedChange={(next) => onTicked(next === true)}
-            tabIndex={0}
-            aria-label={name}
-          >
-            <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-          </Checkbox.Root>
-          <label className="who" htmlFor={id}>
-            {name}
-          </label>
-          {standing.caution !== null && <span className="meta">{standing.caution}</span>}
-        </>
+        <SettingRow
+          label={name}
+          help={standing.caution ?? undefined}
+          control={(ids) => (
+            <Choice ids={ids} kind="toggle" checked={ticked} onCheckedChange={onTicked} />
+          )}
+        />
       ) : (
-        <span className="who">
+        <p className="came-back">
           {name}
           {": "}
           {standing.kind === "in-memory" ? "already in memory" : `left out; ${standing.why}`}
-        </span>
+        </p>
       )}
       {file.text !== "" && (
         <pre className="repo-instruction-text">

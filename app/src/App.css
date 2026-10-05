@@ -2279,65 +2279,6 @@ h2.sidebar-title .node-icon {
   white-space: nowrap;
 }
 
-/* What a new chat is asked: the harness, the persona, the footer (ADR 0022, ADR 0029).
-
-   **This is the rule that was missing.** The rows were five bare `<span>`s in one `<label>`
-   with nothing laying them out, so they ran together — `claudeclaudeclaudebuilt-indefault` on
-   screen, and the same run of words as the row's accessible name. A row is now a grid: the
-   control, the name it is labelled by, and underneath them the detail that describes it. */
-.choices {
-  margin: 0 0 1rem;
-  padding: 0.1rem 0.75rem 0.35rem;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-}
-
-/* Two classes deep on purpose: `.warning h3` is the trust prompt's section heading, it is
-   further down this file, and at equal weight it would win. */
-.warning .choices-name {
-  margin: 0 0 0.3rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.6;
-}
-
-.choice {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.15rem 0.5rem;
-  align-items: baseline;
-  padding: 0.35rem 0;
-}
-
-.choice + .choice {
-  border-top: 1px solid var(--border-subtle);
-}
-
-/* The detail sits under the name, in the name's column: it is what the name means, and a row
-   that put it beside the name went off the side of the dialog on any real command line.
-
-   Quieted with `color` and not `opacity`, so the one mark in it that is NOT quiet — a profile
-   charter has never run — can say so. Opacity applies to the whole subtree and no child can
-   undo it. */
-.choice .meta {
-  grid-column: 2;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.15rem 0.5rem;
-  align-items: baseline;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-/* The one thing in the row that names it, and the thing the whole row is clickable through:
-   a `<label for>` on a `<button>` forwards its click to the control it names. */
-.choice label {
-  cursor: pointer;
-  font-weight: 500;
-}
-
 /* The picker is the longest of these surfaces — three groups, a list of refusals and a
    command line per row — so it is given room the others do not need. */
 .starting {
@@ -2394,21 +2335,6 @@ h2.sidebar-title .node-icon {
 .box:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
-}
-
-/* The words that are about to run. They are the one thing in the detail that is not detail —
-   the whole ask about an unapproved profile is about them — so they are not faded with the
-   rest of the row. `.warning .where` dims every path in these dialogs; this is three deep to
-   outrank it. */
-.choice .meta .where {
-  color: var(--text-secondary);
-  opacity: 1;
-}
-
-/* A profile charter has not recorded running, marked in its own row and not only in the
-   sentence below the list. */
-.choice .needs-approval {
-  color: var(--danger-base);
 }
 
 /* The sentence that says what charter does not know. It is not a warning to be styled away. */
@@ -3601,8 +3527,9 @@ h2.sidebar-title .node-icon {
   color: var(--text-muted);
 }
 
-/* Its on/off, in the place an installed row has Remove; a row, not the picker's divided list. */
-.extension-rows .choice {
+/* Its on/off, in the place an installed row has Remove: the settings set's box, without the
+   room an option row takes in a list of them. */
+.extension-rows .ui-choice-option {
   padding: 0;
 }
 
@@ -3717,25 +3644,6 @@ h2.sidebar-title .node-icon {
    The dialogs that make and delete things
    --------------------------------------------------------------------------------------- */
 
-/* A dialog that ASKS for something rather than describing it: a stack of labels and boxes,
-   each with the sentence that says what it means under it. */
-.asks {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  margin-top: 0.75rem;
-}
-
-.asks label {
-  margin-top: 0.6rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  opacity: 0.6;
-}
-
 /* The repo picker (ADR 0055): a filter and a refresh on one line, and a list that scrolls
    inside the dialog rather than pushing its buttons off the bottom of the window. */
 .repo-picker-head {
@@ -3754,68 +3662,6 @@ h2.sidebar-title .node-icon {
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-/* `.choice`'s own label is a row's name and not a section heading, so it keeps `.choice`'s
-   shape rather than taking the one above. */
-.asks .choice label {
-  margin-top: 0;
-  font-size: inherit;
-  letter-spacing: normal;
-  text-transform: none;
-  opacity: 1;
-}
-
-.asks input[type="text"],
-.asks input:not([type]),
-.asks textarea {
-  padding: 0.35rem 0.5rem;
-  color: var(--text-primary);
-  background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  font: inherit;
-}
-
-.asks textarea {
-  resize: vertical;
-}
-
-.asks input:focus-visible,
-.asks textarea:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -1px;
-}
-
-/* A box with the folder picker beside it. Both are the same answer, typed or chosen. */
-.picking {
-  display: flex;
-  gap: 0.4rem;
-}
-
-.picking input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.picking button {
-  color: var(--text-primary);
-  background: var(--control-base);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  padding: 0.25rem 0.7rem;
-  font: inherit;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.picking button:hover {
-  background: var(--border-subtle);
-}
-
-.picking button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 /* charter's own lines, kept as charter wrote them. `init`'s refusal in a repository is four
@@ -5070,38 +4916,6 @@ h2.sidebar-title .node-icon {
   animation: charter-call var(--motion-duration-settle) var(--motion-easing-standard) 2;
 }
 
-/* A row of buttons under a form (the Saving view, a memory): the old Project settings page's,
-   which SE-19 retired; the rest of its classes went with it. */
-.settings-actions {
-  display: flex;
-  gap: 0.5rem;
-  margin: 0.75rem 0 0;
-}
-
-.settings-actions button {
-  padding: 0.25rem 0.7rem;
-  color: var(--text-primary);
-  background: var(--control-base);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  font: inherit;
-  cursor: pointer;
-}
-
-.settings-actions button:hover:not(:disabled) {
-  background: var(--control-hover);
-}
-
-.settings-actions button:disabled {
-  cursor: default;
-  color: var(--text-muted);
-}
-
-.settings-actions button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
 /* The title bar's save indicator (charter-app#294): the needs-you button's shape, with the
    mark carrying the stage. Words stay `text-primary`; only the mark takes a state colour. */
 .save-indicator {
@@ -5361,10 +5175,6 @@ h2.sidebar-title .node-icon {
   list-style: none;
   margin: 0.75rem 0;
   padding: 0;
-}
-
-.repo-instruction-files .choice > span.who {
-  grid-column: 1 / -1;
 }
 
 .repo-instruction-text {
@@ -5883,6 +5693,56 @@ h2.sidebar-title .node-icon {
   color: var(--text-muted);
 }
 
+/* A form's buttons (SettingActions, V89j): the row a form ends in, under its rows or as a
+   dialog's answers. Drawn as a row's reset is, a step larger, and unavailable said by more than
+   a shade: the cursor stops offering it too. */
+.ui-setting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+.ui-setting-actions button {
+  padding: 0.25rem 0.7rem;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ui-setting-actions button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.ui-setting-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-setting-actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The answer that destroys something, in the one colour the window keeps for it. */
+.ui-setting-actions button.ends-it {
+  border-color: var(--danger-base);
+  color: var(--danger-base);
+}
+
+.ui-setting-actions button.ends-it:hover:not(:disabled) {
+  background: var(--danger-surface);
+}
+
+/* A row whose control is its answers (the forge question): the row already spaces them. */
+.ui-setting-control > .ui-setting-actions {
+  margin: 0;
+}
+
 .ui-field {
   padding: 0.3rem 0.5rem;
   color: var(--text-primary);
@@ -5925,9 +5785,10 @@ textarea.ui-field {
   font-variant-numeric: tabular-nums;
 }
 
-/* A radio choice: the mark, the name it is labelled by, and under the name what it does. The
-   mark is the window's own `.dot`. */
-.ui-choice-radio {
+/* A radio choice, or a few boxes each ticked on its own: the mark, the name it is labelled by,
+   and under the name what it does. The mark is the window's own `.dot` or `.box`. */
+.ui-choice-radio,
+.ui-choice-checks {
   display: grid;
   gap: 0.1rem;
   width: 100%;

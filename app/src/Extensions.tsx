@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ApproveExtension } from "./ApproveExtension";
 import {
@@ -9,6 +8,7 @@ import {
   type InstalledExtensions,
 } from "./bindings";
 import { extensionsChanged } from "./extensionsOn";
+import { Choice } from "./settings/components";
 import { projectThemeChanged } from "./projectTheme";
 import {
   BUILT_IN,
@@ -171,7 +171,9 @@ export function Extensions({ onClose }: { onClose: () => void }) {
           <ul className="extension-rows">
             {(listed?.extensions ?? []).map((row) => (
               <li key={row.id} data-standing={row.standing} data-source={row.source}>
-                <span className="name">{row.name}</span>
+                <span className="name" id={`name-${row.id}`}>
+                  {row.name}
+                </span>
                 {row.source === "app" && <span className="built-in">built-in</span>}
                 <code className="where">{row.path}</code>
                 <span className="standing">
@@ -189,20 +191,15 @@ export function Extensions({ onClose }: { onClose: () => void }) {
                   </button>
                 )}
                 {row.source === "app" ? (
-                  <div className="choice">
-                    <Checkbox.Root
-                      id={`on-${row.id}`}
-                      className="box"
-                      checked={row.on}
-                      onCheckedChange={(next) => void turn(row.id, next === true)}
-                      tabIndex={0}
-                    >
-                      <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-                    </Checkbox.Root>
-                    <label className="who" htmlFor={`on-${row.id}`}>
-                      On, on this machine
-                    </label>
-                  </div>
+                  // One box, in a group the extension's name names: the settings set's
+                  // option row, so it reads as every other box in the window (DS-3e).
+                  <Choice
+                    ids={{ id: `on-${row.id}`, labelledBy: `name-${row.id}` }}
+                    kind="checks"
+                    options={[{ value: "on", label: "On, on this machine" }]}
+                    checked={new Set(row.on ? ["on"] : [])}
+                    onCheckedChange={(_, on) => void turn(row.id, on)}
+                  />
                 ) : (
                   <button type="button" tabIndex={0} onClick={() => void forget(row.id)}>
                     Remove

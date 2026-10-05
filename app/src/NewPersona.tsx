@@ -1,5 +1,6 @@
-import { useId, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * Making a persona (SI-3), asked where the answer is given — `NewVault`'s shape, for `charter
@@ -41,11 +42,9 @@ export function NewPersona({
   const [role, setRole] = useState("");
   const [when, setWhen] = useState("");
   const [parent, setParent] = useState("");
-  const nameId = useId();
-  const roleId = useId();
-  const whenId = useId();
-  const parentId = useId();
-  const box = useRef<HTMLInputElement>(null);
+  // The dialog, so the name box can be found in it on opening: the row draws the box, and a
+  // setting's field takes no ref.
+  const content = useRef<HTMLDivElement>(null);
   const given = (text: string) => (text.trim() === "" ? null : text.trim());
   const ready = name.trim() !== "" && (given(when) !== null || given(parent) !== null) && !making;
   const create = () => {
@@ -63,13 +62,14 @@ export function NewPersona({
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content
+          ref={content}
           className="warning"
           aria-describedby={undefined}
           // A click outside answers nothing (`docs/ui-primitives.md`). Escape is Cancel.
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            box.current?.focus();
+            content.current?.querySelector("input")?.focus();
           }}
         >
           <Dialog.Title>New persona</Dialog.Title>
@@ -78,55 +78,48 @@ export function NewPersona({
           </p>
 
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               create();
             }}
           >
-            <label htmlFor={nameId}>Name</label>
-            <input
-              id={nameId}
-              ref={box}
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => setName(event.target.value)}
-            />
-            <p className="came-back">
-              Lowercase letters, digits, <code>.</code>, <code>_</code> and <code>-</code>.
-            </p>
-
-            <label htmlFor={roleId}>Role</label>
-            <input
-              id={roleId}
-              value={role}
-              autoComplete="off"
-              placeholder="The name, title-cased"
-              onChange={(event) => setRole(event.target.value)}
+            <SettingRow
+              label="Name"
+              help={
+                <>
+                  Lowercase letters, digits, <code>.</code>, <code>_</code> and <code>-</code>.
+                </>
+              }
+              control={(ids) => <Field ids={ids} kind="text" value={name} onChange={setName} />}
             />
 
-            <label htmlFor={whenId}>Delegate when</label>
-            <input
-              id={whenId}
-              value={when}
-              autoComplete="off"
-              placeholder="CI/CD pipelines, k8s deploys, cluster access"
-              onChange={(event) => setWhen(event.target.value)}
+            <SettingRow
+              label="Role"
+              help="Optional. Left empty, it is the name, title-cased."
+              control={(ids) => <Field ids={ids} kind="text" value={role} onChange={setRole} />}
             />
-            <p className="came-back">
-              When the steward should route work here. Required unless it inherits from another
-              persona.
-            </p>
 
-            <label htmlFor={parentId}>Inherits from</label>
-            <input
-              id={parentId}
-              value={parent}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="Optional: another persona's name"
-              onChange={(event) => setParent(event.target.value)}
+            <SettingRow
+              label="Delegate when"
+              help={
+                "When the steward should route work here. Required unless it inherits from " +
+                "another persona."
+              }
+              control={(ids) => (
+                <Field
+                  ids={ids}
+                  kind="text"
+                  value={when}
+                  placeholder="CI/CD pipelines, k8s deploys, cluster access"
+                  onChange={setWhen}
+                />
+              )}
+            />
+
+            <SettingRow
+              label="Inherits from"
+              help="Optional: another persona's name."
+              control={(ids) => <Field ids={ids} kind="text" value={parent} onChange={setParent} />}
             />
 
             {trouble && (
@@ -135,14 +128,14 @@ export function NewPersona({
               </p>
             )}
 
-            <div className="doing">
+            <SettingActions>
               <button type="submit" tabIndex={0} disabled={!ready}>
                 Create persona
               </button>
               <button type="button" tabIndex={0} disabled={making} onClick={onCancel}>
                 Cancel
               </button>
-            </div>
+            </SettingActions>
           </form>
         </Dialog.Content>
       </Dialog.Portal>

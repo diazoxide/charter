@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { commands } from "./bindings";
 import { type ForgeAsk, ForgeQuestion } from "./ForgeQuestion";
-import { Choice, Field, SettingRow } from "./settings/components";
+import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * Making a new project — a plane charter scaffolds — and the one decision it asks about.
@@ -170,14 +170,14 @@ export function NewProject({
             )}
             {/* Asked for whichever form was sent last, as the refusal is (#839). */}
             {forgeAsk && <ForgeQuestion ask={forgeAsk} />}
-            <div className="doing">
+            <SettingActions>
               <button type="submit" tabIndex={0} disabled={repo.trim() === "" || opening}>
                 Open repo
               </button>
               <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel
               </button>
-            </div>
+            </SettingActions>
           </form>
 
           {/* The two-directory form (ADR 0035), for a project of its own somewhere the operator
@@ -302,11 +302,11 @@ export function NewProject({
                 folder box was in WebKit's tab sequence here: it is this scope's first edge and
                 `Cancel` is its last, so `Browse…`, the checkbox and `Create project` were all
                 in the middle, where neither the engine nor Radix reaches. */}
-              <div className="doing">
+              <SettingActions>
                 <button type="submit" tabIndex={0} disabled={!ready}>
                   Create project
                 </button>
-              </div>
+              </SettingActions>
             </form>
           </details>
         </Dialog.Content>

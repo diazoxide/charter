@@ -1,8 +1,8 @@
-import { useId, useRef, useState } from "react";
-import * as Checkbox from "@radix-ui/react-checkbox";
+import { useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { PlaneId } from "./bindings";
 import { RepoPicker } from "./RepoPicker";
+import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * Making a workspace, asked where the answer is given.
@@ -29,6 +29,9 @@ import { RepoPicker } from "./RepoPicker";
  * **Its repos are picked from what the operator's own forge login reaches** (ADR 0055), and
  * cloned after the workspace is made — the dialog closes at once and each repo lands on its
  * own. Picking none is a workspace with no repos, which is still a workspace.
+ *
+ * Its form is drawn from the settings set (DS-3e): a row per answer, and its buttons a
+ * `SettingActions`.
  */
 export function NewWorkspace({
   /** What the plane is called, so the dialog says where the workspace is going. */
@@ -54,12 +57,10 @@ export function NewWorkspace({
   const [vision, setVision] = useState("");
   const [live, setLive] = useState(false);
   const [repos, setRepos] = useState<ReadonlySet<string>>(new Set());
-  const liveId = useId();
-  const nameId = useId();
-  const visionId = useId();
   // The name box, focused by the dialog itself: it is the one thing that has to be answered,
   // and a dialog that opens with the keyboard somewhere else is a dialog you have to click at.
-  const box = useRef<HTMLInputElement>(null);
+  // Found in the dialog on opening: the row draws the box, and a setting's field takes no ref.
+  const content = useRef<HTMLDivElement>(null);
   const ready = name.trim() !== "" && !making;
   const create = () => {
     if (ready) onCreate(name.trim(), vision, live, [...repos].sort());
@@ -74,6 +75,7 @@ export function NewWorkspace({
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content
+          ref={content}
           className="warning"
           aria-labelledby="new-workspace"
           // A click outside answers nothing, which is what every dialog in this window does
@@ -81,7 +83,7 @@ export function NewWorkspace({
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            box.current?.focus();
+            content.current?.querySelector("input")?.focus();
           }}
         >
           <Dialog.Title id="new-workspace">New workspace</Dialog.Title>
@@ -90,67 +92,68 @@ export function NewWorkspace({
           </p>
 
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               create();
             }}
           >
-            <label htmlFor={nameId}>Name</label>
-            <input
-              id={nameId}
-              ref={box}
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => setName(event.target.value)}
-            />
             {/* charter's own alphabet, said once and not enforced here. It is guidance for
                 somebody typing, and the core is what refuses. */}
-            <p className="came-back">
-              Letters, digits, <code>.</code>, <code>_</code> and <code>-</code>. It becomes a
-              directory under <code>workspaces/</code>.
-            </p>
-
-            <label htmlFor={visionId}>What it is for (optional)</label>
-            <textarea
-              id={visionId}
-              rows={3}
-              value={vision}
-              onChange={(event) => setVision(event.target.value)}
+            <SettingRow
+              label="Name"
+              help={
+                <>
+                  Letters, digits, <code>.</code>, <code>_</code> and <code>-</code>. It becomes a
+                  directory under <code>workspaces/</code>.
+                </>
+              }
+              control={(ids) => <Field ids={ids} kind="text" value={name} onChange={setName} />}
             />
-            <p className="came-back">
-              Recorded in <code>workspace.md</code>, the living charter a fork inherits. You can add
-              it later with <code>charter workspace vision</code>.
-            </p>
 
-            <RepoPicker plane={planeId} picked={repos} onPicked={setRepos} />
-            <p className="came-back">
-              Optional. Each one is cloned into the workspace after it is made, and you can add or
-              remove repos later in its settings.
-            </p>
+            <SettingRow
+              label="What it is for (optional)"
+              help={
+                <>
+                  Recorded in <code>workspace.md</code>, the living charter a fork inherits. You can
+                  add it later with <code>charter workspace vision</code>.
+                </>
+              }
+              control={(ids) => (
+                <Field ids={ids} kind="list" minRows={3} value={vision} onChange={setVision} />
+              )}
+            />
+
+            <SettingRow
+              label="Repos"
+              grouped
+              help={
+                "Optional. Each one is cloned into the workspace after it is made, and you can " +
+                "add or remove repos later in its settings."
+              }
+              control={(ids) => (
+                <div
+                  role="group"
+                  aria-labelledby={ids.labelledBy}
+                  aria-describedby={ids.describedBy}
+                >
+                  <RepoPicker plane={planeId} picked={repos} onPicked={setRepos} />
+                </div>
+              )}
+            />
 
             {/* LOCAL unless ticked: publishing is the operator's choice, never a default. */}
-            <div className="choice">
-              <Checkbox.Root
-                id={liveId}
-                className="box"
-                checked={live}
-                onCheckedChange={(next) => setLive(next === true)}
-                tabIndex={0}
-              >
-                <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-              </Checkbox.Root>
-              <label className="who" htmlFor={liveId}>
-                Live
-              </label>
-            </div>
-            <p className="came-back">
-              A live workspace&apos;s charter, memory and todos are committed with the plane and
-              published by every save — ticked, the plane is saved as soon as it is made, the way
-              the Saving tab says this plane saves (and not at all while it has not been told). Left
-              unticked, they stay on this machine.
-            </p>
+            <SettingRow
+              label="Live"
+              help={
+                "A live workspace's charter, memory and todos are committed with the plane and " +
+                "published by every save — ticked, the plane is saved as soon as it is made, the " +
+                "way the Saving tab says this plane saves (and not at all while it has not been " +
+                "told). Left unticked, they stay on this machine."
+              }
+              control={(ids) => (
+                <Choice ids={ids} kind="toggle" checked={live} onCheckedChange={setLive} />
+              )}
+            />
 
             {/* Verbatim, and in the dialog rather than behind it: the operator is still
                 answering, and a refusal they cannot see beside the box is one they cannot act
@@ -166,14 +169,14 @@ export function NewWorkspace({
                 sat between them — where Radix's focus scope does nothing and WebKit will not
                 tab to a `<button>` whose `tabindex` is not written down. The two text boxes
                 were reachable and the one that acts on them was not. */}
-            <div className="doing">
+            <SettingActions>
               <button type="submit" tabIndex={0} disabled={!ready}>
                 Create workspace
               </button>
               <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel
               </button>
-            </div>
+            </SettingActions>
           </form>
         </Dialog.Content>
       </Dialog.Portal>

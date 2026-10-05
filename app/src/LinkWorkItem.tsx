@@ -1,6 +1,7 @@
-import { useId, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useFocusBack } from "./EndingChat";
+import { Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * **Link to work item…**, from a chat tab's menu or the palette (V60, ADR 0088 §3).
@@ -33,8 +34,9 @@ export function LinkWorkItem({
   onCancel: () => void;
 }) {
   const [key, setKey] = useState("");
-  const keyId = useId();
-  const box = useRef<HTMLInputElement>(null);
+  // The dialog, so the box can be found in it on opening: the row draws the box, and a
+  // setting's field takes no ref.
+  const content = useRef<HTMLDivElement>(null);
   const handBack = useFocusBack();
   // Sent as typed, spaces and all: a key is refused, never rewritten (D-0021), so the core's
   // sentence says what is wrong with it.
@@ -51,12 +53,13 @@ export function LinkWorkItem({
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content
+          ref={content}
           className="warning"
           // A click outside answers nothing, as in every dialog here (`docs/ui-primitives.md`).
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            box.current?.focus();
+            content.current?.querySelector("input")?.focus();
           }}
           // The focus goes back to where it was as the dialog opened, as `EndingChat`'s does.
           onCloseAutoFocus={handBack}
@@ -67,39 +70,41 @@ export function LinkWorkItem({
           </p>
 
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               link();
             }}
           >
-            <label htmlFor={keyId}>Tracker key</label>
-            <input
-              id={keyId}
-              ref={box}
-              value={key}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="github:github.com/owner/repo#12"
-              aria-describedby={`${keyId}-like ${keyId}-why`}
-              onChange={(event) => setKey(event.target.value)}
-            />
-            <p className="came-back" id={`${keyId}-like`}>
-              On GitHub, a key looks like <code>github:github.com/owner/repo#12</code>; on GitLab,
-              like <code>gitlab:gitlab.com/group/repo#12</code>.
-            </p>
-            <p className="came-back" id={`${keyId}-why`}>
-              {linked ? (
+            <SettingRow
+              label="Tracker key"
+              help={
                 <>
-                  This chat works on <code>{linked}</code>. Linking another item replaces that link.
+                  On GitHub, a key looks like <code>github:github.com/owner/repo#12</code>; on
+                  GitLab, like <code>gitlab:gitlab.com/group/repo#12</code>.{" "}
+                  {linked ? (
+                    <>
+                      This chat works on <code>{linked}</code>. Linking another item replaces that
+                      link.
+                    </>
+                  ) : (
+                    <>
+                      A chat works on one work item at a time. The link is kept in the
+                      workspace&apos;s work link log, so your other devices see it when the
+                      workspace is LIVE.
+                    </>
+                  )}
                 </>
-              ) : (
-                <>
-                  A chat works on one work item at a time. The link is kept in the workspace&apos;s
-                  work link log, so your other devices see it when the workspace is LIVE.
-                </>
+              }
+              control={(ids) => (
+                <Field
+                  ids={ids}
+                  kind="text"
+                  value={key}
+                  placeholder="github:github.com/owner/repo#12"
+                  onChange={setKey}
+                />
               )}
-            </p>
+            />
 
             {trouble && (
               <p className="trouble" role="alert">
@@ -108,14 +113,14 @@ export function LinkWorkItem({
             )}
 
             {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
-            <div className="doing">
+            <SettingActions>
               <button type="submit" tabIndex={0} disabled={linking}>
                 Link
               </button>
               <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel
               </button>
-            </div>
+            </SettingActions>
           </form>
         </Dialog.Content>
       </Dialog.Portal>

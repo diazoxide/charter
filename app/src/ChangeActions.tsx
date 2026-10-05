@@ -1,8 +1,8 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
-import * as Checkbox from "@radix-ui/react-checkbox";
 import { LoaderCircle } from "lucide-react";
 import { commands, type LandQuestion, type PlaneId, type PushQuestion } from "./bindings";
+import { Choice, SettingRow } from "./settings/components";
 
 /**
  * **A cross-repo change's Push and Land, from its changes view** (#474, ADR 0060).
@@ -254,7 +254,6 @@ export function LandAsk({
   // is asked, and a refusal when its gates now refuse.
   const [now, setNow] = useState<Said<LandQuestion> | undefined>({ ok: question });
   const cancel = useRef<HTMLButtonElement>(null);
-  const squashId = useId();
   const q = now !== undefined && "ok" in now ? now.ok : question;
   const askable = now !== undefined && "ok" in now;
   const done = ran !== undefined && "ok" in ran;
@@ -330,22 +329,18 @@ export function LandAsk({
             </p>
           ))}
           {q.squash && !done && (
-            <div className="choice">
-              <Checkbox.Root
-                className="box"
-                id={squashId}
-                // WebKit leaves a form control out of the tab sequence without it (#186).
-                tabIndex={0}
-                checked={squash}
-                disabled={running}
-                onCheckedChange={(checked) => setSquash(checked === true)}
-              >
-                <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
-              </Checkbox.Root>
-              <label className="who" htmlFor={squashId}>
-                squash it into one commit
-              </label>
-            </div>
+            <SettingRow
+              label="squash it into one commit"
+              control={(ids) => (
+                <Choice
+                  ids={ids}
+                  kind="toggle"
+                  checked={squash}
+                  disabled={running}
+                  onCheckedChange={setSquash}
+                />
+              )}
+            />
           )}
           {ran !== undefined && (
             <Outcome

@@ -61,6 +61,11 @@ const PAIRS: [Token, Token, number][] = [
   ["text.muted", "surface.raised", 4.5],
   // The alerts drawer is `surface.overlay`: its details are secondary text on it.
   ["text.secondary", "surface.overlay", 4.5],
+  // Settings (DS-3e, SE-16's review): the level switcher's unchosen levels are secondary text on
+  // `control.base`, and the group nav's unchosen groups are secondary text on the pane, which a
+  // view tab draws in `surface.raised`.
+  ["text.secondary", "control.base", 4.5],
+  ["text.secondary", "surface.raised", 4.5],
   ["needs-you.text", "needs-you.base", 4.5],
   ["danger.text", "danger.surface", 4.5],
   ["terminal.foreground", "terminal.background", 4.5],

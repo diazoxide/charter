@@ -5,6 +5,7 @@ import { EmptyState } from "./EmptyState";
 import { COMPONENTS } from "./SessionRecordTab";
 import { commands, type ArchivedMemory, type MemoryScope, type PlaneId } from "./bindings";
 import { archiveWhere, memoryOf, scopeKey, scopeWord } from "./memories";
+import { SettingActions } from "./settings/components";
 
 /**
  * **A store's archive, in a tab of its own** (KN-4, D6): what the window's Delete — and
@@ -160,7 +161,7 @@ export function MemoryArchiveTab({
               {outcome.refused}
             </p>
           )}
-          <div className="settings-actions">
+          <SettingActions>
             <button
               type="button"
               tabIndex={0}
@@ -169,7 +170,7 @@ export function MemoryArchiveTab({
             >
               Restore memory
             </button>
-          </div>
+          </SettingActions>
         </section>
       )}
     </div>

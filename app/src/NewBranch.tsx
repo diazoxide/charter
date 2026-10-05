@@ -1,5 +1,6 @@
-import { useId, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * **New branch**, from a repo's row (GL-1, ADR 0072 §4).
@@ -35,8 +36,9 @@ export function NewBranch({
   onCancel: () => void;
 }) {
   const [name, setName] = useState("");
-  const nameId = useId();
-  const box = useRef<HTMLInputElement>(null);
+  // The dialog, so the box can be found in it on opening: the row draws the box, and a
+  // setting's field takes no ref.
+  const content = useRef<HTMLDivElement>(null);
   const cut = () => {
     if (!making) onCut(name.trim() === "" ? null : name.trim());
   };
@@ -50,13 +52,14 @@ export function NewBranch({
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content
+          ref={content}
           className="warning"
           aria-labelledby="new-branch"
           // A click outside answers nothing, as in every dialog here (`docs/ui-primitives.md`).
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            box.current?.focus();
+            content.current?.querySelector("input")?.focus();
           }}
         >
           <Dialog.Title id="new-branch">New branch</Dialog.Title>
@@ -65,27 +68,22 @@ export function NewBranch({
           </p>
 
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               cut();
             }}
           >
-            <label htmlFor={nameId}>Name</label>
-            <input
-              id={nameId}
-              ref={box}
-              value={name}
-              autoComplete="off"
-              spellCheck={false}
-              aria-describedby={`${nameId}-why`}
-              onChange={(event) => setName(event.target.value)}
+            <SettingRow
+              label="Name"
+              help={
+                <>
+                  Optional. Left empty, charter names it chat-1, chat-2 and on. It is cut from what{" "}
+                  <code>{repo}</code> has checked out, in a folder of its own, and new chats start
+                  on it until you pick somewhere else.
+                </>
+              }
+              control={(ids) => <Field ids={ids} kind="text" value={name} onChange={setName} />}
             />
-            <p className="came-back" id={`${nameId}-why`}>
-              Optional. Left empty, charter names it chat-1, chat-2 and on. It is cut from what{" "}
-              <code>{repo}</code> has checked out, in a folder of its own, and new chats start on it
-              until you pick somewhere else.
-            </p>
 
             {trouble && (
               <p className="trouble" role="alert">
@@ -94,14 +92,14 @@ export function NewBranch({
             )}
 
             {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
-            <div className="doing">
+            <SettingActions>
               <button type="submit" tabIndex={0} disabled={making}>
                 Create branch
               </button>
               <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel
               </button>
-            </div>
+            </SettingActions>
           </form>
         </Dialog.Content>
       </Dialog.Portal>

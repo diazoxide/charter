@@ -1,5 +1,5 @@
-import { useId } from "react";
 import type { ForgeWord } from "./bindings";
+import { SettingActions, SettingRow } from "./settings/components";
 
 /** What the core asked, and what to do with the answer. */
 export type ForgeAsk = {
@@ -18,23 +18,31 @@ export type ForgeAsk = {
  * (`interruptBudget.ts`), and on a new machine it is one of the three the first run can spend.
  */
 export function ForgeQuestion({ ask }: { ask: ForgeAsk }) {
-  const heading = useId();
+  // A row of the settings set (DS-3e): the question is its name, why it is asked its help, and
+  // the answers its buttons. The whole row is the group the question names, so the why is in it.
   return (
-    <div className="asks" role="group" aria-labelledby={heading}>
-      <p id={heading}>Which forge are its repos on?</p>
-      <p className="came-back">
-        charter reads the forge from the remote of the repo the project is made for, and here it
-        could not: {ask.why}. You can change it later in Settings, at the Project level.
-      </p>
-      {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189). */}
-      <div className="doing">
-        <button type="button" tabIndex={0} onClick={() => ask.answer("github")}>
-          GitHub
-        </button>
-        <button type="button" tabIndex={0} onClick={() => ask.answer("gitlab")}>
-          GitLab
-        </button>
-      </div>
+    <div role="group" aria-label={QUESTION}>
+      <SettingRow
+        label={QUESTION}
+        grouped
+        help={
+          "charter reads the forge from the remote of the repo the project is made for, and here " +
+          `it could not: ${ask.why}. You can change it later in Settings, at the Project level.`
+        }
+        control={() => (
+          // `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189).
+          <SettingActions>
+            <button type="button" tabIndex={0} onClick={() => ask.answer("github")}>
+              GitHub
+            </button>
+            <button type="button" tabIndex={0} onClick={() => ask.answer("gitlab")}>
+              GitLab
+            </button>
+          </SettingActions>
+        )}
+      />
     </div>
   );
 }
+
+const QUESTION = "Which forge are its repos on?";

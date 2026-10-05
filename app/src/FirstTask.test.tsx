@@ -202,6 +202,26 @@ describe("the first task", () => {
     expect(within(again).getByText(/Started on the branch first-task-1/)).toBeInTheDocument();
   });
 
+  it("moves its pick with one arrow key, and starts and approves nothing until the press", async () => {
+    // The settings set's radio (DS-3e): one arrow picks, and a pick that starts something is
+    // held until its button (docs/ui-primitives.md).
+    const { calls } = core();
+    render(<App />);
+    const { pane } = await openTheFirstTask();
+    const run1 = within(pane).getByRole("radiogroup", { name: "First chat" });
+    const claude = within(run1).getByRole("radio", { name: "claude" });
+    await waitFor(() => expect(claude).toBeChecked());
+    claude.focus();
+
+    await userEvent.keyboard("{ArrowDown>}");
+    await new Promise((done) => setTimeout(done, 80));
+    await userEvent.keyboard("{/ArrowDown}");
+
+    expect(within(run1).getByRole("radio", { name: "codex" })).toBeChecked();
+    expect(calls("first_task_run")).toHaveLength(0);
+    expect(calls("approve_profile")).toHaveLength(0);
+  });
+
   it("starts run 2 on another harness than run 1's, approving its command on the press", async () => {
     const { asked, calls } = core();
     render(<App />);
