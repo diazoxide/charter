@@ -49,7 +49,10 @@ pub struct WorkItem {
     /// draws differently.
     pub issue_type: Option<String>,
     pub state: State,
-    /// Why a closed item was closed, when its tracker says. `None` while it is open.
+    /// Why a closed item was closed, when its tracker says. `None` while it is open. A tracker
+    /// may say it where [`crate::forge::Capability::CloseReasons`] is not known to be there (a
+    /// self-managed GitLab still marks a duplicate): show it only where that capability's answer
+    /// does not take the `Hidden` fallback.
     pub closed_as: Option<ClosedAs>,
     /// The item's status, as its tracker names it (`In progress`, `Won't do`). An item-level
     /// status of the tracker's own (GitLab's work item status, a Jira or Linear status) comes
@@ -63,7 +66,8 @@ pub struct WorkItem {
     /// tracker's order, that gives one. On GitLab it is the item's own (a Premium feature).
     pub iteration: Option<Iteration>,
     /// The tracker's own boards that hold the item, and its status on each: GitHub's Projects
-    /// v2, a GitLab repo's issue boards. A board here is the tracker's, never charter's own [`board::Board`], which is a view.
+    /// v2, a GitLab repo's issue boards. A board here is the tracker's, never charter's own
+    /// [`board::Board`], which is a view.
     pub placements: Vec<Placement>,
     /// Label names, as the tracker spells them.
     pub labels: Vec<String>,
@@ -75,8 +79,8 @@ pub struct WorkItem {
 
 impl WorkItem {
     /// An item of `kind` with only its key and title known: open, with no forge id, page,
-    /// type, status, milestone, iteration, board, label, assignee or relation. A backend fills in the
-    /// rest.
+    /// type, status, milestone, iteration, board, label, assignee or relation. A backend fills
+    /// in the rest.
     pub fn new(key: TrackerKey, kind: Kind, title: impl Into<String>) -> WorkItem {
         WorkItem {
             key,

@@ -187,7 +187,15 @@ fn over(kind: &str, case: &str, how: How) -> Option<Over> {
             }
         }
         How::Native => native::over(kind, default_host(kind), &text),
-        How::SelfManaged => native::over(kind, SELF_MANAGED, &text),
+        How::SelfManaged => {
+            // A case a self-managed instance is asked differently, because a capability charter
+            // has not probed there takes its fallback, has its own recording beside the case's.
+            let own = recordings()
+                .join(kind)
+                .join(format!("{case}.self_managed.json"));
+            let text = std::fs::read_to_string(&own).unwrap_or(text);
+            native::over(kind, SELF_MANAGED, &text)
+        }
         How::Live => unreachable!("answered above"),
     })
 }
@@ -651,8 +659,17 @@ mod cases {
         assert_eq!((sprint.start, sprint.end), (day(5), day(18)));
         assert_eq!(item.placements.len(), 1);
         assert_eq!(item.placements[0].board_title, "Roadmap");
-        assert_eq!(item.status.as_deref(), Some("Done"));
-        assert_eq!(item.closed_as, Some(work::ClosedAs::Completed));
+        // A status of the item's own, and the close reason its category gives, are asked only
+        // where GitLab's work item status is known to be there: not of a self-managed GitLab,
+        // which charter has not probed. There the item has its boards' status, and a closed
+        // issue sits in no label list.
+        let own_status = !(kind == "gitlab" && over.host != "gitlab.com");
+        if own_status {
+            assert_eq!(item.status.as_deref(), Some("Done"));
+            assert_eq!(item.closed_as, Some(work::ClosedAs::Completed));
+        } else {
+            assert_eq!((item.status.as_deref(), item.closed_as), (None, None));
+        }
         match kind {
             "github" => {
                 assert_eq!(item.labels, ["ws:alpha"]);
