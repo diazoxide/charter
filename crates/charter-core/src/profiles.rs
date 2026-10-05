@@ -654,28 +654,46 @@ pub fn current(root: &Path) -> ProfileSet {
 pub fn current_of(derived: ProfileSet) -> ProfileSet {
     let mut set = derived;
     for profile in set.profiles.clone() {
-        let name = shown::short(&profile.name);
-        let reason = if COMMAND_WORDS.contains(&profile.name.as_str()) {
-            format!(
-                "profile '{name}' is named like the command `charter {name}`, and that name \
-                 belongs to the command. Rename the table."
-            )
-        } else if is_charter(&profile.command) {
-            format!(
-                "profile '{name}' runs charter itself — a profile names the harness a chat \
-                 runs, and charter is not a harness. Give it the harness's own command."
-            )
-        } else {
+        let Some((_, reason)) = launch_refusals(&profile.name, &profile.command)
+            .into_iter()
+            .next()
+        else {
             continue;
         };
         set.take(&profile.name);
         set.refused.push(Refused {
-            name,
+            name: shown::short(&profile.name),
             source: profile.source.as_str().to_owned(),
             reason,
         });
     }
     settle(set)
+}
+
+/// [`current`]'s two rules for one profile, each with the profile key it is about (ST-4): a
+/// name `charter <name>` already means, and a command that runs charter itself.
+pub(crate) fn launch_refusals(name: &str, command: &[String]) -> Vec<(&'static str, String)> {
+    let shown_name = shown::short(name);
+    let mut out = Vec::new();
+    if COMMAND_WORDS.contains(&name) {
+        out.push((
+            "name",
+            format!(
+                "profile '{shown_name}' is named like the command `charter {shown_name}`, and \
+                 that name belongs to the command. Rename the table."
+            ),
+        ));
+    }
+    if is_charter(command) {
+        out.push((
+            "command",
+            format!(
+                "profile '{shown_name}' runs charter itself — a profile names the harness a \
+                 chat runs, and charter is not a harness. Give it the harness's own command."
+            ),
+        ));
+    }
+    out
 }
 
 /// `set` with every profile the local file declares refused, when `check` says git would
@@ -760,26 +778,50 @@ fn refusal(
     table: &toml::Value,
     declared: &crate::harness_declaration::Declarations,
 ) -> Option<String> {
+    refusals_of(name, table, declared)
+        .into_iter()
+        .next()
+        .map(|(_, why)| why)
+}
+
+/// **Every rule `name`'s table breaks**, in the order the rules are written, each with the
+/// profile key it is about — `name`, `kind`, `command`, `env`, or `""` for the table as a whole
+/// (ST-4). The loader takes the first ([`refusal`]); the Settings collection
+/// (`settings::harness_profiles`) says each under its field of the Add form. One set of rules,
+/// so the window and the next read refuse in the same words.
+pub(crate) fn refusals_of(
+    name: &str,
+    table: &toml::Value,
+    declared: &crate::harness_declaration::Declarations,
+) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
     let shown_name = shown::short(name);
     let Some(inner) = table.as_table() else {
-        return Some(format!(
-            "[harness] {shown_name} in charter.local.toml is not a table — a profile is \
-             [harness.{shown_name}] with kind, command and optionally env."
+        out.push((
+            "",
+            format!(
+                "[harness] {shown_name} in charter.local.toml is not a table — a profile is \
+                 [harness.{shown_name}] with kind, command and optionally env."
+            ),
         ));
+        return out;
     };
     if !name_ok(name) {
-        return Some(format!(
-            "profile '{shown_name}' is not a name charter accepts — letters, digits, '_' \
-             and '-', starting with a letter or digit, and no dot — the plane format fixes \
-             that alphabet. Rename the table."
+        out.push((
+            "name",
+            format!(
+                "profile '{shown_name}' is not a name charter accepts — letters, digits, '_' \
+                 and '-', starting with a letter or digit, and no dot — the plane format fixes \
+                 that alphabet. Rename the table."
+            ),
         ));
-    }
-    if name == DEFAULT {
-        return Some(
+    } else if name == DEFAULT {
+        out.push((
+            "name",
             "a profile cannot be named 'default' — `default` is the one key under [harness] \
              that is not a profile. Rename the table."
                 .to_owned(),
-        );
+        ));
     }
     let kind = inner.get("kind");
     let word = kind.and_then(toml::Value::as_str).unwrap_or_default();
@@ -788,19 +830,22 @@ fn refusal(
         (None, Some(d)) => Some(d.login.as_deref().unwrap_or("log in inside that harness")),
         (None, None) => None,
     };
-    let Some(login) = login else {
+    if login.is_none() {
         let kinds: Vec<&str> = KINDS
             .iter()
             .map(|k| k.word)
             .chain(declared.projects().map(|d| d.name.as_str()))
             .collect();
-        return Some(format!(
-            "profile '{shown_name}' has kind {}, which is not a harness charter can launch \
-             — one of: {}. Set kind to one of them.",
-            shown::short(&kind.map(py_str).unwrap_or_default()),
-            kinds.join(", ")
+        out.push((
+            "kind",
+            format!(
+                "profile '{shown_name}' has kind {}, which is not a harness charter can launch \
+                 — one of: {}. Set kind to one of them.",
+                shown::short(&kind.map(py_str).unwrap_or_default()),
+                kinds.join(", ")
+            ),
         ));
-    };
+    }
     let command = inner.get("command").and_then(toml::Value::as_array);
     let usable = command.is_some_and(|words| {
         !words.is_empty()
@@ -809,9 +854,13 @@ fn refusal(
                 .all(|w| w.as_str().is_some_and(|w| !w.is_empty()))
     });
     if !usable {
-        return Some(format!(
-            "profile '{shown_name}' has no usable command — command is a list of arguments, \
-             [\"claude\"], never a shell string, because no shell runs it. Write it as a list."
+        out.push((
+            "command",
+            format!(
+                "profile '{shown_name}' has no usable command — command is a list of \
+                 arguments, [\"claude\"], never a shell string, because no shell runs it. Write \
+                 it as a list."
+            ),
         ));
     }
     let env = inner.get("env");
@@ -823,43 +872,52 @@ fn refusal(
             names
         }
         Some(_) => {
-            return Some(format!(
-                "profile '{shown_name}' has an env that is not a table of text values — \
-                 write env = {{ NAME = \"value\" }}."
+            out.push((
+                "env",
+                format!(
+                    "profile '{shown_name}' has an env that is not a table of text values — \
+                     write env = {{ NAME = \"value\" }}."
+                ),
             ));
+            Vec::new()
         }
     };
-    for var in &names {
-        if the_products_own(var) {
-            return Some(format!(
+    if let Some(var) = names.iter().find(|var| the_products_own(var)) {
+        out.push((
+            "env",
+            format!(
                 "profile '{shown_name}' sets {}, one of charter's own variables — charter \
                  sets those itself, and a profile's value would tell every hook the wrong \
                  harness or plane. Remove it.",
                 shown::short(var)
-            ));
-        }
-    }
-    for var in &names {
-        if named_like_a_credential(var) {
-            return Some(format!(
+            ),
+        ));
+    } else if let Some(var) = names.iter().find(|var| named_like_a_credential(var)) {
+        out.push((
+            "env",
+            format!(
                 "profile '{shown_name}' sets {}, which is named like a credential — charter \
                  holds no credential in a profile, because anything set on the harness \
                  reaches the model's own shell. Log in inside that harness instead: {}.",
                 shown::short(var),
-                login
-            ));
-        }
+                login.unwrap_or("log in inside that harness")
+            ),
+        ));
     }
-    for key in inner.keys() {
-        if !PROFILE_KEYS.contains(&key.as_str()) {
-            return Some(format!(
+    if let Some(key) = inner
+        .keys()
+        .find(|key| !PROFILE_KEYS.contains(&key.as_str()))
+    {
+        out.push((
+            "",
+            format!(
                 "profile '{shown_name}' has {}, which charter does not read — a profile is \
                  kind, command and env. Remove it.",
                 shown::short(key)
-            ));
-        }
+            ),
+        ));
     }
-    None
+    out
 }
 
 /// `^[A-Za-z0-9][A-Za-z0-9_-]*$`. No dot: a dot in a name broke tmux targets in charter

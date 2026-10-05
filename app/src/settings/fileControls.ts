@@ -180,7 +180,7 @@ export function entries(draft: string): string[] {
     .filter((line) => line !== "");
 }
 
-/** The places `[[forge]]` blocks are at, and the names `[harness.<name>]` tables have. */
+/** The places `[[forge]]` blocks are at. */
 export function forgeBlocks(file: Shown): number[] {
   const at = new Set<number>();
   for (const { path } of file.fields) {
@@ -188,16 +188,6 @@ export function forgeBlocks(file: Shown): number[] {
     if (first?.key === "forge" && second?.index !== undefined) at.add(second.index);
   }
   return [...at];
-}
-
-export function profiles(file: Shown): string[] {
-  const names = new Set<string>();
-  for (const { path } of file.fields) {
-    const [first, second] = path;
-    if (first?.key === "harness" && second?.key !== undefined && path.length > 2)
-      names.add(second.key);
-  }
-  return [...names];
 }
 
 /** A profile's `env` as `NAME=value` lines — one key per variable, so a line removed is a key
@@ -755,7 +745,8 @@ const COLOUR: Control = {
 };
 
 /** `charter.local.toml`: `[harness]`, `[plane]`'s save keys, `[repos]`, `[extensions]` and
- *  `[theme]`, which is all its readers read there. */
+ *  `[theme]`, which is all its readers read there. Its `[harness.<name>]` profiles are a
+ *  collection, each with a page of its own (ST-4, `project.ts`). */
 export const LOCAL: Group[] = [
   {
     title: "Harness",
@@ -767,20 +758,6 @@ export const LOCAL: Group[] = [
         "The profile the new-chat picker starts on. Wins over charter.toml's.",
       ),
     ],
-  },
-  {
-    title: "Profiles",
-    note: "One per [harness.<name>] table. Add or remove one under Edit as TOML.",
-    controls: (file) =>
-      profiles(file).flatMap((name) => [
-        textAt(key("harness", name, "kind"), `${name}: kind`, { kind: "choice", choices: KINDS }),
-        listAt(
-          key("harness", name, "command"),
-          `${name}: command`,
-          "One argument per line, program first. No shell runs it.",
-        ),
-        { ...envAt(name), label: `${name}: environment` },
-      ]),
   },
   planeGroup("local"),
   reposGroup("local"),

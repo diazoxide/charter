@@ -26,7 +26,8 @@ import { useTabStop } from "../roving";
 export type LevelOffer = { id: string; label: string };
 
 /** One group in the nav: its stable id, and what the nav calls it. */
-export type GroupOffer = { id: string; label: string };
+/** A group the nav offers. `sub` draws it as a page of the group before it (ST-4). */
+export type GroupOffer = { id: string; label: string; sub?: boolean };
 
 /**
  * **The two columns** (V89b): the level switcher and what that level is above a nav of its
@@ -138,6 +139,7 @@ export function SettingsLayout({
               <RovingFocusGroup.Item key={one.id} asChild tabStopId={one.id}>
                 <button
                   type="button"
+                  className={one.sub ? "ui-settings-sub" : undefined}
                   aria-current={one.id === group ? "true" : undefined}
                   onClick={() => onGroupChange(one.id)}
                 >

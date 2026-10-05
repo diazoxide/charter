@@ -16,9 +16,11 @@ import {
 import {
   answered,
   entries,
+  envAt,
   EXTENSIONS,
   harnessPluginGroups,
   key,
+  KINDS,
   listAt,
   LOCAL,
   NO_EXTENSIONS,
@@ -191,6 +193,100 @@ function forgesCollection(shared: SettingsFile, settings: readonly FileSetting[]
   return collection;
 }
 
+/** The address of the profile `name`'s own page (ST-4): a sub-page of Harness & profiles. */
+export function profilePage(name: string): string {
+  return `project.profile.${name}`;
+}
+
+/**
+ * **Harness profiles as a collection** (ST-4, #1236): each `[harness.<name>]` table the core lists
+ * in `charter.local.toml` is an entry with a page of its own, and the Add form asks for its name,
+ * kind and command, written by `charter_core::settings::harness_profiles` (`add_project_profile`,
+ * `remove_project_profile`, `rename_project_profile`). On Harness & profiles each entry is a
+ * heading that opens its page, with Remove; its page holds it alone, with its rows, Rename and
+ * Remove.
+ */
+function profilesCollection(
+  local: SettingsFile,
+  only?: { id: string; settings: readonly FileSetting[] },
+): Collection {
+  const listed = (local.entries ?? []).filter((one) => one.collection === "profiles");
+  const nameOf = (one: (typeof listed)[number]) =>
+    one.values.find((value) => value.field === "name")?.value ?? one.label;
+  return {
+    name: "profiles",
+    noun: "profile",
+    base: local.exists ? local.text : null,
+    entries: listed
+      .filter((one) => only === undefined || one.id === only.id)
+      .map((one) => ({
+        id: one.id,
+        label: one.label,
+        name: nameOf(one),
+        settings: only === undefined ? [] : only.settings.map((setting) => setting.id),
+        page: only === undefined ? profilePage(nameOf(one)) : undefined,
+      })),
+    adds: only === undefined,
+    home: "project.harness",
+    renames: only !== undefined,
+    pageOf: profilePage,
+    fields: [
+      {
+        field: "name",
+        label: "Name",
+        help: "What the profile is called in the new-chat picker: letters, digits, '_' and '-'.",
+        kind: "text",
+      },
+      {
+        field: "kind",
+        label: "Kind",
+        help: "Which harness it runs.",
+        kind: "choice",
+        choices: KINDS,
+        initial: KINDS[0],
+      },
+      {
+        field: "command",
+        label: "Command",
+        help: "One argument per line, program first. No shell runs it, and its first run asks you to approve it.",
+        kind: "lines",
+      },
+    ],
+  };
+}
+
+/**
+ * **One page per profile** (ST-4, V91e): the profile's kind, command and environment, under its
+ * name in the nav, beneath Harness & profiles. A name the core does not list as an entry (a file
+ * that is not TOML) has no page.
+ */
+function profilePages(read: ProjectRead): SettingsGroup[] {
+  const local: Shown = read.local;
+  if (!local.parsed) return [];
+  return (read.local.entries ?? [])
+    .filter((one) => one.collection === "profiles")
+    .map((one) => {
+      const name = one.values.find((value) => value.field === "name")?.value ?? one.label;
+      const settings = [
+        textAt(key("harness", name, "kind"), `${name}: kind`, { kind: "choice", choices: KINDS }),
+        listAt(
+          key("harness", name, "command"),
+          `${name}: command`,
+          "One argument per line, program first. No shell runs it.",
+        ),
+        { ...envAt(name), label: `${name}: environment` },
+      ].map((control) => setting(profilePage(name), "local", control));
+      return {
+        id: profilePage(name),
+        label: one.label,
+        help: `The profile ${one.label}: what it runs and with what environment, on this machine only. A changed command asks you to approve it before its next run.`,
+        settings,
+        collection: profilesCollection(read.local, { id: one.id, settings }),
+        sub: true,
+      };
+    });
+}
+
 /** `[sandbox] mode`, which this tab turns on and never back off (D-SE17g). */
 const SANDBOX_MODE = key("sandbox", "mode");
 
@@ -273,7 +369,7 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
   const sharedOk = shared.parsed;
   const localOk = local.parsed;
   const [general, forges] = SHARED;
-  const [harness, profiles] = LOCAL;
+  const [harness] = LOCAL;
   const fromShared = (group: string, controls: Control[]) =>
     sharedOk
       ? controls.map((one) => picking(setting(group, "shared", one), shared, read.entries))
@@ -330,7 +426,6 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
         ...fromShared("project.harness", sharedGeneral.filter(isDefaultHarness)),
         ...fromLocal("project.harness", [
           ...asked(harness, local, read).controls,
-          ...asked(profiles, local, read).controls,
           listAt(
             key("chat_env", "pass"),
             "Environment passed to chats",
@@ -338,7 +433,9 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
           ),
         ]),
       ],
+      ...(localOk ? { collection: profilesCollection(read.local) } : {}),
     },
+    ...profilePages(read),
     {
       id: "project.sandbox",
       label: "Sandbox",
@@ -385,6 +482,12 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
     },
   ];
 }
+
+/** Each collection of the level: the file it is kept in, and what one entry is called. */
+const HOMES: Readonly<Record<string, { file: SettingsWhich; noun: string }>> = {
+  forges: { file: "shared", noun: "forge" },
+  profiles: { file: "local", noun: "profile" },
+};
 
 /** What the driver answers at the Project level: what was read, and what to do with a setting. */
 export type ProjectLevel =
@@ -505,24 +608,39 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
       );
 
   /**
-   * An add or a remove in one of the level's collections, through the core's function for it,
-   * against the text the entries were drawn from (`op.base`). A written one answers what it did,
-   * in the core's label, and what undoes it (D-ST3-i, as amended): a remove of what was added,
-   * and the text a remove was made against, written back exactly.
+   * An add, a remove or a rename in one of the level's collections, through the core's function
+   * for it, against the text the entries were drawn from (`op.base`). A written one answers what
+   * it did, in the core's label, and what undoes it (D-ST3-i, as amended): a remove of what was
+   * added, the text a remove was made against written back exactly, and a rename back (ST-4).
    */
   const entry = (op: EntryOp, both: ProjectFiles): Promise<EntryWrote<ProjectFiles>> => {
     const refused = (reasons: string[]) => ({ refused: { fields: {}, referrers: [], reasons } });
-    if (op.collection !== "forges")
+    const home = HOMES[op.collection];
+    if (home === undefined)
       return Promise.resolve(refused([`No collection is called ${op.collection}.`]));
     const asked =
-      "add" in op
-        ? commands.addProjectForge(plane, op.base, {
-            kind: op.add.kind ?? "",
-            owner: op.add.owner ?? "",
-            host: op.add.host ?? "",
-            exclude: entries(op.add.exclude ?? ""),
-          })
-        : commands.removeProjectForge(plane, op.base, op.remove);
+      op.collection === "forges"
+        ? "add" in op
+          ? commands.addProjectForge(plane, op.base, {
+              kind: op.add.kind ?? "",
+              owner: op.add.owner ?? "",
+              host: op.add.host ?? "",
+              exclude: entries(op.add.exclude ?? ""),
+            })
+          : "remove" in op
+            ? commands.removeProjectForge(plane, op.base, op.remove)
+            : undefined
+        : "add" in op
+          ? commands.addProjectProfile(plane, op.base, {
+              name: op.add.name ?? "",
+              kind: op.add.kind ?? "",
+              command: entries(op.add.command ?? ""),
+            })
+          : "remove" in op
+            ? commands.removeProjectProfile(plane, op.base, op.remove)
+            : commands.renameProjectProfile(plane, op.base, op.rename, op.to);
+    if (asked === undefined)
+      return Promise.resolve(refused([`A ${home.noun} is not renamed here.`]));
     return asked.then((said): EntryWrote<ProjectFiles> => {
       if (said.status === "error") return refused([said.error]);
       const answer = said.data;
@@ -535,22 +653,35 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
       }
       const file = answer.file;
       const after = file.exists ? file.text : null;
-      const saved = { ...both, shared: file };
+      const which = home.file;
+      const saved = { ...both, [which]: file };
+      const entryIn = (id: string, in_: SettingsFile) =>
+        (in_.entries ?? []).find((one) => one.id === id);
       const labelOf = (id: string, in_: SettingsFile) =>
-        (in_.entries ?? []).find((one) => one.id === id)?.label ?? "the forge";
+        entryIn(id, in_)?.label ?? `the ${home.noun}`;
       if ("add" in op)
         return {
           saved,
-          file: "shared",
+          file: which,
           said: `Added ${labelOf(answer.added ?? "", file)}.`,
           undo: { collection: op.collection, base: after, remove: answer.added ?? "" },
         };
+      if ("rename" in op) {
+        const was = entryIn(op.rename, both[which]);
+        const name = was?.values.find((one) => one.field === "name")?.value ?? "";
+        return {
+          saved,
+          file: which,
+          said: `Renamed ${was?.label ?? `the ${home.noun}`} to ${labelOf(answer.added ?? "", file)}.`,
+          undo: { collection: op.collection, base: after, rename: answer.added ?? "", to: name },
+        };
+      }
       return {
         saved,
-        file: "shared",
-        said: `Removed ${labelOf(op.remove, both.shared)}.`,
+        file: which,
+        said: `Removed ${labelOf(op.remove, both[which])}.`,
         // Exact: the text the entry was removed from, against the text the remove left.
-        undo: { restore: { file: "shared", base: after, text: op.base ?? "" } },
+        undo: { restore: { file: which, base: after, text: op.base ?? "" } },
       };
     });
   };

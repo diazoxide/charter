@@ -58,7 +58,15 @@ import type { FileSetting, SettingsFileId } from "./groups";
  */
 export type EntryOp =
   | { collection: string; base: string | null; add: Readonly<Record<string, string>> }
-  | { collection: string; base: string | null; remove: string };
+  | { collection: string; base: string | null; remove: string }
+  /** A rename of the entry `rename` to `to` (ST-4, V91k): refused, naming them, while
+   *  something uses the entry. Its Undo is the rename back. */
+  | { collection: string; base: string | null; rename: string; to: string };
+
+/** The entry an op is about, when it is about one already there: a remove's or a rename's. */
+export function entryOf(op: EntryOp): string | undefined {
+  return "remove" in op ? op.remove : "rename" in op ? op.rename : undefined;
+}
 
 /** Something that uses an entry, which stops its removal, and the group it is changed in. */
 export type EntryReferrer = { what: string; group: string | null };
@@ -88,10 +96,13 @@ export type EntryUndo =
 export type EntryWrote<T> =
   { saved: T; file: SettingsFileId; said: string; undo: EntryUndo } | { refused: EntryRefusal };
 
-/** A collection's last refused Remove or Undo: the entry it was for (none for an Undo). */
+/** A collection's last refused Remove, Rename or Undo: the entry it was for (none for an
+ *  Undo), and which it was. */
 export type EntryRefused = {
   collection: string;
   entry: string | undefined;
+  /** What was refused, in the words the refusal is said in: `removed` or `renamed`. */
+  verb?: "removed" | "renamed";
   refusal: EntryRefusal;
 };
 
@@ -116,10 +127,10 @@ export type Driven<T> = {
   undoable: string | undefined;
   /** What the last add or remove did, said beside its Undo. */
   undoSaid: string | undefined;
-  /** Adds or removes an entry for the collection `id` (its group's id); answers why nothing
-   *  was written, or `undefined` once it was. */
+  /** Adds, removes or renames an entry for the collection `id` (its group's id); answers why
+   *  nothing was written, or `undefined` once it was. */
   entry: (id: string, op: EntryOp) => Promise<EntryRefusal | undefined>;
-  /** The last refused Remove or Undo in a collection, until the next write or Undo. */
+  /** The last refused Remove, Rename or Undo in a collection, until the next write or Undo. */
   entryRefused: EntryRefused | undefined;
   /** Writes `draft` to `file`: the file the value comes from, else the one picked for it. */
   write: (setting: FileSetting, draft: string, file?: SettingsFileId) => void;
@@ -409,10 +420,11 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
         refused: { fields: {}, referrers: [], reasons: [String(err)] },
       }));
       if ("refused" in wrote) {
-        if (undoing || "remove" in op)
+        if (undoing || entryOf(op) !== undefined)
           setEntryRefused({
             collection: id,
-            entry: undoing || !("remove" in op) ? undefined : op.remove,
+            entry: undoing ? undefined : entryOf(op),
+            verb: "rename" in op ? "renamed" : "removed",
             refusal: wrote.refused,
           });
         // What is shown is what is on disk: a refusal may be the file having moved.

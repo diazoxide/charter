@@ -76,8 +76,9 @@ pub struct SettingsFile {
     pub parsed: bool,
     /// Every value in it, in file order.
     pub fields: Vec<SettingsField>,
-    /// The entries of each collection the file is the home of (ST-3): `charter.toml`'s
-    /// `[[forge]]` blocks. `null` when it holds none, and left out by a caller that lists none.
+    /// The entries of each collection the file is the home of (ST-3): the Shared file's
+    /// `[[forge]]` blocks, and the Local file's `[harness.<name>]` profiles (ST-4). `null` when
+    /// it holds none, and left out by a caller that lists none.
     #[specta(optional)]
     pub entries: Option<Vec<SettingsEntry>>,
 }
@@ -85,7 +86,7 @@ pub struct SettingsFile {
 /// One entry of a collection, as the core lists it (`charter_core::settings::collection::Listed`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct SettingsEntry {
-    /// Which collection: `forges`.
+    /// Which collection: `forges` or `profiles`.
     pub collection: String,
     /// Opaque: what a remove is sent by. A different one once the entry moved or changed.
     pub id: String,
@@ -292,8 +293,9 @@ pub struct EntryReferrer {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EntryWritten {
-    /// Written. `added` is the new entry's identity, after an add; `removed` the entry a remove
-    /// took, as the Add form would write it again: what each one's Undo is made of (D-ST3-i).
+    /// Written. `added` is the entry's identity after an add or a rename (ST-4); `removed` the
+    /// entry a remove took, as the Add form would write it again: what each one's Undo is made
+    /// of (D-ST3-i).
     Saved {
         file: SettingsFile,
         added: Option<String>,
@@ -396,6 +398,128 @@ pub(crate) fn remove_forge(
     }
 }
 
+/// A harness profile as the Add form sends it, each field as typed: the command one argument
+/// per entry.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
+pub struct ProfileEntry {
+    pub name: String,
+    pub kind: String,
+    pub command: Vec<String>,
+}
+
+/// Add a `[harness.<name>]` profile to the project's local settings file, checked whole by the
+/// core's profile rules (`charter_core::settings::harness_profiles::add`). Its first run still
+/// asks for approval.
+///
+/// `base` is the text the window read (`null`: not there), so a file changed on disk since is
+/// refused rather than overwritten.
+#[tauri::command]
+#[specta::specta]
+pub async fn add_project_profile(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    base: Option<String>,
+    entry: ProfileEntry,
+) -> Result<EntryWritten, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || add_profile(&root, base.as_deref(), entry))
+        .await
+        .map_err(|err| format!("adding the profile did not finish: {err}"))?
+}
+
+/// [`add_project_profile`], without a runtime.
+pub(crate) fn add_profile(
+    root: &std::path::Path,
+    base: Option<&str>,
+    entry: ProfileEntry,
+) -> Result<EntryWritten, String> {
+    let entry = settings::harness_profiles::Entry {
+        name: entry.name,
+        kind: entry.kind,
+        command: entry.command,
+    };
+    match settings::harness_profiles::add(root, base, &entry) {
+        Ok(id) => Ok(EntryWritten::Saved {
+            file: file_of(root, SettingsWhich::Local)?,
+            added: Some(id),
+            removed: None,
+        }),
+        Err(refusal) => Ok(refused(refusal)),
+    }
+}
+
+/// Remove the profile called `id` (as the local file's `entries` list it) — refused, naming
+/// them, while a `[harness] default` uses it
+/// (`charter_core::settings::harness_profiles::remove`).
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_project_profile(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    base: Option<String>,
+    id: String,
+) -> Result<EntryWritten, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || remove_profile(&root, base.as_deref(), &id))
+        .await
+        .map_err(|err| format!("removing the profile did not finish: {err}"))?
+}
+
+/// [`remove_project_profile`], without a runtime.
+pub(crate) fn remove_profile(
+    root: &std::path::Path,
+    base: Option<&str>,
+    id: &str,
+) -> Result<EntryWritten, String> {
+    match settings::harness_profiles::remove(root, base, id) {
+        Ok(took) => Ok(EntryWritten::Saved {
+            file: file_of(root, SettingsWhich::Local)?,
+            added: None,
+            removed: Some(values_on_the_wire(vec![
+                ("name", took.name),
+                ("kind", took.kind),
+                ("command", took.command.join("\n")),
+            ])),
+        }),
+        Err(refusal) => Ok(refused(refusal)),
+    }
+}
+
+/// Rename the profile called `id` to `to`, only while nothing uses it — refused, naming them,
+/// otherwise (`charter_core::settings::harness_profiles::rename`). Answers the renamed entry's
+/// identity as `added`: what its Undo renames back.
+#[tauri::command]
+#[specta::specta]
+pub async fn rename_project_profile(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    base: Option<String>,
+    id: String,
+    to: String,
+) -> Result<EntryWritten, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || rename_profile(&root, base.as_deref(), &id, &to))
+        .await
+        .map_err(|err| format!("renaming the profile did not finish: {err}"))?
+}
+
+/// [`rename_project_profile`], without a runtime.
+pub(crate) fn rename_profile(
+    root: &std::path::Path,
+    base: Option<&str>,
+    id: &str,
+    to: &str,
+) -> Result<EntryWritten, String> {
+    match settings::harness_profiles::rename(root, base, id, to) {
+        Ok(id) => Ok(EntryWritten::Saved {
+            file: file_of(root, SettingsWhich::Local)?,
+            added: Some(id),
+            removed: None,
+        }),
+        Err(refusal) => Ok(refused(refusal)),
+    }
+}
+
 /// A collection write's refusal, for the wire.
 fn refused(refusal: settings::collection::Refusal) -> EntryWritten {
     EntryWritten::Refused {
@@ -437,17 +561,18 @@ pub(crate) fn file_of(
     })
 }
 
-/// The collections `which` is the home of, listed by the core: `charter.toml`'s forges.
+/// The collections `which` is the home of, listed by the core: the Shared file's forges, and
+/// the Local file's harness profiles (ST-4).
 fn entries_of(which: SettingsWhich, text: &str) -> Option<Vec<SettingsEntry>> {
-    let listed = match which {
-        SettingsWhich::Shared => settings::forges::listed(text),
-        SettingsWhich::Local => Vec::new(),
+    let (collection, listed) = match which {
+        SettingsWhich::Shared => ("forges", settings::forges::listed(text)),
+        SettingsWhich::Local => ("profiles", settings::harness_profiles::listed(text)),
     };
     (!listed.is_empty()).then(|| {
         listed
             .into_iter()
             .map(|one| SettingsEntry {
-                collection: "forges".to_owned(),
+                collection: collection.to_owned(),
                 id: one.id,
                 label: one.label,
                 keys: one.keys.into_iter().map(step_of).collect(),
@@ -992,6 +1117,44 @@ mod tests {
             panic!("refused: {saved:?}")
         };
         assert!(reasons[0].contains("changed on disk"), "{reasons:?}");
+    }
+
+    #[test]
+    fn a_profile_is_added_renamed_and_refused_on_the_wire_by_field_and_by_its_users() {
+        let dir = plane_with_local("schema = 1\n[harness]\ndefault = \"work\"\n", "");
+        let root = dir.path();
+        let entry = |name: &str| ProfileEntry {
+            name: name.into(),
+            kind: "claude".into(),
+            command: vec!["claude".into()],
+        };
+        let EntryWritten::Refused { fields, .. } =
+            add_profile(root, Some(""), entry("a.b")).unwrap()
+        else {
+            panic!("a name the rules refuse is not written");
+        };
+        assert_eq!(fields[0].field, "name");
+
+        let EntryWritten::Saved { file, added, .. } =
+            add_profile(root, Some(""), entry("spare")).unwrap()
+        else {
+            panic!("a good profile is written");
+        };
+        let entries = file.entries.clone().unwrap();
+        assert_eq!(entries[0].collection, "profiles");
+        assert_eq!(added.as_deref(), Some(entries[0].id.as_str()));
+
+        let EntryWritten::Saved { file, .. } =
+            rename_profile(root, Some(&file.text), &entries[0].id, "work").unwrap()
+        else {
+            panic!("a profile nothing uses is renamed");
+        };
+        let EntryWritten::Refused { referrers, .. } =
+            remove_profile(root, Some(&file.text), &file.entries.unwrap()[0].id).unwrap()
+        else {
+            panic!("the profile the default harness names is not removed");
+        };
+        assert_eq!(referrers[0].group.as_deref(), Some("project.harness"));
     }
 
     /// A plane that is a git repo whose `charter.local.toml` is ignored, so the Local layer is

@@ -67,6 +67,20 @@ const LOCAL: SettingsFile = {
     field(["harness", "work", "kind"], { kind: "text", value: "claude" }),
     field(["harness", "work", "command"], { kind: "list", value: ["claude"] }),
   ],
+  // The core lists the profile as an entry of the profiles collection, with a page (ST-4).
+  entries: [
+    {
+      collection: "profiles",
+      id: "profile:work",
+      label: "work",
+      keys: [{ key: "harness" }, { key: "work" }],
+      values: [
+        { field: "name", value: "work" },
+        { field: "kind", value: "claude" },
+        { field: "command", value: "claude" },
+      ],
+    },
+  ],
 };
 
 const said = (value: string | null, source = "default") => ({ value, source });
@@ -296,7 +310,7 @@ describe("the Project level", () => {
     expect(await within(nav()).findByRole("button", { name: "General" })).toBeInTheDocument();
   });
 
-  it("lists the eight groups in order when each has something to set", async () => {
+  it("lists the eight groups in order when each has something to set, each profile's page under its group", async () => {
     core({ extensions: [LINTER], harnesses: [CLAUDE] });
     await atProject();
 
@@ -305,6 +319,7 @@ describe("the Project level", () => {
         "General",
         "Saving",
         "Harness & profiles",
+        "work",
         "Sandbox",
         "Forges",
         "Extensions",
@@ -348,7 +363,7 @@ describe("the Project level", () => {
     await open("Saving");
 
     expect(screen.getByLabelText("Mode")).toHaveAccessibleDescription(/charter\.toml/);
-    await open("Harness & profiles");
+    await open("work");
     expect(screen.getByLabelText("work: kind")).toHaveAccessibleDescription(/charter\.local\.toml/);
   });
 });
@@ -378,17 +393,8 @@ describe("every project setting there is, at the Project level", () => {
         "[memory] share (deprecated)",
       ],
     ],
-    [
-      "Harness & profiles",
-      [
-        "Default harness",
-        "Default profile",
-        "work: kind",
-        "work: command",
-        "work: environment",
-        "Environment passed to chats",
-      ],
-    ],
+    ["Harness & profiles", ["Default harness", "Default profile", "Environment passed to chats"]],
+    ["work", ["work: kind", "work: command", "work: environment"]],
     ["Sandbox", ["Sandbox mode", "Hosts it may reach"]],
     ["Forges", ["Forge 1: kind", "Forge 1: owner", "Forge 1: host", "Forge 1: repos never listed"]],
     ["Extensions", ["Linter: enabled"]],
@@ -443,7 +449,7 @@ describe("a change at the Project level", () => {
   it("writes a local setting to charter.local.toml", async () => {
     const { sent } = core();
     await atProject();
-    await open("Harness & profiles");
+    await open("work");
 
     await userEvent.selectOptions(screen.getByLabelText("work: kind"), "codex");
 
@@ -883,15 +889,15 @@ describe("one form for Shared and Local (SE-18)", () => {
   });
 
   it.each([
-    "Default profile",
-    "work: kind",
-    "work: command",
-    "work: environment",
-    "Environment passed to chats",
-  ])("never offers Shared for %s, which only this machine may hold", async (label) => {
+    ["Harness & profiles", "Default profile"],
+    ["work", "work: kind"],
+    ["work", "work: command"],
+    ["work", "work: environment"],
+    ["Harness & profiles", "Environment passed to chats"],
+  ])("never offers Shared on %s for %s, which only this machine may hold", async (group, label) => {
     core();
     await atProject();
-    await open("Harness & profiles");
+    await open(group);
 
     expect(within(rowOf(label)).queryByRole("radio", { name: "Shared" })).toBeNull();
   });

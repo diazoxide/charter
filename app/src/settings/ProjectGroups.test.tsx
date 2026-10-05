@@ -64,6 +64,20 @@ const LOCAL: SettingsFile = {
     field(["harness", "work", "env", "CLAUDE_CONFIG_DIR"], { kind: "text", value: "~/.work" }),
     field(["harness", "work", "env", "LANG"], { kind: "text", value: "C" }),
   ],
+  // The core lists the profile as an entry of the profiles collection, with a page (ST-4).
+  entries: [
+    {
+      collection: "profiles",
+      id: "profile:work",
+      label: "work",
+      keys: [{ key: "harness" }, { key: "work" }],
+      values: [
+        { field: "name", value: "work" },
+        { field: "kind", value: "claude" },
+        { field: "command", value: "claude" },
+      ],
+    },
+  ],
 };
 
 /** The theme `project_theme` answers for a project that picked none. */
@@ -214,7 +228,8 @@ describe("the files, at the Project level", () => {
     expect(screen.getByLabelText("Forge 1: owner")).toHaveValue("acme");
     await userEvent.click(within(nav()).getByRole("button", { name: "General" }));
     expect(screen.getByLabelText("Default workspace")).toHaveValue("");
-    await userEvent.click(within(nav()).getByRole("button", { name: "Harness & profiles" }));
+    // A profile's rows are on its own page (ST-4).
+    await userEvent.click(within(nav()).getByRole("button", { name: "work" }));
     expect(screen.getByLabelText("work: kind")).toHaveValue("claude");
     expect(screen.getByLabelText("work: command")).toHaveValue("claude");
     expect(screen.getByLabelText("work: environment")).toHaveValue(
@@ -224,7 +239,7 @@ describe("the files, at the Project level", () => {
 
   it("sends a removed environment line as that key removed, and leaves the others alone", async () => {
     const { sent } = core();
-    await at("Harness & profiles");
+    await at("work");
 
     const env = screen.getByLabelText("work: environment");
     await userEvent.clear(env);

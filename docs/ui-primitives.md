@@ -117,11 +117,11 @@ collection follow the same shape, in three layers:
   `charter_core::settings::forges` is the model (`crates/charter-core/src/settings/collection.rs`
   says the contract). `listed(text)` gives each entry an **opaque identity** (a forge's is
   `forge:<place>:<fingerprint of the block>`, so it changes once the block moves or changes; a
-  profile's will be its name), its label, where its keys are, and the Add form's values that
-  would write it again. `add(root, base, &Entry)` checks the whole entry, writes it to the
-  collection's home file and answers the new identity; `remove(root, base, id)` takes the entry
-  out unless something uses it, and answers what it took. A refusal (`collection::Refusal`) has
-  three parts: `fields` (by the entry's own key, said under that field of the Add form),
+  profile's fingerprints its name and its table), its label, where its keys are, and the Add
+  form's values that would write it again. `add(root, base, &Entry)` checks the whole entry,
+  writes it to the collection's home file and answers the new identity; `remove(root, base, id)`
+  takes the entry out unless something uses it, and answers what it took. A refusal
+  (`collection::Refusal`) has three parts: `fields` (by the entry's own key, said under that field of the Add form),
   `referrers` (who uses the entry, each with the Settings group it is changed in, followed as an
   SE-22 deep link), and `file` (the whole write).
 - **The drawn base.** Every add and remove is sent against **the text the entries were drawn
@@ -149,6 +149,17 @@ collection follow the same shape, in three layers:
   entry, by its identity, and a refused Undo at the head of the collection, until the next write.
   The window computes no label, host or rule of its own (V91l). A collection group is offered in
   the nav while it has no entry, since that is where one is added.
+
+**An entry with a page of its own, and Rename (ST-4).** Harness profiles are the second
+collection (`charter_core::settings::harness_profiles`, home file the local settings file). A
+profile has many fields, so each has **a page of its own** (V91e): a group with `sub` set, drawn
+indented under its collection's group in the nav. The collection's group lists each entry as a
+heading with Open and Remove, and holds Add; the page draws that entry alone (`adds: false`) with
+its rows, Rename and Remove. The page keeps its writes under its collection's group
+(`Collection.home`), so a Remove there lands the person on that group, where its Undo is. The
+core adds `rename(root, base, id, to)`, allowed only while nothing uses the entry (V91k); it is
+an `EntryOp` like the others, and its Undo is the rename back. A picker's New… for the collection
+opens its Add form and picks what was added.
 
 ## The Notice is a house piece too, by its own amendment
 

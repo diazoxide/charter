@@ -329,18 +329,4 @@ describe("the default persona, workspace and harness", () => {
       { path: [{ key: "workspace" }, { key: "default" }], value: text("gamma") },
     ]);
   });
-
-  it("New profile… opens charter.local.toml under Edit as TOML, where a profile is added today", async () => {
-    const { sent } = core();
-    await atProject();
-    await open("Harness & profiles");
-    await waitFor(() => expect(offered("Default harness")).toContain("New profile…"));
-
-    await userEvent.selectOptions(picker("Default harness"), "New profile…");
-
-    expect(
-      await screen.findByRole("textbox", { name: "charter.local.toml, as TOML" }),
-    ).toBeInTheDocument();
-    expect(sent).toEqual([]);
-  });
 });

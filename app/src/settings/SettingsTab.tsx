@@ -32,7 +32,7 @@ import { KEPT, projectGroups, useProjectLevel } from "./project";
 import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
-import { CollectionView } from "./Collection";
+import { CollectionView, type Asked } from "./Collection";
 import { standingIn, type Standing } from "./standing";
 
 /**
@@ -392,14 +392,31 @@ function Shown({
   const rawFile = raw.find((one) => one.id === editing);
   const found =
     waiting === undefined ? groups.reduce((all, one) => all + one.settings.length, 0) : undefined;
+  /** The Add form New profile… opened, on the group it is on, until it adds or is left. */
+  const [asking, setAsking] = useState<{ group: string; asked: Asked }>();
   /**
-   * New… on a picker (ST-1). A profile has no form of its own yet (ST-4), so New profile… opens
-   * `charter.local.toml` under Edit as TOML, where a `[harness.<name>]` table is added today
-   * (D-ST1-4); a persona or a workspace is the level's to make.
+   * New… on a picker (ST-1). New profile… opens the profiles collection's Add form (ST-4,
+   * superseding D-ST1-4's Edit as TOML), on its group, and picks the profile once it is added;
+   * a persona or a workspace is the level's to make.
    */
   const create: OnNew = (entry, then) => {
-    if (entry === "profile" && raw.some((one) => one.id === "local")) setEditing("local");
-    else onNew?.(entry, then);
+    const home = declared.find(
+      (one) => one.collection?.name === "profiles" && one.collection.adds !== false,
+    );
+    if (entry !== "profile") onNew?.(entry, then);
+    else if (home !== undefined) {
+      linkToGroup(place, home.id);
+      setAsking((was) => ({
+        group: home.id,
+        asked: {
+          ask: (was?.asked.ask ?? 0) + 1,
+          then: (name) => {
+            setAsking(undefined);
+            then(name);
+          },
+        },
+      }));
+    } else if (raw.some((one) => one.id === "local")) setEditing("local");
   };
   return (
     <SettingsLayout
@@ -480,6 +497,7 @@ function Shown({
                 group={group}
                 driver={driver}
                 onNew={create}
+                adding={asking?.group === group.id ? asking.asked : undefined}
                 // SE-22's link, at this level: it lands on the group and clears the filter. A
                 // referrer at another level draws no link until ST-4 can follow one (#1241).
                 reachable={(to) => levelOf(to) === level && declared.some((one) => one.id === to)}
@@ -520,10 +538,13 @@ function ShownGroup({
   onNew,
   onGo,
   reachable,
+  adding,
 }: {
   group: SettingsGroup;
   driver?: Driven<unknown>;
   onNew?: OnNew;
+  /** The Add form a picker's New… opened in this group's collection (ST-4). */
+  adding?: Asked;
   /** Opens another group of this level: a link a collection's refusal carries. */
   onGo: (group: string) => void;
   /** Whether {@link onGo} can open `group`. */
@@ -551,6 +572,7 @@ function ShownGroup({
           row={row}
           onGo={onGo}
           reachable={reachable}
+          adding={adding}
         />
       ) : (
         group.settings.map(row)
