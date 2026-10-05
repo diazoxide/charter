@@ -639,7 +639,7 @@ export function reposGroup(section: Which): Group {
 export const KINDS = ["claude", "opencode", "codex"] as const;
 
 /** `charter.toml`, as `docs/plane-format.md` documents it. `[frame]` is the tmux frame's, which
- *  this charter does not have and nothing reads (the doctor says so): the raw view has it. */
+ *  this charter does not have and nothing reads (the doctor says so): Edit as TOML has it. */
 export const SHARED: Group[] = [
   {
     title: "General",
@@ -665,7 +665,7 @@ export const SHARED: Group[] = [
   },
   {
     title: "Forges",
-    note: "One block per [[forge]] in the file. Add or remove a block in the raw view.",
+    note: "One block per [[forge]] in the file. Add or remove a block under Edit as TOML.",
     controls: (file) =>
       forgeBlocks(file).flatMap((at) => {
         const block = (name: string): SettingsStep[] => [
@@ -731,7 +731,7 @@ export const LOCAL: Group[] = [
   },
   {
     title: "Profiles",
-    note: "One per [harness.<name>] table. Add or remove one in the raw view.",
+    note: "One per [harness.<name>] table. Add or remove one under Edit as TOML.",
     controls: (file) =>
       profiles(file).flatMap((name) => [
         textAt(key("harness", name, "kind"), `${name}: kind`, { kind: "choice", choices: KINDS }),

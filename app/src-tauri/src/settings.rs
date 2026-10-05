@@ -3,7 +3,7 @@
 //!
 //! Thin by design, as `doctor.rs` is. Every refusal is the core's sentence — the same one the
 //! next read of the file would say — and every write goes through the core's `toml_edit`
-//! writer. What this adds is the shape the window reads a file in: its text for the raw view,
+//! writer. What this adds is the shape the window reads a file in: its text for Edit as TOML,
 //! and every value in it by path for the forms, so the window needs no TOML parser of its own
 //! and a key the forms do not know yet (#253's `[extensions]`) is already on the wire.
 
@@ -39,7 +39,7 @@ pub enum SettingsStep {
 }
 
 /// A value, as a form reads and writes it. `other` is one no form writes — a float, a date, a
-/// list that is not all text — shown as TOML and changed only in the raw view.
+/// list that is not all text — shown as TOML and changed only under Edit as TOML.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum SettingsValue {
@@ -67,12 +67,12 @@ pub struct SettingsFile {
     pub file: String,
     /// Whether it is there. A Local file that is not is created by the first save.
     pub exists: bool,
-    /// Its text, for the raw view — and what a save is checked against, so an edit made
+    /// Its text, for Edit as TOML — and what a save is checked against, so an edit made
     /// elsewhere since is never written over.
     pub text: String,
     /// What charter refuses in it as it stands, in the core's words.
     pub refusals: Vec<String>,
-    /// Whether it is TOML. When it is not, `fields` is empty and only the raw view can mend it.
+    /// Whether it is TOML. When it is not, `fields` is empty and only Edit as TOML can mend it.
     pub parsed: bool,
     /// Every value in it, in file order.
     pub fields: Vec<SettingsField>,
@@ -85,7 +85,7 @@ pub struct ProjectSettings {
     pub local: SettingsFile,
 }
 
-/// What a save is: the raw view's whole text, or a form's changes to the text it was read as.
+/// What a save is: Edit as TOML's whole text, or a form's changes to the text it was read as.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SettingsChange {
@@ -322,7 +322,7 @@ fn quiet_period(period: std::time::Duration) -> String {
 // ---------------------------------------------------------------------------------------
 
 /// A workspace's settings — the `settings` of its `workspace.json` — as Settings draws them at
-/// the Workspace level. The same shape as a [`SettingsFile`], without a raw view: the manifest is
+/// the Workspace level. The same shape as a [`SettingsFile`], without Edit as TOML: the manifest is
 /// charter's and the team's, and a form is the one way into it here.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
 pub struct WorkspaceSettings {
@@ -435,7 +435,7 @@ fn step_of(step: Step) -> SettingsStep {
     }
 }
 
-/// Exact up to 2^53, which is every number a form writes; beyond it the raw view shows the
+/// Exact up to 2^53, which is every number a form writes; beyond it Edit as TOML shows the
 /// digits and the form does not offer to change them.
 const MOST_EXACT: u64 = 1 << 53;
 
@@ -478,7 +478,7 @@ fn value_to_core(value: SettingsValue) -> Result<Value, String> {
         SettingsValue::Bool(b) => Value::Bool(b),
         SettingsValue::List(items) => Value::List(items),
         SettingsValue::Other(_) => {
-            return Err("that value is only changed in the raw view".to_owned());
+            return Err("that value is only changed under Edit as TOML".to_owned());
         }
     })
 }

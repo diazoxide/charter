@@ -375,7 +375,7 @@ fn secret_refusal(which: Which, kind: &str) -> String {
     )
 }
 
-/// A value found in a file: one a form can write, or one only the raw view changes — a float,
+/// A value found in a file: one a form can write, or one only Edit as TOML changes — a float,
 /// a date, a list that is not all text — as TOML writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
@@ -447,8 +447,8 @@ fn found(value: &toml::Value) -> Found {
 pub fn edited(text: &str, edits: &[Edit]) -> Result<String, String> {
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
         format!(
-            "the file is not valid TOML ({}), so a form cannot change it — fix it in the raw \
-                 view",
+            "the file is not valid TOML ({}), so a form cannot change it — fix it under Edit \
+                 as TOML",
             crate::shown::short(e.message())
         )
     })?;

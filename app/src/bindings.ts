@@ -3930,7 +3930,7 @@ export type SessionRecordView = {
 	body: string,
 };
 
-/**  What a save is: the raw view's whole text, or a form's changes to the text it was read as. */
+/**  What a save is: Edit as TOML's whole text, or a form's changes to the text it was read as. */
 export type SettingsChange = { kind: "raw"; text: string } | { kind: "edits"; edits: SettingsEdit[] };
 
 /**  Set the key at `path` to `value`, or remove it when `value` is `null`. */
@@ -3953,13 +3953,13 @@ export type SettingsFile = {
 	/**  Whether it is there. A Local file that is not is created by the first save. */
 	exists: boolean,
 	/**
-	 *  Its text, for the raw view — and what a save is checked against, so an edit made
+	 *  Its text, for Edit as TOML — and what a save is checked against, so an edit made
 	 *  elsewhere since is never written over.
 	 */
 	text: string,
 	/**  What charter refuses in it as it stands, in the core's words. */
 	refusals: string[],
-	/**  Whether it is TOML. When it is not, `fields` is empty and only the raw view can mend it. */
+	/**  Whether it is TOML. When it is not, `fields` is empty and only Edit as TOML can mend it. */
 	parsed: boolean,
 	/**  Every value in it, in file order. */
 	fields: SettingsField[],
@@ -3973,7 +3973,7 @@ export type SettingsStep = ({ key: string }) & { index?: never } | ({ index: num
 
 /**
  *  A value, as a form reads and writes it. `other` is one no form writes — a float, a date, a
- *  list that is not all text — shown as TOML and changed only in the raw view.
+ *  list that is not all text — shown as TOML and changed only under Edit as TOML.
  */
 export type SettingsValue = { kind: "text"; value: string } | 
 /**
@@ -4431,7 +4431,7 @@ export type WithoutSandbox = {
 
 /**
  *  A workspace's settings — the `settings` of its `workspace.json` — as Settings draws them at
- *  the Workspace level. The same shape as a [`SettingsFile`], without a raw view: the manifest is
+ *  the Workspace level. The same shape as a [`SettingsFile`], without Edit as TOML: the manifest is
  *  charter's and the team's, and a form is the one way into it here.
  */
 export type WorkspaceSettings = {
