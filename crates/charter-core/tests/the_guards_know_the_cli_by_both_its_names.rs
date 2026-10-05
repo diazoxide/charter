@@ -22,7 +22,7 @@ fn leak(cmd: &str) -> Option<String> {
 /// the plane in these tests has (none), so the purlis spelling is refused (RN-7 lifts it only
 /// where the project carries the twin).
 fn no_rules(cmd: &str) -> Option<String> {
-    consentspelling::refusal(cmd, Path::new("/nonexistent-plane"), Path::new(""))
+    consentspelling::refusal(cmd, Path::new("/nonexistent-plane"), &[])
 }
 
 fn vault() -> String {

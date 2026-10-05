@@ -591,7 +591,8 @@ pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, S
     handoff_refusal_spelt(cmd, caller, &[crate::cliname::ALIAS])
 }
 
-/// [`handoff_refusal`] for a call made in `cwd` of the project at `plane`: `purlis handoff`,
+/// [`handoff_refusal`] for a call in the project at `plane`, whose host settings may come from
+/// any of `anchors` (the session's start folder and the call's `cwd`): `purlis handoff`,
 /// spelt exactly, passes the spelling check where the `purlis handoff` twin holds it at least as
 /// strictly as the `charter handoff` rule in every settings file the host reads there — the
 /// project's and the layer's ([`crate::scaffold::settings::twin_in_force`], RN-7, closing
@@ -601,11 +602,11 @@ pub fn handoff_refusal_in(
     cmd: &str,
     caller: Caller<'_>,
     plane: &std::path::Path,
-    cwd: &std::path::Path,
+    anchors: &[&std::path::Path],
 ) -> Option<(&'static str, String)> {
     let purlis_ruled = crate::scaffold::settings::twin_in_force(
         plane,
-        cwd,
+        anchors,
         crate::scaffold::settings::HANDOFF_PATTERN,
         crate::cliname::PRIMARY,
     );

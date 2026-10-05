@@ -161,16 +161,21 @@ fn strictness(decision: Option<&str>) -> u8 {
 }
 
 /// Whether the consent rule `pattern` (spelt `charter …`) holds the command spelt with `name`
-/// at least as strictly as it holds the `charter` spelling, everywhere the host reads it for a
-/// call made in `cwd` of the project at `plane` (RN-7, D-RN7-4).
+/// at least as strictly as it holds the `charter` spelling, everywhere the host may read it for
+/// a call in the project at `plane` (RN-7, D-RN7-4).
 ///
-/// Asked of each file the host may read: the project's `.claude/settings.json`, the nearest
-/// `.claude/settings.json` at or above `cwd` inside the project (a workspace's or a clone's
-/// layer, which is what Claude Code applies to a chat there), and the project's
-/// `opencode.json`. In each, the twin must be there, and be a deny where the `charter` rule is
-/// one. **Fails closed**: a file missing or unreadable, a `cwd` this cannot place inside the
-/// project, or a twin weaker than its rule in any of them answers `false`.
-pub fn twin_in_force(plane: &Path, cwd: &Path, pattern: &str, name: &str) -> bool {
+/// `anchors` are the directories the host's settings may have been loaded for: the folder the
+/// session started in (`$CLAUDE_PROJECT_DIR`, where Claude Code loads its settings) and the
+/// call's own `cwd`, which follows the shell's `cd`. Each one present is asked, because the two
+/// differ after a `cd` and the guard cannot tell which one the host applies.
+///
+/// Asked of each file: the project's `.claude/settings.json`, the nearest
+/// `.claude/settings.json` at or above each anchor inside the project (a workspace's or a
+/// clone's layer), and the project's `opencode.json`. In each, the twin must be there, and be a
+/// deny where the `charter` rule is one. **Fails closed**: no anchor at all, an anchor this
+/// cannot place inside the project, a file missing or unreadable, or a twin weaker than its rule
+/// in any of them answers `false`.
+pub fn twin_in_force(plane: &Path, anchors: &[&Path], pattern: &str, name: &str) -> bool {
     let Some(twin) = consent_pattern_for(pattern, name) else {
         return false;
     };
@@ -178,11 +183,21 @@ pub fn twin_in_force(plane: &Path, cwd: &Path, pattern: &str, name: &str) -> boo
         let twin = strictness(twin_says.as_deref());
         twin > 0 && twin >= strictness(rule_says.as_deref())
     };
-    let Some(layer) = layer_settings(plane, cwd) else {
+    let anchors: Vec<&Path> = anchors
+        .iter()
+        .copied()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .collect();
+    if anchors.is_empty() {
         return false;
-    };
+    }
     let mut claude = vec![plane.join(SETTINGS)];
-    claude.extend(layer);
+    for anchor in anchors {
+        let Some(layer) = layer_settings(plane, anchor) else {
+            return false;
+        };
+        claude.extend(layer);
+    }
     claude.iter().all(|file| {
         held(
             claude_decision_in(file, &twin),

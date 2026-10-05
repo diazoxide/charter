@@ -109,9 +109,13 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
         root: root.display().to_string(),
         forges: charter_core::forge::known_ordered(&root),
     });
+    // Where Claude Code loaded its settings: the session's start folder, which a `cd` in the
+    // shell does not move (RN-7).
+    let session_dir = std::env::var("CLAUDE_PROJECT_DIR").unwrap_or_default();
     let plane = found.as_ref().map(|found| Plane {
         root: &found.root,
         forges: &found.forges,
+        session_dir: &session_dir,
     });
     let call = Call {
         command: &command,

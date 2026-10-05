@@ -46,9 +46,12 @@ const RULES_NAME: &str = cliname::ALIAS;
 /// line under a name the project's consent rules do not spell, as a command one of them would
 /// ask about — in the call itself, with the heredocs a reader takes as data left out, or in a
 /// string a shell it starts runs.
-pub fn refusal(cmd: &str, plane: &Path, cwd: &Path) -> Option<String> {
+///
+/// `anchors` are where the host's settings may come from: the session's start folder and the
+/// call's `cwd` ([`settings::twin_in_force`]). None given keeps the new spelling refused.
+pub fn refusal(cmd: &str, plane: &Path, anchors: &[&Path]) -> Option<String> {
     let stripped = heredoc::strip_reader_heredocs(cmd);
-    let at = At { plane, cwd };
+    let at = At { plane, anchors };
     refusal_in(&stripped, at).or_else(|| in_a_shell_string(&stripped, at))
 }
 
@@ -56,7 +59,7 @@ pub fn refusal(cmd: &str, plane: &Path, cwd: &Path) -> Option<String> {
 #[derive(Clone, Copy)]
 struct At<'a> {
     plane: &'a Path,
-    cwd: &'a Path,
+    anchors: &'a [&'a Path],
 }
 
 /// [`refusal_in`] over each string a segment of `text` hands a shell, one level deep.
@@ -109,7 +112,7 @@ fn ruled_under(prog: &str, gated: &[&str], at: At<'_>) -> bool {
     prog == cliname::PRIMARY
         && gated
             .iter()
-            .all(|pattern| settings::twin_in_force(at.plane, at.cwd, pattern, cliname::PRIMARY))
+            .all(|pattern| settings::twin_in_force(at.plane, at.anchors, pattern, cliname::PRIMARY))
 }
 
 /// Whether every segment of `text` that runs the command line under the new name starts with
