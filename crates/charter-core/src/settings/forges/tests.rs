@@ -1,0 +1,392 @@
+//! The forges collection on a scratch plane: add, read back, field refusals, remove, and the
+//! refusal while something needs the block — through [`add`] and [`remove`] alone.
+
+use std::fs;
+use std::path::Path;
+
+use super::*;
+use crate::settings::collection::Refusal;
+
+const SHARED: &str = "\
+# The plane's own settings.
+schema = 1
+
+[[forge]]
+kind = \"github\"  # the team's org
+owner = \"acme\"
+
+[memory]
+share = \"local\"
+";
+
+/// A scratch plane: `shared` as its `charter.toml`, in a git repository whose `.gitignore`
+/// carries the line `charter init` writes.
+fn plane(shared: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("charter.toml"), shared).unwrap();
+    crate::testgit::run(dir.path(), &["init", "-q"]);
+    fs::write(dir.path().join(".gitignore"), "/charter.local.toml\n").unwrap();
+    dir
+}
+
+fn shared(root: &Path) -> String {
+    fs::read_to_string(root.join("charter.toml")).unwrap()
+}
+
+fn entry(kind: &str, owner: &str, host: &str, exclude: &[&str]) -> Entry {
+    Entry {
+        kind: kind.to_owned(),
+        owner: owner.to_owned(),
+        host: host.to_owned(),
+        exclude: exclude.iter().map(|one| (*one).to_owned()).collect(),
+    }
+}
+
+/// The catalogue `discover` writes, with one repo per `(name, ssh_url)`.
+fn catalogue(root: &Path, repos: &[(&str, &str)]) {
+    let repos: Vec<serde_json::Value> = repos
+        .iter()
+        .map(|(name, url)| serde_json::json!({"name": name, "ssh_url": url, "forge": "gitlab"}))
+        .collect();
+    fs::create_dir_all(root.join("inventory")).unwrap();
+    fs::write(
+        root.join("inventory/repos.json"),
+        serde_json::json!({"group": "acme", "count": repos.len(), "repos": repos}).to_string(),
+    )
+    .unwrap();
+}
+
+fn fields(refusal: &Refusal) -> Vec<&str> {
+    refusal.fields.iter().map(|one| one.field).collect()
+}
+
+#[test]
+fn an_added_forge_is_a_new_block_at_the_end_of_the_list_and_the_rest_of_the_file_is_kept() {
+    let dir = plane(SHARED);
+    add(
+        dir.path(),
+        Some(SHARED),
+        &entry(
+            "gitlab",
+            "platform",
+            "GitLab.Acme.dev",
+            &["sandbox", "", "sandbox"],
+        ),
+    )
+    .unwrap();
+
+    let written = shared(dir.path());
+    assert!(
+        written.starts_with("# The plane's own settings.\nschema = 1\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("kind = \"github\"  # the team's org"),
+        "{written}"
+    );
+    let cfg: toml::Table = written.parse().unwrap();
+    let blocks = cfg["forge"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2, "{written}");
+    let added = blocks[1].as_table().unwrap();
+    assert_eq!(added["kind"].as_str(), Some("gitlab"));
+    assert_eq!(added["owner"].as_str(), Some("platform"));
+    // A host is matched against a remote's host, which is read lowercased.
+    assert_eq!(added["host"].as_str(), Some("gitlab.acme.dev"));
+    assert_eq!(
+        added["exclude"].as_array().unwrap(),
+        &vec![toml::Value::String("sandbox".into())]
+    );
+    // The two blocks are written together, before the table that followed them.
+    assert!(
+        written.find("platform").unwrap() < written.find("[memory]").unwrap(),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_forge_with_only_a_kind_writes_only_the_kind() {
+    let dir = plane("schema = 1\n");
+    add(
+        dir.path(),
+        Some("schema = 1\n"),
+        &entry("github", " ", "", &[]),
+    )
+    .unwrap();
+    assert_eq!(
+        shared(dir.path()),
+        "schema = 1\n\n[[forge]]\nkind = \"github\"\n"
+    );
+}
+
+#[test]
+fn an_empty_kind_is_the_default_kind_written_out() {
+    let dir = plane("schema = 1\n");
+    add(
+        dir.path(),
+        Some("schema = 1\n"),
+        &entry("", "acme", "", &[]),
+    )
+    .unwrap();
+    let cfg: toml::Table = shared(dir.path()).parse().unwrap();
+    assert_eq!(cfg["forge"][0]["kind"].as_str(), Some("gitlab"));
+}
+
+#[test]
+fn a_kind_and_a_host_charter_cannot_use_are_refused_by_field_in_the_readers_words() {
+    let dir = plane(SHARED);
+    let refusal = add(
+        dir.path(),
+        Some(SHARED),
+        &entry("bitbucket", "acme", "https://git.acme.dev/", &[]),
+    )
+    .unwrap_err();
+    assert_eq!(fields(&refusal), ["kind", "host"]);
+    assert_eq!(
+        refusal.fields[0].why,
+        "unknown forge kind 'bitbucket' — known kinds: github, gitlab"
+    );
+    assert!(
+        refusal.fields[1]
+            .why
+            .starts_with("host 'https://git.acme.dev/' is not a hostname"),
+        "{}",
+        refusal.fields[1].why
+    );
+    assert_eq!(shared(dir.path()), SHARED, "nothing is written");
+}
+
+#[test]
+fn a_host_another_block_declares_as_another_kind_is_refused_on_the_host() {
+    let dir = plane(SHARED);
+    let refusal = add(
+        dir.path(),
+        Some(SHARED),
+        &entry("gitlab", "acme", "github.com", &[]),
+    )
+    .unwrap_err();
+    assert_eq!(fields(&refusal), ["host"]);
+    assert_eq!(
+        refusal.fields[0].why,
+        "github.com is already a GitHub forge in [[forge]] block 1: one host is one forge"
+    );
+}
+
+#[test]
+fn the_same_forge_and_owner_twice_is_refused_on_the_owner() {
+    let dir = plane(SHARED);
+    let refusal = add(dir.path(), Some(SHARED), &entry("github", "acme", "", &[])).unwrap_err();
+    assert_eq!(fields(&refusal), ["owner"]);
+    assert_eq!(
+        refusal.fields[0].why,
+        "[[forge]] block 1 already lists acme on github.com"
+    );
+}
+
+#[test]
+fn a_file_changed_since_it_was_read_is_refused_as_a_whole_and_kept() {
+    let dir = plane(SHARED);
+    let refusal = add(
+        dir.path(),
+        Some("schema = 1\n"),
+        &entry("gitlab", "x", "", &[]),
+    )
+    .unwrap_err();
+    assert!(refusal.fields.is_empty());
+    assert!(
+        refusal.file[0].starts_with("charter.toml changed on disk since this tab read it"),
+        "{:?}",
+        refusal.file
+    );
+    assert_eq!(shared(dir.path()), SHARED);
+}
+
+#[test]
+fn a_secret_in_an_owner_is_refused_as_every_save_refuses_it() {
+    let dir = plane(SHARED);
+    let token = "AKIAIOSFODNN7EXAMPLE";
+    let refusal = add(dir.path(), Some(SHARED), &entry("gitlab", token, "", &[])).unwrap_err();
+    assert!(
+        refusal
+            .file
+            .iter()
+            .any(|why| why.contains("looks like it holds a secret")),
+        "{:?}",
+        refusal.file
+    );
+    assert!(!shared(dir.path()).contains(token));
+}
+
+#[test]
+fn forge_written_as_something_other_than_blocks_is_left_to_edit_as_toml() {
+    let text = "schema = 1\nforge = [{ kind = \"github\" }]\n";
+    let dir = plane(text);
+    let refusal = add(dir.path(), Some(text), &entry("gitlab", "x", "", &[])).unwrap_err();
+    assert_eq!(
+        refusal.file,
+        [
+            "forge in charter.toml is not written as [[forge]] blocks, so a form cannot add one — \
+          add it under Edit as TOML"
+        ]
+    );
+}
+
+#[test]
+fn a_removed_forge_takes_its_block_and_nothing_else() {
+    let text = "schema = 1\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n\n[[forge]]\nkind = \"gitlab\"\nowner = \"ops\"\n\n[memory]\nshare = \"local\"\n";
+    let dir = plane(text);
+    remove(dir.path(), Some(text), 0).unwrap();
+    assert_eq!(
+        shared(dir.path()),
+        "schema = 1\n\n[[forge]]\nkind = \"gitlab\"\nowner = \"ops\"\n\n[memory]\nshare = \"local\"\n"
+    );
+}
+
+#[test]
+fn removing_the_last_forge_leaves_no_forge_key() {
+    let dir = plane(SHARED);
+    remove(dir.path(), Some(SHARED), 0).unwrap();
+    let written = shared(dir.path());
+    assert!(!written.contains("forge"), "{written}");
+    assert!(written.contains("[memory]"), "{written}");
+}
+
+#[test]
+fn a_block_that_is_not_there_is_refused() {
+    let dir = plane(SHARED);
+    let refusal = remove(dir.path(), Some(SHARED), 3).unwrap_err();
+    assert_eq!(refusal.file, ["[[forge]] block 4 is not there"]);
+}
+
+const SELF_HOSTED: &str = "\
+schema = 1
+
+[[forge]]
+kind = \"gitlab\"
+group = \"platform\"
+host = \"git.acme.dev\"
+
+[[forge]]
+kind = \"github\"
+owner = \"acme\"
+";
+
+#[test]
+fn removing_a_self_hosted_forge_a_catalogued_repo_is_on_is_refused_naming_the_repo() {
+    let dir = plane(SELF_HOSTED);
+    catalogue(
+        dir.path(),
+        &[
+            ("billing", "git@git.acme.dev:platform/billing.git"),
+            ("site", "git@github.com:acme/site.git"),
+        ],
+    );
+    let refusal = remove(dir.path(), Some(SELF_HOSTED), 0).unwrap_err();
+    assert_eq!(refusal.referrers.len(), 1, "{refusal:?}");
+    assert_eq!(
+        refusal.referrers[0].what,
+        "The repo billing (inventory/repos.json) is on git.acme.dev."
+    );
+    assert_eq!(refusal.referrers[0].group, None);
+    assert_eq!(shared(dir.path()), SELF_HOSTED, "nothing is written");
+}
+
+#[test]
+fn a_pr_mode_on_a_repo_that_needs_the_forge_is_named_with_its_settings_group() {
+    let dir = plane(SELF_HOSTED);
+    catalogue(
+        dir.path(),
+        &[("billing", "https://git.acme.dev/platform/billing.git")],
+    );
+    fs::write(
+        dir.path().join("charter.local.toml"),
+        "[repos.billing]\nmode = \"pr\"\n",
+    )
+    .unwrap();
+    let refusal = remove(dir.path(), Some(SELF_HOSTED), 0).unwrap_err();
+    let named: Vec<(&str, Option<&str>)> = refusal
+        .referrers
+        .iter()
+        .map(|one| (one.what.as_str(), one.group))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            (
+                "The repo billing (inventory/repos.json) is on git.acme.dev.",
+                None
+            ),
+            (
+                "[repos.billing] mode = \"pr\" in charter.local.toml opens a request on git.acme.dev.",
+                Some("project.saving")
+            ),
+        ]
+    );
+}
+
+#[test]
+fn the_planes_own_pr_mode_on_the_forge_is_named() {
+    let text = format!("{SELF_HOSTED}\n[plane]\nmode = \"pr-merge\"\n");
+    let dir = plane(&text);
+    crate::testgit::run(
+        dir.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@git.acme.dev:platform/plane.git",
+        ],
+    );
+    let refusal = remove(dir.path(), Some(&text), 0).unwrap_err();
+    assert_eq!(
+        refusal
+            .referrers
+            .iter()
+            .map(|one| (one.what.as_str(), one.group))
+            .collect::<Vec<_>>(),
+        [(
+            "[plane] mode = \"pr-merge\" in charter.toml opens a request on git.acme.dev, where \
+             this project's origin is.",
+            Some("project.saving")
+        )]
+    );
+}
+
+#[test]
+fn a_forge_at_a_kinds_own_host_is_needed_by_nothing_since_that_host_is_known_without_it() {
+    let dir = plane(SELF_HOSTED);
+    catalogue(dir.path(), &[("site", "git@github.com:acme/site.git")]);
+    remove(dir.path(), Some(SELF_HOSTED), 1).unwrap();
+    assert!(!shared(dir.path()).contains("github"));
+}
+
+#[test]
+fn a_host_another_block_still_declares_is_needed_by_nothing() {
+    let text = format!(
+        "{SELF_HOSTED}\n[[forge]]\nkind = \"gitlab\"\ngroup = \"data\"\nhost = \"git.acme.dev\"\n"
+    );
+    let dir = plane(&text);
+    catalogue(
+        dir.path(),
+        &[("billing", "git@git.acme.dev:platform/billing.git")],
+    );
+    remove(dir.path(), Some(&text), 0).unwrap();
+}
+
+#[test]
+fn adding_a_forge_and_removing_it_again_leaves_the_file_as_it_was() {
+    let text = "schema = 1\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n\n[memory]\nshare = \"local\"\n\n[persona]\ndefault = \"steward\"\n";
+    let dir = plane(text);
+    add(
+        dir.path(),
+        Some(text),
+        &entry("gitlab", "ops", "git.ops.invalid", &[]),
+    )
+    .unwrap();
+    let added = shared(dir.path());
+    assert!(
+        added.find("git.ops.invalid").unwrap() < added.find("[memory]").unwrap(),
+        "{added}"
+    );
+    remove(dir.path(), Some(&added), 1).unwrap();
+    assert_eq!(shared(dir.path()), text);
+}

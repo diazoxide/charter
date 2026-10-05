@@ -701,7 +701,7 @@ export const SHARED: Group[] = [
   },
   {
     title: "Forges",
-    note: "One block per [[forge]] in the file. Add or remove a block under Edit as TOML.",
+    note: "One block per [[forge]] in the file.",
     controls: (file) =>
       forgeBlocks(file).flatMap((at) => {
         const block = (name: string): SettingsStep[] => [

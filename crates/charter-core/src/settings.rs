@@ -34,6 +34,8 @@ use std::path::{Path, PathBuf};
 
 use crate::profiles::{self, COMMITTED_FILE, LOCAL_FILE};
 
+pub mod collection;
+pub mod forges;
 pub mod workspace;
 
 /// Where an answer came from: which layer of the Shared/Workspace/Local overlay decided it
@@ -629,7 +631,11 @@ pub fn save(root: &Path, which: Which, base: Option<&str>, text: &str) -> Result
 
 /// The file as it is on disk — whether it is there, and its text — when it is still what the
 /// caller read (`base`, `None`: it was not there); otherwise why nothing is written.
-fn unchanged(root: &Path, which: Which, base: Option<&str>) -> Result<(bool, String), Vec<String>> {
+pub(crate) fn unchanged(
+    root: &Path,
+    which: Which,
+    base: Option<&str>,
+) -> Result<(bool, String), Vec<String>> {
     let (exists, now) = on_disk(root, which).map_err(|why| vec![why])?;
     if (exists, now.as_str()) != (base.is_some(), base.unwrap_or_default()) {
         return Err(vec![format!(
