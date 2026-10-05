@@ -253,9 +253,10 @@ fn hh_mm_ss_ff(t: &[u8]) -> Option<Clock> {
     let read: u32 = fraction.iter().fold(0, |n, d| n * 10 + u32::from(d - b'0'));
     let micros = read * 10u32.pow(6 - digits as u32);
     p += digits;
-    while t.get(p).is_some_and(u8::is_ascii_digit) {
-        p += 1;
-    }
+    // Digits past the sixth are read and dropped, as the C does. Counted rather than stepped
+    // over one at a time: a step that went wrong was a loop that never ended, which only a
+    // test's timeout could catch (#464).
+    p += t[p..].iter().take_while(|b| b.is_ascii_digit()).count();
     Some(Clock {
         hms,
         micros,

@@ -2910,14 +2910,25 @@ fn git_auth_names_three_drifted_repos_without_saying_there_are_more() {
 #[cfg(unix)]
 #[test]
 fn git_auth_names_the_workspaces_folder_itself_when_it_cannot_be_listed() {
+    // Not as root, which reads a mode-000 directory all the same.
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
+    /// Gives the folder its mode back however the test ends, so its temp dir can go.
+    struct Restore<'a>(&'a Path);
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
     let (_d, root) = plane("schema = 1\n");
     let listing = root.join("workspaces");
     std::fs::create_dir_all(&listing).unwrap();
     std::fs::set_permissions(&listing, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = Restore(&listing);
 
     let r = one(&root, "git auth");
-    std::fs::set_permissions(&listing, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert_eq!(r.status, Status::Warn, "{r:?}");
     assert_eq!(

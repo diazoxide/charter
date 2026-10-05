@@ -418,7 +418,8 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
 /// - **Nothing kept** — the first push from this clone — leases the branch as absent. A
 ///   branch that is there anyway is pushed over only when its tip is already in HEAD's
 ///   history, so nothing is lost; otherwise it is somebody else's, and the plane is blocked.
-/// - **A branch that is gone** — deleted after its PR merged — is leased again as absent.
+/// - **A branch that is gone** — deleted after its PR merged, even between a first push and
+///   the listing after it — is leased again as absent.
 fn push_save_branch(
     root: &Path,
     https: &str,
@@ -453,6 +454,9 @@ fn push_save_branch(
     };
     let expected = kept.pushed.clone().unwrap_or_default();
     let mut pushed = push(&expected).map_err(|unavailable| failed(unavailable.to_string(), say))?;
+    // Only a stale lease sends charter back to the remote. A push that landed is done, and one
+    // refused for a reason of the remote's own keeps that reason: a listing after it that
+    // failed would put "could not read from remote" in its place.
     if !pushed.ok() && pushed.err.contains("stale info") {
         // What the remote has instead: nothing, or a tip.
         let listed = git::run_network(
@@ -471,8 +475,14 @@ fn push_save_branch(
             .filter(|sha| is_object_name(sha))
             .map(str::to_string);
         let again = match &tip {
-            // Gone from the remote: nobody's commits are on it.
-            None if !expected.is_empty() => Some(String::new()),
+            // Gone from the remote: nobody's commits are on it, so it is leased again as
+            // absent — whatever was expected. With nothing expected the first push leased it as
+            // absent too, and found it there: deleted between that push and this listing, as
+            // the forge deletes a merged request's branch. A clone that never pushed this
+            // branch has no request of its own to settle first, so pushing it afresh is what
+            // its next save would do anyway, and blocking would only stop auto-save over a race
+            // (D-HY8g, amended after review).
+            None => Some(String::new()),
             // Already in HEAD's history — this clone's own earlier push, unrecorded — so
             // nothing of anybody's is lost. The tip has to be here to be asked about.
             Some(tip) if tip_is_in_head(root, https, helper, save, tip) => Some(tip.clone()),
@@ -542,6 +552,9 @@ fn describe(root: &Path, target: &str, save: &str, kind: forge::Kind) -> (String
     .unwrap_or_default();
     let total = count(root, &range).map_or(subjects.len(), |n| n as usize);
     let host = crate::dispatch::host();
+    // `total == 1` is the subjects' own count whenever there is one subject: they are the newest
+    // `LISTED` of the same range, and `total` falls back to their count. Excluded as
+    // equivalent in `.cargo/mutants.toml`.
     let title = match subjects.as_slice() {
         [one] if total == 1 => one.clone(),
         _ => format!("{total} saves from {host}"),
@@ -834,3 +847,6 @@ fn differing(root: &Path, head: &str, theirs: &str) -> Vec<String> {
     args.extend(touched.iter().map(String::as_str));
     names(&args).unwrap_or_else(|| vec!["(git could not compare them)".to_string()])
 }
+
+#[cfg(test)]
+mod tests;

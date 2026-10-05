@@ -936,7 +936,10 @@ mod pr_saves {
                 .is_some_and(|why| why.contains("HTTP 502")),
             "{line}"
         );
-        assert_ne!(plane.standing().stage, Stage::Blocked);
+        let standing = plane.standing();
+        assert_ne!(standing.stage, Stage::Blocked);
+        // The PR this clone opened stays known through a save that failed after it.
+        assert_eq!(standing.pr, Some(plane.url(12)), "{standing:?}");
     }
 
     #[test]
@@ -1012,6 +1015,7 @@ mod pr_saves {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_merged_pr_the_plane_cannot_move_onto_yet_is_said_in_the_saves_journal() {
         charter_core::unsteered!();
@@ -1020,7 +1024,18 @@ mod pr_saves {
         }
         // The merge brought `shelf/incoming.md`, and this clone has an empty `shelf` nothing may
         // be written into: the move waits, and a save with nothing to commit says why in its
-        // journal line.
+        // journal line. Not as root, which writes into a mode-555 directory all the same.
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        /// Gives `shelf` its mode back however the test ends, so its temp dir can go.
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
         let plane = plane("waits.test", "pr");
         plane.opened("work.md", 12);
         let at = merge(&plane, "squash");
@@ -1032,14 +1047,12 @@ mod pr_saves {
         git(&theirs, &["push", "-q", "origin", "release"]);
         let shelf = plane.root.join("shelf");
         std::fs::create_dir(&shelf).unwrap();
-        std::fs::set_permissions(&shelf, std::os::unix::fs::PermissionsExt::from_mode(0o555))
-            .unwrap();
+        std::fs::set_permissions(&shelf, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let _restore = Restore(shelf.clone());
         plane.merged(12, &at);
 
         let (code, said) = plane.save_as(None, Trigger::Cli);
 
-        std::fs::set_permissions(&shelf, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
         assert_eq!(code, 0, "{said}");
         let line = plane.last_journal();
         assert!(
@@ -1048,6 +1061,202 @@ mod pr_saves {
                 .is_some_and(|why| why.contains("once nothing here is in the way")),
             "{line} {said}"
         );
+    }
+
+    #[test]
+    fn a_block_clears_once_the_plane_is_moved_off_the_commit_it_is_about() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let plane = plane("moved-off.test", "pr");
+        plane.opened("work.md", 12);
+        plane.state(12, false);
+        planegit::fetch(&plane.root, true).expect("the fetch");
+        assert_eq!(plane.standing().stage, Stage::Blocked);
+
+        // The person settles it by hand: the plane back onto the remote's branch.
+        git(
+            &plane.root,
+            &["reset", "-q", "--hard", "refs/remotes/origin/release"],
+        );
+
+        let standing = plane.standing();
+        assert_ne!(standing.stage, Stage::Blocked, "{standing:?}");
+        assert_eq!(standing.blocked, None, "{standing:?}");
+    }
+
+    #[test]
+    fn a_clean_request_mode_plane_with_no_pr_known_has_nothing_to_save_or_ask() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // Nothing written down for the stand-in: asking the forge anything fails the save.
+        let plane = plane("at-rest.test", "pr");
+
+        let (code, said) = plane.save_as(None, Trigger::Cli);
+
+        assert_eq!(code, 0, "{said}");
+        assert!(said.contains("Nothing to save"), "{said}");
+        assert_eq!(plane.last_journal()["outcome"], "skipped");
+    }
+
+    #[test]
+    fn a_save_branch_tip_this_clone_pushed_but_lost_the_note_of_is_pushed_over() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // The note of what this clone last pushed is gone; the remote's tip is in HEAD's
+        // history, so it is this clone's own and nothing of anybody's is lost.
+        let plane = plane("lost-note.test", "pr");
+        plane.opened("one.md", 12);
+        std::fs::remove_file(charter_core::plane::state_dir(&plane.root).join("save-branch.json"))
+            .unwrap();
+        plane.lookup(Some(12));
+        let updated = plane.updated(12, &["one.md", "two.md"]);
+
+        let (code, said) = plane.save("two.md", "two.md");
+
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&updated), "{said}");
+        assert_eq!(plane.remote(SAVE), plane.head(), "{said}");
+        assert_eq!(plane.standing().stage, Stage::PrOpen, "{said}");
+    }
+
+    #[test]
+    fn a_request_carrying_more_saves_than_it_lists_says_how_many_earlier_ones_it_left_out() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let plane = plane("many.test", "pr");
+        for n in 1..=51 {
+            std::fs::write(plane.root.join("log.md"), n.to_string()).unwrap();
+            git(&plane.root, &["add", "-A"]);
+            git(&plane.root, &["commit", "-q", "-m", &format!("save {n}")]);
+        }
+        let host = plane.scene.host.clone();
+        let machine = charter_core::dispatch::host();
+        let mut body = format!(
+            "body=Saved by charter on {machine}. Every save from this machine pushes to {SAVE} \
+             and updates this pull request.\n\n- … and 1 earlier"
+        );
+        for n in 2..=51 {
+            body.push_str(&format!("\n- save {n}"));
+        }
+        plane.lookup(None);
+        let created = plane.scene.answers(
+            "gh",
+            &[
+                "api",
+                "--hostname",
+                &host,
+                "-X",
+                "POST",
+                "repos/acme/plane/pulls",
+                "-f",
+                &format!("head={SAVE}"),
+                "-f",
+                "base=release",
+                "-f",
+                &format!("title=51 saves from {machine}"),
+                "-f",
+                &body,
+            ],
+            0,
+            &format!(r#"{{"number": 12, "html_url": "{}"}}"#, plane.url(12)),
+            "",
+        );
+
+        let (code, said) = plane.save_as(None, Trigger::Cli);
+
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&created), "{said}");
+    }
+
+    #[test]
+    fn a_merge_the_forge_names_at_a_commit_not_on_the_target_blocks_the_plane() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // The forge says PR 12 merged as the save branch's own commit, which `release` on the
+        // remote does not hold: nothing is moved on its word.
+        let plane = plane("not-on-target.test", "pr");
+        plane.opened("work.md", 12);
+        let head = plane.head();
+        plane.merged(12, &head);
+
+        planegit::fetch(&plane.root, true).expect("the fetch");
+
+        let standing = plane.standing();
+        assert_eq!(standing.stage, Stage::Blocked, "{standing:?}");
+        assert!(
+            standing
+                .blocked
+                .as_deref()
+                .is_some_and(|why| why.contains("which is not on release")),
+            "{standing:?}"
+        );
+        assert_eq!(plane.head(), head);
+    }
+
+    #[test]
+    fn a_save_branch_changed_by_hand_is_pushed_and_given_its_own_pr() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // What was kept about the old save branch — its lease and its open PR — says nothing
+        // about the new one: the save pushes it, rather than calling PR 12 enough.
+        let plane = plane("renamed-save.test", "pr");
+        plane.opened("work.md", 12);
+        std::fs::create_dir_all(plane.root.join(".git/info")).unwrap();
+        std::fs::write(plane.root.join(".git/info/exclude"), "charter.local.toml\n").unwrap();
+        let next = "charter/save/next";
+        std::fs::write(
+            plane.root.join("charter.local.toml"),
+            format!("[plane]\nsave_branch = \"{next}\"\n"),
+        )
+        .unwrap();
+        plane.state(12, true);
+        plane.scene.gh_api(
+            "repos/acme/plane/pulls?state=open&head=acme:charter%2Fsave%2Fnext&base=release&per_page=1",
+            0,
+            "[]",
+            "",
+        );
+        let host = plane.scene.host.clone();
+        let created = plane.scene.answers(
+            "gh",
+            &[
+                "api",
+                "--hostname",
+                &host,
+                "-X",
+                "POST",
+                "repos/acme/plane/pulls",
+                "-f",
+                &format!("head={next}"),
+                "-f",
+                "base=release",
+                "-f",
+                "title=work.md",
+                "-f",
+                &format!("body={}", body(&["work.md"]).replace(SAVE, next)),
+            ],
+            0,
+            &format!(r#"{{"number": 13, "html_url": "{}"}}"#, plane.url(13)),
+            "",
+        );
+
+        let (code, said) = plane.save_as(None, Trigger::Cli);
+
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&created), "{said}");
+        assert_eq!(plane.remote(next), plane.head(), "{said}");
     }
 
     #[test]
