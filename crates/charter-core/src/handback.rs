@@ -62,7 +62,7 @@ const PLANE_ROOT_DIR: &str = "plane-root";
 
 /// Where every report waits.
 pub fn dir(root: &Path) -> PathBuf {
-    root.join(".charter").join("handbacks")
+    crate::names::state(root).join("handbacks")
 }
 
 /// The directory `whose` reports wait in, or `None` for a workspace name that cannot be one.

@@ -84,7 +84,7 @@ pub fn refusal(dir: &Path) -> Option<String> {
                 dir.display(),
                 above.display()
             ))
-        } else if above.join(crate::plane::MANIFEST).is_file() {
+        } else if crate::names::has_manifest(above) {
             Some(format!(
                 "{} is inside the project at {}, and charter's data home is never in a project",
                 dir.display(),
@@ -124,6 +124,16 @@ mod tests {
             dirs::data_dir().map(|dir| dir.join("charter")),
             "an empty value names nothing"
         );
+    }
+
+    #[test]
+    fn a_data_home_inside_a_project_marked_only_by_purlis_toml_is_refused() {
+        // RN-2a: a project is one by either manifest, and no `.git` here to catch it first.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("purlis.toml"), "schema = 1\n").unwrap();
+        let why = refusal(&root.join("data")).expect("refused");
+        assert!(why.contains("inside the project"), "{why}");
     }
 
     #[test]

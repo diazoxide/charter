@@ -328,6 +328,23 @@ pub const WALK_FIX: &str = "Exclude it — `grep -rn --exclude-dir=.charter …`
      '!.charter' …` — or search the path you actually mean. `charter … secret exec --env \
      NAME=<key> -- <cmd>` is how a command gets a value without anyone reading one.";
 
+/// [`WALK_FIX`] for a walk that reached `hit`, naming the state folder `hit` is in: the text
+/// above (which the Python oracle's recording pins) for `.charter/`, and the same sentence with
+/// the folder's own name for `.purlis/` (RN-2a), so the exclusion it offers is the one that works.
+pub fn walk_fix_for(hit: &Path) -> String {
+    let folder = hit
+        .ancestors()
+        .filter_map(Path::file_name)
+        .filter_map(|name| name.to_str())
+        .find(|name| crate::names::STATE_DIR.is(name));
+    match folder {
+        Some(folder) if folder != crate::names::STATE_DIR.reads[0] => {
+            WALK_FIX.replace(crate::names::STATE_DIR.reads[0], folder)
+        }
+        _ => WALK_FIX.to_owned(),
+    }
+}
+
 /// `_REVEAL_REASON`. Deliberately does NOT offer `secret cp` as a way to SEE a value: `cp`
 /// materialises it into a file, and the agent's next move after reading a denial is whatever
 /// the denial names — so that text was the documented route around itself (#423).
@@ -380,8 +397,10 @@ const I_CLASS: &str = "[iıİ]";
 fn vault_path_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // `edm` predates charter's own name for its state folder.
+        let states = crate::names::state_alternation();
         Regex::new(&format!(
-            r"(?i)\.(?:charter|edm)(?:/(?:vaults(?:/|\n?$)|browser|act{I_CLASS}ve-|f{I_CLASS}ngerpr{I_CLASS}nt)|/?\n?$)"
+            r"(?i)\.(?:{states}|edm)(?:/(?:vaults(?:/|\n?$)|browser|act{I_CLASS}ve-|f{I_CLASS}ngerpr{I_CLASS}nt)|/?\n?$)"
         ))
         .expect("the vault-path pattern compiles")
     })
@@ -1343,6 +1362,24 @@ pub fn glob_selects_inside(entry: &Path, pattern: &str, limit: usize) -> bool {
     false
 }
 
+/// `state_dir`, and beside it every other spelling of the state folder when `state_dir` is one
+/// (RN-2a): a plane holding both `.purlis/` and a leftover `.charter/` reads only the first, and
+/// the vaults left in the second are still the operator's.
+fn guarded_state_dirs(state_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![state_dir.to_path_buf()];
+    if let (Some(parent), Some(name)) = (state_dir.parent(), state_dir.file_name())
+        && crate::names::STATE_DIR.is(name)
+    {
+        for spelling in crate::names::STATE_DIR.spellings() {
+            let dir = parent.join(spelling);
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs
+}
+
 /// The guarded state entry a walk rooted at one of `operands` would descend into —
 /// `_walk_into_guarded_state`.
 ///
@@ -1362,7 +1399,10 @@ pub fn walk_into_guarded_state(
     excluded: &[String],
     state_dir: &Path,
 ) -> Option<PathBuf> {
-    let targets = guarded_state_entries(state_dir);
+    let targets: Vec<PathBuf> = guarded_state_dirs(state_dir)
+        .iter()
+        .flat_map(|dir| guarded_state_entries(dir))
+        .collect();
     if targets.is_empty() {
         return None;
     }
@@ -1549,10 +1589,11 @@ pub fn leak_reason(cmd: &str, cwd: &str, state_dir: &Path) -> Option<String> {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let fix = walk_fix_for(&hit);
             return Some(format!(
                 "walks a directory tree that contains the plane's own `{name}` — every file in \
                  it would be printed into the transcript, and none of them is named on this \
-                 command line. {WALK_FIX}"
+                 command line. {fix}"
             ));
         }
     }
@@ -1583,6 +1624,23 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use std::collections::BTreeSet;
+
+    /// The state folder under its purlis name holds the same vaults (RN-2a): a guard that knew
+    /// only `.charter` would wave a read of `.purlis/vaults` through.
+    #[test]
+    fn the_vaults_are_guarded_under_either_name_of_the_state_folder() {
+        for state in [".charter", ".purlis", ".edm"] {
+            assert!(
+                vault_path_re().is_match(&format!("{state}/vaults/x.json")),
+                "{state}"
+            );
+            assert!(vault_path_re().is_match(&format!("cat {state}")), "{state}");
+            assert!(
+                !vault_path_re().is_match(&format!("{state}/vaults.json")),
+                "{state}"
+            );
+        }
+    }
 
     /// CPython's `re.IGNORECASE` and the `regex` crate's `(?i)` are not the same function, and
     /// [`vault_path_re`] spells two letters where they could part company. Both are swept here
@@ -1659,6 +1717,37 @@ mod tests {
         std::fs::write(state.join("vaults/db.json"), "{}").unwrap();
         let at = dir.path().to_string_lossy().into_owned();
         (dir, at, state)
+    }
+
+    /// A walk is guarded into every spelling of the state folder (RN-2a): the one in use, and a
+    /// leftover beside it whose vaults are still the operator's.
+    #[test]
+    fn a_walk_is_refused_into_either_name_of_the_state_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for state in [".purlis", ".charter"] {
+            std::fs::create_dir_all(root.join(state).join("vaults")).unwrap();
+            std::fs::write(root.join(state).join("vaults/db.json"), "{}").unwrap();
+        }
+        let at = root.to_string_lossy().into_owned();
+        let in_use = root.join(".purlis");
+        for (operand, reaches) in [
+            (".", ".purlis"),
+            (".charter", ".charter"),
+            (".purlis", ".purlis"),
+        ] {
+            let hit = walk_into_guarded_state(&at, &[operand.to_owned()], &[], &in_use)
+                .unwrap_or_else(|| panic!("a walk of {operand} was let through"));
+            assert!(hit.starts_with(root.join(reaches)), "{}", hit.display());
+        }
+        // The refusal offers the exclusion that works for the folder it reached.
+        let fix = walk_fix_for(&root.join(".purlis/vaults"));
+        assert!(fix.contains("--exclude-dir=.purlis"), "{fix}");
+        assert!(!fix.contains(".charter"), "{fix}");
+        assert_eq!(walk_fix_for(&root.join(".charter/vaults")), WALK_FIX);
+        // Excluding the one in use keeps the walk out of it, not out of the leftover.
+        let hit = walk_into_guarded_state(&at, &[".".to_owned()], &[".purlis".to_owned()], &in_use);
+        assert!(hit.is_some_and(|hit| hit.starts_with(root.join(".charter"))));
     }
 
     /// A heredoc the shell reads one way and the strip plan another hid a real read (#359). The

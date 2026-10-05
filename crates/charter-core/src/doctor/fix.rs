@@ -243,7 +243,10 @@ fn local_ignore(root: &Path) -> Fixed {
     let check = crate::profiles::ignore_check(root);
     if check.passes() {
         return Fixed::Ran {
-            said: vec!["✓ git does not carry charter.local.toml — nothing to do.".to_owned()],
+            said: vec![format!(
+                "✓ git does not carry {} — nothing to do.",
+                crate::names::LOCAL_SETTINGS.spelling_at(root, Path::is_file)
+            )],
             complete: true,
         };
     }
@@ -352,7 +355,7 @@ fn refusal(root: &Path) -> Option<String> {
     if crate::scaffold::manifest_escapes(root) {
         return None;
     }
-    if !root.join(crate::plane::MANIFEST).is_file() {
+    if !crate::names::has_manifest(root) {
         return Some(format!(
             "no project at {} (it has no charter.toml), so there is nothing to fix",
             super::fsx::path_field(root)

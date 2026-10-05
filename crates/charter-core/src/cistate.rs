@@ -38,8 +38,13 @@ use serde_json::Value;
 
 use crate::contain;
 
-/// The cache the forge refresher writes, relative to the plane root.
-pub const CACHE: &str = ".charter/cache/glstate.json";
+/// The cache the forge refresher writes, relative to the plane's state folder ([`cache`]).
+pub const CACHE: &str = "cache/glstate.json";
+
+/// The cache of the plane at `plane`.
+pub fn cache(plane: &Path) -> std::path::PathBuf {
+    crate::names::state(plane).join(CACHE)
+}
 
 /// How long an entry is served for: `charter/glstate.py:21` `DISPLAY_TTL`.
 pub const DISPLAY: Duration = Duration::from_secs(7200);
@@ -117,7 +122,7 @@ pub enum Reading {
 /// Read `.charter/cache/glstate.json`. A plane nothing has refreshed has an empty cache,
 /// which is an answer and not a refusal.
 pub fn read(plane: &Path) -> Result<Cache, NotRead> {
-    let path = plane.join(CACHE);
+    let path = cache(plane);
     let named = path.display().to_string();
     // `.charter/` is not one of the plane's data directories, so `contain::readable` is the
     // wrong gate here — it would refuse every read of this file. The right one is the walk

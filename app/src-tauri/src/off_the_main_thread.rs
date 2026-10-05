@@ -381,7 +381,7 @@ mod tests {
         }
         // And `chat_usage`'s read for an open chat, which stays synchronous: its usage file, a
         // ring of sixteen rows.
-        let sessions = dir.path().join(charter_core::usage::SESSIONS);
+        let sessions = charter_core::usage::sessions_dir(dir.path());
         std::fs::create_dir_all(&sessions).expect("its sessions");
         let rows: String = (0..16)
             .map(|n| format!("{},{},90,{}\n", 1000 * n, 100 * n, n))

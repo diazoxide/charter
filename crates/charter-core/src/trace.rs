@@ -25,7 +25,8 @@ pub fn bucket(env: &dyn Fn(&str) -> Option<String>) -> String {
 
 /// The trace file of one session.
 pub fn file(root: &Path, session: &str) -> PathBuf {
-    root.join(".charter/persona-state/trace")
+    crate::names::state(root)
+        .join("persona-state/trace")
         .join(format!("{session}.jsonl"))
 }
 

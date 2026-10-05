@@ -93,8 +93,19 @@ impl Which {
         }
     }
 
+    /// The file at `root`, under the name the plane has it by (RN-2a): a write lands in the
+    /// file that is there, never beside it.
     fn path(self, root: &Path) -> PathBuf {
-        root.join(self.file())
+        root.join(self.file_at(root))
+    }
+
+    /// The file's name at `root`: [`Self::file`] until the plane has it under its purlis name.
+    pub fn file_at(self, root: &Path) -> &'static str {
+        let name = match self {
+            Self::Shared => crate::names::PLANE_MANIFEST,
+            Self::Local => crate::names::LOCAL_SETTINGS,
+        };
+        name.spelling_at(root, Path::is_file)
     }
 
     /// The other of the two.
@@ -229,7 +240,7 @@ pub fn read(root: &Path, which: Which) -> Result<Read, String> {
     let (exists, text) = on_disk(root, which)?;
     let refusals = refusals(root, which, &text);
     Ok(Read {
-        file: which.file(),
+        file: which.file_at(root),
         exists,
         text,
         refusals,

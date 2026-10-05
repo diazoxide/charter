@@ -1912,7 +1912,7 @@ mod tests {
         let binary = stand_in(beside.path());
         // The refresh is detached into a group of its own: killed with the test by the pid
         // the lock names, however the assertions below end (#923).
-        let _ends = stand_in::Ends::named_in(root.join(charter_core::glrefresh::LOCK));
+        let _ends = stand_in::Ends::named_in(charter_core::glrefresh::lock(&root));
 
         let drawn = states_of(&root, "alpha", Some(&binary)).expect("the panel draws");
 
@@ -1933,7 +1933,7 @@ mod tests {
         let binary = stand_in(beside.path());
         // The refresh is detached into a group of its own: killed with the test by the pid
         // the lock names, however the assertions below end (#923).
-        let _ends = stand_in::Ends::named_in(root.join(charter_core::glrefresh::LOCK));
+        let _ends = stand_in::Ends::named_in(charter_core::glrefresh::lock(&root));
 
         states_of(&root, "alpha", Some(&binary)).expect("the panel draws");
         let once = ran(beside.path());

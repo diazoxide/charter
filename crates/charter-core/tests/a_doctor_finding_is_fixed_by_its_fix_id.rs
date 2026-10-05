@@ -291,6 +291,11 @@ fn a_local_file_git_would_commit_is_ignored_by_local_ignore_and_then_checks_clea
         ignore.lines().any(|line| line == "/charter.local.toml"),
         "{ignore:?}"
     );
+    // Under its purlis name too (RN-2a), so a leftover under the other name never travels.
+    assert!(
+        ignore.lines().any(|line| line == "/purlis.local.toml"),
+        "{ignore:?}"
+    );
     assert_eq!(
         std::fs::read_to_string(root.join("charter.local.toml")).unwrap(),
         PROFILE,

@@ -419,7 +419,9 @@ fn referrers(root: &Path, before: &str, after: &str) -> Vec<Referrer> {
                 what: format!(
                     "[repos.{name}] mode = \"{}\" in {} opens a request on {host}.",
                     mode.value.as_str(),
-                    mode.source.file().unwrap_or("charter.toml"),
+                    mode.source
+                        .file()
+                        .unwrap_or(crate::profiles::COMMITTED_FILE),
                 ),
                 group: Some(SAVING),
             });
@@ -437,7 +439,10 @@ fn referrers(root: &Path, before: &str, after: &str) -> Vec<Referrer> {
                     "[plane] mode = \"{}\" in {} opens a request on {origin}, where this \
                      project's origin is.",
                     mode.as_str(),
-                    plane.source.file().unwrap_or("charter.toml"),
+                    plane
+                        .source
+                        .file()
+                        .unwrap_or(crate::profiles::COMMITTED_FILE),
                 ),
                 group: Some(SAVING),
             });

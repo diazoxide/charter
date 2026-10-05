@@ -31,7 +31,7 @@ impl Where {
     pub fn here() -> Self {
         let cwd = std::env::current_dir().unwrap_or_default();
         let root = charter_core::plane::resolve(&cwd).unwrap_or_else(|_| cwd.clone());
-        let in_plane = charter_core::plane::is_plane(&root);
+        let in_plane = charter_core::names::has_manifest(&root);
         Self {
             root,
             in_plane,

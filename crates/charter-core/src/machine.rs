@@ -1756,7 +1756,7 @@ pub fn still_a_plane(plane: &Path) -> Result<(), String> {
     if !found.is_dir() {
         return Err("is not a directory any more".to_owned());
     }
-    if !crate::plane::is_plane(plane) {
+    if !crate::names::has_manifest(plane) {
         return Err(format!(
             "is not a plane any more: it holds no {}",
             crate::plane::MANIFEST
@@ -3264,7 +3264,7 @@ mod tests {
         std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
         let elsewhere = held.path().join("elsewhere.json");
         std::fs::write(&elsewhere, br#"{"version":1,"at":0,"chats":[]}"#).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, plane.join(crate::reopen::IN_PLANE)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, crate::reopen::path(&plane)).unwrap();
 
         assert_eq!(Contribution::of(&plane), Contribution::default());
     }

@@ -208,7 +208,12 @@ fn versioned() -> &'static Regex {
 fn self_path() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"\.(?:charter|edm)(?:/|$)|persona\.md|personas/\.default").expect("compiles")
+        // Every spelling of the state folder (RN-2a); `edm` predates charter.
+        let states = crate::names::state_alternation();
+        Regex::new(&format!(
+            r"\.(?:{states}|edm)(?:/|$)|persona\.md|personas/\.default"
+        ))
+        .expect("compiles")
     })
 }
 

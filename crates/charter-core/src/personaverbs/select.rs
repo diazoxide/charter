@@ -40,7 +40,7 @@ pub(super) fn usable(id: Option<&str>) -> Option<&str> {
 
 /// `persona.set_active`: write the pointers and return the reach of the longest-lived one.
 pub fn set_active(root: &Path, name: &str, ids: &Ids) -> Scope {
-    let state = root.join(".charter");
+    let state = crate::names::state(root);
     let _ = crate::plane::private_dir(root, &state);
     let line = format!("{name}\n");
     let sid = usable(ids.session.as_deref());

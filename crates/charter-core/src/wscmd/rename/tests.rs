@@ -310,7 +310,7 @@ fn everything_follows(plane: &Plane) {
     );
 
     // The journal is gone, and the plane was saved once with the move in it.
-    assert!(!root.join(JOURNAL).exists());
+    assert!(!journal_path(root).exists());
     assert_eq!(
         git(root, &["log", "-1", "--format=%s"]).trim(),
         "charter workspace rename alpha beta"
@@ -374,7 +374,7 @@ fn a_rename_killed_at_any_step_leaves_one_name_working_and_the_same_command_fini
         let (code, _) = run(&plane, "alpha", "beta");
         CRASH_AFTER.with(|at| at.set(None));
         assert_eq!(code, 1, "{step:?}");
-        assert!(plane.root.join(JOURNAL).exists(), "{step:?}");
+        assert!(journal_path(&plane.root).exists(), "{step:?}");
 
         if step == Step::Journal {
             // Before the commit point: alpha is whole, its worktrees too.
@@ -419,7 +419,7 @@ fn a_chat_running_in_the_workspace_stops_it_and_is_named() {
     );
     assert!(plane.root.join("workspaces/alpha").is_dir());
     assert!(!plane.root.join("workspaces/beta").exists());
-    assert!(!plane.root.join(JOURNAL).exists());
+    assert!(!journal_path(&plane.root).exists());
 }
 
 #[test]
@@ -434,7 +434,7 @@ fn a_name_that_is_taken_is_refused_before_anything_moves() {
         vec!["✗ workspace 'other' already exists — pick another name or remove it first."]
     );
     assert!(plane.root.join("workspaces/alpha").is_dir());
-    assert!(!plane.root.join(JOURNAL).exists());
+    assert!(!journal_path(&plane.root).exists());
 }
 
 #[test]
@@ -455,7 +455,7 @@ fn a_name_that_cannot_be_a_workspace_is_refused_before_anything_moves() {
     assert_eq!(code, 1);
     assert_eq!(said, vec!["✗ no workspace 'nope'"]);
     assert!(plane.root.join("workspaces/alpha").is_dir());
-    assert!(!plane.root.join(JOURNAL).exists());
+    assert!(!journal_path(&plane.root).exists());
 }
 
 #[test]
@@ -622,7 +622,7 @@ fn a_move_the_journal_cannot_record_is_put_back() {
     assert!(said[0].contains("it was put back"), "{said:?}");
     assert!(plane.root.join("workspaces/alpha/svc").is_dir());
     assert!(!plane.root.join("workspaces/beta").exists());
-    assert!(!plane.root.join(JOURNAL).exists());
+    assert!(!journal_path(&plane.root).exists());
 }
 
 const CONVERSATION: &str = "11111111-2222-4333-8444-555555555555";

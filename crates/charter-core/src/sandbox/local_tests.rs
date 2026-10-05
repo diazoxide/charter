@@ -176,10 +176,11 @@ fn the_answer_is_kept_where_a_chat_cannot_write_it() {
     let project = a_project("schema = 1\n");
     answer(project.path(), Answer::KeepItOff).expect("answered");
 
-    let kept = project.path().join(IN_PLANE);
+    let kept = path(project.path());
     assert!(kept.is_file(), "{}", kept.display());
     // `.charter/app/` is the integrity class's: a sandboxed chat never writes it.
-    assert!(IN_PLANE.starts_with(".charter/app/"));
+    assert!(kept.starts_with(project.path().join(".charter/app")));
+    assert!(IN_STATE.starts_with("app/"));
 }
 
 // -------------------------------------------------------------------------------------
@@ -270,7 +271,7 @@ fn a_rate_rounds_up_so_it_never_reads_under_the_bar_when_it_is_not() {
 #[test]
 fn a_tally_charter_cannot_read_reads_as_empty_and_the_next_count_starts_it_again() {
     let project = a_project("schema = 1\n");
-    let file = project.path().join(IN_PLANE);
+    let file = path(project.path());
     std::fs::create_dir_all(file.parent().expect("a parent")).expect("the directory");
     std::fs::write(&file, "not json").expect("written");
 

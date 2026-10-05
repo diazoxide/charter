@@ -197,7 +197,7 @@ impl Ctx {
     pub fn new(root: &Path, env: Env) -> Self {
         let state = match env.get("PURLIS_HOME") {
             Some(home) if !home.is_empty() => PathBuf::from(home),
-            _ => root.join(".charter"),
+            _ => crate::names::state(root),
         };
         Self {
             root: root.to_path_buf(),

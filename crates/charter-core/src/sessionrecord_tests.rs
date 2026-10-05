@@ -421,7 +421,7 @@ fn a_chats_facts_come_from_the_apps_record_of_it_by_number() {
     let dir = plane(&[]);
     std::fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
     std::fs::write(
-        dir.path().join(crate::reopen::IN_PLANE),
+        crate::reopen::path(dir.path()),
         r#"{"version": 1, "at": 1, "dealt": 7, "chats": [
             {"program": "claude", "name": "3", "number": 3, "resume": "old-one"},
             {"program": "/usr/local/bin/claude", "name": "7", "number": 7,
@@ -456,7 +456,7 @@ fn a_chat_at_the_plane_root_ran_in_dot_and_one_outside_the_plane_in_no_directory
     let dir = plane(&[]);
     std::fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
     std::fs::write(
-        dir.path().join(crate::reopen::IN_PLANE),
+        crate::reopen::path(dir.path()),
         r#"{"version": 1, "at": 1, "dealt": 7, "chats": [
             {"program": "claude", "name": "3", "number": 3, "cwd": "PLANE"},
             {"program": "claude", "name": "4", "number": 4, "cwd": "/somewhere/else"},
@@ -741,7 +741,7 @@ fn whether_a_chat_ran_unsandboxed_comes_from_the_apps_record_of_it() {
     let dir = plane(&[]);
     std::fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
     std::fs::write(
-        dir.path().join(crate::reopen::IN_PLANE),
+        crate::reopen::path(dir.path()),
         r#"{"version": 1, "at": 1, "dealt": 8, "chats": [
             {"program": "claude", "name": "7", "number": 7, "sandbox": "off"},
             {"program": "claude", "name": "8", "number": 8}

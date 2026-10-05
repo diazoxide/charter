@@ -291,7 +291,8 @@ pub fn sources(root: &Path, ask: &Ask) -> (Vec<(String, PathBuf)>, Unread) {
 /// A persona's ephemeral scratch for one session:
 /// `.charter/persona-state/ephemeral/<session>/<persona>`.
 pub fn ephemeral_dir(root: &Path, session: &str, persona: &str) -> PathBuf {
-    root.join(".charter/persona-state/ephemeral")
+    crate::names::state(root)
+        .join("persona-state/ephemeral")
         .join(session)
         .join(persona)
 }

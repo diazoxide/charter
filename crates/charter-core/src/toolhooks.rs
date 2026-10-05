@@ -335,7 +335,7 @@ pub fn pretooluse_read(hook: &Hook) -> Answer {
     deny(format!(
         "walks a directory tree that contains the plane's own `{name}` — every file in it \
          would be printed into the transcript, and none of them is named on this call. {}",
-        leakguard::WALK_FIX
+        leakguard::walk_fix_for(&walked)
     ))
 }
 

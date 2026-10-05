@@ -204,6 +204,7 @@ pub const GITIGNORE_BASELINE: &str = "\
 # Per-developer secret vaults + registry (plaintext secrets, tokens, file paths).
 # NEVER commit this — it holds credentials.
 /.charter/
+/.purlis/
 
 # This machine's own harness permissions. Its committed
 # sibling `.claude/settings.json` is deliberately NOT ignored — that one is the team's.
@@ -212,6 +213,7 @@ pub const GITIGNORE_BASELINE: &str = "\
 # This machine's harness profiles (commands, config folders). Never committed: a profile's
 # command runs on a click, and a merged edit would run it on every machine.
 /charter.local.toml
+/purlis.local.toml
 
 # Session records of chats at the plane root (a chat's Smart close writes them). This
 # machine's own, like a LOCAL workspace's; delete this line to share them with the plane.
@@ -227,7 +229,31 @@ __pycache__/
 ";
 
 const LOCAL_SETTINGS_IGNORE: &str = "/.claude/settings.local.json";
-const LOCAL_PROFILES_IGNORE: &str = "/charter.local.toml";
+/// The `.gitignore` lines that keep the local settings file on this machine, under BOTH its
+/// names (RN-2a): a line for a name the plane does not use is inert, and a leftover under the
+/// other name would otherwise be committed.
+fn local_profiles_ignores() -> Vec<String> {
+    old_then_purlis(crate::names::LOCAL_SETTINGS)
+        .map(|name| format!("/{name}"))
+        .collect()
+}
+
+/// A name's window spellings, the old one first: the order the lines have always come in, with
+/// the purlis one after it.
+fn old_then_purlis(name: crate::names::Name) -> impl Iterator<Item = &'static str> {
+    name.reads
+        .iter()
+        .copied()
+        .chain(std::iter::once(name.write))
+}
+
+/// The `.gitignore` lines that keep the state folder on this machine, under both its names, for
+/// the same reason: a leftover `.purlis/` beside `.charter/` holds a vault registry too.
+fn state_ignores() -> Vec<String> {
+    old_then_purlis(crate::names::STATE_DIR)
+        .map(|name| format!("/{name}/"))
+        .collect()
+}
 
 /// The plane root's session records (ADR 0064), kept on this machine. A workspace's follow the
 /// workspace, LOCAL until it is made LIVE; the plane root has no such switch, so its records
@@ -325,7 +351,8 @@ fn strerror(e: &std::io::Error) -> String {
 /// write nothing (FR-24); the read-only check leaves it to them, because reading through the
 /// link would answer a file that is not the project's.
 pub fn manifest_escapes(root: &Path) -> bool {
-    occupied(&root.join(crate::plane::MANIFEST)) && gate(root, crate::plane::MANIFEST).is_err()
+    occupied(&crate::names::manifest(root))
+        && gate(root, crate::names::manifest_name(root)).is_err()
 }
 
 /// The refusal a command meets on a plane whose format this charter cannot place
@@ -335,8 +362,8 @@ fn refused(root: &Path) -> Option<Outcome> {
     // `charter.toml` is the format gate (V5, FR-24). One that is a link out of the project, or into
     // its `.git`, is somebody else's file: charter reads nothing through it, and writes nothing
     // at all, because every other file would belong to a project whose format it cannot see.
-    if let Err((rel, lands)) = gate(root, crate::plane::MANIFEST) {
-        if !occupied(&root.join(crate::plane::MANIFEST)) {
+    if let Err((rel, lands)) = gate(root, crate::names::manifest_name(root)) {
+        if !occupied(&crate::names::manifest(root)) {
             return None;
         }
         return Some(Outcome {
@@ -410,8 +437,8 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         }
     };
 
-    // charter.toml — or the purlis.toml already there, which is never written a sibling
-    let manifest = crate::plane::manifest_to_keep(root);
+    // charter.toml, or purlis.toml once that is the manifest (RN-2a).
+    let manifest = crate::names::manifest_name(root);
     if let Some(path) = run.gate(root, manifest) {
         if path.exists() {
             run.present.push(manifest.to_owned());
@@ -421,7 +448,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
                 planefile::render(&forge, &owner, args.host.as_deref()),
             ) {
                 Ok(()) => {
-                    run.created.push("charter.toml".to_owned());
+                    run.created.push(manifest.to_owned());
                     if owner.is_empty() {
                         run.warn(
                             "No --owner given — charter.toml's [[forge]] block has no \
@@ -554,8 +581,9 @@ pub fn gitignore_is_a_link(root: &Path) -> bool {
     std::fs::symlink_metadata(root.join(".gitignore")).is_ok_and(|m| m.file_type().is_symlink())
 }
 
-/// The doctor's `local-ignore` fix (FX-2): append the one line `/charter.local.toml` to the
-/// project's `.gitignore`, creating the file when there is none, and nothing else. The part of
+/// The doctor's `local-ignore` fix (FX-2): append the local settings file's ignore lines, under
+/// both its names (`/charter.local.toml`, `/purlis.local.toml`, RN-2a), to the project's
+/// `.gitignore`, creating the file when there is none, and nothing else. The part of
 /// [`reinit`] that keeps this machine's harness profiles out of a commit, without the rest of
 /// reinit. Every line already in `.gitignore` is kept as it is; a line already there is not
 /// added twice. A `.gitignore` that is a link out of the project is refused, writing nothing.
@@ -566,14 +594,16 @@ pub fn ignore_local_profiles(root: &Path) -> Outcome {
     let mut run = Run::default();
     if let Some(path) = run.gate(root, ".gitignore") {
         let _held = crate::rewrite::Lock::on(root);
+        let lines = local_profiles_ignores();
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
         match append_gitignore(
             &path,
-            &[LOCAL_PROFILES_IGNORE],
+            &lines,
             "added by charter's local-ignore fix — harness profiles stay on this machine",
         ) {
             Ok(written) if !written.is_empty() => run
                 .created
-                .push(format!(".gitignore ({LOCAL_PROFILES_IGNORE})")),
+                .push(format!(".gitignore ({})", written.join(", "))),
             Ok(_) => {}
             Err(e) => {
                 run.err(format!("could not read or write {} ({e})", path.display()));
@@ -587,7 +617,8 @@ pub fn ignore_local_profiles(root: &Path) -> Outcome {
     }
     if run.created.is_empty() {
         run.ok(format!(
-            ".gitignore already names {LOCAL_PROFILES_IGNORE} — nothing to do."
+            ".gitignore already names {} — nothing to do.",
+            local_profiles_ignores().join(" and ")
         ));
     } else {
         run.ok(format!("added {}.", run.created.join(", ")));
@@ -614,14 +645,40 @@ pub fn reinit(place: &Place) -> Outcome {
 
     if let Some(path) = run.gate(root, ".gitignore") {
         let _held = crate::rewrite::Lock::on(root);
+        // The state folder's purlis name too (RN-2a): `/.charter/` came with the baseline,
+        // and a leftover `.purlis/` holds a vault registry as much as `.charter/` does.
+        let states = state_ignores();
+        let missing_state: Vec<&str> = states
+            .iter()
+            .map(String::as_str)
+            .filter(|line| !read_text(&path).is_ok_and(|body| body.contains(&line[1..])))
+            .collect();
+        if !missing_state.is_empty() {
+            match append_gitignore(
+                &path,
+                &missing_state,
+                "added by `charter reinit` — charter's state stays on this machine",
+            ) {
+                Ok(written) if !written.is_empty() => run
+                    .created
+                    .push(format!(".gitignore ({})", written.join(", "))),
+                Ok(_) => {}
+                Err(e) => {
+                    run.err(format!("could not read or write {} ({e})", path.display()));
+                    run.failed = true;
+                }
+            }
+        }
+        let lines = local_profiles_ignores();
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
         match append_gitignore(
             &path,
-            &[LOCAL_PROFILES_IGNORE],
+            &lines,
             "added by `charter reinit` — harness profiles stay on this machine",
         ) {
             Ok(written) if !written.is_empty() => run
                 .created
-                .push(format!(".gitignore ({LOCAL_PROFILES_IGNORE})")),
+                .push(format!(".gitignore ({})", written.join(", "))),
             Ok(_) => {}
             Err(e) => {
                 run.err(format!("could not read or write {} ({e})", path.display()));
@@ -982,18 +1039,26 @@ fn ensure_gitignore(path: &Path) -> Result<bool, String> {
     }
     let body = read_text(path)?;
     let lines = text::stripped_lines(&body);
+    // The state folder and the local settings under both their names (RN-2a).
+    let states = state_ignores();
+    let profiles = local_profiles_ignores();
     let mut missing: Vec<&str> = Vec::new();
     if !lines.contains(&"!/workspaces/.gitkeep") {
         missing.extend(["/workspaces/*/*", "!/workspaces/.gitkeep"]);
     }
-    if !body.contains(".charter/") {
-        missing.push("/.charter/");
+    for line in &states {
+        // `/.charter/` was always found anywhere in the text (`.charter/`), and still is.
+        if !body.contains(line.trim_start_matches('/')) {
+            missing.push(line);
+        }
     }
     if !lines.contains(&LOCAL_SETTINGS_IGNORE) {
         missing.push(LOCAL_SETTINGS_IGNORE);
     }
-    if !lines.contains(&LOCAL_PROFILES_IGNORE) {
-        missing.push(LOCAL_PROFILES_IGNORE);
+    for line in &profiles {
+        if !lines.contains(&line.as_str()) {
+            missing.push(line);
+        }
     }
     if !lines.contains(&PLANE_SESSIONS_IGNORE) {
         missing.push(PLANE_SESSIONS_IGNORE);
@@ -1317,7 +1382,7 @@ fn front_door(run: &mut Run, root: &Path, name: &str) {
             }
         }
     }
-    if run.gate(root, crate::plane::MANIFEST).is_none() {
+    if run.gate(root, crate::names::manifest_name(root)).is_none() {
         return;
     }
     match planefile::load(root) {
@@ -1481,7 +1546,7 @@ fn repo_is_not_a_plane_yet(root: &Path, args: &InitArgs) -> Option<Outcome> {
     // scaffolding" is not a list anyone can picture. Built from the same constants the writes
     // come from, so a path that moves cannot leave this sentence behind.
     let written = [
-        crate::plane::MANIFEST,
+        crate::names::PLANE_MANIFEST.newest_old(),
         settings::SETTINGS,
         settings::OPENCODE,
     ]
@@ -1566,7 +1631,7 @@ fn forge_and_owner(run: &mut Run, root: &Path, args: &InitArgs) -> Option<(Strin
 /// charter can heal, and answering "no" here only costs that run its scaffolding, which is
 /// the side to be wrong on.
 fn already_a_plane(root: &Path) -> bool {
-    gate(root, crate::plane::manifest_to_keep(root)).is_ok_and(|path| path.exists())
+    gate(root, crate::names::manifest_name(root)).is_ok_and(|path| path.exists())
 }
 
 /// `commands._first_clone_step`, plus the source `--adopt` names: the one thing a repository
@@ -2881,7 +2946,8 @@ mod tests {
 
         let outcome = reinit(&at(&root, true));
 
-        let mut added = "personas/, inventory/, workspaces/, .gitignore (/charter.local.toml), \
+        let mut added = "personas/, inventory/, workspaces/, .gitignore (/.charter/, /.purlis/), \
+                         .gitignore (/charter.local.toml, /purlis.local.toml), \
                          .gitignore (/sessions/), .gitattributes (merge rules), .claude/settings.json (env), \
                          .claude/settings.json (ask: charter report --yes), opencode.json (ask: \
                          charter report --yes), .claude/settings.json (ask: charter ws todo \
@@ -2914,7 +2980,8 @@ mod tests {
         let outcome = reinit(&at(&root, true));
 
         let mut created =
-            "workspaces/, .gitignore (/charter.local.toml), .gitignore (/sessions/), \
+            "workspaces/, .gitignore (/.charter/, /.purlis/), .gitignore (/charter.local.toml, \
+             /purlis.local.toml), .gitignore (/sessions/), \
              .gitattributes (merge rules), \
              .claude/settings.json (env), .claude/settings.json (ask: charter report --yes), \
              opencode.json (ask: charter report --yes), .claude/settings.json (ask: charter ws \
@@ -3020,14 +3087,40 @@ mod tests {
         assert_eq!(std::fs::read_dir(dir.path()).expect("list").count(), 2);
     }
 
+    /// A plane has its state folder and local settings ignored under both their names (RN-2a).
+    #[test]
+    fn the_state_folder_and_local_file_are_ignored_under_both_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::create_dir(dir.path().join(".purlis")).unwrap();
+        std::fs::write(dir.path().join("purlis.local.toml"), "").unwrap();
+        std::fs::write(&path, "# mine\n").unwrap();
+
+        assert_eq!(ensure_gitignore(&path), Ok(true));
+
+        let body = std::fs::read_to_string(&path).unwrap();
+        let lines = text::stripped_lines(&body);
+        // Both names, always: a line for a name not in use is inert, and a leftover under it
+        // would otherwise be committed.
+        for line in [
+            "/.purlis/",
+            "/.charter/",
+            "/purlis.local.toml",
+            "/charter.local.toml",
+        ] {
+            assert!(lines.contains(&line), "{line}: {body}");
+        }
+    }
+
     /// `commands._ensure_gitignore` against a file that has every rule — `.charter/` found
     /// by Python's substring test — writes nothing and answers `False`.
     #[test]
     fn a_gitignore_with_every_rule_is_left_byte_for_byte() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join(".gitignore");
-        let body = "build/\n!/workspaces/.gitkeep\nkeep/.charter/out\n\
-                    /.claude/settings.local.json\n/charter.local.toml\n/sessions/\n";
+        let body = "build/\n!/workspaces/.gitkeep\nkeep/.charter/out\nkeep/.purlis/out\n\
+                    /.claude/settings.local.json\n/charter.local.toml\n/purlis.local.toml\n\
+                    /sessions/\n";
         std::fs::write(&path, body).expect("a .gitignore");
 
         assert_eq!(ensure_gitignore(&path), Ok(false));
@@ -3051,7 +3144,8 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).expect("read"),
             "node_modules/\n!/workspaces/.gitkeep\n/.charter/\n\n# added by `charter \
-             init`\n/.claude/settings.local.json\n/charter.local.toml\n/sessions/\n"
+             init`\n/.purlis/\n/.claude/settings.local.json\n/charter.local.toml\n\
+             /purlis.local.toml\n/sessions/\n"
         );
     }
 
@@ -3063,16 +3157,17 @@ mod tests {
         let path = dir.path().join(".gitignore");
         std::fs::write(
             &path,
-            "# no .charter/ here, please\n/.claude/settings.local.json\n/charter.local.toml\n\
-             /sessions/\n",
+            "# no .charter/ or .purlis/ here, please\n/.claude/settings.local.json\n\
+             /charter.local.toml\n/purlis.local.toml\n/sessions/\n",
         )
         .expect("a .gitignore");
 
         assert_eq!(ensure_gitignore(&path), Ok(true));
         assert_eq!(
             std::fs::read_to_string(&path).expect("read"),
-            "# no .charter/ here, please\n/.claude/settings.local.json\n/charter.local.toml\n\
-             /sessions/\n\n# added by `charter init`\n/workspaces/*/*\n!/workspaces/.gitkeep\n"
+            "# no .charter/ or .purlis/ here, please\n/.claude/settings.local.json\n\
+             /charter.local.toml\n/purlis.local.toml\n/sessions/\n\n# added by `charter \
+             init`\n/workspaces/*/*\n!/workspaces/.gitkeep\n"
         );
     }
 
@@ -3094,8 +3189,8 @@ mod tests {
     fn a_gitignore_missing_the_plane_roots_session_records_gets_that_line_appended() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join(".gitignore");
-        let body = "!/workspaces/.gitkeep\n/.charter/\n/.claude/settings.local.json\n\
-                    /charter.local.toml\n";
+        let body = "!/workspaces/.gitkeep\n/.charter/\n/.purlis/\n/.claude/settings.local.json\n\
+                    /charter.local.toml\n/purlis.local.toml\n";
         std::fs::write(&path, body).expect("a .gitignore");
 
         assert_eq!(ensure_gitignore(&path), Ok(true));

@@ -95,7 +95,7 @@ pub fn sweep(root: &Path, dir: &Path, now: SystemTime) -> usize {
 /// The plane's leftovers: `.charter/` (the launched-profiles record's) and `.charter/app/`
 /// (the reopen record's).
 pub fn sweep_plane(root: &Path) -> usize {
-    let state = root.join(".charter");
+    let state = crate::names::state(root);
     let now = SystemTime::now();
     sweep(root, &state, now) + sweep(root, &state.join("app"), now)
 }

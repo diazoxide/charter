@@ -94,16 +94,15 @@ fn through_the_allowlist(repo: &Path, found: Vec<Finding>) -> Scan {
 }
 
 /// The text of the repository's allowlist at `rev`, or `None` when `rev` has none or git could
-/// not show it.
+/// not show it. The purlis name wins when `rev` has it (RN-2a, V93e); the old one is read only
+/// when it does not.
 fn allowlist_at(repo: &Path, rev: &str) -> Option<String> {
-    git::run_in_hook(
-        repo,
-        &["show", &format!("{rev}:{}", scanallow::FILE)],
-        git::READ,
-    )
-    .ok()
-    .filter(|run| run.code == Some(0))
-    .map(|run| String::from_utf8_lossy(&run.out).into_owned())
+    scanallow::spellings().find_map(|file| {
+        git::run_in_hook(repo, &["show", &format!("{rev}:{file}")], git::READ)
+            .ok()
+            .filter(|run| run.code == Some(0))
+            .map(|run| String::from_utf8_lossy(&run.out).into_owned())
+    })
 }
 
 /// `found` split through charter's own entries and the allowlist file `text`.
@@ -224,12 +223,12 @@ pub fn pushed(repo: &Path, remote: &str, url: &str, updates: &str) -> Result<Sca
         args.push("--ignore-missing");
         args.extend(range.iter().map(String::as_str));
         args.push("--");
-        let tail: &[&str] = if head.first() == Some(&"rev-list") {
-            &[scanallow::FILE]
-        } else {
-            &[]
-        };
-        args.extend(tail);
+        // Every name the allowlist goes by: a change to either is one to the allowlist.
+        if head.first() == Some(&"rev-list") {
+            for name in scanallow::spellings() {
+                args.push(name);
+            }
+        }
         let run = git::run_in_hook(repo, &args, SHOWING_A_PUSH).map_err(|gone| gone.to_string())?;
         match run.code {
             Some(0) => Ok(String::from_utf8_lossy(&run.out).into_owned()),
@@ -718,6 +717,40 @@ mod tests {
         testgit::run(&repo, &["mv", scanallow::FILE, "elsewhere.toml"]);
 
         assert!(checked(&repo).unwrap().changes_the_allowlist);
+    }
+
+    // The rename window (RN-2a, V93e): the allowlist under either name.
+
+    #[test]
+    fn an_allowlist_under_the_purlis_name_is_read_and_wins_over_the_old_one() {
+        let (_dir, repo) = repo();
+        // The old file allows nothing in docs/; the purlis one does, and wins.
+        std::fs::write(repo.join(".charter-scan-allow.toml"), "").unwrap();
+        std::fs::write(repo.join(".purlis-scan-allow.toml"), DOCS_EMAIL).unwrap();
+        testgit::run(&repo, &["add", "."]);
+        testgit::run(&repo, &["commit", "-q", "-m", "allowlists"]);
+        std::fs::create_dir(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs/intro.md"), "Written by ada@lovelace.dev\n").unwrap();
+        testgit::run(&repo, &["add", "docs/intro.md"]);
+
+        let scan = checked(&repo).unwrap();
+
+        assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+        assert_eq!(scan.allowed[0].1.origin, scanallow::Origin::File(1));
+    }
+
+    #[test]
+    fn a_staged_allowlist_under_either_name_is_a_change_to_it() {
+        for name in [".charter-scan-allow.toml", ".purlis-scan-allow.toml"] {
+            let (_dir, repo) = repo();
+            std::fs::write(repo.join("README.md"), "one\n").unwrap();
+            testgit::run(&repo, &["add", "README.md"]);
+            testgit::run(&repo, &["commit", "-q", "-m", "one"]);
+            std::fs::write(repo.join(name), DOCS_EMAIL).unwrap();
+            testgit::run(&repo, &["add", name]);
+
+            assert!(checked(&repo).unwrap().changes_the_allowlist, "{name}");
+        }
     }
 
     // `pushed` (SQ-7).

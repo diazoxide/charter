@@ -32,7 +32,7 @@ fn now() -> u64 {
 fn cache_holding(plane: &Path, tree: &Path, entry: &str) {
     let key = tree.display().to_string();
     let doc = format!("{{{key:?}: {entry}}}");
-    std::fs::write(plane.join(cistate::CACHE), doc).unwrap();
+    std::fs::write(cistate::cache(plane), doc).unwrap();
 }
 
 /// The tree a reading is about. It never has to exist: the key is a string.
@@ -378,7 +378,7 @@ fn a_cache_file_that_is_a_symlink_is_refused_rather_than_followed() {
         r#"{"/anywhere": {"branch": "main", "ci": "success"}}"#,
     )
     .unwrap();
-    std::os::unix::fs::symlink(&planted, at.join(cistate::CACHE)).unwrap();
+    std::os::unix::fs::symlink(&planted, cistate::cache(&at)).unwrap();
 
     let refusal = cistate::read(&at).expect_err("charter's own path may not be a link");
 
@@ -418,7 +418,7 @@ fn a_cache_that_is_not_a_regular_file_is_refused_rather_than_opened() {
     charter_core::unsteered!();
     // A FIFO here would block the read for ever, and the panel would never draw.
     let (_keep, at) = plane();
-    std::fs::create_dir_all(at.join(cistate::CACHE)).unwrap();
+    std::fs::create_dir_all(cistate::cache(&at)).unwrap();
 
     let refusal = cistate::read(&at).expect_err("a directory is not a cache");
 
@@ -435,7 +435,7 @@ fn a_cache_charter_cannot_parse_is_said_rather_than_read_as_empty() {
     // "Nothing was fetched" and "this file is broken" send an operator to different places.
     let (_keep, at) = plane();
     for junk in ["{", "[]", "\"a string\"", "null"] {
-        std::fs::write(at.join(cistate::CACHE), junk).unwrap();
+        std::fs::write(cistate::cache(&at), junk).unwrap();
 
         let refusal = cistate::read(&at).expect_err("junk is not what charter writes");
 

@@ -70,7 +70,7 @@ const SESSION_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30 *
 /// keeps them together, and the divergence from Python (whose `config.SESSIONS_DIR` does
 /// honour the variable) is the one `active` already declares.
 fn state_dir(root: &Path) -> PathBuf {
-    root.join(".charter")
+    crate::names::state(root)
 }
 
 fn sessions_dir(root: &Path) -> PathBuf {

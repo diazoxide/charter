@@ -1992,8 +1992,10 @@ fn plane_at(root: &Path) -> Result<PathBuf, String> {
         .map_err(|why| format!("charter cannot open {shown}: {why}"))?;
     charter_core::plane::find_root(&here).map_err(|_| {
         format!(
-            "{shown} is not a plane: charter found no {} there or in any directory above it",
-            charter_core::plane::MANIFEST
+            "{shown} is not a plane: charter found no {} or {} there or in any directory above \
+             it",
+            charter_core::names::PLANE_MANIFEST.reads[0],
+            charter_core::names::PLANE_MANIFEST.write,
         )
     })
 }

@@ -44,7 +44,7 @@ impl Rig {
             );
         }
         std::fs::write(
-            self.root().join(charter_core::glrefresh::CACHE),
+            charter_core::cistate::cache(&self.root()),
             serde_json::to_string(&cache).expect("a cache"),
         )
         .expect("the cache is written");
@@ -61,7 +61,7 @@ impl Rig {
         } else {
             std::time::SystemTime::now() + ago
         };
-        filetime(&self.root().join(charter_core::glrefresh::LOCK), when);
+        filetime(&charter_core::glrefresh::lock(&self.root()), when);
     }
 }
 
@@ -305,7 +305,7 @@ fn a_lock_naming_no_pid_is_the_plain_cooldown_and_nothing_more() {
 fn a_lock_whose_content_is_not_a_pid_charter_wrote_names_no_process() {
     charter_core::unsteered!();
     let rig = Rig::new();
-    let path = rig.root().join(charter_core::glrefresh::LOCK);
+    let path = charter_core::glrefresh::lock(&rig.root());
     for content in ["not-a-pid", "+5", "0", "", "  ", "12 34"] {
         std::fs::write(&path, content).expect("the lock is written");
 
@@ -382,7 +382,7 @@ fn a_lock_reached_through_a_link_suppresses_rather_than_spawns() {
     std::fs::write(outside.path().join("theirs"), "4242").expect("their file");
     std::os::unix::fs::symlink(
         outside.path().join("theirs"),
-        rig.root().join(charter_core::glrefresh::LOCK),
+        charter_core::glrefresh::lock(&rig.root()),
     )
     .expect("the link");
 

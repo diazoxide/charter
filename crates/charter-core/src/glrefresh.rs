@@ -52,9 +52,8 @@ use serde_json::{Map, Value};
 use crate::forge::{self, Caller, Raised};
 use crate::worktree::git;
 
-/// The cache this writes, relative to the plane root — the same constant the reader uses, so
-/// the two can never drift to two paths.
-pub const CACHE: &str = crate::cistate::CACHE;
+/// The cache this writes — the same path the reader uses, so the two can never drift apart.
+pub use crate::cistate::cache;
 
 /// The spawn lock, beside the cache. `charter/glstate.py:_lock_file`.
 ///
@@ -67,7 +66,12 @@ pub const CACHE: &str = crate::cistate::CACHE;
 /// same plane reads and writes, and it means the same thing on both sides — a plane the two
 /// implementations leave in different states is a plane whose next render behaves differently
 /// depending on which charter last ran.
-pub const LOCK: &str = ".charter/cache/glstate.refreshing";
+pub fn lock(plane: &Path) -> std::path::PathBuf {
+    crate::names::state(plane).join(LOCK)
+}
+
+/// [`lock`], relative to the plane's state folder.
+pub const LOCK: &str = "cache/glstate.refreshing";
 
 /// What one clone's branch got: the entry written under its path.
 ///
@@ -405,7 +409,7 @@ pub fn state_for_repo(plane: &Path, tree: &Path, branch: &str) -> State {
 /// The cache as it is on disk, or an empty document for every way there is none.
 /// `charter/glstate.py:load`, which catches everything for the same reason.
 pub fn load(plane: &Path) -> Map<String, Value> {
-    std::fs::read_to_string(plane.join(CACHE))
+    std::fs::read_to_string(cache(plane))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|doc| doc.as_object().cloned())
@@ -451,7 +455,7 @@ pub fn key_for(tree: &Path) -> String {
 
 /// Write the cache, private to the operator. Best-effort, as `glstate._save` is.
 fn save(plane: &Path, cache: &Map<String, Value>) -> io::Result<()> {
-    let path = plane.join(CACHE);
+    let path = self::cache(plane);
     private_dir(plane, path.parent().unwrap_or(plane))?;
     write_private(
         plane,
@@ -471,7 +475,7 @@ fn save(plane: &Path, cache: &Map<String, Value>) -> io::Result<()> {
 /// until charter-app#69: a refresh that has finished says so, which is what moves the
 /// cooldown from the spawn to the completion.
 pub fn write_lock(plane: &Path, pid: Option<u32>) {
-    let path = plane.join(LOCK);
+    let path = lock(plane);
     if private_dir(plane, path.parent().unwrap_or(plane)).is_ok() {
         let content = pid.map(|pid| pid.to_string()).unwrap_or_default();
         let _ = write_private(plane, &path, content.as_bytes());
@@ -647,20 +651,16 @@ mod tests {
         mark_done(&plane);
 
         assert_eq!(
-            std::fs::read_to_string(plane.join(CACHE)).unwrap(),
+            std::fs::read_to_string(super::cache(&plane)).unwrap(),
             r#"{"/x/svc": {"branch": "main"}}"#
         );
-        assert_eq!(std::fs::read_to_string(plane.join(LOCK)).unwrap(), "");
+        assert_eq!(std::fs::read_to_string(lock(&plane)).unwrap(), "");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            for named in [CACHE, LOCK] {
-                let mode = std::fs::metadata(plane.join(named))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777;
-                assert_eq!(mode, 0o600, "{named} is {mode:o}");
+            for named in [super::cache(&plane), lock(&plane)] {
+                let mode = std::fs::metadata(&named).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "{} is {mode:o}", named.display());
             }
         }
     }
@@ -704,7 +704,7 @@ mod tests {
         std::fs::write(outside.join("theirs.json"), "NOT CHARTER'S\n").unwrap();
         std::fs::create_dir_all(plane.join(".charter/cache")).unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink(outside.join("theirs.json"), plane.join(CACHE)).unwrap();
+        std::os::unix::fs::symlink(outside.join("theirs.json"), super::cache(&plane)).unwrap();
 
         assert!(save(&plane, &Map::new()).is_err());
         assert_eq!(
@@ -721,13 +721,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let plane = dir.path().to_path_buf();
         std::fs::create_dir_all(plane.join(".charter/cache")).unwrap();
-        std::fs::write(plane.join(CACHE), "{\"old\": 1}").unwrap();
+        std::fs::write(super::cache(&plane), "{\"old\": 1}").unwrap();
         let _killed = crate::rewrite::hook::set(|_, _| Err(io::Error::other("killed")));
 
         assert!(save(&plane, &Map::new()).is_err());
 
         assert_eq!(
-            std::fs::read_to_string(plane.join(CACHE)).unwrap(),
+            std::fs::read_to_string(super::cache(&plane)).unwrap(),
             "{\"old\": 1}"
         );
     }

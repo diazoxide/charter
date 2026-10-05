@@ -1203,6 +1203,7 @@ fn both_names_of_one_thing_are_a_warning_that_names_both_and_the_reconciling_fix
     );
     assert!(r.detail.contains(".purlis and .charter"), "{}", r.detail);
     assert!(r.hint.contains("rename-plane"), "{}", r.hint);
+    assert!(r.hint.contains("rename-local"), "{}", r.hint);
     // Neither name is the one to throw away: until the readers move, the old one is what
     // most of charter reads.
     assert!(!r.hint.contains("delete"), "{}", r.hint);
@@ -3059,4 +3060,18 @@ fn a_row_whose_fix_is_a_setting_names_its_settings_group() {
     assert_eq!(r.status, Status::Warn, "{r:?}");
     assert_eq!(r.settings, Some(SettingsGroup::Harness));
     assert_eq!(one(&root, "git identity").settings, None);
+}
+
+#[test]
+fn a_state_folder_under_both_names_is_left_to_rename_local() {
+    // RN-2a: the state folders are this machine's, and `rename-local` reconciles them; the
+    // project's files are `rename-plane`'s.
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir(root.join(".charter")).unwrap();
+    std::fs::create_dir(root.join(".purlis")).unwrap();
+
+    let r = one(&root, "renamed leftovers");
+    assert!(r.detail.contains(".purlis and .charter"), "{}", r.detail);
+    assert!(r.hint.contains("rename-local"), "{}", r.hint);
+    assert!(!r.hint.contains("rename-plane"), "{}", r.hint);
 }

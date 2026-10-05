@@ -50,14 +50,14 @@ pub fn sweep(plane: &Path, now: SystemTime, live: &[String]) -> Swept {
     Swept {
         sessions: collect(
             plane,
-            &[".charter", "sessions"],
+            &[crate::names::state_name(plane), "sessions"],
             now,
             |name| a_marker(name) && !of_a_live_session(name, live),
             |_| false,
         ),
         traces: collect(
             plane,
-            &[".charter", "persona-state", "trace"],
+            &[crate::names::state_name(plane), "persona-state", "trace"],
             now,
             |name| {
                 name.strip_suffix(".jsonl")
@@ -115,9 +115,13 @@ pub fn on_open(plane: &Path, now: SystemTime) -> Swept {
 /// store here: a `$CHARTER_HOME/reports` the Python charter may have shared between planes is
 /// not one plane's to collect.
 fn sweep_reports(plane: &Path, now: SystemTime) -> usize {
-    collect(plane, &[".charter", "reports"], now, a_report_draft, |_| {
-        false
-    })
+    collect(
+        plane,
+        &[crate::names::state_name(plane), "reports"],
+        now,
+        a_report_draft,
+        |_| false,
+    )
 }
 
 /// Whether a trace records a secret handed out: one of [`crate::secrets::cmd::HANDED_OUT`] as

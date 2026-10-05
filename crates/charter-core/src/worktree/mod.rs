@@ -348,7 +348,7 @@ pub(crate) fn relocation_refusal(plane: &Path) -> Result<(), Refusal> {
     if let Some(declared) = crate::steer::var_os("PURLIS_WORKTREES") {
         return Err(Refusal::Relocated(declared.to_string_lossy().into_owned()));
     }
-    let Ok(text) = std::fs::read_to_string(plane.join("charter.toml")) else {
+    let Ok(text) = std::fs::read_to_string(crate::names::manifest(plane)) else {
         return Ok(());
     };
     let Ok(doc) = text.parse::<toml::Table>() else {

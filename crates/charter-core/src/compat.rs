@@ -70,12 +70,12 @@ pub enum Compat {
 /// Why a project is read-only to this charter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Why {
-    /// `charter.toml` could not be read or is not TOML.
-    ManifestUnreadable { detail: String },
+    /// The manifest (`file`, `charter.toml` or `purlis.toml`) could not be read or is not TOML.
+    ManifestUnreadable { file: &'static str, detail: String },
     /// `schema` is there and is not an integer.
-    SchemaUnplaceable { found: String },
+    SchemaUnplaceable { file: &'static str, found: String },
     /// `schema` is higher than [`SCHEMA`].
-    SchemaTooNew { found: i64 },
+    SchemaTooNew { file: &'static str, found: i64 },
     /// `requires` has a shape this charter cannot read.
     RequiresUnreadable { detail: &'static str },
     /// The project requires a feature this charter does not have.
@@ -83,15 +83,15 @@ pub enum Why {
         feature: String,
         since: Option<String>,
     },
-    /// `purlis.toml` is the project's manifest, and this build still reads part of the
-    /// project under the old names only (D-RN1-12). Lifted once every reader knows both.
-    PurlisNamesPartlyRead,
 }
 
 impl Why {
     /// What the operator does about it, as one sentence.
     pub fn remedy(&self) -> &'static str {
         match self {
+            Why::ManifestUnreadable { file, .. } if *file == crate::names::PLANE_MANIFEST.write => {
+                "Fix purlis.toml."
+            }
             Why::ManifestUnreadable { .. } => "Fix charter.toml.",
             Why::RequiresUnreadable { .. } => {
                 "Upgrade charter: update the app. Or fix `requires` in charter.toml."
@@ -99,9 +99,7 @@ impl Why {
             Why::SchemaUnplaceable { .. } => {
                 "Fix the `schema` line, or upgrade charter: update the app."
             }
-            Why::SchemaTooNew { .. } | Why::Missing { .. } | Why::PurlisNamesPartlyRead => {
-                "Upgrade charter: update the app."
-            }
+            Why::SchemaTooNew { .. } | Why::Missing { .. } => "Upgrade charter: update the app.",
         }
     }
 }
@@ -110,30 +108,25 @@ impl std::fmt::Display for Why {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let me = env!("CARGO_PKG_VERSION");
         match self {
-            Why::ManifestUnreadable { detail } => write!(
+            Why::ManifestUnreadable { file, detail } => write!(
                 f,
-                "charter.toml cannot be read ({detail}), so charter {me} cannot tell which \
+                "{file} cannot be read ({detail}), so charter {me} cannot tell which \
                  format this project is in"
             )?,
-            Why::SchemaUnplaceable { found } => write!(
+            Why::SchemaUnplaceable { file, found } => write!(
                 f,
-                "charter.toml declares schema {found}, which is not a project format version \
+                "{file} declares schema {found}, which is not a project format version \
                  charter {me} can compare against {SCHEMA}"
             )?,
-            Why::SchemaTooNew { found } => write!(
+            Why::SchemaTooNew { file, found } => write!(
                 f,
-                "charter.toml declares schema {found}, but this charter understands {SCHEMA} \
+                "{file} declares schema {found}, but this charter understands {SCHEMA} \
                  (it is charter {me})"
             )?,
             Why::RequiresUnreadable { detail } => write!(
                 f,
                 "{detail}, so charter {me} cannot tell whether it has every feature this \
                  project requires"
-            )?,
-            Why::PurlisNamesPartlyRead => write!(
-                f,
-                "this project is marked by purlis.toml, and charter {me} reads only part of a \
-                 project under its purlis names"
             )?,
             Why::Missing { feature, since } => {
                 let needs = match since {
@@ -169,8 +162,9 @@ impl std::fmt::Display for Why {
 /// (V37a), which is what makes a charter older than FR-24 refuse it; a charter that knows
 /// `requires` does not need the `schema` to read it.
 pub fn read(root: &Path) -> Compat {
-    let manifest = crate::plane::manifest(root);
-    let raw = match std::fs::read(&manifest) {
+    let file = crate::names::manifest_name(root);
+    let unreadable = |detail: String| Compat::ReadOnly(Why::ManifestUnreadable { file, detail });
+    let raw = match std::fs::read(crate::names::manifest(root)) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Compat::Writable,
         Err(e) => return unreadable(e.to_string()),
@@ -184,15 +178,16 @@ pub fn read(root: &Path) -> Compat {
     };
     match schema(&cfg) {
         Schema::Understood(_) => {}
-        Schema::TooNew(found) => return Compat::ReadOnly(Why::SchemaTooNew { found }),
+        Schema::TooNew(found) => return Compat::ReadOnly(Why::SchemaTooNew { file, found }),
         Schema::Unplaceable(other) => {
             return Compat::ReadOnly(Why::SchemaUnplaceable {
+                file,
                 found: crate::shown::short(&other.to_string()),
             });
         }
     }
     let Some(requires) = cfg.get("requires") else {
-        return partly_read(&manifest);
+        return Compat::Writable;
     };
     let Some(entries) = requires.as_array() else {
         return Compat::ReadOnly(Why::RequiresUnreadable {
@@ -216,24 +211,7 @@ pub fn read(root: &Path) -> Compat {
                 .map(str::to_owned),
         });
     }
-    partly_read(&manifest)
-}
-
-/// **Fails safe while the rename is half done** (D-RN1-12): a project whose manifest is
-/// `purlis.toml` is one most of this build's readers do not see yet, so it is read-only to it.
-fn partly_read(manifest: &Path) -> Compat {
-    if manifest
-        .file_name()
-        .is_some_and(|n| n == crate::names::PLANE_MANIFEST.write)
-    {
-        Compat::ReadOnly(Why::PurlisNamesPartlyRead)
-    } else {
-        Compat::Writable
-    }
-}
-
-fn unreadable(detail: String) -> Compat {
-    Compat::ReadOnly(Why::ManifestUnreadable { detail })
+    Compat::Writable
 }
 
 #[cfg(test)]
@@ -280,26 +258,29 @@ mod tests {
     fn a_schema_too_new_in_purlis_toml_is_refused_as_in_charter_toml() {
         assert_eq!(
             read(purlis_project("schema = 99\n").path()),
-            Compat::ReadOnly(Why::SchemaTooNew { found: 99 })
+            Compat::ReadOnly(Why::SchemaTooNew {
+                file: "purlis.toml",
+                found: 99
+            })
+        );
+        let Compat::ReadOnly(why) = read(purlis_project("schema = 99\n").path()) else {
+            unreachable!()
+        };
+        assert!(
+            why.to_string()
+                .starts_with("purlis.toml declares schema 99"),
+            "{why}"
         );
     }
 
     #[test]
-    fn a_project_marked_only_by_purlis_toml_is_read_only_until_every_reader_knows_it() {
+    fn a_project_marked_by_purlis_toml_is_writable_now_every_reader_knows_it() {
+        // D-RN1-12 lifted (RN-2a): every reader of the manifest asks `names::manifest`.
         let dir = purlis_project("schema = 2\n");
-        let Compat::ReadOnly(why) = read(dir.path()) else {
-            panic!("a purlis.toml project must be read-only to this build");
-        };
-        assert_eq!(why, Why::PurlisNamesPartlyRead);
-        let said = why.to_string();
-        assert!(said.contains("purlis.toml"), "{said}");
-        assert!(said.contains("read-only"), "{said}");
-        // Beside a charter.toml it is the same: purlis.toml is the manifest.
-        std::fs::write(dir.path().join("charter.toml"), "schema = 2\n").unwrap();
-        assert_eq!(
-            read(dir.path()),
-            Compat::ReadOnly(Why::PurlisNamesPartlyRead)
-        );
+        assert_eq!(read(dir.path()), Compat::Writable);
+        // Beside a charter.toml that does not even parse: purlis.toml is the manifest.
+        std::fs::write(dir.path().join("charter.toml"), "not toml [").unwrap();
+        assert_eq!(read(dir.path()), Compat::Writable);
     }
 
     #[test]
@@ -321,7 +302,13 @@ mod tests {
 
     #[test]
     fn a_schema_this_charter_does_not_understand_is_read_only() {
-        assert_eq!(why("schema = 3\n"), Why::SchemaTooNew { found: 3 });
+        assert_eq!(
+            why("schema = 3\n"),
+            Why::SchemaTooNew {
+                file: "charter.toml",
+                found: 3
+            }
+        );
         assert!(matches!(
             why("schema = \"two\"\n"),
             Why::SchemaUnplaceable { .. }
@@ -396,7 +383,11 @@ mod tests {
     #[test]
     fn the_remedy_for_an_old_charter_says_how_to_upgrade_it() {
         assert_eq!(
-            Why::SchemaTooNew { found: 3 }.remedy(),
+            Why::SchemaTooNew {
+                file: "charter.toml",
+                found: 3
+            }
+            .remedy(),
             "Upgrade charter: update the app."
         );
     }
