@@ -419,6 +419,20 @@ describe("the ways out of the start dialogs' refusals (NO-8, #1233)", () => {
     );
   });
 
+  it("types no login line that holds a control character, so nothing is run", async () => {
+    const { asked, opens } = core();
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+    await settle();
+
+    for (const line of ["gh auth login\nrm -rf ~", "gh auth login\r", "gh\u001b[2Jauth"])
+      act(() => askLogin(PLANE, line));
+    await settle();
+
+    expect(opens()).toEqual([]);
+    expect(asked.some(({ cmd }) => cmd === "send_input")).toBe(false);
+  });
+
   it("ignores a login asked for another project", async () => {
     const { opens } = core();
     render(<App />);

@@ -122,7 +122,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "FirstRun.tsx": { count: 2, why: "the first-run page's progress and refusal, inside its tab" },
   "FirstTaskTab.tsx": {
     count: 1,
-    why: ACTION,
+    why:
+      ACTION +
+      ". Also its read of the start options, read once when it opens: Read again is NO-8's " +
+      "follow-up (#1296)",
   },
   "HarnessSetupTab.tsx": {
     count: 1,
@@ -203,7 +206,9 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "RepoInstructionsTab.tsx": {
     count: 2,
-    why: ACTION,
+    why:
+      ACTION +
+      '. Also its "Added N files to memory": what the last press answered, not a standing line',
   },
   "RepoPicker.tsx": {
     count: 2,
@@ -214,7 +219,9 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "SandboxOffer.tsx": { count: 1, why: "the answer's refusal, inside the sandbox offer's Notice" },
   "SavingView.tsx": {
     count: 3,
-    why: ACTION,
+    why:
+      ACTION +
+      ". Also a save's own output, line by line: what the last press answered, not a standing line",
   },
   "SearchTab.tsx": { count: 1, why: "the search's progress, a live value" },
   "SessionRecordTab.tsx": {
@@ -235,7 +242,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "Updates.tsx": {
     count: 4,
-    why: ACTION,
+    why:
+      ACTION +
+      ". Also its warning that installing ends every chat (WARNING's case), and the channel " +
+      "it moved to: what the last press answered, not a standing line",
   },
   "VaultTab.tsx": {
     count: 7,
