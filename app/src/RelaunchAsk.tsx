@@ -65,7 +65,7 @@ export function RelaunchAsk({
           <ul className="ending">
             {question.projects.map((project) => (
               <li key={project.plane} title={project.plane}>
-                <span className="who">{nameOf(project.plane)}</span>
+                <span>{nameOf(project.plane)}</span>
                 <span className="what">{counts(project.chats, project.views, ", ")}</span>
               </li>
             ))}

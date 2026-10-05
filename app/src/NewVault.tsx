@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Choice, Field, SettingRow } from "./settings/components";
+import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * The providers a new vault can be kept by, in the order they are offered, with what each means
@@ -141,14 +141,14 @@ export function NewVault({
               </p>
             )}
 
-            <div className="doing">
+            <SettingActions>
               <button type="submit" tabIndex={0} disabled={!ready}>
                 Create vault
               </button>
               <button type="button" tabIndex={0} disabled={making} onClick={onCancel}>
                 Cancel
               </button>
-            </div>
+            </SettingActions>
           </form>
         </Dialog.Content>
       </Dialog.Portal>

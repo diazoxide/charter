@@ -47,9 +47,9 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
 - **UI is built from Radix primitives, never hand-rolled markup**, and never behind a charter API
   of our own — no `<Modal>`, no `<Field>`. A shadcn/ui component's source **copied into the repo
   is allowed** and is not that layer (ADR 0037, amended 2026-09-22). **One house set is the
-  exception:** the five settings pieces in `app/src/settings/components.tsx` (SettingsLayout,
-  SettingGroup, SettingRow, Field, Choice; ADR 0037, amended 2026-10-04, V89f). A sixth piece
-  needs a new amendment.
+  exception:** the six settings pieces in `app/src/settings/components.tsx` (SettingsLayout,
+  SettingGroup, SettingRow, Field, Choice, SettingActions; ADR 0037, amended 2026-10-04, V89f
+  and V89j). Another piece needs a new amendment.
   `docs/ui-primitives.md` says which, why, and what it costs; `docs/design-system.md` says what a
   copy has to satisfy.
 - **No colour is written anywhere but `app/src/theme/`.** A theme is a data file; the CSS

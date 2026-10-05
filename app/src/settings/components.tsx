@@ -6,9 +6,9 @@ import { ListFilter } from "lucide-react";
 import { useTabStop } from "../roving";
 
 /**
- * **The house settings set** (SE-16, #1166; DS-3 #626's *expand* step; V89f): the five pieces
- * every settings screen is drawn from — {@link SettingsLayout}, {@link SettingGroup},
- * {@link SettingRow}, {@link Field} and {@link Choice}.
+ * **The house settings set** (SE-16, #1166; DS-3 #626; V89f, V89j): the six pieces every
+ * settings screen and every form is drawn from — {@link SettingsLayout}, {@link SettingGroup},
+ * {@link SettingRow}, {@link Field}, {@link Choice} and {@link SettingActions}.
  *
  * `docs/ui-primitives.md` forbids a house component library and allows exactly this set, for the
  * reasons written there: charter had two hand-built form styles that had already drifted
@@ -18,7 +18,8 @@ import { useTabStop } from "../roving";
  * are the primitive's words (`value`, `onValueChange`, `checked`), not new ones.
  *
  * Drawn in `App.css` under `ui-*` classes, every colour a design-system token. The old
- * `settings-*` and `choices` classes stay until the last screen has moved (expand–contract).
+ * hand-built `settings-*`, `asks`, `choices`, `choice`, `who` and `picking` classes were deleted
+ * once the last screen had moved (DS-3e, #1177), and `oldFormClasses.test.ts` keeps them gone.
  */
 
 /** One level of the switcher: You, Project, Workspace or Persona (`CONTEXT.md`, **Level**). */
@@ -428,12 +429,21 @@ export function Field(props: FieldProps) {
 
 /** One option of a choice: its value, what it is called, and a line on what it does. The line
  *  is words, or a few marked-up facts (a harness's kind, command and source) that describe the
- *  option as one line. */
-export type Option = { value: string; label: string; says?: ReactNode };
+ *  option as one line. A radio's or a box's option can be out of reach on its own (`disabled`),
+ *  with why on its `title` — the primitive's own words (DS-3e). */
+export type Option = {
+  value: string;
+  label: string;
+  says?: ReactNode;
+  disabled?: boolean;
+  title?: string;
+};
 
 /**
  * **A value picked**: `radio` one of a few, each with a line on what it does (a Radix radio
- * group); `select` one of many (the native `<select>`); `toggle` on or off (a Radix checkbox).
+ * group); `select` one of many (the native `<select>`); `toggle` on or off (a Radix checkbox);
+ * `checks` any of a few, each ticked on its own (a Radix checkbox per option, in a group the row
+ * names — the repos a workspace takes, the files offered to memory; DS-3e).
  */
 export type ChoiceProps = Tied &
   (
@@ -453,7 +463,20 @@ export type ChoiceProps = Tied &
         unset?: string;
         onValueChange: (to: string) => void;
       }
-    | { kind: "toggle"; checked: boolean; onCheckedChange: (to: boolean) => void }
+    | {
+        kind: "toggle";
+        checked: boolean;
+        onCheckedChange: (to: boolean) => void;
+        /** The box's own `disabled`: held while what it feeds is being done. */
+        disabled?: boolean;
+      }
+    | {
+        kind: "checks";
+        options: readonly Option[];
+        /** The values ticked. */
+        checked: ReadonlySet<string>;
+        onCheckedChange: (value: string, on: boolean) => void;
+      }
   );
 
 /** The keys a radio group moves its pick with (Radix's own list). */
@@ -483,11 +506,46 @@ export function Choice(props: ChoiceProps) {
         // without `tabIndex` — New project's box was reachable by nothing until it had one.
         tabIndex={0}
         checked={props.checked}
+        disabled={props.disabled}
         aria-describedby={ids.describedBy}
         onCheckedChange={(to) => props.onCheckedChange(to === true)}
       >
         <Checkbox.Indicator>✓</Checkbox.Indicator>
       </Checkbox.Root>
+    );
+  if (props.kind === "checks")
+    return (
+      <div
+        id={ids.id}
+        role="group"
+        className="ui-choice-checks"
+        aria-labelledby={ids.labelledBy}
+        aria-describedby={ids.describedBy}
+      >
+        {props.options.map((one) => (
+          <div className="ui-choice-option" key={one.value}>
+            <Checkbox.Root
+              id={`${ids.id}-${one.value}`}
+              className="box"
+              // #186: WebKit leaves a `<button>` out of the Tab order without `tabIndex`.
+              tabIndex={0}
+              checked={props.checked.has(one.value)}
+              disabled={one.disabled}
+              title={one.title}
+              aria-describedby={one.says ? `${ids.id}-${one.value}-says` : undefined}
+              onCheckedChange={(to) => props.onCheckedChange(one.value, to === true)}
+            >
+              <Checkbox.Indicator>✓</Checkbox.Indicator>
+            </Checkbox.Root>
+            <label htmlFor={`${ids.id}-${one.value}`}>{one.label}</label>
+            {one.says && (
+              <div className="ui-choice-says" id={`${ids.id}-${one.value}-says`}>
+                {one.says}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     );
   if (props.kind === "select")
     return (
@@ -539,9 +597,11 @@ export function Choice(props: ChoiceProps) {
             className="dot"
             value={one.value}
             id={`${ids.id}-${one.value}`}
+            disabled={one.disabled}
+            title={one.title}
             aria-describedby={one.says ? `${ids.id}-${one.value}-says` : undefined}
             onFocus={() => {
-              if (arrowing.current && !props.disabled && one.value !== props.value)
+              if (arrowing.current && !props.disabled && !one.disabled && one.value !== props.value)
                 props.onValueChange(one.value);
             }}
           >
@@ -557,4 +617,20 @@ export function Choice(props: ChoiceProps) {
       ))}
     </RadioGroup.Root>
   );
+}
+
+/**
+ * **A form's buttons** (V89j, DS-3e #1177): the row a form ends in — Save and Cancel, Use this,
+ * Move, Restore, Retry — under its rows, or a dialog's answers under its form.
+ *
+ * A row and nothing more: the buttons are native `<button>`s the caller writes, with their own
+ * `type`, `disabled` and `onClick`, so the call site still says what each one is. The row draws
+ * them all alike, from the same tokens as a row's reset; a button that destroys something says
+ * so with `className="ends-it"`, as the dialogs' answers do.
+ *
+ * Every button in it still needs `tabIndex={0}`: WebKit leaves a `<button>` out of the Tab order
+ * without one (#190), and the row cannot add it to buttons it does not draw.
+ */
+export function SettingActions({ children }: { children: ReactNode }) {
+  return <div className="ui-setting-actions">{children}</div>;
 }

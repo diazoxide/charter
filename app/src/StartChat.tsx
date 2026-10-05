@@ -379,7 +379,7 @@ export function StartChat({
               <ul>
                 {options.refused.map(([name, why]) => (
                   <li key={name}>
-                    <span className="who">{name}</span> {why}
+                    <span>{name}</span> {why}
                   </li>
                 ))}
               </ul>

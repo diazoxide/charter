@@ -5,7 +5,7 @@ import { ArrowUpCircle, LoaderCircle, Pin } from "lucide-react";
 import { commands, type Offer, type PinReport, type PlaneId } from "./bindings";
 import { MidTurn, mightBeMidTurn, type Ending } from "./QuitWarning";
 import { ReleaseNotes } from "./ReleaseNotes";
-import { Choice, SettingRow } from "./settings/components";
+import { Choice, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * **"An update is available", and the pin that drifts** — the two version facts charter ADR
@@ -371,7 +371,7 @@ export function UpdateItem({
               )}
             />
             {picked !== undefined && picked !== channel && (
-              <div className="settings-actions">
+              <SettingActions>
                 <button
                   type="button"
                   tabIndex={0}
@@ -384,7 +384,7 @@ export function UpdateItem({
                 >
                   Use this channel
                 </button>
-              </div>
+              </SettingActions>
             )}
             {moved !== undefined && (
               <p className="honest" role="status">

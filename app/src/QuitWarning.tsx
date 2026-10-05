@@ -121,7 +121,7 @@ export function EndingList({ chats }: { chats: readonly Ending[] }) {
       {chats.map((chat) => (
         <li key={chat.key}>
           <span className="what">{chat.harness ?? "shell"}</span>
-          <span className="who">{chat.name}</span>
+          <span>{chat.name}</span>
           <ChatState state={chat.state} />
           {several && chat.project && <code className="where">{chat.project}</code>}
           {chat.cwd && <code className="where">{chat.cwd}</code>}

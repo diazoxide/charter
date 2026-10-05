@@ -1,5 +1,6 @@
-import { useId, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import { Field, SettingActions, SettingRow } from "./settings/components";
 
 /** What a vault holds, as `vault_open` said it: its provider and its secrets' NAMES. */
 export type VaultHolds = { provider: string; secrets: readonly string[] };
@@ -52,8 +53,9 @@ export function DeleteVault({
   onCancel: () => void;
 }) {
   const [typed, setTyped] = useState("");
-  const box = useRef<HTMLInputElement>(null);
-  const boxId = useId();
+  // The dialog, so the box can be found in it on opening: the row draws the box, and a
+  // setting's field takes no ref.
+  const content = useRef<HTMLDivElement>(null);
   const ready = typed === vault && !deleting;
   const del = () => {
     if (ready) onDelete();
@@ -68,10 +70,11 @@ export function DeleteVault({
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="asking" />
         <AlertDialog.Content
+          ref={content}
           className="warning"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            box.current?.focus();
+            content.current?.querySelector<HTMLInputElement>("form input")?.focus();
           }}
         >
           <AlertDialog.Title>Delete vault {vault}?</AlertDialog.Title>
@@ -99,20 +102,14 @@ export function DeleteVault({
           )}
 
           <form
-            className="asks"
             onSubmit={(event) => {
               event.preventDefault();
               del();
             }}
           >
-            <label htmlFor={boxId}>Type {vault} to confirm</label>
-            <input
-              id={boxId}
-              ref={box}
-              value={typed}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(event) => setTyped(event.target.value)}
+            <SettingRow
+              label={`Type ${vault} to confirm`}
+              control={(ids) => <Field ids={ids} kind="text" value={typed} onChange={setTyped} />}
             />
 
             {trouble && (
@@ -121,7 +118,7 @@ export function DeleteVault({
               </p>
             )}
 
-            <div className="doing">
+            <SettingActions>
               {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
               <button type="submit" className="ends-it" tabIndex={0} disabled={!ready}>
                 Delete vault
@@ -131,7 +128,7 @@ export function DeleteVault({
                   Cancel
                 </button>
               </AlertDialog.Cancel>
-            </div>
+            </SettingActions>
           </form>
         </AlertDialog.Content>
       </AlertDialog.Portal>

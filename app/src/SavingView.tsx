@@ -21,7 +21,7 @@ import {
   usePlaneSaving,
   useRepoSaving,
 } from "./saving";
-import { Choice, Field, SettingRow, type Option } from "./settings/components";
+import { Choice, Field, SettingActions, SettingRow, type Option } from "./settings/components";
 
 /**
  * **The Saving view** (charter-app#294, ADR 0051): where this plane's unsaved work sits, what
@@ -154,7 +154,7 @@ export function SavingView({
                   ))}
                 </ul>
               )}
-              <div className="settings-actions">
+              <SettingActions>
                 <button
                   type="button"
                   className="panel-view"
@@ -171,7 +171,7 @@ export function SavingView({
                 >
                   Open terminal here
                 </button>
-              </div>
+              </SettingActions>
             </div>
           )}
           {saving.notice !== null && <p className="saving-note">{saving.notice}</p>}
@@ -201,7 +201,7 @@ export function SavingView({
               <Field ids={ids} kind="text" value={message} onChange={setMessage} disabled={busy} />
             )}
           />
-          <div className="settings-actions">
+          <SettingActions>
             <button
               type="button"
               className="panel-view"
@@ -233,7 +233,7 @@ export function SavingView({
                 Save all
               </button>
             )}
-          </div>
+          </SettingActions>
           {confirming !== undefined && workspace !== undefined && (
             <ConfirmSaveAll
               plane={confirming.plane}
@@ -502,7 +502,7 @@ function ModeQuestion({ plane, branch }: { plane: PlaneId; branch: string }) {
           />
         )}
       />
-      <div className="settings-actions">
+      <SettingActions>
         <button
           type="button"
           tabIndex={0}
@@ -513,7 +513,7 @@ function ModeQuestion({ plane, branch }: { plane: PlaneId; branch: string }) {
         >
           Use this
         </button>
-      </div>
+      </SettingActions>
       {refused !== null && (
         <p className="trouble" role="alert">
           {refused}

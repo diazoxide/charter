@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import Markdown from "react-markdown";
 import { LoaderCircle } from "lucide-react";
 import { EmptyState } from "./EmptyState";
-import { Choice, Field, SettingRow } from "./settings/components";
+import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 import { COMPONENTS } from "./SessionRecordTab";
 import {
   commands,
@@ -184,7 +184,7 @@ export function MemoryTab({
             {stale.now === null
               ? "This memory is not there any more — it was archived or removed since you opened it. Nothing was saved."
               : "This memory changed on disk since you opened it, so nothing was saved."}{" "}
-            <span className="settings-actions">
+            <SettingActions>
               <button
                 type="button"
                 tabIndex={0}
@@ -205,7 +205,7 @@ export function MemoryTab({
                   Overwrite
                 </button>
               )}
-            </span>
+            </SettingActions>
           </div>
         )}
         {refused !== undefined && (
@@ -213,7 +213,7 @@ export function MemoryTab({
             {refused}
           </p>
         )}
-        <div className="settings-actions">
+        <SettingActions>
           <button type="submit" tabIndex={0} disabled={saving || stale !== undefined}>
             Save
           </button>
@@ -228,7 +228,7 @@ export function MemoryTab({
           >
             Cancel
           </button>
-        </div>
+        </SettingActions>
       </form>
     );
   }
@@ -382,7 +382,7 @@ function MoveMemory({
           {refused}
         </p>
       )}
-      <div className="settings-actions">
+      <SettingActions>
         <button
           type="button"
           tabIndex={0}
@@ -391,7 +391,7 @@ function MoveMemory({
         >
           Move
         </button>
-      </div>
+      </SettingActions>
     </div>
   );
 }

@@ -472,9 +472,9 @@ Still refused, unchanged by the ruling: a component library as a **dependency**,
 abstraction layer over Radix — `<ConfirmModal open onConfirm>` — whether it is written here or
 copied from somewhere. Copying it would not launder it; what is refused is a charter API in
 front of the primitive. **The one exception** is the settings set (ADR 0037, amended
-2026-10-04, V89f): SettingsLayout, SettingGroup, SettingRow, Field and Choice in
-`app/src/settings/components.tsx`, five thin pieces over the Radix primitives already in use,
-drawn in tokens. `docs/ui-primitives.md` gives the reasons. Nothing else joins it without a new
+2026-10-04, V89f and V89j): SettingsLayout, SettingGroup, SettingRow, Field, Choice and
+SettingActions in `app/src/settings/components.tsx`, six thin pieces over the Radix primitives
+and native elements already in use, drawn in tokens. `docs/ui-primitives.md` gives the reasons. Nothing else joins it without a new
 amendment.
 
 **Lucide** is the icon set (`lucide-react`). The property that matters is that it draws with

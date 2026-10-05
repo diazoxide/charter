@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { commands, type PlaneId } from "./bindings";
 import { RepoPicker } from "./RepoPicker";
 import { cloneRepos, useRepoClones } from "./repoClones";
-import type { RowIds } from "./settings/components";
+import { SettingActions, type RowIds } from "./settings/components";
 
 /**
  * **A workspace's repos, in Settings at its level** (ADR 0055; SE-20): the same picker as a new
@@ -78,7 +78,7 @@ export function useWorkspaceRepos(
             {c.state === "cloning" ? `Cloning ${repo}…` : `${repo} is waiting to be cloned.`}
           </p>
         ))}
-        <div className="settings-actions">
+        <SettingActions>
           {failed.map(([repo]) => (
             <button
               key={repo}
@@ -100,7 +100,7 @@ export function useWorkspaceRepos(
           >
             {applyWords(adding.length, removing.length)}
           </button>
-        </div>
+        </SettingActions>
       </div>
     ),
   };

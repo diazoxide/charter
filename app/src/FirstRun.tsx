@@ -18,7 +18,7 @@ function choiceOf(value: string): TemplateChoice {
   return { kind: "named", id: value };
 }
 import { type ForgeAsk, ForgeQuestion } from "./ForgeQuestion";
-import { Choice, Field, SettingRow } from "./settings/components";
+import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * What a machine that has never opened a project sees (FR-4, #603).
@@ -127,11 +127,11 @@ export function FirstRun({
       </p>
 
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189). */}
-      <div className="doing">
+      <SettingActions>
         <button type="button" tabIndex={0} disabled={opening} onClick={pick}>
           Open a repo…
         </button>
-      </div>
+      </SettingActions>
 
       {/* The path and the template are rows of the settings set (DS-3d, #1176). */}
       <form
@@ -153,11 +153,11 @@ export function FirstRun({
             />
           )}
         />
-        <div className="doing">
+        <SettingActions>
           <button type="submit" tabIndex={0} disabled={!typed.trim() || opening}>
             Open
           </button>
-        </div>
+        </SettingActions>
       </form>
 
       {found && found.templates.length > 0 && (
@@ -236,11 +236,11 @@ export function FirstRun({
         </>
       )}
 
-      <div className="doing">
+      <SettingActions>
         <button type="button" tabIndex={0} onClick={onOpenProject}>
           Open an existing project instead
         </button>
-      </div>
+      </SettingActions>
     </section>
   );
 }

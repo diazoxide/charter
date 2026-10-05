@@ -34,9 +34,9 @@ file is the defect.
   and a file in `app/src/components/ui/` is ours, editable line by line, and visible in the diff
   that adds it. `docs/design-system.md` has what a copy must satisfy.
 - **One house set is allowed, and only this one: the settings set** (ADR 0037, amended
-  2026-10-04, ruling V89f; SE-16 #1166). `app/src/settings/components.tsx` holds five pieces —
-  **SettingsLayout**, **SettingGroup**, **SettingRow**, **Field** and **Choice** — and nothing
-  else may join it without a new amendment to that record. See
+  2026-10-04, rulings V89f and V89j; SE-16 #1166, DS-3e #1177). `app/src/settings/components.tsx`
+  holds six pieces — **SettingsLayout**, **SettingGroup**, **SettingRow**, **Field**, **Choice**
+  and **SettingActions** — and nothing else may join it without a new amendment to that record. See
   [The settings set](#the-settings-set-is-the-one-house-set) below for why.
 - Charter's own look, always. Radix ships **no CSS at all** — every primitive is an unstyled
   element with `data-state` attributes to hang rules off. `App.css` stays the one place the
@@ -61,20 +61,35 @@ operator amended it there on 2026-10-04 (V89f; the spec on #558):
   written twice with different spacing, different focus rules and different names for the
   same thing, and every new screen picked one by copying it. A rule that forbids the
   component does not stop the drift; it moves it into CSS.
-- **It is DS-3's _expand_ step** (#626, "One component set"). The set is added beside the old
-  classes, each screen moves onto it in its own ticket (Saving, Memory, workspace repos, New
-  project, New vault, Rename workspace, Start chat, First run, Updates), and the old
-  `settings-*`, `choices` and `choice` classes are deleted in a last ticket once nothing uses
-  them — an expand–contract change, never a big-bang one.
+- **It was DS-3's _expand_ step** (#626, "One component set"). The set was added beside the old
+  classes, each screen moved onto it in its own ticket (Saving, Memory, workspace repos, New
+  project, New vault, Rename workspace, Start chat, First run, Updates), and DS-3e (#1177)
+  moved the rest (New workspace, New branch, New persona, Link to work item, a vault's secret
+  dialogs and Delete vault, the forge question, First task, the repo picker, an extension's
+  on/off, the repo's instruction files, Land's squash box) and then **deleted** the old
+  `settings-*`, `asks`, `choices`, `choice`, `who` and `picking` classes — an expand–contract
+  change, never a big-bang one. `app/src/settings/oldFormClasses.test.ts` fails on any rule or
+  `className` that names one again.
 
 What keeps it from becoming the library this file forbids:
 
-- **Five pieces, named here, and no more.** `SettingsLayout` (the level switcher, the nav of
+- **Six pieces, named here, and no more.** `SettingsLayout` (the level switcher, the nav of
   groups with its filter box above it, and the chosen group, in two columns), `SettingGroup`
   (a group's heading, help and rows), `SettingRow` (label, help, control and reset, and since
   SE-17 a refused write's reason and the last change's Undo; since SE-18 the value's origin, an
-  override badge and the file choice), `Field` (`text`, `list` and `range`) and `Choice` (`radio`, `select` and
-  `toggle`). A sixth piece is an amendment to ADR 0037, not a commit.
+  override badge and the file choice), `Field` (`text`, `list` and `range`), `Choice` (`radio`,
+  `select`, `toggle`, and since DS-3e `checks`: any of a few, each ticked on its own) and
+  `SettingActions` (a form's row of buttons, V89j). A seventh piece is an amendment to ADR
+  0037, not a commit.
+- **SettingActions is a row, and the buttons are the caller's.** Native `<button>`s with their
+  own `type`, `disabled` and `onClick` (and `tabIndex={0}`, for #190), drawn alike; a button
+  that destroys something says so with `ends-it`. It ends a _form_. A dialog's answer bar — a
+  question with Cancel and one act and nothing to fill in, like the quit warning or a delete's
+  confirm — keeps its own `answer` or `doing` row.
+- **A box the set's `Field` cannot hold goes in the row's control slot as a native element.**
+  A `Field` is controlled; a secret's value is never held in React state (a vault's value box),
+  so that box is a native `<input type="password">` drawn with `ui-field`, in a `SettingRow`.
+  The slot is how a row composes what the set does not draw, as `Browse…` beside a path is.
 - **Each piece is a thin layer over a primitive already in the window, and says which.**
   The level switcher is a Radix radio group; the nav is buttons under Radix roving focus
   (`roving.ts`, as the explorer's rows); `Choice` is a Radix radio group, a native `<select>`
@@ -304,8 +319,9 @@ the arrow keys".
 writes on a button.** Because an arrow picks, and a held arrow repeats, a radio that wrote on
 its pick would write every option it passed through on the way to the one meant. Such a radio
 keeps the pick in the screen's own state and acts only on an explicit button: Saving's _Use
-this_ (DS-3b), Updates' _Use this channel_ (DS-3d) and Settings' file choice, whose _Move to …_
-writes both files and has no Undo (SE-18). A radio whose write can be undone, as
+this_ (DS-3b), Updates' _Use this channel_ (DS-3d), Settings' file choice, whose _Move to …_
+writes both files and has no Undo (SE-18), and First task's profile, which starts a chat only
+on _Start the first chat_ (DS-3e). A radio whose write can be undone, as
 Settings' controls can (V89e), writes on its pick. Each held pick is guarded by a test that
 holds an arrow down for about 80 ms and finds nothing written.
 

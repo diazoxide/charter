@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
-import * as RadioGroup from "@radix-ui/react-radio-group";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
+import { Choice, SettingActions } from "./settings/components";
 import {
   commands,
   type FirstTaskRun,
@@ -163,43 +163,32 @@ export function FirstTaskTab({
               </p>
             ) : (
               <>
-                <RadioGroup.Root
-                  className="choices"
-                  name={`first-task-${run}`}
+                <Choice
+                  ids={{ id: `${labelId}-pick`, labelledBy: labelId }}
+                  kind="radio"
                   value={profile?.name ?? ""}
                   onValueChange={(name) => setPicked((was) => ({ ...was, [run]: name }))}
-                  aria-labelledby={labelId}
                   disabled={starting !== undefined}
-                >
-                  {profiles.map((one) => (
-                    <div className="choice" key={one.name}>
-                      <RadioGroup.Item
-                        className="dot"
-                        value={one.name}
-                        id={`${labelId}-${one.name}`}
-                        disabled={!one.ready_to_type}
-                        aria-describedby={`${labelId}-${one.name}-says`}
-                        // The capability it lacks, in its harness card's words (HP-19).
-                        title={one.harness?.cannot_type ?? undefined}
-                      >
-                        <RadioGroup.Indicator className="dot-mark" />
-                      </RadioGroup.Item>
-                      <label className="who" htmlFor={`${labelId}-${one.name}`}>
-                        {one.name}
-                      </label>
-                      <ProfileMeta row={one} id={`${labelId}-${one.name}-says`}>
+                  options={profiles.map((one) => ({
+                    value: one.name,
+                    label: one.name,
+                    disabled: !one.ready_to_type,
+                    // The capability it lacks, in its harness card's words (HP-19).
+                    title: one.harness?.cannot_type ?? undefined,
+                    says: (
+                      <ProfileMeta row={one}>
                         {!one.ready_to_type && (
                           <span className="what">
                             {one.harness?.cannot_type ?? "charter cannot type the task into it"}
                           </span>
                         )}
                       </ProfileMeta>
-                    </div>
-                  ))}
-                </RadioGroup.Root>
+                    ),
+                  }))}
+                />
                 {/* The picker's own sentence, before the press that approves (V69). */}
                 <ApprovalSentence row={profile} />
-                <div className="doing">
+                <SettingActions>
                   <button
                     type="button"
                     tabIndex={0}
@@ -210,7 +199,7 @@ export function FirstTaskTab({
                       ? `Approve and start the ${ORDINAL[run].toLowerCase()}`
                       : `Start the ${ORDINAL[run].toLowerCase()}`}
                   </button>
-                </div>
+                </SettingActions>
               </>
             )}
           </section>

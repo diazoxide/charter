@@ -8,7 +8,7 @@ import type { ProfileRow } from "./bindings";
  * The operator's ruling (V69, PR #949): a surface other than the picker may record a profile
  * approval only with the picker's exact sentence — *charter has not run this profile before*, or
  * *as it now stands* when the command changed since it was approved — with the command in
- * `<code>`, which `.choice .meta .where` keeps undimmed, and the row's `.needs-approval` mark.
+ * `<code>`, which `.ui-choice-says .meta .where` keeps undimmed, and the row's `.needs-approval` mark.
  */
 export function ApprovalSentence({ row }: { row: ProfileRow | undefined }) {
   if (!row?.approval) return null;
