@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791185177900,
+  "lastUpdate": 1791191841510,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2016,6 +2016,48 @@ window.BENCHMARK_DATA = {
             "value": 101.318011,
             "unit": "ms",
             "extra": "median of 5 runs: 101.042, 101.194, 101.318, 101.999, 102.512 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "ea9c202023f6dd65074ef3e5c9e4908dc49b210a",
+          "message": "secret shapes: recognise more token formats\n\nEvery check built on `secret_kind` now also asks the token-prefix rule\nthat `found` and `token_kind` already used, after the existing rules, so\neach kind those rules named stays the one named. The prefix list gains\nthe remaining documented GitLab token prefixes and Slack's app-level and\nworkflow token prefixes, each cited from its provider's documentation.\n\nTests build made-up token bodies at runtime and cover every documented\nformat plus names that only start like a token.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T13:15:07+04:00",
+          "tree_id": "cea96b623a4caba9075bf5abfcc5346e003787e0",
+          "url": "https://github.com/diazoxide/charter/commit/ea9c202023f6dd65074ef3e5c9e4908dc49b210a"
+        },
+        "date": 1791191840410,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.6108515000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.595, 0.600, 0.611, 0.616, 0.617 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.138594,
+            "unit": "ms",
+            "extra": "median of 5 runs: 15.880, 16.068, 16.139, 16.226, 16.337 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.578577,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.599, 101.286, 101.579, 102.227, 103.890 ms"
           }
         ]
       }
