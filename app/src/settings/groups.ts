@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { SettingsEdit, SettingsStep, SettingsWhich } from "../bindings";
-import type { Shown } from "./fileControls";
+import type { Entry, Shown } from "./fileControls";
 import type { Reset, RowIds } from "./components";
 
 /**
@@ -74,6 +74,14 @@ export type FileSetting = Named & {
    * confining, and its empty option is not drawn while a write of it is pending.
    */
   oneWay?: boolean;
+  /**
+   * **A picker over one of the project's collections** (ST-1, #1225): `choices` are what the
+   * project has — undefined until the core has listed them — and the picker offers New… for it.
+   */
+  names?: Entry;
+  /** The core's sentence about this key as the file stands — a value that names nothing — said
+   *  beside the setting until it is replaced. */
+  standing?: string;
 };
 
 /**

@@ -421,5 +421,6 @@ export function fileSetting(
     labels: control.labels,
     read: control.read,
     edits: control.edits,
+    names: control.names,
   };
 }

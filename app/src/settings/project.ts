@@ -30,11 +30,13 @@ import {
   themeGroup,
   valueAt,
   type Control,
+  type Entries,
   type Saving,
   type Shown,
 } from "./fileControls";
 import { asked, fileSetting, useSettingsDriver, type Driven, type Wrote } from "./driver";
 import type { FileSetting, SettingsFileId, SettingsGroup } from "./groups";
+import { settled } from "../PlaneEdits";
 
 /**
  * **The Project level** (SE-17, #1167; V89b, V89e, V89h): a project's settings in the Settings
@@ -64,6 +66,8 @@ export type ProjectRead = {
   theme: ProjectTheme | undefined;
   saving: Saving;
   sandbox: SandboxState | undefined;
+  /** What the project has for a picker to name (ST-1): each list once the core has answered. */
+  entries: Partial<Entries>;
 };
 
 /** The sentence a setting's help ends on: where it is kept, and who sees it. */
@@ -98,6 +102,23 @@ function setting(group: string, file: SettingsWhich, control: Control): FileSett
   return file === "shared" && eitherFile(one.key)
     ? { ...fileSetting(group, file, control, ""), movable: true }
     : one;
+}
+
+/**
+ * **A picker's choices and the core's word on its value** (ST-1, #1225): what the project has,
+ * once the core has listed it, and the sentence among the file's standing refusals that is about
+ * this key — the core says a default naming nothing as `[persona] default = "ghost" …`, as it
+ * says `[harness] default`'s.
+ */
+function picking(one: FileSetting, file: Shown, entries: Partial<Entries>): FileSetting {
+  if (one.names === undefined) return one;
+  const [table, name] = one.key;
+  const about = `[${table?.key ?? ""}] ${name?.key ?? ""} = `;
+  return {
+    ...one,
+    choices: entries[one.names],
+    standing: file.refusals.find((why) => why.startsWith(about)),
+  };
 }
 
 /** `[plane] assisted_by` and `[repos.<name>] assisted_by` (V67): how an agent's commit says so. */
@@ -193,9 +214,13 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
   const [general, forges] = SHARED;
   const [harness, profiles] = LOCAL;
   const fromShared = (group: string, controls: Control[]) =>
-    sharedOk ? controls.map((one) => setting(group, "shared", one)) : [];
+    sharedOk
+      ? controls.map((one) => picking(setting(group, "shared", one), shared, read.entries))
+      : [];
   const fromLocal = (group: string, controls: Control[]) =>
-    localOk ? controls.map((one) => setting(group, "local", one)) : [];
+    localOk
+      ? controls.map((one) => picking(setting(group, "local", one), local, read.entries))
+      : [];
 
   const sharedGeneral = asked(general, shared, read).controls;
   const isDefaultHarness = (one: Control) => one.id === JSON.stringify(key("harness", "default"));
@@ -302,7 +327,11 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
 export type ProjectLevel =
   | { state: "reading" }
   | { state: "trouble"; trouble: string }
-  | (Driven<ProjectFiles> & { read: ProjectRead });
+  | (Driven<ProjectFiles> & {
+      read: ProjectRead;
+      /** Lists what the pickers name again: once something has been made for one (ST-1). */
+      readEntries: () => Promise<void>;
+    });
 
 /** The project's two files. */
 type ProjectFiles = { shared: SettingsFile; local: SettingsFile };
@@ -317,6 +346,7 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   const [theme, setTheme] = useState<ProjectTheme>();
   const [saving, setSaving] = useState<Saving>();
   const [sandbox, setSandbox] = useState<SandboxState>();
+  const [entries, setEntries] = useState<Partial<Entries>>({});
   /** The newest asking of what is in force: an answer to an older one is dropped. */
   const asking = useRef(0);
 
@@ -326,6 +356,33 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
       .then((said) => setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined))
       .catch(() => setTheme(undefined));
   }, [plane]);
+
+  /**
+   * **What the pickers name** (ST-1): the profiles a chat can start on and the personas, as the
+   * new-chat picker reads them (`start_options`), and the workspaces, as the sidebar does. A list
+   * the core did not answer is left as it was: a picker without one names nothing as missing.
+   */
+  const readEntries = useCallback(
+    () =>
+      Promise.all([
+        settled(commands.startOptions(plane)).then((said) => {
+          // A whole-window test answers a command it does not care about with nothing.
+          const options = said.status === "ok" ? said.data : undefined;
+          if (options) {
+            const profile = options.profiles.map((one) => one.name);
+            setEntries((was) => ({ ...was, profile, persona: options.personas }));
+          }
+        }),
+        settled(commands.planeSidebar(plane)).then((said) => {
+          const sidebar = said.status === "ok" ? said.data : undefined;
+          if (sidebar) {
+            const workspace = sidebar.workspaces.map((one) => one.name);
+            setEntries((was) => ({ ...was, workspace }));
+          }
+        }),
+      ]).then(() => undefined),
+    [plane],
+  );
 
   /** What is in force, read again after every read and write so each sentence says what it now is. */
   const readInForce = useCallback(() => {
@@ -358,7 +415,8 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
       })
       .catch(() => newest() && setSandbox(undefined));
     readTheme();
-  }, [plane, readTheme]);
+    void readEntries();
+  }, [plane, readTheme, readEntries]);
 
   // An approval or a removal in the Extensions dialog changes what the theme draws.
   const answers = useProjectThemeAnswers(plane);
@@ -417,6 +475,7 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   if (driver.state !== "read") return driver;
   return {
     ...driver,
-    read: { ...driver.now, extensions, harnesses, theme, saving, sandbox },
+    read: { ...driver.now, extensions, harnesses, theme, saving, sandbox, entries },
+    readEntries,
   };
 }

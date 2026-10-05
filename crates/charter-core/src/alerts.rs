@@ -437,7 +437,7 @@ fn follows_dev(cfg: &toml::Table) -> bool {
 /// a name too long) is taken as there, as charter's `_persona_exists` takes a failure, because
 /// an alert manufactured from a failed look is exactly the false alarm this row cannot afford.
 /// Only the answers `Path.exists` reads as "not there" are.
-fn persona_exists(root: &Path, name: &str) -> bool {
+pub(crate) fn persona_exists(root: &Path, name: &str) -> bool {
     let personas = root.join("personas");
     [
         personas.join(name).join("persona.md"),

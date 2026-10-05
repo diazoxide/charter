@@ -47,7 +47,28 @@ export type Control = {
   read: (file: Shown) => string;
   /** The edits `draft` makes to `file`, the file it was typed over. */
   edits: (draft: string, file: Shown) => SettingsEdit[];
+  /** A `choice` over one of the project's own collections (ST-1): its choices are what the
+   *  project has, read when the level is, and it offers New… beside them. */
+  names?: Entry;
 };
+
+/**
+ * **A collection a setting names an entry of** (ST-1, #1225; V91r): the project's personas, its
+ * workspaces, or the harness profiles a chat can start on — built in, or declared in
+ * `charter.local.toml`.
+ */
+export type Entry = "persona" | "workspace" | "profile";
+
+/** What each {@link Entry} lists, as the core answered it. */
+export type Entries = Readonly<Record<Entry, readonly string[]>>;
+
+/**
+ * **A picker over one of the project's collections** (ST-1): a `choice` whose choices are filled
+ * in from what the core lists when the level is read, with New… beside them.
+ */
+export function pickAt(path: SettingsStep[], label: string, names: Entry, hint?: string): Control {
+  return { ...textAt(path, label, { kind: "choice", hint }), names, unset: "not set" };
+}
 
 /** What `project_extensions` answers before it has answered, or when it could not. */
 export const NO_EXTENSIONS: ProjectExtensions = { extensions: [], local_left_out: null };
@@ -648,13 +669,24 @@ export const SHARED: Group[] = [
   {
     title: "General",
     controls: () => [
-      textAt(key("workspace", "default"), "Default workspace"),
-      textAt(key("persona", "default"), "Default persona", {
-        hint: "The persona a chat starts as when nothing else names one.",
-      }),
-      textAt(key("harness", "default"), "Default harness", {
-        hint: "claude, opencode, codex, or a profile charter.local.toml declares.",
-      }),
+      pickAt(
+        key("workspace", "default"),
+        "Default workspace",
+        "workspace",
+        "The workspace a session lands in when nothing else selects one.",
+      ),
+      pickAt(
+        key("persona", "default"),
+        "Default persona",
+        "persona",
+        "The persona a chat starts as when nothing else names one.",
+      ),
+      pickAt(
+        key("harness", "default"),
+        "Default harness",
+        "profile",
+        "A built-in harness, or a profile charter.local.toml declares.",
+      ),
       textAt(key("update", "channel"), "Update channel", {
         kind: "choice",
         choices: ["stable", "dev"],
@@ -728,9 +760,12 @@ export const LOCAL: Group[] = [
   {
     title: "Harness",
     controls: () => [
-      textAt(key("harness", "default"), "Default profile", {
-        hint: "The profile the new-chat picker starts on. Wins over charter.toml's.",
-      }),
+      pickAt(
+        key("harness", "default"),
+        "Default profile",
+        "profile",
+        "The profile the new-chat picker starts on. Wins over charter.toml's.",
+      ),
     ],
   },
   {

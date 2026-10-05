@@ -1,10 +1,15 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
-import type { PlaneId, SettingsEdit, SettingsWhich } from "../bindings";
+import { commands, type PlaneId, type SettingsEdit, type SettingsWhich } from "../bindings";
+import { NewPersona } from "../NewPersona";
+import { NewWorkspace } from "../NewWorkspace";
+import { settled } from "../PlaneEdits";
+import { cloneRepos } from "../repoClones";
 import { DEFAULT_THEME, inForce } from "../theme/theme";
 import { atCreation } from "../windowprefs";
 import { Choice, Field, SettingGroup, SettingRow, SettingsLayout, type RowIds } from "./components";
 import { heldIn, keysOf, type Driven, type Files } from "./driver";
+import type { Entry } from "./fileControls";
 import {
   inAFile,
   LEVELS,
@@ -99,8 +104,38 @@ function YouLevel({ levels, onLevelChange }: Switcher) {
   );
 }
 
+/** What New… on a picker makes, and what is done with its name once it is made (ST-1). */
+type Making = {
+  entry: "persona" | "workspace";
+  then: (name: string) => void;
+  trouble?: string;
+  busy: boolean;
+};
+
+/** Where New… on a picker goes (ST-1): `then` is handed the name of what was made. */
+type OnNew = (entry: Entry, then: (name: string) => void) => void;
+
 function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) {
   const project = useProjectLevel(plane);
+  const [making, setMaking] = useState<Making>();
+  /**
+   * **Makes what New… asked for, then picks it** (ST-1, D-ST1-2): through the same core
+   * commands the sidebar's New persona and New workspace use, so the window and a terminal
+   * refuse the same names in the same words; a refusal stays in the dialog. What was made is
+   * listed again before it is picked, so the picker names it rather than a value it lacks.
+   */
+  const make = async (made: Promise<{ status: "ok" } | { status: "error"; error: string }>) => {
+    if (making === undefined) return false;
+    setMaking({ ...making, busy: true, trouble: undefined });
+    const answer = await made;
+    if (answer.status === "error") {
+      setMaking({ ...making, busy: false, trouble: answer.error });
+      return false;
+    }
+    setMaking(undefined);
+    if (project.state === "read") await project.readEntries();
+    return true;
+  };
   const groups = useMemo(
     () => (project.state === "read" ? projectGroups(project.read) : []),
     [project],
@@ -140,7 +175,45 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
       }
       driver={project.state === "read" ? project : undefined}
       raw={raw}
-    />
+      onNew={(entry, then) => {
+        if (entry !== "profile") setMaking({ entry, then, busy: false });
+      }}
+    >
+      {making?.entry === "persona" && (
+        <NewPersona
+          plane={plane}
+          trouble={making.trouble}
+          making={making.busy}
+          onCreate={(name, role, when, parent) =>
+            void make(settled(commands.personaCreate(plane, name, role, when, parent))).then(
+              (made) => made && making.then(name),
+            )
+          }
+          onCancel={() => setMaking(undefined)}
+        />
+      )}
+      {making?.entry === "workspace" && (
+        <NewWorkspace
+          plane={plane}
+          planeId={plane}
+          trouble={making.trouble}
+          making={making.busy}
+          onCreate={(name, vision, live, repos) =>
+            void make(
+              settled(
+                commands.workspaceCreate(plane, name, vision.trim() === "" ? null : vision, live),
+              ),
+            ).then((made) => {
+              if (!made) return;
+              making.then(name);
+              // The repos land after it, each on its own, as they do from the sidebar.
+              if (repos.length > 0) void cloneRepos(plane, name, repos);
+            })
+          }
+          onCancel={() => setMaking(undefined)}
+        />
+      )}
+    </Shown>
   );
 }
 
@@ -204,6 +277,8 @@ function Shown({
   mend = [],
   driver,
   raw = [],
+  onNew,
+  children,
 }: Switcher & {
   level: Level;
   /** Where the group shown is remembered (`links.settingsPlace`). */
@@ -219,6 +294,10 @@ function Shown({
   driver?: Driven<unknown>;
   /** The level's files as raw TOML, each with its link at the foot of the nav (SE-19). */
   raw?: readonly RawFile[];
+  /** Where a picker's New… goes for a persona or a workspace (ST-1). */
+  onNew?: OnNew;
+  /** What the level draws over the tab: the dialog New… opened. */
+  children?: ReactNode;
 }) {
   // Per tab and not remembered (V89c): a level drawn afresh starts with the whole nav.
   const [filter, setFilter] = useState("");
@@ -246,6 +325,15 @@ function Shown({
   const rawFile = raw.find((one) => one.id === editing);
   const found =
     waiting === undefined ? groups.reduce((all, one) => all + one.settings.length, 0) : undefined;
+  /**
+   * New… on a picker (ST-1). A profile has no form of its own yet (ST-4), so New profile… opens
+   * `charter.local.toml` under Edit as TOML, where a `[harness.<name>]` table is added today
+   * (D-ST1-4); a persona or a workspace is the level's to make.
+   */
+  const create: OnNew = (entry, then) => {
+    if (entry === "profile" && raw.some((one) => one.id === "local")) setEditing("local");
+    else onNew?.(entry, then);
+  };
   return (
     <SettingsLayout
       levels={levels}
@@ -305,10 +393,11 @@ function Shown({
               }
             />
           ) : (
-            group && <ShownGroup key={group.id} group={group} driver={driver} />
+            group && <ShownGroup key={group.id} group={group} driver={driver} onNew={create} />
           )}
         </>
       )}
+      {children}
     </SettingsLayout>
   );
 }
@@ -333,7 +422,15 @@ function narrowed(groups: readonly SettingsGroup[], filter: string): readonly Se
 
 /** The chosen group, drawn from its data. Keyed by the group, so each setting's hook is always
  *  the same one in a given row. */
-function ShownGroup({ group, driver }: { group: SettingsGroup; driver?: Driven<unknown> }) {
+function ShownGroup({
+  group,
+  driver,
+  onNew,
+}: {
+  group: SettingsGroup;
+  driver?: Driven<unknown>;
+  onNew?: OnNew;
+}) {
   return (
     <SettingGroup label={group.label} help={group.help}>
       {group.notes?.map((why, at) => (
@@ -343,7 +440,7 @@ function ShownGroup({ group, driver }: { group: SettingsGroup; driver?: Driven<u
       ))}
       {group.settings.map((setting) =>
         inAFile(setting) ? (
-          driver && <FileRow key={setting.id} setting={setting} driver={driver} />
+          driver && <FileRow key={setting.id} setting={setting} driver={driver} onNew={onNew} />
         ) : (
           <LiveRow key={setting.id} setting={setting} />
         ),
@@ -420,7 +517,15 @@ function removals(setting: FileSetting, files: Files, from: SettingsFileId | und
  * is held and made on a button, never as the arrows pass over it (`ui-primitives.md`). While no
  * file holds the value, the pick only says where the next value goes, and writes nothing.
  */
-function FileRow({ setting, driver: project }: { setting: FileSetting; driver: Driven<unknown> }) {
+function FileRow({
+  setting,
+  driver: project,
+  onNew,
+}: {
+  setting: FileSetting;
+  driver: Driven<unknown>;
+  onNew?: OnNew;
+}) {
   const from = heldIn(setting, project.files);
   const [pick, setPick] = useState<SettingsWhich>();
   /** The file a new value goes to: where it is, else where it was picked to go. */
@@ -447,7 +552,11 @@ function FileRow({ setting, driver: project }: { setting: FileSetting; driver: D
     <SettingRow
       label={setting.label}
       help={setting.help}
-      error={project.refused[setting.id]}
+      error={
+        project.refused[setting.id] ??
+        // The core's word on a value that names nothing, until a write replaces it (ST-1).
+        (setting.standing !== undefined && !writing ? [setting.standing] : undefined)
+      }
       undo={project.undoable === setting.id && !writing ? project.undo : undefined}
       origin={originOf(setting, project.files, from)}
       badge={overridden !== undefined ? "Overrides charter.toml" : undefined}
@@ -475,6 +584,15 @@ function FileRow({ setting, driver: project }: { setting: FileSetting; driver: D
       control={(ids) =>
         setting.kind === "colour" ? (
           <Colour ids={ids} setting={setting} value={value} onValueChange={write} />
+        ) : setting.names !== undefined ? (
+          <Picker
+            ids={ids}
+            setting={setting}
+            names={setting.names}
+            value={value}
+            onValueChange={write}
+            onNew={onNew}
+          />
         ) : setting.kind === "choice" ? (
           <Choice
             kind="select"
@@ -566,6 +684,61 @@ function Place({
         </button>
       )}
     </div>
+  );
+}
+
+/** What New… is called in a picker over each collection (ST-1). */
+const NEW: Record<Entry, string> = {
+  persona: "New persona…",
+  workspace: "New workspace…",
+  profile: "New profile…",
+};
+
+/** The value of a picker's New… option: one no name can be (a NUL is in none). */
+const MAKE_ONE = "\u0000new";
+
+/**
+ * **A picker over one of the project's collections** (ST-1, #1225; V91r): what the project has,
+ * and New…, which opens the matching create flow and writes nothing until something is made —
+ * then that is picked. A value the file holds that the project does not have is shown as held,
+ * marked as naming nothing once the list is in; the row says the core's sentence about it, and
+ * any pick replaces it.
+ */
+function Picker({
+  ids,
+  setting,
+  names,
+  value,
+  onValueChange,
+  onNew,
+}: {
+  ids: RowIds;
+  setting: FileSetting;
+  names: Entry;
+  value: string;
+  onValueChange: (to: string) => void;
+  onNew?: OnNew;
+}) {
+  const listed = setting.choices;
+  const held = value !== "" && !(listed ?? []).includes(value);
+  return (
+    <Choice
+      kind="select"
+      ids={ids}
+      options={[
+        ...(held
+          ? [{ value, label: listed === undefined ? value : `${value} — names nothing here` }]
+          : []),
+        ...(listed ?? []).map((one) => ({ value: one, label: one })),
+        ...(onNew ? [{ value: MAKE_ONE, label: NEW[names] }] : []),
+      ]}
+      value={value}
+      unset={setting.unset}
+      onValueChange={(to) => {
+        if (to === MAKE_ONE) onNew?.(names, onValueChange);
+        else onValueChange(to);
+      }}
+    />
   );
 }
 

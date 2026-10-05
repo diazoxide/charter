@@ -334,7 +334,55 @@ fn shared_refusals(root: &Path, text: &str) -> Vec<String> {
         Some(text),
         profiles::read_local(root),
     ));
-    said(root, &set, COMMITTED_FILE, &cfg)
+    let mut out = said(root, &set, COMMITTED_FILE, &cfg);
+    out.extend(names_nothing(root, &cfg));
+    out
+}
+
+/// `[persona] default` and `[workspace] default` naming nothing in this project (ST-1, #1225),
+/// one sentence each, as `[harness] default`'s is said: the Settings tab draws them as pickers
+/// over what is here, and a value set by hand that names nothing is shown with this.
+///
+/// A persona default naming no persona is one charter already reads as none
+/// ([`crate::active::plane_default_persona`]), and the alerts call it the front door. The
+/// workspace `default` is exempt: it is the one every project has, made where it is first used.
+/// A `workspaces/` the filesystem will not list names nothing charter can say is missing, and a
+/// value shaped like a secret is never quoted back.
+fn names_nothing(root: &Path, cfg: &toml::Table) -> Vec<String> {
+    let named = |table: &str| {
+        cfg.get(table)
+            .and_then(toml::Value::as_table)
+            .and_then(|t| t.get("default"))
+            .map(|v| crate::memstore::py_strip(&crate::pyrepr::str_toml(v)).to_owned())
+            .filter(|v| !v.is_empty())
+            // Never said back when it is shaped like a secret: the secret's own refusal, by
+            // its kind, is the one sentence about it.
+            .filter(|v| crate::secretshape::secret_kind(v).is_none())
+    };
+    let mut out = Vec::new();
+    if let Some(persona) = named("persona")
+        && !crate::alerts::persona_exists(root, &persona)
+    {
+        out.push(format!(
+            "[persona] default = \"{}\" names no persona in this project, so charter reads it \
+             as no default. Pick one that is here, or make it.",
+            crate::shown::short(&persona)
+        ));
+    }
+    if let Some(workspace) = named("workspace")
+        && workspace != crate::active::BUILT_IN_WORKSPACE
+        && crate::workspaces::Plane::open(root)
+            .workspaces()
+            .is_ok_and(|names| !names.contains(&workspace))
+    {
+        out.push(format!(
+            "[workspace] default = \"{}\" names no workspace in this project — a session with \
+             nothing else selected lands in a workspace that is not there. Pick one that is \
+             here, or make it.",
+            crate::shown::short(&workspace)
+        ));
+    }
+    out
 }
 
 /// The Local file's: every profile the loader would refuse, and a `default` that names none it
