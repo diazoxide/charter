@@ -20,7 +20,8 @@ import { commands, type PlaneId } from "./bindings";
 export type CloneState =
   | { state: "waiting" }
   | { state: "cloning" }
-  | { state: "cloned" }
+  /** `said` is what `clone` answered, in its own words, for a caller that has to quote it. */
+  | { state: "cloned"; said?: string }
   | { state: "failed"; said: string };
 
 type Clones = ReadonlyMap<string, CloneState>;
@@ -55,14 +56,19 @@ export function underWay(state: CloneState | undefined): boolean {
  * Add `repos` to the plane's inventory, then clone them into `workspace` one after another,
  * after any clone this window already asked for there. A repo already under way is left to
  * the call that asked first. `onEach` hears each repo as it finishes, so a list can be read
- * again as it lands rather than once the batch ends. Resolves with the ones that failed, once
- * every one has been tried.
+ * again as it lands rather than once the batch ends; it may answer a state to put in its place
+ * — a clone that answered but is not where the workspace looks is a failure, not a success.
+ * The next repo waits for it. Resolves with the ones that failed, once every one has been
+ * tried.
  */
 export function cloneRepos(
   plane: PlaneId,
   workspace: string,
   repos: string[],
-  onEach?: (repo: string, state: CloneState) => void,
+  onEach?: (
+    repo: string,
+    state: CloneState,
+  ) => CloneState | undefined | Promise<CloneState | undefined>,
 ): Promise<Failed> {
   const key = keyOf(plane, workspace);
   const mine = repos.filter((repo) => !underWay(byWorkspace.get(key)?.get(repo)));
@@ -81,7 +87,10 @@ async function cloneInTurn(
   plane: PlaneId,
   workspace: string,
   repos: string[],
-  onEach?: (repo: string, state: CloneState) => void,
+  onEach?: (
+    repo: string,
+    state: CloneState,
+  ) => CloneState | undefined | Promise<CloneState | undefined>,
 ): Promise<Failed> {
   if (repos.length === 0) return [];
   const taken = await commands
@@ -95,16 +104,17 @@ async function cloneInTurn(
     const answer = await commands
       .cloneRepo(plane, workspace, repo)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    const state: CloneState =
+    const cloned: CloneState =
       answer.status === "ok"
-        ? { state: "cloned" }
+        ? { state: "cloned", said: answer.data.join(" ") }
         : {
             state: "failed",
             said: taken.status === "error" ? `${answer.error}\n${taken.error}` : answer.error,
           };
-    set(plane, workspace, repo, state);
+    set(plane, workspace, repo, cloned);
+    const state = (await onEach?.(repo, cloned)) ?? cloned;
+    if (state !== cloned) set(plane, workspace, repo, state);
     if (state.state === "failed") failed.push({ repo, said: state.said });
-    onEach?.(repo, state);
   }
   return failed;
 }
