@@ -1530,10 +1530,14 @@ export const commands = {
 	/**  One workspace's settings, and what charter says about them. */
 	workspaceSettings: (plane: PlaneId, workspace: string) => typedError<WorkspaceSettings, string>(__TAURI_INVOKE("workspace_settings", { plane, workspace })),
 	/**
-	 *  Change one workspace's settings: checked by the readers of the project's files, written into
-	 *  its `workspace.json` with every other key kept (`charter_core::settings::workspace`).
+	 *  Change one workspace's `workspace.json`: a form's changes to its settings, written with every
+	 *  other key kept, or Edit as JSON's whole text (NO-7, #1232) — each checked by the readers of
+	 *  the project's files (`charter_core::settings::workspace`).
+	 * 
+	 *  `base` is the text the window read (`null`: the file was not there), so a file changed on
+	 *  disk since is refused rather than overwritten.
 	 */
-	saveWorkspaceSettings: (plane: PlaneId, workspace: string, base: string | null, edits: SettingsEdit[]) => typedError<WorkspaceSettingsSaved, string>(__TAURI_INVOKE("save_workspace_settings", { plane, workspace, base, edits })),
+	saveWorkspaceSettings: (plane: PlaneId, workspace: string, base: string | null, change: SettingsChange) => typedError<WorkspaceSettingsSaved, string>(__TAURI_INVOKE("save_workspace_settings", { plane, workspace, base, change })),
 	/**
 	 *  What one chat's recorded usage says, or nothing.
 	 * 
@@ -4826,8 +4830,8 @@ export type WithoutSandbox = {
 
 /**
  *  A workspace's settings — the `settings` of its `workspace.json` — as Settings draws them at
- *  the Workspace level. The same shape as a [`SettingsFile`], without Edit as TOML: the manifest is
- *  charter's and the team's, and a form is the one way into it here.
+ *  the Workspace level. The same shape as a [`SettingsFile`]; its whole text is edited under Edit
+ *  as JSON (NO-7, #1232), as a project's files are under Edit as TOML.
  */
 export type WorkspaceSettings = {
 	workspace: string,

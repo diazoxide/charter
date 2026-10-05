@@ -600,8 +600,8 @@ fn quiet_period(period: std::time::Duration) -> String {
 // ---------------------------------------------------------------------------------------
 
 /// A workspace's settings — the `settings` of its `workspace.json` — as Settings draws them at
-/// the Workspace level. The same shape as a [`SettingsFile`], without Edit as TOML: the manifest is
-/// charter's and the team's, and a form is the one way into it here.
+/// the Workspace level. The same shape as a [`SettingsFile`]; its whole text is edited under Edit
+/// as JSON (NO-7, #1232), as a project's files are under Edit as TOML.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
 pub struct WorkspaceSettings {
     pub workspace: String,
@@ -644,8 +644,12 @@ pub async fn workspace_settings(
         .map_err(|err| format!("reading the workspace's settings did not finish: {err}"))?
 }
 
-/// Change one workspace's settings: checked by the readers of the project's files, written into
-/// its `workspace.json` with every other key kept (`charter_core::settings::workspace`).
+/// Change one workspace's `workspace.json`: a form's changes to its settings, written with every
+/// other key kept, or Edit as JSON's whole text (NO-7, #1232) — each checked by the readers of
+/// the project's files (`charter_core::settings::workspace`).
+///
+/// `base` is the text the window read (`null`: the file was not there), so a file changed on
+/// disk since is refused rather than overwritten.
 #[tauri::command]
 #[specta::specta]
 pub async fn save_workspace_settings(
@@ -653,11 +657,11 @@ pub async fn save_workspace_settings(
     plane: PlaneId,
     workspace: String,
     base: Option<String>,
-    edits: Vec<SettingsEdit>,
+    change: SettingsChange,
 ) -> Result<WorkspaceSettingsSaved, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {
-        save_workspace(&root, &workspace, base.as_deref(), edits)
+        save_workspace(&root, &workspace, base.as_deref(), change)
     })
     .await
     .map_err(|err| format!("saving the workspace's settings did not finish: {err}"))?
@@ -668,10 +672,18 @@ pub(crate) fn save_workspace(
     root: &std::path::Path,
     workspace: &str,
     base: Option<&str>,
-    edits: Vec<SettingsEdit>,
+    change: SettingsChange,
 ) -> Result<WorkspaceSettingsSaved, String> {
-    let edits: Vec<Edit> = edits.into_iter().map(edit_of).collect::<Result<_, _>>()?;
-    match settings::workspace::save(root, workspace, base, &edits) {
+    let saved = match change {
+        SettingsChange::Raw { text } => {
+            settings::workspace::save_text(root, workspace, base, &text)
+        }
+        SettingsChange::Edits { edits } => {
+            let edits: Vec<Edit> = edits.into_iter().map(edit_of).collect::<Result<_, _>>()?;
+            settings::workspace::save(root, workspace, base, &edits)
+        }
+    };
+    match saved {
         Ok(()) => Ok(WorkspaceSettingsSaved::Saved {
             settings: workspace_of(root, workspace)?,
         }),
@@ -921,7 +933,7 @@ mod tests {
         assert_eq!(before.file, "workspaces/alpha/workspace.json");
         assert!(before.exists && before.parsed && before.fields.is_empty());
         let saved =
-            save_workspace(dir.path(), "alpha", Some(manifest), vec![enabled(false)]).unwrap();
+            save_workspace(dir.path(), "alpha", Some(manifest), edits(enabled(false))).unwrap();
         let WorkspaceSettingsSaved::Saved { settings } = saved else {
             panic!("saved: {saved:?}")
         };
@@ -937,11 +949,45 @@ mod tests {
         );
     }
 
+    fn edits(one: SettingsEdit) -> SettingsChange {
+        SettingsChange::Edits { edits: vec![one] }
+    }
+
+    #[test]
+    fn a_workspace_json_saved_as_text_is_written_through_the_core_and_read_back() {
+        let manifest = "{\n  \"name\": \"alpha\"\n}\n";
+        let dir = with_workspace(manifest);
+        let text = "{\"name\": \"alpha\", \"settings\": {\"extensions\": {\"stats\": {\"enabled\": true}}}}\n";
+        let saved = save_workspace(
+            dir.path(),
+            "alpha",
+            Some(manifest),
+            SettingsChange::Raw { text: text.into() },
+        )
+        .unwrap();
+        let WorkspaceSettingsSaved::Saved { settings } = saved else {
+            panic!("saved: {saved:?}")
+        };
+        assert_eq!(settings.text, text);
+        assert_eq!(settings.fields.len(), 1, "{:?}", settings.fields);
+        let refused = save_workspace(
+            dir.path(),
+            "alpha",
+            Some(text),
+            SettingsChange::Raw { text: "{".into() },
+        )
+        .unwrap();
+        assert!(
+            matches!(&refused, WorkspaceSettingsSaved::Refused { reasons } if reasons[0].contains("would not be a JSON object")),
+            "{refused:?}"
+        );
+    }
+
     #[test]
     fn a_refused_workspace_save_answers_the_cores_sentences() {
         let manifest = "{\n  \"name\": \"alpha\"\n}\n";
         let dir = with_workspace(manifest);
-        let saved = save_workspace(dir.path(), "alpha", Some("{}"), vec![enabled(true)]).unwrap();
+        let saved = save_workspace(dir.path(), "alpha", Some("{}"), edits(enabled(true))).unwrap();
         let WorkspaceSettingsSaved::Refused { reasons } = saved else {
             panic!("refused: {saved:?}")
         };

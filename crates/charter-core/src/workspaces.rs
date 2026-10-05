@@ -528,6 +528,20 @@ impl Workspace {
         )
     }
 
+    /// Write `workspace.json` as exactly `text`, replacing the file atomically: the Workspace
+    /// level's Edit as JSON saving a manifest a hand wrote, which stays the hand's byte for byte
+    /// (NO-7, #1232). The caller has checked the text; nothing here stamps it.
+    pub fn write_manifest_text(&self, text: &str) -> io::Result<()> {
+        self.writable(&self.dir.join("workspace.json"))?;
+        std::fs::create_dir_all(&self.dir)?;
+        crate::rewrite::replace(
+            &self.dir,
+            &self.dir.join("workspace.json"),
+            text.as_bytes(),
+            crate::rewrite::Mode::Kept,
+        )
+    }
+
     /// Create the workspace's memory index when it has none — the per-file DB's `MEMORY.md`.
     ///
     /// A legacy `notes.md` is grandfathered into the index, so a pre-v2 workspace's memo

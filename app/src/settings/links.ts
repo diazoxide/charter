@@ -23,8 +23,12 @@ import { LEVELS, type Level } from "./groups";
  * launch's record: it is this session's, not the tab's.
  */
 
-/** A link into Settings: the group's address, and — at the Workspace level — which workspace. */
-export type SettingsLink = { group: string; workspace?: string };
+/**
+ * A link into Settings: the group's address, and — at the Workspace level — which workspace.
+ * It may also name one setting of the group (NO-7, #1232), by its id (`project.saving.plane.mode`):
+ * the group is shown and that setting's control is focused.
+ */
+export type SettingsLink = { group: string; workspace?: string; setting?: string };
 
 /** The level a group's address is at — the word before its first dot — or `undefined`. */
 export function levelOf(group: string): Level | undefined {
@@ -44,9 +48,10 @@ export function settingsPlace(level: Level, plane?: string, workspace?: string):
 /**
  * What a place shows: its group, and how many links have landed on it — a count that moves on
  * a link and never on a click, so a tab can tell "a link brought me here" (and clear its filter
- * so the group is on screen) from "the person picked a group".
+ * so the group is on screen) from "the person picked a group". `setting` is the setting the last
+ * link named, until the tab has focused it ({@link focusedSetting}).
  */
-export type Shown = { group: string; linked: number };
+export type Shown = { group: string; linked: number; setting?: string };
 
 let shown = new Map<string, Shown>();
 const listeners = new Set<() => void>();
@@ -63,9 +68,29 @@ export function chooseGroup(place: string, group: string): void {
   put(place, { group, linked: was?.linked ?? 0 });
 }
 
-/** A link landed on `group` at `place`. */
-export function linkToGroup(place: string, group: string): void {
-  put(place, { group, linked: (shown.get(place)?.linked ?? 0) + 1 });
+/** A link landed on `group` at `place` — on its setting `setting`, when it names one. */
+export function linkToGroup(place: string, group: string, setting?: string): void {
+  put(place, { group, linked: (shown.get(place)?.linked ?? 0) + 1, setting });
+}
+
+/** The tab at `place` focused the setting the last link named: a redraw does not do it again. */
+export function focusedSetting(place: string): void {
+  const was = shown.get(place);
+  if (was?.setting !== undefined) put(place, { group: was.group, linked: was.linked });
+}
+
+/** The window event a view sends to follow a link into Settings in its project's window: the
+ *  Saving view's Notice does (NO-7, #1232), as its ways out send `WAY_OUT`. */
+export const SETTINGS_LINK = "charter-settings-link";
+
+/** What a link asked of a project's window: which project, and the link. */
+export type SettingsLinkAsk = { plane: string; link: SettingsLink };
+
+/** Asks the window of the project `plane` to follow `link` (`PlaneView` hears it). */
+export function askSettingsLink(plane: string, link: SettingsLink): void {
+  window.dispatchEvent(
+    new CustomEvent<SettingsLinkAsk>(SETTINGS_LINK, { detail: { plane, link } }),
+  );
 }
 
 /** What `place` shows, redrawn as it changes; `undefined` until a group is picked or linked. */

@@ -22,6 +22,11 @@ import {
   useRepoSaving,
 } from "./saving";
 import { Choice, Field, SettingActions, SettingRow, type Option } from "./settings/components";
+import { askSettingsLink, type SettingsLink } from "./settings/links";
+import { Notice } from "./Notice";
+
+/** Settings › Saving › Mode: where a project's save mode is changed (SE-22's address). */
+const SAVING_MODE: SettingsLink = { group: "project.saving", setting: "project.saving.plane.mode" };
 
 /**
  * **The Saving view** (charter-app#294, ADR 0051): where this plane's unsaved work sits, what
@@ -174,7 +179,19 @@ export function SavingView({
               </SettingActions>
             </div>
           )}
-          {saving.notice !== null && <p className="saving-note">{saving.notice}</p>}
+          {saving.notice !== null && (
+            /* A request mode on an origin no forge charter knows (NO-7, #1232): the mode it
+               complains about is changed in Settings › Saving, so that is where it links. */
+            <Notice
+              cause="saving-no-forge"
+              link={{
+                label: "Change the mode",
+                onPress: () => askSettingsLink(plane, SAVING_MODE),
+              }}
+            >
+              {saving.notice}
+            </Notice>
+          )}
           {saving.pushFailed !== null && (
             <p className="saving-note">{`The last push did not land: ${saving.pushFailed}`}</p>
           )}

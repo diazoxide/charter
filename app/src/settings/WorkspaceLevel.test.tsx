@@ -13,6 +13,7 @@ import type {
   HarnessPlugins,
   ProjectExtension,
   ProjectTheme,
+  SettingsChange,
   SettingsEdit,
   WorkspaceSettings as Settings,
   WorkspaceSettingsSaved,
@@ -274,7 +275,11 @@ function core(
         sent.push(given);
         const answer = saved?.(given);
         if (answer) return answer;
-        file = applied(file, given.edits as SettingsEdit[]);
+        const change = given.change as SettingsChange;
+        file =
+          change.kind === "raw"
+            ? { ...file, exists: true, text: change.text }
+            : applied(file, change.edits);
         return { kind: "saved", settings: file };
       }
       return undefined;
@@ -286,6 +291,10 @@ function core(
     asked: (cmd: string) => asked.filter(([one]) => one === cmd).map(([, given]) => given),
   };
 }
+
+/** The edits a form's write sent (`save_workspace_settings`' change). */
+const editsOf = (sent: Record<string, unknown>) =>
+  (sent.change as SettingsChange & { edits?: SettingsEdit[] }).edits;
 
 /** The tab as a view tab holds it, about `alpha`: its level is the tab's. */
 function Tab({ at = "workspace" }: { at?: Level }) {
@@ -419,7 +428,7 @@ describe("every workspace setting there is, at the Workspace level", () => {
     await userEvent.tab();
 
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0].edits).toEqual([
+    expect(editsOf(sent[0])).toEqual([
       { path: [{ key: "theme" }, { key: "icons" }], value: { kind: "text", value: "seti/seti" } },
     ]);
   });
@@ -554,7 +563,12 @@ describe("Extensions", () => {
       plane: PLANE,
       workspace: "alpha",
       base: MANIFEST,
-      edits: [{ path: [{ key: "extensions" }, { key: "stats" }, { key: "enabled" }], value: null }],
+      change: {
+        kind: "edits",
+        edits: [
+          { path: [{ key: "extensions" }, { key: "stats" }, { key: "enabled" }], value: null },
+        ],
+      },
     });
     await waitFor(() => expect(asked("project_extensions").length).toBeGreaterThan(1));
   });
@@ -580,7 +594,7 @@ describe("Extensions", () => {
     await userEvent.click(await within(group).findByRole("button", { name: "Undo" }));
 
     await waitFor(() => expect(sent).toHaveLength(2));
-    expect(sent[1].edits).toEqual([
+    expect(editsOf(sent[1])).toEqual([
       {
         path: [{ key: "extensions" }, { key: "stats" }, { key: "enabled" }],
         value: { kind: "bool", value: false },
@@ -604,7 +618,7 @@ describe("Extensions", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Reset" }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0].edits).toEqual([
+    expect(editsOf(sent[0])).toEqual([
       { path: [{ key: "extensions" }, { key: "stats" }, { key: "enabled" }], value: null },
     ]);
   });
@@ -763,7 +777,7 @@ describe("Appearance (charter-app#281)", () => {
 
     await userEvent.selectOptions(await within(group).findByLabelText("Colour"), "purple");
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0].edits).toEqual([
+    expect(editsOf(sent[0])).toEqual([
       { path: [{ key: "theme" }, { key: "colour" }], value: { kind: "text", value: "purple" } },
     ]);
 
@@ -776,7 +790,7 @@ describe("Appearance (charter-app#281)", () => {
     expect(sent).toHaveLength(2);
     fireEvent.change(custom, { target: { value: PICKED } });
     await waitFor(() => expect(sent).toHaveLength(3));
-    expect(sent[2].edits).toEqual([
+    expect(editsOf(sent[2])).toEqual([
       { path: [{ key: "theme" }, { key: "colour" }], value: { kind: "text", value: PICKED } },
     ]);
   });
@@ -801,7 +815,7 @@ describe("Appearance (charter-app#281)", () => {
     await waitFor(() => expect(sent).toHaveLength(1));
     await act(() => new Promise((settle) => setTimeout(settle, 20)));
     expect(sent).toHaveLength(1);
-    expect(sent[0].edits).toEqual([
+    expect(editsOf(sent[0])).toEqual([
       { path: [{ key: "theme" }, { key: "colour" }], value: { kind: "text", value: PICKED } },
     ]);
   });
@@ -886,7 +900,7 @@ describe("Plugins (charter-app#282)", () => {
     );
 
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0].edits).toEqual([
+    expect(editsOf(sent[0])).toEqual([
       {
         path: [{ key: "harness_plugins" }, { key: "claude" }, { key: "serena@official" }],
         value: { kind: "bool", value: false },
@@ -998,5 +1012,109 @@ describe("Settings at a workspace's level, as a view", () => {
     await userEvent.click(await screen.findByRole("radio", { name: "Workspace" }));
 
     expect(moved).toEqual([["workspace-settings/alpha", "Workspace settings · alpha"]]);
+  });
+});
+
+describe("Edit as JSON (NO-7, #1232)", () => {
+  const editLink = () =>
+    within(screen.getByRole("group", { name: "Edit as JSON" })).getByRole("button", {
+      name: "workspace.json",
+    });
+  const box = () => screen.getByRole("textbox", { name: "workspace.json, as JSON" });
+
+  it("sits at the foot of the nav and shows the whole manifest", async () => {
+    core();
+    await at();
+
+    await userEvent.click(editLink());
+
+    expect(box()).toHaveValue(MANIFEST);
+    expect(screen.queryByRole("group", { name: "Edit as TOML" })).toBeNull();
+  });
+
+  it("saves the whole text through the core, against the text the edit began from", async () => {
+    const { sent } = core();
+    await at();
+    await userEvent.click(editLink());
+    const typed = '{"name": "alpha", "description": "mended"}';
+
+    fireEvent.change(box(), { target: { value: typed } });
+    await userEvent.click(screen.getByRole("button", { name: "Save workspace.json" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({
+      plane: PLANE,
+      workspace: "alpha",
+      base: MANIFEST,
+      change: { kind: "raw", text: typed },
+    });
+    await waitFor(() => expect(box()).toHaveValue(typed));
+  });
+
+  it("says the core's refusal and keeps the edit", async () => {
+    core(ALPHA, () => ({
+      kind: "refused",
+      reasons: ["workspaces/alpha/workspace.json would not be a JSON object, so nothing was saved"],
+    }));
+    await at();
+    await userEvent.click(editLink());
+
+    fireEvent.change(box(), { target: { value: "{" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save workspace.json" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "workspaces/alpha/workspace.json would not be a JSON object",
+    );
+    expect(box()).toHaveValue("{");
+  });
+
+  it("is where a manifest that is not JSON is mended", async () => {
+    core({
+      ...ALPHA,
+      text: '{"name": ',
+      parsed: false,
+      fields: [],
+      refusals: [
+        "workspaces/alpha/workspace.json is not a JSON object, so charter reads no settings from it — mend it by hand",
+      ],
+    });
+    await at();
+
+    expect(
+      screen.getByText("Open workspace.json under Edit as JSON to mend it."),
+    ).toBeInTheDocument();
+    await userEvent.click(editLink());
+    expect(box()).toHaveValue('{"name": ');
+  });
+});
+
+describe("a standing refusal at the Workspace level (NO-7, #1232)", () => {
+  it("links to the setting it is about, which is shown and focused", async () => {
+    core({
+      ...ALPHA,
+      refusals: [
+        "settings.theme.icons in workspaces/alpha/workspace.json is 7, not an icon theme's pick",
+      ],
+    });
+    await at();
+
+    await userEvent.click(screen.getByRole("button", { name: "Go to Appearance › Icons" }));
+
+    expect(within(nav()).getByRole("button", { name: "Appearance" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    await waitFor(() => expect(screen.getByLabelText("Icons")).toHaveFocus());
+  });
+
+  it("draws no link for a key no setting here holds", async () => {
+    core({
+      ...ALPHA,
+      refusals: ["settings.colour in workspaces/alpha/workspace.json is not read"],
+    });
+    await at();
+
+    const row = screen.getByText("settings.colour in workspaces/alpha/workspace.json is not read");
+    expect(within(row.closest("li") as HTMLElement).queryByRole("button")).toBeNull();
   });
 });

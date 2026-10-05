@@ -255,7 +255,13 @@ import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
 import { useTextSizes } from "./textSize";
 import { focusStands } from "./Cockpit";
-import { landing, linkToGroup, type SettingsLink } from "./settings/links";
+import {
+  landing,
+  linkToGroup,
+  SETTINGS_LINK,
+  type SettingsLink,
+  type SettingsLinkAsk,
+} from "./settings/links";
 
 /** One empty list, so a prop left out is the same list at every render. */
 const NONE: readonly never[] = [];
@@ -2202,11 +2208,22 @@ export const PlaneView = memo(function PlaneView({
     (link: SettingsLink) => {
       const to = landing(link, plane);
       if (to === undefined) return;
-      linkToGroup(to.place, link.group);
+      linkToGroup(to.place, link.group, link.setting);
       showView(to.view, to.title, to.workspace);
     },
     [plane, showView],
   );
+
+  /** A link a view of this project asked for — the Saving view's Notice (NO-7) — opened the
+   *  same way. */
+  useEffect(() => {
+    const asked = (event: Event) => {
+      const wanted = (event as CustomEvent<SettingsLinkAsk>).detail;
+      if (wanted.plane === plane) openSettingsAt(wanted.link);
+    };
+    window.addEventListener(SETTINGS_LINK, asked);
+    return () => window.removeEventListener(SETTINGS_LINK, asked);
+  }, [plane, openSettingsAt]);
 
   /** A link the window followed, opened the same way and for the same reason (SE-22). */
   const settingsLinkHandled = useRef(settingsLinkAsked?.at);

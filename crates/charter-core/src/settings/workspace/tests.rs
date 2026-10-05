@@ -449,3 +449,136 @@ fn a_manifest_that_is_there_but_cannot_be_read_is_said_and_never_saved_over() {
     let err = save(dir.path(), "alpha", None, &[off()]).unwrap_err();
     assert!(err[0].contains("could not be read"), "{err:?}");
 }
+
+// ---------------------------------------------------------------------------------------
+// Edit as JSON (NO-7, #1232): the whole manifest as text
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_hand_written_manifest_saved_as_text_is_written_as_typed_and_stays_the_operators() {
+    let hand = "{\n  \"name\": \"alpha\",\n  \"repos\": []\n}\n";
+    let typed = "{\"name\": \"alpha\", \"repos\": [], \"description\": \"mended\"}\n";
+    let dir = plane(Some(hand));
+    save_text(dir.path(), "alpha", Some(hand), typed).unwrap();
+    assert_eq!(on_disk(dir.path()), typed);
+    assert_eq!(manifest::ownership(Some(typed)), Ownership::Operator);
+}
+
+#[test]
+fn charters_manifest_saved_as_text_stays_charters_with_the_text_it_was_given() {
+    let dir = plane(Some(&old()));
+    let mut doc: serde_json::Value = serde_json::from_str(&old()).unwrap();
+    doc["description"] = serde_json::json!("mended by hand");
+    let typed = serde_json::to_string(&doc).unwrap();
+    save_text(dir.path(), "alpha", Some(&old()), &typed).unwrap();
+    let text = on_disk(dir.path());
+    assert_eq!(
+        manifest::ownership(Some(&text)),
+        Ownership::Charter,
+        "{text}"
+    );
+    let now: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(now["description"], "mended by hand");
+    assert_eq!(now["repos"], serde_json::json!([{"name": "widget"}]));
+}
+
+#[test]
+fn text_that_is_not_a_json_object_is_refused_and_nothing_is_written() {
+    let dir = plane(Some(&old()));
+    for typed in ["{\"name\": ", "[1, 2]", ""] {
+        let refused = save_text(dir.path(), "alpha", Some(&old()), typed).unwrap_err();
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].starts_with(
+                "workspaces/alpha/workspace.json would not be a JSON object, so nothing was saved"
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(on_disk(dir.path()), old());
+    }
+}
+
+#[test]
+fn a_manifest_changed_since_its_text_was_read_is_not_written_over() {
+    let dir = plane(Some(&old()));
+    let refused = save_text(dir.path(), "alpha", Some("{}"), "{\"name\": \"alpha\"}").unwrap_err();
+    assert_eq!(
+        refused,
+        vec![
+            "workspaces/alpha/workspace.json changed on disk since this tab read it, so nothing \
+             was saved. Read it again, then make the change again."
+                .to_owned()
+        ]
+    );
+    assert_eq!(on_disk(dir.path()), old());
+}
+
+#[test]
+fn text_the_reader_would_refuse_is_refused_unless_the_file_already_held_it() {
+    let held = r#"{"name": "alpha", "settings": {"colour": "red"}}"#;
+    let dir = plane(Some(held));
+    // What the file already holds is not this save's to answer for: the description is mended.
+    let mended = r#"{"name": "alpha", "description": "x", "settings": {"colour": "red"}}"#;
+    save_text(dir.path(), "alpha", Some(held), mended).unwrap();
+    assert_eq!(on_disk(dir.path()), mended);
+    // A new one is refused in the reader's words.
+    let worse = r#"{"name": "alpha", "settings": {"colour": "red", "extensions": {"stats": {"enabled": "no"}}}}"#;
+    let refused = save_text(dir.path(), "alpha", Some(mended), worse).unwrap_err();
+    assert_eq!(
+        refused,
+        vec![
+            "settings.extensions.stats.enabled in workspaces/alpha/workspace.json is not true or \
+             false"
+                .to_owned()
+        ]
+    );
+    assert_eq!(on_disk(dir.path()), mended);
+}
+
+#[test]
+fn a_secret_anywhere_in_the_text_is_refused_by_its_kind_and_never_quoted() {
+    let dir = plane(Some(&old()));
+    let token = "AKIAIOSFODNN7EXAMPLE";
+    let typed = format!(r#"{{"name": "alpha", "description": "{token}"}}"#);
+    let refused = save_text(dir.path(), "alpha", Some(&old()), &typed).unwrap_err();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(refused[0].contains("AWS access key"), "{refused:?}");
+    assert!(!refused[0].contains(token));
+    assert_eq!(on_disk(dir.path()), old());
+}
+
+#[test]
+fn a_manifest_that_is_not_json_is_mended_as_text() {
+    let broken = "{\"name\": ";
+    let dir = plane(Some(broken));
+    let mended = "{\"name\": \"alpha\"}\n";
+    save_text(dir.path(), "alpha", Some(broken), mended).unwrap();
+    assert_eq!(on_disk(dir.path()), mended);
+    assert!(read_file(dir.path(), "alpha").unwrap().parsed);
+}
+
+#[test]
+fn a_workspace_with_no_manifest_gets_the_text_as_its_first_and_charters() {
+    let dir = plane(None);
+    save_text(
+        dir.path(),
+        "alpha",
+        None,
+        "{\"name\": \"alpha\", \"repos\": []}",
+    )
+    .unwrap();
+    let text = on_disk(dir.path());
+    assert_eq!(
+        manifest::ownership(Some(&text)),
+        Ownership::Charter,
+        "{text}"
+    );
+}
+
+#[test]
+fn a_text_save_of_a_workspace_that_is_gone_never_makes_it_again() {
+    let dir = plane(None);
+    fs::remove_dir_all(dir.path().join("workspaces/alpha")).unwrap();
+    assert!(save_text(dir.path(), "alpha", None, "{}").is_err());
+    assert!(!dir.path().join("workspaces/alpha").exists());
+}

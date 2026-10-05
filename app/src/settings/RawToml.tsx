@@ -3,6 +3,8 @@ import type { Shown } from "./fileControls";
 
 /**
  * **Edit as TOML** (SE-19, #1169; the spec on #558, V89d): a file of a level, as its whole text.
+ * The Workspace level's `workspace.json` is the same, as **Edit as JSON** (NO-7, #1232): its
+ * Save goes through the core's check of a manifest, against the text the edit began from.
  * One link per file sits at the foot of the nav; pressing it shows the file's text in the right
  * column, in place of a group, with an explicit Save and Discard. Nothing is written as it is
  * typed: half a table header is not a file to write.
@@ -24,10 +26,12 @@ import type { Shown } from "./fileControls";
  * Undo is gone.
  */
 
-/** One file a level offers as raw TOML. */
+/** One file a level offers as its whole text. */
 export type RawFile = {
-  /** Which file, as the level names it: `shared` or `local`. */
+  /** Which file, as the level names it: `shared`, `local` or `workspace`. */
   id: string;
+  /** What the text is written in: a project's files are TOML, a workspace's manifest JSON. */
+  as: "TOML" | "JSON";
   /** The file as it was last read. */
   file: Shown;
   /** The sentence on where the file is kept and who sees it. */
@@ -49,7 +53,8 @@ export function named(file: Shown): string {
   return file.file.split("/").pop() ?? file.file;
 }
 
-/** The links at the foot of the nav: one per file, the one on screen marked current. */
+/** The links at the foot of the nav: one per file, the one on screen marked current, under
+ *  what the level's files are written in (a level's files share one). */
 export function RawLinks({
   files,
   editing,
@@ -63,7 +68,7 @@ export function RawLinks({
   return (
     <div className="ui-settings-raw" role="group" aria-labelledby={label}>
       <p className="ui-settings-raw-label" id={label}>
-        Edit as TOML
+        {`Edit as ${files[0]?.as ?? "TOML"}`}
       </p>
       {files.map((one) => (
         <button
@@ -125,7 +130,7 @@ export function RawEditor({
     <section className="ui-setting-group ui-raw" aria-labelledby={heading}>
       <h3 id={heading}>{name}</h3>
       <p className="ui-setting-help">
-        The whole file, comments and all. {raw.kept}
+        {raw.as === "TOML" ? "The whole file, comments and all." : "The whole file."} {raw.kept}
         {!file.exists && " Not created yet: the first save creates it."} Nothing is written until
         you save, and charter refuses text it would not read.
       </p>
@@ -142,7 +147,7 @@ export function RawEditor({
         spellCheck={false}
         autoComplete="off"
         rows={Math.max(12, text.split("\n").length + 1)}
-        aria-label={`${name}, as TOML`}
+        aria-label={`${name}, as ${raw.as}`}
         // An edit keeps the text it began from for as long as it lasts.
         onChange={(event) =>
           onDraft({ base: draft ? draft.base : base, text: event.currentTarget.value })
