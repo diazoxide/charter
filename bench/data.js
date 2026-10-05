@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791161883805,
+  "lastUpdate": 1791164338390,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1638,6 +1638,48 @@ window.BENCHMARK_DATA = {
             "value": 102.0739225,
             "unit": "ms",
             "extra": "median of 5 runs: 100.580, 101.041, 102.074, 102.101, 102.231 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "7692ba246cb842293e14e8ce0c656b6d7c8ec9dc",
+          "message": "KN-3 fold-ins: workspace move-memory in two comments, rewrapped lines\n\n- memscope.rs and the core test's header name `charter workspace move-memory`,\n  not `charter workspace move`.\n- Rewrapped to the usual width: memory_move.rs's first doc line, the doc\n  comment above `move_memory`, the changes fragment, and the plane-format\n  line ending \"and the window's Move\".\n\nRefs #715\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T05:36:36+04:00",
+          "tree_id": "c0fc57270d0db47859cfc8a3095015ab7103f769",
+          "url": "https://github.com/diazoxide/charter/commit/7692ba246cb842293e14e8ce0c656b6d7c8ec9dc"
+        },
+        "date": 1791164337665,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4598055,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.450, 0.457, 0.460, 0.460, 0.469 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.293289,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.241, 16.248, 16.293, 16.452, 16.479 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.63660949999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.433, 101.388, 101.637, 101.749, 103.041 ms"
           }
         ]
       }
