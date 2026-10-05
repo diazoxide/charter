@@ -1,5 +1,6 @@
 # What an issue's REST answer does not hold: its parent and sub-issues, the pull requests that
 # close it, and where its Projects v2 boards hold it (status and iteration). FW-6a.
+# Archived board items are left out; GitHub includes them unless asked not to.
 query WorkItem($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
@@ -24,11 +25,12 @@ query WorkItem($owner: String!, $name: String!, $number: Int!) {
           state
         }
       }
-      projectItems(first: 100) {
+      projectItems(first: 100, includeArchived: false) {
         pageInfo {
           hasNextPage
         }
         nodes {
+          isArchived
           project {
             id
             title
@@ -41,6 +43,9 @@ query WorkItem($owner: String!, $name: String!, $number: Int!) {
             }
           }
           fieldValues(first: 50) {
+            pageInfo {
+              hasNextPage
+            }
             nodes {
               __typename
               ... on ProjectV2ItemFieldIterationValue {

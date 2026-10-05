@@ -46,6 +46,9 @@ pub struct Issue {
     /// How many issues block it and it blocks. A host without issue dependencies answers none.
     #[serde(default)]
     pub issue_dependencies_summary: Option<DependencySummary>,
+    /// Present when the number is a pull request's: GitHub answers one as an issue too.
+    #[serde(default)]
+    pub pull_request: Option<Value>,
 }
 
 /// An account, by its login.

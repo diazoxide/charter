@@ -651,7 +651,12 @@ mod cases {
                 assert_eq!(item.placements[0].board_title, "Roadmap");
                 assert_eq!(item.placements[0].status.as_deref(), Some("Done"));
                 let sprint = item.iteration.as_ref().expect("the board's iteration");
-                assert_eq!(sprint.title, "Sprint 3");
+                assert_eq!(sprint.title.as_deref(), Some("Sprint 3"));
+                assert_eq!(
+                    item.placements[0].iteration.as_ref(),
+                    Some(sprint),
+                    "the item's iteration is its board's"
+                );
                 assert_eq!(
                     (sprint.start, sprint.end),
                     (
