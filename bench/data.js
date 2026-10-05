@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791191841510,
+  "lastUpdate": 1791193485045,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2058,6 +2058,48 @@ window.BENCHMARK_DATA = {
             "value": 101.578577,
             "unit": "ms",
             "extra": "median of 5 runs: 100.599, 101.286, 101.579, 102.227, 103.890 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "18291f234aa8a0e79c2e50cd30a6da55695aa94d",
+          "message": "train 44: settings-forges e2e finds the Forges button inside the nav\n\nWebdriverIO's `button=Forges` text selector cannot be joined to a CSS\nselector, so `nav[aria-label=\"Groups\"] button=Forges` threw \"is not a\nvalid selector\" on both scenario runners. The spec now finds the nav,\nthen the button inside it, as settings-gears does.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T13:41:32+04:00",
+          "tree_id": "1d561608fb6e37844a5fd806253846daa8244805",
+          "url": "https://github.com/diazoxide/charter/commit/18291f234aa8a0e79c2e50cd30a6da55695aa94d"
+        },
+        "date": 1791193483636,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.491734,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.480, 0.491, 0.492, 0.501, 0.526 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.797514,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.280, 16.286, 16.798, 16.975, 17.095 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.35280800000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.336, 103.826, 104.353, 104.627, 105.698 ms"
           }
         ]
       }
