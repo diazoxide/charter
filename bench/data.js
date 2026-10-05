@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791238181127,
+  "lastUpdate": 1791239434605,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2352,6 +2352,48 @@ window.BENCHMARK_DATA = {
             "value": 101.4131735,
             "unit": "ms",
             "extra": "median of 5 runs: 101.284, 101.346, 101.413, 101.854, 103.443 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "b0bbea88b94684d149114f4ad63dd529181816fe",
+          "message": "ST-4: A page per harness profile: Add, Remove, and rename when unused\n\nEach [harness.<name>] profile in the local settings file is an entry of a\nnew Settings collection, charter_core::settings::harness_profiles, with\nlisted/add/remove/rename on the ST-3 collection write seam (drawn base,\nopaque ids, exact Undo of a remove, inverse op for an add or a rename).\n\n- Field refusals come from the loader's own rules: profiles::refusals_of\n  and launch_refusals now return every broken rule with the profile key it\n  is about; the loader still takes the first, in the same words.\n- A value shaped like a secret in the name, the kind, the command or a new\n  name is refused under that field by its kind, pointing to the vault, and\n  is never said back (V91m).\n- Remove and rename are refused while a [harness] default in either file\n  names the profile and nothing else would answer to the name; each user is\n  named with a link to Harness & profiles (V91g, V91k).\n- A rename is exact: the profile keeps its place among [harness]'s keys\n  (an inline profile too) and its name keeps its quoting, so the rename\n  back gives the text it started from.\n- Writes go to whichever local settings file the project has (RN-2a).\n- The window: one nav page per profile, set in under Harness & profiles,\n  with its rows, Rename and Remove; Add (name, kind, command) and an Open\n  per profile on Harness & profiles. A Remove or an Undo on a page lands\n  on Harness & profiles. New profile... in the default pickers opens the\n  Add form and picks the new profile.\n- The approval before a profile's first run is unchanged: an added or\n  renamed profile asks, as any profile nothing approved does.\n\nDecided in implementation:\n- D-ST4-1: the core module is settings::harness_profiles, not\n  settings::profiles, since settings already imports crate::profiles.\n- D-ST4-2: one rule set. The loader's rules answer every failure with its\n  field; the collection adds only what a writer can break (a name the file\n  already has, a secret). Rejected: a second copy of the rules.\n- D-ST4-3: the users of a profile are [harness] default in either file,\n  only when the name would then name nothing (a local table shadowing a\n  built-in can go). Chat records are not users: a reopened chat whose\n  profile is gone is skipped by name (ADR 0022).\n- D-ST4-4: Add asks for name, kind and command; the environment is set on\n  the profile's page. No profile field holds a secret, so there is no vault\n  picker; a secret-shaped value is refused under its field, by kind.\n- D-ST4-5: a page per profile (project.profile.<name>, `sub` in the nav)\n  holds that entry alone with Rename and Remove, no Add; its writes are\n  kept under project.harness (Collection.home), so a Remove or an Undo\n  there lands where the Undo is said. Row labels stay \"<name>: kind\" so\n  the filter finds them by the profile's name.\n- D-ST4-6: rename is an EntryOp; its Undo is the rename back through the\n  core, with its reference check. The wire answers the renamed id in\n  EntryWritten.added rather than a new field.\n- D-ST4-7: a renamed profile asks for approval again (the record is keyed\n  by name). Fail-closed; no record is moved.\n- D-ST4-8: New profile... opens the Add form and picks what it added,\n  superseding D-ST1-4's Edit as TOML (kept only when the local file is not\n  TOML). A new table goes after the last profile, after a blank line.\n\nCloses #1236\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T02:18:37+04:00",
+          "tree_id": "9755b1716a8fc566c4b83e125acd898850cd4812",
+          "url": "https://github.com/purlis/purlis/commit/b0bbea88b94684d149114f4ad63dd529181816fe"
+        },
+        "date": 1791239432804,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4519425,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.446, 0.451, 0.452, 0.454, 0.468 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.319095500000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.263, 16.264, 16.319, 16.467, 16.948 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.399489,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.807, 100.971, 101.399, 101.788, 102.516 ms"
           }
         ]
       }
