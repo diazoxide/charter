@@ -97,3 +97,67 @@ fn an_inherited_old_name_is_outranked_by_the_purlis_name_beside_it() {
     assert!(!outranked(OsStr::new("CHARTER_HOME")));
     assert!(!outranked(OsStr::new("PATH")));
 }
+
+fn os_env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+    move |name: &str| {
+        pairs
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| OsString::from(v))
+    }
+}
+
+/// D-RN2d-8: a steering variable whose two names disagree is never silently picked from.
+#[test]
+fn a_steering_variable_whose_names_disagree_is_a_refusal_naming_both() {
+    let found = disagreement_in(os_env(&[("PURLIS_ROOT", "/chat"), ("CHARTER_ROOT", "/x")]))
+        .expect("a disagreement");
+    assert_eq!(
+        found.to_string(),
+        "PURLIS_ROOT and CHARTER_ROOT disagree — set only PURLIS_ROOT (CHARTER_ROOT is the old \
+         name)."
+    );
+}
+
+#[test]
+fn equal_twins_and_an_old_name_alone_are_no_disagreement() {
+    assert_eq!(
+        disagreement_in(os_env(&[("PURLIS_ROOT", "/p"), ("CHARTER_ROOT", "/p")])),
+        None
+    );
+    let alone = [("CHARTER_ROOT", "/old")];
+    assert_eq!(disagreement_in(os_env(&alone)), None);
+    assert_eq!(
+        lookup("PURLIS_ROOT", os_env(&alone)),
+        Some(OsString::from("/old"))
+    );
+}
+
+#[test]
+fn each_variable_that_chooses_what_is_acted_on_is_checked() {
+    for rest in [
+        "ROOT",
+        "HOME",
+        "WORKSPACE",
+        "WORKTREES",
+        "PLANE_ROOT_SESSION",
+        "PERSONA",
+        "CONFIG_HOME",
+        "DATA_HOME",
+    ] {
+        let purlis = format!("PURLIS_{rest}");
+        let charter = format!("CHARTER_{rest}");
+        let pairs = [(purlis.as_str(), "a"), (charter.as_str(), "b")];
+        assert!(disagreement_in(os_env(&pairs)).is_some(), "{rest}");
+    }
+}
+
+#[test]
+fn a_disagreeing_variable_that_chooses_nothing_is_read_under_the_purlis_name() {
+    let pairs = [("PURLIS_LOG_DIR", "/new"), ("CHARTER_LOG_DIR", "/old")];
+    assert_eq!(disagreement_in(os_env(&pairs)), None);
+    assert_eq!(
+        lookup("CHARTER_LOG_DIR", os_env(&pairs)),
+        Some(OsString::from("/new"))
+    );
+}

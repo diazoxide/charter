@@ -311,10 +311,12 @@ fn spawn(plane: &Path, workspace: &str, binary: &Path) -> Result<u32, String> {
         .arg("-w")
         .arg(workspace)
         .current_dir(plane)
-        .env("PURLIS_ROOT", plane)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Under both names: a `CHARTER_ROOT` this process inherited would otherwise disagree with
+    // it, and the child refuses a disagreement (D-RN2d-8).
+    crate::envvar::set_on(&mut command, "PURLIS_ROOT", plane);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

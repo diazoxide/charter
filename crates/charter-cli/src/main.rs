@@ -1472,6 +1472,23 @@ fn tell_the_host_about_the_tool_call(
 /// decided and could not print ([`guard::deny`]), a word in the tool-hook namespace this
 /// binary does not answer at all ([`is_a_tool_hook`]), and a `PreToolUse` hook that crashed
 /// ([`guard::refuse_on_a_crash`]).
+/// A hook run where a variable that chooses the project disagrees with its old name
+/// (D-RN2d-8): it acts on no project, and says why on standard error.
+///
+/// - **A `PreToolUse` hook blocks** (exit 2, the sentence as the reason the harness shows): the
+///   guard would otherwise judge the call against a project it guessed, and a refused write is
+///   the safe side.
+/// - **Every other hook stands aside** (exit 0, nothing on standard output): it only reports,
+///   briefs or records, and exiting 2 from one would leave a session unable to end.
+fn hook_on_disagreement(name: &str, disagree: &charter_core::envvar::Disagreement) -> ExitCode {
+    eprintln!("charter: {disagree}");
+    if is_a_pretooluse_hook(name) {
+        ExitCode::from(BLOCK)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 fn hook(name: &str, now: Option<&str>) -> ExitCode {
     // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
     // events: a tool call carries no chat state worth a `Report`.
@@ -3066,10 +3083,14 @@ fn main() -> ExitCode {
         .skip(1)
         .map(|word| word.to_string_lossy().into_owned())
         .collect();
-    if charter_core::extension::cli::extension_command(&words).is_some()
-        && let Some(why) = read_only_project()
-    {
-        return refused(&why);
+    if charter_core::extension::cli::extension_command(&words).is_some() {
+        // An extension's command can act on the project too (D-RN2d-8).
+        if let Some(disagree) = charter_core::envvar::disagreement() {
+            return refused(&disagree.to_string());
+        }
+        if let Some(why) = read_only_project() {
+            return refused(&why);
+        }
     }
     if let Some(code) = extcmd::intercept(&argv, |word| parser.find_subcommand(word).is_some()) {
         return code;
@@ -3096,6 +3117,21 @@ fn main() -> ExitCode {
             };
         }
     };
+    // **A variable that chooses what to act on, named twice with two values, is refused**
+    // (D-RN2d-8), never read under one of its names: inside a chat both names carry the same
+    // value, so this is a `CHARTER_ROOT=…` typed in front of a command, which would otherwise
+    // act on the chat's own project. Every command that acts on a project refuses; a hook
+    // decides per kind ([`hook_on_disagreement`]); `report` and the shell guard need no
+    // project, and a guarded program that is `charter` refuses on its own.
+    if let Some(disagree) = charter_core::envvar::disagreement() {
+        match &cli.command {
+            Command::Hook {
+                name, list: false, ..
+            } => return hook_on_disagreement(name.as_deref().unwrap_or_default(), &disagree),
+            Command::Hook { list: true, .. } | Command::Report(_) | Command::ShellGuard { .. } => {}
+            _ => return refused(&disagree.to_string()),
+        }
+    }
     // Before `run`, because its exit code is not a plain success or failure: a tool hook this
     // binary does not answer must BLOCK rather than be read as "allow".
     if let Command::Hook {
