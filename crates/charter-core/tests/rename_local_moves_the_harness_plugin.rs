@@ -303,3 +303,34 @@ fn a_home_with_no_plugin_installed_gets_none_from_the_move() {
             .unwrap_or_default();
     assert!(!journal.contains("\"plugin\""), "{journal}");
 }
+
+#[test]
+fn a_plugin_installed_after_the_move_still_resolves_after_the_undo() {
+    // The move ran with nothing installed, so it journalled no plugin step; `plugin install`
+    // then put the copy in the moved config home. The undo moves that home back, so it points
+    // the registration at the copy there too, plugin step or not (D-RN8-13).
+    charter_core::unsteered!();
+    let home = installed_before_the_rename();
+    let out = install::run(home.harnesses(), Verb::Uninstall, &[], false);
+    assert!(!install::failed(&out), "{}", install::render(&out, false));
+    let config = home.local.config_root.clone();
+
+    let moved = renamelocal::run(&home.local, &nobody_running());
+    assert!(moved.complete && moved.changed, "{:#?}", moved.said);
+    let mut now = home.harnesses().clone();
+    now.charter_dir = machine::dir(&config);
+    assert_eq!(now.charter_dir, config.join("purlis"));
+    let out = install::run(&now, Verb::Install, &["claude".to_owned()], false);
+    assert!(!install::failed(&out), "{}", install::render(&out, false));
+    assert!(resolves(&home), "{}", home.settings());
+
+    let undone = renamelocal::undo(&home.local, &nobody_running());
+
+    assert!(undone.complete, "{:#?}", undone.said);
+    assert!(config.join("charter/plugin").is_dir());
+    assert_eq!(
+        home.registered("purlis-app").as_deref(),
+        Some(config.join("charter/plugin").to_str().unwrap())
+    );
+    assert!(resolves(&home), "{}", home.settings());
+}

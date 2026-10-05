@@ -876,6 +876,16 @@ pub fn undo(local: &Local, seams: &Seams) -> Moved {
     // is only where it ends up once the config home is back.
     if pending.iter().any(|entry| **entry == Entry::Plugin) {
         unmove_plugin(local, &mut moved);
+    } else if let Some(m) = &local.plugin {
+        // No plugin step to put back, but a copy installed since the move lives in the config
+        // home that just moved back, so its registration is pointed at it (D-RN8-13). It needs
+        // no bundle and does nothing where no registered folder is gone.
+        let mut m = m.clone();
+        m.charter_dir = local.home();
+        report(
+            &mut moved,
+            &Vec::from_iter(crate::plugin_install::repoint(&m, false)),
+        );
     }
     if !moved.complete {
         moved.note(format!(
