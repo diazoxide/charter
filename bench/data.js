@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791241771945,
+  "lastUpdate": 1791244591738,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2478,6 +2478,48 @@ window.BENCHMARK_DATA = {
             "value": 101.62571,
             "unit": "ms",
             "extra": "median of 5 runs: 101.249, 101.458, 101.626, 101.913, 102.570 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "e691c31272ce7cc01aa7470c18deac99afc1dbfc",
+          "message": "save: the secret check also asks each decoded key and string on its own\n\nThe JSON and TOML writers keep an escaped control character as two\ncharacters, so a credential right after an escaped newline or tab had a\nletter in front of it in the re-written document, and the rules that need a\nboundary there missed it. parsed_kind now also asks each decoded key and\nstring value on its own, after the whole-document pass, which still reads a\nkey and its value together as an assignment.\n\nDecided in implementation:\n- D-1295-6 (dispatcher, overrides D-1295-3): the save asks each decoded key\n  and string value as well as the whole document. Until the settings\n  editors move onto parsed_kind (issue 1304, item 1) the save may refuse\n  what an editor accepted, which is the safe direction.\n\nRefs #1295\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T03:53:49+04:00",
+          "tree_id": "469ca42c4ad027a10e87e9091c845e86e5d06122",
+          "url": "https://github.com/purlis/purlis/commit/e691c31272ce7cc01aa7470c18deac99afc1dbfc"
+        },
+        "date": 1791244591191,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.43553,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.416, 0.432, 0.436, 0.437, 0.454 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.5720855,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.312, 16.365, 16.572, 16.618, 17.053 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.4245225,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.415, 102.246, 102.425, 102.491, 102.725 ms"
           }
         ]
       }
