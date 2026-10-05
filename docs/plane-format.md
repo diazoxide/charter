@@ -435,11 +435,13 @@ scaffold, `inventory/repos.json`, `docs/topology.md`, and the generated README r
   (`charter/root.py:17`, `charter/root.py:62`). **Status: stable** — it is the one thing a
   second implementation must agree on to find the same plane.
   **Rename window (#1253, RN-1):** `purlis.toml` marks a plane too, and when a directory
-  holds both it is the manifest (V93e). Until every reader knows the purlis names, a plane
-  whose manifest is `purlis.toml` is read-only to this build. A name held under both spellings
-  is named by the doctor's `renamed leftovers` row, and the `rename-plane` fix reconciles
-  them. The state folder stays `.charter/` until the guards know `.purlis/` (RN-2a). Every
-  name the rename moves, with its old spellings, is in `crates/charter-core/src/names.rs`.
+  holds both it is the manifest (V93e). `charter.local.toml` and `.charter-scan-allow.toml`
+  follow the same rule, and a write goes to the file the plane already has, so a plane with
+  only old names is written as before. The state folder is `.purlis/` only when it is the one
+  there, or when both are there and this machine's rename-local record says the project moved;
+  otherwise it is `.charter/` (RN-2a). A name held under both spellings is named by the doctor's
+  `renamed leftovers` row: `rename-plane` reconciles the files and `rename-local` the state
+  folders. Every name the rename moves, with its old spellings, is in `crates/charter-core/src/names.rs`.
 - **Resolution order** (`charter/root.py:32`, `find_root`):
   1. `$CHARTER_ROOT` wins outright; it is `expanduser`'d and `resolve`'d, and a value with no
      `charter.toml` under it **raises** rather than falling back to the walk

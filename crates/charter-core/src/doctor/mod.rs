@@ -215,7 +215,7 @@ pub(crate) enum Config {
 impl Config {
     /// `instance.load`, with the failure kept as the sentence Python records.
     pub(crate) fn load(root: &Path) -> Self {
-        let path = crate::plane::manifest(root);
+        let path = crate::names::manifest(root);
         let Ok(raw) = std::fs::read(&path) else {
             return Self::Read(toml::Table::new());
         };
@@ -419,7 +419,7 @@ impl Doctor {
     pub fn at(root: &Path, cwd: &Path, pinned: bool, preflight: bool) -> Self {
         Self {
             root: root.to_path_buf(),
-            has_plane: crate::plane::is_plane(root),
+            has_plane: crate::names::has_manifest(root),
             pinned,
             cwd: cwd.to_path_buf(),
             preflight,
@@ -634,7 +634,7 @@ pub fn table(rows: &[Row], color: bool) -> String {
 /// when there is no plane or nothing to add.
 pub fn fix_report_rule(cwd: &Path) -> Option<(String, u8)> {
     let root = canonical(&crate::plane::resolve(cwd).ok()?);
-    if !root.join(crate::plane::MANIFEST).is_file() {
+    if !crate::names::has_manifest(&root) {
         return None;
     }
     let here = canonical(cwd);

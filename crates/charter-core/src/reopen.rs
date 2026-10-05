@@ -38,8 +38,8 @@ pub use arrival::{Arrival, CloneSeat, arrive};
 /// chats in it cannot be trusted to mean what they say.
 pub const VERSION: u32 = 1;
 
-/// Where the record lives, relative to a plane root.
-pub const IN_PLANE: &str = ".charter/app/reopen.json";
+/// Where the record lives, relative to the plane's state folder ([`path`]).
+pub const IN_STATE: &str = "app/reopen.json";
 
 /// The largest record charter will read, matching `contain.MAX_BYTES` on the Python side.
 /// A real record is a few hundred bytes per chat; anything approaching this is not one.
@@ -600,7 +600,7 @@ impl Chat {
 
 /// The record's path inside `plane_root`.
 pub fn path(plane_root: &Path) -> PathBuf {
-    plane_root.join(IN_PLANE)
+    crate::names::state(plane_root).join(IN_STATE)
 }
 
 /// Refuses a record path a symlink could take outside the plane, or that is not a plain file.
@@ -2007,7 +2007,7 @@ pub(crate) mod tests {
         let outside = held.path().join("outside");
         std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        std::os::unix::fs::symlink(outside.join("planted.json"), plane.join(IN_PLANE)).unwrap();
+        std::os::unix::fs::symlink(outside.join("planted.json"), path(&plane)).unwrap();
 
         assert!(write(&plane, &one_chat()).is_err());
         assert!(!outside.join("planted.json").exists());

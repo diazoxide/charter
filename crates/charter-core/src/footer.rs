@@ -166,7 +166,7 @@ impl Look {
     /// with the default (`green`/`yellow`/`red`), whose escape is the shipped one. Two doors,
     /// one colour — so this port does not have to reproduce the validation to agree with it.
     pub fn of(plane: &Path) -> Self {
-        let Ok(text) = std::fs::read_to_string(plane.join(crate::plane::MANIFEST)) else {
+        let Ok(text) = std::fs::read_to_string(crate::names::manifest(plane)) else {
             return Self::default();
         };
         let Ok(doc) = text.parse::<toml::Table>() else {

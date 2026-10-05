@@ -1118,12 +1118,12 @@ fn hook_in(plane: &std::path::Path, word: &str, env: &[(&str, &str)]) -> i32 {
 /// the process it started. The hook writes it before it exits, so its absence the moment the
 /// hook returns is an answer and not a race.
 fn a_refresh_was_started(plane: &std::path::Path) -> bool {
-    plane.join(charter_core::glrefresh::LOCK).exists()
+    charter_core::glrefresh::lock(plane).exists()
 }
 
 /// Waits for the refresh the hook started to land its cache, or gives up.
 fn the_cache_it_wrote(plane: &std::path::Path) -> Option<String> {
-    let cache = plane.join(charter_core::glrefresh::CACHE);
+    let cache = charter_core::cistate::cache(plane);
     for _ in 0..200 {
         if let Ok(text) = std::fs::read_to_string(&cache) {
             return Some(text);
@@ -1144,7 +1144,7 @@ fn a_session_starting_where_no_app_is_open_refreshes_the_forge_cache() {
     let plane = a_plane_with_a_clone();
     // The refresh the hook starts is detached into a group of its own: killed with the test
     // by the pid its lock names, however the assertions below end (#923).
-    let _ends = stand_in::Ends::named_in(plane.path().join(charter_core::glrefresh::LOCK));
+    let _ends = stand_in::Ends::named_in(charter_core::glrefresh::lock(plane.path()));
 
     let code = hook_in(plane.path(), "sessionstart", &[]);
 

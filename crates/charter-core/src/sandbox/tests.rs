@@ -218,11 +218,68 @@ fn a_registry_charter_cannot_read_is_taken_to_hold_a_keyring_vault() {
 
 #[test]
 fn a_chat_never_writes_charters_integrity_state() {
+    // Under both names of the state folder (RN-2a): the purlis one is read when it is there, so
+    // a chat that could make `.purlis/app` would be writing the records charter reads next.
     let (plane, denied) = denied_with(None, Os::Linux);
     assert_eq!(
         paths(&denied, Class::Integrity, Access::Write),
-        [plane.path().join(".charter/app")]
+        [
+            plane.path().join(".purlis/app"),
+            plane.path().join(".charter/app"),
+            // Neither folder is there yet, so neither is the chat's to make (D-RN2a-7).
+            plane.path().join(".purlis"),
+            plane.path().join(".charter"),
+        ]
     );
+}
+
+#[test]
+fn a_chat_cannot_plant_a_purlis_state_folder_beside_charters() {
+    // D-RN2a-7: a `.purlis/` made beside `.charter/` must not be the chat's to make. The one
+    // that is there is not denied whole: the rows for what is inside it hold.
+    let plane = tempfile::tempdir().expect("a plane");
+    std::fs::create_dir(plane.path().join(".charter")).unwrap();
+    let denied = Denied::of(plane.path(), &machine(Os::Linux));
+    let write = paths(&denied, Class::Integrity, Access::Write);
+    assert!(write.contains(&plane.path().join(".purlis")), "{write:?}");
+    assert!(!write.contains(&plane.path().join(".charter")), "{write:?}");
+}
+
+#[test]
+fn a_state_folder_name_held_by_a_file_or_a_link_is_still_not_the_chats_to_make() {
+    // "Is not a directory", not "is absent": a committed file or a link named `.purlis` would
+    // otherwise be one `rm` away from a folder the chat fills.
+    let plane = tempfile::tempdir().expect("a plane");
+    std::fs::create_dir(plane.path().join(".charter")).unwrap();
+    std::fs::write(plane.path().join(".purlis"), "").unwrap();
+    let denied = Denied::of(plane.path(), &machine(Os::Linux));
+    let write = paths(&denied, Class::Integrity, Access::Write);
+    assert!(write.contains(&plane.path().join(".purlis")), "{write:?}");
+
+    std::fs::remove_file(plane.path().join(".purlis")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(plane.path().join(".charter"), plane.path().join(".purlis"))
+        .unwrap();
+    let denied = Denied::of(plane.path(), &machine(Os::Linux));
+    let write = paths(&denied, Class::Integrity, Access::Write);
+    assert!(write.contains(&plane.path().join(".purlis")), "{write:?}");
+}
+
+#[test]
+fn a_chat_never_plants_either_name_of_the_settings_files() {
+    for name in [
+        "charter.toml",
+        "purlis.toml",
+        "charter.local.toml",
+        "purlis.local.toml",
+    ] {
+        assert!(
+            PLANTED
+                .iter()
+                .any(|planted| planted.path == name && planted.reach == Reach::AndBelow),
+            "{name}"
+        );
+    }
 }
 
 /// The second acceptance line of #667, as V22a words it: a chat cannot write another chat's
@@ -233,18 +290,20 @@ fn a_chat_never_writes_charters_integrity_state() {
 #[test]
 fn a_chat_never_reads_or_writes_any_chats_hook_spool_or_its_keys() {
     let (plane, denied) = denied_with(None, Os::Linux);
-    let spool = crate::hookwire::spool::dir_for(&plane.path().join(".charter/app/hooks.sock"));
-
     let held = paths(&denied, Class::Integrity, Access::ReadWrite);
-    for file in [
-        spool.join("6.jsonl"),
-        spool.join(crate::hookwire::spool::KEYS),
-    ] {
-        assert!(
-            held.iter().any(|denied| file.starts_with(denied)),
-            "{} is not under {held:?}",
-            file.display()
-        );
+    for state in [".charter", ".purlis"] {
+        let spool =
+            crate::hookwire::spool::dir_for(&plane.path().join(state).join("app/hooks.sock"));
+        for file in [
+            spool.join("6.jsonl"),
+            spool.join(crate::hookwire::spool::KEYS),
+        ] {
+            assert!(
+                held.iter().any(|denied| file.starts_with(denied)),
+                "{} is not under {held:?}",
+                file.display()
+            );
+        }
     }
 }
 
@@ -1112,10 +1171,13 @@ fn no_sandboxed_chat_starts_in_a_folder_reached_through_a_link() {
 #[test]
 fn a_charter_toml_above_a_folder_that_is_not_a_regular_file_is_seen() {
     // The plane's own walk takes only a regular file for a plane, so a start that asked it
-    // alone would read "no plane" and start the chat unsandboxed.
-    for kind in ["link", "dangling", "directory", "fifo"] {
+    // alone would read "no plane" and start the chat unsandboxed. Under either name (RN-2a).
+    for (name, kind) in ["charter.toml", "purlis.toml"]
+        .into_iter()
+        .flat_map(|name| ["link", "dangling", "directory", "fifo"].map(|kind| (name, kind)))
+    {
         let plane = tempfile::tempdir().expect("a plane");
-        let marker = plane.path().join("charter.toml");
+        let marker = plane.path().join(name);
         match kind {
             "link" => {
                 std::fs::write(plane.path().join("real.toml"), ON).expect("a file");
@@ -1133,7 +1195,7 @@ fn a_charter_toml_above_a_folder_that_is_not_a_regular_file_is_seen() {
         }
         let below = plane.path().join("workspaces/w");
         std::fs::create_dir_all(&below).expect("a workspace");
-        assert!(marker_unreadable(&below), "{kind}");
+        assert!(marker_unreadable(&below), "{name}: {kind}");
     }
     let plain = plane_saying(ON);
     assert!(!marker_unreadable(plain.path()));

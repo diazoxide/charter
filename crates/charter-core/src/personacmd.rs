@@ -37,7 +37,7 @@ use crate::repocmd::{Say, Sink};
 
 /// `charter persona default [<name>] [--clear]`, and its exit code.
 pub fn default_command(root: &Path, name: Option<&str>, clear: bool, say: Sink) -> u8 {
-    let manifest = root.join(crate::plane::MANIFEST);
+    let manifest = crate::names::manifest(root);
     let legacy = root.join("personas").join(".default");
     if clear {
         // Asked BEFORE the clear, because after it neither rung answers anything.
@@ -163,7 +163,7 @@ pub fn default_command(root: &Path, name: Option<&str>, clear: bool, say: Sink) 
 /// see WHAT IS WRITTEN, and hiding a stale declaration is how one survives three sessions of
 /// somebody wondering why the front door is empty.
 fn declared(root: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(root.join(crate::plane::MANIFEST)).ok()?;
+    let text = std::fs::read_to_string(crate::names::manifest(root)).ok()?;
     let doc: toml::Table = text.parse().ok()?;
     let named = doc.get("persona")?.as_table()?.get("default")?.as_str()?;
     let named = crate::memstore::py_strip(named);

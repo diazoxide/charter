@@ -32,11 +32,14 @@ use std::path::{Path, PathBuf};
 
 use crate::shown;
 
-/// The file profiles live in, beside the plane's `charter.toml`.
-pub const LOCAL_FILE: &str = "charter.local.toml";
+/// The file profiles live in, beside the plane's `charter.toml`, as messages name it. The file
+/// read and written is [`crate::names::local_settings`]: this name, or `purlis.local.toml` once
+/// that is there.
+pub const LOCAL_FILE: &str = crate::names::LOCAL_SETTINGS.reads[0];
 
-/// The committed file, which holds `[harness] default` and no profile.
-pub const COMMITTED_FILE: &str = "charter.toml";
+/// The committed file, which holds `[harness] default` and no profile, as messages name it. The
+/// file read is [`crate::names::manifest`].
+pub const COMMITTED_FILE: &str = crate::names::PLANE_MANIFEST.reads[0];
 
 /// Words an env NAME may not contain, matched case-insensitively.
 ///
@@ -320,14 +323,14 @@ pub fn derive(root: &Path) -> ProfileSet {
 /// [`derive`] with the project's harness declarations already read, so a launch that reads
 /// them once judges and runs the same bytes ([`crate::start::ready_in`]).
 pub fn derive_in(root: &Path, declared: &crate::harness_declaration::Declarations) -> ProfileSet {
-    let committed = std::fs::read_to_string(root.join(COMMITTED_FILE)).ok();
+    let committed = std::fs::read_to_string(crate::names::manifest(root)).ok();
     derive_declared(committed.as_deref(), read_local(root), declared)
 }
 
 /// The local file as [`derive_from`] takes it: its text, `None` when there is none, or the
 /// error that stopped the read.
 pub fn read_local(root: &Path) -> std::io::Result<Option<String>> {
-    match std::fs::read_to_string(root.join(LOCAL_FILE)) {
+    match std::fs::read_to_string(crate::names::local_settings(root)) {
         Ok(text) => Ok(Some(text)),
         // An absent file declares nothing and is not a refusal.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -1033,10 +1036,10 @@ pub fn ignore_check_with(root: &Path, git: &Path) -> IgnoreCheck {
 /// thirty seconds made that one test half of `cargo test -p charter-core`'s wall clock —
 /// and the nightly mutation run pays the whole suite once per mutant, six thousand times.
 pub fn ignore_check_within(root: &Path, git: &Path, timeout: std::time::Duration) -> IgnoreCheck {
-    if !root.join(LOCAL_FILE).exists() {
+    if !crate::names::local_settings(root).exists() {
         return IgnoreCheck::default();
     }
-    check_of(git_path_state(root, git, timeout))
+    check_of(root, git_path_state(root, git, timeout))
 }
 
 /// Whether git would carry the local file **once it is written** — [`ignore_check`] for a
@@ -1057,31 +1060,31 @@ pub fn ignore_check_before_writing_within(
     git: &Path,
     timeout: std::time::Duration,
 ) -> IgnoreCheck {
-    if root.join(LOCAL_FILE).exists() {
+    if crate::names::local_settings(root).exists() {
         return ignore_check_within(root, git, timeout);
     }
-    check_of(git_ignore_state(root, git, timeout))
+    check_of(root, git_ignore_state(root, git, timeout))
 }
 
-/// The refusal, and its fix, for what git said about the local file.
-fn check_of(state: GitState) -> IgnoreCheck {
+/// The refusal, and its fix, for what git said about the local file, named as the plane at
+/// `root` has it (`charter.local.toml` or `purlis.local.toml`).
+fn check_of(root: &Path, state: GitState) -> IgnoreCheck {
+    let file = local_name(root);
     match state {
         GitState::Tracked => IgnoreCheck {
-            reason: "git tracks charter.local.toml, so what it says would reach every clone \
-                     of this plane — charter reads nothing in it until it is untracked: git \
-                     rm --cached charter.local.toml, commit that removal, then charter \
-                     reinit."
-                .to_owned(),
-            fix: "git rm --cached charter.local.toml, commit that removal, then charter \
-                  reinit"
-                .to_owned(),
+            reason: format!(
+                "git tracks {file}, so what it says would reach every clone of this plane — \
+                 charter reads nothing in it until it is untracked: git rm --cached {file}, \
+                 commit that removal, then charter reinit."
+            ),
+            fix: format!("git rm --cached {file}, commit that removal, then charter reinit"),
             ignorable: false,
         },
         GitState::Committable => IgnoreCheck {
-            reason: "git would commit charter.local.toml, so charter reads nothing in it \
-                     until it is ignored — charter doctor --fix local-ignore adds \
-                     /charter.local.toml to .gitignore."
-                .to_owned(),
+            reason: format!(
+                "git would commit {file}, so charter reads nothing in it until it is ignored \
+                 — charter doctor --fix local-ignore adds /{file} to .gitignore."
+            ),
             fix: "charter reinit".to_owned(),
             ignorable: true,
         },
@@ -1089,13 +1092,12 @@ fn check_of(state: GitState) -> IgnoreCheck {
             let why = shown::short(&why);
             IgnoreCheck {
                 reason: format!(
-                    "git could not say whether charter.local.toml is ignored ({why}), so \
-                     charter reads nothing in it — an unknown is not a pass. Run git status \
-                     --ignored -- charter.local.toml in the plane to see what git says."
+                    "git could not say whether {file} is ignored ({why}), so charter reads \
+                     nothing in it — an unknown is not a pass. Run git status --ignored -- \
+                     {file} in the plane to see what git says."
                 ),
                 fix: format!(
-                    "run git status --ignored -- charter.local.toml in the plane by hand; \
-                     git said: {why}"
+                    "run git status --ignored -- {file} in the plane by hand; git said: {why}"
                 ),
                 ignorable: false,
             }
@@ -1125,7 +1127,7 @@ fn git_path_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitS
             "--ignored=matching",
             "--untracked-files=all",
             "--",
-            LOCAL_FILE,
+            local_name(root),
         ],
         timeout,
     ) {
@@ -1162,13 +1164,18 @@ fn git_path_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitS
     }
 }
 
+/// The local file's name in the plane at `root`, as git is asked about it.
+fn local_name(root: &Path) -> &'static str {
+    crate::names::LOCAL_SETTINGS.spelling_at(root, Path::is_file)
+}
+
 /// What git says about a local file that does not exist yet, from ONE `git check-ignore`:
 /// exit 0 is ignored, exit 1 is not — which is also its answer for a path git tracks.
 fn git_ignore_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitState {
     let out = match git_answer(
         root,
         git,
-        &["check-ignore", "-q", "--", LOCAL_FILE],
+        &["check-ignore", "-q", "--", local_name(root)],
         timeout,
     ) {
         Ok(out) => out,

@@ -419,7 +419,7 @@ fn url_path(scheme: &str, url: &str) -> String {
 /// `charter.toml`, parsed, or `{}` when there is none. Python's `instance.load`, including its
 /// refusal of a plane format this charter cannot place.
 pub fn load_config(root: &Path) -> Result<toml::Table, String> {
-    let path = root.join(crate::plane::MANIFEST);
+    let path = crate::names::manifest(root);
     let Ok(raw) = std::fs::read(&path) else {
         return Ok(toml::Table::new());
     };

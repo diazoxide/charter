@@ -315,9 +315,12 @@ pub(crate) fn memory_body(
     )
 }
 
-/// Is `path` in the plane's state directory, `.charter/` — charter's own, and private?
+/// Is `path` in the plane's state directory, `.charter/` or `.purlis/` — charter's own, and
+/// private? Either spelling, whichever is in use: both are private.
 fn under_state(root: &std::path::Path, path: &std::path::Path) -> bool {
-    path.starts_with(root.join(".charter"))
+    crate::names::STATE_DIR
+        .spellings()
+        .any(|state| path.starts_with(root.join(state)))
 }
 
 /// Append one `- [title](file)` line ([`index_line`]). Order is write order: charter never

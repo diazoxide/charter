@@ -146,7 +146,7 @@ impl Plane {
     pub fn default_persona(&self) -> Option<String> {
         // A hand-edited `charter.toml` that does not parse is not an error here: the sidebar
         // still draws, and `charter doctor` is what reports the file.
-        let text = std::fs::read_to_string(self.root.join(crate::plane::MANIFEST)).ok()?;
+        let text = std::fs::read_to_string(crate::names::manifest(&self.root)).ok()?;
         let doc: toml::Table = text.parse().ok()?;
         doc.get("persona")?
             .as_table()?

@@ -649,7 +649,7 @@ pub fn declared_default_workspace(root: &Path) -> Option<String> {
 
 /// `[workspace] default` as the manifest holds it, or `None` — `instance.default_workspace_of`.
 fn declared_plane_default(root: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(root.join(crate::plane::MANIFEST)).ok()?;
+    let text = std::fs::read_to_string(crate::names::manifest(root)).ok()?;
     let doc: toml::Table = text.parse().ok()?;
     let named = python_str(doc.get("workspace")?.as_table()?.get("default")?)?;
     let named = py_strip(&named).to_string();
@@ -731,7 +731,7 @@ impl PersonaRung {
             Self::SessionPointer => "session",
             Self::TerminalPointer => "terminal",
             Self::ActiveFile => "active-file",
-            Self::PlaneDefault => "charter.toml",
+            Self::PlaneDefault => crate::names::PLANE_MANIFEST.reads[0],
             Self::CommittedDefault => "committed-default",
             Self::Nothing => "none",
         }
@@ -814,7 +814,7 @@ pub fn plane_default_persona(root: &Path) -> Option<String> {
 /// than to a broken identity. Saying so out loud is `doctor`'s job; silence here is the
 /// fail-toward-no-change half.
 fn declared_plane_persona(root: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(root.join(crate::plane::MANIFEST)).ok()?;
+    let text = std::fs::read_to_string(crate::names::manifest(root)).ok()?;
     let doc: toml::Table = text.parse().ok()?;
     let named = python_str(doc.get("persona")?.as_table()?.get("default")?)?;
     let named = py_strip(&named).to_string();
@@ -855,7 +855,7 @@ fn defined_persona(root: &Path, named: &str) -> Option<String> {
 /// in this binary — `cistate`, `profiletrust`, `reopen` and `hookwire` all join `.charter`
 /// onto the plane. One spelling here too, rather than a second answer for these two rungs.
 fn state_dir(root: &Path) -> PathBuf {
-    root.join(".charter")
+    crate::names::state(root)
 }
 
 /// The persona selections `ids` could have written: this session's pointer, this pane's, and

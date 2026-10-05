@@ -183,7 +183,7 @@ pub fn background_checks_off(env: &dyn Fn(&str) -> Option<String>) -> bool {
 /// see it. That is [`crate::cistate::read`]'s own rule about the file beside this one, and the
 /// answer to a link here is [`Decided::LockUnreadable`], which suppresses.
 pub fn in_flight(plane: &Path, now: f64) -> Result<Option<(Option<u32>, f64)>, String> {
-    let path = plane.join(glrefresh::LOCK);
+    let path = glrefresh::lock(plane);
     contain::no_link_on_the_way(plane, &path).map_err(|why| {
         format!(
             "{} is reached through a symlink, and charter's own path may not be ({why})",

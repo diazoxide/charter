@@ -26,7 +26,7 @@ pub enum Read {
 
 /// `instance.load(root)`.
 pub fn load(root: &Path) -> Read {
-    let path = root.join(crate::plane::MANIFEST);
+    let path = crate::names::manifest(root);
     let Ok(bytes) = std::fs::read(&path) else {
         return Read::Absent;
     };
@@ -146,7 +146,7 @@ pub fn render(forge: &str, owner: &str, host: Option<&str>) -> String {
 pub fn set_key(root: &Path, section: &str, key: &str, value: &str) -> std::io::Result<()> {
     // A link `init`'s gate let through stays inside the plane and is followed, as every other
     // file `init` writes is; the file it lands on is the one replaced.
-    let path = super::linked_to(&root.join(crate::plane::MANIFEST));
+    let path = super::linked_to(&crate::names::manifest(root));
     let dir = path.parent().unwrap_or(root);
     crate::rewrite::update(dir, &path, |body| match body {
         Some(body) => {
@@ -191,7 +191,7 @@ pub fn project_id(root: &Path) -> Option<String> {
 /// An id that is there and is not a ULID is an error, and the file is left as it is: an id is
 /// never written over. So is a directory with no `charter.toml`, which is not a project.
 pub fn ensure_project_id(root: &Path) -> std::io::Result<String> {
-    let path = super::linked_to(&root.join(crate::plane::MANIFEST));
+    let path = super::linked_to(&crate::names::manifest(root));
     let dir = path.parent().unwrap_or(root);
     let mut id = None;
     crate::rewrite::update(dir, &path, |body| {

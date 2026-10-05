@@ -82,7 +82,7 @@ fn path(root: &Path) -> PathBuf {
 }
 
 fn path_of(root: &Path, record: &str) -> PathBuf {
-    root.join(".charter").join(record)
+    crate::names::state(root).join(record)
 }
 
 /// The most this record may be. It is one object of short fingerprints, it is read whole,
@@ -159,7 +159,7 @@ fn record(root: &Path, record: &str, name: &str, entry: serde_json::Value) -> io
     // The record itself, not only the directory holding it. Gating `.charter` left this
     // safe because `private_dir` refuses a symlinked state directory and the write ends in
     // a `rename` — true, and one level shallower than the thing opened.
-    let state = root.join(".charter");
+    let state = crate::names::state(root);
     if !crate::contain::within_plane(root, &path(root))
         || !crate::contain::within_plane(root, &state)
     {

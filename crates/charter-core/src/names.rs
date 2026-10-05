@@ -25,6 +25,12 @@
 
 use std::path::{Path, PathBuf};
 
+mod window;
+pub use window::{
+    STATE_MOVED_RECORD, has_manifest, listed_in, local_settings, manifest, manifest_name,
+    moved_by_rename_local, scan_allow, state, state_alternation, state_name, state_name_with,
+};
+
 /// What sort of thing a name names. Callers never branch on it; it is how the doctor, the
 /// guards and the tests enumerate [`ALL`] by family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -107,8 +113,9 @@ impl Name {
             .chain(self.history.iter().copied())
     }
 
-    /// The newest old spelling: what a writer not yet moved onto this module still writes.
-    /// The purlis name for an entry that has no old one.
+    /// The newest old spelling, or the purlis name for an entry that has no old one: what a
+    /// project that has neither spelling keeps using until it is migrated, and what a fresh
+    /// project starts with ([`Self::file_at`]).
     pub fn newest_old(&self) -> &'static str {
         self.reads
             .first()

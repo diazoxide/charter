@@ -59,13 +59,15 @@ pub fn dir_for(socket: &Path) -> PathBuf {
 }
 
 /// Whether `dir` is a spool the chat sandbox's integrity denial covers: a project's
-/// `.charter/app/spool/` (ADR 0067 §5, `sandbox::Denied`). Nothing is spooled, and no key
-/// written, anywhere else (V63).
+/// `.charter/app/spool/` or `.purlis/app/spool/` (ADR 0067 §5, `sandbox::Denied`, which denies
+/// both). Nothing is spooled, and no key written, anywhere else (V63).
 pub fn covered(dir: &Path) -> bool {
     let mut parts = dir.components().rev().map(|part| part.as_os_str());
     parts.next() == Some(DIR.as_ref())
         && parts.next() == Some("app".as_ref())
-        && parts.next() == Some(".charter".as_ref())
+        && parts
+            .next()
+            .is_some_and(|state| crate::names::STATE_DIR.is(state))
 }
 
 /// [`covered`], or the refusal a hook reports as the line lost.

@@ -15,7 +15,8 @@ pub const TABLE: &str = "sandbox";
 
 /// The file the policy is read from. Only the committed file: turning the sandbox on is a
 /// restriction a plane may carry (ADR 0035), and nothing else says anything about it.
-pub const FILE: &str = "charter.toml";
+/// Named as messages name it; the file read is [`crate::names::manifest`].
+pub const FILE: &str = crate::names::PLANE_MANIFEST.reads[0];
 
 /// A named set of hosts a sandboxed chat may reach (ADR 0067 §3). What each holds is
 /// [`hosts`]; SD-4 and SD-31 add to the set.
@@ -90,7 +91,7 @@ impl Plane {
     /// The plane at `root`. No file says nothing. A file that cannot be read, or is not TOML,
     /// is [`Self::unreadable`]: it may say `[sandbox]`, so it never reads as saying nothing.
     pub fn read(root: &Path) -> Self {
-        match read_plane_file(&root.join(FILE)) {
+        match read_plane_file(&crate::names::manifest(root)) {
             Ok(text) => Self::of(text.as_deref()),
             Err(()) => Self {
                 top: None,
@@ -397,7 +398,7 @@ impl Planted {
 /// files; the project config of every harness and editor; and `charter.toml`, which turns the
 /// sandbox on. A chat writing one of these could have code run outside its sandbox the next
 /// time a person, an editor or another chat opens the directory.
-pub const PLANTED: [Planted; 38] = [
+pub const PLANTED: [Planted; 40] = [
     // A `.git` moved into place brings its own config and hooks.
     Planted::itself(".git"),
     Planted::and_below(".git/config"),
@@ -442,11 +443,14 @@ pub const PLANTED: [Planted; 38] = [
     Planted::and_below(".zshenv"),
     Planted::and_below(".zprofile"),
     Planted::and_below(".zlogin"),
-    // A chat at the plane root could otherwise take `[sandbox]` out of it.
-    Planted::and_below(FILE),
+    // A chat at the plane root could otherwise take `[sandbox]` out of it — under either name,
+    // since the purlis one is read when it is there (RN-2a).
+    Planted::and_below(crate::names::PLANE_MANIFEST.write),
+    Planted::and_below(crate::names::PLANE_MANIFEST.reads[0]),
     // What the machine adds to the plane, which charter reads at every later start: the
     // variables passed to chats, plugins and extensions.
-    Planted::and_below(crate::profiles::LOCAL_FILE),
+    Planted::and_below(crate::names::LOCAL_SETTINGS.write),
+    Planted::and_below(crate::names::LOCAL_SETTINGS.reads[0]),
 ];
 
 /// What a denied path is denied for.
@@ -592,15 +596,31 @@ impl Denied {
         deny(Class::Vaults, ctx.local_registry(), Access::Write);
 
         // 2. Integrity: charter's own records, which only charter writes.
-        deny(Class::Integrity, root.join(".charter/app"), Access::Write);
-        // Every chat's hook spool and the keys that check it, neither read nor written: the
-        // hooks that write a spool run outside the sandbox their tools run in (ADR 0068 §6 as
-        // amended by V63), so nothing inside it needs them.
-        deny(
-            Class::Integrity,
-            crate::hookwire::spool::dir_for(&root.join(".charter/app/hooks.sock")),
-            Access::ReadWrite,
-        );
+        // Under EVERY spelling of the state folder (RN-2a): a chat that could write
+        // `.purlis/app` would be writing records charter may read next.
+        for state in crate::names::STATE_DIR.spellings() {
+            let app = root.join(state).join("app");
+            deny(Class::Integrity, app.clone(), Access::Write);
+            // Every chat's hook spool and the keys that check it, neither read nor written: the
+            // hooks that write a spool run outside the sandbox their tools run in (ADR 0068 §6
+            // as amended by V63), so nothing inside it needs them.
+            deny(
+                Class::Integrity,
+                crate::hookwire::spool::dir_for(&app.join("hooks.sock")),
+                Access::ReadWrite,
+            );
+        }
+        // …and a state folder the project does not have as a folder is not the chat's to make
+        // (D-RN2a-7): which folder holds charter's state is decided by which are there, so making
+        // one is a move of that state. One that is there is left to the rows above.
+        for state in crate::names::STATE_DIR.spellings() {
+            let folder = root.join(state);
+            // Not a directory of its own: absent, a file, or a link (which a chat could point
+            // anywhere) — none is the chat's to turn into a state folder.
+            if !std::fs::symlink_metadata(&folder).is_ok_and(|meta| meta.is_dir()) {
+                deny(Class::Integrity, folder, Access::Write);
+            }
+        }
 
         // 3. Human powers: the approvals a person gave on this machine.
         let config_root = crate::machine::rooted(
@@ -1160,14 +1180,17 @@ pub fn folder_refusal(root: &Path, cwd: &Path) -> Option<&'static str> {
     }
 }
 
-/// Whether a `charter.toml` above `start` is there and is not a regular file — a link, a
-/// FIFO, a socket, a device or a directory — which the plane's own walk does not take for a
-/// plane at all. A sandboxed start refuses it ([`NotStarted::PlaneUnreadable`]) rather than
-/// reading "no plane" and starting the chat unsandboxed.
+/// Whether a plane manifest above `start`, under either name (`charter.toml` or
+/// `purlis.toml`), is there and is not a regular file — a link, a FIFO, a socket, a device or a
+/// directory — which the plane's own walk does not take for a plane at all. A sandboxed start
+/// refuses it ([`NotStarted::PlaneUnreadable`]) rather than reading "no plane" and starting the
+/// chat unsandboxed.
 pub fn marker_unreadable(start: &Path) -> bool {
     let here = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
     here.ancestors().any(|dir| {
-        std::fs::symlink_metadata(dir.join(FILE)).is_ok_and(|meta| !meta.file_type().is_file())
+        crate::names::PLANE_MANIFEST.spellings().any(|name| {
+            std::fs::symlink_metadata(dir.join(name)).is_ok_and(|meta| !meta.file_type().is_file())
+        })
     })
 }
 

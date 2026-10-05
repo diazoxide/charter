@@ -268,7 +268,9 @@ pub struct Where {
 /// session in its environment, so nothing ever has to guess it.
 pub fn socket_for(plane: Option<&Path>) -> Where {
     if let Some(plane) = plane {
-        let beside_the_record = plane.join(".charter").join("app").join("hooks.sock");
+        let beside_the_record = charter_core::names::state(plane)
+            .join("app")
+            .join("hooks.sock");
         // macOS allows 104 bytes for a unix socket path including the terminator
         // (`sys/un.h`), Linux 108; the smaller is the one to hold to, since a plane is
         // portable. A plane nested deeper than that is not a failure, just not somewhere the

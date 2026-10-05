@@ -102,7 +102,7 @@ const NO_PIN: &str = "— (this control plane pins no version)";
 /// declining to reproduce a traceback; nothing downstream can tell the two apart, because the
 /// only caller is a row that then prints the no-pin line.
 pub fn locked_version(root: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(root.join(crate::plane::MANIFEST)).ok()?;
+    let text = std::fs::read_to_string(crate::names::manifest(root)).ok()?;
     let doc: toml::Table = text.parse().ok()?;
     let pinned = doc.get("charter")?.as_table()?.get("version")?.as_str()?;
     let pinned = crate::memstore::py_strip(pinned);

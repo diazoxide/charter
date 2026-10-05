@@ -1195,3 +1195,67 @@ fn a_settings_file_that_is_there_but_cannot_be_read_is_said_and_not_shown_as_abs
         "{err}"
     );
 }
+
+// ---- the rename window (RN-2a, V93e) ------------------------------------------------ //
+
+/// A plane whose two settings files go by `manifest` and `local`, both ignored the way a plane
+/// of either name ignores its local file.
+fn plane_named(manifest: &str, local: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(manifest), "schema = 1\n").unwrap();
+    fs::write(dir.path().join(local), "").unwrap();
+    crate::testgit::run(dir.path(), &["init", "-q"]);
+    fs::write(
+        dir.path().join(".gitignore"),
+        "/charter.local.toml\n/purlis.local.toml\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn a_save_lands_in_the_settings_file_the_plane_has_and_never_starts_a_second() {
+    for (manifest, local, other_manifest, other_local) in [
+        (
+            "charter.toml",
+            "charter.local.toml",
+            "purlis.toml",
+            "purlis.local.toml",
+        ),
+        (
+            "purlis.toml",
+            "purlis.local.toml",
+            "charter.toml",
+            "charter.local.toml",
+        ),
+    ] {
+        let dir = plane_named(manifest, local);
+        let root = dir.path();
+        let shared = "schema = 1\n\n[workspace]\ndefault = \"ide\"\n";
+        save(root, Which::Shared, Some("schema = 1\n"), shared).unwrap();
+        let body = "[harness]\ndefault = \"claude\"\n";
+        save(root, Which::Local, Some(""), body).unwrap();
+
+        assert_eq!(text(root, manifest), shared);
+        assert_eq!(text(root, local), body);
+        assert!(!root.join(other_manifest).exists(), "{other_manifest}");
+        assert!(!root.join(other_local).exists(), "{other_local}");
+        assert_eq!(read(root, Which::Shared).unwrap().file, manifest);
+        assert_eq!(read(root, Which::Local).unwrap().file, local);
+    }
+}
+
+#[test]
+fn with_both_names_the_purlis_file_is_read_and_written_and_the_old_one_left_alone() {
+    let dir = plane_named("charter.toml", "charter.local.toml");
+    let root = dir.path();
+    fs::write(root.join("purlis.toml"), "schema = 1\n").unwrap();
+    fs::write(root.join("charter.toml"), "schema = 1\n# old\n").unwrap();
+
+    assert_eq!(read(root, Which::Shared).unwrap().text, "schema = 1\n");
+    let shared = "schema = 1\n\n[workspace]\ndefault = \"ide\"\n";
+    save(root, Which::Shared, Some("schema = 1\n"), shared).unwrap();
+
+    assert_eq!(text(root, "purlis.toml"), shared);
+    assert_eq!(text(root, "charter.toml"), "schema = 1\n# old\n");
+}

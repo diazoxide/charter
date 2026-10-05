@@ -27,8 +27,15 @@
 
 use sha2::{Digest, Sha256};
 
-/// The allowlist's file, at the top of the repository.
-pub const FILE: &str = ".charter-scan-allow.toml";
+/// The allowlist's file, at the top of the repository, as messages name it. A repository may
+/// hold it as `.purlis-scan-allow.toml` instead, which wins when it is there (RN-2a, V93e):
+/// [`spellings`] is every name it goes by.
+pub const FILE: &str = crate::names::SCAN_ALLOW.reads[0];
+
+/// Every name the allowlist goes by, the one that wins first.
+pub fn spellings() -> impl Iterator<Item = &'static str> {
+    crate::names::SCAN_ALLOW.spellings()
+}
 
 /// Where an entry came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,7 +309,7 @@ fn entry(item: &toml::Value, n: usize) -> Result<Entry, String> {
 
 /// Whether `path`, a file at the top of a repository, is the allowlist.
 pub fn is_the_file(path: &str) -> bool {
-    path == FILE
+    crate::names::SCAN_ALLOW.recognises(path)
 }
 
 /// The entry `charter scan --explain` offers for a finding: its rule in its file.

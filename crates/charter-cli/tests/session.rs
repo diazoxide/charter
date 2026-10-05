@@ -392,7 +392,7 @@ fn the_profile_and_directory_are_the_apps_record_of_the_chat_never_the_commands_
     let root = root(&tmp);
     let piece = root.join("workspaces/alpha/charter-app/si-8e");
     std::fs::create_dir_all(&piece).unwrap();
-    let app_record = root.join(charter_core::reopen::IN_PLANE);
+    let app_record = charter_core::reopen::path(&root);
     std::fs::create_dir_all(app_record.parent().unwrap()).unwrap();
     std::fs::write(
         &app_record,

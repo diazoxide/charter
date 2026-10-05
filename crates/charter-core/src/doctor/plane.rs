@@ -246,7 +246,8 @@ pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
             |n| n.to_string_lossy().into_owned(),
         )
     };
-    let found: Vec<String> = crate::names::leftovers_in_plane(&d.root)
+    let leftovers = crate::names::leftovers_in_plane(&d.root);
+    let found: Vec<String> = leftovers
         .iter()
         .map(|at| {
             let mut both = vec![file(at.path())];
@@ -254,13 +255,34 @@ pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
             both.join(" and ")
         })
         .collect();
+    // The state folder is this machine's and `rename-local` reconciles it; the files are the
+    // project's and `rename-plane` does (RN-2a).
+    let is_state = |at: &crate::names::At| {
+        at.path()
+            .file_name()
+            .is_some_and(|name| crate::names::STATE_DIR.is(name))
+    };
+    let state = leftovers.iter().any(is_state);
+    let files = leftovers.iter().any(|at| !is_state(at));
+    let fix = match (files, state) {
+        (true, true) => {
+            "the `rename-plane` fix will reconcile the files, and `rename-local` the \
+                         state folders, into the purlis names."
+        }
+        (false, true) => {
+            "the `rename-local` fix will reconcile the state folders into the \
+                          purlis name."
+        }
+        _ => "the `rename-plane` fix will reconcile them into the purlis names.",
+    };
     (!found.is_empty()).then(|| {
         Row::warn(
             "renamed leftovers",
             format!("under both names: {}", found.join(", ")),
-            "This project holds the same thing under its purlis and its charter name, so \
-             settings or state may be split between them. Keep both for now: the \
-             `rename-plane` fix will reconcile them into the purlis names.",
+            format!(
+                "This project holds the same thing under its purlis and its charter name, so \
+                 settings or state may be split between them. Keep both for now: {fix}"
+            ),
         )
     })
 }

@@ -38,7 +38,9 @@ use crate::contain;
 
 /// Where a session's turns are recorded, under the plane's state directory.
 /// `charter/config.py`'s `SESSIONS_DIR`.
-pub const SESSIONS: &str = ".charter/sessions";
+pub fn sessions_dir(plane: &Path) -> PathBuf {
+    crate::names::state(plane).join("sessions")
+}
 
 /// How many turns are kept. `charter/statusline.py:_TREND_KEEP`.
 ///
@@ -75,7 +77,7 @@ pub const KEEP: usize = 16;
 pub fn file_for(plane: &Path, sid: &str) -> Option<PathBuf> {
     contain::mintable(sid)
         .is_ok()
-        .then(|| plane.join(SESSIONS).join(format!("{sid}.usage")))
+        .then(|| sessions_dir(plane).join(format!("{sid}.usage")))
 }
 
 /// What one turn's payload says it cost.
@@ -836,7 +838,7 @@ mod tests {
         let outside = here.join("outside");
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("theirs"), "NOT CHARTER'S\n").unwrap();
-        std::fs::create_dir_all(plane.join(SESSIONS)).unwrap();
+        std::fs::create_dir_all(sessions_dir(&plane)).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(
             outside.join("theirs"),
@@ -859,7 +861,7 @@ mod tests {
         let plane = here.join("plane");
         let outside = here.join("outside");
         std::fs::create_dir_all(&outside).unwrap();
-        std::fs::create_dir_all(plane.join(SESSIONS)).unwrap();
+        std::fs::create_dir_all(sessions_dir(&plane)).unwrap();
         (held, plane, outside)
     }
 
@@ -1176,7 +1178,7 @@ mod tests {
         let plane = std::fs::canonicalize(dir.path()).unwrap();
         let elsewhere = plane.join("elsewhere");
         std::fs::write(&elsewhere, "900,100,90,77\n").unwrap();
-        std::fs::create_dir_all(plane.join(SESSIONS)).unwrap();
+        std::fs::create_dir_all(sessions_dir(&plane)).unwrap();
         std::os::unix::fs::symlink(&elsewhere, file_for(&plane, "s1").unwrap()).unwrap();
 
         assert!(history(&plane, "s1").is_empty());

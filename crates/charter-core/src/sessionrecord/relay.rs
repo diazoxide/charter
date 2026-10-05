@@ -68,7 +68,7 @@ pub fn marker(root: &Path, place: &Place, chat: u32) -> Option<PathBuf> {
         }
     };
     Some(
-        dir.join(".charter")
+        crate::names::state(&dir)
             .join("sessions")
             .join(format!("{chat}.saved")),
     )

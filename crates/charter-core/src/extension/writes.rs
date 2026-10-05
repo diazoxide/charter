@@ -32,9 +32,12 @@ const MOST_PATH_BYTES: usize = 200;
 /// standing for any one name, a workspace's. A write path that could cover one is refused: a
 /// declaration that let an extension own one would be a capability that changes what a chat is
 /// allowed to do.
-const NEVER_WRITTEN: [&[Option<&str>]; 4] = [
-    &[Some(crate::profiles::COMMITTED_FILE)],
-    &[Some(crate::profiles::LOCAL_FILE)],
+/// Both spellings of each settings file (RN-2a): the purlis one is read when it is there.
+const NEVER_WRITTEN: [&[Option<&str>]; 6] = [
+    &[Some(crate::names::PLANE_MANIFEST.write)],
+    &[Some(crate::names::PLANE_MANIFEST.reads[0])],
+    &[Some(crate::names::LOCAL_SETTINGS.write)],
+    &[Some(crate::names::LOCAL_SETTINGS.reads[0])],
     &[Some("vaults.json")],
     &[
         Some("workspaces"),
@@ -43,9 +46,9 @@ const NEVER_WRITTEN: [&[Option<&str>]; 4] = [
     ],
 ];
 
-/// How [`NEVER_WRITTEN`] is named in a refusal.
-const NEVER_WRITTEN_SAID: &str =
-    "charter.toml, charter.local.toml, vaults.json and a workspace's workspace.json";
+/// How [`NEVER_WRITTEN`] is named in a refusal: every name it holds.
+const NEVER_WRITTEN_SAID: &str = "charter.toml, purlis.toml, charter.local.toml, \
+     purlis.local.toml, vaults.json and a workspace's workspace.json";
 
 /// How a segment is matched: as a shell does, never a leading `.`.
 const MATCHING: glob::MatchOptions = glob::MatchOptions {
@@ -228,6 +231,20 @@ fn reaches(declared: &str, path: &[Option<&str>]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_refusal_names_every_file_it_keeps_from_an_extension() {
+        for name in crate::names::PLANE_MANIFEST
+            .spellings()
+            .chain(crate::names::LOCAL_SETTINGS.spellings())
+        {
+            assert!(NEVER_WRITTEN_SAID.contains(name), "{name}");
+            assert!(
+                NEVER_WRITTEN.iter().any(|one| *one == [Some(name)]),
+                "{name}"
+            );
+        }
+    }
 
     fn declared(paths: &[&str]) -> Vec<String> {
         paths.iter().map(|&it| it.to_owned()).collect()

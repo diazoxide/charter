@@ -66,7 +66,7 @@ fn the_record_never_holds_the_environment_that_names_an_account() {
     )
     .unwrap();
 
-    let text = fs::read_to_string(dir.path().join(reopen::IN_PLANE)).unwrap();
+    let text = fs::read_to_string(reopen::path(dir.path())).unwrap();
     let doc: serde_json::Value = serde_json::from_str(&text).expect("the record is JSON");
     let chat = &doc["chats"][0];
 
@@ -94,7 +94,7 @@ fn a_record_written_before_profiles_existed_still_reads_as_a_chat_with_none() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
     fs::write(
-        dir.path().join(reopen::IN_PLANE),
+        reopen::path(dir.path()),
         r#"{"version":1,"at":1789000000,"chats":[{"program":"/bin/zsh","args":[],"cwd":"","name":"1","resume":"","active":true}]}"#,
     )
     .unwrap();
@@ -115,7 +115,7 @@ fn a_profile_name_that_is_not_one_charter_would_mint_reads_as_no_profile() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
     fs::write(
-        dir.path().join(reopen::IN_PLANE),
+        reopen::path(dir.path()),
         r#"{"version":1,"at":1789000000,"chats":[{"program":"claude","args":[],"cwd":"","name":"1","resume":"","active":true,"profile":"../../etc/passwd","persona":"Not A Persona"}]}"#,
     )
     .unwrap();
@@ -159,7 +159,7 @@ fn a_chats_footer_choice_survives_a_quit_and_comes_back_with_it() {
     );
     // The word on disk is the word the environment carries, so the record and the launch
     // cannot come to mean different things by it.
-    let text = fs::read_to_string(dir.path().join(reopen::IN_PLANE)).unwrap();
+    let text = fs::read_to_string(reopen::path(dir.path())).unwrap();
     let doc: serde_json::Value = serde_json::from_str(&text).expect("the record is JSON");
     assert_eq!(doc["chats"][0]["footer"], charter_core::start::FOOTER_SHOW);
     assert_eq!(doc["chats"][1]["footer"], "");
@@ -174,7 +174,7 @@ fn a_record_written_before_the_footer_was_a_choice_comes_back_blanked() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
     fs::write(
-        dir.path().join(reopen::IN_PLANE),
+        reopen::path(dir.path()),
         r#"{"version":1,"at":1789000000,"chats":[{"program":"claude","args":[],"cwd":"","name":"1","resume":"","active":true,"profile":"claude-work","persona":""}]}"#,
     )
     .unwrap();
@@ -194,7 +194,7 @@ fn a_footer_word_charter_did_not_write_reads_as_the_default() {
     fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
     for said in ["true", "1", "SHOW", "yes", "show it"] {
         fs::write(
-            dir.path().join(reopen::IN_PLANE),
+            reopen::path(dir.path()),
             format!(
                 r#"{{"version":1,"at":1789000000,"chats":[{{"program":"claude","args":[],"cwd":"","name":"1","resume":"","active":true,"footer":{said:?}}}]}}"#
             ),

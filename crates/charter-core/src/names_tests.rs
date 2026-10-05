@@ -171,8 +171,9 @@ fn the_entries_carry_the_names_on_disk_today() {
     assert_eq!(PLANE_MANIFEST.reads, ["charter.toml"]);
     assert_eq!(crate::plane::MANIFEST, PLANE_MANIFEST.reads[0]);
     assert_eq!(STATE_DIR.reads, [".charter"]);
-    assert_eq!(crate::profiles::LOCAL_FILE, LOCAL_SETTINGS.reads[0]);
-    assert_eq!(crate::scanallow::FILE, SCAN_ALLOW.reads[0]);
+    // Moved onto this module (RN-2a): the literal is here now, so it is pinned here.
+    assert_eq!(LOCAL_SETTINGS.reads[0], "charter.local.toml");
+    assert_eq!(SCAN_ALLOW.reads[0], ".charter-scan-allow.toml");
     // Moved (RN-2b): the code writes the purlis name, and the old one is pinned here.
     assert_eq!(GENERATED_SIDECAR.reads[0], ".charter-generated");
     assert_eq!(crate::layer::MARKER, GENERATED_SIDECAR.write);
@@ -269,8 +270,9 @@ fn the_entries_carry_the_names_on_disk_today() {
         crate::secrets::onepassword::OLD_TAG,
         ONEPASSWORD_TAG.reads[0]
     );
-    // No constant names the state folder alone; the paths under it are spelled whole.
-    assert!(crate::cistate::CACHE.starts_with(&format!("{}/", STATE_DIR.reads[0])));
+    // The state folder's old name lives only here now (RN-2a): every path under it is joined
+    // to `names::state`.
+    assert_eq!(STATE_DIR.reads[0], ".charter");
     // Every remaining entry, so no old name in this module is one the code never had.
     assert_eq!(crate::profiles::COMMITTED_FILE, PLANE_MANIFEST.reads[0]);
     assert_eq!(crate::extension::MANIFEST, EXTENSION_MANIFEST.reads[0]);

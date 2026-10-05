@@ -1540,7 +1540,7 @@ pub fn tree_of(plane: &Path, start: &Path) -> Option<PathBuf> {
 pub fn nested_plane_in(plane: &Path, start: &Path) -> Option<PathBuf> {
     let here = start.canonicalize().ok()?;
     let target = plane.canonicalize().ok()?;
-    let marked = here.ancestors().find(|d| crate::plane::is_plane(d))?;
+    let marked = here.ancestors().find(|d| crate::names::has_manifest(d))?;
     let inner = crate::plane::plane_of(marked);
     // The chain is WALKED rather than shortcut through `outermost`: in a plane inside a plane
     // inside a plane, under `$CHARTER_ROOT=<the middle one>`, the outermost is not the tree

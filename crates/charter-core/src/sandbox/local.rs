@@ -16,8 +16,13 @@ use std::path::Path;
 
 use super::{Plane, TABLE};
 
-/// The file, relative to the project root.
-pub const IN_PLANE: &str = ".charter/app/sandbox.json";
+/// The file, relative to the project's state folder ([`path`]).
+pub const IN_STATE: &str = "app/sandbox.json";
+
+/// The file in the project at `root`.
+pub fn path(root: &Path) -> std::path::PathBuf {
+    crate::names::state(root).join(IN_STATE)
+}
 
 /// What the file holds.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -30,7 +35,7 @@ struct OnDisk {
 }
 
 fn read(root: &Path) -> OnDisk {
-    std::fs::read_to_string(root.join(IN_PLANE))
+    std::fs::read_to_string(path(root))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
@@ -38,7 +43,7 @@ fn read(root: &Path) -> OnDisk {
 
 /// Reads the file, changes it and writes it back, under charter's lock on its directory.
 fn change(root: &Path, how: impl FnOnce(&mut OnDisk)) -> io::Result<()> {
-    let path = root.join(IN_PLANE);
+    let path = path(root);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -75,7 +80,7 @@ pub enum Answer {
 /// sandbox is unknown, and every chat in it is refused until it is fixed.
 pub fn offer_due(root: &Path) -> bool {
     let plane = Plane::read(root);
-    root.join(crate::plane::MANIFEST).is_file()
+    crate::names::has_manifest(root)
         && !plane.unreadable()
         && plane.said().policy.is_none()
         && read(root).offer.is_empty()
@@ -120,7 +125,7 @@ pub fn answer(root: &Path, answer: Answer) -> io::Result<()> {
 /// read with the sandbox's own reader ([`super::read_plane_file`]), which refuses anything else,
 /// and must be the text the write is made against.
 fn turn_on(root: &Path) -> io::Result<()> {
-    let target = root.join(crate::plane::MANIFEST);
+    let target = crate::names::manifest(root);
     let dir = root.to_path_buf();
     let unedited = || {
         io::Error::new(

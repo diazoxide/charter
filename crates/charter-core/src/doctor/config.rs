@@ -186,11 +186,12 @@ fn worktrees_refusal(root: &Path, declared: &str) -> Option<String> {
 /// silently ignored — each of which renders exactly as the key being absent, so this row is
 /// the only place any of them is said.
 pub(super) fn charter_toml(d: &Doctor) -> Row {
-    const NAME: &str = "charter.toml";
+    // The row is named for the manifest the project has: `charter.toml` or `purlis.toml`.
+    let name = crate::names::manifest_name(&d.root);
     let cfg = match &d.config {
         Config::Malformed(why) => {
             return Row::fail(
-                NAME,
+                name,
                 first_line(why),
                 "Fix or remove charter.toml, then re-run. Falling back to empty \
                  group/exclude/workspace defaults until it does.",
@@ -198,7 +199,7 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
         }
         Config::Refused(why) => {
             return Row::fail(
-                NAME,
+                name,
                 first_line(why),
                 "charter refuses to operate on this plane at all — see the `schema` row. \
                  `charter update`, then re-run.",
@@ -217,7 +218,7 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
                 .map(|found| (SettingsGroup::Harness, found))
         })
     {
-        return Row::warn(NAME, summary, detail).in_settings(group);
+        return Row::warn(name, summary, detail).in_settings(group);
     }
     // `[[frame.component]]` is refused WHOLE when charter cannot draw it, and nothing but
     // this row says so. Whether an arrangement can be drawn is the tmux frame's question,
@@ -229,18 +230,18 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
         .is_some_and(|frame| frame.contains_key("component"));
     if arranges {
         return deferred::row(
-            NAME,
+            name,
             "this plane declares a [[frame.component]] arrangement, which arranges a tmux \
              frame this charter does not have, so nothing reads it",
         );
     }
     // After the arrangement, so a save finding never hides that it went unread.
     if let Some((summary, detail)) = save_finding(&d.root) {
-        return Row::warn(NAME, summary, detail).in_settings(SettingsGroup::Saving);
+        return Row::warn(name, summary, detail).in_settings(SettingsGroup::Saving);
     }
     if !d.has_plane {
         return Row::warn(
-            NAME,
+            name,
             format!(
                 "no control plane found (cwd: {})",
                 super::fsx::path_field(&d.root)
@@ -250,7 +251,7 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
         );
     }
     Row::ok(
-        NAME,
+        name,
         format!("parsed cleanly ({})", super::fsx::path_field(&d.root)),
     )
 }
@@ -463,9 +464,7 @@ pub(super) fn schema(d: &Doctor) -> Row {
     // than in a row of its own: the row's question is "can this charter work on this project's
     // format", and a second row would say the same thing twice.
     if let crate::compat::Compat::ReadOnly(
-        why @ (crate::compat::Why::Missing { .. }
-        | crate::compat::Why::RequiresUnreadable { .. }
-        | crate::compat::Why::PurlisNamesPartlyRead),
+        why @ (crate::compat::Why::Missing { .. } | crate::compat::Why::RequiresUnreadable { .. }),
     ) = crate::compat::read(&d.root)
     {
         return Row::fail(

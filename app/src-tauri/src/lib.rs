@@ -2647,7 +2647,7 @@ mod tests {
         // `wscmd::rename` moves the directory first and the pins last, so in between the old
         // name's pin names nothing: its journal says the rename is not done.
         let (plane, store) = plane_pinning(&["beta", "old-name", "new-name"]);
-        let journal = plane.path().join(charter_core::wscmd::rename::JOURNAL);
+        let journal = charter_core::wscmd::rename::journal_path(plane.path());
         std::fs::create_dir_all(journal.parent().expect("a parent")).expect("made");
         std::fs::write(
             &journal,

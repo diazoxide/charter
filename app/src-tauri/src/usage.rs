@@ -157,7 +157,7 @@ mod tests {
     fn plane_with(rows: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("a directory");
         let root = std::fs::canonicalize(dir.path()).expect("it resolves");
-        let sessions = root.join(usage::SESSIONS);
+        let sessions = usage::sessions_dir(&root);
         std::fs::create_dir_all(&sessions).expect("a sessions directory");
         std::fs::write(sessions.join(format!("{SID}.usage")), rows).expect("a record");
         (dir, root)

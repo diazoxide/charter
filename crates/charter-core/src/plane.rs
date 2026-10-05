@@ -3,32 +3,23 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::names::{self, Found};
+use crate::names;
 
 /// The OLD name of the file that marks a directory as a plane root, which the call sites not yet
 /// moved onto [`crate::names`] still join. A plane is recognised by either name ([`is_plane`]);
 /// [`manifest`] says which file a plane's manifest is.
 pub const MANIFEST: &str = "charter.toml";
 
-/// The manifest's name for a WRITER at `root`: whichever is there, `purlis.toml` first, and
-/// `charter.toml` where neither is — so `init` keeps writing what it always wrote, and never
-/// writes a second manifest beside a `purlis.toml`.
-pub fn manifest_to_keep(root: &Path) -> &'static str {
-    match names::PLANE_MANIFEST.file_in(root).found {
-        Found::Purlis => names::PLANE_MANIFEST.write,
-        Found::Old | Found::Neither => MANIFEST,
-    }
-}
-
 /// Whether `dir` is a plane root: it holds a `purlis.toml` or a `charter.toml` FILE.
 pub fn is_plane(dir: &Path) -> bool {
-    names::PLANE_MANIFEST.file_in(dir).found != Found::Neither
+    names::has_manifest(dir)
 }
 
-/// The manifest of the plane at `root`: `purlis.toml` when it is there, else `charter.toml`
-/// when that is, else `purlis.toml` — the purlis name wins (V93e).
+/// The manifest of the plane at `root`, to read and to write: [`names::manifest`], the one
+/// answer (`purlis.toml` when it is there, else `charter.toml`, which is also what a project
+/// with neither starts with).
 pub fn manifest(root: &Path) -> PathBuf {
-    names::PLANE_MANIFEST.file_in(root).name
+    names::manifest(root)
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -265,14 +256,13 @@ pub fn standing_in_nested_plane(start: &Path) -> Option<PathBuf> {
 /// either caller because `save` WRITES the push record and `doctor` READS it, and a state
 /// directory the two disagree about is a record written where nothing looks for it.
 ///
-/// **Always `.charter/` for now, even beside a `.purlis/`** (D-RN1-11). The guards that keep
-/// the state folder out of reads, searches and commits know only `.charter/`, so the state
-/// folder moves in the same change that teaches them `.purlis/` (RN-2a). The doctor's
-/// `renamed leftovers` row still names a `.purlis/` beside it.
+/// **[`names::state`] says which folder** (RN-2a, D-RN2a-7): `.purlis/` only when it is the one
+/// there or the machine's rename-local record says this project moved; `.charter/` otherwise.
+/// The guards that keep the state folder out of reads, searches and commits know both names.
 pub fn state_dir(root: &Path) -> PathBuf {
     match crate::steer::var_os("PURLIS_HOME") {
         Some(home) if !home.is_empty() => PathBuf::from(home),
-        _ => root.join(names::STATE_DIR.newest_old()),
+        _ => names::state(root),
     }
 }
 
@@ -581,18 +571,19 @@ mod tests {
     }
 
     #[test]
-    fn the_state_folder_stays_the_old_one_whatever_else_is_there() {
-        // D-RN1-11: the guards that keep `.charter/` out of reads, walks and commits do not
-        // know `.purlis/` yet, so the state folder moves only when they do (RN-2a).
+    fn the_state_folder_moves_only_when_the_purlis_one_is_the_one_there() {
+        // D-RN2a-7: a `.purlis/` beside `.charter/` is not trusted by its presence; which one is
+        // the state then is the rename-local record's to say (`names::state_name_with`).
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         assert_eq!(state_dir(&root), root.join(".charter"));
 
-        fs::create_dir(root.join(".purlis")).unwrap();
-        assert_eq!(state_dir(&root), root.join(".charter"));
-
         fs::create_dir(root.join(".charter")).unwrap();
         assert_eq!(state_dir(&root), root.join(".charter"));
+
+        fs::remove_dir(root.join(".charter")).unwrap();
+        fs::create_dir(root.join(".purlis")).unwrap();
+        assert_eq!(state_dir(&root), root.join(".purlis"));
     }
 
     #[test]
@@ -615,11 +606,11 @@ mod tests {
     fn the_manifest_a_writer_keeps_is_the_one_that_is_there() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        assert_eq!(manifest_to_keep(&root), "charter.toml");
+        assert_eq!(names::manifest_name(&root), "charter.toml");
         fs::write(root.join("purlis.toml"), "").unwrap();
-        assert_eq!(manifest_to_keep(&root), "purlis.toml");
+        assert_eq!(names::manifest_name(&root), "purlis.toml");
         fs::write(root.join("charter.toml"), "").unwrap();
-        assert_eq!(manifest_to_keep(&root), "purlis.toml");
+        assert_eq!(names::manifest_name(&root), "purlis.toml");
     }
 
     #[test]

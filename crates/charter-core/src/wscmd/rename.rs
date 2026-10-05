@@ -90,8 +90,9 @@ use crate::harness::Harness;
 use crate::repocmd::{Say, Sink};
 use crate::wscmd;
 
-/// Where the journal of a rename in progress lives, relative to the plane root.
-pub const JOURNAL: &str = ".charter/workspace-rename.json";
+/// Where the journal of a rename in progress lives, relative to the plane's state folder
+/// ([`journal_path`]).
+pub const JOURNAL: &str = "workspace-rename.json";
 
 /// What `charter workspace rename` was asked for.
 pub struct Request<'a> {
@@ -304,8 +305,16 @@ struct Journal {
     moved: bool,
 }
 
-fn journal_path(root: &Path) -> PathBuf {
-    root.join(JOURNAL)
+/// `path` as the operator knows it: from the plane root, as `.charter/app/reopen.json`.
+fn shown_in(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+pub fn journal_path(root: &Path) -> PathBuf {
+    crate::names::state(root).join(JOURNAL)
 }
 
 fn read_journal(root: &Path) -> Option<Journal> {
@@ -329,7 +338,7 @@ pub fn in_flight(root: &Path) -> Option<(String, String)> {
 }
 
 fn write_journal(root: &Path, journal: &Journal) -> std::io::Result<()> {
-    let dir = root.join(".charter");
+    let dir = crate::names::state(root);
     crate::plane::private_dir(root, &dir)?;
     let text = serde_json::to_string(journal).map_err(std::io::Error::other)? + "\n";
     crate::rewrite::replace(
@@ -578,7 +587,7 @@ fn finish(request: &Request, say: Sink) -> u8 {
     if let Err(why) = follow_in_reopen(root, &moved, config_root) {
         left.push(format!(
             "the app's record ({}) still names '{old}' ({why})",
-            crate::reopen::IN_PLANE
+            shown_in(root, &crate::reopen::path(root))
         ));
     }
     if crashed(Step::Reopen) {
@@ -818,7 +827,7 @@ fn rename_headings(root: &Path, old: &str, new: &str) -> Vec<String> {
 
 /// Every pointer that selects `old`, pointed at `new`. Answers what could not be.
 fn rename_pointers(root: &Path, old: &str, new: &str) -> Vec<String> {
-    let state = root.join(".charter");
+    let state = crate::names::state(root);
     let mut left = Vec::new();
     let mut files: Vec<(PathBuf, crate::rewrite::Mode)> = vec![
         (
@@ -891,7 +900,7 @@ fn rename_pointers(root: &Path, old: &str, new: &str) -> Vec<String> {
 
 /// The state charter keeps under the workspace's name in `.charter/`, moved to the new one.
 fn rename_state(root: &Path, old: &str, new: &str) -> Vec<String> {
-    let state = root.join(".charter");
+    let state = crate::names::state(root);
     let mut left = Vec::new();
     for (from, to) in [
         (
@@ -1007,28 +1016,32 @@ fn follow_in_pins(config: &Path, root: &Path, old: &str, new: &str) -> std::io::
 /// Said, not rewritten: `charter.toml` is the team's and `charter.local.toml` the operator's,
 /// both hand-edited, and a rename is not a settings edit.
 fn config_named(root: &Path, old: &str) -> Vec<String> {
-    ["charter.toml", "charter.local.toml"]
-        .into_iter()
-        .filter(|file| {
-            std::fs::read_to_string(root.join(file))
-                .ok()
-                .and_then(|text| text.parse::<toml::Table>().ok())
-                .and_then(|doc| {
-                    doc.get("workspace")?
-                        .as_table()?
-                        .get("default")?
-                        .as_str()
-                        .map(|name| name == old)
-                })
-                .unwrap_or(false)
-        })
-        .map(|file| {
-            format!(
-                "{file} still sets [workspace] default = \"{old}\" — edit it if the default \
+    [
+        crate::names::manifest(root),
+        crate::names::local_settings(root),
+    ]
+    .into_iter()
+    .filter(|file| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| text.parse::<toml::Table>().ok())
+            .and_then(|doc| {
+                doc.get("workspace")?
+                    .as_table()?
+                    .get("default")?
+                    .as_str()
+                    .map(|name| name == old)
+            })
+            .unwrap_or(false)
+    })
+    .map(|file| {
+        let file = shown_in(root, &file);
+        format!(
+            "{file} still sets [workspace] default = \"{old}\" — edit it if the default \
                  should follow the rename."
-            )
-        })
-        .collect()
+        )
+    })
+    .collect()
 }
 
 // ----------------------------------------------------------------------------------------
@@ -1110,7 +1123,8 @@ pub fn open_in_app(root: &Path, workspaces: &[&str]) -> Vec<String> {
 
 #[cfg(unix)]
 fn app_is_listening(root: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(root.join(".charter/app/hooks.sock")).is_ok()
+    std::os::unix::net::UnixStream::connect(crate::names::state(root).join("app/hooks.sock"))
+        .is_ok()
 }
 
 #[cfg(not(unix))]
