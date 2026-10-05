@@ -136,7 +136,8 @@ import {
   usePlaneChanged,
 } from "./planeChanged";
 import { usePlaneUpdated } from "./PlaneUpdated";
-import { Notice } from "./Notice";
+import { Notice, NoticeBand } from "./Notice";
+import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
@@ -433,14 +434,10 @@ export const PlaneView = memo(function PlaneView({
     busy: boolean;
   }>();
   /**
-   * **The Notices dismissed in this window, by cause** (`Notice.tsx`). For this run only:
-   * keeping a dismissal across a relaunch until its cause changes is NO-2's (#1229).
+   * **The Notices dismissed here until their cause changes** (`dismissals.ts`, V91j): kept on
+   * this machine across relaunches, and let go once the core answers without the cause.
    */
-  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
-  const dismiss = useCallback(
-    (cause: string) => setDismissed((was) => new Set(was).add(cause)),
-    [],
-  );
+  const { dismissed, dismiss, settle: settleNotices, showAgain } = useDismissals(plane);
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
   /** What the core last said about where a chat is working, and which directory it was
@@ -722,6 +719,20 @@ export const PlaneView = memo(function PlaneView({
   // so a project that is closed and opened again is a fresh one and asks again — which it
   // must, because the core still holds whatever it put back.
   const adopted = useRef(false);
+  /** Settles the notes a relaunch says about its chats (`resumed`, `guessed`, `fresh`) against
+   *  the chats the core put back. */
+  const settleChatNotes = useCallback(
+    (open: readonly OpenChat[]) => {
+      for (const family of CHAT_NOTES) {
+        const field = family.slice("chat-".length) as "resumed" | "guessed" | "fresh";
+        settleNotices(
+          family,
+          open.filter((one) => one[field]).map((one) => `${family}:${one.session}`),
+        );
+      }
+    },
+    [settleNotices],
+  );
   useEffect(() => {
     if (adopted.current) return;
     adopted.current = true;
@@ -742,6 +753,9 @@ export const PlaneView = memo(function PlaneView({
           .then((trouble) => setWouldNotStart(trouble.status === "ok" ? (trouble.data ?? []) : []))
           .catch(() => undefined);
         const open = answer?.status === "ok" ? (answer.data ?? []) : [];
+        // What the relaunch did to each chat is the core's answer: a dismissed note about a chat
+        // that came back some other way, or not at all, is let go (`dismissals.ts`).
+        if (answer?.status === "ok") settleChatNotes(open);
         // Each as it is named now: a record an older charter wrote can hold a view since renamed.
         const back = (viewAnswer?.status === "ok" ? (viewAnswer.data ?? []) : []).map((tab) => {
           const now = viewNamedNow(refOf(tab), tab.title);
@@ -818,7 +832,7 @@ export const PlaneView = memo(function PlaneView({
         setSettled(true);
         setViewsHeard(true);
       });
-  }, [change, plane]);
+  }, [change, plane, settleChatNotes]);
 
   /**
    * The window's view tabs, told to the core whenever they change — so the record brings them
@@ -993,6 +1007,13 @@ export const PlaneView = memo(function PlaneView({
         // Named, never drawn, and never written away (V91c as amended): a dormant pin is the
         // operator's to forget.
         setDormantPins(Array.isArray(said?.missing) ? said.missing : []);
+        // The store's answer is what says a gone pin came back, never a list not read yet
+        // (`dismissals.ts`): a dismissal is let go only when the core answers without it.
+        if (Array.isArray(said?.missing))
+          settleNotices(
+            "pin-dormant",
+            said.missing.map((name) => `pin-dormant:${name}`),
+          );
       })
       // A window that cannot ask draws nothing pinned: the workspace strip holds the one you
       // are in, and the rest are behind its show-more — the arrangement an operator who has
@@ -1001,7 +1022,7 @@ export const PlaneView = memo(function PlaneView({
     return () => {
       gone = true;
     };
-  }, [pinning, plane, sidebar]);
+  }, [pinning, plane, settleNotices, sidebar]);
 
   /**
    * Which workspace each chat is filed under — the strip its tab appears on.
@@ -3166,6 +3187,8 @@ export const PlaneView = memo(function PlaneView({
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (said.status === "error") return { ok: false, refused: said.error };
       const chat = said.data;
+      // A new occurrence: whatever was dismissed about this chat was about the one before.
+      for (const family of CHAT_NOTES) showAgain(`${family}:${chat.session}`);
       resuming.current.set(chat.session, { path, afterFailure, heard: false });
       setStartedIn((was) => ({ ...was, [chat.session]: filedFor(chat.cwd, focused) }));
       setReopened((was) => [...was.filter((one) => one.session !== chat.session), chat]);
@@ -3174,7 +3197,7 @@ export const PlaneView = memo(function PlaneView({
       );
       return { ok: true };
     },
-    [change, focused, plane],
+    [change, focused, plane, showAgain],
   );
 
   // A resumed chat whose harness ended without a word — it could not find the conversation — is
@@ -4431,119 +4454,123 @@ export const PlaneView = memo(function PlaneView({
       {/* **The window's standing lines are Notices** (`Notice.tsx`, V91a–d): each has a way
           out, and `Notice.guard.test.ts` fails on one drawn any other way. Those with nothing
           better to offer yet have Dismiss; NO-3 and NO-4 give them their own. */}
-      {trouble && (
-        <Notice cause="window-trouble" tone="trouble" onDismiss={() => setTrouble(undefined)}>
-          {trouble}
-        </Notice>
-      )}
-
-      {/* What happened to the chat in front when it was put back. Only a chat that came from
-          the record has either, so a chat the operator just opened says nothing. */}
-      {/* Both notes name the chat by what its tab says — `frontTab.name`, the one field the
-          strip prints — and not by its recorded number, which the operator never reads
-          ("5 came back" beside a tab that says "steward 5"). */}
-      {frontTab && frontChat?.resumed && !dismissed.has(`chat-resumed:${frontChat.session}`) && (
-        <Notice
-          cause={`chat-resumed:${frontChat.session}`}
-          onDismiss={() => dismiss(`chat-resumed:${frontChat.session}`)}
-        >
-          <strong>{frontTab.name}</strong> was resumed — conversation{" "}
-          <code>{frontChat.resumed}</code>
-        </Notice>
-      )}
-      {/* What a Resume from a session record had to guess because the record could not say
-          it — its profile, its directory (SI-8e) — said beside what happened, never instead. */}
-      {frontTab && frontChat?.guessed && !dismissed.has(`chat-guessed:${frontChat.session}`) && (
-        <Notice
-          cause={`chat-guessed:${frontChat.session}`}
-          onDismiss={() => dismiss(`chat-guessed:${frontChat.session}`)}
-        >
-          <strong>{frontTab.name}</strong>: {frontChat.guessed}.
-        </Notice>
-      )}
-      {/* Only for a harness. Every chat is a shell until the harness picker lands, and a
-          shell has no conversation to bring back — saying so on every relaunch, forever,
-          is noise about the normal case. */}
-      {frontTab &&
-        frontChat?.fresh &&
-        frontChat.harness &&
-        !dismissed.has(`chat-fresh:${frontChat.session}`) && (
-          <Notice
-            cause={`chat-fresh:${frontChat.session}`}
-            onDismiss={() => dismiss(`chat-fresh:${frontChat.session}`)}
-          >
-            <strong>{frontTab.name}</strong> came back as a new chat: {frontChat.fresh}
+      {/* **Stacked** (V91i): at most two stand under the strip, the most important first, and
+          the rest are behind "+N more" (`NoticeBand`). */}
+      <NoticeBand>
+        {trouble && (
+          <Notice cause="window-trouble" tone="trouble" onDismiss={() => setTrouble(undefined)}>
+            {trouble}
           </Notice>
         )}
 
-      {/* **A smart close that ended on its record** (SI-8f): its tab has gone, so this is where
+        {/* What happened to the chat in front when it was put back. Only a chat that came from
+          the record has either, so a chat the operator just opened says nothing. */}
+        {/* Both notes name the chat by what its tab says — `frontTab.name`, the one field the
+          strip prints — and not by its recorded number, which the operator never reads
+          ("5 came back" beside a tab that says "steward 5"). */}
+        {frontTab && frontChat?.resumed && !dismissed.has(`chat-resumed:${frontChat.session}`) && (
+          <Notice
+            cause={`chat-resumed:${frontChat.session}`}
+            onDismiss={() => dismiss(`chat-resumed:${frontChat.session}`)}
+          >
+            <strong>{frontTab.name}</strong> was resumed — conversation{" "}
+            <code>{frontChat.resumed}</code>
+          </Notice>
+        )}
+        {/* What a Resume from a session record had to guess because the record could not say
+          it — its profile, its directory (SI-8e) — said beside what happened, never instead. */}
+        {frontTab && frontChat?.guessed && !dismissed.has(`chat-guessed:${frontChat.session}`) && (
+          <Notice
+            cause={`chat-guessed:${frontChat.session}`}
+            onDismiss={() => dismiss(`chat-guessed:${frontChat.session}`)}
+          >
+            <strong>{frontTab.name}</strong>: {frontChat.guessed}.
+          </Notice>
+        )}
+        {/* Only for a harness. Every chat is a shell until the harness picker lands, and a
+          shell has no conversation to bring back — saying so on every relaunch, forever,
+          is noise about the normal case. */}
+        {frontTab &&
+          frontChat?.fresh &&
+          frontChat.harness &&
+          !dismissed.has(`chat-fresh:${frontChat.session}`) && (
+            <Notice
+              cause={`chat-fresh:${frontChat.session}`}
+              onDismiss={() => dismiss(`chat-fresh:${frontChat.session}`)}
+            >
+              <strong>{frontTab.name}</strong> came back as a new chat: {frontChat.fresh}
+            </Notice>
+          )}
+
+        {/* **A smart close that ended on its record** (SI-8f): its tab has gone, so this is where
           the window says so — quietly, as news and not as a question, with the record one
           press away in its own view tab (SI-8d). */}
-      {/* **The sandbox's one-time offer** to a project made before it (ADR 0067 §1, V21 1):
+        {/* **The sandbox's one-time offer** to a project made before it (ADR 0067 §1, V21 1):
           a notice like the one below, answered once, never a dialog. */}
-      <SandboxOffer plane={plane} />
-      {savedNotice && (
-        <Notice
-          cause="session-saved"
-          link={
-            savedNotice.record
-              ? {
-                  label: "Open record",
-                  onPress: () => {
-                    const record = savedNotice.record;
-                    setSavedNotice(undefined);
-                    if (record) showView(sessionView(record.path), sessionTitle(record.title));
-                  },
-                }
-              : undefined
-          }
-          onDismiss={() => setSavedNotice(undefined)}
-        >
-          Session saved{savedNotice.record ? ` — ${savedNotice.record.title}` : "."}
-        </Notice>
-      )}
+        <SandboxOffer plane={plane} />
+        {savedNotice && (
+          <Notice
+            cause="session-saved"
+            link={
+              savedNotice.record
+                ? {
+                    label: "Open record",
+                    onPress: () => {
+                      const record = savedNotice.record;
+                      setSavedNotice(undefined);
+                      if (record) showView(sessionView(record.path), sessionTitle(record.title));
+                    },
+                  }
+                : undefined
+            }
+            onDismiss={() => setSavedNotice(undefined)}
+          >
+            Session saved{savedNotice.record ? ` — ${savedNotice.record.title}` : "."}
+          </Notice>
+        )}
 
-      {/* **A pin whose workspace is gone is kept dormant** (V91c as amended): never drawn, since
+        {/* **A pin whose workspace is gone is kept dormant** (V91c as amended): never drawn, since
           a strip that showed it would offer a workspace the project does not have (ADR 0034's
           hazard, one scope down), and never written away. It is drawn again in its place when
           the workspace comes back. Forget is the operator's, with an Undo for this run. */}
-      {dormantPins
-        .filter((name) => !dismissed.has(`pin-dormant:${name}`))
-        .map((name) => (
+        {dormantPins
+          .filter((name) => !dismissed.has(`pin-dormant:${name}`))
+          .map((name) => (
+            <Notice
+              key={name}
+              cause={`pin-dormant:${name}`}
+              fixes={[{ label: "Forget", onPress: () => void forgetDormantPin(name) }]}
+              onDismiss={() => dismiss(`pin-dormant:${name}`)}
+            >
+              {name} is gone, kept dormant: its pin comes back in its place when the workspace does.
+            </Notice>
+          ))}
+        {forgottenPins.map(({ name, after }) => (
           <Notice
             key={name}
-            cause={`pin-dormant:${name}`}
-            fixes={[{ label: "Forget", onPress: () => void forgetDormantPin(name) }]}
-            onDismiss={() => dismiss(`pin-dormant:${name}`)}
+            cause={`pin-forgotten:${name}`}
+            fixes={[{ label: "Undo", onPress: () => void undoForget(name, after) }]}
+            onDismiss={() => setForgottenPins((was) => was.filter((one) => one.name !== name))}
           >
-            {name} is gone, kept dormant: its pin comes back in its place when the workspace does.
+            Forgot the pin to {name}.
           </Notice>
         ))}
-      {forgottenPins.map(({ name, after }) => (
-        <Notice
-          key={name}
-          cause={`pin-forgotten:${name}`}
-          fixes={[{ label: "Undo", onPress: () => void undoForget(name, after) }]}
-          onDismiss={() => setForgottenPins((was) => was.filter((one) => one.name !== name))}
-        >
-          Forgot the pin to {name}.
-        </Notice>
-      ))}
 
-      {/* A memory's Delete, which can be undone for a few seconds (SI-9b, ADR 0065 Q8). */}
-      {memoryEdits.undo}
+        {/* A memory's Delete, which can be undone for a few seconds (SI-9b, ADR 0065 Q8). */}
+        {memoryEdits.undo}
 
-      {wouldNotStart.map(([name, why]) => (
-        <Notice
-          key={name}
-          cause={`chat-did-not-start:${name}`}
-          tone="trouble"
-          onDismiss={() => setWouldNotStart((was) => was.filter(([one]) => one !== name))}
-        >
-          <strong>{name}</strong> did not start ({why}). It is still recorded, and will be tried
-          again at the next launch.
-        </Notice>
-      ))}
+        {wouldNotStart.map(([name, why]) => (
+          <Notice
+            key={name}
+            cause={`chat-did-not-start:${name}`}
+            tone="trouble"
+            onDismiss={() => setWouldNotStart((was) => was.filter(([one]) => one !== name))}
+          >
+            <strong>{name}</strong> did not start ({why}). It is still recorded, and will be tried
+            again at the next launch.
+          </Notice>
+        ))}
+      </NoticeBand>
 
       {/* **The four regions** (ADR 0038): by default the explorer on the left, the
           panes in the middle, what is asking for you on the right, and what the repos are
@@ -5103,6 +5130,9 @@ type Arrived = {
 
 /** A harness started by hand in a shell tab, as its banner needs it (ADR 0062). */
 type ByHandNote = { harness: string; cwd: string | null };
+
+/** The notes a relaunch or a Resume says about a chat, by the family of their cause. */
+const CHAT_NOTES = ["chat-resumed", "chat-guessed", "chat-fresh"] as const;
 
 /**
  * The strip a chat started in `cwd` is filed on until the plane says: the focused workspace's,

@@ -2312,6 +2312,44 @@ h2.sidebar-title .node-icon {
   opacity: 0.8;
 }
 
+/* **The Notices under the strip, stacked** (`NoticeBand`, V91i): two stand, and "+N more" is
+   one quiet line under them, in the band's colour, that opens the rest as a list over the
+   panes — the list is drawn over the work rather than pushing it down, because problems never
+   push the operator's work off the screen. */
+.notice-band-stack {
+  position: relative;
+}
+
+.notice-more {
+  display: block;
+  width: 100%;
+  padding: 0.15rem 0.75rem;
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  color: var(--text-secondary);
+  background: var(--border-subtle);
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.notice-more:hover,
+.notice-more:focus-visible {
+  color: var(--text-primary);
+}
+
+.notice-more-list {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  background: var(--surface-raised);
+  box-shadow: 0 2px 8px var(--overlay-shadow);
+}
+
 /* Quitting asks first, over everything, because it ends every session.
 
    **The scrim and the surface are siblings**, not a box inside a box. Radix portals
