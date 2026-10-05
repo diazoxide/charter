@@ -2604,9 +2604,10 @@ export type MachineWorkspacePin = {
 	/**  The workspace's name, as it was pinned. */
 	name: string,
 	/**
-	 *  Whether the project no longer has a workspace by that name: a **dangling** pin, listed
-	 *  so it can be unpinned. False where the project itself cannot be read, since then
-	 *  nothing is known about its workspaces.
+	 *  Whether the project no longer has a workspace by that name. Such a pin is kept
+	 *  **dormant** (V91c as amended): hidden from the strip, and back in its place when the
+	 *  workspace returns; This machine lists it so it can be forgotten for good. False where
+	 *  the project itself cannot be read, since then nothing is known about its workspaces.
 	 */
 	gone: boolean,
 };

@@ -29,6 +29,8 @@ let channel: string;
 let sent: { cmd: string; args: Record<string, unknown> }[];
 /** The refusal the next action is answered with, if any. */
 let refuse: string | undefined;
+/** What every read of the store waits on: resolved, unless a test holds the reads back. */
+let gate: Promise<void>;
 
 function machine(): ThisMachine {
   return { projects: structuredClone(store), dropped: [], forgetful: null };
@@ -89,11 +91,12 @@ beforeEach(() => {
   channel = "stable";
   sent = [];
   refuse = undefined;
+  gate = Promise.resolve();
   mockIPC(
     (cmd, args) => {
       if (cmd === "plane_at_launch") return { plane: null, from: null, why: "no plane here" };
       if (cmd === "recent_planes") return { planes: [], dropped: [], forgetful: null };
-      if (cmd === "this_machine") return machine();
+      if (cmd === "this_machine") return gate.then(machine);
       if (cmd === "update_channel") return channel;
       if (
         ["forget_project", "revoke_approval", "pin_on_this_machine", "set_update_channel"].includes(
@@ -144,7 +147,7 @@ describe("You › This machine", () => {
     expect(entries("Pins")).toEqual([
       `plane${PLANE}Unpin`,
       "ide in planeUnpin",
-      "renamed in planegoneUnpin",
+      "renamed in planegone, kept dormantForget",
       "docs in planeUnpin",
     ]);
     expect(entries("Approved projects")).toEqual([`plane${PLANE}Revoke`]);
@@ -166,10 +169,10 @@ describe("You › This machine", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("unpins a dangling pin, and its Undo pins it back in its place", async () => {
+  it("forgets a dormant pin, and its Undo pins it back in its place", async () => {
     await thisMachine();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Unpin renamed in plane" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Forget renamed in plane" }));
 
     await waitFor(() =>
       expect(entries("Pins")).toEqual([
@@ -191,7 +194,7 @@ describe("You › This machine", () => {
       expect(entries("Pins")).toEqual([
         `plane${PLANE}Unpin`,
         "ide in planeUnpin",
-        "renamed in planegoneUnpin",
+        "renamed in planegone, kept dormantForget",
         "docs in planeUnpin",
       ]),
     );
@@ -200,6 +203,42 @@ describe("You › This machine", () => {
       args: { path: PLANE, workspace: "renamed", pinned: true, at: 1 },
     });
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
+  it("puts a pin back where it was when it was unpinned, after another unpin settled", async () => {
+    await thisMachine();
+    await screen.findByRole("button", { name: "Unpin ide in plane" });
+    // Reads held back, so both buttons are pressed on the list as first drawn: [ide, renamed,
+    // docs], where docs is third. By its turn ide is gone, and docs is second.
+    let release = () => {};
+    gate = new Promise((done) => {
+      release = done;
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Unpin ide in plane" }));
+    await userEvent.click(screen.getByRole("button", { name: "Unpin docs in plane" }));
+    release();
+    gate = Promise.resolve();
+
+    await waitFor(() =>
+      expect(entries("Pins")).toEqual([
+        `plane${PLANE}Unpin`,
+        "renamed in planegone, kept dormantForget",
+      ]),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() =>
+      expect(entries("Pins")).toEqual([
+        `plane${PLANE}Unpin`,
+        "renamed in planegone, kept dormantForget",
+        "docs in planeUnpin",
+      ]),
+    );
+    expect(sent.at(-1)).toEqual({
+      cmd: "pin_on_this_machine",
+      args: { path: PLANE, workspace: "docs", pinned: true, at: 1 },
+    });
   });
 
   it("revokes an approval, keeping the project in the recents, with no Undo", async () => {
