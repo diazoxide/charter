@@ -22,11 +22,12 @@
 //! handed to nothing. A file can choose among installed plugins; it cannot install one.
 //!
 //! **Pins come before everything** ([`Adapter::pinned`]). Claude Code's are written into every
-//! chat's `--settings`. `charter@inline` is always on, because it carries the hooks and the
+//! chat's `--settings`. `purlis@inline` is always on, because it carries the hooks and the
 //! Bash guard, and a file a chat can write must not be able to switch the guard off.
-//! `charter@charter` is always off, by the operator's ruling of 2026-09-23. `charter-app@inline`,
-//! the bundled plugin's id before it was renamed (#406), is always off too, so a file that still
-//! names it is told the new id. A file
+//! `charter@charter` is always off, by the operator's ruling of 2026-09-23. Every id the bundled
+//! plugin had before it was renamed (`charter-app@inline` until #406, `charter@inline` and the
+//! installed `charter@charter-app` until #1266) is always off too, so a file that still names
+//! one is told the new id, and an old copy never loads beside the new one. A file
 //! that says otherwise is refused by the settings tab's save ([`refusals`]) and, if it gets there
 //! another way, ignored with a sentence ([`Effective::ignored`]).
 //!
@@ -187,29 +188,52 @@ pub struct ClaudeCode;
 
 pub static CLAUDE_CODE: ClaudeCode = ClaudeCode;
 
-/// Claude Code's pins: charter's own plugin on, and off the two it replaced — the Python
-/// charter's, and its own under the id it had before it was renamed (#406). Each matches on
-/// the whole id: `charter@inline` and `charter@charter` are both *named* `charter`.
-static CLAUDE_PINS: [Pin; 3] = [
-    Pin {
-        id: crate::plugin::LOADED_AS,
-        on: true,
-        why: "charter@inline is always on: it is charter's own plugin, and it carries \
-              charter's hooks and the Bash guard",
-    },
-    Pin {
-        id: crate::plugin::SUPERSEDED,
+/// Claude Code's pins: the app's own plugin on, and off every plugin it replaced — the Python
+/// charter's, and its own under each id it had before it was renamed (#406, #1266). Each
+/// matches on the whole id: `charter@inline` and `charter@charter` are both *named* `charter`.
+///
+/// Built once, because each sentence names its ids from [`crate::names`] rather than spelling
+/// them, and a pin's sentence lives as long as the program.
+static CLAUDE_PINS: std::sync::LazyLock<Vec<Pin>> = std::sync::LazyLock::new(|| {
+    let said = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
+    let own = crate::plugin::LOADED_AS;
+    let mut pins = vec![
+        Pin {
+            id: own,
+            on: true,
+            why: said(format!(
+                "{own} is always on: it is charter's own plugin, and it carries charter's hooks \
+                 and the Bash guard"
+            )),
+        },
+        Pin {
+            id: crate::plugin::SUPERSEDED,
+            on: false,
+            why: said(format!(
+                "{} is always off: it is the Python charter's plugin, and a chat the app starts \
+                 carrying it too would have two sets of hooks and two handoff skills",
+                crate::plugin::SUPERSEDED
+            )),
+        },
+    ];
+    pins.extend(crate::plugin::FORMERLY.iter().map(|&(old, new)| Pin {
+        id: old,
         on: false,
-        why: "charter@charter is always off: it is the Python charter's plugin, and a chat \
-              the app starts carrying it too would have two sets of hooks and two handoff skills",
-    },
-    Pin {
-        id: crate::plugin::FORMERLY,
-        on: false,
-        why: "charter-app@inline is always off: it is the id charter's own plugin had before \
-              it was renamed, and charter's own plugin is charter@inline",
-    },
-];
+        why: said(if new == own {
+            format!(
+                "{old} is always off: it is an id charter's own plugin had before it was \
+                 renamed, and charter's own plugin is {own}"
+            )
+        } else {
+            format!(
+                "{old} is always off: it is the id the copy `charter plugin install` wrote had \
+                 before the plugin was renamed; that copy is {new} now, and a chat the app \
+                 starts loads {own}"
+            )
+        }),
+    }));
+    pins
+});
 
 impl Adapter for ClaudeCode {
     fn harness(&self) -> &'static str {
@@ -276,7 +300,7 @@ impl Adapter for ClaudeCode {
     }
 
     fn pinned(&self) -> &'static [Pin] {
-        &CLAUDE_PINS
+        CLAUDE_PINS.as_slice()
     }
 }
 

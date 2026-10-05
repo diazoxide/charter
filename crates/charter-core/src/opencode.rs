@@ -70,12 +70,18 @@
 
 use std::path::{Path, PathBuf};
 
-/// Where the shim sits inside the bundled plugin directory ([`crate::plugin`]). Claude Code
-/// reads only the directories it knows in a plugin, so this one rides beside them unread.
-pub const SHIM_IN_BUNDLE: &str = "opencode/charter.ts";
+/// The folder the shim sits in inside the bundled plugin directory ([`crate::plugin`]). Claude
+/// Code reads only the directories it knows in a plugin, so this one rides beside them unread.
+pub const DIR_IN_BUNDLE: &str = "opencode";
 
-/// The shim's file name, in the bundle and in opencode's plugin directory alike.
-pub const FILE_NAME: &str = crate::names::OPENCODE_SHIM.reads[0];
+/// The shim's file name, in the bundle and in opencode's plugin directory alike (#1266: it was
+/// `charter.ts`; `charter plugin install` takes a shim of its own at that name away).
+pub const FILE_NAME: &str = crate::names::OPENCODE_SHIM.write;
+
+/// Where the shim is in the bundled plugin at `bundle`.
+pub fn shim_in(bundle: &Path) -> PathBuf {
+    bundle.join(DIR_IN_BUNDLE).join(FILE_NAME)
+}
 
 /// The variable opencode reads a whole config from, merged over every other config it reads.
 pub const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";

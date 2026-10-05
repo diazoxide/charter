@@ -42,7 +42,7 @@ impl HarnessAdapter for Opencode {
     ) -> StateHooks {
         let Some(shim) = kit
             .plugin
-            .map(|plugin| plugin.join(crate::opencode::SHIM_IN_BUNDLE))
+            .map(crate::opencode::shim_in)
             .filter(|shim| shim.is_file())
         else {
             return StateHooks::None;
@@ -219,7 +219,7 @@ mod tests {
         // HP-7: opencode merges the config in OPENCODE_CONFIG_CONTENT key by key, so the server
         // sits beside the operator's own and nothing is written.
         let bundle = tempfile::tempdir().expect("a bundle");
-        let shim = bundle.path().join(crate::opencode::SHIM_IN_BUNDLE);
+        let shim = crate::opencode::shim_in(bundle.path());
         std::fs::create_dir_all(shim.parent().expect("a parent")).expect("dirs");
         std::fs::write(&shim, "").expect("the shim");
         let StateHooks::ThisSessionOnly { env, .. } = ADAPTER.arm(
@@ -240,7 +240,7 @@ mod tests {
             .expect("the session config");
         let config: serde_json::Value = serde_json::from_str(config).expect("JSON");
         assert_eq!(
-            config["mcp"]["charter"],
+            config["mcp"]["purlis"],
             serde_json::json!({"type": "local", "command": ["/bin/charter", "mcp"], "enabled": true})
         );
         assert!(config["plugin"].is_array(), "{config}");

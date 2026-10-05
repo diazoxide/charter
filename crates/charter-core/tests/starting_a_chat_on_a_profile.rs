@@ -379,10 +379,7 @@ fn an_opencode_chat_is_armed_through_its_environment_and_nothing_on_its_line() {
     // charter's own words, exactly.
     let plane = Plane::new();
     a_wrapper_profile(&plane, "opencode", &["oc-work"]);
-    let shim = plane
-        .root()
-        .join("plugin")
-        .join(charter_core::opencode::SHIM_IN_BUNDLE);
+    let shim = charter_core::opencode::shim_in(&plane.root().join("plugin"));
     fs::create_dir_all(shim.parent().unwrap()).unwrap();
     fs::write(
         &shim,
@@ -408,7 +405,7 @@ fn an_opencode_chat_is_armed_through_its_environment_and_nothing_on_its_line() {
         .find(|(name, _)| name == charter_core::opencode::CONFIG_ENV)
         .map(|(_, value)| value.clone())
         .expect("the shim is handed over");
-    assert!(config.contains("opencode/charter.ts"), "{config}");
+    assert!(config.contains("opencode/purlis.ts"), "{config}");
 }
 
 #[test]
@@ -729,9 +726,11 @@ fn a_claude_code_chat_is_started_with_exactly_the_plugins_its_project_chose() {
     assert_eq!(
         settings["enabledPlugins"],
         serde_json::json!({
-            "charter@inline": true,
+            "purlis@inline": true,
             "charter@charter": false,
+            "charter@inline": false,
             "charter-app@inline": false,
+            "charter@charter-app": false,
             "figma@official": false,
             "serena@official": true,
         })
@@ -834,9 +833,11 @@ fn a_chat_started_in_a_workspace_is_handed_that_workspaces_plugin_choices_betwee
     assert_eq!(
         enabled(alpha.clone()),
         serde_json::json!({
-            "charter@inline": true,
+            "purlis@inline": true,
             "charter@charter": false,
+            "charter@inline": false,
             "charter-app@inline": false,
+            "charter@charter-app": false,
             "figma@official": false,
             "humanizer@h": false,
             "serena@official": true,
@@ -846,9 +847,11 @@ fn a_chat_started_in_a_workspace_is_handed_that_workspaces_plugin_choices_betwee
     assert_eq!(
         enabled(plane.root().to_path_buf()),
         serde_json::json!({
-            "charter@inline": true,
+            "purlis@inline": true,
             "charter@charter": false,
+            "charter@inline": false,
             "charter-app@inline": false,
+            "charter@charter-app": false,
             "figma@official": true,
             "serena@official": true,
         }),

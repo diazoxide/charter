@@ -3893,6 +3893,9 @@ writes is the next heading's `AGENTS.md`, in a piece only (ADR 0085).
 
 ### `~/.config/opencode/plugin/charter.ts` (`$XDG_CONFIG_HOME` honoured)
 
+- **Since the rename (#1266):** `charter plugin install` writes its guard as
+  `plugin/purlis.ts` and removes this file when charter or the Python charter wrote it, so
+  opencode never loads two.
 - **Format:** TypeScript module, generated from `_SHIM_TEMPLATE`
   (`charter/harness/opencode.py:244`, rendered at `charter/harness/opencode.py:403`).
 - **Status:** **stable** — opencode loads it; it is what sets `$CHARTER_HARNESS` and routes

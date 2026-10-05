@@ -3056,13 +3056,19 @@ fn migrate(undo: bool) -> ExitCode {
         .and_then(|cwd| charter_core::plane::find_root(&cwd).ok())
         .into_iter()
         .collect();
-    let Some(local) = Local::of_this_machine(&here) else {
+    let Some(mut local) = Local::of_this_machine(&here) else {
         eprintln!(
             "charter: cannot tell where this machine's config home is, so there is nowhere to \
              journal a move; nothing was moved"
         );
         return ExitCode::FAILURE;
     };
+    // The harness plugin moves with the rest, installed from this charter and the plugin
+    // shipped beside it, as `plugin install` installs it (RN-8). Without them the plugin is
+    // left alone, and the undo says it could not put it back.
+    local.plugin = charter_core::doctor::fix::this_machine(None)
+        .ok()
+        .filter(|m| m.bundle.is_some());
     let moved = if undo {
         renamelocal::undo(&local, &Seams::real())
     } else {

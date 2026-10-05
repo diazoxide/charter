@@ -466,13 +466,13 @@ fn neither_file_may_turn_charters_own_plugin_off() {
         let why = refusals(
             dir.path(),
             which,
-            "[harness_plugins.claude]\n\"charter@inline\" = false\n",
+            "[harness_plugins.claude]\n\"purlis@inline\" = false\n",
         );
         assert_eq!(
             why,
             [format!(
-                "harness_plugins.claude.\"charter@inline\" in {} cannot be false: \
-                 charter@inline is always on: it is charter's own plugin, and it carries \
+                "harness_plugins.claude.\"purlis@inline\" in {} cannot be false: \
+                 purlis@inline is always on: it is charter's own plugin, and it carries \
                  charter's hooks and the Bash guard",
                 which.file()
             )],

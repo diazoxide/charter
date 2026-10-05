@@ -198,7 +198,13 @@ fn the_pure_flag_is_seen_with_a_value_attached() {
 
 #[test]
 fn the_shim_file_is_named_the_same_in_the_bundle_and_in_opencodes_directory() {
-    assert!(SHIM_IN_BUNDLE.ends_with(&format!("/{FILE_NAME}")));
+    let bundle = Path::new("/app/plugin");
+    assert_eq!(
+        shim_in(bundle).file_name(),
+        Some(std::ffi::OsStr::new(FILE_NAME))
+    );
+    // #1266: the shim is `purlis.ts` now, in the bundle and in opencode's folder alike.
+    assert_eq!(FILE_NAME, "purlis.ts");
 }
 
 #[test]

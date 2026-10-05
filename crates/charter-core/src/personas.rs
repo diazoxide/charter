@@ -247,8 +247,10 @@ pub fn valid_name(name: &str) -> bool {
 
 /// Persona names charter keeps for itself. `charter` is one because `charter/<id>` is how its
 /// own curation actions are named (ADR 0061): a persona called that could declare
-/// `charter/<id>` for an id no built-in uses and pass it off as one.
-pub const RESERVED: [&str; 1] = ["charter"];
+/// `charter/<id>` for an id no built-in uses and pass it off as one. The harness plugin's name
+/// is the other (#1266): its skills are `purlis:<skill>`, and a persona named after it would
+/// read as one of them.
+pub const RESERVED: [&str; 2] = ["charter", crate::names::PLUGIN_NAME.write];
 
 /// Why `name` is one of [`RESERVED`], or `None`. Not part of [`shape_refusal`]: a persona that
 /// already has the name must still load, lint and be removed, so only `persona create` refuses
@@ -259,10 +261,17 @@ pub fn reserved_refusal(name: &str) -> Option<String> {
         .iter()
         .find(|r| r.eq_ignore_ascii_case(name))
         .map(|r| {
-            format!(
-                "the persona name '{r}' is reserved — `{r}/<id>` names charter's own actions, \
-                 so this one would pass as a built-in"
-            )
+            if *r == crate::names::PLUGIN_NAME.write {
+                format!(
+                    "the persona name '{r}' is reserved — `{r}:<skill>` names charter's own \
+                     skills, so this one would pass as a built-in"
+                )
+            } else {
+                format!(
+                    "the persona name '{r}' is reserved — `{r}/<id>` names charter's own \
+                     actions, so this one would pass as a built-in"
+                )
+            }
         })
 }
 

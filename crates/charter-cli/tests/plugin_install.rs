@@ -61,10 +61,7 @@ fn install_wires_both_harnesses_to_this_charter_and_a_second_run_changes_nothing
     let text = said(&out);
     assert!(text.contains("claude:\n"), "{text}");
     assert!(text.contains("codex:\n"), "{text}");
-    assert!(
-        text.contains("done     enable charter@charter-app"),
-        "{text}"
-    );
+    assert!(text.contains("done     enable purlis@purlis-app"), "{text}");
 
     // The command line itself, `purlis`, though the install ran through its `charter` alias:
     // a hook runs the binary, not the alias that handed it on (RN-3).
@@ -83,7 +80,7 @@ fn install_wires_both_harnesses_to_this_charter_and_a_second_run_changes_nothing
     );
     let settings = m.read("home/.claude/settings.json");
     assert!(
-        settings.contains("\"charter@charter-app\": true"),
+        settings.contains("\"purlis@purlis-app\": true"),
         "{settings}"
     );
     assert!(!settings.contains("\"charter@charter\""), "{settings}");
@@ -101,7 +98,7 @@ fn a_dry_run_writes_nothing_and_uninstall_takes_it_all_back() {
     let m = Machine::new();
     let dry = m.charter(&["plugin", "install", "--dry-run"]);
     assert_eq!(dry.status.code(), Some(0));
-    assert!(said(&dry).contains("would    enable charter@charter-app"));
+    assert!(said(&dry).contains("would    enable purlis@purlis-app"));
     assert!(!m.root.join("home/.claude/settings.json").exists());
     assert!(!m.root.join("home/.codex/config.toml").exists());
     assert!(!m.root.join("config/charter/plugin").exists());
@@ -112,7 +109,7 @@ fn a_dry_run_writes_nothing_and_uninstall_takes_it_all_back() {
     assert!(!m.root.join("config/charter/plugin").exists());
     assert!(
         !m.read("home/.claude/settings.json")
-            .contains("charter@charter-app")
+            .contains("purlis@purlis-app")
     );
     assert!(
         !m.read("home/.codex/config.toml")
@@ -154,7 +151,7 @@ fn install_puts_the_opencode_guard_where_opencode_reads_plugins_and_uninstall_ta
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_purlis"))
         .canonicalize()
         .unwrap();
-    let shim = m.read("home/.config/opencode/plugin/charter.ts");
+    let shim = m.read("home/.config/opencode/plugin/purlis.ts");
     assert!(shim.starts_with(charter_core::opencode::MARK), "{shim}");
     assert_eq!(
         charter_core::opencode::binary_in(&shim),
@@ -169,7 +166,7 @@ fn install_puts_the_opencode_guard_where_opencode_reads_plugins_and_uninstall_ta
     assert_eq!(gone.status.code(), Some(0), "{}", said(&gone));
     assert!(
         !m.root
-            .join("home/.config/opencode/plugin/charter.ts")
+            .join("home/.config/opencode/plugin/purlis.ts")
             .exists()
     );
 }
@@ -180,7 +177,7 @@ fn install_refuses_to_replace_an_opencode_plugin_charter_did_not_write() {
     let dir = m.root.join("home/.config/opencode/plugin");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("charter.ts"),
+        dir.join("purlis.ts"),
         "export const Theirs = async () => ({})\n",
     )
     .unwrap();
@@ -193,7 +190,32 @@ fn install_refuses_to_replace_an_opencode_plugin_charter_did_not_write() {
         said(&out)
     );
     assert_eq!(
+        m.read("home/.config/opencode/plugin/purlis.ts"),
+        "export const Theirs = async () => ({})\n"
+    );
+}
+
+#[test]
+fn a_file_at_the_shims_old_name_that_charter_did_not_write_is_left_beside_it() {
+    // #1266: the shim is `purlis.ts` now. A `charter.ts` of charter's own is taken away so
+    // opencode never loads two; anybody else's is not charter's to remove.
+    let m = Machine::new();
+    let dir = m.root.join("home/.config/opencode/plugin");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("charter.ts"),
+        "export const Theirs = async () => ({})\n",
+    )
+    .unwrap();
+
+    let out = m.charter(&["plugin", "install", "--harness", "opencode"]);
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    assert_eq!(
         m.read("home/.config/opencode/plugin/charter.ts"),
         "export const Theirs = async () => ({})\n"
+    );
+    assert!(
+        m.read("home/.config/opencode/plugin/purlis.ts")
+            .starts_with("// purlis's opencode plugin")
     );
 }

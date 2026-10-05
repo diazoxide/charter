@@ -181,6 +181,20 @@ pub(crate) struct Shipped {
     pub git_hooks: Option<charter_core::githooks::GitHooks>,
 }
 
+/// What rename-local installs the harness plugin from at launch (RN-8): this app's `charter`
+/// and its bundled plugin, on the build that brings the installed plugin up to date on its own
+/// (`plugin_install::refreshes_on_its_own`); `None` elsewhere, and the plugin is left alone.
+#[cfg(not(feature = "e2e"))]
+fn plugin_to_move(app: &tauri::AppHandle) -> Option<charter_core::plugin_install::Machine> {
+    use charter_core::plugin_install as install;
+    if !install::refreshes_on_its_own(charter_core::fence::FENCED, cfg!(debug_assertions)) {
+        return None;
+    }
+    let binary = charter_binary()?;
+    let binary = binary.canonicalize().unwrap_or(binary);
+    install::Machine::from_env(binary, Some(bundled_plugin(app)?)).ok()
+}
+
 /// Re-run `charter plugin install` for each harness whose installed copy runs this app's
 /// `charter` and is out of date (`charter_core::plugin_install::refresh` has the rule), on a
 /// thread of its own. Said on standard error, as `charter plugin install` says it; a harness
@@ -2265,7 +2279,10 @@ pub fn run() {
             // else of charter's still running makes it wait for the next launch (D-RN5-11).
             // Off in the scenario build, whose specs name the old folders (D-RN5-7).
             #[cfg(not(feature = "e2e"))]
-            if let Some(renamed) = charter_core::renamelocal::at_launch(&app.config().identifier) {
+            if let Some(renamed) = charter_core::renamelocal::at_launch(
+                &app.config().identifier,
+                plugin_to_move(app.handle()),
+            ) {
                 log_the_rename(&renamed);
             }
             // From here on this app holds the config home: no rename-local of a later launch,
@@ -2833,9 +2850,7 @@ mod tests {
 
     /// The bundled opencode shim, in the repository.
     fn opencode_shim_file() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(PLUGIN_DIR)
-            .join(charter_core::opencode::SHIM_IN_BUNDLE)
+        charter_core::opencode::shim_in(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(PLUGIN_DIR))
     }
 
     /// Writes the bundled opencode shim from `charter_core::opencode`, for when it changes:

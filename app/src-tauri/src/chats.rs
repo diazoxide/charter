@@ -2268,7 +2268,7 @@ mod tests {
         // charter writes, reaching the network through charter's proxy alone (ADR 0067 §2).
         let plane = a_sandboxed_plane();
         let plugin = plane.path().join("plugin");
-        let shim = plugin.join(charter_core::opencode::SHIM_IN_BUNDLE);
+        let shim = charter_core::opencode::shim_in(&plugin);
         std::fs::create_dir_all(shim.parent().expect("a parent")).expect("the bundle");
         std::fs::write(&shim, "export default {}\n").expect("the shim");
         let socket = plane.path().join(".charter/app/hooks.sock");
@@ -4589,9 +4589,11 @@ mod tests {
         assert_eq!(
             settings["enabledPlugins"],
             serde_json::json!({
-                "charter@inline": true,
+                "purlis@inline": true,
                 "charter@charter": false,
+                "charter@inline": false,
                 "charter-app@inline": false,
+                "charter@charter-app": false,
                 "figma@official": false,
             }),
             "{argv:?}"

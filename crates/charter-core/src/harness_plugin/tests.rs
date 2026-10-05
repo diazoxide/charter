@@ -122,7 +122,7 @@ fn a_plugin_a_file_names_that_is_not_installed_is_listed_and_handed_to_nothing()
     assert_eq!((it.wanted, it.source), (Some(true), Source::Shared));
     assert_eq!(
         chosen(&CLAUDE_CODE, &all),
-        BTreeMap::from(pins(&CLAUDE_CODE))
+        pins(&CLAUDE_CODE).into_iter().collect::<BTreeMap<_, _>>()
     );
 }
 
@@ -179,16 +179,16 @@ fn a_workspace_that_names_nothing_leaves_the_project_answer_as_it_was() {
 
 #[test]
 fn a_workspace_that_turns_a_pin_the_wrong_way_is_ignored_by_its_own_file_and_key() {
-    let all = claude_in(&[], "", &ws(&[("charter@inline", false)]), "");
-    let own = row(&all, "charter@inline");
+    let all = claude_in(&[], "", &ws(&[("purlis@inline", false)]), "");
+    let own = row(&all, "purlis@inline");
     assert_eq!((own.wanted, own.source), (Some(true), Source::Default));
     assert_eq!(
         own.ignored,
         [Ignored {
             source: Source::Workspace,
             why: "workspaces/alpha/workspace.json sets \
-                  settings.harness_plugins.claude.\"charter@inline\" to false, and \
-                  charter@inline is always on: it is charter's own plugin, and it carries \
+                  settings.harness_plugins.claude.\"purlis@inline\" to false, and \
+                  purlis@inline is always on: it is charter's own plugin, and it carries \
                   charter's hooks and the Bash guard"
                 .to_owned(),
         }]
@@ -222,21 +222,19 @@ fn a_workspaces_choice_for_a_harness_that_cannot_apply_is_said_ignored_and_hande
 // What no file moves
 // -------------------------------------------------------------------------------------
 
-fn pins(adapter: &dyn Adapter) -> [(String, bool); 3] {
-    let pinned = adapter.pinned();
-    assert_eq!(pinned.len(), 3, "{pinned:?}");
-    [
-        (pinned[0].id.to_owned(), pinned[0].on),
-        (pinned[1].id.to_owned(), pinned[1].on),
-        (pinned[2].id.to_owned(), pinned[2].on),
-    ]
+fn pins(adapter: &dyn Adapter) -> Vec<(String, bool)> {
+    adapter
+        .pinned()
+        .iter()
+        .map(|pin| (pin.id.to_owned(), pin.on))
+        .collect()
 }
 
 #[test]
 fn charters_own_plugin_is_always_on_and_the_old_one_always_off() {
     let all = claude(&["charter@charter"], "", "");
-    assert_eq!(row(&all, "charter@inline").wanted, Some(true));
-    assert!(row(&all, "charter@inline").pinned.is_some());
+    assert_eq!(row(&all, "purlis@inline").wanted, Some(true));
+    assert!(row(&all, "purlis@inline").pinned.is_some());
     assert_eq!(row(&all, "charter@charter").wanted, Some(false));
     assert!(row(&all, "charter@charter").pinned.is_some());
 }
@@ -245,17 +243,17 @@ fn charters_own_plugin_is_always_on_and_the_old_one_always_off() {
 fn no_file_can_turn_charters_own_plugin_off_or_the_old_one_on() {
     let all = claude(
         &["charter@charter"],
-        "[harness_plugins.claude]\n\"charter@inline\" = false\n",
+        "[harness_plugins.claude]\n\"purlis@inline\" = false\n",
         "[harness_plugins.claude]\n\"charter@charter\" = true\n",
     );
-    let own = row(&all, "charter@inline");
+    let own = row(&all, "purlis@inline");
     assert_eq!((own.wanted, own.source), (Some(true), Source::Default));
     assert_eq!(
         own.ignored,
         [Ignored {
             source: Source::Shared,
-            why: "charter.toml sets harness_plugins.claude.\"charter@inline\" to false, and \
-                  charter@inline is always on: it is charter's own plugin, and it carries \
+            why: "charter.toml sets harness_plugins.claude.\"purlis@inline\" to false, and \
+                  purlis@inline is always on: it is charter's own plugin, and it carries \
                   charter's hooks and the Bash guard"
                 .to_owned(),
         }]
@@ -266,40 +264,91 @@ fn no_file_can_turn_charters_own_plugin_off_or_the_old_one_on() {
     assert_eq!(old.ignored[0].source, Source::Local);
 
     let chosen = chosen(&CLAUDE_CODE, &all);
-    assert_eq!(chosen.get("charter@inline"), Some(&true));
+    assert_eq!(chosen.get("purlis@inline"), Some(&true));
     assert_eq!(chosen.get("charter@charter"), Some(&false));
 }
 
 #[test]
 fn claude_codes_pins_are_charters_own_on_and_the_two_it_replaced_off() {
     assert_eq!(
-        BTreeMap::from(pins(&CLAUDE_CODE)),
+        pins(&CLAUDE_CODE).into_iter().collect::<BTreeMap<_, _>>(),
         BTreeMap::from([
-            ("charter@inline".to_owned(), true),
+            ("purlis@inline".to_owned(), true),
             ("charter@charter".to_owned(), false),
             ("charter-app@inline".to_owned(), false),
+            ("charter@inline".to_owned(), false),
+            ("charter@charter-app".to_owned(), false),
         ])
     );
+    assert_eq!(pins(&CLAUDE_CODE).len(), 5);
+}
+
+#[test]
+fn every_id_the_plugin_had_before_purlis_is_pinned_off_with_the_id_that_replaced_it() {
+    // #1266 (V93m), ADR 0056's FORMERLY: the old plugins are named `charter`, the new one
+    // `purlis`, so `--plugin-dir` no longer wins the name over them; each is turned off by its
+    // whole id, and a file that turns one on is told the id it is now.
+    let all = claude(
+        &["charter@charter-app"],
+        "[harness_plugins.claude]\n\"charter@inline\" = true\n",
+        "[harness_plugins.claude]\n\"charter@charter-app\" = true\n",
+    );
+    let inline = row(&all, "charter@inline");
+    assert_eq!(
+        (inline.wanted, inline.source),
+        (Some(false), Source::Default)
+    );
+    assert_eq!(
+        inline.ignored,
+        [Ignored {
+            source: Source::Shared,
+            why: "charter.toml sets harness_plugins.claude.\"charter@inline\" to true, and \
+                  charter@inline is always off: it is an id charter's own plugin had before it \
+                  was renamed, and charter's own plugin is purlis@inline"
+                .to_owned(),
+        }]
+    );
+    let copy = row(&all, "charter@charter-app");
+    assert_eq!((copy.wanted, copy.source), (Some(false), Source::Default));
+    assert_eq!(copy.ignored.len(), 1, "{:?}", copy.ignored);
+    assert!(
+        copy.ignored[0].why.ends_with(
+            "charter@charter-app is always off: it is the id the copy `charter plugin install` \
+             wrote had before the plugin was renamed; that copy is purlis@purlis-app now, and a \
+             chat the app starts loads purlis@inline"
+        ),
+        "{}",
+        copy.ignored[0].why
+    );
+    let chosen = chosen(&CLAUDE_CODE, &all);
+    assert_eq!(chosen.get("purlis@inline"), Some(&true));
+    for old in [
+        "charter@inline",
+        "charter-app@inline",
+        "charter@charter-app",
+    ] {
+        assert_eq!(chosen.get(old), Some(&false), "{old}");
+    }
 }
 
 #[test]
 fn turning_the_python_plugin_off_never_turns_charters_own_off() {
     // #406: both plugins are *named* `charter`. Only the marketplace tells them apart, and
     // a file that turns `charter@charter` off, or a machine that has it installed, must leave
-    // `charter@inline` on.
+    // `purlis@inline` on.
     let all = claude(
         &["charter@charter"],
         "[harness_plugins.claude]\n\"charter@charter\" = false\n",
         "[harness_plugins.claude]\n\"charter@charter\" = false\n",
     );
-    let own = row(&all, "charter@inline");
+    let own = row(&all, "purlis@inline");
     assert_eq!((own.wanted, own.source), (Some(true), Source::Default));
     assert!(own.ignored.is_empty(), "{:?}", own.ignored);
     let old = row(&all, "charter@charter");
     assert_eq!(old.wanted, Some(false));
     assert!(old.ignored.is_empty(), "{:?}", old.ignored);
     let chosen = chosen(&CLAUDE_CODE, &all);
-    assert_eq!(chosen.get("charter@inline"), Some(&true));
+    assert_eq!(chosen.get("purlis@inline"), Some(&true));
     assert_eq!(chosen.get("charter@charter"), Some(&false));
     assert_eq!(
         refusals(
@@ -314,7 +363,7 @@ fn turning_the_python_plugin_off_never_turns_charters_own_off() {
 fn turning_charters_own_plugin_on_never_turns_the_python_one_on() {
     let all = claude(
         &["charter@charter"],
-        "[harness_plugins.claude]\n\"charter@inline\" = true\n",
+        "[harness_plugins.claude]\n\"purlis@inline\" = true\n",
         "",
     );
     let old = row(&all, "charter@charter");
@@ -326,7 +375,7 @@ fn turning_charters_own_plugin_on_never_turns_the_python_one_on() {
     );
     assert_eq!(
         refusals(
-            "[harness_plugins.claude]\n\"charter@inline\" = true\n",
+            "[harness_plugins.claude]\n\"purlis@inline\" = true\n",
             "charter.toml"
         ),
         Vec::<String>::new()
@@ -352,12 +401,12 @@ fn a_file_that_still_names_the_plugin_by_its_old_id_is_told_its_new_one() {
         [Ignored {
             source: Source::Shared,
             why: "charter.toml sets harness_plugins.claude.\"charter-app@inline\" to true, and \
-                  charter-app@inline is always off: it is the id charter's own plugin had before \
-                  it was renamed, and charter's own plugin is charter@inline"
+                  charter-app@inline is always off: it is an id charter's own plugin had before \
+                  it was renamed, and charter's own plugin is purlis@inline"
                 .to_owned(),
         }]
     );
-    let own = row(&all, "charter@inline");
+    let own = row(&all, "purlis@inline");
     assert_eq!(own.wanted, Some(true));
     assert_eq!(
         refusals(
@@ -366,8 +415,8 @@ fn a_file_that_still_names_the_plugin_by_its_old_id_is_told_its_new_one() {
         ),
         [
             "harness_plugins.claude.\"charter-app@inline\" in charter.toml cannot be true: \
-          charter-app@inline is always off: it is the id charter's own plugin had before it was \
-          renamed, and charter's own plugin is charter@inline"
+          charter-app@inline is always off: it is an id charter's own plugin had before it was \
+          renamed, and charter's own plugin is purlis@inline"
                 .to_owned()
         ]
     );
@@ -391,7 +440,9 @@ fn a_chat_gets_exactly_the_installed_plugins_a_file_decided_and_the_pins() {
         chosen(&CLAUDE_CODE, &all),
         BTreeMap::from([
             ("charter-app@inline".to_owned(), false),
-            ("charter@inline".to_owned(), true),
+            ("charter@inline".to_owned(), false),
+            ("charter@charter-app".to_owned(), false),
+            ("purlis@inline".to_owned(), true),
             ("charter@charter".to_owned(), false),
             ("figma@official".to_owned(), false),
             ("serena@official".to_owned(), false),
@@ -632,7 +683,7 @@ fn a_well_formed_table_is_refused_nothing() {
 #[test]
 fn a_file_is_refused_a_harness_charter_does_not_know_a_value_that_is_not_bool_and_a_pin() {
     let got = refusals(
-        "[harness_plugins.vim]\n\"a@b\" = true\n\n[harness_plugins.claude]\n\"figma@official\" = \"yes\"\n\"charter@inline\" = false\n",
+        "[harness_plugins.vim]\n\"a@b\" = true\n\n[harness_plugins.claude]\n\"figma@official\" = \"yes\"\n\"purlis@inline\" = false\n",
         "charter.local.toml",
     );
     assert_eq!(
@@ -643,8 +694,8 @@ fn a_file_is_refused_a_harness_charter_does_not_know_a_value_that_is_not_bool_an
                 .to_owned(),
             "harness_plugins.claude.\"figma@official\" in charter.local.toml is not true or false"
                 .to_owned(),
-            "harness_plugins.claude.\"charter@inline\" in charter.local.toml cannot be false: \
-             charter@inline is always on: it is charter's own plugin, and it carries \
+            "harness_plugins.claude.\"purlis@inline\" in charter.local.toml cannot be false: \
+             purlis@inline is always on: it is charter's own plugin, and it carries \
              charter's hooks and the Bash guard"
                 .to_owned(),
         ]
@@ -703,7 +754,7 @@ fn a_workspace_that_chooses_in_a_project_that_does_not_is_handed_its_choice_at_t
         Some(&ws(&[("figma@official", false)])),
         r#"{"version": 2, "plugins": {"figma@official": [{"scope": "user"}]}}"#,
     );
-    let mut want = BTreeMap::from(pins(&CLAUDE_CODE));
+    let mut want = pins(&CLAUDE_CODE).into_iter().collect::<BTreeMap<_, _>>();
     want.insert("figma@official".to_owned(), false);
     assert_eq!(got, want);
 }
@@ -712,7 +763,10 @@ fn a_workspace_that_chooses_in_a_project_that_does_not_is_handed_its_choice_at_t
 fn a_project_that_chooses_nothing_starts_its_chats_with_the_pins_and_reads_no_record() {
     // The record here is not JSON: had it been read, the listing would have failed. It was not,
     // and the answer is the pins, as every chat before this carried.
-    assert_eq!(start_with("", "{"), BTreeMap::from(pins(&CLAUDE_CODE)));
+    assert_eq!(
+        start_with("", "{"),
+        pins(&CLAUDE_CODE).into_iter().collect::<BTreeMap<_, _>>()
+    );
 }
 
 #[test]
@@ -721,7 +775,7 @@ fn a_project_that_chooses_is_handed_what_the_chats_own_record_has_installed() {
         "[harness_plugins.claude]\n\"figma@official\" = false\n\"acme@corp\" = true\n",
         r#"{"version": 2, "plugins": {"figma@official": [{"scope": "user"}]}}"#,
     );
-    let mut want = BTreeMap::from(pins(&CLAUDE_CODE));
+    let mut want = pins(&CLAUDE_CODE).into_iter().collect::<BTreeMap<_, _>>();
     want.insert("figma@official".to_owned(), false);
     assert_eq!(got, want);
 }
@@ -797,7 +851,10 @@ fn a_project_that_chooses_nothing_never_opens_the_harnesss_record() {
         !read_it,
         "the record was opened for a project that chooses nothing"
     );
-    assert_eq!(got, BTreeMap::from(pins(&CLAUDE_CODE)));
+    assert_eq!(
+        got,
+        pins(&CLAUDE_CODE).into_iter().collect::<BTreeMap<_, _>>()
+    );
 }
 
 #[test]
