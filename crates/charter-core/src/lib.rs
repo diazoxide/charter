@@ -74,6 +74,7 @@ pub mod manifest;
 pub mod mdsection;
 pub mod memscope;
 pub mod memstore;
+pub mod names;
 pub mod netlog;
 pub mod news;
 pub mod noharness;
