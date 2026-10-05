@@ -19,10 +19,12 @@
 //!   checks pass, pinned to the pushed commit.
 //!
 //! **A request mode never pushes to the default branch or to the PR's base.** A clone standing on
-//! either gets a branch of its own first, `charter/<workspace>/<short-sha>`, created at HEAD
+//! either gets a branch of its own first, `purlis/<workspace>/<short-sha>`, created at HEAD
 //! and pushed instead. The clone stays where it is: a save commits on the branch the repo is
 //! on, and nothing moves an agent's checkout under it. The next save from there reuses that
-//! branch while it is an ancestor of HEAD, so one pull request collects the saves.
+//! branch while it is an ancestor of HEAD, so one pull request collects the saves — a
+//! `charter/<workspace>/…` branch made before the rename included, so its open pull request
+//! carries on rather than being opened a second time (V93j).
 //!
 //! # What it does not do
 //!
@@ -34,7 +36,8 @@
 //!   refuses by a narrower rule instead, [`secret_files`]: a file named like a credential, or a
 //!   private key or a forge token in anything staged (ADR 0051).
 //! - **Nobody else's pull request.** An open PR from the same branch that charter did not open
-//!   — its head is not under `charter/` and its body has no [`pr::MARKER`] — keeps its title,
+//!   — its head is not under `purlis/` or `charter/` and its body has no [`pr::MARKER`], in
+//!   either spelling — keeps its title,
 //!   its description and its merging; the save names it and leaves it.
 //!
 //! # A session mid-turn
@@ -638,11 +641,20 @@ fn commit_push(
 
 /// The branch a request-mode save pushes when the clone stands on its PR's base or its default
 /// branch: one an earlier save of this repo pushed, while HEAD still descends from it, else
-/// a fresh `charter/<workspace>/<short-sha>` at HEAD. Created or moved forward locally too, so
+/// a fresh `purlis/<workspace>/<short-sha>` at HEAD. Created or moved forward locally too, so
 /// the operator can see it; never moved backwards or sideways.
+///
+/// A branch carried on may be under any prefix the product has used: a `charter/<workspace>/…`
+/// branch made before the rename keeps its open pull request (V93j). Only a fresh one is
+/// named with the purlis prefix.
 fn save_branch(request: &Request, on: &str, head_sha: &str) -> Result<String, String> {
     let clone = request.clone;
-    let prefix = format!("charter/{}/", request.workspace);
+    let prefixes: Vec<String> = crate::names::BRANCH_PREFIX
+        .spellings()
+        .map(|p| format!("{p}{}/", request.workspace))
+        .collect();
+    let ours = |name: &str| prefixes.iter().any(|p| name.starts_with(p.as_str()));
+    let prefix = &prefixes[0];
     // The newest journal line that NAMES one — a quit's commit-only line or a failed push
     // names none, and must not break the chain — then every local branch charter made here,
     // newest first. The first that HEAD still descends from carries on.
@@ -652,25 +664,23 @@ fn save_branch(request: &Request, on: &str, head_sha: &str) -> Result<String, St
         .rev()
         .filter(|line| line.get("target").and_then(serde_json::Value::as_str) == Some(&wanted))
         .find_map(|line| line.get("branch")?.as_str().map(str::to_owned))
-        .filter(|name| name.starts_with(&prefix));
-    let local = git::run(
-        clone,
-        &[
-            "for-each-ref",
-            "--sort=-committerdate",
-            "--format=%(refname:short)",
-            &format!("refs/heads/{prefix}"),
-        ],
-        git::READ,
-    )
-    .ok()
-    .filter(git::Run::ok)
-    .map(|run| run.out.lines().map(str::to_owned).collect::<Vec<_>>())
-    .unwrap_or_default();
+        .filter(|name| ours(name));
+    let mut list = vec![
+        "for-each-ref".to_string(),
+        "--sort=-committerdate".into(),
+        "--format=%(refname:short)".into(),
+    ];
+    list.extend(prefixes.iter().map(|p| format!("refs/heads/{p}")));
+    let list: Vec<&str> = list.iter().map(String::as_str).collect();
+    let local = git::run(clone, &list, git::READ)
+        .ok()
+        .filter(git::Run::ok)
+        .map(|run| run.out.lines().map(str::to_owned).collect::<Vec<_>>())
+        .unwrap_or_default();
     let reuse = journalled
         .into_iter()
         .chain(local)
-        .filter(|name| name.starts_with(&prefix) && planesave::branch_ok(name))
+        .filter(|name| ours(name) && planesave::branch_ok(name))
         .find(|name| {
             git::run(
                 clone,

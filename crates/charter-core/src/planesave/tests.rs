@@ -439,7 +439,7 @@ fn the_save_branch_is_the_one_named_or_this_clones_own() {
     let plane = settings("", "").plane;
     let first = plane.save_branch_or_default(one.path());
     assert!(
-        first.starts_with(&format!("charter/save/{}-", crate::dispatch::host())),
+        first.starts_with(&format!("purlis/save/{}-", crate::dispatch::host())),
         "{first}"
     );
     assert!(branch_ok(&first), "{first}");
@@ -464,7 +464,12 @@ fn the_save_branch_names_its_clone_by_the_clone_key_and_is_the_name_it_always_wa
     assert_eq!(key.as_str(), "6fec8e6c929644b3");
     assert_eq!(
         plane.save_branch_or_default(at),
-        format!("charter/save/{}-6fec8e", crate::dispatch::host())
+        format!("purlis/save/{}-6fec8e", crate::dispatch::host())
+    );
+    // Only the prefix moved with the rename (V93j): what follows it is the name it always was.
+    assert_eq!(
+        default_rest(at),
+        format!("save/{}-6fec8e", crate::dispatch::host())
     );
 }
 

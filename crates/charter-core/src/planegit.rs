@@ -62,15 +62,12 @@ use crate::secretshape;
 use crate::shown;
 use crate::worktree::git;
 
-/// The start of the branch a per-push landing goes to (`charter/<sha>`).
-pub(crate) const BRANCH_PREFIX: &str = "charter/";
-
 /// What a push of the plane root's HEAD did, in one word. Python's module constants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     /// It landed on the branch HEAD is on.
     Pushed,
-    /// The branch requires a pull request → it landed on `charter/<sha>`. `push` mode's
+    /// The branch requires a pull request → it landed on `purlis/<sha>`. `push` mode's
     /// fallback, and `charter save`'s recorded one; the request modes use a save branch instead.
     Branched,
     /// The branch requires a pull request and THAT push failed too.
@@ -976,7 +973,9 @@ fn status_of(root: &Path) -> (Vec<String>, bool) {
     (out, tracked)
 }
 
-/// The `charter/<sha>` branch an earlier push is STILL waiting on a pull request for.
+/// The `purlis/<sha>` branch an earlier push is STILL waiting on a pull request for — or the
+/// `charter/<sha>` one a push made before the rename is waiting on, which carries on until its
+/// request merges (V93j).
 ///
 /// Advancing it is a fast-forward — each new HEAD is a descendant of the one before — so one
 /// open pull request accumulates the commits instead of leaving one abandoned remote branch
@@ -992,9 +991,12 @@ fn open_pull_request_branch(root: &Path) -> Option<String> {
     // next save advance the branch the whole pull-request path exists to leave alone.
     rec.get("landed")
         .and_then(serde_json::Value::as_str)
-        .and_then(|name| name.strip_prefix(BRANCH_PREFIX))
-        .filter(|sha| is_object_name(sha))
-        .map(|sha| format!("{BRANCH_PREFIX}{sha}"))
+        .filter(|name| {
+            crate::names::BRANCH_PREFIX
+                .strip(name)
+                .is_some_and(is_object_name)
+        })
+        .map(str::to_owned)
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -1052,7 +1054,8 @@ fn land_via_branch(
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
     let fresh = format!(
-        "{BRANCH_PREFIX}{}",
+        "{}{}",
+        crate::names::BRANCH_PREFIX.write,
         if sha.is_empty() { "change" } else { &sha }
     );
     let kind = forge::request_words_of(root, root);

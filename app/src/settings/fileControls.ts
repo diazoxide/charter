@@ -537,7 +537,7 @@ const PLANE_KEYS: readonly SaveKey[] = [
     label: "Save branch",
     kind: "text",
     hint: "The one branch per machine that pr and pr-merge push to.",
-    none: "charter/save/<this machine's name>",
+    none: "purlis/save/<this machine's name>",
   },
   { key: "sign", label: "Sign commits", kind: "bool", hint: "Sign the commits a save makes." },
   {

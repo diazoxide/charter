@@ -162,8 +162,8 @@ fn an_agents_own_commit_on_a_change_branch_carries_all_four_trailers() {
     assert_eq!(
         project.trailers(),
         format!(
-            "Assisted-by: claude-code\nCharter-Chat: {CHAT}\nCharter-Persona: steward\n\
-             Charter-Change: billing-v2"
+            "Assisted-by: claude-code\nPurlis-Chat: {CHAT}\nPurlis-Persona: steward\n\
+             Purlis-Change: billing-v2"
         )
     );
 }
@@ -187,7 +187,7 @@ fn an_amend_does_not_add_the_trailers_twice() {
     assert!(ran.status.success(), "{ran:?}");
     assert_eq!(
         project.trailers(),
-        format!("Assisted-by: claude-code\nCharter-Chat: {CHAT}\nCharter-Persona: steward")
+        format!("Assisted-by: claude-code\nPurlis-Chat: {CHAT}\nPurlis-Persona: steward")
     );
 }
 
@@ -213,7 +213,7 @@ fn a_repos_trailer_config_runs_nothing_and_the_agents_own_lines_stay_byte_for_by
         String::from_utf8_lossy(&body.stdout),
         format!(
             "fix: one bill\n\n---\nnot a patch\n\nCo-authored-by:x\nRefs:\nhttps://example.com/a\n\
-             Assisted-by: claude-code\nCharter-Chat: {CHAT}\nCharter-Persona: steward\n\n"
+             Assisted-by: claude-code\nPurlis-Chat: {CHAT}\nPurlis-Persona: steward\n\n"
         )
     );
 }
@@ -232,7 +232,7 @@ fn a_commit_an_agent_makes_below_its_chats_harness_is_stamped() {
     assert!(ran.status.success(), "{ran:?}");
     assert_eq!(
         project.trailers(),
-        format!("Assisted-by: claude-code\nCharter-Chat: {CHAT}\nCharter-Persona: steward")
+        format!("Assisted-by: claude-code\nPurlis-Chat: {CHAT}\nPurlis-Persona: steward")
     );
 }
 

@@ -14,7 +14,7 @@ use crate::Here;
 pub enum ChangeCommand {
     /// Create a change: a name and the reason for it.
     Create {
-        /// The change's slug: also its default branch name, and the `Charter-Change:` trailer
+        /// The change's slug: also its default branch name, and the `Purlis-Change:` trailer
         /// on every landing commit.
         change: String,
         /// One line: what this work is for. Required.

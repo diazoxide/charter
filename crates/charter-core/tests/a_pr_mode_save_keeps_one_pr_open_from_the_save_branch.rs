@@ -1203,6 +1203,160 @@ mod pr_saves {
         assert_eq!(plane.head(), head);
     }
 
+    /// The open-request lookup from `head`, answering request `open` or none.
+    fn lookup_from(plane: &Plane, head: &str, open: Option<u64>) -> PathBuf {
+        let out = match open {
+            Some(n) => format!(r#"[{{"number": {n}, "html_url": "{}"}}]"#, plane.url(n)),
+            None => "[]".to_string(),
+        };
+        plane.scene.gh_api(
+            &format!(
+                "repos/acme/plane/pulls?state=open&head=acme:{}&base=release&per_page=1",
+                head.replace('/', "%2F")
+            ),
+            0,
+            &out,
+            "",
+        )
+    }
+
+    /// Request `number` from `head` written: `method` is `POST` to open it, `PATCH` to update it.
+    fn written_from(
+        plane: &Plane,
+        method: &str,
+        head: &str,
+        number: u64,
+        subjects: &[&str],
+    ) -> PathBuf {
+        let host = plane.scene.host.clone();
+        let (path, mut argv) = match method {
+            "POST" => (
+                "repos/acme/plane/pulls".to_string(),
+                vec![
+                    "-f".to_string(),
+                    format!("head={head}"),
+                    "-f".into(),
+                    "base=release".into(),
+                ],
+            ),
+            _ => (format!("repos/acme/plane/pulls/{number}"), vec![]),
+        };
+        argv.extend([
+            "-f".to_string(),
+            format!("title={}", title(subjects)),
+            "-f".into(),
+            format!("body={}", body(subjects).replace(SAVE, head)),
+        ]);
+        let mut args = vec!["api", "--hostname", &host, "-X", method, &path];
+        args.extend(argv.iter().map(String::as_str));
+        plane.scene.answers(
+            "gh",
+            &args,
+            0,
+            &format!(
+                r#"{{"number": {number}, "html_url": "{}"}}"#,
+                plane.url(number)
+            ),
+            "",
+        )
+    }
+
+    #[test]
+    fn a_request_open_from_the_charter_save_branch_carries_on_there_until_it_merges() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // V93j. The plane names no save_branch, so its default is this clone's own. Before the
+        // rename it was `charter/save/<host>-<clone>`, and PR 12 is open from there.
+        let plane = plane("renamed-prefix.test", "pr");
+        let manifest = std::fs::read_to_string(plane.root.join("charter.toml")).unwrap();
+        std::fs::write(
+            plane.root.join("charter.toml"),
+            manifest.replace(&format!("save_branch = \"{SAVE}\"\n"), ""),
+        )
+        .unwrap();
+        git(&plane.root, &["commit", "-q", "-am", "no save_branch"]);
+        git(
+            &plane.root,
+            &[
+                "push",
+                "-q",
+                &plane.bare.display().to_string(),
+                "HEAD:release",
+            ],
+        );
+        git(
+            &plane.root,
+            &["update-ref", "refs/remotes/origin/release", "HEAD"],
+        );
+        let rest = charter_core::planesave::default_rest(&plane.root);
+        let (old, new) = (format!("charter/{rest}"), format!("purlis/{rest}"));
+        std::fs::write(plane.root.join("work.md"), "work.md").unwrap();
+        git(&plane.root, &["add", "-A"]);
+        git(&plane.root, &["commit", "-q", "-m", "work.md"]);
+        git(
+            &plane.root,
+            &[
+                "push",
+                "-q",
+                &plane.bare.display().to_string(),
+                &format!("HEAD:refs/heads/{old}"),
+            ],
+        );
+        let pushed = plane.head();
+        let state = plane.root.join(".charter");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("save-branch.json"),
+            serde_json::json!({
+                "branch": old,
+                "pushed": pushed,
+                "pr": {"number": 12, "url": plane.url(12), "head": pushed, "target": "release"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // While it is open, the next save updates it from where it is.
+        plane.state(12, true);
+        lookup_from(&plane, &old, Some(12));
+        let updated = written_from(&plane, "PATCH", &old, 12, &["work.md", "more.md"]);
+        let (code, said) = plane.save("more.md", "more.md");
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&updated), "{said}");
+        assert_eq!(plane.remote(&old), plane.head(), "{said}");
+        assert_eq!(
+            git(&plane.bare, &["for-each-ref", "refs/heads/purlis/"]),
+            "",
+            "no purlis branch while it is open: {said}"
+        );
+
+        // Once it has merged, the next save opens its request from the purlis name.
+        plane.their_commit("theirs.md", "theirs");
+        let theirs = plane.theirs();
+        git(
+            &theirs,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "Merge pull request #12",
+                &format!("origin/{old}"),
+            ],
+        );
+        git(&theirs, &["push", "-q", "origin", "release"]);
+        let at = git(&theirs, &["rev-parse", "HEAD"]);
+        plane.merged(12, &at);
+        lookup_from(&plane, &new, None);
+        let created = written_from(&plane, "POST", &new, 13, &["later.md"]);
+        let (code, said) = plane.save("later.md", "later.md");
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&created), "{said}");
+        assert_eq!(plane.remote(&new), plane.head(), "{said}");
+    }
+
     #[test]
     fn a_save_branch_changed_by_hand_is_pushed_and_given_its_own_pr() {
         charter_core::unsteered!();

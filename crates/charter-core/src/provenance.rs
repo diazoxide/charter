@@ -5,10 +5,14 @@
 //!
 //! ```text
 //! Assisted-by: <harness>:<model>
-//! Charter-Chat: <chat ULID>
-//! Charter-Persona: <persona>
-//! Charter-Change: <change slug>
+//! Purlis-Chat: <chat ULID>
+//! Purlis-Persona: <persona>
+//! Purlis-Change: <change slug>
 //! ```
+//!
+//! Commits made before the rename carry `Charter-Chat`, `Charter-Persona` and `Charter-Change`.
+//! History is never rewritten, so those keys are recognised forever ([`crate::names`], V93j):
+//! a message that already carries one with the same value is not given its purlis twin.
 //!
 //! `Assisted-by` is the Linux kernel's original form (`Documentation/process/coding-assistants.rst`,
 //! 78d979db6cef). The kernel later cut it to `Assisted-by: LLM` (816d9992d9ed), and a project
@@ -38,11 +42,30 @@ const ROOT_ENV: &str = "PURLIS_ROOT";
 /// The trailer naming who assisted: the harness and its model, or the kernel's bare `LLM`.
 pub const ASSISTED_BY: &str = "Assisted-by";
 /// The chat, by its ULID.
-pub const CHAT: &str = "Charter-Chat";
+pub const CHAT: &str = crate::names::TRAILER_CHAT.write;
 /// The persona the chat adopted.
-pub const PERSONA: &str = "Charter-Persona";
+pub const PERSONA: &str = crate::names::TRAILER_PERSONA.write;
 /// The cross-repo change the commit's branch is a member of (ADR 0060).
-pub const CHANGE: &str = "Charter-Change";
+pub const CHANGE: &str = crate::names::TRAILER_CHANGE.write;
+
+/// The trailer keys charter has written, each under every spelling it has had.
+const RENAMED: [crate::names::Name; 3] = [
+    crate::names::TRAILER_CHAT,
+    crate::names::TRAILER_PERSONA,
+    crate::names::TRAILER_CHANGE,
+];
+
+/// Every spelling of the trailer line `line`: itself, and for a renamed key the same value under
+/// each of the key's other names.
+fn spellings_of(line: &str) -> Vec<String> {
+    let Some((key, value)) = line.split_once(": ") else {
+        return vec![line.to_owned()];
+    };
+    match RENAMED.iter().find(|name| name.recognises(key)) {
+        Some(name) => name.spellings().map(|k| format!("{k}: {value}")).collect(),
+        None => vec![line.to_owned()],
+    }
+}
 
 /// The value [`Form::Llm`] writes.
 pub const BARE: &str = "LLM";
@@ -233,10 +256,12 @@ pub fn append(message: &str, trailers: &[String], comment: Option<&str>) -> Stri
         .filter(|l| text(l))
         .map(|l| l.trim_end_matches(['\n', '\r']).trim_end())
         .collect();
+    // A trailer the message has under an older key — `Charter-Chat` for `Purlis-Chat`, on an
+    // amend of a commit made before the rename — is had: the same claim is never made twice.
     let added: Vec<&str> = trailers
         .iter()
         .map(String::as_str)
-        .filter(|t| !had.contains(t))
+        .filter(|t| !spellings_of(t).iter().any(|s| had.contains(s.as_str())))
         .collect();
     if added.is_empty() {
         return message.to_owned();

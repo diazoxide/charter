@@ -185,3 +185,73 @@ fn a_save_branch_deleted_on_the_remote_while_a_first_push_was_on_its_way_is_push
         "this clone's save is the branch now"
     );
 }
+
+/// What a clone keeps when a request is open from `branch`, as its saves left it.
+fn kept_open_on(root: &Path, branch: &str) {
+    Kept {
+        branch: Some(branch.to_string()),
+        pushed: Some("a".repeat(40)),
+        pr: Some(KeptPr {
+            number: 12,
+            url: "https://x.invalid/pull/12".into(),
+            head: "a".repeat(40),
+            target: "main".into(),
+        }),
+    }
+    .write(root);
+}
+
+#[test]
+fn a_new_clone_saves_to_a_purlis_branch() {
+    let (_dir, root, _bare) = plane_and_remote();
+    let plane = crate::planesave::Settings::from_text(None, None).plane;
+    let save = save_branch(&root, &plane);
+    assert_eq!(
+        save,
+        format!("purlis/{}", crate::planesave::default_rest(&root))
+    );
+}
+
+#[test]
+fn a_request_still_open_from_the_charter_save_branch_carries_on_there_until_it_is_settled() {
+    // V93j: the clone opened its request before the rename, from `charter/save/<host>-<clone>`.
+    // While it is open, saves go on updating it there rather than opening a second one.
+    let (_dir, root, _bare) = plane_and_remote();
+    let plane = crate::planesave::Settings::from_text(None, None).plane;
+    let old = format!("charter/{}", crate::planesave::default_rest(&root));
+    kept_open_on(&root, &old);
+    assert_eq!(save_branch(&root, &plane), old);
+
+    // Once it is settled — merged, or closed — what is kept names no request, and the next
+    // save goes to the purlis name.
+    let mut kept = Kept::read(&root);
+    kept.pr = None;
+    kept.write(&root);
+    assert_eq!(
+        save_branch(&root, &plane),
+        format!("purlis/{}", crate::planesave::default_rest(&root))
+    );
+}
+
+#[test]
+fn only_this_clones_own_default_branch_carries_on_and_a_save_branch_set_by_hand_wins() {
+    let (_dir, root, _bare) = plane_and_remote();
+    let plane = crate::planesave::Settings::from_text(None, None).plane;
+    // Another clone's charter save branch, kept here somehow, is not this clone's.
+    kept_open_on(&root, "charter/save/elsewhere-000000");
+    assert_eq!(
+        save_branch(&root, &plane),
+        format!("purlis/{}", crate::planesave::default_rest(&root))
+    );
+    // A branch named by hand is the branch, whatever is kept.
+    kept_open_on(
+        &root,
+        &format!("charter/{}", crate::planesave::default_rest(&root)),
+    );
+    let named = crate::planesave::Settings::from_text(
+        Some("[plane]\nsave_branch = \"team/saves\"\n"),
+        None,
+    )
+    .plane;
+    assert_eq!(save_branch(&root, &named), "team/saves");
+}

@@ -198,12 +198,12 @@ pub fn create(
              or a dash).",
             named(slug)
         )));
-        say(Say::Info(
+        say(Say::Info(format!(
             "The slug names a file in this plane, a branch in every member, and the \
-             `Charter-Change:` trailer on each landing commit — so it is refused rather than \
-             rewritten."
-                .into(),
-        ));
+             `{}:` trailer on each landing commit — so it is refused rather than \
+             rewritten.",
+            super::land::TRAILER
+        )));
         return 1;
     }
     let Some(why) = why_given(why, "what this work is for", say) else {

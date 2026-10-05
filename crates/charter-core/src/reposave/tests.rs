@@ -1187,5 +1187,20 @@ fn a_branch_whose_name_charter_would_refuse_is_never_carried_on() {
 
     let got = save_branch_of(&f);
 
-    assert_eq!(got, Ok(format!("charter/alpha/{}", &f.head()[..7])));
+    assert_eq!(got, Ok(format!("purlis/alpha/{}", &f.head()[..7])));
+}
+
+#[test]
+fn a_fresh_save_branch_is_named_purlis_and_a_charter_one_from_before_the_rename_carries_on() {
+    // V93j: new work writes the purlis prefix …
+    let f = Fixture::new("[repos.widget]\nmode = \"pr\"\n");
+    assert_eq!(
+        save_branch_of(&f),
+        Ok(format!("purlis/alpha/{}", &f.head()[..7]))
+    );
+    // … and a `charter/…` branch an earlier save left, which HEAD still descends from, is
+    // carried on, journalled or not, so its open pull request is not opened twice.
+    let f = Fixture::new("[repos.widget]\nmode = \"pr\"\n");
+    run(&f.clone, &["branch", "charter/alpha/0ld0ld0"]);
+    assert_eq!(save_branch_of(&f).as_deref(), Ok("charter/alpha/0ld0ld0"));
 }

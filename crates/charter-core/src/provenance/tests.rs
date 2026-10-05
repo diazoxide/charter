@@ -18,9 +18,9 @@ fn an_agent_commit_carries_all_four_trailers_in_v67s_order_and_spelling() {
         everything().trailers(Form::Full),
         [
             "Assisted-by: claude-code:claude-opus-5-5",
-            "Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K",
-            "Charter-Persona: steward",
-            "Charter-Change: billing-v2",
+            "Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K",
+            "Purlis-Persona: steward",
+            "Purlis-Change: billing-v2",
         ]
     );
 }
@@ -50,7 +50,7 @@ fn a_trailer_whose_value_is_unknown_is_left_out() {
         p.trailers(Form::Full),
         [
             "Assisted-by: claude-code:claude-opus-5-5",
-            "Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K",
+            "Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K",
         ]
     );
 }
@@ -274,9 +274,9 @@ fn an_agents_own_commit_in_a_workspace_repo_is_stamped_with_all_four() {
         commit.stamped(),
         "fix: one bill\n\n\
          Assisted-by: claude-code\n\
-         Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
-         Charter-Persona: steward\n\
-         Charter-Change: billing-v2\n"
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
+         Purlis-Persona: steward\n\
+         Purlis-Change: billing-v2\n"
     );
 }
 
@@ -291,10 +291,35 @@ fn a_message_stamped_twice_an_amend_carries_each_trailer_once_after_the_operator
         "fix: one bill\n\n\
          Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\
          Assisted-by: claude-code\n\
-         Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
-         Charter-Persona: steward\n\
-         Charter-Change: billing-v2\n"
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
+         Purlis-Persona: steward\n\
+         Purlis-Change: billing-v2\n"
     );
+}
+
+#[test]
+fn an_amend_of_a_commit_made_before_the_rename_is_not_given_purlis_twins_of_its_trailers() {
+    // History keeps `Charter-*` forever (V93j): the same claim under the old key is had.
+    let old = "fix: one bill\n\n\
+               Assisted-by: claude-code\n\
+               Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
+               Charter-Persona: steward\n\
+               Charter-Change: billing-v2\n";
+    let commit = Commit::new(old);
+    stamp(&commit.message, &commit.clone, &commit.env());
+    assert_eq!(commit.stamped(), old);
+}
+
+#[test]
+fn an_old_trailer_with_another_value_is_a_different_claim_and_the_purlis_one_is_added() {
+    let message = "fix\n\nCharter-Chat: 01HZZZZZZZZZZZZZZZZZZZZZZZ\n";
+    let trailers = everything().trailers(Form::Full);
+    let stamped = append(message, &trailers, None);
+    assert!(
+        stamped.contains("\nPurlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"),
+        "{stamped}"
+    );
+    assert!(stamped.contains("\nPurlis-Persona: steward\n"), "{stamped}");
 }
 
 #[test]
@@ -309,7 +334,7 @@ fn a_repo_that_follows_the_kernel_is_stamped_assisted_by_llm() {
     assert!(
         commit
             .stamped()
-            .contains("\nAssisted-by: LLM\nCharter-Chat: "),
+            .contains("\nAssisted-by: LLM\nPurlis-Chat: "),
         "{}",
         commit.stamped()
     );
@@ -412,18 +437,18 @@ fn lines(trailers: &[&str]) -> Vec<String> {
 
 const OURS: [&str; 2] = [
     "Assisted-by: claude-code",
-    "Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K",
+    "Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K",
 ];
 
 #[test]
 fn a_message_with_no_trailers_gets_a_blank_line_and_then_the_block() {
     assert_eq!(
         append("fix: one bill\n", &lines(&OURS), None),
-        "fix: one bill\n\nAssisted-by: claude-code\nCharter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
+        "fix: one bill\n\nAssisted-by: claude-code\nPurlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
     );
     assert_eq!(
         append("fix: one bill", &lines(&OURS), None),
-        "fix: one bill\n\nAssisted-by: claude-code\nCharter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n",
+        "fix: one bill\n\nAssisted-by: claude-code\nPurlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n",
         "no newline at the end"
     );
 }
@@ -433,7 +458,7 @@ fn the_agents_own_lines_stay_byte_for_byte_and_ours_join_its_trailer_block() {
     assert_eq!(
         append("fix\n\nbody\n\nCo-authored-by:x\n", &lines(&OURS), None),
         "fix\n\nbody\n\nCo-authored-by:x\nAssisted-by: claude-code\n\
-         Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
     );
 }
 
@@ -446,7 +471,7 @@ fn a_bare_url_after_refs_is_left_exactly_as_written() {
             None
         ),
         "fix\n\nRefs:\nhttps://example.com/a?b=c\nAssisted-by: claude-code\n\
-         Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
     );
 }
 
@@ -455,7 +480,7 @@ fn a_dashed_line_in_the_body_is_not_a_patch_divider() {
     assert_eq!(
         append("fix\n\nbefore\n---\nafter\n", &lines(&OURS), None),
         "fix\n\nbefore\n---\nafter\n\nAssisted-by: claude-code\n\
-         Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
     );
 }
 
@@ -464,9 +489,9 @@ fn a_line_already_there_is_not_added_again_and_a_message_with_all_of_them_is_unt
     let half = "fix\n\nAssisted-by: claude-code\n";
     assert_eq!(
         append(half, &lines(&OURS), None),
-        "fix\n\nAssisted-by: claude-code\nCharter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
+        "fix\n\nAssisted-by: claude-code\nPurlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n"
     );
-    let whole = "fix\n\nAssisted-by: claude-code\nCharter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K";
+    let whole = "fix\n\nAssisted-by: claude-code\nPurlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K";
     assert_eq!(append(whole, &lines(&OURS), None), whole);
 }
 
@@ -477,7 +502,7 @@ fn in_an_edited_message_ours_go_before_the_comments_and_the_scissors() {
     assert_eq!(
         append(edited, &lines(&OURS), Some("#")),
         "fix\n\nSigned-off-by: A <a@example.invalid>\nAssisted-by: claude-code\n\
-         Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\n# Please enter the message.\n\
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\n# Please enter the message.\n\
          # ------------------------ >8 ------------------------\ndiff --git a/x b/x\n"
     );
 }

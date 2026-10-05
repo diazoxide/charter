@@ -41,7 +41,7 @@ pub struct Plane {
     pub from_share: bool,
     /// The target branch. `None`: the remote's default branch.
     pub branch: Resolved<Option<String>>,
-    /// The rolling branch the request modes push to. `None`: `charter/save/<host>`.
+    /// The rolling branch the request modes push to. `None`: `purlis/save/<host>-<clone>`.
     pub save_branch: Resolved<Option<String>>,
     /// Whether save commits are signed.
     pub sign: Resolved<bool>,
@@ -54,7 +54,7 @@ pub struct Plane {
 }
 
 impl Plane {
-    /// The branch the request modes push to: `save_branch`, or `charter/save/<host>-<clone>` — this
+    /// The branch the request modes push to: `save_branch`, or `purlis/save/<host>-<clone>` — this
     /// machine's name, as the dispatch log names it ([`crate::dispatch::host`]), and six hex
     /// digits of a hash of the plane's own path. The path is what keeps two clones apart: two
     /// on one machine, or two machines with one name, never share a save branch.
@@ -63,15 +63,29 @@ impl Plane {
     /// root that is UTF-8, which is one hash naming a clone everywhere. They are kept over the
     /// root's lossy spelling, as they always were, so that no clone's save branch is renamed:
     /// a root that is not UTF-8 is the one place the two differ.
+    ///
+    /// The default is named with the purlis prefix. A clone whose pull request is still open
+    /// from the `charter/save/…` branch it had before the rename carries on there until it
+    /// merges; that is the save chain's to decide (`planegit::prsave`), from what it kept.
     pub fn save_branch_or_default(&self, root: &std::path::Path) -> String {
-        use sha2::Digest;
         self.save_branch.value.clone().unwrap_or_else(|| {
-            let at = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-            let digest = sha2::Sha256::digest(at.to_string_lossy().as_bytes());
-            let clone: String = digest.iter().take(3).map(|b| format!("{b:02x}")).collect();
-            format!("charter/save/{}-{clone}", crate::dispatch::host())
+            format!(
+                "{}{}",
+                crate::names::BRANCH_PREFIX.write,
+                default_rest(root)
+            )
         })
     }
+}
+
+/// What follows the product's branch prefix in a clone's default save branch:
+/// `save/<host>-<six hex digits of the clone's path>`.
+pub fn default_rest(root: &std::path::Path) -> String {
+    use sha2::Digest;
+    let at = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let digest = sha2::Sha256::digest(at.to_string_lossy().as_bytes());
+    let clone: String = digest.iter().take(3).map(|b| format!("{b:02x}")).collect();
+    format!("save/{}-{clone}", crate::dispatch::host())
 }
 
 /// How one workspace repo is saved: `[repos.<name>]`, keyed by the repo's name in

@@ -156,7 +156,7 @@ mod repo_saves {
             .to_string()
     }
 
-    const BODY: &str = "body=Saved by charter from the alpha workspace ([repos.widget] mode = pr).\n\n<!-- charter-save -->";
+    const BODY: &str = "body=Saved by charter from the alpha workspace ([repos.widget] mode = pr).\n\n<!-- purlis-save -->";
 
     fn lookup(scene: &Scene, head: &str, out: &str) -> PathBuf {
         scene.gh_api(
@@ -257,7 +257,7 @@ mod repo_saves {
         let main_before = r.remote("main");
         r.commit("a.md", "first change");
         let short = &r.head()[..7];
-        let branch = format!("charter/alpha/{short}");
+        let branch = format!("purlis/alpha/{short}");
         let first_lookup = lookup(&scene, &branch, "[]");
         let opened = create(&scene, &branch, "first change", BODY, 4);
 
@@ -312,6 +312,58 @@ mod repo_saves {
     }
 
     #[test]
+    fn a_charter_branch_a_save_made_before_the_rename_carries_on_and_its_pr_is_not_duplicated() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // V93j: a save made before the rename left `charter/alpha/<sha>` with PR #4 open from
+        // it. The next save carries on there and updates #4; it opens no `purlis/…` branch and
+        // no second request (no create is written down, so one would exit 99).
+        let host = "repo-renamed.test";
+        let scene = Scene::new(host);
+        let r = repo(host, "[repos.widget]\nmode = \"pr\"\n");
+        r.commit("a.md", "first change");
+        let old = format!("charter/alpha/{}", &r.head()[..7]);
+        support::git(&r.clone, &["branch", &old]);
+        support::git(
+            &r.clone,
+            &["push", "-q", &r.bare.display().to_string(), &old],
+        );
+        r.commit("b.md", "second change");
+        let found =
+            format!(r#"[{{"number": 4, "html_url": "https://{host}/acme/widget/pull/4"}}]"#);
+        let looked = lookup(&scene, &old, &found);
+        let updated = scene.answers(
+            "gh",
+            &[
+                "api",
+                "--hostname",
+                host,
+                "-X",
+                "PATCH",
+                "repos/acme/widget/pulls/4",
+                "-f",
+                "title=second change",
+                "-f",
+                BODY,
+            ],
+            0,
+            &format!(r#"{{"number": 4, "html_url": "https://{host}/acme/widget/pull/4"}}"#),
+            "",
+        );
+
+        let (code, said) = r.save();
+
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&looked) && was_asked(&updated), "{said}");
+        assert_eq!(r.remote(&old), r.head());
+        assert_eq!(r.last()["branch"], old.as_str());
+        let purlis = support::git(&r.bare, &["for-each-ref", "refs/heads/purlis/"]).stdout;
+        assert!(purlis.is_empty(), "a purlis branch was pushed: {said}");
+    }
+
+    #[test]
     fn on_the_base_branch_the_settings_name_pr_mode_pushes_a_branch_of_its_own_and_never_it() {
         charter_core::unsteered!();
         if !in_child() {
@@ -332,7 +384,7 @@ mod repo_saves {
         );
         let develop_before = r.remote("develop");
         r.commit("e.md", "base change");
-        let branch = format!("charter/alpha/{}", &r.head()[..7]);
+        let branch = format!("purlis/alpha/{}", &r.head()[..7]);
         scene.gh_api(
             &format!(
                 "repos/acme/widget/pulls?state=open&head=acme:{}&base=develop&per_page=1",
@@ -388,7 +440,7 @@ mod repo_saves {
         let r = repo(host, "[repos.widget]\nmode = \"pr-merge\"\n");
         support::git(&r.clone, &["checkout", "-q", "-b", "feature/y"]);
         r.commit("c.md", "a change");
-        let body = "body=Saved by charter from the alpha workspace ([repos.widget] mode = pr-merge).\n\n<!-- charter-save -->";
+        let body = "body=Saved by charter from the alpha workspace ([repos.widget] mode = pr-merge).\n\n<!-- purlis-save -->";
         lookup(&scene, "feature/y", "[]");
         create(&scene, "feature/y", "a change", body, 12);
         scene.answers(
@@ -542,7 +594,7 @@ mod repo_saves {
                     "-f",
                     "title=a change",
                     "-f",
-                    "description=Saved by charter from the alpha workspace ([repos.widget] mode = pr-merge).\n\n<!-- charter-save -->",
+                    "description=Saved by charter from the alpha workspace ([repos.widget] mode = pr-merge).\n\n<!-- purlis-save -->",
                 ],
                 0,
                 &format!(r#"{{"iid": 3, "id": 9003, "web_url": "{}"}}"#, mr_url(host, 3)),

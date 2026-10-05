@@ -214,20 +214,23 @@ fn checked(plane: &Path, ws: &str, line: &Landing, new_slug: &str) -> Result<Tar
             short(&commit)
         )));
     }
-    // A revert already landed, as a merge (git's own line) or a squash (charter's trailer).
-    let reverted = ask(
-        &clone,
-        &[
-            "rev-list",
-            "-n",
-            "1",
-            "--extended-regexp",
-            &format!("--grep=^This reverts commit {commit}"),
-            &format!("--grep=^Charter-Change: {}$", literal(new_slug)),
-            &format!("{commit}..{base}"),
-        ],
-    )
-    .filter(|found| !found.is_empty());
+    // A revert already landed, as a merge (git's own line) or a squash (charter's trailer, under
+    // every key it has had: a landing made before the rename says `Charter-Change`, V93j).
+    let mut argv = vec![
+        "rev-list".to_string(),
+        "-n".into(),
+        "1".into(),
+        "--extended-regexp".into(),
+        format!("--grep=^This reverts commit {commit}"),
+    ];
+    argv.extend(
+        crate::names::TRAILER_CHANGE
+            .spellings()
+            .map(|key| format!("--grep=^{key}: {}$", literal(new_slug))),
+    );
+    argv.push(format!("{commit}..{base}"));
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let reverted = ask(&clone, &argv).filter(|found| !found.is_empty());
     if let Some(by) = reverted {
         return Err(refuse(format!(
             "{} already carries a revert of {}: {}. Nothing to revert there",
