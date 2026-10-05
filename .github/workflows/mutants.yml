@@ -98,7 +98,9 @@ name: mutants
 #    account's job slots, and is the operator's call).
 #    The issue records which FILES are not known clean. A night that is not clean adds what it
 #    tested; a slice that runs clean clears only its own files; the issue closes when none is
-#    left. `workflow_dispatch` can still ask for the whole crate.
+#    left, which only a full cycle of clean slices can do. `workflow_dispatch` can still ask
+#    for the whole crate, but a dispatched run never touches the issue (`notice` runs on
+#    `schedule` only), so its answer is on its own run page.
 #
 # 6. **Every mutant builds without debug info** (`[profile.mutants]` in `Cargo.toml`, chosen by
 #    `profile = "mutants"` in `.cargo/mutants.toml`, as the cargo-mutants book recommends). On
@@ -447,9 +449,9 @@ jobs:
     #
     # One issue, found by its exact title among EVERY open issue, with its BODY rewritten each
     # red night — never a new issue while one is open and never a comment, so this cannot
-    # become noise — and closed only when every file it holds has run clean again in a slice,
-    # or a FULL run is clean. A copy filed by an older version of this job is closed as a
-    # duplicate of the oldest.
+    # become noise — and closed only when every file it holds has run clean again in a
+    # scheduled slice. A dispatched run, full or not, never reaches this job. A copy filed by
+    # an older version of this job is closed as a duplicate of the oldest.
     name: say so where someone will see it
     needs: [plan, baseline, core, survivors]
     if: always() && github.event_name == 'schedule'

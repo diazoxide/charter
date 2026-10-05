@@ -434,3 +434,26 @@ test("a red full run marks the whole crate", () => {
   assert.deepEqual(actions, ["create"]);
   assert.match(body, /\*\*4 of charter-core's 4 files are not known clean/);
 });
+
+test("a record that is not a list of files holds the whole crate, and never closes the issue", () => {
+  // A clean slice over a.rs would close an issue whose record says only a.rs is dirty. A record
+  // that says anything else, or nothing readable, must not be taken for "nothing left".
+  for (const record of ["{}", '"xyz"', "[1]", '["*"]', "null", "5", "[", '["src/a.rs", 2]']) {
+    const body = `Last run: an older one\n\n<!-- mutants-report dirty: ${record} -->\n`;
+    const { actions, body: next } = notice({ scope: "slice" }, left(9, body), {
+      tested: ["src/a.rs"],
+      files: ["src/a.rs", "src/b.rs"],
+    });
+    assert.deepEqual(actions, ["edit 9"], record);
+    assert.match(next, /\*\*1 of charter-core's 2 files is not known clean/, record);
+  }
+});
+
+test("a record of no files, written by hand, is nothing left", () => {
+  const body = "Last run: an older one\n\n<!-- mutants-report dirty: [] -->\n";
+  const { actions } = notice({ scope: "slice" }, left(9, body), {
+    tested: ["src/a.rs"],
+    files: ["src/a.rs", "src/b.rs"],
+  });
+  assert.deepEqual(actions, ["close 9"]);
+});

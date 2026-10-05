@@ -21,7 +21,7 @@ So the two questions are asked separately and answered separately:
   denominator, and the mutants that hung the suite listed apart as caught.
 * **`slice`** — which files does this Sunday test? The crate in weekly slices of whole files.
 * **`notice`** — what does the nightly's one issue say? Opened or updated on a red night, and
-  closed when every file it holds has since run clean in a slice, or on a clean full run.
+  closed when every file it holds has since run clean in a Sunday slice.
 
 Each mode writes GitHub's step summary when `$GITHUB_STEP_SUMMARY` is set, so the answer is
 on the run's own page rather than at the end of a 6,000-line log.
@@ -508,7 +508,16 @@ def recorded(body: str | None, is_open: bool) -> set[str] | str:
                 value = json.loads(line[len(MARKER) : -len(" -->")])
             except json.JSONDecodeError:
                 return WHOLE
-            return value if value == WHOLE else set(value)
+            if value == WHOLE:
+                return WHOLE
+            # Only a list of paths is a record. Anything else (an object, a number, a list
+            # holding a non-path or "*") is a record nobody can read, and reading it as "no
+            # file left" would close the issue: it holds the whole crate instead.
+            if isinstance(value, list) and all(
+                isinstance(item, str) and item != WHOLE for item in value
+            ):
+                return set(value)
+            return WHOLE
     return WHOLE
 
 
@@ -525,7 +534,7 @@ def state_section(dirty: set[str] | str, files: set[str] | None) -> str:
     return (
         f"{MARKER}{json.dumps(record)} -->\n"
         f"{said} Sunday tests one weekly slice of the crate, and a slice that runs clean clears "
-        "its own files. The issue closes when no file is left, or on a clean full run."
+        "its own files. The issue closes when no file is left."
     )
 
 
@@ -548,7 +557,12 @@ def cmd_notice(args: argparse.Namespace) -> int:
     * a clean slice clears its own files, and nothing else; a clean full run clears all of them;
     * a clean diff night clears nothing: it tested the lines that changed, not their files;
     * the issue closes only on a clean slice or full run that leaves nothing, so a partial or
-      cancelled run can never close it."""
+      cancelled run can never close it;
+    * an unreadable record is the whole crate, never "nothing left".
+
+    The workflow calls this on scheduled runs only, and none of them is full, so in practice the
+    issue closes after a full cycle of clean slices. A full scope is still handled, for a
+    schedule that asks for one."""
     ours: list[tuple[int, str]] = []
     for line in sys.stdin:
         line = line.strip()
@@ -662,7 +676,7 @@ def main() -> int:
     sliced.add_argument("--week", type=int, required=True, help="weeks since the Unix epoch")
     sliced.set_defaults(func=cmd_slice)
 
-    notice = sub.add_parser("notice",help="decide what the nightly's one issue is told")
+    notice = sub.add_parser("notice", help="decide what the nightly's one issue is told")
     notice.add_argument("--title", required=True, help="the issue's exact title")
     notice.add_argument("--run-url", required=True, help="this run's page")
     for job in ("plan", "baseline", "core", "survivors"):

@@ -109,8 +109,9 @@ TIMEOUTs and no MISSED mutant, and this rule is what keeps such a night red.
 When the nightly is not clean it keeps one issue in this repo up to date. Sunday tests one of
 13 weekly slices of the crate (whole files), so the issue records which files are not known
 clean: a night that is not clean adds the files it tested, a slice that runs clean clears only
-its own, and the issue closes, with any copies, when none is left or a full run is clean. A
-partial or cancelled run never closes it. Five consecutive red nights went unread in September
+its own, and the issue closes, with any copies, only when none is left: a full cycle of clean
+slices. A partial or cancelled run never closes it, and a dispatched run (even a full one)
+never touches it. Five consecutive red nights went unread in September
 2026 while fifty PRs merged past them; that is what the issue is for. Which issue, and what it
 is told, is `tools/mutants-report.py notice`, tested in `tools/mutants-report.test.mjs`.
 
