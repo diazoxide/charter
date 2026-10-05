@@ -1378,12 +1378,18 @@ impl Chats {
         // A chat the record holds no id for is given one here, before it is tried, so the
         // one that does not start is kept under it too and is not given another at every
         // launch it fails at (#856 review F2).
+        //
+        // **And so is a chat whose id another chat in the record already has** — a record
+        // hand-edited, corrupt or left by an older bug. Two chats are two chats: the record writes
+        // one per id, the newest open (`record`), which is right only for a retry or a fresh
+        // start under way, and two running under one id would lose one at the next write.
+        let mut seen = std::collections::HashSet::new();
         let chats: Vec<(Chat, Why)> = record
             .chats
             .iter()
-            .map(|chat| match chat.identity.id {
-                Some(_) => (chat.clone(), Why::Relaunch),
-                None => (
+            .map(|chat| match &chat.identity.id {
+                Some(id) if seen.insert(id.clone()) => (chat.clone(), Why::Relaunch),
+                _ => (
                     Chat {
                         identity: charter_core::reopen::Identity {
                             id: Some(minted()),
@@ -3348,6 +3354,50 @@ mod tests {
             vec![Some(waiting[0].id.clone())],
             "the first is still recorded"
         );
+    }
+
+    #[test]
+    fn a_record_holding_one_id_twice_puts_back_two_chats_with_their_own_ids_and_keeps_both() {
+        // A record hand-edited, corrupt, or left by an older bug can hold two chats under one
+        // id. The record writes one chat per id (the newest open), which is right only for a
+        // retry or a fresh start under way — so the put-back gives the repeat an id of its own,
+        // as it does a chat that had none, and neither drops out at the next write.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let shared = |name: &str| {
+            let one = chat(&claude, name, None);
+            Chat {
+                identity: charter_core::reopen::Identity {
+                    id: Some(ID.to_owned()),
+                    ..one.identity.clone()
+                },
+                ..one
+            }
+        };
+        let (chats, wrote) = recorded();
+
+        let open = chats.put_back_here(
+            &Record {
+                views: Vec::new(),
+                chats: vec![shared("ide.7"), shared("ide.8")],
+                dealt: 0,
+                relaunch_after_update: false,
+                clone_seat: None,
+                focus: None,
+            },
+            SIZE,
+        );
+
+        assert_eq!(open.len(), 2, "both start");
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        let ids: Vec<Option<String>> = last.chats.iter().map(|c| c.identity.id.clone()).collect();
+        assert_eq!(ids.len(), 2, "both are recorded: {ids:?}");
+        assert_eq!(ids[0].as_deref(), Some(ID), "the first keeps the id");
+        assert!(
+            ids[1].is_some() && ids[1] != ids[0],
+            "the repeat has its own: {ids:?}"
+        );
+        chats.end_all();
     }
 
     #[test]
