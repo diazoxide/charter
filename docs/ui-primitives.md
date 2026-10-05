@@ -161,6 +161,12 @@ own words instead. What it adds is a type that refuses a line with no way out: `
 corner, over the terminal and taking no row; the default is the band under the strip.
 `Notice.guard.test.ts` fails on a hand-built one.
 
+Under the strip, Notices are stacked by `NoticeBand` (V91i, NO-2 #1229): at most two stand, the
+most important first — trouble before news, then the family order `IMPORTANCE` exports — and
+the rest are behind "+N more", which opens them as a list of the same Notices. A Dismiss of a
+cause the core answers for lasts until the cause changes, across relaunches
+(`app/src/dismissals.ts`).
+
 ## Why Radix, and why not the other two
 
 **Not Material (MUI).** Material is the wrong visual language for a dense terminal-adjacent

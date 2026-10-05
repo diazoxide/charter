@@ -214,7 +214,8 @@ has it; nothing reads the key after that.
     { "id": "bottom", "side": "bottom", "order": 0, "collapsed": true }
   ],
   "text": { "window": 15, "terminal": 14 },
-  "editor": "zed"
+  "editor": "zed",
+  "dismissed": { "/home/me/project": ["pin-dormant:ide", "chat-fresh:3"] }
 }
 ```
 
@@ -244,6 +245,13 @@ has it; nothing reads the key after that.
   drawer says so. Settings writes it (`app/src/yourEditor.ts`). It is a word and never
   a program: the core builds the URL, or reads the variable itself, so nothing written here is
   run.
+- **`dismissed`** is the Notices you dismissed (NO-2, V91j), per project by its path, each
+  by its cause. A Notice stays hidden while its cause is kept here, and the window lets the
+  cause go once the project answers without it, so the Notice shows again if the cause comes
+  back. Only causes the core answers for are kept: `pin-dormant`, `chat-resumed`,
+  `chat-guessed` and `chat-fresh`; any other is left out, as is anything past 200 per project
+  (`app/src/dismissals.ts`). It is here and not in a project because what you have already
+  seen is yours on this machine. Delete it to see every Notice again.
 - **The file is read once, as the window is created.** Edit it while charter is not running,
   or expect the next change made in the window to replace your edit.
 - **Nothing in it can stop the window.** A file that is not JSON, is not a layout, is a link or
