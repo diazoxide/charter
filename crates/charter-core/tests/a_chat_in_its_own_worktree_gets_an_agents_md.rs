@@ -8,7 +8,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use charter_core::{briefing, doctor, guest, start, worktree};
+use charter_core::{briefing, doctor, files, guest, start, worktree};
 
 /// A plane whose default persona is `ops`, with a second persona `qa`, and one clone.
 fn plane() -> support::Fixture {
@@ -573,4 +573,122 @@ fn workspaces_doctor_cannot_read_are_a_warning_not_a_missing_row() {
         .expect("a row");
     assert_eq!(row.status, doctor::Status::Warn);
     assert!(row.detail.contains("alpha"), "{}", row.detail);
+}
+
+// ---- NO-4: the operator's AGENTS.md gets its way out --------------------------------------
+
+#[test]
+fn a_start_names_the_branch_whose_agents_md_charters_line_hides() {
+    charter_core::unsteered!();
+    let (f, piece) = hidden_in_the_clone();
+    with_a_profile(&f);
+
+    let ready = start::ready(
+        &start::Start {
+            profile: Some("work".into()),
+            persona: Some("ops".into()),
+            name: "1".into(),
+            cwd: Some(piece),
+            ..Default::default()
+        },
+        &f.plane,
+    )
+    .expect("it starts");
+
+    assert_eq!(
+        ready.agents_md,
+        vec![start::TheirAgentsMd {
+            workspace: "alpha".into(),
+            repo: "svc".into(),
+            piece: None,
+        }]
+    );
+}
+
+#[test]
+fn move_aside_puts_the_operators_agents_md_where_git_status_shows_it() {
+    charter_core::unsteered!();
+    let (f, _piece) = hidden_in_the_clone();
+
+    let moved = guest::move_agents_md_aside(&f.plane, files::Branch::repo("alpha", "svc"))
+        .expect("it is moved");
+
+    assert_eq!(moved, "AGENTS.aside.md");
+    assert!(!f.clone.join("AGENTS.md").exists());
+    assert_eq!(
+        read(&f.clone.join("AGENTS.aside.md")),
+        "# the operator's, made later\n"
+    );
+    assert_eq!(
+        f.status(&f.clone),
+        "?? AGENTS.aside.md\n",
+        "no longer hidden"
+    );
+}
+
+#[test]
+fn move_aside_never_moves_onto_a_file_already_there() {
+    charter_core::unsteered!();
+    let (f, _piece) = hidden_in_the_clone();
+    std::fs::write(f.clone.join("AGENTS.aside.md"), "an earlier one\n").unwrap();
+
+    let moved = guest::move_agents_md_aside(&f.plane, files::Branch::repo("alpha", "svc"))
+        .expect("it is moved");
+
+    assert_eq!(moved, "AGENTS.aside-2.md");
+    assert_eq!(read(&f.clone.join("AGENTS.aside.md")), "an earlier one\n");
+    assert_eq!(
+        read(&f.clone.join("AGENTS.aside-2.md")),
+        "# the operator's, made later\n"
+    );
+}
+
+#[test]
+fn move_aside_refuses_charters_own_agents_md_and_touches_nothing() {
+    charter_core::unsteered!();
+    let f = plane();
+    let piece = cut(&f, "p1");
+    start::layered_or_refusal(&piece, &f.plane, Some("ops")).expect("charter writes its own");
+    let before = read(&piece.join("AGENTS.md"));
+
+    let refused = guest::move_agents_md_aside(&f.plane, files::Branch::piece("alpha", "svc", "p1"))
+        .expect_err("not the operator's");
+
+    assert!(refused.contains("charter wrote"), "{refused}");
+    assert_eq!(read(&piece.join("AGENTS.md")), before);
+    assert!(!piece.join("AGENTS.aside.md").exists());
+}
+
+#[test]
+fn move_aside_refuses_a_tracked_agents_md() {
+    charter_core::unsteered!();
+    let f = plane();
+    std::fs::write(f.clone.join("AGENTS.md"), "committed\n").unwrap();
+    support::git(&f.clone, &["add", "AGENTS.md"]);
+    support::git(&f.clone, &["commit", "-q", "-m", "agents"]);
+
+    let refused = guest::move_agents_md_aside(&f.plane, files::Branch::repo("alpha", "svc"))
+        .expect_err("a tracked file is the repository's");
+
+    assert!(refused.contains("tracks"), "{refused}");
+    assert_eq!(read(&f.clone.join("AGENTS.md")), "committed\n");
+}
+
+#[test]
+fn the_operators_agents_md_opens_in_their_editor_though_charters_line_hides_it() {
+    charter_core::unsteered!();
+    let (f, _piece) = hidden_in_the_clone();
+
+    let launch = guest::their_agents_md_in_your_editor(
+        &f.plane,
+        files::Branch::repo("alpha", "svc"),
+        charter_core::youreditor::Editor::VsCode,
+        &|_| None,
+    )
+    .expect("it opens");
+
+    let charter_core::youreditor::Launch::Url(url) = launch else {
+        panic!("a URL: {launch:?}")
+    };
+    assert!(url.ends_with("svc/AGENTS.md:1:1"), "{url}");
 }

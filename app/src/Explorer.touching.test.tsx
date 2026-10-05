@@ -107,6 +107,7 @@ function draw(focus?: Place) {
         onShowChat={() => {}}
         offers={new Map()}
         onPress={() => {}}
+        onReadAgain={() => {}}
         onOpenFile={() => {}}
         focus={focus}
         onFocus={() => {}}

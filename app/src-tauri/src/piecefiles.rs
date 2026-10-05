@@ -466,6 +466,59 @@ pub fn open_in_your_editor(
     }
 }
 
+/// **Open file** on a chat's start notice (NO-4): the operator's `AGENTS.md` at the top of a
+/// branch, which charter's exclude line hides from `git status`, opened in your editor.
+/// Refused, in the core's sentence, for an `AGENTS.md` that is not theirs.
+// Placed by name by `charter_core::guest::their_agents_md_in_your_editor`, never a path the
+// window sent; handed to the editor as `open_in_your_editor` hands one. Not a doc comment,
+// because the generated bindings carry those.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+#[specta::specta]
+pub fn open_their_agents_md(
+    app: tauri::AppHandle,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+    editor: YourEditor,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt as _;
+    let var = |name: &str| std::env::var(name).ok();
+    match charter_core::guest::their_agents_md_in_your_editor(
+        planes.held(&plane)?.root(),
+        branch(&workspace, &repo, &piece),
+        editor.into(),
+        &var,
+    )? {
+        Launch::Url(url) => app
+            .opener()
+            .open_url(&url, None::<&str>)
+            .map_err(|e| format!("the system did not open {url}: {e}")),
+        Launch::Program { program, args } => youreditor::start(&program, &args),
+    }
+}
+
+/// **Move aside…** on a chat's start notice (NO-4), after the window asked: the operator's
+/// `AGENTS.md` at the top of a branch renamed to `AGENTS.aside.md` (or the next free
+/// `AGENTS.aside-N.md`), never over a file, so `git status` shows it again. Answers its new
+/// name. Refused, touching nothing, for an `AGENTS.md` that is not theirs.
+#[tauri::command]
+#[specta::specta]
+pub fn move_their_agents_md_aside(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+) -> Result<String, String> {
+    charter_core::guest::move_agents_md_aside(
+        planes.held(&plane)?.root(),
+        branch(&workspace, &repo, &piece),
+    )
+}
+
 fn launch_of(
     plane: &Path,
     branch: Branch<'_>,

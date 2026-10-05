@@ -7,15 +7,24 @@ export const commands = {
 	/**
 	 *  The window says its first frame is on screen, which is where cold start ends.
 	 * 
-	 *  It answers with the one line to put on screen when that took longer than the limit, and
-	 *  with nothing when it did not. An operator who launched charter from an icon has no
-	 *  standard error to read, and a start that took half a minute with no window has to say why
-	 *  somewhere they can see it (charter-app#24). Only the first call is answered: a webview
-	 *  that reloads has not started the process again.
+	 *  It answers with the one line to put on screen when that took longer than the limit, with the
+	 *  relaunch it suggests for Copy command (NO-4), and with nothing when it did not. An operator
+	 *  who launched charter from an icon has no standard error to read, and a start that took half a
+	 *  minute with no window has to say why somewhere they can see it (charter-app#24). Only the
+	 *  first call is answered: a webview that reloads has not started the process again.
 	 * 
 	 *  `CHARTER_BENCH_LOG` — which only `tools/bench.mjs` sets — also prints the number here.
 	 */
-	firstFrame: () => __TAURI_INVOKE<string | null>("first_frame"),
+	firstFrame: () => __TAURI_INVOKE<{
+	/**  The one line on screen. */
+	said: string,
+	/**
+	 *  The command the line suggests, whole, for the Notice's Copy command (NO-4): the window
+	 *  has no fix for a launch already made, so this is the last resort and listed as debt
+	 *  (V91q). `None` where no cause is known.
+	 */
+	relaunch: string | null,
+} | null>("first_frame"),
 	/**  What the window says about this launch and the session bus: nothing, on a launch with it. */
 	sessionBus: () => __TAURI_INVOKE<{
 	/**  The line it draws: why there is no bus, and what is off for the run. */
@@ -877,6 +886,19 @@ export const commands = {
 	 *  sentence, for any path the light editor would refuse.
 	 */
 	openInYourEditor: (plane: PlaneId, workspace: string, repo: string, piece: string | null, path: string, line: number, editor: YourEditor) => typedError<null, string>(__TAURI_INVOKE("open_in_your_editor", { plane, workspace, repo, piece, path, line, editor })),
+	/**
+	 *  **Open file** on a chat's start notice (NO-4): the operator's `AGENTS.md` at the top of a
+	 *  branch, which charter's exclude line hides from `git status`, opened in your editor.
+	 *  Refused, in the core's sentence, for an `AGENTS.md` that is not theirs.
+	 */
+	openTheirAgentsMd: (plane: PlaneId, workspace: string, repo: string, piece: string | null, editor: YourEditor) => typedError<null, string>(__TAURI_INVOKE("open_their_agents_md", { plane, workspace, repo, piece, editor })),
+	/**
+	 *  **Move aside…** on a chat's start notice (NO-4), after the window asked: the operator's
+	 *  `AGENTS.md` at the top of a branch renamed to `AGENTS.aside.md` (or the next free
+	 *  `AGENTS.aside-N.md`), never over a file, so `git status` shows it again. Answers its new
+	 *  name. Refused, touching nothing, for an `AGENTS.md` that is not theirs.
+	 */
+	moveTheirAgentsMdAside: (plane: PlaneId, workspace: string, repo: string, piece: string | null) => typedError<string, string>(__TAURI_INVOKE("move_their_agents_md_aside", { plane, workspace, repo, piece })),
 	/**
 	 *  One file or folder of a branch, its path put on the clipboard: relative to the branch's
 	 *  folder, or absolute (FM-10). Refused, in the core's sentence, for a path that leaves the
@@ -4294,6 +4316,18 @@ export type SidebarWorkspace = {
 	live: boolean,
 };
 
+/**  What the window says about a slow launch: its line, and the relaunch that line suggests. */
+export type SlowStart = {
+	/**  The one line on screen. */
+	said: string,
+	/**
+	 *  The command the line suggests, whole, for the Notice's Copy command (NO-4): the window
+	 *  has no fix for a launch already made, so this is the last resort and listed as debt
+	 *  (V91q). `None` where no cause is known.
+	 */
+	relaunch: string | null,
+};
+
 /**  Whether Smart close is offered on a chat, and the answer the close dialog starts on. */
 export type SmartCloseOffer = {
 	available: boolean,
@@ -4355,6 +4389,11 @@ export type Started = {
 	 *  `AGENTS.md` was not written, and an `AGENTS.md` charter's exclude line hides.
 	 */
 	notices: string[],
+	/**
+	 *  The branches whose `AGENTS.md` a notice names as the operator's and hidden by charter's
+	 *  line: what the notice's Open file and Move aside… act on (NO-4).
+	 */
+	agents_md: TheirAgentsMd[],
 };
 
 /**  A chat "Start a chat here" opened: what the window needs to put its tab on the right strip. */
@@ -4409,6 +4448,16 @@ export type TemplateRow = {
 	title: string,
 	/**  One line on what it is for. */
 	summary: string,
+};
+
+/**
+ *  A branch whose `AGENTS.md` is the operator's and hidden from `git status` by charter's line:
+ *  the repo's own folder (no piece) or one of its pieces.
+ */
+export type TheirAgentsMd = {
+	workspace: string,
+	repo: string,
+	piece: string | null,
 };
 
 /**  One theme a project may pick, as the Theme select lists it. */

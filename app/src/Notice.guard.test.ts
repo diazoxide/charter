@@ -46,7 +46,9 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "BottomBar.tsx": {
     count: 2,
-    why: "the repos bar's read refusal and a branch it cannot read, in that region (NO-4, #1231)",
+    why:
+      "the repos bar's read refusal and a branch it cannot read: the bottom region has nothing " +
+      "to press (ADR 0038), so their way out is the explorer's Read again on the same read (NO-4)",
   },
   "ChangeActions.tsx": {
     count: 4,
@@ -76,7 +78,9 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "Explorer.tsx": {
     count: 1,
-    why: "the explorer's read refusal, inside that region (NO-4, #1231)",
+    why:
+      "a folder of a branch's tree that could not be read, in the tree where its entries go: a " +
+      "row's own refusal, and opening the folder again reads it again (NO-4)",
   },
   "ExtensionAction.tsx": {
     count: 1,
@@ -230,8 +234,14 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
 };
 
-/** Notices whose only way out is Copy command (V91q's debt): `file: cause`. None yet. */
-const COPY_ONLY: string[] = [];
+/**
+ * Notices whose only way out is Copy command (V91q's debt): `file: cause`, each with why the
+ * window has no fix of its own.
+ *
+ * - `slow-start` (NO-4): the relaunch without the session bus. The launch is already made, and
+ *   the window cannot start charter again in another environment for the operator.
+ */
+const COPY_ONLY: string[] = ["App.tsx: slow-start"];
 
 const SRC = join(process.cwd(), "src");
 

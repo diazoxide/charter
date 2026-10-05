@@ -133,6 +133,20 @@ pub struct Ready {
     /// `AGENTS.md` was not written, and every `AGENTS.md` that charter's exclude line hides
     /// and charter did not write (V35, ADR 0085). Empty for nearly every start.
     pub notices: Vec<String>,
+    /// The branches whose `AGENTS.md` a notice above names as the operator's and hidden by
+    /// charter's exclude line (V35): what the window's **Open file** and **Move aside…** act on
+    /// (NO-4). Named, never given as a path, so the window hands the core back a branch it
+    /// places again. A hidden file outside every branch of the project is in the sentence only.
+    pub agents_md: Vec<TheirAgentsMd>,
+}
+
+/// A branch whose `AGENTS.md` is the operator's and hidden from `git status` by charter's line:
+/// a repo's own folder (`piece: None`) or one of its pieces.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TheirAgentsMd {
+    pub workspace: String,
+    pub repo: String,
+    pub piece: Option<String>,
 }
 
 impl Ready {
@@ -242,7 +256,13 @@ pub fn ready_on(
     // gate below exists for: this writes charter's own documents into a tree charter owns,
     // and it is idempotent, so doing it for a start that is then refused costs nothing.
     let mut notices = layered_or_refusal(&here, root, persona.as_deref())?;
-    notices.extend(hidden_agents_md_notice(&here));
+    let hidden = hidden_agents_md_in(&here);
+    notices.extend(hidden.said(|p| p.display().to_string()));
+    let agents_md = hidden
+        .found
+        .iter()
+        .filter_map(|file| branch_holding(root, file))
+        .collect();
     // The gate. Startable kind, ignored file, approved command — one call, so no caller can
     // start a chat past a check another caller makes.
     if let Some(why) = crate::wiring::refusal_in(profile, root, declared) {
@@ -385,6 +405,7 @@ pub fn ready_on(
         sandbox,
         unsandboxed,
         notices,
+        agents_md,
     })
 }
 
@@ -533,14 +554,50 @@ pub fn layered_or_refusal(
     Err(format!("{} Nothing was started.", layered.refusal(&piece)))
 }
 
-/// V35: the window's notice naming every `AGENTS.md` that charter's exclude line hides in
-/// the repository a chat starting in `here` stands in, and charter did not write — or none.
-/// Asked at every start, in a piece or a clone alike, because the line hides the clone's.
-fn hidden_agents_md_notice(here: &Path) -> Option<String> {
-    let checkout = here
-        .ancestors()
-        .find(|dir| crate::guest::git_dir(dir).is_some())?;
-    crate::guest::hidden_agents_md(checkout).said(|p| p.display().to_string())
+/// V35: every `AGENTS.md` that charter's exclude line hides in the repository a chat starting
+/// in `here` stands in, and charter did not write. Asked at every start, in a piece or a clone
+/// alike, because the line hides the clone's.
+fn hidden_agents_md_in(here: &Path) -> crate::guest::HiddenAgentsMd {
+    here.ancestors()
+        .find(|dir| crate::guest::git_dir(dir).is_some())
+        .map(crate::guest::hidden_agents_md)
+        .unwrap_or_default()
+}
+
+/// The branch of this project whose folder holds `file` at its top: a repo's own folder, or one
+/// of its pieces. `None` for a file anywhere else. Path arithmetic on the layout
+/// `docs/plane-format.md` records; the window's actions place the branch again by name.
+fn branch_holding(root: &Path, file: &Path) -> Option<TheirAgentsMd> {
+    let dir = std::fs::canonicalize(file.parent()?).ok()?;
+    if let Some(found) = crate::worktree::locate(root, &dir) {
+        let piece = crate::worktree::path_for(root, &found.workspace, &found.repo, &found.piece)
+            .ok()
+            .and_then(|path| std::fs::canonicalize(path).ok())?;
+        return (piece == dir).then_some(TheirAgentsMd {
+            workspace: found.workspace,
+            repo: found.repo,
+            piece: Some(found.piece),
+        });
+    }
+    let workspaces = std::fs::canonicalize(root.join("workspaces")).ok()?;
+    let parts: Vec<&str> = dir
+        .strip_prefix(&workspaces)
+        .ok()?
+        .iter()
+        .map(|part| part.to_str())
+        .collect::<Option<_>>()?;
+    match parts.as_slice() {
+        [ws, repo]
+            if crate::contain::workspace_name_ok(ws) && crate::contain::repo_name_ok(repo) =>
+        {
+            Some(TheirAgentsMd {
+                workspace: (*ws).to_owned(),
+                repo: (*repo).to_owned(),
+                piece: None,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// What a chat starting in `piece` as `persona` is told in its `AGENTS.md`

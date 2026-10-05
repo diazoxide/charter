@@ -71,7 +71,10 @@ type Answer = {
   repos?: RepoStates;
   pieces: Record<string, Piece[]>;
   piecesRefused: Record<string, string>;
-  trouble?: string;
+  /** Each ask's own refusal, so one ask's success clears its own and never the other's
+   *  (NO-4): a refusal that stood after a read went through read as a read still failing. */
+  panelsTrouble?: string;
+  reposTrouble?: string;
   /** Whether the repos ask has come back, however it came back. */
   read?: boolean;
 };
@@ -135,15 +138,15 @@ export function useWorkspaceState(
       .then((said) => {
         if (gone) return;
         if (said.status === "error") {
-          told({ trouble: said.error });
+          told({ panelsTrouble: said.error });
         } else if (said.data?.workspace === workspace) {
           // An `ok` answer with no body reads as `ok` all the same, and the window must not
           // throw inside a promise nothing is holding. It simply has nothing to draw.
-          told({ panels: said.data });
+          told({ panels: said.data, panelsTrouble: undefined });
         }
       })
       .catch((err: unknown) => {
-        if (!gone) told({ trouble: String(err) });
+        if (!gone) told({ panelsTrouble: String(err) });
       });
 
     return () => {
@@ -161,13 +164,13 @@ export function useWorkspaceState(
       .then((said) => {
         if (gone) return;
         if (said.status === "error") {
-          told({ read: true, trouble: said.error });
+          told({ read: true, reposTrouble: said.error });
         } else if (said.data?.workspace === workspace) {
-          told({ read: true, repos: said.data });
+          told({ read: true, repos: said.data, reposTrouble: undefined });
         }
       })
       .catch((err: unknown) => {
-        if (!gone) told({ read: true, trouble: String(err) });
+        if (!gone) told({ read: true, reposTrouble: String(err) });
       });
 
     return () => {
@@ -210,7 +213,15 @@ export function useWorkspaceState(
             if (said.status === "error") {
               return { ...was, piecesRefused: { ...was.piecesRefused, [repo]: said.error } };
             }
-            return { ...was, pieces: { ...was.pieces, [repo]: said.data ?? [] } };
+            // A listing that went through clears that clone's refusal (NO-4).
+            const refused = Object.fromEntries(
+              Object.entries(was.piecesRefused).filter(([one]) => one !== repo),
+            );
+            return {
+              ...was,
+              pieces: { ...was.pieces, [repo]: said.data ?? [] },
+              piecesRefused: refused,
+            };
           });
         })
         .catch((err: unknown) => {
@@ -232,7 +243,7 @@ export function useWorkspaceState(
     repos: mine?.repos,
     pieces: mine?.pieces ?? NOTHING_YET.pieces,
     piecesRefused: mine?.piecesRefused ?? NOTHING_YET.piecesRefused,
-    trouble: mine?.trouble,
+    trouble: mine?.panelsTrouble ?? mine?.reposTrouble,
     // Reading until the answer that runs git has come back for THIS workspace.
     reading: workspace !== undefined && !mine?.read,
   };

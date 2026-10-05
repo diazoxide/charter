@@ -1,4 +1,5 @@
 import { LiveMark } from "./LiveDialog";
+import { Notice } from "./Notice";
 import {
   useEffect,
   useMemo,
@@ -188,6 +189,7 @@ export function Explorer({
   focus,
   onFocus,
   cloning,
+  onReadAgain,
 }: {
   /** The project, for reading a branch's folders. Without one no folder is read. */
   plane?: PlaneId;
@@ -217,6 +219,9 @@ export function Explorer({
   /** What this window is cloning into the workspace, so a repo that is not cloned here shows
    *  its clone under way, or why it failed (#1215). */
   cloning?: Cloning;
+  /** Asks the workspace's reads again: the way out of a refused one (NO-4). It is this
+   *  region's to offer, for the bottom bar's lines too, since that region is not pressed. */
+  onReadAgain: () => void;
 }) {
   /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
    *  it cannot be where the keyboard comes back in. */
@@ -509,7 +514,11 @@ export function Explorer({
             offers={offers}
             onPress={onPress}
           />
-          {state.trouble && <Trouble>{state.trouble}</Trouble>}
+          {state.trouble && (
+            <ReadRefused cause={`workspace-read:${workspace}`} onReadAgain={onReadAgain}>
+              {state.trouble}
+            </ReadRefused>
+          )}
           {filterBox}
           <div role="tree" aria-label={`Chats and files of ${name}`} onKeyDown={onTreeKey}>
             <ChatList
@@ -534,7 +543,11 @@ export function Explorer({
   return (
     <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
       <nav ref={navRef} className="explorer" aria-label="Explorer" data-testid="explorer">
-        {state.trouble && <Trouble>{state.trouble}</Trouble>}
+        {state.trouble && (
+          <ReadRefused cause={`workspace-read:${workspace}`} onReadAgain={onReadAgain}>
+            {state.trouble}
+          </ReadRefused>
+        )}
 
         {filterBox}
 
@@ -621,10 +634,13 @@ export function Explorer({
                   {piecesRefused[repo] ? (
                     // Said, never swallowed: a clone with no rows otherwise reads as a clone
                     // nobody has cut a branch in.
-                    <Trouble>
+                    <ReadRefused
+                      cause={`branches-read:${workspace}/${repo}`}
+                      onReadAgain={onReadAgain}
+                    >
                       charter could not list the branches of <code>{repo}</code>:{" "}
                       {piecesRefused[repo]}
-                    </Trouble>
+                    </ReadRefused>
                   ) : pieces[repo] === undefined ? (
                     <Pending>Asking git…</Pending>
                   ) : pieces[repo].length === 0 ? (
@@ -738,9 +754,13 @@ export function Explorer({
         />
 
         {panels?.refused.map(([name, why]) => (
-          <Trouble key={`refused-${name}`}>
+          <ReadRefused
+            key={`refused-${name}`}
+            cause={`repo-refused:${workspace}/${name}`}
+            onReadAgain={onReadAgain}
+          >
             charter will not read <code>{name}</code>: {why}
-          </Trouble>
+          </ReadRefused>
         ))}
 
         {toggles}
@@ -749,12 +769,28 @@ export function Explorer({
   );
 }
 
-/** A refusal, with the mark that says it is one.
- *
- *  The icon is decorative and Lucide hides it from a screen reader by itself (it adds
- *  `aria-hidden` to any icon given no accessible name of its own), so what an assistive
- *  technology gets is the alert and its sentence, exactly as before. */
-function Trouble({ children }: { children: ReactNode }) {
+/** **A read this region was refused, as a Notice** (NO-4, V91b): the sentence, and **Read
+ *  again**, which asks the workspace's reads again and clears the line once one goes through. */
+function ReadRefused({
+  cause,
+  onReadAgain,
+  children,
+}: {
+  cause: string;
+  onReadAgain: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Notice cause={cause} tone="trouble" fixes={[{ label: "Read again", onPress: onReadAgain }]}>
+      {children}
+    </Notice>
+  );
+}
+
+/** A folder of a branch's tree that could not be read, said in the tree where its entries
+ *  would be: a row's own refusal, not a standing line about the window (folding the folder and
+ *  opening it again reads it again). The icon is decorative and Lucide hides it. */
+function FolderRefused({ children }: { children: ReactNode }) {
   return (
     <p className="trouble" role="alert">
       <TriangleAlert className="node-icon" />
@@ -1144,7 +1180,7 @@ function FilesRow({
         ("pending" in level ? (
           <Pending>Reading…</Pending>
         ) : "trouble" in level ? (
-          <Trouble>{level.trouble}</Trouble>
+          <FolderRefused>{level.trouble}</FolderRefused>
         ) : (
           <FolderEntries branch={branch} level={level} at={at} />
         ))}
