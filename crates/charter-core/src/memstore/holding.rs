@@ -568,9 +568,10 @@ pub(super) fn duplicate_of(spot: &Spot, text: &str) -> Option<String> {
 
 /// Any store of the project held by descriptor: a workspace's as [`reach`] holds it, any other
 /// (a persona's, `_shared`'s) one plain name at a time from the project's root, never through a
-/// link. `make` makes what is missing on the way — which, once the caller has found the workspace
-/// or the persona there, is only ever the store itself or `_shared/` — and `Ok(None)` is a store
-/// that is not there and is not to be made.
+/// link, and named in a sentence by its path in the project. `make` makes what is missing on
+/// the way — which, once the caller has found the workspace or the persona there, is only ever
+/// the store itself or `_shared/` — and `Ok(None)` is a store that is not there and is not to
+/// be made.
 fn hold_any(root: &Path, dir: &Path, make: bool) -> io::Result<Option<Store>> {
     let below_root = || {
         refused(format!(
@@ -594,6 +595,12 @@ fn hold_any(root: &Path, dir: &Path, make: bool) -> io::Result<Option<Store>> {
             let [first, rest @ ..] = parts.as_slice() else {
                 return Err(below_root());
             };
+            // A link in a persona's store reaches outside that store, not "its workspace".
+            let within = match parts.as_slice() {
+                ["personas", crate::personas::SHARED, ..] => "the shared store",
+                ["personas", ..] => "the persona store",
+                _ => "the project",
+            };
             let Some(mut store) = Store::hold(
                 root,
                 &Place::PlaneRoot,
@@ -605,6 +612,7 @@ fn hold_any(root: &Path, dir: &Path, make: bool) -> io::Result<Option<Store>> {
             else {
                 return Ok(None);
             };
+            store = store.named(parts.join("/"), within.to_owned());
             for part in rest {
                 store = match store.sub(part, make).map_err(unheld)? {
                     Some(below) => below,
@@ -617,7 +625,9 @@ fn hold_any(root: &Path, dir: &Path, make: bool) -> io::Result<Option<Store>> {
 }
 
 /// [`super::move_one`], with both stores held by descriptor: the file is renamed from one held
-/// store into the other, and nothing is looked up by path once they are open.
+/// store into the other, never over anything, and nothing is looked up by path once they are
+/// open. **Nothing is made until every check has passed**: a target store that is not there
+/// yet is made only for the rename, so a refusal leaves no empty store behind.
 pub(super) fn move_one(
     root: &Path,
     from: &Path,
@@ -629,28 +639,24 @@ pub(super) fn move_one(
 ) -> io::Result<PathBuf> {
     let name = md_name(ident);
     let src = hold_any(root, from, false)?.ok_or_else(|| no_such(ident))?;
-    // Asked before the target is held, which may make its store: a memory that is not there
-    // makes nothing anywhere.
     if !md_names(&src)?.contains(&name) {
         return Err(no_such(ident));
     }
-    let dst = hold_any(root, to, true)?.ok_or_else(|| {
-        refused(format!(
-            "{} could not be made, so nothing moved",
-            crate::shown::readable(
-                &to.strip_prefix(root).unwrap_or(to).to_string_lossy(),
-                super::PATH_LIMIT
-            )
-        ))
-    })?;
+    // The target as it is: `None` when its store is not there yet, and then nothing is in it.
+    let there = hold_any(root, to, false)?;
     // Both locks, always in the order of the stores' paths, so two moves the opposite ways
-    // cannot each hold one and wait on the other.
-    let (_first, _second) = if from < to {
-        let first = src.lock().map_err(busy)?;
-        (first, dst.lock().map_err(busy)?)
-    } else {
-        let first = dst.lock().map_err(busy)?;
-        (first, src.lock().map_err(busy)?)
+    // cannot each hold one and wait on the other (and `Store::lock` gives up after a bound).
+    // A target that is not there yet has nothing to take turns on.
+    let (_first, _second) = match &there {
+        Some(dst) if to < from => {
+            let first = dst.lock().map_err(busy)?;
+            (Some(first), Some(src.lock().map_err(busy)?))
+        }
+        Some(dst) => {
+            let first = src.lock().map_err(busy)?;
+            (Some(first), Some(dst.lock().map_err(busy)?))
+        }
+        None => (Some(src.lock().map_err(busy)?), None),
     };
     // Again under the locks: it may have gone between the look above and now.
     if !md_names(&src)?.contains(&name) {
@@ -658,34 +664,79 @@ pub(super) fn move_one(
     }
     let text = raw(&src, &name)?;
     let dest = super::moved_name(&name, &text, timestamped, now);
-    let bare = super::unstamped(&dest);
-    if dst.entry(&dest).map_err(refused)?.is_some()
-        || md_names(&dst)?
-            .iter()
-            .any(|held| super::unstamped(held) == bare)
-    {
-        return Err(super::taken(to, root, &dest));
-    }
-    if let Some(entry) = dst.entry(INDEX).map_err(refused)?
-        && !entry.plain()
-    {
-        return Err(refused(dst.not_plain(INDEX, entry.kind)));
+    if let Some(dst) = &there {
+        let bare = super::unstamped(&dest);
+        if dst.entry(&dest).map_err(refused)?.is_some()
+            || md_names(dst)?
+                .iter()
+                .any(|held| super::unstamped(held) == bare)
+        {
+            return Err(super::taken(to, root, &dest));
+        }
+        if let Some(entry) = dst.entry(INDEX).map_err(refused)?
+            && !entry.plain()
+        {
+            return Err(refused(dst.not_plain(INDEX, entry.kind)));
+        }
     }
     gate(root, &from.join(&name))?;
     gate(root, &to.join(&dest))?;
     gate(root, &to.join(INDEX))?;
+    // Every check has passed: only now is a target that is not there made.
+    let made;
+    let dst = match &there {
+        Some(dst) => dst,
+        None => {
+            made = hold_any(root, to, true)?.ok_or_else(|| {
+                refused(format!(
+                    "{} could not be made, so nothing moved",
+                    crate::shown::readable(
+                        &to.strip_prefix(root).unwrap_or(to).to_string_lossy(),
+                        super::PATH_LIMIT
+                    )
+                ))
+            })?;
+            &made
+        }
+    };
     let at = to.join(&dest);
     let title = title_in(&at, &text);
-    src.rename_into(&name, &dst, &dest).map_err(|why| {
-        // The filesystem's own refusal keeps its kind: a store it will not let charter write
-        // is a permission, not a link.
-        io::Error::new(io::ErrorKind::PermissionDenied, why)
-    })?;
+    // The filesystem's own refusal keeps its kind: a store it will not let charter write is a
+    // permission, not a link.
+    let moved = src.rename_into_new(&name, dst, &dest);
+    if there.is_none() && !matches!(moved, Ok(true)) {
+        // The store made for this move, still empty: taken away again, so a move that did not
+        // happen leaves nothing behind. `remove_dir` takes only an empty directory and never
+        // follows a link.
+        let _ = std::fs::remove_dir(to);
+    }
+    let moved = moved.map_err(|why| io::Error::new(io::ErrorKind::PermissionDenied, why))?;
+    if !moved {
+        // Something appeared at the name since the look above, from a writer that does not take
+        // the store's lock: it is left as it is, and nothing moved.
+        return Err(super::taken(to, root, &dest));
+    }
     let line = format!("{}\n", index_line(&title, &dest));
     if let Err(why) = dst.append(INDEX, header, line.as_bytes()) {
-        // The file and its line go together: back where it was, under its own name.
-        let _ = dst.rename_into(&dest, &src, &name);
-        return Err(refused(why));
+        // The file and its line go together: back where it was, under its own name, and never
+        // over anything that appeared there meanwhile.
+        return Err(match dst.rename_into_new(&dest, &src, &name) {
+            Ok(true) => refused(why),
+            back => {
+                let stayed = format!(
+                    "{}/{dest}",
+                    to.strip_prefix(root).unwrap_or(to).to_string_lossy()
+                );
+                refused(format!(
+                    "{why}; and it could not be moved back ({}), so it stayed at {stayed} with \
+                     no line in that store's index",
+                    match back {
+                        Err(e) => e,
+                        _ => format!("{name} is taken there now"),
+                    }
+                ))
+            }
+        });
     }
     rewrite_index(&src, &name, None);
     Ok(at)

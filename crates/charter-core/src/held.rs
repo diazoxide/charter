@@ -76,17 +76,20 @@ pub(crate) struct Store {
     below: String,
     /// The store as the sentence names it: `the chat's memory`, `workspaces/alpha/memory`.
     said: String,
+    /// What a link in it reaches outside of, as a sentence names it: `its workspace`, or
+    /// `the persona store` for a persona's memory held from the project's root.
+    within: String,
 }
 
 /// The sentence for a store reached through a link, or holding one at `inside`. Never the
 /// absolute path.
-fn reaches_outside(said: &str, below: &str, inside: Option<&str>) -> String {
+fn reaches_outside(said: &str, within: &str, below: &str, inside: Option<&str>) -> String {
     match inside {
         Some(entry) => format!(
-            "{said} reaches outside its workspace through a link ({below}/{entry}), so nothing \
-             was done"
+            "{said} reaches outside {within} through a link ({below}/{entry}), so nothing was \
+             done"
         ),
-        None => format!("{said} reaches outside its workspace through a link, so nothing was done"),
+        None => format!("{said} reaches outside {within} through a link, so nothing was done"),
     }
 }
 
@@ -206,6 +209,11 @@ impl Store {
             (Who::Operator, Place::Workspace(ws)) => format!("workspaces/{ws}/{store}"),
             (Who::Operator, Place::PlaneRoot) => store.to_owned(),
         };
+        let within = match place {
+            Place::Workspace(_) => "its workspace",
+            Place::PlaneRoot => "the project",
+        }
+        .to_owned();
         let dir = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
         let step = dir | OFlags::NOFOLLOW;
         // The root is the project, named by the environment or the operator, not by anything a
@@ -249,6 +257,7 @@ impl Store {
             fd,
             below: String::new(),
             said: said.clone(),
+            within,
         };
         let Some(mut held) = below.sub(store, make != Make::Nothing)? else {
             return Ok(None);
@@ -278,9 +287,9 @@ impl Store {
         };
         let outside = || {
             if self.below.is_empty() {
-                reaches_outside(&self.said, name, None)
+                reaches_outside(&self.said, &self.within, name, None)
             } else {
-                reaches_outside(&self.said, &self.below, Some(name))
+                reaches_outside(&self.said, &self.within, &self.below, Some(name))
             }
         };
         let fd = match rustix::fs::openat(&self.fd, name, step, Mode::empty()) {
@@ -307,6 +316,7 @@ impl Store {
             fd,
             below,
             said: self.said.clone(),
+            within: self.within.clone(),
         }))
     }
 
@@ -351,7 +361,12 @@ impl Store {
     pub(crate) fn refuse_anything_odd(&self) -> Result<(), String> {
         match odd_inside(self.fd.as_fd(), "", 0) {
             None => Ok(()),
-            Some(Odd::Link(entry)) => Err(reaches_outside(&self.said, &self.below, Some(&entry))),
+            Some(Odd::Link(entry)) => Err(reaches_outside(
+                &self.said,
+                &self.within,
+                &self.below,
+                Some(&entry),
+            )),
             Some(Odd::NotAFile(entry)) => Err(format!(
                 "{} holds {}/{entry}, which is neither a file nor a directory, so nothing was \
                  done",
@@ -549,6 +564,55 @@ impl Store {
         rustix::fs::unlinkat(&self.fd, name, AtFlags::empty()).map_err(|e| self.failed(e))
     }
 
+    /// This store, named in a sentence as `said`, and a link in it as reaching outside
+    /// `within` — for a store held from the project's root that is not the project's own,
+    /// such as a persona's memory (KN-3).
+    pub(crate) fn named(mut self, said: String, within: String) -> Self {
+        self.said = said;
+        self.within = within;
+        self
+    }
+
+    /// Move `name` from this store to `to` in `into`, never over anything: `Ok(false)`, moving
+    /// nothing, when something is at `to` already.
+    ///
+    /// The kernel's no-replace rename where there is one (`renameat2(RENAME_NOREPLACE)` on
+    /// Linux, `renameatx_np(RENAME_EXCL)` on macOS), so a file a writer that does not take the
+    /// store's lock planted at `to` after the caller looked is refused rather than replaced. A
+    /// filesystem that does not have it is renamed onto plainly, after a look (`renameat`).
+    pub(crate) fn rename_into_new(
+        &self,
+        name: &str,
+        into: &Store,
+        to: &str,
+    ) -> Result<bool, String> {
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios"
+        ))]
+        match rustix::fs::renameat_with(
+            &self.fd,
+            name,
+            &into.fd,
+            to,
+            rustix::fs::RenameFlags::NOREPLACE,
+        ) {
+            Ok(()) => return Ok(true),
+            Err(rustix::io::Errno::EXIST) => return Ok(false),
+            Err(
+                rustix::io::Errno::INVAL | rustix::io::Errno::NOSYS | rustix::io::Errno::NOTSUP,
+            ) => {}
+            Err(e) => return Err(self.failed(e)),
+        }
+        if into.entry(to)?.is_some() {
+            return Ok(false);
+        }
+        self.rename_into(name, into, to)?;
+        Ok(true)
+    }
+
     /// Move `name` from this store to `to` in `into`, another store held the same way.
     pub(crate) fn rename_into(&self, name: &str, into: &Store, to: &str) -> Result<(), String> {
         rustix::fs::renameat(&self.fd, name, &into.fd, to).map_err(|e| self.failed(e))
@@ -566,7 +630,7 @@ impl Store {
 
     /// The sentence for `name` in this store being a link.
     pub(crate) fn outside(&self, name: &str) -> String {
-        reaches_outside(&self.said, &self.below, Some(name))
+        reaches_outside(&self.said, &self.within, &self.below, Some(name))
     }
 
     /// The sentence for `name`, of `kind`, not being a plain file: a link (or a file with

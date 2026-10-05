@@ -321,6 +321,8 @@ describe("moving a memory (KN-3)", () => {
     const choice = await screen.findByRole("combobox", { name: "Move to" });
     const offered = [...choice.querySelectorAll("option")].map((one) => one.textContent);
     expect(offered).toEqual(["Pick a store…", "alpha — workspace", "devops — persona", "shared"]);
+    // A move out of a LOCAL journal publishes the memory: the help line says so.
+    expect(choice).toHaveAccessibleDescription(/published with the project/);
   });
 
   it("holds the pick, and moves only on the Move button", async () => {

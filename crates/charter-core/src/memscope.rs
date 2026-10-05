@@ -104,6 +104,10 @@ impl Scope {
 /// persona's store and `<its stamp>-<slug>` in a journal ([`memstore::move_one`]). `now` stamps
 /// the name of a memory with no stamp line moved into a journal.
 ///
+/// Moved out of a journal and back, a memory has its first name again **to the minute**: its
+/// stamp line holds minutes, so the seconds of its first name come back as `00`
+/// ([`memstore::move_one`]).
+///
 /// Refused, with nothing moved: the same scope twice (`InvalidInput`), a scope the plane does
 /// not have ([`Scope::dir`]), a target holding a memory of that name (`AlreadyExists`), and a
 /// store charter may not write.

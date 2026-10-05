@@ -1784,8 +1784,13 @@ pub(crate) fn unstamped(name: &str) -> &str {
 /// are `timestamped` or not (KN-3): its name without the journal's prefix in a persona's store;
 /// in a journal, its own name when it has a prefix already, else the prefix of its own stamp
 /// line (`_YYYY-MM-DD HH:MM · kind_`, seconds `00`), else of `now` for a file with none. So a
-/// memory moved away and back has its first name again, and a journal lists it where it was
-/// recorded rather than where it was moved.
+/// journal lists it where it was recorded rather than where it was moved.
+///
+/// **A memory moved out of a journal and back has its first name again to the minute, not to
+/// the second.** The stamp line, which is all the memory carries with it, holds minutes, so
+/// `20260302-091437-a-fact.md` comes back as `20260302-091400-a-fact.md`; its text is the same
+/// byte for byte. Keeping the seconds would mean writing them into the file or keeping the
+/// journal's prefix in a persona's store, and either changes what a persona's memory is.
 pub(crate) fn moved_name(
     name: &str,
     text: &str,
@@ -1879,7 +1884,6 @@ fn move_by_path(
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    std::fs::create_dir_all(to)?;
     let (_first, _second) = if from < to {
         (crate::rewrite::Lock::on(from), crate::rewrite::Lock::on(to))
     } else {
@@ -1909,6 +1913,8 @@ fn move_by_path(
     gate(root, &target)?;
     gate(root, &index)?;
     let title = title_in(&target, &text);
+    // Made only now, once every check has passed: a refusal leaves no empty store.
+    std::fs::create_dir_all(to)?;
     std::fs::rename(&file, &target)?;
     if !index.exists() {
         let _ = std::fs::write(&index, header);
