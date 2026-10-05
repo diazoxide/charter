@@ -421,6 +421,36 @@ pub fn optimize(
     if unread.is_empty() { 0 } else { 1 }
 }
 
+/// `charter workspace optimize`'s curation over the workspaces `names`, in order: [`optimize`]
+/// with each workspace's journal as a store and the workspace command's own words. The CLI
+/// and the doctor's `memory-optimize` fix both call it, so the two curate alike.
+pub fn optimize_workspaces(
+    root: &Path,
+    names: &[String],
+    apply: bool,
+    stale_days: i64,
+    today: chrono::NaiveDate,
+    changed: &mut dyn FnMut(),
+    say: crate::repocmd::Sink,
+) -> u8 {
+    let stores: Vec<Store> = names
+        .iter()
+        .map(|n| Store {
+            label: n.clone(),
+            dir: root.join("workspaces").join(n).join("memory"),
+            verified_pct: None,
+        })
+        .collect();
+    let how = Optimizing {
+        apply,
+        stale_days,
+        today,
+        proposals: "  proposals (not auto-applied — decide these yourself):",
+        tidy: "\nNo safe ops to apply — the journal is already tidy.",
+    };
+    optimize(root, &stores, &how, changed, say)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

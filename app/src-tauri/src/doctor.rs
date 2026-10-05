@@ -132,7 +132,8 @@ pub async fn plane_doctor(
     // Resolved on the thread that asked, as `workspace_repos` does: a plane that is not open
     // refuses here, with the registry's own sentence, rather than inside the blocking half.
     let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || report(&root, full))
+    let shipped = planes.shipped().clone();
+    tauri::async_runtime::spawn_blocking(move || report(&root, full, &shipped))
         .await
         .map_err(|err| format!("the doctor did not finish: {err}"))
 }
@@ -164,14 +165,21 @@ pub async fn plane_doctor_fix(
     fix: String,
 ) -> Result<DoctorFixed, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || fixed(&root, &fix))
+    let shipped = planes.shipped().clone();
+    tauri::async_runtime::spawn_blocking(move || fixed(&root, &fix, &shipped))
         .await
         .map_err(|err| format!("the fix did not finish: {err}"))?
 }
 
-/// [`plane_doctor_fix`], on the calling thread.
-fn fixed(root: &std::path::Path, fix: &str) -> Result<DoctorFixed, String> {
+/// [`plane_doctor_fix`], on the calling thread. `plugin-install` installs a copy whose hooks run
+/// the `charter` this app ships ([`crate::Shipped`]), never the app's own executable.
+fn fixed(
+    root: &std::path::Path,
+    fix: &str,
+    shipped: &crate::Shipped,
+) -> Result<DoctorFixed, String> {
     use charter_core::doctor::fix::{self as registry, FixId, Fixed};
+    use charter_core::plugin_install::Machine;
     let id = FixId::parse(fix).ok_or_else(|| {
         format!(
             "charter has no fix '{}'; the fixes are {}",
@@ -179,7 +187,14 @@ fn fixed(root: &std::path::Path, fix: &str) -> Result<DoctorFixed, String> {
             FixId::ALL.map(FixId::id).join(", ")
         )
     })?;
-    Ok(match registry::apply(root, id) {
+    let applied = match id {
+        FixId::PluginInstall => match machine(shipped, Machine::from_env) {
+            Ok(machine) => registry::apply_for(root, id, &machine),
+            Err(why) => Fixed::Refused(why),
+        },
+        _ => registry::apply(root, id),
+    };
+    Ok(match applied {
         Fixed::Ran { said, complete } => DoctorFixed {
             fix: id.id().to_owned(),
             refused: None,
@@ -204,12 +219,43 @@ fn fixed(root: &std::path::Path, fix: &str) -> Result<DoctorFixed, String> {
 /// another. Not pinned: the plane was chosen by the operator opening it, not by an
 /// environment variable, and `pinned` is what makes the `nested plane` row talk about
 /// `$CHARTER_ROOT`.
-pub(crate) fn report(root: &std::path::Path, full: bool) -> DoctorReport {
+///
+/// **The plugin rows read this machine only in the full doctor**, as the harnesses the `charter`
+/// this app ships would find them, so the dialog can offer the `plugin-install` fix. The
+/// preflight a project opens with reads no harness configuration, as before.
+pub(crate) fn report(root: &std::path::Path, full: bool, shipped: &crate::Shipped) -> DoctorReport {
+    let machine = if full {
+        machine(
+            shipped,
+            charter_core::plugin_install::Machine::from_env_to_read,
+        )
+        .ok()
+    } else {
+        None
+    };
     report_in(
         root,
         full,
         charter_core::machine::config_root_if_there().as_deref(),
+        machine,
     )
+}
+
+/// This machine's harnesses, with the `charter` this app ships as the one the hooks run and its
+/// plugin as the one copied: `from_env` for a writer, `from_env_to_read` for the doctor.
+fn machine(
+    shipped: &crate::Shipped,
+    from_env: fn(
+        std::path::PathBuf,
+        Option<std::path::PathBuf>,
+    ) -> Result<charter_core::plugin_install::Machine, String>,
+) -> Result<charter_core::plugin_install::Machine, String> {
+    let binary = shipped.binary.as_ref().ok_or(
+        "this app has no `charter` beside it for the hooks to run, so nothing was installed",
+    )?;
+    // Resolved, as the `charter` that installed a copy named itself.
+    let binary = binary.canonicalize().unwrap_or_else(|_| binary.clone());
+    from_env(binary, shipped.plugin.clone())
 }
 
 /// [`report`], reading the forge request budgets (`forge budget` rows, FW-4) kept under the
@@ -219,8 +265,13 @@ fn report_in(
     root: &std::path::Path,
     full: bool,
     config_root: Option<&std::path::Path>,
+    machine: Option<charter_core::plugin_install::Machine>,
 ) -> DoctorReport {
     let doctor = Doctor::at(root, root, false, !full);
+    let doctor = match machine {
+        Some(machine) => doctor.with_machine(machine),
+        None => doctor,
+    };
     let doctor = match config_root {
         Some(config_root) => doctor.reading_budgets_in(config_root),
         None => doctor,
@@ -405,7 +456,7 @@ mod tests {
     /// [`super::report`] reading no machine store: the real one reaches the operator's own
     /// config directory, which the plane fence refuses a test. Shadows the glob import.
     fn report(root: &std::path::Path, full: bool) -> DoctorReport {
-        report_in(root, full, None)
+        report_in(root, full, None, None)
     }
 
     /// A plane charter recognises, resolved (macOS temp dirs are links).
@@ -426,7 +477,7 @@ mod tests {
         // row the app reworded, dropped or reordered is a failure here and not a review note.
         let (_dir, root) = plane();
 
-        let drawn = report_in(&root, false, None);
+        let drawn = report_in(&root, false, None, None);
         let printed: serde_json::Value = serde_json::from_str(&charter_core::doctor::json(
             &Doctor::at(&root, &root, false, true).run(),
         ))
@@ -463,7 +514,8 @@ mod tests {
         assert_eq!(before.status, DoctorStatus::Warn, "{before:?}");
         assert_eq!(before.fix.as_deref(), Some("reinit"));
 
-        let done = fixed(&root, "reinit").expect("a fix the registry has");
+        let done =
+            fixed(&root, "reinit", &crate::Shipped::default()).expect("a fix the registry has");
         assert_eq!(done.refused, None, "{done:?}");
         assert!(done.complete, "{done:?}");
         assert!(done.said.iter().any(|l| l.contains("personas")), "{done:?}");
@@ -474,9 +526,54 @@ mod tests {
     }
 
     #[test]
+    fn the_full_doctor_offers_plugin_install_on_a_machine_without_it() {
+        // FX-2: the plugin rows answer for the machine the window was handed, so the dialog
+        // draws a Fix button on them.
+        let (dir, root) = plane();
+        let place = dir
+            .path()
+            .canonicalize()
+            .expect("it resolves")
+            .join("machine");
+        std::fs::create_dir_all(place.join("codex")).expect("a codex home");
+        std::fs::write(place.join("charter-bin"), "").expect("a binary");
+        let machine = charter_core::plugin_install::Machine {
+            claude_config: place.join("claude"),
+            codex_home: place.join("codex"),
+            opencode_config: place.join("opencode"),
+            charter_dir: place.join("config/charter"),
+            binary: place.join("charter-bin"),
+            bundle: None,
+        };
+        let drawn = report_in(&root, true, None, Some(machine));
+        let install = drawn
+            .rows
+            .iter()
+            .find(|r| r.name == "plugin install")
+            .expect("a plugin install row");
+        assert_eq!(install.status, DoctorStatus::Warn, "{install:?}");
+        assert_eq!(install.fix.as_deref(), Some("plugin-install"));
+    }
+
+    #[test]
+    fn plugin_install_from_an_app_that_ships_no_charter_is_refused() {
+        let (_dir, root) = plane();
+        let done = fixed(&root, "plugin-install", &crate::Shipped::default())
+            .expect("a fix the registry has");
+        assert!(!done.complete, "{done:?}");
+        assert!(
+            done.refused
+                .as_deref()
+                .is_some_and(|why| why.contains("no `charter` beside it")),
+            "{done:?}"
+        );
+    }
+
+    #[test]
     fn a_fix_the_registry_does_not_have_is_refused_by_name() {
         let (_dir, root) = plane();
-        let refused = fixed(&root, "index-lock").expect_err("no such fix");
+        let refused =
+            fixed(&root, "index-lock", &crate::Shipped::default()).expect_err("no such fix");
         assert!(
             refused.contains("index-lock") && refused.contains("reinit"),
             "{refused}"
@@ -496,7 +593,7 @@ mod tests {
                 .map(|r| r.detail.clone())
                 .collect::<Vec<_>>()
         };
-        assert!(budget_rows(&report_in(&root, false, Some(config.path()))).is_empty());
+        assert!(budget_rows(&report_in(&root, false, Some(config.path()), None)).is_empty());
         let account = charter_core::forge::Account {
             kind: charter_core::forge::Kind::GitLab,
             host: "gitlab.com".into(),
@@ -504,7 +601,7 @@ mod tests {
         };
         Meter::kept_in(config.path(), &account, std::sync::Arc::new(SystemClock)).record(None);
         assert_eq!(
-            budget_rows(&report_in(&root, false, Some(config.path()))),
+            budget_rows(&report_in(&root, false, Some(config.path()), None)),
             [
                 "gitlab octocat@gitlab.com: 1 of 1000 counted requests this hour (1 sent, 0 \
               answered 304 Not Modified); the forge has stated no limit"

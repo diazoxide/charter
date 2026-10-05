@@ -35,9 +35,16 @@ pub(super) fn inventory(d: &Doctor) -> Row {
             "not built — this plane's own repo is clonable without it",
         );
     }
-    Row::warn(
+    let row = Row::warn(
         NAME,
         "empty, and this plane's own repo could not be derived",
         "Run: charter discover  (builds inventory/repos.json).",
-    )
+    );
+    // Offered only where the project declares a forge (FX-2): without one, discover has
+    // nobody to ask, and a Fix button that can only fail reads as broken.
+    if forge::declares_a_forge(cfg) {
+        row.fixed_by(super::fix::FixId::Discover)
+    } else {
+        row
+    }
 }

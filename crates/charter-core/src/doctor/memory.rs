@@ -254,9 +254,34 @@ pub(super) fn memory_indexes(d: &Doctor) -> Row {
             hint,
         );
     }
-    row(
+    let found = row(
         Status::Warn,
         format!("{dangling} dangling, {unindexed} unindexed"),
         hint,
-    )
+    );
+    // `optimize --apply` links an unindexed file and only proposes a dangling link, so it is
+    // the fix only when something is unindexed (FX-2).
+    if unindexed > 0 {
+        found.fixed_by(super::fix::FixId::MemoryOptimize)
+    } else {
+        found
+    }
+}
+
+/// The kinds of memory base (`persona`, `workspace`) holding a file its `MEMORY.md` does not
+/// list, which `charter persona|workspace optimize --all --apply` links: what the
+/// `memory-optimize` fix curates. A base charter cannot read, or whose index it will not touch,
+/// is left out, as the row leaves it out of its count.
+pub(super) fn unindexed_kinds(root: &Path) -> BTreeSet<&'static str> {
+    let Ok((bases, _)) = memory_bases(root) else {
+        return BTreeSet::new();
+    };
+    bases
+        .iter()
+        .filter(|(_, dir)| dir.is_dir() && index_refusal(root, dir).is_none())
+        .filter(|(_, dir)| {
+            crate::memstore::index_drift(root, dir).is_ok_and(|(_, unlinked)| !unlinked.is_empty())
+        })
+        .map(|(label, _)| kind(label))
+        .collect()
 }

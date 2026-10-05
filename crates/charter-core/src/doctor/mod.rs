@@ -444,10 +444,18 @@ impl Doctor {
     /// Asks only the checks that can carry a fix id, rather than [`Doctor::run`]'s every row:
     /// those ask git and a forge, and `--fix` runs the whole doctor again after it fixes.
     pub fn fixes(&self) -> Vec<fix::FixId> {
-        let mut ids: Vec<fix::FixId> = [config::schema(self)]
-            .into_iter()
-            .filter_map(|row| row.fix)
-            .collect();
+        let mut ids: Vec<fix::FixId> = [
+            plugin::plugin_install(self),
+            plugin::plugin(self),
+            plugin::plugin_files(self),
+            config::schema(self),
+            profiles::harness_profiles(self),
+            memory::memory_indexes(self),
+            inventory::inventory(self),
+        ]
+        .into_iter()
+        .filter_map(|row| row.fix)
+        .collect();
         ids.sort();
         ids.dedup();
         ids

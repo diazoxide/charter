@@ -846,6 +846,12 @@ impl Planes {
         }
     }
 
+    /// What this build ships that a chat is armed with: the `charter` its hooks run and the
+    /// plugin. The doctor's `plugin-install` fix installs these.
+    pub(crate) fn shipped(&self) -> &crate::Shipped {
+        &self.shipped
+    }
+
     /// Records every hook call of every project this registry holds into `events` (FD-9).
     pub fn recording_events(mut self, events: Option<hooks::Events>) -> Self {
         self.events = events;

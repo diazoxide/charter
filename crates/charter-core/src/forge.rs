@@ -434,6 +434,12 @@ pub fn load_config(root: &Path) -> Result<toml::Table, String> {
     Ok(cfg)
 }
 
+/// Whether `charter.toml` declares at least one `[[forge]]` block: whether `charter discover`
+/// has a forge of the project's own to ask.
+pub fn declares_a_forge(cfg: &toml::Table) -> bool {
+    !blocks(cfg).is_empty()
+}
+
 fn blocks(cfg: &toml::Table) -> Vec<&toml::Value> {
     match cfg.get("forge") {
         Some(toml::Value::Array(items)) => items.iter().collect(),

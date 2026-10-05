@@ -545,6 +545,47 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
     run.outcome(code)
 }
 
+/// The doctor's `local-ignore` fix (FX-2): append the one line `/charter.local.toml` to the
+/// project's `.gitignore`, creating the file when there is none, and nothing else. The part of
+/// [`reinit`] that keeps this machine's harness profiles out of a commit, without the rest of
+/// reinit. Every line already in `.gitignore` is kept as it is; a line already there is not
+/// added twice. A `.gitignore` that is a link out of the project is refused, writing nothing.
+pub fn ignore_local_profiles(root: &Path) -> Outcome {
+    if let Some(refusal) = refused(root) {
+        return refusal;
+    }
+    let mut run = Run::default();
+    if let Some(path) = run.gate(root, ".gitignore") {
+        let _held = crate::rewrite::Lock::on(root);
+        match append_gitignore(
+            &path,
+            &[LOCAL_PROFILES_IGNORE],
+            "added by `charter doctor --fix local-ignore` — harness profiles stay on this machine",
+        ) {
+            Ok(written) if !written.is_empty() => run
+                .created
+                .push(format!(".gitignore ({LOCAL_PROFILES_IGNORE})")),
+            Ok(_) => {}
+            Err(e) => {
+                run.err(format!("could not read or write {} ({e})", path.display()));
+                run.failed = true;
+            }
+        }
+    }
+    if !run.escapes.is_empty() || run.failed {
+        report_blockers(&mut run, "doctor --fix local-ignore");
+        return run.outcome(1);
+    }
+    if run.created.is_empty() {
+        run.ok(format!(
+            ".gitignore already names {LOCAL_PROFILES_IGNORE} — nothing to do."
+        ));
+    } else {
+        run.ok(format!("added {}.", run.created.join(", ")));
+    }
+    run.outcome(0)
+}
+
 /// `charter reinit`.
 pub fn reinit(place: &Place) -> Outcome {
     let root = &place.root;
