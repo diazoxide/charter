@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791177092005,
+  "lastUpdate": 1791185177900,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1974,6 +1974,48 @@ window.BENCHMARK_DATA = {
             "value": 101.7695425,
             "unit": "ms",
             "extra": "median of 5 runs: 100.964, 101.732, 101.770, 102.491, 102.732 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "ac9ba5ced5cfcbb8851301e4196d742f9cde2541",
+          "message": "SE-23 e2e: press the gear the driver cannot show, and leave the window as found\n\nsettings-gears.e2e.ts went red on both scenario jobs on its first run\n(run 37260967190), and every spec after it with it.\n\n- The gear: a WebDriver pointer move does not make WebKit match\n  `:hover`, a WebDriver Tab is synthesised in the page and moves no\n  focus, and whether a scripted focus matches `:focus-visible` depends\n  on what earlier specs did with the pointer. The gear is pressed from\n  the page; its quiet stays SettingsGears.test.tsx's to hold.\n- Sign commits: found by its `<label for>`, which wdio's `aria/`\n  selector does not resolve, and chosen by value plus a `change`,\n  because `selectByAttribute` leaves the value unset in this driver.\n- The leak: `close_plane` lets the core go of a project but leaves its\n  tab on the strip, in front, with its Settings tab, and one app\n  process serves the whole run. The after-hook now closes the project\n  from its own tab's close button, as saving.e2e.ts does, and puts the\n  copy's charter.toml back.\n\nRefs #1173\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T11:24:07+04:00",
+          "tree_id": "97af29d756c7745416bb6fbf0219d7066477775f",
+          "url": "https://github.com/diazoxide/charter/commit/ac9ba5ced5cfcbb8851301e4196d742f9cde2541"
+        },
+        "date": 1791185176542,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.445917,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.434, 0.444, 0.446, 0.453, 0.456 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.5211865,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.357, 16.481, 16.521, 16.605, 16.652 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.318011,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.042, 101.194, 101.318, 101.999, 102.512 ms"
           }
         ]
       }
