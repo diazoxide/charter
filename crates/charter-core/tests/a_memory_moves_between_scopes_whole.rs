@@ -1,6 +1,6 @@
 //! Moving a memory from one scope to another (KN-3, ADR 0065 Q13's follow-up): a workspace's
 //! journal, a persona's memory and `_shared`. The one core operation the window's Move and
-//! `charter workspace move` / `charter persona move-memory` both call.
+//! `charter workspace move-memory` / `charter persona move-memory` both call.
 //!
 //! The move is whole: the file is renamed, never copied, so no copy stays behind, and a move
 //! that is refused leaves both stores exactly as they were.

@@ -4,9 +4,9 @@
 //! A memory is in one of three kinds of store: a workspace's journal
 //! (`workspaces/<ws>/memory/`), a persona's own (`personas/<name>/memory/`), or the one every
 //! persona reads (`personas/_shared/memory/`). [`move_memory`] is the one move, which the
-//! window's Move and `charter workspace move` / `charter persona move-memory` both call; the
-//! file rules are [`crate::memstore::move_one`]'s, and `docs/plane-format.md` → *Moving a memory
-//! between scopes* is the contract.
+//! window's Move and `charter workspace move-memory` / `charter persona move-memory` both call;
+//! the file rules are [`crate::memstore::move_one`]'s, and `docs/plane-format.md` → *Moving a
+//! memory between scopes* is the contract.
 
 use std::io;
 use std::path::PathBuf;
