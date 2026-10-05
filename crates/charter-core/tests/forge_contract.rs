@@ -160,6 +160,16 @@ pub fn recording(kind: &str, case: &str) -> String {
         .unwrap_or_else(|e| panic!("the recording {}: {e}", file.display()))
 }
 
+/// The self-managed override at `file`, or `None` when there is none. Any other read error
+/// fails, so an override that is there is never quietly replaced by the main recording.
+fn own_recording(file: &Path) -> Option<String> {
+    match std::fs::read_to_string(file) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => panic!("the override {}: {e}", file.display()),
+    }
+}
+
 /// A forge's backend for `case`, answered as `how` says, or `None`, said aloud, for a case the
 /// live run leaves out.
 fn over(kind: &str, case: &str, how: How) -> Option<Over> {
@@ -193,7 +203,7 @@ fn over(kind: &str, case: &str, how: How) -> Option<Over> {
             let own = recordings()
                 .join(kind)
                 .join(format!("{case}.self_managed.json"));
-            let text = std::fs::read_to_string(&own).unwrap_or(text);
+            let text = own_recording(&own).unwrap_or(text);
             native::over(kind, SELF_MANAGED, &text)
         }
         How::Live => unreachable!("answered above"),
@@ -924,6 +934,52 @@ fn every_method_of_the_seam_has_a_case_on_both_forges() {
     }
 }
 
+/// Every recording names a case of [`CASES`], by its stem with or without `.self_managed`. A
+/// self-managed override whose case was renamed would otherwise go unread, and the self-managed
+/// run would quietly fall back to the case's main recording.
+#[test]
+fn every_recording_on_both_forges_names_a_case() {
+    charter_core::unsteered!();
+    for kind in ["github", "gitlab"] {
+        let dir = recordings().join(kind);
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let stem = name
+                .strip_suffix(".json")
+                .unwrap_or_else(|| panic!("{kind}: {name} is no recording"));
+            let case = stem.strip_suffix(".self_managed").unwrap_or(stem);
+            assert!(
+                CASES.contains(&case),
+                "{kind}: {name} names no case of the contract"
+            );
+        }
+    }
+}
+
+/// A self-managed override that is not there is no override; one that is there but cannot be
+/// read fails the case rather than passing it on the main recording.
+#[test]
+fn a_self_managed_override_that_cannot_be_read_fails_rather_than_falling_back() {
+    charter_core::unsteered!();
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        own_recording(&dir.path().join("absent.self_managed.json")),
+        None
+    );
+    let file = dir.path().join("there.self_managed.json");
+    std::fs::write(&file, "{}").unwrap();
+    assert_eq!(own_recording(&file).as_deref(), Some("{}"));
+    // A directory in the file's place is there, and reading it is an error, not a miss.
+    let unreadable = dir.path().join("dir.self_managed.json");
+    std::fs::create_dir(&unreadable).unwrap();
+    let said = std::panic::catch_unwind(|| own_recording(&unreadable));
+    assert!(
+        said.is_err(),
+        "an unreadable override passed as no override"
+    );
+}
+
 /// A case the live run does not run says why, and names the ticket that will run it (ADR 0070
 /// §7: a test is never skipped silently).
 #[test]
@@ -1210,11 +1266,19 @@ mod network_log {
         "acme", "api", "web", "main", "charter", "save", "12", "7", SHA, MERGE,
     ];
 
+    /// Each case's recording, then its self-managed override where there is one, so a path only
+    /// an override asks is checked too.
     fn paths(kind: &str) -> Vec<String> {
         CASES
             .iter()
             .flat_map(|case| {
-                let file: Value = serde_json::from_str(&recording(kind, case)).unwrap();
+                let own = recordings()
+                    .join(kind)
+                    .join(format!("{case}.self_managed.json"));
+                std::iter::once(recording(kind, case)).chain(own_recording(&own))
+            })
+            .flat_map(|text| {
+                let file: Value = serde_json::from_str(&text).unwrap();
                 file["exchanges"]
                     .as_array()
                     .cloned()
@@ -1235,11 +1299,11 @@ mod network_log {
         charter_core::unsteered!();
         for kind in ["github", "gitlab"] {
             let paths = paths(kind);
-            // Exactly the REST calls the recordings hold, so a recording that lost one, or a
-            // reader that skipped some, fails here rather than checking less.
+            // Exactly the REST calls the recordings and their overrides hold, so a recording that
+            // lost one, or a reader that skipped some, fails here rather than checking less.
             let expected = match kind {
                 "github" => 18,
-                _ => 22,
+                _ => 24,
             };
             assert_eq!(paths.len(), expected, "{kind}: the recorded REST calls");
             for path in paths {
