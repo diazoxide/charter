@@ -73,6 +73,76 @@ pub fn var(name: &str) -> Option<String> {
     var_os(name).and_then(|value| value.into_string().ok())
 }
 
+/// The variables that choose what a command acts on — a project, a path, a persona, the
+/// machine's approvals — by what follows the prefix (D-RN2d-8).
+///
+/// For these, two names with two values are never silently read under one of them: the
+/// caller refuses ([`disagreement`]). Inside a chat both carry the same value, so the case is
+/// a `CHARTER_<X>=…` typed in front of a command — which, read under the purlis name, would
+/// act on the chat's own project instead of the one asked for. Every other variable (logs,
+/// knobs, the footer) is read under the purlis name when the two differ (V93e).
+///
+/// `SESSION_ID` is not here: it keys a chat's own state rather than naming a scope, and an
+/// opencode shim an older build installed sets only its old name in a tool's shell.
+pub const SELECTING: [&str; 8] = [
+    "ROOT",
+    "HOME",
+    "WORKSPACE",
+    "WORKTREES",
+    "PLANE_ROOT_SESSION",
+    "PERSONA",
+    "CONFIG_HOME",
+    "DATA_HOME",
+];
+
+/// One of [`SELECTING`] set under two names with two values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Disagreement {
+    /// The purlis name, the one to keep.
+    pub purlis: String,
+    /// The old name that says something else.
+    pub old: String,
+}
+
+impl std::fmt::Display for Disagreement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{purlis} and {old} disagree — set only {purlis} ({old} is the old name).",
+            purlis = self.purlis,
+            old = self.old
+        )
+    }
+}
+
+/// The first of [`SELECTING`] whose names disagree in `env`: both set, to different values.
+/// Equal values, or one name alone, are no disagreement.
+pub fn disagreement_in(env: impl Fn(&str) -> Option<OsString>) -> Option<Disagreement> {
+    SELECTING.iter().find_map(|rest| {
+        let mut names = ENV_PREFIX
+            .spellings()
+            .map(|prefix| format!("{prefix}{rest}"));
+        let purlis = names.next()?;
+        let value = env(&purlis)?;
+        names
+            .find(|old| env(old).is_some_and(|other| other != value))
+            .map(|old| Disagreement { purlis, old })
+    })
+}
+
+/// [`disagreement_in`] this process's environment.
+pub fn disagreement() -> Option<Disagreement> {
+    disagreement_in(|name: &str| std::env::var_os(name))
+}
+
+/// Sets `name` on `command` under every one of its names, so an old name the child would
+/// inherit says the same thing ([`disagreement`]).
+pub fn set_on(command: &mut std::process::Command, name: &str, value: impl AsRef<OsStr>) {
+    for spelling in spellings(name) {
+        command.env(spelling, value.as_ref());
+    }
+}
+
 /// A chat's environment with each product variable under both of its names (V93k).
 ///
 /// Every other pair is kept, in its place. A product variable keeps the place it was first
