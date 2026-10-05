@@ -213,6 +213,7 @@ macro_rules! app_commands {
                 changes::change_land_question,
                 changes::change_land,
                 doctor::plane_doctor,
+                doctor::plane_doctor_fix,
                 settings::project_settings,
                 settings::save_project_settings,
                 settings::move_project_settings,

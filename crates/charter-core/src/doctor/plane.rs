@@ -180,6 +180,7 @@ pub(super) fn front_door(d: &Doctor) -> Row {
             ),
             hint: "charter persona default <name>".to_owned(),
             settings: None,
+            fix: None,
         };
     }
     Row::ok(NAME, "none declared")

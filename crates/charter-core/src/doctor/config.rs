@@ -500,11 +500,18 @@ pub(super) fn schema(d: &Doctor) -> Row {
         };
         return Row::ok(NAME, format!("up to date (schema {schema})"));
     }
-    Row::warn(
+    let row = Row::warn(
         NAME,
         format!("{} issue(s): {}", found.len(), found.join("; ")),
         "Run: charter reinit  (creates what's missing; never touches existing content).",
-    )
+    );
+    // Reinit is the fix only when there is something it creates: a folder occupied by a file
+    // is one it refuses to touch, and a Fix button that changed nothing would read as broken.
+    if BASELINE_DIRS.iter().any(|dir| !d.root.join(dir).exists()) {
+        row.fixed_by(super::fix::FixId::Reinit)
+    } else {
+        row
+    }
 }
 
 /// `version lock`: `[charter] version`, opt-in. A plane that pins nothing reports OK.

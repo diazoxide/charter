@@ -26,6 +26,7 @@ mod changes;
 mod clones;
 mod config;
 mod deferred;
+pub mod fix;
 // `pub(crate)`: `gitpolicy` asks the same two questions about the same
 // directories — what clears a path charter could not check, and whether a path is
 // simply not there — and `charter/workspace.py` answers them once for both.
@@ -107,6 +108,10 @@ pub struct Row {
     /// the window can change. The app's doctor links the row to that group; the table and
     /// `--json` leave it out, so what `charter doctor` prints is unchanged.
     pub settings: Option<SettingsGroup>,
+    /// **The fix charter can make for this finding itself** (FX-1, V91p), when there is one:
+    /// what `charter doctor --fix <id>` and the Doctor dialog's Fix button apply through
+    /// [`fix::apply`]. `--json` carries it on the rows that have one; the table does not.
+    pub fix: Option<fix::FixId>,
 }
 
 /// **A Settings group a doctor row can link to** (SE-22): one of the Project level's groups,
@@ -175,6 +180,7 @@ impl Row {
             detail: detail.into(),
             hint: hint.into(),
             settings: None,
+            fix: None,
         }
     }
 
@@ -182,6 +188,14 @@ impl Row {
     pub(crate) fn in_settings(self, group: SettingsGroup) -> Self {
         Self {
             settings: Some(group),
+            ..self
+        }
+    }
+
+    /// This row, offering the fix `id` ([`Row::fix`]).
+    pub(crate) fn fixed_by(self, id: fix::FixId) -> Self {
+        Self {
+            fix: Some(id),
             ..self
         }
     }
@@ -419,6 +433,26 @@ impl Doctor {
         }
     }
 
+    /// The project this doctor answers for.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The fixes this doctor's findings offer, in the order [`fix::FixId::ALL`] lists them:
+    /// what `charter doctor --fix` with no id applies.
+    ///
+    /// Asks only the checks that can carry a fix id, rather than [`Doctor::run`]'s every row:
+    /// those ask git and a forge, and `--fix` runs the whole doctor again after it fixes.
+    pub fn fixes(&self) -> Vec<fix::FixId> {
+        let mut ids: Vec<fix::FixId> = [config::schema(self)]
+            .into_iter()
+            .filter_map(|row| row.fix)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     /// Every row, in the order Python's `doctor._checks` runs them: cheap and local first.
     pub fn run(&self) -> Vec<Row> {
         let mut rows = vec![python3(), git::git(), git::identity(self)];
@@ -522,16 +556,24 @@ pub(crate) fn first_line(text: &str) -> String {
 }
 
 /// `--json`: `json.dumps(rows, indent=2)` and the newline `print` adds.
+///
+/// **A row with a fix carries a fifth key, `fix`, after the four** (FX-1, D-FX1-1): the id
+/// `charter doctor --fix <id>` takes. Only on those rows, so every other row prints exactly the
+/// four keys it always has, and a reader that looks rows up by their keys reads on unchanged.
 pub fn json(rows: &[Row]) -> String {
     let doc = serde_json::Value::Array(
         rows.iter()
             .map(|r| {
-                serde_json::json!({
+                let mut row = serde_json::json!({
                     "name": r.name,
                     "status": r.status.word(),
                     "detail": r.detail,
                     "hint": r.hint,
-                })
+                });
+                if let (Some(fix), Some(row)) = (r.fix, row.as_object_mut()) {
+                    row.insert("fix".to_owned(), fix.id().into());
+                }
+                row
             })
             .collect(),
     );
