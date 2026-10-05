@@ -99,9 +99,15 @@ missing from it turns `survivors` red. Adding a line to it is a decision with a 
 way to make a run green — and a mutation that provably cannot change any answer does not go in
 it at all: prove it and write it into the source, as `realpath` in `pypath.rs` does.
 
-When the nightly is not clean it keeps one issue in this repo up to date, and closes it when the
-nightly is clean again. Five consecutive red nights went unread in September 2026 while fifty
-PRs merged past them; that is what the issue is for.
+A TIMEOUT is a **hang**, listed apart and not red, when `--timeout` sits at least half again
+above the slowest whole suite of the same run: a mutant that loops for ever is caught, and no
+test could ever retire it. Closer than that, a TIMEOUT stays a survivor, because it may be a
+suite cut short.
+
+When the nightly is not clean it keeps one issue in this repo up to date, and closes it, with
+any copies, only when a full run is clean. Five consecutive red nights went unread in September
+2026 while fifty PRs merged past them; that is what the issue is for. Which issue, and what it
+is told, is `tools/mutants-report.py notice`, tested in `tools/mutants-report.test.mjs`.
 
 ## Agent skills
 

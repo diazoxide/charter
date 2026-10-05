@@ -1366,6 +1366,11 @@ fn a_session_in_a_clone_of_its_own_is_told_its_trust_is_its_own() {
         )),
         "{l:?}"
     );
+    assert!(
+        l.detail
+            .contains("until that is given, hooks do not run here"),
+        "{l:?}"
+    );
     assert_eq!(
         row(&doctor(&root).run(), "session root").detail,
         format!("{} — the plane", root.display())
@@ -2629,4 +2634,241 @@ fn the_doctor_shows_each_accounts_request_budget_and_its_use() {
     );
     // A doctor a test names reads no machine store.
     assert!(names(&doctor(&root)).is_empty());
+}
+
+// ---- the #480 survivors: rows nothing pinned yet ----------------------------------------------
+
+#[test]
+fn an_index_lock_dated_ahead_of_the_clock_is_being_written_not_a_crash() {
+    // A clock that went back, or a lock written from another machine's share: its age reads
+    // negative, which is "just now", and never three hours old.
+    let (_d, root) = repo_plane();
+    let lock = root.join(".git/index.lock");
+    std::fs::write(&lock, "").unwrap();
+    let ahead = std::time::SystemTime::now() + std::time::Duration::from_secs(3 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&lock)
+        .unwrap()
+        .set_modified(ahead)
+        .unwrap();
+    let r = one(&root, "index lock");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "held now — 0 byte(s), 0s old; a git is probably writing"
+    );
+}
+
+#[test]
+fn a_git_file_past_the_record_bound_is_not_followed_to_a_lock() {
+    // A `.git` FILE names the git directory a worktree's index lives in. One past the bound is
+    // not read at all, whatever it names — here a directory that does hold a lock.
+    let (_d, root) = plane("schema = 1\n");
+    let elsewhere = root.join("inventory/gitdir");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(elsewhere.join("index.lock"), "").unwrap();
+    let mut text = format!("gitdir: {}\n", elsewhere.display());
+    text.push_str(&"\n".repeat(crate::reopen::MAX_BYTES as usize));
+    std::fs::write(root.join(".git"), text).unwrap();
+    let r = one(&root, "index lock");
+    assert_eq!(
+        (r.status, r.detail.as_str()),
+        (Status::Ok, "none held on the plane's index"),
+        "{r:?}"
+    );
+
+    // The same file within the bound is followed, which is what makes the line above a bound.
+    std::fs::write(
+        root.join(".git"),
+        format!("gitdir: {}\n", elsewhere.display()),
+    )
+    .unwrap();
+    let r = one(&root, "index lock");
+    assert!(r.detail.starts_with("held now — 0 byte(s)"), "{r:?}");
+}
+
+/// The `plane root` row over a push record of exactly these bytes.
+fn with_push_record(text: &str) -> Row {
+    let (_d, root) = repo_plane();
+    std::fs::create_dir_all(root.join(".charter")).unwrap();
+    std::fs::write(root.join(".charter/plane-push.json"), text).unwrap();
+    one(&root, "plane root")
+}
+
+#[test]
+fn a_push_record_of_exactly_the_bound_is_read() {
+    let mut text = r#"{"outcome": "stranded", "branch": "main", "head": "deadbeef"}"#.to_owned();
+    let pad = crate::reopen::MAX_BYTES as usize - text.len();
+    text.push_str(&" ".repeat(pad));
+    assert_eq!(text.len() as u64, crate::reopen::MAX_BYTES);
+    let r = with_push_record(&text);
+    assert_eq!(
+        r.detail, "a memory commit was committed but never pushed",
+        "{r:?}"
+    );
+
+    text.push(' ');
+    let r = with_push_record(&text);
+    assert_eq!(
+        r.detail, "clean on main",
+        "one byte past the bound is not read: {r:?}"
+    );
+}
+
+#[test]
+fn a_push_records_outcome_counts_when_python_would_call_it_true() {
+    // `if not rec.get("outcome")`: Python's truthiness, for each kind of JSON value.
+    for (outcome, stranded) in [
+        ("1", true),
+        ("0", false),
+        ("0.5", true),
+        ("[1]", true),
+        ("[]", false),
+        (r#"{"why": 1}"#, true),
+        ("{}", false),
+        (r#""x""#, true),
+        (r#""""#, false),
+        ("null", false),
+        ("true", true),
+        ("false", false),
+    ] {
+        let r = with_push_record(&format!(
+            r#"{{"outcome": {outcome}, "branch": "main", "head": "deadbeef"}}"#
+        ));
+        assert_eq!(
+            r.detail == "a memory commit was committed but never pushed",
+            stranded,
+            "outcome {outcome}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn a_session_outside_the_plane_is_told_which_parts_walk_up_and_which_do_not() {
+    let (_d, root) = plane("schema = 1\n");
+    let cwd = root.join("workspaces/alpha");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let r = row(&Doctor::at(&root, &cwd, true, true).run(), "session root");
+    assert!(
+        r.detail.contains(
+            "the host reads settings from the session's own directory and does not walk up"
+        ),
+        "{r:?}"
+    );
+    assert!(
+        r.detail
+            .contains("skills+agents DO walk up, as far as the git root"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_session_layer_marks_each_part_it_finds_and_each_it_does_not() {
+    let (_d, root) = plane("schema = 1\n");
+    let layer = |root: &Path| {
+        let l = one(root, "session layer");
+        l.detail
+            .split('\n')
+            .find_map(|line| line.split("claude-code: ").nth(1).map(str::to_owned))
+            .unwrap_or_else(|| panic!("no claude-code line: {l:?}"))
+    };
+    assert!(
+        layer(&root).starts_with("settings \u{2717}"),
+        "{}",
+        layer(&root)
+    );
+    assert!(
+        layer(&root).contains("skills+agents \u{2717}"),
+        "{}",
+        layer(&root)
+    );
+
+    // Settings count only when they are a JSON object carrying a key the layer is made of.
+    std::fs::create_dir_all(root.join(".claude/skills")).unwrap();
+    std::fs::write(root.join(".claude/settings.json"), r#"{"theme": "dark"}"#).unwrap();
+    assert!(
+        layer(&root).starts_with("settings \u{2717}"),
+        "{}",
+        layer(&root)
+    );
+    assert!(
+        layer(&root).ends_with("skills+agents \u{2713}"),
+        "{}",
+        layer(&root)
+    );
+
+    std::fs::write(root.join(".claude/settings.json"), r#"{"env": {}}"#).unwrap();
+    assert_eq!(layer(&root), "settings \u{2713}; skills+agents \u{2713}");
+
+    // Up to a megabyte of settings is read; one byte more is not.
+    let mut big = r#"{"env": {}}"#.to_owned();
+    big.push_str(&" ".repeat(1_048_576 - big.len()));
+    std::fs::write(root.join(".claude/settings.json"), &big).unwrap();
+    assert!(
+        layer(&root).starts_with("settings \u{2713}"),
+        "{}",
+        layer(&root)
+    );
+    big.push(' ');
+    std::fs::write(root.join(".claude/settings.json"), &big).unwrap();
+    assert!(
+        layer(&root).starts_with("settings \u{2717}"),
+        "{}",
+        layer(&root)
+    );
+}
+
+#[test]
+fn a_plain_directory_inside_the_planes_repository_rides_the_planes_trust() {
+    let (_d, root) = repo_plane();
+    let cwd = root.join("workspaces/alpha");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let l = row(&Doctor::at(&root, &cwd, true, true).run(), "session layer");
+    assert!(!l.detail.contains("trust:"), "{l:?}");
+}
+
+#[test]
+fn a_request_charter_only_asked_to_merge_is_not_called_left_to_merge_later() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    change_record(&root, "alpha", "a", &[("svc", "change/a")]);
+    crate::change::pending::append(
+        &root,
+        "alpha",
+        "laptop",
+        &crate::change::pending::Pending::new(
+            "a",
+            "svc",
+            3,
+            "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+            crate::change::pending::Via::Direct,
+            crate::change::pending::Stage::Asked,
+            chrono::Utc::now(),
+        ),
+    )
+    .unwrap();
+    let r = one(&root, "changes");
+    assert!(!r.detail.contains("merge later"), "{r:?}");
+}
+
+#[test]
+fn a_plane_inside_a_larger_repository_is_checked_on_that_repositorys_index() {
+    // No `.git` of its own: git is asked where the index is, and its answer is the one used.
+    let dir = tempfile::tempdir().unwrap();
+    let top = std::fs::canonicalize(dir.path()).unwrap();
+    git(&top, &["init", "-q", "-b", "main", "."]);
+    let root = top.join("ops/plane");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
+    for d in ["personas", "inventory", "workspaces"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    assert_eq!(
+        one(&root, "index lock").detail,
+        "none held on the plane's index"
+    );
+    std::fs::write(top.join(".git/index.lock"), "").unwrap();
+    let r = one(&root, "index lock");
+    assert!(r.detail.starts_with("held now — 0 byte(s)"), "{r:?}");
 }

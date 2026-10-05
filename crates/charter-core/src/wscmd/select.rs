@@ -675,6 +675,21 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_id_that_is_not_one_path_segment_writes_no_pointer() {
+        let dir = plane();
+        workspace(dir.path(), "beta");
+        for terminal in ["..", "a/b"] {
+            let ids = ids(Some("s1"), Some(terminal));
+            assert_eq!(
+                set_active(dir.path(), "beta", &ids, false),
+                Scope::Session,
+                "{terminal:?}"
+            );
+        }
+        assert!(!terminals_dir(dir.path()).exists());
+    }
+
+    #[test]
     fn a_lock_refuses_a_switch_and_writes_nothing() {
         let dir = plane();
         workspace(dir.path(), "beta");
@@ -745,6 +760,63 @@ mod tests {
         assert!(
             is_locked(dir.path(), &ids).is_none(),
             "a typo must not take the session lock"
+        );
+    }
+
+    #[test]
+    fn use_lists_what_there_is_when_nothing_is_near_and_nothing_when_there_is_nothing() {
+        let dir = plane();
+        let ids = ids(Some("s1"), None);
+        let (code, said) =
+            lines(|say| use_workspace(dir.path(), "zzzzzz", &ids, false, false, stamp(), say));
+        assert_eq!(code, 1);
+        assert!(
+            said[1].contains("Create it"),
+            "an empty plane lists nothing: {said:?}"
+        );
+
+        workspace(dir.path(), "alpha");
+        let (code, said) =
+            lines(|say| use_workspace(dir.path(), "zzzzzz", &ids, false, false, stamp(), say));
+        assert_eq!(code, 1);
+        assert!(said[1].contains("Existing: alpha"), "{said:?}");
+    }
+
+    #[test]
+    fn a_near_miss_is_within_two_fifths_of_the_longer_name() {
+        let names = ["alpha".to_owned(), "zulu".to_owned()];
+        // Two edits in five characters: the edge of difflib's 0.6.
+        assert_eq!(near("alpah", &names), ["alpha"]);
+        assert!(near("alxyz", &names).is_empty());
+    }
+
+    #[test]
+    fn distance_counts_the_fewest_single_character_edits() {
+        for (a, b, d) in [
+            ("", "", 0),
+            ("abc", "", 3),
+            ("", "abc", 3),
+            ("abc", "abc", 0),
+            ("kitten", "sitting", 3),
+            ("ab", "ba", 2),
+            ("abcd", "abd", 1),
+            ("abd", "abcd", 1),
+            ("flaw", "lawn", 2),
+        ] {
+            assert_eq!(distance(a, b), d, "{a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn the_lock_is_named_for_what_it_holds() {
+        assert_eq!(lock_words("beta", None), "unlocked");
+        assert_eq!(
+            lock_words("beta", Some("beta")),
+            "🔒 locked for this session"
+        );
+        assert_eq!(
+            lock_words("gamma", Some("beta")),
+            "this session's commands only; 🔒 still locked to 'beta'"
         );
     }
 

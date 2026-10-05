@@ -86,3 +86,43 @@ fn warnings(plane: &Path, name: &str) -> Vec<String> {
         })
         .collect()
 }
+
+/// Set on the child of the test below: the plane `CHARTER_ROOT` pins.
+const PINNED: &str = "STEERING_PINS_THE_PLANE_CHILD";
+
+const PINS: &str = "a_pinned_plane_is_the_one_acted_on_and_an_empty_home_is_no_home";
+
+/// `CHARTER_ROOT` pins the plane wherever the command runs, and an empty `CHARTER_HOME` is
+/// unset rather than a state directory with no name (#480).
+#[test]
+fn a_pinned_plane_is_the_one_acted_on_and_an_empty_home_is_no_home() {
+    charter_core::unsteered!();
+    let Some(pinned) = std::env::var_os(PINNED) else {
+        let dir = tempfile::tempdir().unwrap();
+        let pinned = dir.path().join("pinned");
+        std::fs::create_dir_all(&pinned).unwrap();
+        std::fs::write(pinned.join("charter.toml"), "").unwrap();
+        charter_core::testrun::rerun_steered(
+            &[PINS],
+            &[
+                (PINNED, pinned.as_os_str()),
+                ("CHARTER_ROOT", pinned.as_os_str()),
+                ("CHARTER_HOME", "".as_ref()),
+            ],
+        );
+        return;
+    };
+
+    // Standing in another plane altogether, the pinned one is still the one resolved.
+    let here = tempfile::tempdir().unwrap();
+    std::fs::write(here.path().join("charter.toml"), "").unwrap();
+    assert_eq!(
+        charter_core::plane::resolve(here.path()).unwrap(),
+        Path::new(&pinned)
+    );
+    assert_eq!(
+        charter_core::plane::state_dir(here.path()),
+        here.path().join(".charter"),
+        "an empty CHARTER_HOME names no state directory"
+    );
+}

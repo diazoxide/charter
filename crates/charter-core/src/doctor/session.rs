@@ -314,6 +314,21 @@ fn reaches(part: &Part, here: &Path, bound: Option<&Path>) -> bool {
     })
 }
 
+/// What the harnesses with an in-repo layer gate on trust, each once, in their order.
+///
+/// Only Claude Code declares both a layer and a trust gate, so no gate is ever seen twice and
+/// none is empty: `||` for the `&&` below collects the same list, and `.cargo/mutants.toml`
+/// excludes it as equivalent. A second harness with a gate retires that entry.
+fn trust_gates(harnesses: &[&Harness]) -> Vec<&'static str> {
+    let mut gates: Vec<&'static str> = Vec::new();
+    for h in harnesses.iter().filter(|h| !h.layer.is_empty()) {
+        if !h.trust_gate.is_empty() && !gates.contains(&h.trust_gate) {
+            gates.push(h.trust_gate);
+        }
+    }
+    gates
+}
+
 /// `session layer`: can a session started HERE see charter's layer (#869, #859)? What each
 /// harness would find, by its own measured rule — and, where a harness gates its hooks on
 /// trust, that a directory with a git root of its own carries its own acceptance.
@@ -352,7 +367,7 @@ pub(super) fn session_layer(d: &Doctor) -> Row {
         "{} — what a session started here would find in the repo",
         fsx::path_field(&here)
     )];
-    let mut gates: Vec<&str> = Vec::new();
+    let gates = trust_gates(&harnesses);
     for h in &harnesses {
         if h.layer.is_empty() {
             let note = if h.note.is_empty() {
@@ -362,9 +377,6 @@ pub(super) fn session_layer(d: &Doctor) -> Row {
             };
             lines.push(format!("{}: {note}", h.name));
             continue;
-        }
-        if !h.trust_gate.is_empty() && !gates.contains(&h.trust_gate) {
-            gates.push(h.trust_gate);
         }
         let bits: Vec<String> = h
             .layer
@@ -422,5 +434,42 @@ mod nfc_tests {
         assert_eq!(nfc("\u{958}"), "\u{915}\u{93c}");
         // Hangul, which composes by arithmetic rather than by table.
         assert_eq!(nfc("\u{1100}\u{1161}"), "\u{ac00}");
+    }
+}
+
+#[cfg(test)]
+mod config_home_tests {
+    use super::claude_config_home;
+
+    /// Set on the child only: the folder it must answer.
+    const EXPECTED: &str = "CLAUDE_CONFIG_HOME_TEST_EXPECTED";
+    const CHILD: &str =
+        "doctor::session::config_home_tests::the_config_folder_is_the_one_the_child_was_given";
+
+    /// `$CLAUDE_CONFIG_DIR` is the subject, so it is set on a child and never here.
+    #[test]
+    fn the_config_folder_is_the_one_claude_code_would_open() {
+        // Empty is kept as empty: Claude Code reads `??`, so it is its own working directory,
+        // never the default folder.
+        crate::testrun::rerun(
+            &[CHILD],
+            &[("CLAUDE_CONFIG_DIR", "".as_ref()), (EXPECTED, ".".as_ref())],
+        );
+        // A decomposed name is the composed folder Claude Code opens.
+        crate::testrun::rerun(
+            &[CHILD],
+            &[
+                ("CLAUDE_CONFIG_DIR", "/x/cafe\u{301}".as_ref()),
+                (EXPECTED, "/x/caf\u{e9}".as_ref()),
+            ],
+        );
+    }
+
+    #[test]
+    fn the_config_folder_is_the_one_the_child_was_given() {
+        let Some(expected) = std::env::var_os(EXPECTED) else {
+            return;
+        };
+        assert_eq!(claude_config_home(), std::path::Path::new(&expected));
     }
 }

@@ -239,6 +239,21 @@ mod tests {
     }
 
     #[test]
+    fn a_path_spelled_from_the_current_directory_is_placed_like_any_other() {
+        // A relative root of "" leaves the path's own leading `.`: it names nothing, and must
+        // not read as a part this cannot place.
+        assert_eq!(
+            classify(Path::new(""), Path::new("./workspaces/alpha/todos/m8-1.md")),
+            Some(change(
+                Kind::Todos,
+                Some("alpha"),
+                None,
+                "workspaces/alpha/todos/m8-1.md"
+            ))
+        );
+    }
+
+    #[test]
     fn a_todo_is_a_todo_of_its_workspace() {
         assert_eq!(
             at("workspaces/alpha/todos/m8-1.md"),

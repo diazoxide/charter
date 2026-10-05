@@ -339,6 +339,8 @@ fn probe(d: &Doctor) -> Result<Probe, String> {
     // carries untracked files, and counting them would put this row permanently in yellow.
     let status = git_in(root, &["status", "--porcelain", "--untracked-files=no"])?;
     if !status.ok() {
+        // `git_in` answers a run with no exit code as `Err`, so `code` is always there and the
+        // `-1` is never used: `.cargo/mutants.toml` excludes its "delete -" as equivalent.
         return Ok(Probe::StatusFailed(status.code.unwrap_or(-1)));
     }
     let dirty = status
@@ -388,6 +390,8 @@ fn default_branch(root: &Path) -> Result<Option<String>, String> {
         ],
     )?;
     let remote_head = py_strip(&head.out);
+    // The halves agree: `symbolic-ref --quiet` that succeeds prints the ref, and one that fails
+    // prints nothing on stdout, so `||` asks the same question (`.cargo/mutants.toml`).
     if head.ok() && !remote_head.is_empty() {
         return Ok(Some(
             remote_head
@@ -598,6 +602,9 @@ fn git_dir_of(root: &Path) -> Result<Option<PathBuf>, String> {
     }
     let run = git_in(root, &["rev-parse", "--git-dir"])?;
     let out = py_strip(&run.out);
+    // As in `default_branch`, the halves agree: `rev-parse --git-dir` prints a path when it
+    // succeeds and nothing on stdout when it fails, so `&&` asks the same question
+    // (`.cargo/mutants.toml`).
     if !run.ok() || out.is_empty() {
         return Ok(None);
     }
