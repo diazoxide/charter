@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791150514587,
+  "lastUpdate": 1791158830808,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1512,6 +1512,48 @@ window.BENCHMARK_DATA = {
             "value": 104.262693,
             "unit": "ms",
             "extra": "median of 5 runs: 103.357, 103.905, 104.263, 106.796, 107.851 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "3c4f46aee0f3b388744cbbfa75615b886e6150a2",
+          "message": "FM-11 review: a theme state, the no-line sentences, honest comments, your editor\n\n- The `piece-diff` view has a state in the theme test (`theme/views.test.tsx`): a text diff\n  whose drawn line is checked, so every view in `OWN_MARKS` is drawn in every theme.\n- A change with no changed line says what changed, by its mark: a pure rename \"Only its name\n  changed: moved from X\", a new empty file \"X was added, and it is empty\", a deleted empty one\n  \"X was deleted, and it was empty\", and only a changed file keeps the mode sentence.\n- The comparison tab has \"Open in your editor\" (the light editor's, at the change's first\n  line), and the binary and too-large sentences point to it.\n- The comments in `piecefiles.rs` and on `files::what_changed` no longer say no git process\n  starts: confining the path finds the branch's folder in the app process (`git worktree list`\n  or `git rev-parse`). Moving that into the reader, announcing the tab's states and naming the\n  merge view are on #1189.\n\nCloses #1114\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T04:05:23+04:00",
+          "tree_id": "e6968cb56696b48bbce9e46321abaddd740b8e7b",
+          "url": "https://github.com/diazoxide/charter/commit/3c4f46aee0f3b388744cbbfa75615b886e6150a2"
+        },
+        "date": 1791158830005,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.465265,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.435, 0.461, 0.465, 0.485, 0.488 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.429012,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.335, 16.362, 16.429, 16.506, 16.576 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.942263,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.617, 101.529, 101.942, 102.052, 102.207 ms"
           }
         ]
       }
