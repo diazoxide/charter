@@ -1165,6 +1165,7 @@ function App() {
       selectTab: () => undefined,
       renameTab: () => undefined,
       linkWorkItem: () => undefined,
+      startFresh: () => undefined,
       unlinkWorkItem: async () => nowhere(),
       focusWorkspace: () => undefined,
       pickClone: () => undefined,

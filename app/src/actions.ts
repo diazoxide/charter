@@ -187,6 +187,9 @@ export type Does =
   | { verb: "linkWorkItem"; tab: number }
   /** Ends a chat's work link. */
   | { verb: "unlinkWorkItem"; tab: number }
+  /** Asks, then starts a chat again on the project's instructions as they are now (NO-3): the
+   *  same chat, in a new run with no conversation resumed. */
+  | { verb: "startFresh"; tab: number }
   /** Pins or unpins a chat, a workspace or a project (ADR 0039).
    *
    *  Three verbs and not one, because they are three stores: a project's pin and a
@@ -573,6 +576,9 @@ export type Now = {
   /** Whether a chat can have a work link: it is filed in a workspace. A chat at the project
    *  root, or working outside the project, is offered neither row (ADR 0088 §4). */
   linkable?: (session: number) => boolean;
+  /** The files each chat started on that the project has changed since, by session
+   *  (`chats_plane_updated`, charter#369): such a chat is offered Start fresh (NO-3). */
+  planeUpdated?: Readonly<Record<number, readonly string[]>>;
   /** Why each chat's Smart close stopped without its record (SI-8f), for its needs-you rows. */
   stopped?: Readonly<Record<number, string>>;
 };
@@ -591,6 +597,8 @@ export type Doing = {
   renameTab: (tab: number) => void;
   /** Opens the dialog that asks for the work item. Nothing is linked until it is answered. */
   linkWorkItem: (tab: number) => void;
+  /** Asks whether to start the tab's chat fresh, and does on a yes (NO-3). */
+  startFresh: (tab: number) => void;
   /** Ends the chat's work link, through `chat_work_unlink`; a refusal is the core's sentence. */
   unlinkWorkItem: (tab: number) => Promise<Ran>;
   /** Each answers a `Ran`, because a pin can be refused: the stores are bounded, and
@@ -1148,6 +1156,21 @@ export function catalogue(now: Now): Offer[] {
     if (chatOf(now.tabs, tab) === undefined) continue;
     const name = now.tabs.byId[tab].name;
     offers.push(can(`tab.rename:${tab}`, `Rename chat ${name}…`, { verb: "renameTab", tab }, name));
+  }
+
+  // **Start fresh** (NO-3, charter#369): a chat the project's instructions changed under since it
+  // started runs on what it read until it is started again. Only such a chat has the row, and
+  // its tab's mark presses the same one. It ends the chat's program, so it is asked about first
+  // (`PlaneView`'s `ChatAsk`), and it sits below the line in the tab's menu.
+  for (const tab of now.tabs.order) {
+    const chat = chatOf(now.tabs, tab);
+    const files = chat === undefined ? undefined : now.planeUpdated?.[chat];
+    if (files === undefined || files.length === 0) continue;
+    const name = now.tabs.byId[tab].name;
+    offers.push({
+      ...can(`tab.fresh:${tab}`, `Start chat ${name} fresh`, { verb: "startFresh", tab }, name),
+      note: `Changed since it started: ${files.join(", ")}`,
+    });
   }
 
   // **A chat's work link** (V60, ADR 0088 §3): which work item it works on. Above the line: it
@@ -2009,6 +2032,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "linkWorkItem":
       doing.linkWorkItem(does.tab);
       return DID;
+    case "startFresh":
+      doing.startFresh(does.tab);
+      return DID;
     case "unlinkWorkItem":
       return doing.unlinkWorkItem(does.tab);
     case "pinTab":
@@ -2563,7 +2589,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `tab.worklink:${what.tab}`,
           `tab.workunlink:${what.tab}`,
         ],
-        below: [`tab.close:${what.tab}`],
+        below: [`tab.fresh:${what.tab}`, `tab.close:${what.tab}`],
       };
     case "workspace":
       return {

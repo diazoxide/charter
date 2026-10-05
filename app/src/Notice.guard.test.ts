@@ -56,6 +56,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "a branch's apart count, said as it changes: a live value, not a line",
   },
+  "ChatAsk.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
   "DeleteVault.tsx": {
     count: 2,
     why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",

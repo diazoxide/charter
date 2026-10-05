@@ -728,6 +728,17 @@ body {
   line-height: 1;
   color: var(--text-secondary);
 }
+/* On the strip the mark is a button beside the tab, pressing Start fresh (NO-3): the same quiet
+   mark, with nothing of a button's chrome until it is under the pointer. */
+.fresh-mark {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.fresh-mark:hover {
+  color: var(--text-primary);
+}
 
 /* The bar's own controls — `+`, the two splits, `End this pane's chat`, the region toggles.
    Each carries an icon beside its words (`PlaneView`'s `Doer`), so this is a flex row: the
