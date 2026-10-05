@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
+import type { Offer } from "./actions";
 import { commands, type PlaneId } from "./bindings";
 
 /** The files each chat started on that have changed since, by session. */
@@ -56,5 +57,38 @@ export function PlaneUpdatedMark({ files }: { files?: readonly string[] }) {
     >
       <RefreshCw />
     </span>
+  );
+}
+
+/**
+ * **The mark on the strip, as the way out it names** (NO-3): the same mark, drawn as a button
+ * beside the tab rather than inside it — a button cannot sit in the tab's own — that presses the
+ * catalogue's `tab.fresh:<id>`, the row the palette and the tab's menu list. So its accessible
+ * name is the row's words, and the question it asks is the row's (`PlaneView`'s `ChatAsk`).
+ *
+ * **Not a Tab stop**, for `Closer`'s reason (charter-app#189): the strip is one stop, and a
+ * keyboard reaches the same row from the palette or the tab's menu.
+ */
+export function FreshMark({
+  offer,
+  files,
+  onPress,
+}: {
+  offer?: Offer;
+  files?: readonly string[];
+  onPress: (offer: Offer) => void;
+}) {
+  if (!offer || !files || files.length === 0) return null;
+  return (
+    <button
+      type="button"
+      className="plane-updated fresh-mark"
+      tabIndex={-1}
+      aria-label={`${offer.title} — plane updated since this chat started`}
+      title={`Plane updated since this chat started: ${files.join(", ")}. Press to start it fresh on what is there now.`}
+      onClick={() => onPress(offer)}
+    >
+      <RefreshCw />
+    </button>
   );
 }

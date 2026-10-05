@@ -409,6 +409,23 @@ export const commands = {
 	 */
 	chatsThatWouldNotStart: (plane: PlaneId) => typedError<([string, string])[], string>(__TAURI_INVOKE("chats_that_would_not_start", { plane })),
 	/**
+	 *  Retry now (NO-3): starts the chat named `name` that this launch could not start, the way
+	 *  the launch tried to. It is the chat as the window draws it, or why it still did not start —
+	 *  and then it is still recorded, with that reason.
+	 */
+	retryChatThatDidNotStart: (plane: PlaneId, name: string, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("retry_chat_that_did_not_start", { plane, name, columns, rows })),
+	/**
+	 *  Forget this chat (NO-3): drops the chat named `name` that this launch could not start from
+	 *  the record. Kept otherwise, on purpose, so a moved directory never deletes a chat.
+	 */
+	forgetChatThatDidNotStart: (plane: PlaneId, name: string) => typedError<null, string>(__TAURI_INVOKE("forget_chat_that_did_not_start", { plane, name })),
+	/**
+	 *  Start fresh (NO-3): chat `session` started again on the plane's instructions as they are
+	 *  now — the same chat, in a new run with no conversation resumed (ADR 0066). The answer is the
+	 *  new one as the window draws it; the window then closes the old one, which ends its program.
+	 */
+	startChatFresh: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("start_chat_fresh", { plane, session, columns, rows })),
+	/**
 	 *  Every chat this plane has open that is running on instructions the plane has changed since
 	 *  it started (charter#369): its tab is marked, and the mark names the files. The window asks
 	 *  again whenever the plane changes on disk.

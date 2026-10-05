@@ -62,6 +62,7 @@ function doing(): Doing & { calls: string[] } {
     selectTab: note("selectTab"),
     renameTab: note("renameTab"),
     linkWorkItem: note("linkWorkItem"),
+    startFresh: note("startFresh"),
     unlinkWorkItem: async (...args: unknown[]) => {
       note("unlinkWorkItem")(...args);
       return { ok: true };
@@ -1904,17 +1905,18 @@ describe("the palette at fifty chats", () => {
       return offers.lookups;
     }
 
-    it("asks for seven rows per tab and never walks the list", () => {
+    it("asks for eight rows per tab and never walks the list", () => {
       const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
 
-      // 50 tabs × the seven ids a chat menu lists (the two work link rows are V60's).
+      // 50 tabs × the eight ids a chat menu lists (the two work link rows are V60's, Start
+      // fresh is NO-3's).
       // **Not fifty scans of 291 rows**, which is
       // what this cost before the lookup was built once for the window — and the number that
       // does not move when the catalogue grows again.
-      expect(strip(offers)).toBe(350);
+      expect(strip(offers)).toBe(400);
     });
 
-    it("is the same 350 whether the catalogue carries the pieces or not", () => {
+    it("is the same 400 whether the catalogue carries the pieces or not", () => {
       // The property, not the timing: the cost of a menu is flat in the length of the list it
       // reads. A scan is not, which is why #174's hundred rows needed this first.
       const small = new Counting(
@@ -1923,7 +1925,7 @@ describe("the palette at fifty chats", () => {
         ),
       );
 
-      expect(strip(small)).toBe(350);
+      expect(strip(small)).toBe(400);
     });
   });
 });

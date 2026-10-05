@@ -1409,6 +1409,67 @@ fn chats_that_would_not_start(
     Ok(planes.held(&plane)?.chats().would_not_start())
 }
 
+/// The chat `session` as the window draws it, once it has started: the answer of the commands
+/// below that start one.
+fn drawn(held: &planes::Held, session: u32) -> Result<OpenChat, String> {
+    held.chats()
+        .open_now()
+        .into_iter()
+        .find(|open| open.session == session)
+        .map(OpenChat::from)
+        .ok_or_else(|| format!("chat {session} ended as it started"))
+}
+
+/// Retry now (NO-3): starts the chat named `name` that this launch could not start, the way
+/// the launch tried to. It is the chat as the window draws it, or why it still did not start —
+/// and then it is still recorded, with that reason.
+#[tauri::command]
+#[specta::specta]
+fn retry_chat_that_did_not_start(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+    columns: u16,
+    rows: u16,
+) -> Result<OpenChat, String> {
+    let held = planes.held(&plane)?;
+    let session = held
+        .chats()
+        .retry(&name, held.root(), Size { columns, rows })?;
+    drawn(&held, session)
+}
+
+/// Forget this chat (NO-3): drops the chat named `name` that this launch could not start from
+/// the record. Kept otherwise, on purpose, so a moved directory never deletes a chat.
+#[tauri::command]
+#[specta::specta]
+fn forget_chat_that_did_not_start(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+) -> Result<(), String> {
+    planes.held(&plane)?.chats().forget(&name)
+}
+
+/// Start fresh (NO-3): chat `session` started again on the plane's instructions as they are
+/// now — the same chat, in a new run with no conversation resumed (ADR 0066). The answer is the
+/// new one as the window draws it; the window then closes the old one, which ends its program.
+#[tauri::command]
+#[specta::specta]
+fn start_chat_fresh(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    columns: u16,
+    rows: u16,
+) -> Result<OpenChat, String> {
+    let held = planes.held(&plane)?;
+    let started = held
+        .chats()
+        .start_fresh(session, held.root(), Size { columns, rows })?;
+    drawn(&held, started)
+}
+
 /// Every chat this plane has open that is running on instructions the plane has changed since
 /// it started (charter#369): its tab is marked, and the mark names the files. The window asks
 /// again whenever the plane changes on disk.

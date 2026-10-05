@@ -120,8 +120,9 @@ export function TabMarks({
   id: number;
   /** The chats wrapping up — being smart-closed (ADR 0064). */
   wrapping: ReadonlySet<number>;
-  /** The chats the plane's instructions changed under, by session (charter#369). */
-  updates: PlaneUpdates;
+  /** The chats the plane's instructions changed under, by session (charter#369). Left out on the
+   *  strip, where the mark is a button beside the tab (`FreshMark`) rather than inside it. */
+  updates?: PlaneUpdates;
   /** The chats that are shell tabs, whose tab wears a terminal's mark (SI-5). */
   shells: ReadonlySet<number>;
   /** The pin mark, on the strip; the menu of hidden tabs draws none. */
@@ -151,7 +152,7 @@ export function TabMarks({
       )}
       <span className="tab-name">{tabs.byId[id].name}</span>
       {pin}
-      <PlaneUpdatedMark files={chat === undefined ? undefined : updates[chat]} />
+      <PlaneUpdatedMark files={chat === undefined ? undefined : updates?.[chat]} />
       {/* The first pane's session is the tab's own chat. Its own element, so what a tab IS
           stays separate from what it is DOING — a tab whose text changed every time a turn
           began would be unreadable, and untestable. */}

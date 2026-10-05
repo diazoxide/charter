@@ -135,7 +135,7 @@ import {
   SIDEBAR,
   usePlaneChanged,
 } from "./planeChanged";
-import { usePlaneUpdated } from "./PlaneUpdated";
+import { FreshMark, usePlaneUpdated } from "./PlaneUpdated";
 import { Notice, NoticeBand } from "./Notice";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
@@ -200,6 +200,7 @@ import {
 } from "./tabs";
 import { chipSays, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
 import { EndingChat, type SmartAsk } from "./EndingChat";
+import { ChatAsk } from "./ChatAsk";
 import { DID_NOT_START, saidWhenItEnds, stoppedWhy, useSmartClosing } from "./smartClose";
 import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
@@ -440,6 +441,22 @@ export const PlaneView = memo(function PlaneView({
   const { dismissed, dismiss, settle: settleNotices, showAgain } = useDismissals(plane);
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
+  /** **Forget this chat…** (NO-3): the chat whose record is about to be dropped, while the
+   *  question is up, and the core's refusal of the last answer. */
+  const [forgetting, setForgetting] = useState<{ name: string; busy: boolean; trouble?: string }>();
+  /**
+   * **Start fresh** (NO-3, charter#369): the tab whose chat is about to be started again on the
+   * project's instructions as they are now, while the question is up. The tab mark and the
+   * palette's row both come here (`tab.fresh:<id>`).
+   */
+  const [freshening, setFreshening] = useState<{
+    tab: number;
+    session: number;
+    name: string;
+    files: readonly string[];
+    busy: boolean;
+    trouble?: string;
+  }>();
   /** What the core last said about where a chat is working, and which directory it was
    *  asked about — so an answer about the chat that WAS in front is never drawn under the
    *  one that is now. `workspaceState` keys its answers the same way, for the same reason. */
@@ -3205,6 +3222,100 @@ export const PlaneView = memo(function PlaneView({
     [change, focused, plane, showAgain],
   );
 
+  /**
+   * **A chat the window started in place of one** — a Retry now, or a Start fresh (NO-3) — drawn
+   * the way a chat a relaunch put back is: its tab opens in front, its notes say how it came
+   * back, and its pin and its shell's mark come with it.
+   */
+  const drawStarted = useCallback(
+    (chat: OpenChat) => {
+      setStartedIn((was) => ({ ...was, [chat.session]: filedFor(chat.cwd, focused) }));
+      setReopened((was) => [...was.filter((one) => one.session !== chat.session), chat]);
+      if (chat.pinned) setPinnedChats((was) => [...was, chat.session]);
+      if (isShell(chat)) setShells((was) => new Set(was).add(chat.session));
+      change((tabs) =>
+        openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
+      );
+    },
+    [change, focused],
+  );
+
+  /**
+   * **Retry now** on a chat this launch could not start (NO-3): the core starts it again the
+   * way the launch tried to (`retry_chat_that_did_not_start`). Started, its tab opens and its
+   * Notice goes; refused, the Notice stays and says the new reason.
+   */
+  const retryChat = useCallback(
+    async (name: string) => {
+      const said = await commands
+        .retryChatThatDidNotStart(plane, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") {
+        setWouldNotStart((was) =>
+          was.map(([one, why]) => (one === name ? [one, said.error] : [one, why])),
+        );
+        return;
+      }
+      setWouldNotStart((was) => was.filter(([one]) => one !== name));
+      drawStarted(said.data);
+    },
+    [drawStarted, plane],
+  );
+
+  const forgetChat = useCallback(
+    async (name: string) => {
+      setForgetting({ name, busy: true });
+      const said = await commands
+        .forgetChatThatDidNotStart(plane, name)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") {
+        setForgetting({ name, busy: false, trouble: said.error });
+        return;
+      }
+      setForgetting(undefined);
+      setWouldNotStart((was) => was.filter(([one]) => one !== name));
+    },
+    [plane],
+  );
+
+  const askStartFresh = useCallback(
+    (tab: number) => {
+      const session = chatOf(now.current, tab);
+      if (session === undefined) return;
+      setFreshening({
+        tab,
+        session,
+        name: now.current.byId[tab].name,
+        files: planeUpdates[session] ?? [],
+        busy: false,
+      });
+    },
+    [planeUpdates],
+  );
+  /**
+   * The core starts the same chat again, fresh (`start_chat_fresh`); then the old tab closes,
+   * which ends the old program, and the new one opens in front. Refused, nothing is closed and
+   * the question says why.
+   */
+  const startFresh = useCallback(async () => {
+    const asked = freshening;
+    if (asked === undefined) return;
+    setFreshening({ ...asked, busy: true, trouble: undefined });
+    const said = await commands
+      .startChatFresh(plane, asked.session, STARTING_SIZE.columns, STARTING_SIZE.rows)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (said.status === "error") {
+      setFreshening({ ...asked, busy: false, trouble: said.error });
+      return;
+    }
+    setFreshening(undefined);
+    change((tabs) => closeTab(tabs, asked.tab, filedIn, isPinned));
+    void commands.closeSession(plane, asked.session);
+    setReopened((was) => was.filter((one) => one.session !== asked.session));
+    setPinnedChats((was) => was.filter((one) => one !== asked.session));
+    drawStarted(said.data);
+  }, [change, drawStarted, filedIn, freshening, isPinned, plane]);
+
   // A resumed chat whose harness ended without a word — it could not find the conversation — is
   // replaced by a fresh chat with the same record, once (SI-8d). Everything else a resumed chat
   // does only marks it heard, and a heard chat is the operator's from then on.
@@ -3335,6 +3446,7 @@ export const PlaneView = memo(function PlaneView({
       renameTab: beginRename,
       linkWorkItem,
       unlinkWorkItem,
+      startFresh: askStartFresh,
       pinTab,
       pinWorkspace,
       pinProject: windowDoes.pinProject,
@@ -3393,6 +3505,7 @@ export const PlaneView = memo(function PlaneView({
       beginRename,
       linkWorkItem,
       unlinkWorkItem,
+      askStartFresh,
       bringToFront,
       cancelSmartClose,
       close,
@@ -3623,6 +3736,7 @@ export const PlaneView = memo(function PlaneView({
             // A chat filed in a workspace; one at the project root, or outside the project, is
             // offered no work link (ADR 0088 §4).
             linkable: (session) => filedIn(session) !== OUTSIDE,
+            planeUpdated: planeUpdates,
           }),
     [
       clones,
@@ -3659,6 +3773,7 @@ export const PlaneView = memo(function PlaneView({
       wrapping,
       workItems,
       filedIn,
+      planeUpdates,
     ],
   );
 
@@ -4359,10 +4474,11 @@ export const PlaneView = memo(function PlaneView({
                                     if (offer?.available) press(offer);
                                   }}
                                 >
+                                  {/* No `updates` here: on the strip the plane-updated mark
+                                      is a button of its own beside the tab (`FreshMark`). */}
                                   <TabMarks
                                     tabs={tabs}
                                     id={id}
-                                    updates={planeUpdates}
                                     shells={shells}
                                     wrapping={wrapping}
                                     pin={
@@ -4375,6 +4491,11 @@ export const PlaneView = memo(function PlaneView({
                                 </button>
                               </RovingFocusGroup.Item>
                             )}
+                            <FreshMark
+                              offer={by(`tab.fresh:${id}`)}
+                              files={planeUpdates[chatOf(tabs, id) ?? -1]}
+                              onPress={press}
+                            />
                             <Closer offer={by(`tab.close:${id}`)} onPress={press} />
                           </span>
                         )}
@@ -4566,6 +4687,10 @@ export const PlaneView = memo(function PlaneView({
             key={name}
             cause={`chat-did-not-start:${name}`}
             tone="trouble"
+            fixes={[
+              { label: "Retry now", onPress: () => void retryChat(name) },
+              { label: "Forget this chat…", onPress: () => setForgetting({ name, busy: false }) },
+            ]}
             onDismiss={() => setWouldNotStart((was) => was.filter(([one]) => one !== name))}
           >
             <strong>{name}</strong> did not start ({why}). It is still recorded, and will be tried
@@ -4905,6 +5030,29 @@ export const PlaneView = memo(function PlaneView({
 
       {/* The one question charter asks before it ends a chat, wherever the row was pressed
           (the operator: *"closing session should ask confirmation"*). */}
+      {/* NO-3's two questions: a chat's record dropped, and a chat started again. */}
+      {forgetting && (
+        <ChatAsk
+          title={`Forget ${forgetting.name}?`}
+          says={`charter stops keeping ${forgetting.name}, and no later launch tries to start it again. This cannot be undone.`}
+          answer="Forget chat"
+          trouble={forgetting.trouble}
+          busy={forgetting.busy}
+          onAnswer={() => void forgetChat(forgetting.name)}
+          onCancel={() => setForgetting(undefined)}
+        />
+      )}
+      {freshening && (
+        <ChatAsk
+          title={`Start ${freshening.name} fresh?`}
+          says={`The project's instructions changed since it started (${freshening.files.join(", ")}). Its program ends, and it starts again on what is there now, as a new conversation.`}
+          answer="Start fresh"
+          trouble={freshening.trouble}
+          busy={freshening.busy}
+          onAnswer={() => void startFresh()}
+          onCancel={() => setFreshening(undefined)}
+        />
+      )}
       {endingChat && (
         <EndingChat
           offer={endingChat.offer}
