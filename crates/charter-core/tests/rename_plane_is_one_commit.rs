@@ -456,10 +456,10 @@ fn the_purlis_spelling_is_let_through_once_the_project_carries_its_rules() {
     let report = "purlis report bug --yes 0123";
     let promote = "purlis ws todo promote 1";
 
-    assert!(handoffguard::handoff_refusal_in(handoff, caller, &root, &root).is_some());
+    assert!(handoffguard::handoff_refusal_in(handoff, caller, &root, &[&root]).is_some());
     for cmd in [report, promote] {
         assert!(
-            charter_core::consentspelling::refusal(cmd, &root, &root).is_some(),
+            charter_core::consentspelling::refusal(cmd, &root, &[&root]).is_some(),
             "{cmd} before the rename"
         );
     }
@@ -467,12 +467,12 @@ fn the_purlis_spelling_is_let_through_once_the_project_carries_its_rules() {
     ran(&fix::apply(&root, FixId::RenamePlane));
 
     assert_eq!(
-        handoffguard::handoff_refusal_in(handoff, caller, &root, &root),
+        handoffguard::handoff_refusal_in(handoff, caller, &root, &[&root]),
         None
     );
     for cmd in [report, promote, handoff] {
         assert_eq!(
-            charter_core::consentspelling::refusal(cmd, &root, &root),
+            charter_core::consentspelling::refusal(cmd, &root, &[&root]),
             None,
             "{cmd} after the rename"
         );
@@ -484,7 +484,7 @@ fn the_purlis_spelling_is_let_through_once_the_project_carries_its_rules() {
         "python3 -m purlis report bug --yes x",
     ] {
         assert!(
-            charter_core::consentspelling::refusal(cmd, &root, &root).is_some(),
+            charter_core::consentspelling::refusal(cmd, &root, &[&root]).is_some(),
             "{cmd}"
         );
     }
@@ -495,7 +495,7 @@ fn the_purlis_spelling_is_let_through_once_the_project_carries_its_rules() {
         "purlis handoff beta <<BRIEF\nx\nBRIEF",
     ] {
         assert!(
-            handoffguard::handoff_refusal_in(cmd, caller, &root, &root).is_some(),
+            handoffguard::handoff_refusal_in(cmd, caller, &root, &[&root]).is_some(),
             "{cmd}"
         );
     }
@@ -514,7 +514,8 @@ fn a_purlis_rule_in_one_harness_only_is_not_enough() {
         settings::PURLIS_REPORT_PATTERN
     ));
     assert!(
-        charter_core::consentspelling::refusal("purlis report bug --yes x", &root, &root).is_some()
+        charter_core::consentspelling::refusal("purlis report bug --yes x", &root, &[&root])
+            .is_some()
     );
     let caller = Caller {
         agent_id: None,
@@ -526,7 +527,7 @@ fn a_purlis_rule_in_one_harness_only_is_not_enough() {
             "purlis handoff beta <<'BRIEF'\nx\nBRIEF",
             caller,
             &root,
-            &root
+            &[&root]
         )
         .is_some()
     );
@@ -556,13 +557,13 @@ fn a_layer_without_the_twin_still_refuses_the_new_spelling_there() {
     std::fs::write(ws.join(".claude/settings.json"), SETTINGS).unwrap();
 
     assert_eq!(
-        charter_core::consentspelling::refusal(REPORT, &root, &root),
+        charter_core::consentspelling::refusal(REPORT, &root, &[&root]),
         None
     );
-    assert!(charter_core::consentspelling::refusal(REPORT, &root, &ws).is_some());
-    assert!(handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &ws).is_some());
+    assert!(charter_core::consentspelling::refusal(REPORT, &root, &[&ws]).is_some());
+    assert!(handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &[&ws]).is_some());
     assert_eq!(
-        handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &root),
+        handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &[&root]),
         None
     );
 
@@ -570,17 +571,17 @@ fn a_layer_without_the_twin_still_refuses_the_new_spelling_there() {
     let twinned = read(&root, ".claude/settings.json");
     std::fs::write(ws.join(".claude/settings.json"), twinned).unwrap();
     assert_eq!(
-        charter_core::consentspelling::refusal(REPORT, &root, &ws),
+        charter_core::consentspelling::refusal(REPORT, &root, &[&ws]),
         None
     );
     assert_eq!(
-        handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &ws),
+        handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &[&ws]),
         None
     );
 
     // A cwd that cannot be placed inside the project fails closed.
     let elsewhere = tempfile::tempdir().unwrap();
-    assert!(charter_core::consentspelling::refusal(REPORT, &root, elsewhere.path()).is_some());
+    assert!(charter_core::consentspelling::refusal(REPORT, &root, &[elsewhere.path()]).is_some());
 }
 
 /// A twin weaker than its charter rule — an ask beside a deny — does not lift the refusal.
@@ -595,14 +596,14 @@ fn a_twin_weaker_than_its_charter_rule_is_not_enough() {
     doc["permissions"]["deny"] = serde_json::json!(["Bash(charter report *--yes*)"]);
     std::fs::write(&path, doc.to_string()).unwrap();
 
-    assert!(charter_core::consentspelling::refusal(REPORT, &root, &root).is_some());
+    assert!(charter_core::consentspelling::refusal(REPORT, &root, &[&root]).is_some());
     doc["permissions"]["deny"] = serde_json::json!([
         "Bash(charter report *--yes*)",
         "Bash(purlis report *--yes*)"
     ]);
     std::fs::write(&path, doc.to_string()).unwrap();
     assert_eq!(
-        charter_core::consentspelling::refusal(REPORT, &root, &root),
+        charter_core::consentspelling::refusal(REPORT, &root, &[&root]),
         None
     );
 }
@@ -623,7 +624,7 @@ fn a_quoted_escaped_or_split_new_name_stays_refused() {
         "echo ok && 'purlis' report bug --yes x",
     ] {
         assert!(
-            charter_core::consentspelling::refusal(cmd, &root, &root).is_some(),
+            charter_core::consentspelling::refusal(cmd, &root, &[&root]).is_some(),
             "{cmd}"
         );
     }
@@ -632,7 +633,7 @@ fn a_quoted_escaped_or_split_new_name_stays_refused() {
         "cd /tmp && purlis ws todo promote 1",
     ] {
         assert_eq!(
-            charter_core::consentspelling::refusal(cmd, &root, &root),
+            charter_core::consentspelling::refusal(cmd, &root, &[&root]),
             None,
             "{cmd}"
         );
@@ -650,4 +651,27 @@ fn a_chat_cannot_run_rename_plane() {
     let why = refused(fix::rename_plane::apply_in(&root, &in_a_chat));
     assert!(why.contains("not run from inside a chat"), "{why}");
     assert_eq!((head(&root), tree(&root)), before);
+}
+
+/// The host loads its settings for the folder the session started in, and a `cd` in the shell
+/// does not move that. A session started in a workspace whose layer lacks the twin stays refused
+/// at the project root, and with no folder at all the new spelling is refused (fails closed).
+#[test]
+fn the_session_folder_is_asked_as_well_as_the_cwd() {
+    charter_core::unsteered!();
+    let (_dir, root) = project();
+    ran(&fix::apply(&root, FixId::RenamePlane));
+    let ws = root.join("workspaces/alpha");
+    std::fs::create_dir_all(ws.join(".claude")).unwrap();
+    std::fs::write(ws.join(".claude/settings.json"), SETTINGS).unwrap();
+
+    assert!(charter_core::consentspelling::refusal(REPORT, &root, &[&ws, &root]).is_some());
+    assert!(handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &[&ws, &root]).is_some());
+    assert!(charter_core::consentspelling::refusal(REPORT, &root, &[]).is_some());
+    let none = Path::new("");
+    assert!(charter_core::consentspelling::refusal(REPORT, &root, &[none, none]).is_some());
+    assert_eq!(
+        charter_core::consentspelling::refusal(REPORT, &root, &[&root, &root]),
+        None
+    );
 }

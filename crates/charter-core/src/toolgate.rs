@@ -118,6 +118,10 @@ pub struct Plane<'a> {
     /// Every host the one-credential policy covers, **in Python's dict order**: A2 reports the
     /// FIRST host whose `git@<host>` is in the argv, so a sorted list is a different answer.
     pub forges: &'a [Forge],
+    /// The folder the host session started in, where it loaded its settings
+    /// (`$CLAUDE_PROJECT_DIR`), or `""` when the hook was not told. The consent-spelling arms
+    /// ask its layer as well as the call's `cwd` (RN-7).
+    pub session_dir: &'a str,
 }
 
 /// A refused tool call: what the chat is told, and what a tally would record.
@@ -247,7 +251,7 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
             cmd,
             call.caller,
             Path::new(plane.root),
-            Path::new(call.cwd),
+            &[Path::new(plane.session_dir), Path::new(call.cwd)],
         )
     {
         // No `cmd` on this trace row, the one arm without it: a handoff's command line carries
@@ -260,7 +264,11 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
     // project carries the purlis twin, RN-7). GATED, as A7 is: the rules it stands in for are a
     // plane's.
     if let Some(plane) = plane
-        && let Some(why) = consentspelling::refusal(cmd, Path::new(plane.root), Path::new(call.cwd))
+        && let Some(why) = consentspelling::refusal(
+            cmd,
+            Path::new(plane.root),
+            &[Path::new(plane.session_dir), Path::new(call.cwd)],
+        )
     {
         return Some(Verdict::new(consentspelling::REASON, None, why));
     }
@@ -332,6 +340,7 @@ mod tests {
         let plane = Plane {
             root: &root,
             forges: &forges,
+            session_dir: "",
         };
         let call = Call {
             command: cmd,
@@ -419,6 +428,7 @@ mod tests {
         let plane = Plane {
             root: &root,
             forges: &forges,
+            session_dir: "",
         };
         let state = fix.state();
         let mut c = Call {
