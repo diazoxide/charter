@@ -8,10 +8,17 @@
 //! whole vault or record reading its old items, where every reader still finds them.
 //!
 //! **An item already under `purlis/…` is never trusted for being there** (RN-4 review). Its value
-//! is compared with the original: the same, it counts as copied; different, the vault stays on
-//! the old prefix and the run says so. The one exception is an item this machine's rename-local
-//! wrote itself (the journal's `copied`): a copy left behind by an undo, or by a run that failed
-//! its read-back, is written again rather than refused for good.
+//! is compared with the original: different, the vault stays on the old prefix and the run says
+//! so; the same, it counts as copied in a store that holds no item to the app. The one exception
+//! is an item this machine's rename-local wrote itself (the journal's `copied`): a copy left
+//! behind by an undo, or by a run that failed its read-back, is written again rather than refused
+//! for good.
+//!
+//! **Where a store holds items to the app, every copy is a fresh item the app holds**
+//! (D-RN6-8). An item already there, even with the very value, is replaced by a new one the app's
+//! own writer makes, never updated in place, and a write that comes back anything but held to the
+//! app ([`Held::ToTheApp`]) fails that item: the item there is another program's, and keeps the
+//! access that program gave it. The same holds for the undo's copy back.
 //!
 //! **The old items are kept** and never deleted, so `purlis migrate --undo` only points each
 //! vault and record back at them. A key written since the switch lives only under `purlis/…`,
@@ -24,14 +31,15 @@
 //! rule (Linux, Windows, a test build's stub) — and a terminal on macOS leaves it to the app's
 //! next launch ([`real`]). Its copies are written through the app's own writer, so they are
 //! held to the app like the originals. An undo that has keys to copy back runs from the terminal
-//! too, asking once for each such key: it is rare and the person asked for it.
+//! too, and the system asks twice for each such key (reading its copy, and reading back what was
+//! written under the old name): it is rare and the person asked for it.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::{Entry, Local, Moved, Seams, write_entry};
 use crate::names::KEYCHAIN_PREFIX;
-use crate::secrets::keyring::{self, Store};
+use crate::secrets::keyring::{self, Held, Store};
 use crate::secrets::registry::{self, Vault};
 use crate::secrets::{Ctx, Env, identity, keyhold};
 
@@ -212,7 +220,10 @@ impl Copy<'_> {
             ));
             return;
         }
-        match keyring::switch_service(ctx, vault, from, &to) {
+        let Entry::Switched { keys, .. } = &entry else {
+            return;
+        };
+        match keyring::switch_service(ctx, vault, from, &to, keys) {
             Ok(true) => moved.done(format!(
                 "{what}: {count} secret(s) copied to {to}, each read back the same, and read \
                  from there now; the items under {from} are kept"
@@ -288,9 +299,12 @@ impl Copy<'_> {
                 )),
             };
         };
+        let holds = self.store.holds();
         match there {
-            Some(value) if value == original => return Ok(()),
-            Some(_) if !self.wrote(to, account) => {
+            // Where nothing is held to the app, the same value is the copy; where it is, the
+            // item is made again by the app, so it is never one another program made (D-RN6-8).
+            Some(value) if value == original && !holds => return Ok(()),
+            Some(value) if value != original && !self.wrote(to, account) => {
                 return Err(format!(
                     "an item for '{account}' under {to} is there already and holds a different \
                      value; rename-local never trusts an item it did not copy there. If you do \
@@ -307,9 +321,11 @@ impl Copy<'_> {
             },
         )
         .map_err(|e| format!("the journal could not be written ({e})"))?;
-        self.store
+        let held = self
+            .store
             .set(to, account, &original)
             .map_err(|e| e.message)?;
+        held_by_the_app(self.store, held, to, account)?;
         match read(to) {
             Ok(Some(copy)) if copy == original => Ok(()),
             Ok(_) => Err(format!(
@@ -378,11 +394,19 @@ pub(super) fn switch_back(
             }
         }
     }
-    match keyring::switch_service(&ctx, &vault, to, from) {
+    let now: BTreeMap<String, String> = index
+        .keys
+        .iter()
+        .map(|(key, entry)| (key.clone(), entry.updated.clone()))
+        .collect();
+    match keyring::switch_service(&ctx, &vault, to, from, &now) {
         Ok(true) => moved.done(format!(
             "{what}: reads its secrets under {from} again; the copies under {to} are kept"
         )),
-        Ok(false) => {}
+        Ok(false) => moved.failed(format!(
+            "{what}: a secret was written while it was put back; it still reads its secrets              under {to}, and `{}` again finishes it",
+            super::UNDO_COMMAND
+        )),
         Err(e) => moved.failed(format!("{what}: {}", e.message)),
     }
 }
@@ -397,7 +421,8 @@ fn copy_back(store: &dyn Store, to: &str, from: &str, key: &str) -> Result<(), S
         // Not found under either: nothing to lose.
         return Ok(());
     };
-    store.set(from, key, &value).map_err(|e| e.message)?;
+    let held = store.set(from, key, &value).map_err(|e| e.message)?;
+    held_by_the_app(store, held, from, key)?;
     match store
         .get(from, key)
         .map(|back| back.map(keyring::Secret::into_inner))
@@ -407,6 +432,23 @@ fn copy_back(store: &dyn Store, to: &str, from: &str, key: &str) -> Result<(), S
             "'{key}', written since it moved, did not read back the same under {from}"
         )),
     }
+}
+
+/// A write to a store that holds items to the app, which did not leave the item held to it:
+/// the item there is another program's, written in place and still under its access, so it is
+/// never switched to.
+fn held_by_the_app(
+    store: &dyn Store,
+    held: Held,
+    service: &str,
+    account: &str,
+) -> Result<(), String> {
+    if !store.holds() || held == Held::ToTheApp {
+        return Ok(());
+    }
+    Err(format!(
+        "the item for '{account}' under {service} could not be made the app's own: another          program's item is there. If you do not know it, remove it, then run this again"
+    ))
 }
 
 /// Undo a record's switch: the record, while it is still the one with `ids`, read under the old

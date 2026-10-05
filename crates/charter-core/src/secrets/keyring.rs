@@ -514,9 +514,17 @@ pub fn renamed(service: &str) -> Option<String> {
 }
 
 /// Point the vault's index at `to` instead of `from`, and nothing else in it: `false`, with the
-/// index untouched, when it does not name `from` now. Both must be this vault's own
+/// index untouched, when it does not name `from` now, or when its keys are not exactly `keys`
+/// (each key's `updated`, as they were when its items were copied): a secret written since is
+/// under `from` alone, and must never be left behind. Both services must be this vault's own
 /// ([`service_ok_for`]). The keychain copy's switch (RN-6), and its undo's.
-pub fn switch_service(ctx: &Ctx, vault: &Vault, from: &str, to: &str) -> Result<bool, VaultError> {
+pub fn switch_service(
+    ctx: &Ctx,
+    vault: &Vault,
+    from: &str,
+    to: &str,
+    keys: &BTreeMap<String, String>,
+) -> Result<bool, VaultError> {
     if !service_ok_for(from, &vault.name) || !service_ok_for(to, &vault.name) {
         return Err(VaultError::new(format!(
             "vault '{}' cannot be pointed from '{from}' to '{to}': each must be its own service",
@@ -524,7 +532,12 @@ pub fn switch_service(ctx: &Ctx, vault: &Vault, from: &str, to: &str) -> Result<
         )));
     }
     let mut index = load_index(ctx, vault)?;
-    if index.service.as_deref() != Some(from) {
+    let unchanged = index.keys.len() == keys.len()
+        && index
+            .keys
+            .iter()
+            .all(|(key, entry)| keys.get(key) == Some(&entry.updated));
+    if index.service.as_deref() != Some(from) || !unchanged {
         return Ok(false);
     }
     index.service = Some(to.to_owned());
