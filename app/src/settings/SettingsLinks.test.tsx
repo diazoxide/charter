@@ -35,6 +35,7 @@ const ROW = (over: Partial<DoctorRow> = {}): DoctorRow => ({
   hint: "Fix or remove it: until then charter reads the next file down, or the default.",
   checked: true,
   settings: "project.saving",
+  fix: null,
   ...over,
 });
 

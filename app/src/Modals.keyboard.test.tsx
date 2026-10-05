@@ -441,6 +441,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
                 hint: "Fix or remove it",
                 checked: true,
                 settings: "project.saving",
+                fix: null,
               },
             ],
             app_rows: [],

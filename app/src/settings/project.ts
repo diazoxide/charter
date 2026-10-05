@@ -409,7 +409,7 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   const [theme, setTheme] = useState<ProjectTheme>();
   const [saving, setSaving] = useState<Saving>();
   const [sandbox, setSandbox] = useState<SandboxState>();
-  const [entries, setEntries] = useState<Partial<Entries>>({});
+  const [picked, setPicked] = useState<Partial<Entries>>({});
   /** The newest asking of what is in force: an answer to an older one is dropped. */
   const asking = useRef(0);
 
@@ -433,14 +433,14 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
           const options = said.status === "ok" ? said.data : undefined;
           if (options) {
             const profile = options.profiles.map((one) => one.name);
-            setEntries((was) => ({ ...was, profile, persona: options.personas }));
+            setPicked((was) => ({ ...was, profile, persona: options.personas }));
           }
         }),
         settled(commands.planeSidebar(plane)).then((said) => {
           const sidebar = said.status === "ok" ? said.data : undefined;
           if (sidebar) {
             const workspace = sidebar.workspaces.map((one) => one.name);
-            setEntries((was) => ({ ...was, workspace }));
+            setPicked((was) => ({ ...was, workspace }));
           }
         }),
       ]).then(() => undefined),
@@ -590,7 +590,7 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   if (driver.state !== "read") return driver;
   return {
     ...driver,
-    read: { ...driver.now, extensions, harnesses, theme, saving, sandbox, entries },
+    read: { ...driver.now, extensions, harnesses, theme, saving, sandbox, entries: picked },
     readEntries,
   };
 }
