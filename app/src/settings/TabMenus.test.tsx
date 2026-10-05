@@ -61,8 +61,9 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, GLOBAL);
 });
 
-/** A core holding `planes`, the first in front, each with the workspaces alpha and beta. */
-function core(planes: string[]) {
+/** A core holding `planes`, the first in front, each with the workspaces alpha and beta, and
+ *  `pinned` pinned in each. */
+function core(planes: string[], pinned: string[] = []) {
   mockIPC(
     (cmd, args) => {
       const given = (args ?? {}) as Record<string, unknown>;
@@ -77,6 +78,7 @@ function core(planes: string[]) {
       if (cmd === "running_sessions") return [];
       if (cmd === "chat_states") return [];
       if (cmd === "extensions_on") return [];
+      if (cmd === "plane_pins") return { workspaces: pinned, missing: [] };
       if (cmd === "plane_sidebar")
         return {
           root: plane,
@@ -134,6 +136,17 @@ async function palette(typed: string) {
   await userEvent.keyboard("{Enter}");
 }
 
+/** Puts a tab other than the one in front there — Settings at You, from the palette — and
+ *  answers it. */
+async function anotherInFront(): Promise<HTMLElement> {
+  const was = inFront();
+  await palette("Your settings…");
+  await waitFor(() => expect(level()).toBe("You"));
+  const now = inFront();
+  if (now === undefined || now === was) throw new Error("no other tab came to the front");
+  return now;
+}
+
 describe("a project tab's menu", () => {
   it("opens Settings at the Project level in the project right-clicked, bringing it to the front", async () => {
     core([ONE, TWO]);
@@ -166,30 +179,42 @@ describe("a project tab's menu", () => {
 
     await fromItsMenu(projectTab("one"), "Project settings…");
     await waitFor(() => expect(level()).toBe("Project"));
+    const project = inFront();
+    // Another tab in front, so a row that did nothing would leave it there.
+    const other = await anotherInFront();
     const opened = tabs().length;
 
     await palette("Project settings…");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(inFront()).toBe(project));
+    expect(level()).toBe("Project");
+
+    await userEvent.click(other);
+    expect(inFront()).toBe(other);
     await userEvent.click(within(projects()).getByRole("button", { name: "Project settings…" }));
 
-    expect(tabs()).toHaveLength(opened);
+    await waitFor(() => expect(inFront()).toBe(project));
     expect(level()).toBe("Project");
+    expect(tabs()).toHaveLength(opened);
   });
 });
 
 describe("a workspace tab's menu", () => {
-  it("opens Settings at that workspace's level, on its strip", async () => {
-    core([ONE]);
+  it("opens Settings at the right-clicked workspace's level, on its strip, from another's", async () => {
+    // Pinned, so beta has a tab on the strip while alpha is the one focused (ADR 0054).
+    core([ONE], ["beta"]);
     render(<App />);
     await screen.findByRole("tab", { name: /alpha/ });
-    const alpha = () => within(workspaces()).getByRole("tab", { name: /alpha/ });
-    await userEvent.click(alpha());
+    const tab = (name: RegExp) => within(workspaces()).getByRole("tab", { name });
+    await userEvent.click(tab(/alpha/));
+    expect(tab(/alpha/)).toHaveAttribute("aria-selected", "true");
 
-    await fromItsMenu(alpha(), "Workspace settings…");
+    await fromItsMenu(tab(/beta/), "Workspace settings…");
 
     await waitFor(() => expect(level()).toBe("Workspace"));
-    expect(inFront()).toHaveTextContent("Workspace settings · alpha");
-    expect(alpha()).toHaveAttribute("aria-selected", "true");
+    expect(inFront()).toHaveTextContent("Workspace settings · beta");
+    // Beta's strip is the one in front now, and the only one.
+    expect(within(workspaces()).getByRole("tab", { selected: true })).toBe(tab(/beta/));
   });
 
   it("lands on the tab the palette's Workspace settings… and the gear open, not a second", async () => {
@@ -201,6 +226,9 @@ describe("a workspace tab's menu", () => {
 
     await fromItsMenu(alpha, "Workspace settings…");
     await waitFor(() => expect(level()).toBe("Workspace"));
+    const workspace = inFront();
+    // Another tab in front, so a row that did nothing would leave it there.
+    const other = await anotherInFront();
     const opened = tabs().length;
 
     // One row per workspace, told apart by the note that names it.
@@ -213,11 +241,16 @@ describe("a workspace tab's menu", () => {
     if (row === undefined) throw new Error("no Workspace settings… row for alpha");
     await userEvent.click(row);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(inFront()).toBe(workspace));
+
+    await userEvent.click(other);
+    expect(inFront()).toBe(other);
     await userEvent.click(
       within(workspaces()).getByRole("button", { name: "Workspace settings…" }),
     );
 
-    expect(tabs()).toHaveLength(opened);
+    await waitFor(() => expect(inFront()).toBe(workspace));
     expect(inFront()).toHaveTextContent("Workspace settings · alpha");
+    expect(tabs()).toHaveLength(opened);
   });
 });
