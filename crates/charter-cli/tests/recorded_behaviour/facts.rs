@@ -79,13 +79,14 @@ fn plane(root: &Path) -> String {
     }
     let bare = root.parent().expect("a side").join("forge/acme/plane.git");
     if bare.is_dir() {
-        let named = Regex::new(r"charter/[0-9a-f]{7,}$").expect("a pattern");
+        // A branch charter names by its commit: `purlis/<sha>`, `charter/<sha>` before the rename.
+        let named = Regex::new(r"(charter|purlis)/[0-9a-f]{7,}$").expect("a pattern");
         let mut refs: Vec<String> = git(&bare, &["for-each-ref", "--format=%(refname)"])
             .split_whitespace()
             .map(|r| {
                 format!(
                     "{} tree {} subject {}",
-                    named.replace(r, "charter/<sha>"),
+                    named.replace(r, "$1/<sha>"),
                     git(&bare, &["rev-parse", &format!("{r}^{{tree}}")]).trim(),
                     git(&bare, &["log", "-1", "--format=%s", r]).trim()
                 )

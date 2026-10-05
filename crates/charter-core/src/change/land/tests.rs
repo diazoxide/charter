@@ -344,7 +344,7 @@ fn github_probe(repo: &str, n: u64, queue: bool) -> Value {
 fn github_merge_fields(repo: &str, n: u64, method: &str) -> Value {
     json!([{"text": ["merge_method", method]},
            {"text": ["commit_title", format!("api-2: {repo} (#{n})")]},
-           {"text": ["commit_message", "bump the api\n\nCharter-Change: api-2"]},
+           {"text": ["commit_message", "bump the api\n\nPurlis-Change: api-2"]},
            {"text": ["sha", HEAD]}])
 }
 
@@ -400,7 +400,7 @@ fn a_member_lands_at_the_head_its_checks_passed_on_and_the_landing_is_logged() {
         "{said}"
     );
     assert!(
-        said.contains("merged #7 as e5bd3914e2e5, trailer Charter-Change: api-2"),
+        said.contains("merged #7 as e5bd3914e2e5, trailer Purlis-Change: api-2"),
         "{said}"
     );
     let log = world.log();
@@ -920,7 +920,7 @@ fn gitlab_ready(n: u64, trains: bool) -> Vec<Value> {
 fn gitlab_merge_fields(n: u64) -> Value {
     json!([{"typed": ["squash", "false"]}, {"text": ["sha", HEAD]},
            {"text": ["merge_commit_message",
-                     format!("api-2: widget (!{n})\n\nbump the api\n\nCharter-Change: api-2")]}])
+                     format!("api-2: widget (!{n})\n\nbump the api\n\nPurlis-Change: api-2")]}])
 }
 
 #[test]

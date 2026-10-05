@@ -175,23 +175,28 @@ pub(super) fn own_mr(listing: &Value) -> Option<&Value> {
 }
 
 /// The line charter puts in the body of every pull request it writes, so it can tell its own
-/// from one a person opened from the same branch.
-pub const MARKER: &str = "<!-- charter-save -->";
+/// from one a person opened from the same branch. Bodies already on a forge carry the old
+/// spelling, which [`is_ours`] recognises forever ([`crate::names::SAVE_PR_MARKER`]).
+pub const MARKER: &str = crate::names::SAVE_PR_MARKER.write;
 
 /// What `open_or_update` found or made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opened {
     pub pr: Pr,
     /// Whether the PR is charter's: one it opened now, or an open one whose head branch is
-    /// under `charter/` or whose body carries [`MARKER`]. A PR that is not charter's was left
+    /// under the product's branch prefix or whose body carries [`MARKER`], either under any
+    /// spelling it has had ([`crate::names`]). A PR that is not charter's was left
     /// exactly as it was, and nothing may be asked of the forge about it — auto-merge above all.
     pub ours: bool,
 }
 
 /// Whether an open PR is charter's to rewrite: its head branch is one charter names, or its
-/// body carries [`MARKER`].
+/// body carries [`MARKER`] — the purlis names, or the charter ones a PR opened before the
+/// rename still has (V93j).
 pub(super) fn is_ours(head: &str, body: Option<&str>) -> bool {
-    head.starts_with("charter/") || body.is_some_and(|b| b.contains(MARKER))
+    use crate::names::{BRANCH_PREFIX, SAVE_PR_MARKER};
+    BRANCH_PREFIX.strip(head).is_some()
+        || body.is_some_and(|b| SAVE_PR_MARKER.spellings().any(|m| b.contains(m)))
 }
 
 /// Where a pull or merge request stands.

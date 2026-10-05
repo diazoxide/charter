@@ -640,7 +640,7 @@ describe("the project's own save keys, in Saving (charter-app#300, ADR 0051)", (
       /In this project: the branch the project has checked out, its default\./,
     );
     expect(within(saving).getByLabelText("Save branch")).toHaveAccessibleDescription(
-      /In this project: charter\/save\/<this machine's name>, its default\./,
+      /In this project: purlis\/save\/<this machine's name>, its default\./,
     );
   });
 

@@ -8,8 +8,9 @@
 //! 1. **The last PR is settled** ([`settle`]): if it has merged since, the local target branch
 //!    is moved onto the remote's, and if it was closed without merging, the plane is blocked.
 //! 2. **HEAD is pushed to the save branch** (`[plane] save_branch`, default
-//!    `charter/save/<host>-<this clone>`), with `--force-with-lease` against the commit this
-//!    clone last pushed there, which `save-branch.json` keeps. A force is needed because a
+//!    `purlis/save/<host>-<this clone>`, or the `charter/save/…` one a request still open from
+//!    before the rename is on: [`save_branch`]), with `--force-with-lease` against the commit
+//!    this clone last pushed there, which `save-branch.json` keeps. A force is needed because a
 //!    squash or rebase merge leaves the save branch's old tip out of the target's history, and
 //!    the lease is what keeps it from overwriting anything somebody else pushed there — a
 //!    second machine with the same name included. With nothing kept, the branch is leased as
@@ -70,7 +71,7 @@ pub(super) fn still_holds(root: &Path, rec: &serde_json::Value, head: &str) -> b
     // hand, to get past another clone's commits — is not about this plane any more.
     let landed = rec.get("landed").and_then(serde_json::Value::as_str);
     let plane = crate::planesave::Settings::read(root).plane;
-    if landed.is_some_and(|landed| landed != plane.save_branch_or_default(root)) {
+    if landed.is_some_and(|landed| landed != save_branch(root, &plane)) {
         return false;
     }
     is_object_name(head)
@@ -104,19 +105,44 @@ fn resolve(root: &Path, rev: &str) -> Option<String> {
         .filter(|sha| !sha.is_empty())
 }
 
+/// The save branch this clone pushes to: [`Plane::save_branch_or_default`], except that a clone
+/// whose pull request is still open from its default save branch under an older prefix —
+/// `charter/save/<host>-<clone>`, from before the rename — carries on there until that request
+/// merges or closes, so the rename never opens a second one beside it (V93j). Once it is
+/// settled, the next push goes to the purlis name. A `save_branch` set by hand is always used
+/// as it is.
+pub(super) fn save_branch(root: &Path, plane: &Plane) -> String {
+    let fresh = plane.save_branch_or_default(root);
+    if plane.save_branch.value.is_some() {
+        return fresh;
+    }
+    let kept = Kept::read(root);
+    let rest = crate::planesave::default_rest(root);
+    match kept.branch {
+        Some(branch)
+            if kept.pr.is_some()
+                && crate::names::BRANCH_PREFIX.strip(&branch) == Some(rest.as_str()) =>
+        {
+            branch
+        }
+        _ => fresh,
+    }
+}
+
 /// What a request mode needs before it can push anything: the forge repo the plane's origin names,
 /// the save branch, and the target branch. `Err` is a config error, in words, and the plane is
 /// blocked on it (ADR 0051).
 pub(super) fn config(root: &Path, plane: &Plane) -> Result<(Repo, String, String), String> {
     let repo = Repo::of_plane(root)?;
-    let save = plane.save_branch_or_default(root);
+    let save = save_branch(root, plane);
     let target = plane.branch.value.clone().unwrap_or_else(|| here(root));
     if save == target {
         return Err(format!(
             "[plane] save_branch is {save}, the target branch itself, and a request mode never \
              pushes to the branch its {} goes into. Name another save_branch, or \
-             remove it for charter/save/<host>-<clone>",
-            repo.forge.kind.request_noun()
+             remove it for {}save/<host>-<clone>",
+            repo.forge.kind.request_noun(),
+            crate::names::BRANCH_PREFIX.write
         ));
     }
     Ok((repo, save, target))
@@ -286,6 +312,13 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
         // A move rewrote HEAD.
         Settled::Moved => resolve(root, "HEAD").unwrap_or_default(),
         Settled::Nothing | Settled::Open => head,
+    };
+    // A merged request was the last one a pre-rename save branch carries: what follows it goes
+    // to the purlis name.
+    let save = if settled == Settled::Moved {
+        save_branch(root, plane)
+    } else {
+        save
     };
     if count(root, &format!("refs/remotes/origin/{target}..HEAD")) == Some(0) {
         say(Say::Done(format!(

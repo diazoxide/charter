@@ -1320,7 +1320,7 @@ fn a_branch_that_requires_a_pull_request_gets_one_rather_than_a_stranded_commit(
     // A protected branch is not a remote that moved, and is never said to be one.
     assert!(!said.contains("remote moved"), "{said}");
     let short = ask(&fixture.root, &["rev-parse", "--short", "HEAD"]);
-    let branch = format!("charter/{}", short.trim());
+    let branch = format!("purlis/{}", short.trim());
     assert_eq!(
         ask(&bare, &["log", "-1", "--format=%s", &branch]).trim(),
         "a save",
@@ -1362,7 +1362,7 @@ fn saved_past_a_protected_main(host: &str) -> String {
 fn a_protected_main_on_github_asks_for_a_pull_request() {
     let said = saved_past_a_protected_main("github.com");
     assert!(
-        said.contains("'main' requires a pull request — pushed charter/"),
+        said.contains("'main' requires a pull request — pushed purlis/"),
         "{said}"
     );
     assert!(said.contains("After the PR merges"), "{said}");
@@ -1372,7 +1372,7 @@ fn a_protected_main_on_github_asks_for_a_pull_request() {
 fn a_protected_main_on_gitlab_asks_for_a_merge_request() {
     let said = saved_past_a_protected_main("gitlab.com");
     assert!(
-        said.contains("'main' requires a merge request — pushed charter/"),
+        said.contains("'main' requires a merge request — pushed purlis/"),
         "{said}"
     );
     assert!(said.contains("After the MR merges"), "{said}");
@@ -1571,6 +1571,8 @@ fn a_record_that_was_edited_cannot_put_a_word_of_its_own_into_gits_argv() {
         .unwrap();
         open_pull_request_branch(&fixture.root)
     };
+    assert_eq!(record("purlis/abc1234").as_deref(), Some("purlis/abc1234"));
+    // A branch a push made before the rename is still waiting on carries on (V93j).
     assert_eq!(
         record("charter/abc1234").as_deref(),
         Some("charter/abc1234")
@@ -1578,6 +1580,8 @@ fn a_record_that_was_edited_cannot_put_a_word_of_its_own_into_gits_argv() {
     // The branch the whole pull-request path exists to leave alone.
     assert_eq!(record("main"), None);
     assert_eq!(record("charter/--force"), None);
+    assert_eq!(record("purlis/--force"), None);
+    assert_eq!(record("other/abc1234"), None);
     assert_eq!(record(""), None);
 }
 
@@ -3293,8 +3297,8 @@ fn a_save_an_agent_run_asked_for_carries_its_trailers_after_the_operators_own() 
         fixture.head_trailers(),
         "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\
          Assisted-by: claude-code:claude-opus-5-5\n\
-         Charter-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
-         Charter-Persona: steward"
+         Purlis-Chat: 01J9ZQ3W5Y7X8V6T4R2P0N1M3K\n\
+         Purlis-Persona: steward"
     );
     assert_eq!(fixture.head_subject(), "memory: one lesson");
 }
@@ -3319,7 +3323,7 @@ fn a_plane_that_follows_the_kernel_says_assisted_by_llm() {
     assert!(
         fixture
             .head_trailers()
-            .starts_with("Assisted-by: LLM\nCharter-Chat: "),
+            .starts_with("Assisted-by: LLM\nPurlis-Chat: "),
         "{}",
         fixture.head_trailers()
     );
@@ -3506,6 +3510,54 @@ fn protect_main(bare: &Path, otherwise: &str) {
 }
 
 #[test]
+fn a_charter_branch_a_push_before_the_rename_left_waiting_is_advanced_and_no_purlis_one_made() {
+    // V93j: the open request is from `charter/<sha>`, as a push before the rename named it.
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    protect_main(&bare, "exit 0");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let (code, said) = fixture.just_save();
+    assert_eq!(code, 0, "{said}");
+    let fresh = push_record(&fixture.root).expect("a record")["landed"]
+        .as_str()
+        .expect("a branch")
+        .to_owned();
+    let old = fresh.replacen("purlis/", "charter/", 1);
+    assert_ne!(old, fresh);
+    run(&bare, &["branch", "-m", &fresh, &old]);
+    let record = std::fs::read_to_string(push_record_path(&fixture.root)).unwrap();
+    std::fs::write(
+        push_record_path(&fixture.root),
+        record.replace(&fresh, &old),
+    )
+    .unwrap();
+
+    std::fs::write(fixture.root.join("more.md"), "more").unwrap();
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        push_record(&fixture.root).expect("a record")["landed"],
+        old.as_str()
+    );
+    let branches = ask(
+        &bare,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/purlis",
+            "refs/heads/charter",
+        ],
+    );
+    assert_eq!(branches.trim(), old, "one branch, one request");
+    assert_eq!(
+        ask(&bare, &["rev-parse", &old]),
+        ask(&fixture.root, &["rev-parse", "HEAD"]),
+        "carrying both saves"
+    );
+}
+
+#[test]
 fn a_second_save_past_a_protected_main_advances_the_branch_its_open_request_is_from() {
     let fixture = Fixture::plane();
     let bare = fixture.with_a_remote();
@@ -3531,6 +3583,7 @@ fn a_second_save_past_a_protected_main_advances_the_branch_its_open_request_is_f
         &[
             "for-each-ref",
             "--format=%(refname:short)",
+            "refs/heads/purlis",
             "refs/heads/charter",
         ],
     );

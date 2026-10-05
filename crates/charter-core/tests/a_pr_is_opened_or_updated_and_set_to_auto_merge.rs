@@ -260,6 +260,52 @@ mod prs {
     }
 
     #[test]
+    fn a_pr_whose_body_carries_the_marker_charter_wrote_before_the_rename_is_still_its_own() {
+        charter_core::unsteered!();
+        // V93j: bodies already on a forge keep `<!-- charter-save -->`, recognised forever.
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("pr-marked-old.test");
+        scene.gh_api(
+            "repos/acme/widget/pulls?state=open&head=acme:feature%2Fx&base=main&per_page=1",
+            0,
+            &format!(
+                r#"[{{"number": 5, "html_url": "https://pr-marked-old.test/acme/widget/pull/5", "body": "Saved.\n\n{}"}}]"#,
+                "<!-- charter-save -->"
+            ),
+            "",
+        );
+        let updated = scene.answers(
+            "gh",
+            &[
+                "api",
+                "--hostname",
+                "pr-marked-old.test",
+                "-X",
+                "PATCH",
+                "repos/acme/widget/pulls/5",
+                "-f",
+                "title=t",
+                "-f",
+                "body=b",
+            ],
+            0,
+            r#"{"number": 5, "html_url": "https://pr-marked-old.test/acme/widget/pull/5"}"#,
+            "",
+        );
+        let opened = open_or_update(
+            &repo(&scene, "github", "acme/widget"),
+            "feature/x",
+            "main",
+            "t",
+            "b",
+        );
+        assert_eq!(opened.map(|o| (o.pr.number, o.ours)), Ok((5, true)));
+        assert!(was_asked(&updated));
+    }
+
+    #[test]
     fn a_github_lookup_that_fails_opens_nothing_rather_than_a_duplicate() {
         charter_core::unsteered!();
         if !in_child() {

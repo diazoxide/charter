@@ -52,8 +52,9 @@ use crate::repocmd::Say;
 use crate::shown;
 use crate::worktree::git;
 
-/// The trailer charter writes on the landing commit it authors.
-pub const TRAILER: &str = "Charter-Change";
+/// The trailer charter writes on the landing commit it authors. Landings made before the rename
+/// carry `Charter-Change`, which `change revert` still finds ([`crate::names::TRAILER_CHANGE`]).
+pub const TRAILER: &str = crate::names::TRAILER_CHANGE.write;
 
 /// How the landing commit is asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
