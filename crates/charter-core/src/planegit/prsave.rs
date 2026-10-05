@@ -117,14 +117,22 @@ fn resolve(root: &Path, rev: &str) -> Option<String> {
 /// settled, the next push goes to the purlis name. A `save_branch` set by hand is always used
 /// as it is.
 ///
-/// What ends the old branch is a settle that SAW its request merged or closed
-/// ([`forget_old_branch`]), never merely a forgotten request: a plane moved off the request's
+/// "Still open" is a request kept, or one [`Kept::held`]: a plane moved off the request's
 /// commit by hand forgets the request while it may still be open on the forge, and pushing
-/// to the purlis name then would open a second one beside it.
+/// to the purlis name then would open a second one beside it. Only a settle that SAW it merged
+/// or closed ends that ([`forget_old_branch`]). A kept old branch with no request — a clone
+/// upgraded after its last one merged — goes straight to the purlis name.
 pub(super) fn save_branch(root: &Path, plane: &Plane) -> String {
     let fresh = plane.save_branch_or_default(root);
-    match Kept::read(root).branch {
-        Some(branch) if branch != fresh && is_own_default(root, plane, &branch) => branch,
+    let kept = Kept::read(root);
+    match kept.branch {
+        Some(branch)
+            if (kept.pr.is_some() || kept.held)
+                && branch != fresh
+                && is_own_default(root, plane, &branch) =>
+        {
+            branch
+        }
         _ => fresh,
     }
 }
@@ -179,6 +187,10 @@ pub(super) struct Kept {
     /// The commit this clone last pushed to it.
     pub pushed: Option<String>,
     pub pr: Option<KeptPr>,
+    /// The request [`Self::pr`] named was forgotten without being seen to merge or close — the
+    /// plane was moved off its commit by hand — so it may still be open, and a pre-rename save
+    /// branch carries on until a settle sees it end ([`save_branch`], V93j).
+    pub held: bool,
 }
 
 /// The PR a save last opened or updated.
@@ -222,6 +234,7 @@ impl Kept {
             branch: text(&doc, "branch").filter(|b| crate::planesave::branch_ok(b)),
             pushed: text(&doc, "pushed").filter(|h| is_object_name(h)),
             pr,
+            held: doc.get("held").and_then(serde_json::Value::as_bool) == Some(true),
         }
     }
 
@@ -238,6 +251,10 @@ impl Kept {
                 "target": pr.target,
             })),
         });
+        let mut doc = doc;
+        if self.held {
+            doc["held"] = serde_json::Value::Bool(true);
+        }
         if let Some(dir) = path.parent()
             && crate::profiletrust::private_dir(dir).is_ok()
         {
@@ -669,6 +686,10 @@ pub(super) fn settle(
     // longer the plane that PR is about.
     if !is_ancestor(root, &known.head, "HEAD") {
         kept.pr = None;
+        // Not seen to end: a pre-rename branch is held until a settle sees it end.
+        kept.held = kept.branch.as_deref().is_some_and(|b| {
+            b != plane.save_branch_or_default(root) && is_own_default(root, plane, b)
+        });
         kept.write(root);
         return Settled::Nothing;
     }
