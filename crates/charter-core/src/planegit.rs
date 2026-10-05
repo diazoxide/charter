@@ -1673,8 +1673,24 @@ fn secret_on_disk(root: &Path, path: &str) -> bool {
     }
     std::fs::read(&file).is_ok_and(|bytes| {
         unscanned(path, &bytes).is_none()
-            && secretshape::found(&String::from_utf8_lossy(&bytes)).is_some()
+            && secret_in(path, &String::from_utf8_lossy(&bytes)).is_some()
     })
+}
+
+/// What the secret guard finds in the text of the file at `path`: its kind, and the line it
+/// starts on when the text spells it. The one question the save and the standing both ask.
+///
+/// The text first, as it always was. Then, for a file whose name says JSON or TOML, the
+/// document as it reads, with every escape decoded ([`secretshape::parsed_kind`], #1295) —
+/// asked only when the text was clean, and with no line, since the decoded document's lines
+/// are not the file's. Text that does not parse has had its one scan, as before.
+fn secret_in(path: &str, text: &str) -> Option<(Option<usize>, &'static str)> {
+    if let Some(found) = secretshape::found(text) {
+        return Some((Some(found.line), found.kind));
+    }
+    secretshape::Structured::of(path)
+        .and_then(|form| secretshape::parsed_kind(form, text))
+        .map(|kind| (None, kind))
 }
 
 /// How many `git show`s the secret guard runs at once. Each is a process of its own, and a
@@ -2336,8 +2352,8 @@ fn commit_push(
             Some(text) => {
                 if let Some(why) = unscanned(path, text.as_bytes()) {
                     skipped.push(((*path).clone(), why));
-                } else if let Some(found) = secretshape::found(&text) {
-                    flagged.push(((*path).clone(), Some(found.line), found.kind));
+                } else if let Some((line, kind)) = secret_in(path, &text) {
+                    flagged.push(((*path).clone(), line, kind));
                 }
             }
             // A row charter could not read what is staged for is not one it commits

@@ -407,6 +407,49 @@ fn token_at(text: &str) -> Option<(&'static str, usize)> {
         .map(|hit| (FORGE_TOKEN.1, hit.start()))
 }
 
+/// A form of document a file can be read in as well as scanned as text, known by its name.
+///
+/// JSON and TOML let a string spell any character as an escape (`\u0041` is `A`), so what the
+/// file holds — what charter reads, and what anyone reading the file gets — is not always what
+/// its bytes spell. [`parsed_kind`] asks the document as it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Structured {
+    Json,
+    Toml,
+}
+
+impl Structured {
+    /// The form `path` is read in by its extension (`.json`, `.toml`, any case), or `None`.
+    /// Only the name is asked, so a file of any other name is never parsed.
+    pub fn of(path: &str) -> Option<Self> {
+        let ext = std::path::Path::new(path).extension()?.to_str()?;
+        if ext.eq_ignore_ascii_case("json") {
+            Some(Self::Json)
+        } else if ext.eq_ignore_ascii_case("toml") {
+            Some(Self::Toml)
+        } else {
+            None
+        }
+    }
+}
+
+/// [`secret_kind`] of `text` as the document reads, keys included: parsed as `form`, then
+/// written out again with every escape decoded — JSON the way charter writes a manifest
+/// ([`crate::pyjson::dumps_indent2_unicode`]), TOML by the `toml` writer. `None` for a
+/// document with no secret, and for text that does not parse as `form`, whose bytes are all
+/// a scan of the text has to go on.
+///
+/// The settings editors ask the same of what is typed into them (Edit as JSON, Edit as
+/// TOML), and a plane save of each staged file of that form (#1295), so a document the
+/// editors refuse is one the save refuses.
+pub fn parsed_kind(form: Structured, text: &str) -> Option<&'static str> {
+    let read = match form {
+        Structured::Json => crate::pyjson::dumps_indent2_unicode(&serde_json::from_str(text).ok()?),
+        Structured::Toml => toml::to_string(&text.parse::<toml::Table>().ok()?).ok()?,
+    };
+    secret_kind(&read)
+}
+
 /// A credential [`found`] in a text: its kind, and the 1-based line it starts on. Never the
 /// value, since every caller prints what it gets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1306,6 +1349,98 @@ mod documented_token_tests {
         ] {
             assert_eq!(secret_kind(text), None, "{text}");
             assert_eq!(token_kind(text), None, "{text}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod parsed_tests {
+    use super::*;
+
+    /// Each shape the settings editors refuse as they read the document — a character written
+    /// as an escape — is found the same way in a file of that form.
+    #[test]
+    fn a_secret_spelled_with_escapes_is_found_as_the_document_reads_it() {
+        for (form, text, kind) in [
+            (
+                Structured::Json,
+                r#"{"description": "\u0041KIAIOSFODNN7EXAMPLE"}"#,
+                "AWS access key",
+            ),
+            (
+                Structured::Json,
+                r#"{"description": "AKIAIOSF\u004fDNN7EXAMPLE"}"#,
+                "AWS access key",
+            ),
+            (
+                Structured::Json,
+                r#"{"note": "\u0067hp_0123456789abcdefABCDEFghij"}"#,
+                "a token by its forge's prefix",
+            ),
+            (
+                Structured::Json,
+                r#"{"\u0041KIAIOSFODNN7EXAMPLE": true}"#,
+                "AWS access key",
+            ),
+            (
+                Structured::Toml,
+                "[workspace]\ndefault = \"\\u0041KIAIOSFODNN7EXAMPLE\"\n",
+                "AWS access key",
+            ),
+            (
+                Structured::Toml,
+                "[workspace]\ndefault = \"AKIA\\U00000049OSFODNN7EXAMPLE\"\n",
+                "AWS access key",
+            ),
+            (
+                Structured::Toml,
+                "[extensions.stats.settings]\n\"pass\\u0077ord\" = \"hunter2hunter2\"\n",
+                "credential assignment",
+            ),
+        ] {
+            assert_eq!(
+                secret_kind(text),
+                None,
+                "{text}: the raw scan already saw it"
+            );
+            assert_eq!(parsed_kind(form, text), Some(kind), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_document_with_no_secret_or_that_does_not_parse_answers_none() {
+        for (form, text) in [
+            (Structured::Json, r#"{"name": "alpha", "repos": []}"#),
+            (Structured::Json, r#"{"name": "\u0041lpha"}"#),
+            (Structured::Toml, "[plane]\nname = \"fixture\"\n"),
+            (
+                Structured::Json,
+                "{\"name\": \"\\u0041KIAIOSFODNN7EXAMPLE\"",
+            ),
+            (
+                Structured::Toml,
+                "[plane\ndefault = \"\\u0041KIAIOSFODNN7EXAMPLE\"\n",
+            ),
+        ] {
+            assert_eq!(parsed_kind(form, text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn only_a_json_or_toml_name_is_read_as_a_document() {
+        for (path, form) in [
+            ("charter.toml", Some(Structured::Toml)),
+            ("purlis.toml", Some(Structured::Toml)),
+            ("workspaces/alpha/workspace.json", Some(Structured::Json)),
+            ("personas/devops/SETTINGS.JSON", Some(Structured::Json)),
+            ("personas/steward/memory/note.md", None),
+            ("workspaces/alpha/todos/0001.json.md", None),
+            ("workspaces/alpha/events.jsonl", None),
+            ("toml", None),
+            (".json", None),
+            ("dir.json/notes", None),
+        ] {
+            assert_eq!(Structured::of(path), form, "{path}");
         }
     }
 }
