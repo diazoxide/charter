@@ -258,13 +258,15 @@ fn an_older_charter_writes_nothing_to_a_project_that_requires_a_feature_it_lacks
 
 #[test]
 fn doctor_fix_writes_nothing_to_a_read_only_project() {
-    let project = Project::new(REQUIRES);
-    let before = project.tree();
-    let out = project.run(&["doctor", "--fix"]);
-    let said = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "{said}");
-    assert!(said.contains("memory-proposals"), "{said}");
-    assert_eq!(project.tree(), before, "doctor --fix wrote to the project");
+    for args in [&["doctor", "--fix"][..], &["doctor", "--fix", "reinit"]] {
+        let project = Project::new(REQUIRES);
+        let before = project.tree();
+        let out = project.run(args);
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{args:?}: {said}");
+        assert!(said.contains("memory-proposals"), "{args:?}: {said}");
+        assert_eq!(project.tree(), before, "{args:?} wrote to the project");
+    }
 }
 
 #[test]

@@ -56,7 +56,8 @@ impl From<Status> for DoctorStatus {
     }
 }
 
-/// One doctor row: the four fields `charter doctor --json` prints, and two it does not.
+/// One doctor row: the fields `charter doctor --json` prints, and two it does not (`checked`,
+/// `settings`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct DoctorRow {
     pub name: String,
@@ -75,12 +76,17 @@ pub struct DoctorRow {
     /// when the fix is a setting ([`Row::settings`], SE-22): the window links the row there.
     /// `charter doctor --json` does not print it.
     pub settings: Option<String>,
+    /// The fix charter can make for this finding itself (FX-1, `charter_core::doctor::fix`),
+    /// by the id `charter doctor --fix <id>` takes: the dialog draws a Fix button for it, which
+    /// calls [`plane_doctor_fix`]. `None` for a row charter cannot fix, and for the app's own.
+    pub fix: Option<String>,
 }
 
 impl From<Row> for DoctorRow {
     fn from(row: Row) -> Self {
         Self {
             checked: !row.deferred(),
+            fix: row.fix.map(|id| id.id().to_owned()),
             status: row.status.into(),
             name: row.name,
             detail: row.detail,
@@ -129,6 +135,64 @@ pub async fn plane_doctor(
     tauri::async_runtime::spawn_blocking(move || report(&root, full))
         .await
         .map_err(|err| format!("the doctor did not finish: {err}"))
+}
+
+/// What applying a fix came to, as the Doctor dialog draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DoctorFixed {
+    /// The fix that was asked for, by its id.
+    pub fix: String,
+    /// Why it was refused, before anything was written. `None` when it ran.
+    pub refused: Option<String>,
+    /// What it changed, line by line, in the words and marks `charter doctor --fix` prints.
+    pub said: Vec<String>,
+    /// Whether it did everything it was asked to. `false` for a refusal, and for a fix that
+    /// ran and could not do part of it, which `said` names.
+    pub complete: bool,
+}
+
+/// Apply one doctor fix by its id to the plane the window names (FX-1): the Doctor dialog's
+/// Fix button. The same core entry point `charter doctor --fix <id>` calls, so the window and
+/// the terminal make the same fix. The window asks the doctor again afterwards.
+///
+/// On a blocking thread, as [`plane_doctor`] is: a fix writes files and takes the plane's lock.
+#[tauri::command]
+#[specta::specta]
+pub async fn plane_doctor_fix(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    fix: String,
+) -> Result<DoctorFixed, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || fixed(&root, &fix))
+        .await
+        .map_err(|err| format!("the fix did not finish: {err}"))?
+}
+
+/// [`plane_doctor_fix`], on the calling thread.
+fn fixed(root: &std::path::Path, fix: &str) -> Result<DoctorFixed, String> {
+    use charter_core::doctor::fix::{self as registry, FixId, Fixed};
+    let id = FixId::parse(fix).ok_or_else(|| {
+        format!(
+            "charter has no fix '{}'; the fixes are {}",
+            charter_core::shown::short(fix),
+            FixId::ALL.map(FixId::id).join(", ")
+        )
+    })?;
+    Ok(match registry::apply(root, id) {
+        Fixed::Ran { said, complete } => DoctorFixed {
+            fix: id.id().to_owned(),
+            refused: None,
+            said,
+            complete,
+        },
+        Fixed::Refused(why) => DoctorFixed {
+            fix: id.id().to_owned(),
+            refused: Some(why),
+            said: Vec::new(),
+            complete: false,
+        },
+    })
 }
 
 /// The report for one plane. The command above is this on a blocking thread.
@@ -205,6 +269,7 @@ fn chat_footer(root: &std::path::Path) -> DoctorRow {
         // This build runs this check: it is not one of the ported table's deferred rows.
         checked: true,
         settings: None,
+        fix: None,
     };
     let where_it_looked = format!(
         "This is the answer for {}; a chat started somewhere else reads that directory's \
@@ -292,6 +357,7 @@ fn event_log(opened: Option<&Result<std::path::PathBuf, crate::EventLogRefused>>
         hint,
         checked: true,
         settings: None,
+        fix: None,
     };
     match opened {
         Some(Ok(dir)) => row(
@@ -373,7 +439,48 @@ mod tests {
             assert_eq!(serde_json::to_value(row.status).unwrap(), json["status"]);
             assert_eq!(serde_json::json!(row.detail), json["detail"]);
             assert_eq!(serde_json::json!(row.hint), json["hint"]);
+            assert_eq!(
+                serde_json::json!(row.fix),
+                json.get("fix").cloned().unwrap_or(serde_json::Value::Null)
+            );
         }
+    }
+
+    #[test]
+    fn a_fixable_row_names_its_fix_and_the_fix_leaves_the_doctor_clean() {
+        // FX-1: the window's Fix button, from the row to the re-check.
+        let (_dir, root) = plane();
+        std::fs::remove_dir(root.join("personas")).expect("removed");
+        let schema = |report: &DoctorReport| {
+            report
+                .rows
+                .iter()
+                .find(|r| r.name == "schema")
+                .cloned()
+                .expect("a schema row")
+        };
+        let before = schema(&report(&root, false));
+        assert_eq!(before.status, DoctorStatus::Warn, "{before:?}");
+        assert_eq!(before.fix.as_deref(), Some("reinit"));
+
+        let done = fixed(&root, "reinit").expect("a fix the registry has");
+        assert_eq!(done.refused, None, "{done:?}");
+        assert!(done.complete, "{done:?}");
+        assert!(done.said.iter().any(|l| l.contains("personas")), "{done:?}");
+
+        let after = schema(&report(&root, false));
+        assert_eq!(after.status, DoctorStatus::Ok, "{after:?}");
+        assert_eq!(after.fix, None);
+    }
+
+    #[test]
+    fn a_fix_the_registry_does_not_have_is_refused_by_name() {
+        let (_dir, root) = plane();
+        let refused = fixed(&root, "index-lock").expect_err("no such fix");
+        assert!(
+            refused.contains("index-lock") && refused.contains("reinit"),
+            "{refused}"
+        );
     }
 
     #[test]

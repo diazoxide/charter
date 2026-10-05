@@ -28,6 +28,7 @@ function row(name: string, status: DoctorRow["status"], over: Partial<DoctorRow>
     hint: `${name} fix`,
     checked: true,
     settings: null,
+    fix: null,
     ...over,
   };
 }
@@ -290,5 +291,84 @@ describe("useDoctor", () => {
 
     expect(result.current.report?.full).toBe(true);
     expect(result.current.running).toBe(false);
+  });
+});
+
+describe("the Fix button", () => {
+  /** The dialog as the window wires it: the real hook, over a mocked core. */
+  function Wired() {
+    return <Health doctor={useDoctor(PLANE)} />;
+  }
+
+  const missing = row("schema", "warn", {
+    detail: "1 issue(s): missing directory: personas/",
+    fix: "reinit",
+  });
+  const clean = row("schema", "ok", { detail: "up to date (schema 1)" });
+
+  it("applies the row's fix by its id, says what changed and checks again", async () => {
+    const asked: Array<[string, unknown]> = [];
+    let fixed = false;
+    mockIPC((cmd, args) => {
+      asked.push([cmd, args]);
+      if (cmd === "plane_doctor") return report([fixed ? clean : missing, row("git", "ok")]);
+      if (cmd === "plane_doctor_fix") {
+        fixed = true;
+        return {
+          fix: "reinit",
+          refused: null,
+          said: ["✓ Reinitialized: created personas/"],
+          complete: true,
+        };
+      }
+      return null;
+    });
+    render(<Wired />);
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    const warnings = await within(dialog).findByRole("region", { name: "Warnings" });
+    const before = asked.filter(([cmd]) => cmd === "plane_doctor").length;
+
+    await userEvent.click(within(warnings).getByRole("button", { name: "Fix: reinit" }));
+
+    expect(asked).toContainEqual(["plane_doctor_fix", { plane: PLANE, fix: "reinit" }]);
+    expect(await within(dialog).findByText("✓ Reinitialized: created personas/")).toBeVisible();
+    // Checked again, at the depth the open dialog shows, and the row has moved.
+    await waitFor(() =>
+      expect(
+        within(within(dialog).getByRole("region", { name: "Passed" })).getByText("schema"),
+      ).toBeInTheDocument(),
+    );
+    const after = asked.filter(([cmd]) => cmd === "plane_doctor").slice(before);
+    expect(after).toContainEqual(["plane_doctor", { plane: PLANE, full: true }]);
+    expect(within(dialog).queryByRole("button", { name: /^Fix/ })).toBeNull();
+  });
+
+  it("says why a fix was refused", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "plane_doctor") return report([missing]);
+      if (cmd === "plane_doctor_fix")
+        return {
+          fix: "reinit",
+          refused: "this project requires the feature memory-proposals",
+          said: [],
+          complete: false,
+        };
+      return null;
+    });
+    render(<Wired />);
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Fix: reinit" }));
+
+    expect(await within(dialog).findByText(/requires the feature memory-proposals/)).toBeVisible();
+  });
+
+  it("draws no Fix button on a row charter cannot fix", async () => {
+    render(<Health doctor={state({ report: report([row("index lock", "warn")]) })} />);
+    await userEvent.click(button());
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("button", { name: /^Fix/ })).toBeNull();
   });
 });

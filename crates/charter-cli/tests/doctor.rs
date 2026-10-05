@@ -191,3 +191,79 @@ fn a_harness_name_from_the_environment_cannot_forge_a_row() {
         "{text}"
     );
 }
+
+/// A project with a `charter.toml` and nothing else: the `schema` row's finding, which reinit
+/// fixes (FX-1).
+fn bare_project() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    (dir, root)
+}
+
+#[test]
+fn json_names_the_fix_on_a_fixable_row_and_on_no_other() {
+    let (_d, root) = bare_project();
+    let rows = rows(&doctor(&root, &root.join("home"), &["--json"]));
+    assert_eq!(row(&rows, "schema")["fix"], "reinit");
+    assert_eq!(
+        row(&rows, "schema")
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["name", "status", "detail", "hint", "fix"],
+        "the four keys first, as they always were"
+    );
+    let with_fix: Vec<_> = rows.iter().filter(|r| r.get("fix").is_some()).collect();
+    assert_eq!(with_fix.len(), 1, "{with_fix:?}");
+}
+
+#[test]
+fn fix_with_an_id_applies_that_fix_says_what_it_changed_and_reports_it_clean() {
+    let (_d, root) = bare_project();
+    let home = root.join("home");
+    let vars = [("CHARTER_CONFIG_HOME", root.to_str().unwrap())];
+    let out = doctor_with(&root, &home, &["--json", "--fix", "reinit"], &vars);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix reinit:"), "{said}");
+    assert!(
+        said.contains("personas"),
+        "it names what it created: {said}"
+    );
+    // `--fix <id>` applies that fix alone: the plugin install bare `--fix` makes is not run.
+    assert!(!said.contains("codex:"), "{said}");
+    let after = rows(&out);
+    let schema = row(&after, "schema");
+    assert_eq!(schema["status"], "ok", "{schema}");
+    assert!(schema.get("fix").is_none(), "{schema}");
+    assert!(root.join("personas").is_dir());
+}
+
+#[test]
+fn bare_fix_applies_every_fix_the_doctor_offers() {
+    let (_d, root) = bare_project();
+    let home = root.join("home");
+    let vars = [("CHARTER_CONFIG_HOME", root.to_str().unwrap())];
+    let out = doctor_with(&root, &home, &["--json", "--fix"], &vars);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix reinit:"), "{said}");
+    assert_eq!(row(&rows(&out), "schema")["status"], "ok");
+    for dir in ["personas", "inventory", "workspaces"] {
+        assert!(root.join(dir).is_dir(), "{dir}/ missing: {said}");
+    }
+}
+
+#[test]
+fn fix_with_an_id_no_fix_has_is_refused_and_names_the_fixes() {
+    let (_d, root) = bare_project();
+    let out = doctor(&root, &root.join("home"), &["--fix", "index-lock"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("reinit"),
+        "it names the fixes there are: {said}"
+    );
+    assert!(!root.join("personas").exists(), "nothing was fixed");
+}

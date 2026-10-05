@@ -262,12 +262,21 @@ enum Command {
         /// one. Every other check runs.
         #[arg(long)]
         preflight: bool,
-        /// Repair first, then report: install charter's plugin for chats started outside the
-        /// app (what `charter plugin install` does), and add the plane's default ask rule for
-        /// `charter report --yes` when it is missing (what `charter guard ask` does). Each
-        /// change is printed on stderr.
-        #[arg(long)]
-        fix: bool,
+        /// Repair first, then report. With no ID: install charter's plugin for chats started
+        /// outside the app (what `charter plugin install` does), add the plane's default ask
+        /// rule for `charter report --yes` when it is missing (what `charter guard ask` does),
+        /// and apply every fix the doctor's rows offer. With an ID (the `fix` a row carries in
+        /// `--json`): apply that fix alone. What each changed, or why it was refused, is
+        /// printed on stderr.
+        #[arg(
+            long,
+            value_name = "ID",
+            num_args = 0..=1,
+            value_parser = clap::builder::PossibleValuesParser::new(
+                charter_core::doctor::fix::FixId::ALL.map(charter_core::doctor::fix::FixId::id)
+            ),
+        )]
+        fix: Option<Option<String>>,
     },
 
     /// Refresh the forge state the CI column is drawn from: each clone's open PR/MR and the
@@ -652,7 +661,7 @@ enum ReadOnly {
 /// refused, so a new command is refused there until somebody shows it only reads.
 fn read_only_standing(command: &Command) -> ReadOnly {
     match command {
-        Command::Doctor { fix: false, .. }
+        Command::Doctor { fix: None, .. }
         | Command::Update { .. }
         | Command::Version { .. }
         | Command::News(_)
@@ -3217,7 +3226,7 @@ fn main() -> ExitCode {
             json,
             preflight,
             fix,
-        } => return doctor(*json, *preflight, *fix),
+        } => return doctor(*json, *preflight, fix.as_ref().map(Option::as_deref)),
         Command::Plugin(verb) => return plugin(verb),
         // A background refresh and a footer: neither is a plane write, and both choose their
         // own exit status as their Python counterparts do.
@@ -3416,15 +3425,19 @@ fn with_here(f: impl FnOnce(&Here) -> u8) -> ExitCode {
 /// `charter doctor`: every check, as a table or as `--json`, and the verdict as the exit.
 ///
 /// `--fix` repairs before it reports, so the report reads as the state after the repair, as
-/// Python's did when it installed the Claude Code plugin first. Its repairs are charter's plugin
-/// (#373) and the plane's ask rule for `charter report --yes` (ADR 0059).
-fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
+/// Python's did when it installed the Claude Code plugin first. Bare `--fix` repairs charter's
+/// plugin (#373), the plane's ask rule for `charter report --yes` (ADR 0059), and applies every
+/// fix the rows offer (the fix registry, FX-1); `--fix <id>` applies that one fix alone.
+///
+/// `fix` is `None` without `--fix`, `Some(None)` for a bare `--fix`, and `Some(Some(id))` for
+/// one fix.
+fn doctor(json: bool, preflight: bool, fix: Option<Option<&str>>) -> ExitCode {
     use std::io::IsTerminal;
 
-    // The one repair: charter's plugin, for the chats started outside the app (#373). Its
+    // The machine repair: charter's plugin, for the chats started outside the app (#373). Its
     // steps go to stderr so a `--json` reader still gets JSON alone.
     let mut fix_failed = false;
-    if fix {
+    if fix == Some(None) {
         match plugin_machine(None) {
             Ok(machine) => {
                 use charter_core::plugin_install as install;
@@ -3446,9 +3459,29 @@ fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
         }
     };
     // The plane repair: the ask rule a report is filed behind (ADR 0059, amended 2026-09-26).
-    if fix && let Some((said, code)) = charter_core::doctor::fix_report_rule(&cwd) {
+    if fix == Some(None)
+        && let Some((said, code)) = charter_core::doctor::fix_report_rule(&cwd)
+    {
         eprint!("{said}");
         fix_failed |= code != 0;
+    }
+    // The registry's fixes (FX-1): the one asked for, or every one a row offers.
+    if let Some(asked) = fix {
+        use charter_core::doctor::fix::{self as registry, FixId};
+        let doctor = charter_core::doctor::Doctor::new(&cwd, preflight);
+        let ids = match asked {
+            // clap took only an id the registry has.
+            Some(id) => FixId::parse(id).into_iter().collect(),
+            None => doctor.fixes(),
+        };
+        for id in ids {
+            let fixed = registry::apply(doctor.root(), id);
+            eprintln!("fix {id}:");
+            for line in fixed.lines() {
+                eprintln!("  {line}");
+            }
+            fix_failed |= !fixed.complete();
+        }
     }
     let rows = charter_core::doctor::Doctor::new(&cwd, preflight).run();
     if json {

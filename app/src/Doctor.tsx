@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoaderCircle, Stethoscope } from "lucide-react";
-import { commands, type DoctorReport, type DoctorRow, type PlaneId } from "./bindings";
+import {
+  commands,
+  type DoctorFixed,
+  type DoctorReport,
+  type DoctorRow,
+  type PlaneId,
+} from "./bindings";
 
 /**
  * **`charter doctor`, from inside the window** — the last of ADR 0038's named gaps.
@@ -50,6 +56,13 @@ import { commands, type DoctorReport, type DoctorRow, type PlaneId } from "./bin
  * doctor, which also probes each harness profile: that RUNS the harness, and the core says
  * only a doctor a person asked for may (`doctor/profiles.rs`). Opening the dialog is the
  * asking. The dialog says which of the two it is showing.
+ *
+ * # Fix
+ *
+ * A row charter can fix itself carries a fix id (`DoctorRow.fix`, FX-1), and the dialog draws a
+ * Fix button for it. The button calls the same core entry point `charter doctor --fix <id>`
+ * does, says what the fix changed or why it was refused, and then checks again, so the row is
+ * redrawn from what is true after the fix rather than assumed fixed.
  */
 
 /** What the window knows about the doctor for one project. */
@@ -63,6 +76,13 @@ export type DoctorState = {
   trouble?: string;
   /** Ask again — `full` probes the harness profiles. */
   run: (full: boolean) => void;
+  /** Apply the fix a row carries, by its id, then check again (the full doctor: the dialog
+   *  is open). Absent where nothing can apply one. */
+  fix?: (id: string) => void;
+  /** The fix on its way, by its id. */
+  fixing?: string;
+  /** What the last fix came to: its lines, or why it was refused. */
+  fixed?: DoctorFixed;
 };
 
 /**
@@ -123,7 +143,31 @@ export function useDoctor(plane: PlaneId): DoctorState {
     ask(false);
   }, [ask]);
 
-  return { report, running, trouble, run };
+  const [fixing, setFixing] = useState<string>();
+  const [fixed, setFixed] = useState<DoctorFixed>();
+  const fix = useCallback(
+    (id: string) => {
+      setFixing(id);
+      setFixed(undefined);
+      void commands
+        .planeDoctorFix(plane, id)
+        .then((answer) => {
+          if (answer.status === "ok") setFixed(answer.data);
+          else setFixed({ fix: id, refused: answer.error, said: [], complete: false });
+        })
+        .catch((err: unknown) => {
+          setFixed({ fix: id, refused: String(err), said: [], complete: false });
+        })
+        .finally(() => {
+          setFixing(undefined);
+          // Checked again whatever came of it: a fix that half-ran changed something too.
+          run(true);
+        });
+    },
+    [plane, run],
+  );
+
+  return { report, running, trouble, run, fix, fixing, fixed };
 }
 
 /** Every row the verdict counts: the table's, and the app's own beside it. */
@@ -171,15 +215,21 @@ export function onTheLine(doctor: DoctorState): { said?: string; tone: string; l
 /** The glyph `charter doctor`'s own table draws for each verdict, so the two read alike. */
 const GLYPH: Record<DoctorRow["status"], string> = { ok: "✓", warn: "!", fail: "✗" };
 
+/** What a row's Fix button needs: the doctor's `fix`, and whether one may be pressed now. */
+type Fixer = { apply: (id: string) => void; busy: boolean };
+
 /**
  * The rows of one heading. A row whose fix is a setting names that setting's group
- * (`DoctorRow.settings`, SE-22), and is drawn with the way into it: `onOpenSettings`.
+ * (`DoctorRow.settings`, SE-22), and is drawn with the way into it: `onOpenSettings`. A row
+ * charter can fix itself (`DoctorRow.fix`, FX-1) is drawn with a Fix button: `fixer`.
  */
 function Rows({
   rows,
+  fixer,
   onOpenSettings,
 }: {
   rows: readonly DoctorRow[];
+  fixer?: Fixer;
   onOpenSettings?: (group: string) => void;
 }) {
   return (
@@ -205,6 +255,18 @@ function Rows({
               onClick={() => onOpenSettings(row.settings as string)}
             >
               Fix it in Settings
+            </button>
+          )}
+          {row.status !== "ok" && row.fix && fixer && (
+            <button
+              type="button"
+              className="doctor-fix"
+              tabIndex={0}
+              aria-label={`Fix: ${row.fix}`}
+              disabled={fixer.busy}
+              onClick={() => fixer.apply(row.fix as string)}
+            >
+              Fix
             </button>
           )}
         </li>
@@ -236,8 +298,12 @@ export function Health({
       onOpenSettings(group);
     });
   const { said, tone, label } = onTheLine(doctor);
-  const { report, running, trouble, run } = doctor;
+  const { report, running, trouble, run, fixing, fixed } = doctor;
   const groups = report ? sorted(report.rows) : undefined;
+  const fixer: Fixer | undefined = doctor.fix && {
+    apply: doctor.fix,
+    busy: running || fixing !== undefined,
+  };
   const ours = report?.app_rows ?? [];
 
   return (
@@ -287,6 +353,25 @@ export function Health({
               The doctor could not run: {trouble}
             </p>
           )}
+          {fixed !== undefined && (
+            <section
+              aria-label="Fix"
+              className={`doctor-fixed${fixed.complete ? "" : " doctor-trouble"}`}
+              role="status"
+            >
+              {fixed.refused !== null ? (
+                <p className="honest">
+                  Fix {fixed.fix} was refused: {fixed.refused}
+                </p>
+              ) : (
+                <ul className="doctor-fixed-lines">
+                  {fixed.said.map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
           {ours.length > 0 && (
             <section aria-label="This app">
               <h3>This app</h3>
@@ -303,19 +388,19 @@ export function Health({
               {groups.blockers.length > 0 && (
                 <section aria-label="Blockers">
                   <h3>Blockers</h3>
-                  <Rows rows={groups.blockers} onOpenSettings={settings} />
+                  <Rows rows={groups.blockers} fixer={fixer} onOpenSettings={settings} />
                 </section>
               )}
               {groups.warnings.length > 0 && (
                 <section aria-label="Warnings">
                   <h3>Warnings</h3>
-                  <Rows rows={groups.warnings} onOpenSettings={settings} />
+                  <Rows rows={groups.warnings} fixer={fixer} onOpenSettings={settings} />
                 </section>
               )}
               {groups.passed.length > 0 && (
                 <section aria-label="Passed">
                   <h3>Passed</h3>
-                  <Rows rows={groups.passed} onOpenSettings={settings} />
+                  <Rows rows={groups.passed} fixer={fixer} onOpenSettings={settings} />
                 </section>
               )}
               {groups.unchecked.length > 0 && (

@@ -394,6 +394,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
         hint: "install git",
         checked: true,
         settings: null,
+        fix: null,
       },
       {
         name: "tmux",
@@ -402,6 +403,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
         hint: "a later build checks this",
         checked: false,
         settings: null,
+        fix: null,
       },
     ];
     render(

@@ -115,6 +115,7 @@ pub(super) fn workspace_clones(d: &Doctor) -> Row {
                under-report — never a live query, this runs at SessionStart."
             .to_owned(),
         settings: None,
+        fix: None,
     };
     fsx::beside_unread(root, row, &unseen)
 }
