@@ -21,9 +21,10 @@ import { closeProject } from "../opening.js";
  *
  * **Its own project, copied into the run's tree** (charter-app#129's fence): it writes a setting,
  * so it may only ever be pointed at a plane the run itself made. **It closes it through the
- * window**, by the tab's own ×, as `saving.e2e.ts` does: `close_plane` lets the core go of a
- * project but does not take its tab off the strip, and one app process serves the whole run, so
- * a project left in front here, with its Settings tab, is the strip every later spec reads.
+ * window**, by the tab's own ×, as `saving.e2e.ts` does, and asserts the tab is gone: one app
+ * process serves the whole run, so a project left in front here, with its Settings tab, is the
+ * strip every later spec reads. `close_plane` asked directly takes the tab out too
+ * (`plane-closed`, #1242); the × is what an operator presses.
  */
 
 const PROJECTS = '[role="tablist"][aria-label="Projects"]';

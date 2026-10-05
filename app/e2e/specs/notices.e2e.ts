@@ -2,7 +2,6 @@ import { existsSync, realpathSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { anEmptyRecord, copyFixturePlane } from "../harness.js";
-import { closeProject } from "../opening.js";
 
 /**
  * **A pin to a workspace that is gone is kept dormant** (NO-1 #1223, ruling V91c as amended),
@@ -111,10 +110,15 @@ describe("a pin to a workspace that is gone", function () {
       await ask("pin_workspace", { plane: mine, workspace: name, pinned: true });
     await ask("arrange_workspace_pins", { plane: mine, workspaces: found });
     expect(await pinOrder()).toEqual(found);
-    // **Let go of through the window, not behind its back**, as `view-tabs.e2e.ts` does:
-    // `close_plane` asked directly leaves the window drawing a project the core no longer holds.
+    // Let go of in the core, as `view-tabs.e2e.ts` does: the window is told and takes the tab
+    // out (`plane-closed`, #1242).
     const selector = `${PROJECTS} button[aria-label="Close project ${NAME}"]`;
-    if (await $(selector).isExisting()) await closeProject(selector);
+    if ((await ask<string[]>("open_planes")).includes(mine))
+      await ask("close_plane", { plane: mine });
+    await browser.waitUntil(async () => !(await $(selector).isExisting()), {
+      timeout: 20_000,
+      timeoutMsg: "this spec's project's tab stayed on the strip",
+    });
     await browser.waitUntil(async () => !(await ask<string[]>("open_planes")).includes(mine), {
       timeout: 20_000,
       timeoutMsg: "this spec's project was not let go of",

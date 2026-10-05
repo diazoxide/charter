@@ -751,6 +751,9 @@ pub struct Planes {
     /// Told the root of each plane let go of, so the one watch per repo stops listening to its
     /// clones (FD-11).
     released: Released,
+    /// Told each plane [`Planes::close`] let go of, so every window drawing it takes it out
+    /// (#1242).
+    closed: Closed,
     /// Told when a harness is started by hand in a shell tab of any plane (ADR 0062).
     by_hand: hooks::ByHandTeller,
     /// Told each file a chat's tool touched, confined and rated (FM-6).
@@ -774,6 +777,19 @@ pub struct Planes {
 
 /// Told the root of a plane the app let go of.
 pub type Released = Arc<dyn Fn(&Path) + Send + Sync>;
+
+/// Told a plane [`Planes::close`] let go of (#1242).
+pub type Closed = Arc<dyn Fn(&PlaneId) + Send + Sync>;
+
+/// The event every window drawing a plane is sent when the core has closed it (#1242). The
+/// window takes the project's tab out, with its chats and views, whoever asked the close.
+pub(crate) const CLOSED: &str = "plane-closed";
+
+/// What `plane-closed` carries.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlaneClosed {
+    pub plane: PlaneId,
+}
 
 /// Makes a plane's session host, given where its chats are to report.
 pub type Hosting = Arc<dyn Fn(Option<Reporting>) -> Box<dyn SessionHost> + Send + Sync>;
@@ -836,6 +852,7 @@ impl Planes {
             changes: Arc::new(|_, _| {}),
             saves: Arc::new(|_, _| {}),
             released: Arc::new(|_| {}),
+            closed: Arc::new(|_| {}),
             by_hand: Arc::new(|_| {}),
             touches: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
@@ -888,6 +905,17 @@ impl Planes {
     /// Tells `released` the root of every plane this registry lets go of (FD-11).
     pub fn telling_released(mut self, released: Released) -> Self {
         self.released = released;
+        self
+    }
+
+    /// Tells `closed` every plane [`Self::close`] lets go of, so no window goes on drawing a
+    /// project the core no longer holds (#1242).
+    ///
+    /// **The quit is not told** ([`Self::let_go_of_all`]): the windows go with the process,
+    /// and a window emptied on the way out would report holding nothing and wipe the
+    /// arrangement the next launch puts back.
+    pub fn telling_closed(mut self, closed: Closed) -> Self {
+        self.closed = closed;
         self
     }
 
@@ -1795,7 +1823,8 @@ impl Planes {
         }
     }
 
-    /// Closes a plane: its record is written, its sessions are ended, its socket is released.
+    /// Closes a plane: its record is written, its sessions are ended, its socket is released,
+    /// and every window drawing it is told, whoever asked ([`Self::telling_closed`]).
     ///
     /// **Nothing of the plane on disk is touched** beyond the record the app already keeps
     /// there. Closing a project is the app letting go of it, never the plane going away.
@@ -1806,6 +1835,7 @@ impl Planes {
             .ok_or_else(|| no_such(plane, "close"))?;
         held.let_go(false);
         (self.released)(&held.root);
+        (self.closed)(plane);
         Ok(())
     }
 
@@ -3183,6 +3213,43 @@ mod tests {
         planes.let_go_of_all();
 
         assert_eq!(*told.lock().unwrap(), [held_one, held_two]);
+    }
+
+    #[test]
+    fn closing_a_plane_tells_the_windows_and_letting_go_of_every_plane_does_not() {
+        // #1242: whoever asked `close_plane`, every window drawing the plane is told, and takes
+        // its tab out. The quit is the one path that is NOT told: the windows go with the
+        // process, and a window emptied on the way out would report holding nothing and wipe
+        // the arrangement the next launch puts back.
+        let dir = tempfile::tempdir().expect("a directory");
+        let one = a_plane(&dir.path().join("one"));
+        let two = a_plane(&dir.path().join("two"));
+        let told: Arc<Mutex<Vec<PlaneId>>> = Arc::default();
+        let planes = planes().telling_closed({
+            let told = Arc::clone(&told);
+            Arc::new(move |plane: &PlaneId| told.lock().unwrap().push(plane.clone()))
+        });
+        let first = planes.open(&one);
+        let _second = planes.open(&two);
+
+        planes.close(&first).expect("it closes");
+        planes.let_go_of_all();
+
+        assert_eq!(*told.lock().unwrap(), [first]);
+    }
+
+    #[test]
+    fn a_plane_that_is_not_open_tells_no_window_it_closed() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let told: Arc<Mutex<Vec<PlaneId>>> = Arc::default();
+        let planes = planes().telling_closed({
+            let told = Arc::clone(&told);
+            Arc::new(move |plane: &PlaneId| told.lock().unwrap().push(plane.clone()))
+        });
+
+        let _ = planes.close(&PlaneId::of(dir.path()));
+
+        assert!(told.lock().unwrap().is_empty());
     }
 
     #[test]

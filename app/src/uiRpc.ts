@@ -78,7 +78,8 @@ export const commands = {
 	openPlanes: () => __TAURI_INVOKE<PlaneId[]>("open_planes"),
 	/**
 	 *  Lets go of a plane: its record is written, its sessions are ended, and its hook socket is
-	 *  released.
+	 *  released. Every window drawing it is told `plane-closed` and takes its tab out, whoever
+	 *  asked (#1242).
 	 * 
 	 *  **Nothing of the plane on disk goes.** Closing a project is the app letting go of it, and
 	 *  a plane closed here can be opened again — by this process or another — with everything
