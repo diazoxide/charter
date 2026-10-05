@@ -653,6 +653,37 @@ fn open_refuses_a_plane_root_record_that_is_a_link() {
     assert!(open(dir.path(), "sessions/20260928-090000-x.md").is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn open_refuses_a_workspace_record_or_sessions_folder_that_links_out_of_the_plane() {
+    // #1297: a session tab put back at a launch opens through here, and its path came off a
+    // record anyone who can write the state folder can edit. Its shape is checked there; that
+    // it lands inside the plane is checked here, whatever links are on the way.
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(outside.path().join("sessions")).unwrap();
+    let target = outside.path().join("sessions/20260928-090000-x.md");
+    std::fs::write(&target, "---\ntitle: x\n---\n# x\n").unwrap();
+
+    // The same file, inside the plane, opens: what is refused below is the link alone.
+    let dir = plane(&["alpha"]);
+    let sessions = dir.path().join("workspaces/alpha/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::copy(&target, sessions.join("20260928-090000-x.md")).unwrap();
+    assert!(open(dir.path(), "workspaces/alpha/sessions/20260928-090000-x.md").is_ok());
+
+    let dir = plane(&["alpha"]);
+    let sessions = dir.path().join("workspaces/alpha/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::os::unix::fs::symlink(&target, sessions.join("20260928-090000-x.md")).unwrap();
+    assert!(open(dir.path(), "workspaces/alpha/sessions/20260928-090000-x.md").is_err());
+
+    let dir = plane(&["alpha"]);
+    let sessions = dir.path().join("workspaces/alpha/sessions");
+    let _ = std::fs::remove_dir_all(&sessions);
+    std::os::unix::fs::symlink(outside.path().join("sessions"), &sessions).unwrap();
+    assert!(open(dir.path(), "workspaces/alpha/sessions/20260928-090000-x.md").is_err());
+}
+
 // ---- the record a saved line names ----------------------------------------------------------
 
 #[test]
