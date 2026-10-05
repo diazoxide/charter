@@ -91,11 +91,18 @@ function todoRow(todo: TodoView): PanelRow {
   };
 }
 
-/** The core. The open todos are the ones not closed or forgotten. */
-function core() {
+/** The core. The open todos are the ones not closed or forgotten, and `extra` is one more. */
+function core(extra?: Pick<TodoView, "title" | "body">) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const gone = new Set<string>();
-  const open = () => TODOS.filter((todo) => !gone.has(todo.slug));
+  const all: TodoView[] =
+    extra === undefined
+      ? TODOS
+      : [
+          ...TODOS,
+          { workspace: "alpha", slug: "20260304-080000-hostile", stamp: "2026-03-04", ...extra },
+        ];
+  const open = () => all.filter((todo) => !gone.has(todo.slug));
   mockIPC((cmd, args) => {
     const given = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: given });
@@ -202,6 +209,28 @@ describe("a todo row", () => {
     await userEvent.click(await todoRowFor("Drop the old importer"));
 
     expect(await screen.findByTestId("todo-body")).toHaveTextContent("Drop the old importer");
+  });
+
+  it("draws no HTML from the todo's file, and no javascript: link", async () => {
+    // A todo is a file a chat or a terminal wrote: `skipHtml` drops raw HTML, and the tab's
+    // links are `SessionRecordTab.COMPONENTS`', which make only http and https links.
+    core({
+      title: "Hostile",
+      body: 'Before <script>window.ran = true</script> <img src="x" onerror="window.ran = true"> [press me](javascript:alert(1)) after.',
+    });
+    render(<App />);
+
+    await userEvent.click(await todoRowFor("Hostile"));
+
+    const body = await screen.findByTestId("todo-body");
+    expect(body).toHaveTextContent("press me");
+    expect(body.querySelector("script")).toBeNull();
+    expect(body.querySelector("img")).toBeNull();
+    // Dropped, not escaped into the text: what `skipHtml` does that the default does not.
+    expect(body.textContent).not.toMatch(/<script|<img|onerror/);
+    // No anchor at all: a `javascript:` link is words, not a link with an emptied href.
+    expect(body.querySelector("a")).toBeNull();
+    expect((window as { ran?: boolean }).ran).toBeUndefined();
   });
 
   it("brings the tab already open forward rather than opening a second", async () => {
