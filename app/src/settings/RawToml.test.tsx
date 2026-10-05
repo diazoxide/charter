@@ -37,10 +37,15 @@ const file = (which: SettingsWhich, text: string, exists = true): SettingsFile =
 
 type Sent = { which: SettingsWhich; base: string | null; change: SettingsChange };
 
-/** The core, as a mock: `refuse` answers every save with these reasons instead of writing. */
+/**
+ * The core, as a mock: `refuse` answers every save with these reasons instead of writing. Like
+ * the core, a save made against text the file no longer holds is refused. `held`, when given,
+ * is awaited before a save answers.
+ */
 function core({
   refuse = undefined as string[] | undefined,
   local = file("local", LOCAL_TEXT),
+  held = undefined as (() => Promise<void>) | undefined,
 } = {}) {
   const files: Record<SettingsWhich, SettingsFile> = {
     shared: file("shared", SHARED_TEXT),
@@ -62,21 +67,32 @@ function core({
         case "save_project_settings": {
           const which = given.which as SettingsWhich;
           const change = given.change as SettingsChange;
-          sent.push({ which, base: given.base as string | null, change });
-          if (refuse) return { kind: "refused", reasons: refuse };
-          if (change.kind === "raw")
-            files[which] = { ...files[which], exists: true, text: change.text };
-          else {
-            // A form's change: each key set or gone, and a text that differs.
-            let fields = [...files[which].fields];
-            for (const edit of change.edits) {
-              const at = JSON.stringify(edit.path);
-              fields = fields.filter((one) => JSON.stringify(one.path) !== at);
-              if (edit.value !== null) fields.push({ path: edit.path, value: edit.value });
+          const base = given.base as string | null;
+          sent.push({ which, base, change });
+          return (held ?? (() => Promise.resolve()))().then(() => {
+            if (refuse) return { kind: "refused", reasons: refuse };
+            const was = files[which];
+            if ((was.exists ? was.text : null) !== base)
+              return {
+                kind: "refused",
+                reasons: [
+                  `${was.file} changed on disk since this tab read it, so nothing was saved.`,
+                ],
+              };
+            if (change.kind === "raw")
+              files[which] = { ...files[which], exists: true, text: change.text };
+            else {
+              // A form's change: each key set or gone, and a text that differs.
+              let fields = [...files[which].fields];
+              for (const edit of change.edits) {
+                const at = JSON.stringify(edit.path);
+                fields = fields.filter((one) => JSON.stringify(one.path) !== at);
+                if (edit.value !== null) fields.push({ path: edit.path, value: edit.value });
+              }
+              files[which] = { ...files[which], fields, text: `${files[which].text}# form\n` };
             }
-            files[which] = { ...files[which], fields, text: `${files[which].text}# form\n` };
-          }
-          return { kind: "saved", file: files[which] };
+            return { kind: "saved", file: files[which] };
+          });
         }
       }
       return undefined;
@@ -297,6 +313,74 @@ describe("Edit as TOML", () => {
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0].base).toBe(SHARED_TEXT);
+  });
+
+  it("refuses the save, and keeps the outside change, after an edit was typed back, the file changed, and typing went on", async () => {
+    const { files, sent } = core();
+    await atProject();
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "# mine");
+    await userEvent.type(raw("charter.toml"), "{Backspace}".repeat("# mine".length));
+    const outside = `${SHARED_TEXT}# edited by hand\n`;
+    files.shared = { ...files.shared, text: outside };
+    await changedOnDisk();
+    await screen.findByText(/charter\.toml changed on disk since this edit began/);
+
+    await userEvent.type(raw("charter.toml"), "# then\n");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/changed on disk/);
+    expect(sent.map((one) => one.base)).toEqual([SHARED_TEXT]);
+    expect(files.shared.text).toBe(outside);
+    // What was typed is kept, and Discard takes up the outside change.
+    expect(raw("charter.toml")).toHaveValue(`${SHARED_TEXT}# then\n`);
+    await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(raw("charter.toml")).toHaveValue(outside);
+  });
+
+  it("writes an edit typed straight after a save, against what that save wrote", async () => {
+    const { files } = core();
+    await atProject();
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "# one\n");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+    await waitFor(() => expect(files.shared.text).toBe(`${SHARED_TEXT}# one\n`));
+
+    await userEvent.type(raw("charter.toml"), "# two\n");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+
+    await waitFor(() => expect(files.shared.text).toBe(`${SHARED_TEXT}# one\n# two\n`));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/changed on disk/)).toBeNull();
+  });
+
+  it("loses nothing typed while a save is on its way", async () => {
+    let letGo = () => {};
+    let holding = true;
+    const { files } = core({
+      held: () =>
+        holding
+          ? new Promise<void>((done) => {
+              holding = false;
+              letGo = done;
+            })
+          : Promise.resolve(),
+    });
+    await atProject();
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "# one\n");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+    await screen.findByRole("button", { name: "Saving…" });
+
+    await userEvent.type(raw("charter.toml"), "# two\n");
+    await act(async () => letGo());
+    await waitFor(() => expect(files.shared.text).toBe(`${SHARED_TEXT}# one\n`));
+
+    // What was typed during the save is still there, as an edit of what the save wrote.
+    expect(raw("charter.toml")).toHaveValue(`${SHARED_TEXT}# one\n# two\n`);
+    expect(screen.queryByText(/changed on disk/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+    await waitFor(() => expect(files.shared.text).toBe(`${SHARED_TEXT}# one\n# two\n`));
   });
 
   it("saves the next edit against what the last save wrote", async () => {
