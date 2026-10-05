@@ -16,12 +16,21 @@ import { describe, expect, it } from "vitest";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
 
-/** The addresses `SettingsGroup::id` spells, in its order. */
+/**
+ * The addresses `SettingsGroup::id` spells, in its order. Every arm is read whatever its
+ * address holds, and there must be one per variant: an arm this pattern cannot read (wrapped
+ * by rustfmt, or returning a const) fails here instead of dropping out of the check.
+ */
 function coreGroups(): string[] {
   const source = read("crates/charter-core/src/doctor/mod.rs");
+  const variants = /pub enum SettingsGroup \{([^}]*)\}/.exec(source);
+  expect(variants, "SettingsGroup is the enum the core links by").not.toBeNull();
   const body = /impl SettingsGroup \{[\s\S]*?pub const fn id\(self\)[\s\S]*?\n {4}\}/.exec(source);
   expect(body, "SettingsGroup::id is where the core spells each address").not.toBeNull();
-  return [...(body?.[0] ?? "").matchAll(/=> "([a-z.]+)"/g)].map((one) => one[1]);
+  const ids = [...(body?.[0] ?? "").matchAll(/Self::\w+ => "([^"]+)",/g)].map((one) => one[1]);
+  const count = [...(variants?.[1] ?? "").matchAll(/^\s*[A-Z]\w*,/gm)].length;
+  expect(ids.length, "one arm per variant: SettingsGroup::id spells every group").toBe(count);
+  return ids;
 }
 
 /** The group ids the Project level declares: each group's `id: "project.<group>"`. */
