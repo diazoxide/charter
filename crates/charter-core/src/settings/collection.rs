@@ -28,11 +28,15 @@
 //! refused for, each with the Settings group it is changed in when it is a setting, and
 //! [`Refusal::file`] for the whole write (the file moved, a secret, a file a form cannot edit).
 //!
-//! **Undo is the inverse operation, through these same functions** (D-ST3-i): the Undo of an add
-//! is a `remove` of the identity `add` answered, with its reference check, and the Undo of a
-//! remove is an `add` of the entry `remove` answered. So an Undo is refused for what the
-//! operation would be — a repo catalogued on the host since, say — and never writes around the
-//! collection's rules.
+//! **Undo** (D-ST3-i, as amended by the dispatcher): the Undo of an add is the inverse
+//! operation through these same functions — a `remove` of the identity `add` answered, with its
+//! reference check, so it is refused once something uses the entry (a repo catalogued on the
+//! host since, say). The Undo of a remove is **the file's earlier text written back exactly**,
+//! through [`super::save`] against the text the remove left: the entry returns to its place, as
+//! it was spelled, with its comment — and order matters, since a plane's first `[[forge]]` block
+//! is its primary group. It asks no reference check, because putting an entry back only declares
+//! again and cannot take anything away from a user; it is refused if the file moved since. A
+//! collection with no text to put back (the machine store) undoes a remove with an `add`.
 //!
 //! [`super::forges`] is the first collection. A new one copies its shape: an `Entry` with one
 //! `String`/`Vec<String>` per form field, `check` for the field refusals, `listed`, `add`,

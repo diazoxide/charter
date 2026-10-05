@@ -482,3 +482,57 @@ fn adding_a_forge_and_removing_it_again_leaves_the_file_as_it_was() {
     remove(dir.path(), Some(&added), &id(&added, 1)).unwrap();
     assert_eq!(shared(dir.path()), text);
 }
+
+/// The review's file: a comment, block 0 holding both `group` and `owner` (so `group` is the
+/// plane's primary group, `config.GROUP`), then a second block.
+const PRIMARY: &str = "\
+schema = 1
+
+# the team
+[[forge]]
+kind = \"gitlab\"
+group = \"acme\"
+owner = \"old\"
+
+[[forge]]
+kind = \"github\"
+owner = \"beta\"
+";
+
+#[test]
+fn undoing_a_remove_puts_the_text_back_exactly_and_block_0_is_still_the_primary_group() {
+    let dir = plane(PRIMARY);
+    remove(dir.path(), Some(PRIMARY), &id(PRIMARY, 0)).unwrap();
+    let after = shared(dir.path());
+    assert_eq!(crate::forge::group_of(&after.parse().unwrap(), 0), "beta");
+
+    // The Undo of a remove (D-ST3-i as amended): the text before, against the text it left.
+    crate::settings::save(dir.path(), Which::Shared, Some(&after), PRIMARY).unwrap();
+
+    assert_eq!(shared(dir.path()), PRIMARY);
+    assert_eq!(crate::forge::group_of(&PRIMARY.parse().unwrap(), 0), "acme");
+}
+
+#[test]
+fn undoing_the_remove_of_one_of_two_identical_blocks_goes_through() {
+    let twins = "schema = 1\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n";
+    let dir = plane(twins);
+    remove(dir.path(), Some(twins), &id(twins, 1)).unwrap();
+    let after = shared(dir.path());
+    crate::settings::save(dir.path(), Which::Shared, Some(&after), twins).unwrap();
+    assert_eq!(shared(dir.path()), twins);
+}
+
+#[test]
+fn undoing_a_remove_is_refused_once_the_file_moved() {
+    let dir = plane(PRIMARY);
+    remove(dir.path(), Some(PRIMARY), &id(PRIMARY, 0)).unwrap();
+    let after = shared(dir.path());
+    fs::write(
+        dir.path().join("charter.toml"),
+        format!("{after}\n# edited\n"),
+    )
+    .unwrap();
+    let why = crate::settings::save(dir.path(), Which::Shared, Some(&after), PRIMARY).unwrap_err();
+    assert!(why[0].contains("changed on disk"), "{why:?}");
+}

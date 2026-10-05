@@ -402,11 +402,10 @@ function Shown({
                 group={group}
                 driver={driver}
                 onNew={create}
-                onGo={(to) => {
-                  // SE-22's link, at this level: it lands on the group and clears the filter.
-                  // A referrer at another level is ST-4's (#1241).
-                  if (levelOf(to) === level) linkToGroup(place, to);
-                }}
+                // SE-22's link, at this level: it lands on the group and clears the filter. A
+                // referrer at another level draws no link until ST-4 can follow one (#1241).
+                reachable={(to) => levelOf(to) === level && declared.some((one) => one.id === to)}
+                onGo={(to) => linkToGroup(place, to)}
               />
             )
           )}
@@ -442,12 +441,15 @@ function ShownGroup({
   driver,
   onNew,
   onGo,
+  reachable,
 }: {
   group: SettingsGroup;
   driver?: Driven<unknown>;
   onNew?: OnNew;
   /** Opens another group of this level: a link a collection's refusal carries. */
   onGo: (group: string) => void;
+  /** Whether {@link onGo} can open `group`. */
+  reachable: (group: string) => boolean;
 }) {
   const row = (setting: Setting) =>
     inAFile(setting) ? (
@@ -470,6 +472,7 @@ function ShownGroup({
           driver={driver}
           row={row}
           onGo={onGo}
+          reachable={reachable}
         />
       ) : (
         group.settings.map(row)
