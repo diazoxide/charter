@@ -4,7 +4,7 @@ import { act, cleanup, render as renderBare, screen, within } from "@testing-lib
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { Moved, OpenChat } from "./bindings";
+import type { Moved, NotStarted, OpenChat } from "./bindings";
 
 /** What the picker draws. One profile, so picking is one click. */
 const START_OPTIONS = {
@@ -90,7 +90,7 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
 /** The core, answering with `open` as the chats it already has. */
 function core(
   open: OpenChat[] = [],
-  wouldNot: [string, string][] = [],
+  wouldNot: NotStarted[] = [],
   /** What each chat is doing, as the hooks would have reported it. */
   states: Moved[] = [],
 ): {
@@ -332,7 +332,10 @@ describe("what the window does with the chats the core already has", () => {
   it("names the chats this launch could not start, and says they are still recorded", async () => {
     // A chat whose directory has moved would otherwise just be a tab that is quietly not
     // there — and the operator has no way to know it is still coming back.
-    core([chat({ session: 7, in_front: true })], [["ide.9", "no such file or directory"]]);
+    core(
+      [chat({ session: 7, in_front: true })],
+      [{ id: "c-ide-9", name: "ide.9", why: "no such file or directory" }],
+    );
 
     render(<App />);
 

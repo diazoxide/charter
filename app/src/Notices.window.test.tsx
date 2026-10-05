@@ -11,6 +11,7 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import type { NotStarted } from "./bindings";
 import { countsInStatusBar, IMPORTANCE } from "./Notice";
 import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
@@ -80,7 +81,7 @@ function core(
   open: ReturnType<typeof chat>[] = [chat(1, "one")],
   world: {
     gone: string[];
-    wouldNotStart?: [string, string][];
+    wouldNotStart?: NotStarted[];
     pins?: "hangs" | "refuses" | "unsure";
     chats?: "refuses";
   } = { gone: [] },
@@ -373,13 +374,19 @@ describe("a dismissed Notice", () => {
 
   it("about an event is not kept: the next occurrence shows", async () => {
     // A chat that did not start is an event of this launch; its Dismiss ends that occurrence.
-    core([chat(1, "one")], { gone: [], wouldNotStart: [["two", "no profile"]] });
+    core([chat(1, "one")], {
+      gone: [],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
+    });
     render(<App />);
     await dismiss(await screen.findByText(/did not start/));
     await settle();
 
     relaunch();
-    core([chat(1, "one")], { gone: [], wouldNotStart: [["two", "no profile"]] });
+    core([chat(1, "one")], {
+      gone: [],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
+    });
     render(<App />);
     expect(await screen.findByText(/did not start/)).toBeInTheDocument();
   });
@@ -397,7 +404,7 @@ describe("the Notices under the strip", () => {
   const four = () => {
     core([chat(1, "one", { fresh: "its conversation was not found" })], {
       gone: ["able", "baker"],
-      wouldNotStart: [["two", "no profile"]],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
     });
     render(<App />);
   };
@@ -421,7 +428,7 @@ describe("the Notices under the strip", () => {
     // the focus while another arrives below it.
     core([chat(1, "one", { fresh: "its conversation was not found" })], {
       gone: ["able"],
-      wouldNotStart: [["two", "no profile"]],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
     });
     render(<App />);
     const trouble = noticeOf(await screen.findByText(/did not start/));
@@ -492,7 +499,7 @@ describe("the status bar", () => {
     forgetThisLaunch();
     core([chat(1, "one", { fresh: "its conversation was not found" })], {
       gone: ["able", "baker"],
-      wouldNotStart: [["two", "no profile"]],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
     });
     render(<App />);
     await screen.findByRole("button", { name: "+2 more" });
