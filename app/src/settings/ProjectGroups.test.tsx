@@ -527,6 +527,24 @@ const SAVES_SHARED: SettingsFile = {
   ],
 };
 
+/** The row a setting is drawn in, by its control's label. */
+function rowOf(label: string): HTMLElement {
+  const row = screen.getByLabelText(label).closest(".ui-setting-row");
+  if (!(row instanceof HTMLElement)) throw new Error(`no row for ${label}`);
+  return row;
+}
+
+/** A Local file holding what {@link SAVES_IN_FORCE} says it decided. */
+const LOCAL_SAVES: SettingsFile = {
+  ...LOCAL,
+  fields: [
+    ...LOCAL.fields,
+    field(["plane", "mode"], { kind: "text", value: "push" }),
+    field(["plane", "branch"], { kind: "text", value: "trunk" }),
+    field(["repos", "api", "autosave"], { kind: "bool", value: true }),
+  ],
+};
+
 const SAVES_IN_FORCE: SavingInForce = {
   plane: {
     ...NO_SAVING.plane,
@@ -578,14 +596,21 @@ describe("the project's own save keys, in Saving (charter-app#300, ADR 0051)", (
   });
 
   it("says beside each key which file decided it, and marks a value charter.local.toml overrides", async () => {
-    core({ shared: SAVES_SHARED, saving: SAVES_IN_FORCE });
+    // One form (SE-18): the row shows Local's value where Local holds one, badged as overriding
+    // what charter.toml has.
+    core({ shared: SAVES_SHARED, local: LOCAL_SAVES, saving: SAVES_IN_FORCE });
     const saving = await at("Saving");
 
     await waitFor(() =>
       expect(within(saving).getByLabelText("Mode")).toHaveAccessibleDescription(
-        /In this project: push, from charter\.local\.toml — overriding the value here\./,
+        /In this project: push, from charter\.local\.toml\./,
       ),
     );
+    expect(within(saving).getByLabelText("Mode")).toHaveValue("push");
+    expect(within(saving).getByLabelText("Mode")).toHaveAccessibleDescription(
+      /From charter\.local\.toml, at the Project level: this machine only\. charter\.toml has pr, which this overrides\./,
+    );
+    expect(within(rowOf("Mode")).getByText("Overrides charter.toml")).toBeInTheDocument();
     expect(within(saving).getByLabelText("Sign commits")).toHaveAccessibleDescription(
       /In this project: on, from charter\.toml\./,
     );
@@ -597,8 +622,9 @@ describe("the project's own save keys, in Saving (charter-app#300, ADR 0051)", (
       /In this project: trunk, from charter\.local\.toml\./,
     );
     expect(within(saving).getByLabelText("Target branch")).not.toHaveAccessibleDescription(
-      /overriding/,
+      /overrides/,
     );
+    expect(within(rowOf("Target branch")).queryByText("Overrides charter.toml")).toBeNull();
   });
 
   it("says what no value means where no file sets one", async () => {
@@ -784,15 +810,20 @@ describe("each repo's save keys, in Saving (charter-app#300, ADR 0051)", () => {
           field(["repos", "api", "autosave"], { kind: "bool", value: false }),
         ],
       },
+      local: LOCAL_SAVES,
       saving: SAVES_IN_FORCE,
     });
     await at("Saving");
 
     await waitFor(() =>
       expect(screen.getByLabelText("api: auto-save")).toHaveAccessibleDescription(
-        /In this project: on, from charter\.local\.toml — overriding the value here\./,
+        /In this project: on, from charter\.local\.toml\./,
       ),
     );
+    expect(screen.getByLabelText("api: auto-save")).toHaveAccessibleDescription(
+      /charter\.toml has off, which this overrides\./,
+    );
+    expect(within(rowOf("api: auto-save")).getByText("Overrides charter.toml")).toBeInTheDocument();
   });
 
   it("writes a repo's key under [repos.<name>]", async () => {

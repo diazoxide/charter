@@ -703,7 +703,7 @@ fn moved(
         text.parse::<toml_edit::DocumentMut>()
             .map_err(|e: toml_edit::TomlError| {
                 format!(
-                    "{} is not valid TOML ({}), so nothing can be moved — fix it in the raw view",
+                    "{} is not valid TOML ({}), so nothing can be moved — fix it under Edit as TOML",
                     which.file(),
                     crate::shown::short(e.message())
                 )
@@ -728,7 +728,7 @@ fn moved(
             None | Some(toml_edit::Item::None) => return Err(nothing()),
             Some(_) => {
                 return Err(format!(
-                    "{} is a table, so it is moved in the raw view",
+                    "{} is a table, so it is moved under Edit as TOML",
                     dotted(path)
                 ));
             }
