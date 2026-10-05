@@ -144,6 +144,12 @@ pub trait Store: Send + Sync {
     fn rehold(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
         self.set(service, account, value)
     }
+    /// The entry made as a fresh item, the way the keychain copy writes (RN-6): where this
+    /// store holds items to charter's app, an item another program owns is an error and nothing
+    /// is written into it, never a write in place under that program's access.
+    fn make_fresh(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        self.set(service, account, value)
+    }
 }
 
 /// The store this build talks to. See the module header: a fenced build never reaches the
@@ -216,6 +222,13 @@ impl Store for OsStore {
             return super::keyhold::set(service, account, value, super::keyhold::Why::Move);
         }
         Ok(Held::NoRule)
+    }
+
+    fn make_fresh(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        if cfg!(target_os = "macos") {
+            return super::keyhold::set(service, account, value, super::keyhold::Why::Copy);
+        }
+        self.set(service, account, value)
     }
 }
 

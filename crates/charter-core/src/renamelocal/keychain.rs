@@ -323,7 +323,7 @@ impl Copy<'_> {
         .map_err(|e| format!("the journal could not be written ({e})"))?;
         let held = self
             .store
-            .set(to, account, &original)
+            .make_fresh(to, account, &original)
             .map_err(|e| e.message)?;
         held_by_the_app(self.store, held, to, account)?;
         match read(to) {
@@ -404,7 +404,8 @@ pub(super) fn switch_back(
             "{what}: reads its secrets under {from} again; the copies under {to} are kept"
         )),
         Ok(false) => moved.failed(format!(
-            "{what}: a secret was written while it was put back; it still reads its secrets              under {to}, and `{}` again finishes it",
+            "{what}: a secret was written while it was put back; it still reads its secrets \
+             under {to}, and `{}` again finishes it",
             super::UNDO_COMMAND
         )),
         Err(e) => moved.failed(format!("{what}: {}", e.message)),
@@ -421,7 +422,7 @@ fn copy_back(store: &dyn Store, to: &str, from: &str, key: &str) -> Result<(), S
         // Not found under either: nothing to lose.
         return Ok(());
     };
-    let held = store.set(from, key, &value).map_err(|e| e.message)?;
+    let held = store.make_fresh(from, key, &value).map_err(|e| e.message)?;
     held_by_the_app(store, held, from, key)?;
     match store
         .get(from, key)
@@ -447,7 +448,8 @@ fn held_by_the_app(
         return Ok(());
     }
     Err(format!(
-        "the item for '{account}' under {service} could not be made the app's own: another          program's item is there. If you do not know it, remove it, then run this again"
+        "the item for '{account}' under {service} could not be made the app's own: another \
+         program's item is there. If you do not know it, remove it, then run this again"
     ))
 }
 

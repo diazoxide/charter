@@ -565,6 +565,8 @@ struct Holding {
     under: FileStore,
     answer: fn(bool) -> Held,
     writes: AtomicUsize,
+    /// Items another program owns: a fresh write refuses each and writes nothing into it.
+    foreign: Vec<(String, String)>,
 }
 
 impl Store for Holding {
@@ -583,13 +585,32 @@ impl Store for Holding {
     fn holds(&self) -> bool {
         true
     }
+    fn make_fresh(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        if self
+            .foreign
+            .iter()
+            .any(|(s, a)| s == service && a == account)
+        {
+            return Err(VaultError::new("another program's item is there"));
+        }
+        self.set(service, account, value)
+    }
 }
 
 fn holding(ctx: &Ctx, answer: fn(bool) -> Held) -> Box<dyn Store> {
+    holding_with(ctx, answer, Vec::new())
+}
+
+fn holding_with(
+    ctx: &Ctx,
+    answer: fn(bool) -> Held,
+    foreign: Vec<(String, String)>,
+) -> Box<dyn Store> {
     Box::new(Holding {
         under: FileStore::at(ctx.state.join(keyring::STUB_FILE)),
         answer,
         writes: AtomicUsize::new(0),
+        foreign,
     })
 }
 
@@ -674,16 +695,10 @@ fn where_items_are_held_an_item_there_with_the_same_value_is_made_again_by_the_a
     let m = machine();
     let new = service(&m).replacen("charter/", "purlis/", 1);
     stub(&m.plane).set(&new, "API_TOKEN", API).unwrap();
-    // Whatever was there before is another program's: the app cannot make it its own.
-    let foreign = |ctx: &Ctx, _: Asking| {
-        Some(holding(ctx, |was_there| {
-            if was_there {
-                Held::NotYet
-            } else {
-                Held::ToTheApp
-            }
-        }))
-    };
+    // What was there before is another program's: the app cannot make it its own.
+    let planted = vec![(new.clone(), "API_TOKEN".to_owned())];
+    let foreign =
+        move |ctx: &Ctx, _: Asking| Some(holding_with(ctx, |_| Held::ToTheApp, planted.clone()));
 
     let moved = renamelocal::run(
         &m.local,
@@ -695,7 +710,10 @@ fn where_items_are_held_an_item_there_with_the_same_value_is_made_again_by_the_a
 
     let failed = failures(&moved);
     assert_eq!(failed.len(), 1, "{:#?}", moved.said);
-    assert!(failed[0].contains("vault 'ops'") && failed[0].contains("API_TOKEN"));
+    assert!(
+        failed[0].contains("vault 'ops'") && failed[0].contains("another program's item"),
+        "{failed:#?}"
+    );
     assert!(service(&m).starts_with("charter/ops/"));
     // The identity, with nothing there before, moved.
     assert_eq!(record(&m).1.as_deref(), Some("purlis"));
@@ -822,4 +840,100 @@ fn a_secret_written_between_its_copy_and_the_switch_is_never_left_behind() {
         keyring::get(&self::ctx(&m.plane), &ops, "DB_PASSWORD").unwrap(),
         "rotated-mid-copy"
     );
+}
+
+fn journal(m: &Machine, line: &Value) {
+    let journal = machine::dir(&m.local.config_root).join(renamelocal::JOURNAL);
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    let mut text = std::fs::read_to_string(&journal).unwrap_or_default();
+    text.push_str(&format!("{line}\n"));
+    std::fs::write(&journal, text).unwrap();
+}
+
+#[test]
+fn another_programs_item_where_a_copy_was_journalled_is_never_written_into() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    let new = old.replacen("charter/", "purlis/", 1);
+    // A copy journalled whose write never landed, and another program's item there since.
+    journal(
+        &m,
+        &json!({"op": "copied", "service": new, "account": "API_TOKEN"}),
+    );
+    stub(&m.plane).set(&new, "API_TOKEN", "planted").unwrap();
+    let planted = vec![(new.clone(), "API_TOKEN".to_owned())];
+    let foreign =
+        move |ctx: &Ctx, _: Asking| Some(holding_with(ctx, |_| Held::ToTheApp, planted.clone()));
+    let seams = Seams {
+        keyring: &foreign,
+        ..nobody_running()
+    };
+
+    let moved = renamelocal::run(&m.local, &seams);
+
+    assert!(
+        failures(&moved)
+            .iter()
+            .any(|l| l.contains("vault 'ops'") && l.contains("another program's item")),
+        "{:#?}",
+        moved.said
+    );
+    assert_eq!(service(&m), old);
+    assert_eq!(item(&m, &new, "API_TOKEN").as_deref(), Some("planted"));
+    reads_everything(&m);
+
+    assert!(renamelocal::undo(&m.local, &seams).complete);
+    assert_eq!(item(&m, &new, "API_TOKEN").as_deref(), Some("planted"));
+    assert_eq!(service(&m), old);
+}
+
+#[test]
+fn another_programs_item_where_the_undo_copies_back_a_new_key_is_never_written_into() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    assert!(renamelocal::run(&m.local, &nobody_running()).complete);
+    let new = service(&m);
+    let (ctx, ops) = (ctx(&m.plane), vault(&m.plane, "ops"));
+    keyring::set_with(
+        &stub(&m.plane),
+        &ctx,
+        &ops,
+        "NEW_KEY",
+        "added-4",
+        "2026-10-06T09:00:00Z",
+    )
+    .unwrap();
+    // The key has no old item: another program makes one there, under its own access.
+    stub(&m.plane).set(&old, "NEW_KEY", "planted").unwrap();
+    let planted = vec![(old.clone(), "NEW_KEY".to_owned())];
+    let foreign =
+        move |ctx: &Ctx, _: Asking| Some(holding_with(ctx, |_| Held::ToTheApp, planted.clone()));
+    let seams = Seams {
+        keyring: &foreign,
+        ..nobody_running()
+    };
+
+    let undone = renamelocal::undo(&m.local, &seams);
+
+    assert!(!undone.complete, "{:#?}", undone.said);
+    assert!(
+        failures(&undone)
+            .iter()
+            .any(|l| l.contains("another program's item")),
+        "{:#?}",
+        undone.said
+    );
+    assert_eq!(item(&m, &old, "NEW_KEY").as_deref(), Some("planted"));
+    assert_eq!(service(&m), new);
+    assert_eq!(
+        keyring::get(&self::ctx(&m.plane), &ops, "NEW_KEY").unwrap(),
+        "added-4"
+    );
+
+    // A run after it leaves it as it is too.
+    renamelocal::run(&m.local, &seams);
+    assert_eq!(item(&m, &old, "NEW_KEY").as_deref(), Some("planted"));
+    assert_eq!(service(&m), new);
 }
