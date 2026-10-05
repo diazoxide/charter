@@ -40,9 +40,11 @@ import type { FileSetting, SettingsFileId } from "./groups";
  *   what uses the entry, and for the whole file ({@link EntryRefusal}). **It is sent against the
  *   text the entries were drawn from** ({@link EntryOp}'s `base`, taken when the person pressed
  *   the button), never the text as it stands when the write's turn comes, so a remove queued
- *   behind another write is refused rather than made to the entry now in its place. **Its Undo
- *   is the inverse operation through the same core function** (D-ST3-i) — a remove of what was
- *   added, an add of what was removed — so an Undo is refused for what that operation would be.
+ *   behind another write is refused rather than made to the entry now in its place. **Its Undo**
+ *   (D-ST3-i, as amended) is what the level answers ({@link EntryUndo}): an add is undone by the
+ *   inverse operation through the same core function — a remove of what was added, refused for
+ *   what uses it — and a remove by writing the file's text back exactly as it was, against the
+ *   text the remove left, so the entry is back where it was, as it was spelled, with its comment.
  *
  * **Nothing here loosens what the level says may not be loosened**: its `mayUndo` is asked of
  * every Undo, every reset and every move, and one it refuses is not offered (D-SE17g).
@@ -69,11 +71,22 @@ export type EntryRefusal = {
 };
 
 /**
+ * **What undoes an add or a remove** (D-ST3-i, as amended): an operation through the core (the
+ * Undo of an add: a remove of what was added, with its reference check), or the whole text of a
+ * file written back over `base`, the text the change left (the Undo of a remove: exact — place,
+ * spelling and comments — and refused if the file moved since; putting an entry back only
+ * declares again, so it asks no reference check). A collection with no text to put back (the
+ * machine store) undoes with operations only.
+ */
+export type EntryUndo =
+  EntryOp | { restore: { file: SettingsFileId; base: string | null; text: string } };
+
+/**
  * What an add or a remove answered: the level, the file it wrote, what was done (said beside
- * its Undo) and the operation that undoes it; or why nothing was written.
+ * its Undo) and what undoes it; or why nothing was written.
  */
 export type EntryWrote<T> =
-  { saved: T; file: SettingsFileId; said: string; undo: EntryOp } | { refused: EntryRefusal };
+  { saved: T; file: SettingsFileId; said: string; undo: EntryUndo } | { refused: EntryRefusal };
 
 /** A collection's last refused Remove or Undo: the entry it was for (none for an Undo). */
 export type EntryRefused = {
@@ -168,7 +181,7 @@ export type Level<T> = {
  */
 type Change =
   | { setting: string; file: SettingsFileId; back: SettingsEdit[] }
-  | { setting: string; undo: EntryOp; said: string };
+  | { setting: string; undo: EntryUndo; said: string };
 
 /**
  * **The file a setting's value comes from** at this level, or `undefined` when no file here
@@ -415,16 +428,40 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
     [readFiles, took],
   );
 
+  /** Writes a file's earlier text back for the collection `id`: the Undo of a remove. */
+  const restore = useCallback(
+    async (id: string, put: { file: SettingsFileId; base: string | null; text: string }) => {
+      const was = held.current;
+      const save = latest.current.saveRaw;
+      if (was === undefined || save === undefined) return;
+      const said = await save(put.file, put.base, put.text, was).catch(
+        (err: unknown): Wrote<T> => ({ refused: [String(err)] }),
+      );
+      if ("refused" in said) {
+        setEntryRefused({
+          collection: id,
+          entry: undefined,
+          refusal: { fields: {}, referrers: [], reasons: said.refused },
+        });
+        await readFiles();
+        return;
+      }
+      took(said.saved);
+    },
+    [readFiles, took],
+  );
+
   const undo = useCallback(() => {
     const change = last;
     if (!change) return;
     setLast(undefined);
     setEntryRefused(undefined);
     enqueue(async () => {
-      if ("undo" in change) await sendEntry(change.setting, change.undo, true);
-      else await send(change.setting, change.file, change.back);
+      if (!("undo" in change)) await send(change.setting, change.file, change.back);
+      else if ("restore" in change.undo) await restore(change.setting, change.undo.restore);
+      else await sendEntry(change.setting, change.undo, true);
     });
-  }, [enqueue, last, send, sendEntry]);
+  }, [enqueue, last, restore, send, sendEntry]);
 
   const entry = useCallback(
     (id: string, op: EntryOp) =>

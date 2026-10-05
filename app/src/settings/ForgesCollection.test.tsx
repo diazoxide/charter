@@ -107,7 +107,8 @@ const BETA: Block = { kind: "github", owner: "beta", host: "" };
 
 type Asked =
   | { cmd: "add"; base: string | null; entry: ForgeEntry }
-  | { cmd: "remove"; base: string | null; id: string };
+  | { cmd: "remove"; base: string | null; id: string }
+  | { cmd: "raw"; base: string | null; text: string };
 
 const MOVED = "charter.toml changed on disk since this tab read it, so nothing was saved.";
 
@@ -127,14 +128,17 @@ function core({
   blocks: start = [ACME],
   refuseAdd,
   refuseRemove,
-  holdAdds = false,
+  holdRaw = false,
 }: {
   blocks?: Block[];
   refuseAdd?: (entry: ForgeEntry) => EntryWritten | undefined;
   refuseRemove?: (id: string) => EntryWritten | undefined;
-  holdAdds?: boolean;
+  /** Each whole-text write waits for `release()`. */
+  holdRaw?: boolean;
 } = {}) {
   let blocks = [...start];
+  /** Every text the file has been, and the blocks it was: what a whole-text write puts back. */
+  const seen = new Map<string, Block[]>([[text(blocks), blocks]]);
   const asked: Asked[] = [];
   const held: (() => void)[] = [];
   mockIPC(
@@ -160,11 +164,11 @@ function core({
           const entry = given.entry as ForgeEntry;
           const base = given.base as string | null;
           asked.push({ cmd: "add", base, entry });
-          if (holdAdds) await new Promise<void>((go) => held.push(go));
           if (base !== text(blocks)) return refusal({ reasons: [MOVED] });
           const answer = refuseAdd?.(entry);
           if (answer) return answer;
           blocks = [...blocks, { kind: entry.kind, owner: entry.owner, host: entry.host }];
+          seen.set(text(blocks), blocks);
           return {
             kind: "saved",
             file: fileOf(blocks),
@@ -184,6 +188,7 @@ function core({
           if (answer) return answer;
           const took = blocks[at];
           blocks = blocks.filter((_, place) => place !== at);
+          seen.set(text(blocks), blocks);
           return {
             kind: "saved",
             file: fileOf(blocks),
@@ -196,6 +201,15 @@ function core({
             ],
           };
         }
+        case "save_project_settings": {
+          const change = given.change as { kind: "raw"; text: string };
+          const base = given.base as string | null;
+          asked.push({ cmd: "raw", base, text: change.text });
+          if (holdRaw) await new Promise<void>((go) => held.push(go));
+          if (base !== text(blocks)) return { kind: "refused", reasons: [MOVED] };
+          blocks = seen.get(change.text) ?? blocks;
+          return { kind: "saved", file: fileOf(blocks) };
+        }
       }
       return undefined;
     },
@@ -204,7 +218,7 @@ function core({
   return {
     asked,
     owners: () => blocks.map((one) => one.owner),
-    /** Lets the oldest held add be answered. */
+    /** Lets the oldest held write be answered. */
     release: () => act(async () => held.shift()?.()),
   };
 }
@@ -312,7 +326,7 @@ describe("Settings › Forges", () => {
     );
   });
 
-  it("removes a block by its identity, and undoes it by adding it back through the core", async () => {
+  it("removes a block by its identity, and undoes it by writing the text it took it from back", async () => {
     const { asked, owners } = core();
     await atForges();
 
@@ -325,11 +339,8 @@ describe("Settings › Forges", () => {
     await userEvent.click(screen.getByRole("button", { name: "Undo" }));
 
     await waitFor(() => expect(owners()).toEqual(["acme"]));
-    expect(asked[1]).toEqual({
-      cmd: "add",
-      base: text([]),
-      entry: { kind: "github", owner: "acme", host: "", exclude: [] },
-    });
+    // Exact: the text the entry was removed from, against the text the remove left.
+    expect(asked[1]).toEqual({ cmd: "raw", base: text([]), text: text([ACME]) });
     expect(await block("Forge 1: github acme at github.com")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
   });
@@ -370,7 +381,7 @@ describe("Settings › Forges", () => {
 
   it("sends a Remove against the text it was drawn from, so one queued behind an Undo takes nothing else", async () => {
     // The review's sequence: [acme, beta]; Remove acme; Undo, slow; Remove beta, now Forge 1.
-    const { asked, owners, release } = core({ blocks: [ACME, BETA], holdAdds: true });
+    const { asked, owners, release } = core({ blocks: [ACME, BETA], holdRaw: true });
     await atForges();
     await userEvent.click(removeOf("Forge 1: github acme at github.com"));
     await waitFor(() => expect(owners()).toEqual(["beta"]));
@@ -383,8 +394,9 @@ describe("Settings › Forges", () => {
 
     await waitFor(() => expect(asked).toHaveLength(3));
     expect(asked[2]).toEqual({ cmd: "remove", base: drawn, id: idOf([BETA], 0) });
-    // acme came back at the end, and nothing else went: the core refused the stale Remove.
-    await waitFor(() => expect(owners()).toEqual(["beta", "acme"]));
+    // acme came back where it was, first, and nothing else went: the stale Remove was refused.
+    expect(asked[1]).toEqual({ cmd: "raw", base: drawn, text: text([ACME, BETA]) });
+    await waitFor(() => expect(owners()).toEqual(["acme", "beta"]));
     expect(await screen.findByText(MOVED)).toBeInTheDocument();
   });
 
@@ -418,6 +430,23 @@ describe("Settings › Forges", () => {
       "aria-current",
       "true",
     );
+  });
+
+  it("draws no link for a referrer whose group this tab cannot open", async () => {
+    core({
+      refuseRemove: () =>
+        refusal({
+          referrers: [
+            { what: "The workspace ide saves billing as a request.", group: "workspace.saving" },
+          ],
+        }),
+    });
+    await atForges();
+    await userEvent.click(removeOf("Forge 1: github acme at github.com"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The workspace ide saves billing as a request.");
+    expect(within(alert).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("clears a refused Remove once anything else is written", async () => {

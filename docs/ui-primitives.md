@@ -129,10 +129,15 @@ collection follow the same shape, in three layers:
   text as it stands when the write's turn in the queue comes. The core checks it, as every
   settings write does, so a Remove queued behind an Undo is refused rather than made to the
   entry now in its place.
-- **Undo is the inverse operation, through the core** (D-ST3-i): the Undo of an add is a remove
-  of the identity the add answered, with its reference check; the Undo of a remove is an add of
-  what the remove answered. An Undo is refused for exactly what that operation would be refused
-  for — a repo catalogued on the host since, say — and works when the file was not there before.
+- **Undo** (D-ST3-i, as amended): the Undo of an add is the inverse operation through the
+  core, a remove of the identity the add answered, with its reference check, so it is refused for
+  exactly what that remove would be refused for (a repo catalogued on the host since, say). The
+  Undo of a remove writes the file's earlier text back exactly, through the level's whole-text
+  write, against the text the remove left: same place, same spelling, same comment. Order is
+  meaning here (a plane's first `[[forge]]` block is its primary group), so an add at the end
+  would not be an undo. Putting an entry back only declares again, so it asks no reference
+  check; it is refused if the file moved since. A collection with no text to restore (the
+  machine store) undoes a remove with an add.
 - **The wire: the file lists its entries** (`SettingsFile.entries`), and one command per write,
   `add_project_forge` and `remove_project_forge`, answering `EntryWritten`: the file as it now
   stands with what was added or removed, or the three-part refusal.

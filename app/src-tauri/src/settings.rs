@@ -202,8 +202,12 @@ pub(crate) fn save(
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SettingsMoved {
     /// Boxed: both files are far larger than a refusal.
-    Moved { settings: Box<ProjectSettings> },
-    Refused { reasons: Vec<String> },
+    Moved {
+        settings: Box<ProjectSettings>,
+    },
+    Refused {
+        reasons: Vec<String>,
+    },
 }
 
 /// Move the values at `paths` into `to`, out of the other file: the Settings tab's "Shared /

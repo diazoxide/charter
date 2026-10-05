@@ -20,6 +20,7 @@ export function CollectionView({
   driver,
   row,
   onGo,
+  reachable,
 }: {
   /** The group's id: what the driver keeps the collection's Undo and refusals by. */
   id: string;
@@ -29,8 +30,10 @@ export function CollectionView({
   driver: Driven<unknown>;
   /** Draws one of the group's settings as a row. */
   row: (setting: Setting) => ReactNode;
-  /** Opens a group of this level: a referrer's link. */
+  /** Opens a group: a referrer's link. */
   onGo: (group: string) => void;
+  /** Whether {@link onGo} can open `group` from here: a link that cannot is not drawn. */
+  reachable: (group: string) => boolean;
 }) {
   const { noun } = collection;
   const [removing, setRemoving] = useState<string>();
@@ -40,6 +43,10 @@ export function CollectionView({
   const settle = () => (adding.current ?? whole.current)?.focus();
   const undoSaid = driver.undoable === id ? driver.undoSaid : undefined;
   const refused = driver.entryRefused?.collection === id ? driver.entryRefused : undefined;
+  // An Undo's refusal, or a Remove's whose entry is no longer drawn as it was, is the head's.
+  const atHead =
+    refused !== undefined &&
+    (refused.entry === undefined || !collection.entries.some((one) => one.id === refused.entry));
   const ofEntry = (entry: CollectionEntry) =>
     settings.filter((one) => entry.settings.includes(one.id));
   const mine = new Set(collection.entries.flatMap((entry) => entry.settings));
@@ -60,7 +67,7 @@ export function CollectionView({
   return (
     <div className="ui-collection" ref={whole} tabIndex={-1}>
       {settings.filter((one) => !mine.has(one.id)).map(row)}
-      {(undoSaid !== undefined || (refused && refused.entry === undefined)) && (
+      {(undoSaid !== undefined || atHead) && (
         <div className="ui-collection-done" role="status">
           {undoSaid !== undefined && (
             <>
@@ -79,8 +86,8 @@ export function CollectionView({
               </button>
             </>
           )}
-          {refused && refused.entry === undefined && (
-            <Refused noun={noun} refusal={refused.refusal} onGo={onGo} />
+          {refused && atHead && (
+            <Refused noun={noun} refusal={refused.refusal} onGo={onGo} reachable={reachable} />
           )}
         </div>
       )}
@@ -100,7 +107,7 @@ export function CollectionView({
             </button>
           </div>
           {refused?.entry === entry.id && (
-            <Refused noun={noun} refusal={refused.refusal} onGo={onGo} />
+            <Refused noun={noun} refusal={refused.refusal} onGo={onGo} reachable={reachable} />
           )}
           {ofEntry(entry).map(row)}
         </div>
@@ -115,10 +122,12 @@ function Refused({
   noun,
   refusal,
   onGo,
+  reachable,
 }: {
   noun: string;
   refusal: EntryRefusal;
   onGo: (group: string) => void;
+  reachable: (group: string) => boolean;
 }) {
   const users = refusal.referrers.length;
   return (
@@ -129,7 +138,7 @@ function Refused({
       {refusal.referrers.map((one, at) => (
         <p key={at}>
           {one.what}
-          {one.group !== null && (
+          {one.group !== null && reachable(one.group) && (
             <>
               {" "}
               <button

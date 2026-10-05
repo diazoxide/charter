@@ -507,8 +507,8 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   /**
    * An add or a remove in one of the level's collections, through the core's function for it,
    * against the text the entries were drawn from (`op.base`). A written one answers what it did,
-   * in the core's label, and its inverse: a remove of what was added, an add of what was
-   * removed (D-ST3-i).
+   * in the core's label, and what undoes it (D-ST3-i, as amended): a remove of what was added,
+   * and the text a remove was made against, written back exactly.
    */
   const entry = (op: EntryOp, both: ProjectFiles): Promise<EntryWrote<ProjectFiles>> => {
     const refused = (reasons: string[]) => ({ refused: { fields: {}, referrers: [], reasons } });
@@ -549,11 +549,8 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
         saved,
         file: "shared",
         said: `Removed ${labelOf(op.remove, both.shared)}.`,
-        undo: {
-          collection: op.collection,
-          base: after,
-          add: Object.fromEntries((answer.removed ?? []).map((one) => [one.field, one.value])),
-        },
+        // Exact: the text the entry was removed from, against the text the remove left.
+        undo: { restore: { file: "shared", base: after, text: op.base ?? "" } },
       };
     });
   };
