@@ -755,6 +755,14 @@ export const commands = {
 	 */
 	dropRepo: (plane: PlaneId, workspace: string, repo: string) => typedError<string[], Refused>(__TAURI_INVOKE("drop_repo", { plane, workspace, repo })),
 	/**
+	 *  Take a repo the workspace names and this machine has NOT cloned out of the workspace: its
+	 *  row in `workspace.json`, and nothing else (#1228).
+	 * 
+	 *  A cloned repo is refused here and goes through [`drop_repo`], whose guard weighs the work
+	 *  in the clone; this calls `wscmd::drop::drop_membership` and nothing else.
+	 */
+	dropRepoMembership: (plane: PlaneId, workspace: string, repo: string) => typedError<string[], string>(__TAURI_INVOKE("drop_repo_membership", { plane, workspace, repo })),
+	/**
 	 *  What git says about each of the focused workspace's clones, and what the forge cache
 	 *  last recorded for the branch each is on.
 	 * 

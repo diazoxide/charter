@@ -50,6 +50,8 @@ function core(
     holds?: Record<string, Promise<void>>;
     /** Repos whose clone answers ok and that the next read still lists as not cloned. */
     stillAbsent?: string[];
+    /** What `drop_repo_membership` refuses with, in the core's words, instead of dropping. */
+    refuseDrop?: string;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -113,6 +115,14 @@ function core(
       cloned.push(repo);
       return [`✓ ${repo} → workspaces/alpha/${repo}`];
     }
+    if (cmd === "drop_repo_membership") {
+      if (over.refuseDrop !== undefined) throw over.refuseDrop;
+      const repo = String(a.repo);
+      missing.splice(missing.indexOf(repo), 1);
+      return [
+        `Removed '${repo}' from workspace 'alpha'. Nothing was deleted: it was not cloned here.`,
+      ];
+    }
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
@@ -121,6 +131,7 @@ function core(
   return {
     asked,
     clones: () => asked.filter((one) => one.cmd === "clone_repo"),
+    drops: () => asked.filter((one) => one.cmd === "drop_repo_membership"),
     /** The most `clone_repo` calls the core was running at once. */
     peak: () => peak,
   };
@@ -323,5 +334,109 @@ describe("every repo that is not cloned here", () => {
     if (all === undefined) throw new Error("no Clone all row");
     await userEvent.click(all);
     await waitFor(() => expect(clones().map((one) => one.args.repo)).toEqual(["charter", "web"]));
+  });
+});
+
+/**
+ * **Taking a repo that is not cloned here out of the workspace** (#1228): only its row in
+ * `workspace.json` goes, so nothing is deleted — but the workspace stops naming it, so it asks
+ * first. The core's `drop_repo_membership` decides; a cloned repo is not offered this.
+ */
+describe("removing a repo that is not cloned here from the workspace", () => {
+  it("asks first on the row, and the repo leaves the list once it is answered", async () => {
+    const { drops } = core();
+    render(<App />);
+
+    await userEvent.click(
+      within(await absent()).getByRole("button", { name: "Remove charter from workspace…" }),
+    );
+    const asking = await screen.findByRole("alertdialog", { name: "Remove charter from alpha?" });
+    expect(asking).toHaveTextContent("Nothing is deleted");
+    expect(drops()).toEqual([]);
+    await userEvent.click(within(asking).getByRole("button", { name: "Remove from workspace" }));
+
+    await waitFor(() => expect(screen.queryByTestId("absent-charter")).toBeNull());
+    expect(screen.getByTestId("absent-web")).toBeInTheDocument();
+    expect(drops().map((one) => one.args)).toEqual([
+      { plane: PLANE, workspace: "alpha", repo: "charter" },
+    ]);
+  });
+
+  it("removes nothing when it is cancelled", async () => {
+    const { drops } = core();
+    render(<App />);
+
+    await userEvent.click(
+      within(await absent()).getByRole("button", { name: "Remove web from workspace…" }),
+    );
+    const asking = await screen.findByRole("alertdialog", { name: "Remove web from alpha?" });
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(drops()).toEqual([]);
+    expect(absentRow("web")).toBeInTheDocument();
+  });
+
+  it("says the core's refusal in the question, and keeps the repo", async () => {
+    const said =
+      "workspaces/alpha/workspace.json is not JSON charter can read, so 'web' was left in it.";
+    core({ refuseDrop: said });
+    render(<App />);
+
+    await userEvent.click(
+      within(await absent()).getByRole("button", { name: "Remove web from workspace…" }),
+    );
+    const asking = await screen.findByRole("alertdialog", { name: "Remove web from alpha?" });
+    await userEvent.click(within(asking).getByRole("button", { name: "Remove from workspace" }));
+
+    expect(await within(asking).findByRole("alert")).toHaveTextContent(said);
+    expect(absentRow("web")).toBeInTheDocument();
+  });
+
+  it("is on the row's menu, below the line under Clone", async () => {
+    const { drops } = core();
+    render(<App />);
+    await absent();
+
+    fireEvent.contextMenu(within(absentRow("web")).getByText("web"));
+    const menu = await screen.findByRole("menu");
+    const items = within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.getAttribute("aria-label"));
+    expect(items).toEqual(["Clone web", "Remove web from workspace…"]);
+    expect(within(menu).getByRole("separator")).toBeInTheDocument();
+    await userEvent.click(
+      within(menu).getByRole("menuitem", { name: "Remove web from workspace…" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Remove from workspace",
+      }),
+    );
+
+    await waitFor(() => expect(drops().map((one) => one.args.repo)).toEqual(["web"]));
+  });
+
+  it("is not offered while the repo is being cloned", async () => {
+    let release = () => {};
+    const held = new Promise<void>((done) => (release = done));
+    const { drops } = core({ held });
+    render(<App />);
+
+    await userEvent.click(within(await absent()).getByRole("button", { name: "Clone charter" }));
+    await within(absentRow("charter")).findByText("Cloning charter…");
+
+    expect(
+      within(absentRow("charter")).queryByRole("button", {
+        name: "Remove charter from workspace…",
+      }),
+    ).toBeNull();
+    fireEvent.contextMenu(within(absentRow("charter")).getByText("charter"));
+    const item = await screen.findByRole("menuitem", { name: /Remove charter from workspace/ });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    await userEvent.keyboard("{Escape}");
+    release();
+    expect(await screen.findByTestId("clone-charter")).toBeInTheDocument();
+    expect(drops()).toEqual([]);
   });
 });

@@ -1,7 +1,13 @@
 import { FolderX, LoaderCircle, TriangleAlert } from "lucide-react";
 import { Menued } from "./Menus";
 import { SettingActions } from "./settings/components";
-import { CLONE_ALL_ID, cloneMissingId, type Catalogued, type Offer } from "./actions";
+import {
+  CLONE_ALL_ID,
+  cloneMissingId,
+  dropMembershipId,
+  type Catalogued,
+  type Offer,
+} from "./actions";
 import type { CloneState } from "./repoClones";
 
 /** What this window is cloning into the focused workspace, by repo (`repoClones`). */
@@ -23,7 +29,10 @@ const NOTHING_CLONING: Cloning = new Map();
  * leaves this list for the clones above it. Nothing here asks for a credential: git and the
  * forge's own helper answer that, or the core says why it could not.
  *
- * The menu leaves room below its line for taking the repo out of the workspace.
+ * **Each row also offers Remove…, which takes the repo out of the workspace** (#1228): beside
+ * Clone on hover or focus, and below the line of the row's menu. It presses the catalogue's
+ * `absent.drop:<repo>`, which asks first; only the repo's row in `workspace.json` goes, since
+ * nothing of it is here to delete. While its clone is under way it is not offered.
  */
 export function NotClonedHere({
   absent,
@@ -65,6 +74,7 @@ export function NotClonedHere({
             repo={repo}
             state={cloning.get(repo)}
             offer={offers.get(cloneMissingId(repo))}
+            drop={offers.get(dropMembershipId(repo))}
             offers={offers}
             onPress={onPress}
           />
@@ -78,12 +88,15 @@ function AbsentRow({
   repo,
   state,
   offer,
+  drop,
   offers,
   onPress,
 }: {
   repo: string;
   state: CloneState | undefined;
   offer: Offer | undefined;
+  /** The row that asks to take the repo out of the workspace (#1228). */
+  drop: Offer | undefined;
   offers: Catalogued;
   onPress: (offer: Offer) => void;
 }) {
@@ -111,19 +124,33 @@ function AbsentRow({
               </span>
             </span>
           ) : (
-            offer !== undefined && (
+            (offer !== undefined || drop !== undefined) && (
               <div className={`absent-actions${state?.state === "failed" ? "" : " row-action"}`}>
                 <SettingActions>
-                  <button
-                    type="button"
-                    tabIndex={0}
-                    aria-label={state?.state === "failed" ? `Retry ${repo}` : offer.title}
-                    disabled={!offer.available}
-                    title={offer.available ? offer.note : offer.reason}
-                    onClick={press}
-                  >
-                    {state?.state === "failed" ? "Retry" : "Clone"}
-                  </button>
+                  {offer !== undefined && (
+                    <button
+                      type="button"
+                      tabIndex={0}
+                      aria-label={state?.state === "failed" ? `Retry ${repo}` : offer.title}
+                      disabled={!offer.available}
+                      title={offer.available ? offer.note : offer.reason}
+                      onClick={press}
+                    >
+                      {state?.state === "failed" ? "Retry" : "Clone"}
+                    </button>
+                  )}
+                  {drop !== undefined && (
+                    <button
+                      type="button"
+                      tabIndex={0}
+                      aria-label={drop.title}
+                      disabled={!drop.available}
+                      title={drop.available ? drop.note : drop.reason}
+                      onClick={() => onPress(drop)}
+                    >
+                      Remove…
+                    </button>
+                  )}
                 </SettingActions>
               </div>
             )

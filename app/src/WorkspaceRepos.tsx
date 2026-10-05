@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { commands, type PlaneId } from "./bindings";
 import { RepoPicker } from "./RepoPicker";
-import { cloneRepos, useRepoClones } from "./repoClones";
+import { cloneRepos, underWay, useRepoClones } from "./repoClones";
+import { dropMembershipTitle } from "./actions";
+import { RemoveFromWorkspace } from "./RemoveFromWorkspace";
 import { SettingActions, type RowIds } from "./settings/components";
 
 /**
@@ -113,4 +115,86 @@ function applyWords(adding: number, removing: number): string {
   if (removing > 0) parts.push(`remove ${removing}`);
   const said = parts.join(", ");
   return said.charAt(0).toUpperCase() + said.slice(1);
+}
+
+/**
+ * **The repos the workspace names that are not cloned here, each with Remove from workspace**
+ * (#1228), as the second row of Settings › Repos. The picker above clones one when it is
+ * ticked; this takes one out of the workspace's membership instead, through the same question
+ * the explorer's "Not cloned here" row asks (`RemoveFromWorkspace`). A repo whose clone is
+ * under way is not offered it.
+ *
+ * The list is the core's (`workspace_panels`' `absent`), read again when a removal is answered
+ * and whenever this window's clones into the workspace change.
+ */
+export function useNotClonedHere(
+  plane: PlaneId,
+  workspace: string,
+): { control: (ids: RowIds) => ReactNode } {
+  const [absent, setAbsent] = useState<readonly string[]>();
+  const [asking, setAsking] = useState<string>();
+  const clones = useRepoClones(plane, workspace);
+  const reading = useRef(0);
+
+  const read = useCallback(() => {
+    const mine = ++reading.current;
+    void commands
+      .workspacePanels(plane, workspace)
+      .then((said) =>
+        // `data` can be absent from an answer the window was not built against (a test's core).
+        said.status === "ok" ? ((said.data as Partial<typeof said.data> | null)?.absent ?? []) : [],
+      )
+      .catch(() => [])
+      .then((names) => {
+        if (reading.current === mine) setAbsent(names);
+      });
+  }, [plane, workspace]);
+  useEffect(read, [read, clones]);
+
+  return {
+    control: (ids) => (
+      <div role="group" aria-labelledby={ids.labelledBy} aria-describedby={ids.describedBy}>
+        {absent !== undefined && absent.length === 0 && (
+          <p className="none">Every repo it names is cloned here.</p>
+        )}
+        {absent !== undefined && absent.length > 0 && (
+          <ul className="absent-list">
+            {absent.map((repo) => {
+              const busy = underWay(clones.get(repo));
+              return (
+                <li key={repo}>
+                  <span className="repo">{repo}</span>
+                  <SettingActions>
+                    <button
+                      type="button"
+                      className="panel-view"
+                      tabIndex={0}
+                      aria-label={dropMembershipTitle(repo)}
+                      disabled={busy}
+                      title={busy ? `${repo} is being cloned.` : undefined}
+                      onClick={() => setAsking(repo)}
+                    >
+                      Remove from workspace…
+                    </button>
+                  </SettingActions>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {asking !== undefined && (
+          <RemoveFromWorkspace
+            plane={plane}
+            workspace={workspace}
+            repo={asking}
+            onClose={() => setAsking(undefined)}
+            onDone={() => {
+              setAsking(undefined);
+              read();
+            }}
+          />
+        )}
+      </div>
+    ),
+  };
 }

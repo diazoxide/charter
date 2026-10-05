@@ -2005,7 +2005,25 @@ h2.sidebar-title .node-icon {
   margin-left: auto;
 }
 
-.explorer .absent-actions .ui-setting-actions {
+.explorer .absent-actions /* Settings › Repos' "Not cloned here": one line per repo, its Remove on the line (#1228). */
+.absent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.absent-list li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.absent-list .ui-setting-actions {
+  margin: 0;
+}
+
+.ui-setting-actions {
   margin: 0;
 }
 

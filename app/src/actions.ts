@@ -305,6 +305,10 @@ export type Does =
    *  through the clone path Settings › Repos uses (`clone_repo`, #1215). Where each lands is
    *  the core's answer; credentials are git's and the forge's, never asked for here. */
   | { verb: "cloneMissing"; workspace: string; repos: string[] }
+  /** Asks whether to take a repo the workspace names, and this machine has not cloned, out of
+   *  the workspace (#1228). It writes nothing by itself: the question's yes calls
+   *  `drop_repo_membership`, which drops only the repo's row in `workspace.json`. */
+  | { verb: "askDropMembership"; workspace: string; repo: string }
   /** Shows the opener, so another project can be opened into this window beside the ones it
    *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
   | { verb: "openProject" }
@@ -670,6 +674,9 @@ export type Doing = {
   /** Clones those repos into the workspace, in turn. Each one's progress and failure is drawn
    *  on its own row; the `Ran` says which failed, in the core's words. */
   cloneMissing: (workspace: string, repos: string[]) => Promise<Ran>;
+  /** Asks whether to take that repo out of the workspace's membership. Nothing is written
+   *  until it is answered. */
+  askDropMembership: (workspace: string, repo: string) => void;
   /** Opens the picker for a new tab whose chat starts in that directory, and nowhere else. */
   newChatIn: (path: string) => void;
   sendKey: (key: string) => Promise<Ran>;
@@ -962,6 +969,13 @@ export const CLONE_ALL_ID = "absent.cloneAll";
 
 /** The row that clones one of them — the explorer's row button and its Retry press it. */
 export const cloneMissingId = (repo: string) => `absent.clone:${repo}`;
+
+/** The row that asks to take one of them out of the workspace (#1228) — the explorer's row
+ *  button presses it, and its menu draws it below the line. */
+export const dropMembershipId = (repo: string) => `absent.drop:${repo}`;
+
+/** What the row that takes a repo out of the workspace says, wherever it is drawn. */
+export const dropMembershipTitle = (repo: string) => `Remove ${repo} from workspace…`;
 
 /** Whether one of the operator's pins names this thing. */
 function isPinned<T>(held: readonly T[], one: T): boolean {
@@ -1660,6 +1674,25 @@ export function catalogue(now: Now): Offer[] {
             },
       );
     }
+    // **And the way to take each out of the workspace** (#1228). Below the line, in a menu: the
+    // workspace stops naming it. It asks first, and a repo being cloned is not offered it —
+    // that clone would land in a workspace that no longer names it.
+    for (const repo of missing) {
+      const title = dropMembershipTitle(repo);
+      offers.push(
+        busy.has(repo)
+          ? cannot(dropMembershipId(repo), title, `${repo} is being cloned.`, repo)
+          : {
+              ...can(
+                dropMembershipId(repo),
+                title,
+                { verb: "askDropMembership", workspace, repo },
+                repo,
+              ),
+              note: `${workspace} stops naming it. Nothing is deleted.`,
+            },
+      );
+    }
     // Listed while something is missing, like the per-repo rows: with every repo cloned there
     // is nothing for it to be about, and a greyed row in every palette query that shares its
     // letters would be noise, not a reason (D-1215-3).
@@ -2121,6 +2154,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "cloneMissing":
       return doing.cloneMissing(does.workspace, does.repos);
+    case "askDropMembership":
+      doing.askDropMembership(does.workspace, does.repo);
+      return DID;
     case "newTabIn":
     case "newChatIn":
       doing.newChatIn(does.path);
@@ -2676,8 +2712,8 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         below: [],
       };
     case "absent":
-      // Clone above; the line below is where taking the repo out of the workspace goes.
-      return { above: [cloneMissingId(what.repo)], below: [] };
+      // Clone above; taking the repo out of the workspace below the line (#1228).
+      return { above: [cloneMissingId(what.repo)], below: [dropMembershipId(what.repo)] };
     case "pane":
       return {
         above: ["chat.new", "shell.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],

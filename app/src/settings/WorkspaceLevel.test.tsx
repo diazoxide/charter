@@ -188,6 +188,8 @@ function core(
   { extensions = EXTENSIONS, harnesses = HARNESSES } = {},
 ) {
   let file = settings;
+  /** What `alpha` names and this machine has not cloned (#1228). */
+  const absent = ["web"];
   const sent: Record<string, unknown>[] = [];
   const asked: [string, Record<string, unknown>][] = [];
   mockIPC(
@@ -227,6 +229,24 @@ function core(
         };
       if (cmd === "workspace_repos")
         return { workspace: given.workspace, repos: [{ name: "api" }], cache_refused: null };
+      if (cmd === "workspace_panels")
+        return {
+          workspace: given.workspace,
+          repos: ["api"],
+          paths: {},
+          absent: [...absent],
+          refused: [],
+          todos: [],
+          todos_refused: null,
+          personas: [],
+          persona: null,
+          sessions: [],
+          contributed: [],
+        };
+      if (cmd === "drop_repo_membership") {
+        absent.splice(absent.indexOf(String(given.repo)), 1);
+        return [`Removed '${String(given.repo)}' from workspace 'alpha'.`];
+      }
       if (cmd === "drop_repo")
         throw {
           said: "Refusing to remove 'api' — this would discard work: api: uncommitted changes. Push or commit first.",
@@ -351,7 +371,7 @@ describe("the Workspace level", () => {
 describe("every workspace setting there is, at the Workspace level", () => {
   it.each([
     ["Live", ["Published with the project"]],
-    ["Repos", ["Cloned here"]],
+    ["Repos", ["Cloned here", "Not cloned here"]],
     ["Extensions", ["Persona statistics: enabled", "Solarized: enabled"]],
     ["Appearance", ["Theme", "Colour", "Icons"]],
     [
@@ -432,6 +452,48 @@ describe("Repos", () => {
 
     expect(await within(group).findByRole("alert")).toHaveTextContent("api: uncommitted changes");
     expect(asked("drop_repo")).toEqual([{ plane: PLANE, workspace: "alpha", repo: "api" }]);
+  });
+});
+
+describe("Repos not cloned here", () => {
+  it("offers to remove one from the workspace, and asks first", async () => {
+    const { asked } = core();
+    const group = await at("Repos");
+
+    const named = await within(group).findByRole("button", {
+      name: "Remove web from workspace…",
+    });
+    await userEvent.click(named);
+    const asking = await screen.findByRole("alertdialog", { name: "Remove web from alpha?" });
+    expect(asked("drop_repo_membership")).toEqual([]);
+    await userEvent.click(within(asking).getByRole("button", { name: "Remove from workspace" }));
+
+    await waitFor(() =>
+      expect(
+        within(group).queryByRole("button", { name: "Remove web from workspace…" }),
+      ).toBeNull(),
+    );
+    expect(asked("drop_repo_membership")).toEqual([
+      { plane: PLANE, workspace: "alpha", repo: "web" },
+    ]);
+    expect(asked("drop_repo")).toEqual([]);
+  });
+
+  it("removes nothing when the question is cancelled", async () => {
+    const { asked } = core();
+    const group = await at("Repos");
+
+    await userEvent.click(
+      await within(group).findByRole("button", { name: "Remove web from workspace…" }),
+    );
+    const asking = await screen.findByRole("alertdialog", { name: "Remove web from alpha?" });
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(asked("drop_repo_membership")).toEqual([]);
+    expect(
+      within(group).getByRole("button", { name: "Remove web from workspace…" }),
+    ).toBeInTheDocument();
   });
 });
 

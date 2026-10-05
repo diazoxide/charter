@@ -1173,6 +1173,7 @@ function App() {
       focusBranch: () => undefined,
       newBranch: () => undefined,
       cloneMissing: async () => nowhere(),
+      askDropMembership: () => undefined,
       newChatIn: () => undefined,
       // Both are rows the catalogue marks unavailable with no plane — there is nowhere to make
       // a workspace and no workspace to delete — so `perform` refuses them before either of

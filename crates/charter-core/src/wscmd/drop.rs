@@ -1,4 +1,6 @@
-//! Take one repo out of a workspace: delete its clone and its row in the manifest (ADR 0055).
+//! Take one repo out of a workspace: delete its clone and its row in the manifest (ADR 0055) —
+//! or, for a repo the workspace names and nobody cloned here, only its row
+//! ([`drop_membership`], #1228).
 //!
 //! **The same guard as [`super::remove`], narrowed to one clone, and inside the delete.** What
 //! [`super::work_at_risk`] names for this repo — uncommitted changes, unpushed commits, a clone
@@ -107,6 +109,85 @@ pub fn drop_repo(root: &Path, ws: &str, repo: &str, say: Sink) -> Removal {
         code: 0,
         refused_over: Vec::new(),
     }
+}
+
+/// Take `repo` out of workspace `ws`'s membership: its row in `workspace.json`, and only that
+/// (#1228). For a repo the workspace names and this machine has not cloned, there is nothing
+/// to delete, so there is nothing for [`drop_repo`]'s guard to weigh.
+///
+/// **A clone is refused, never deleted here.** A repo that is cloned goes through
+/// [`drop_repo`], whose work-at-risk and worktree refusals are the reason it exists; a second
+/// way to the same row that skipped them would be a way round them.
+///
+/// **The operator asked for this write**, so a manifest a hand wrote is written too, as the
+/// Workspace settings' save writes one: without charter's stamp, so it stays the hand's. One
+/// that does not parse is refused rather than replaced. Every other key and row is kept, in
+/// its place.
+///
+/// Exit codes: 0 dropped, 1 could not, and nothing was written.
+pub fn drop_membership(root: &Path, ws: &str, repo: &str, say: Sink) -> u8 {
+    let mut fail = |why: String| {
+        say(Say::Fail(why));
+        1
+    };
+    if wscmd::workspace_dir(root, ws).is_none() {
+        return fail(format!("invalid workspace name '{ws}'"));
+    }
+    if !wscmd::workspace_dir_exists(root, ws) {
+        return fail(format!("no workspace '{ws}'"));
+    }
+    if !crate::contain::repo_name_ok(repo) {
+        return fail(format!(
+            "'{}' is not a repo's name",
+            crate::shown::escaped(repo)
+        ));
+    }
+    let cloned = match crate::repos::clones(root, ws) {
+        Ok(found) => found.repos.iter().any(|r| r.name == repo),
+        Err(why) => {
+            return fail(format!(
+                "the clones in '{ws}' could not be read ({why}), so '{repo}' was left in it."
+            ));
+        }
+    };
+    if cloned {
+        return fail(format!(
+            "'{repo}' is cloned in workspace '{ws}' — remove the clone instead, which checks \
+             it holds no work first."
+        ));
+    }
+    let workspace = match crate::workspaces::Plane::open(root).workspace(ws) {
+        Ok(workspace) => workspace,
+        Err(why) => return fail(format!("workspace '{ws}' could not be read ({why})")),
+    };
+    let (doc, owner) = workspace.manifest();
+    let Some(mut doc) = doc else {
+        return fail(match owner {
+            Ownership::Absent => format!("workspace '{ws}' does not name '{repo}'"),
+            _ => format!(
+                "workspaces/{ws}/workspace.json is not JSON charter can read, so '{repo}' was \
+                 left in it. Mend the file first."
+            ),
+        });
+    };
+    let Some(rows) = doc.get_mut("repos").and_then(Value::as_array_mut) else {
+        return fail(format!("workspace '{ws}' does not name '{repo}'"));
+    };
+    let before = rows.len();
+    rows.retain(|r| r.get("name").and_then(Value::as_str) != Some(repo));
+    if rows.len() == before {
+        return fail(format!("workspace '{ws}' does not name '{repo}'"));
+    }
+    if let Err(why) = workspace.write_manifest_as(&doc, owner != Ownership::Operator) {
+        return fail(format!(
+            "workspaces/{ws}/workspace.json could not be written ({}), so '{repo}' is still in it.",
+            crate::shown::short(&why.to_string())
+        ));
+    }
+    say(Say::Done(format!(
+        "Removed '{repo}' from workspace '{ws}'. Nothing was deleted: it was not cloned here."
+    )));
+    0
 }
 
 /// Drop `repo`'s row from a manifest charter wrote. One the operator wrote is left as it is,
@@ -244,5 +325,136 @@ mod tests {
         assert_eq!(done.code, 0, "{said:?}");
         let (doc, _) = workspace.manifest();
         assert_eq!(doc.unwrap()["repos"], serde_json::json!([{"name": "kept"}]));
+    }
+}
+
+#[cfg(test)]
+mod membership {
+    use super::*;
+    use crate::manifest;
+    use crate::workspaces::{Plane, Workspace};
+
+    fn plane() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("workspaces/alpha")).unwrap();
+        dir
+    }
+
+    fn alpha(root: &Path) -> Workspace {
+        Plane::open(root).workspace("alpha").unwrap()
+    }
+
+    fn run(root: &Path, ws: &str, name: &str) -> (u8, Vec<String>) {
+        let mut said = Vec::new();
+        let code = drop_membership(root, ws, name, &mut |line: Say| said.push(line.to_string()));
+        (code, said)
+    }
+
+    #[test]
+    fn an_uncloned_repo_leaves_the_manifest_and_nothing_else_does() {
+        let dir = plane();
+        alpha(dir.path())
+            .write_manifest(&serde_json::json!({
+                "name": "alpha",
+                "repos": [{"name": "kept", "url": "https://example.com/kept.git"}, {"name": "gone"}],
+                "settings": {"theme": {"icons": "charter-icons"}},
+            }))
+            .unwrap();
+
+        let (code, said) = run(dir.path(), "alpha", "gone");
+
+        assert_eq!(code, 0, "{said:?}");
+        let (doc, owner) = alpha(dir.path()).manifest();
+        let doc = doc.unwrap();
+        assert_eq!(owner, manifest::Ownership::Charter);
+        assert_eq!(
+            doc["repos"],
+            serde_json::json!([{"name": "kept", "url": "https://example.com/kept.git"}])
+        );
+        assert_eq!(doc["name"], "alpha");
+        assert_eq!(
+            doc["settings"],
+            serde_json::json!({"theme": {"icons": "charter-icons"}})
+        );
+        assert!(said.iter().any(|line| line.contains("gone")), "{said:?}");
+    }
+
+    #[test]
+    fn a_manifest_a_hand_wrote_stays_the_hands() {
+        let dir = plane();
+        let path = dir.path().join("workspaces/alpha/workspace.json");
+        std::fs::write(
+            &path,
+            "{\n  \"name\": \"alpha\",\n  \"repos\": [{\"name\": \"gone\"}, {\"name\": \"kept\"}]\n}\n",
+        )
+        .unwrap();
+
+        let (code, said) = run(dir.path(), "alpha", "gone");
+
+        assert_eq!(code, 0, "{said:?}");
+        let (doc, owner) = alpha(dir.path()).manifest();
+        assert_eq!(owner, manifest::Ownership::Operator);
+        assert_eq!(doc.unwrap()["repos"], serde_json::json!([{"name": "kept"}]));
+    }
+
+    #[test]
+    fn a_cloned_repo_is_refused_and_left_to_the_drop_that_guards_its_work() {
+        let dir = plane();
+        let clone = dir.path().join("workspaces/alpha/svc");
+        std::fs::create_dir_all(&clone).unwrap();
+        let git = |argv: &[&str]| assert!(crate::testgit::run(&clone, argv).ok());
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "T"]);
+        std::fs::write(clone.join("README.md"), "hi\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "first"]);
+        std::fs::write(clone.join("README.md"), "changed\n").unwrap();
+        let rows = serde_json::json!({"name": "alpha", "repos": [{"name": "svc"}]});
+        alpha(dir.path()).write_manifest(&rows).unwrap();
+
+        let (code, said) = run(dir.path(), "alpha", "svc");
+
+        assert_eq!(code, 1, "{said:?}");
+        assert!(
+            said.iter().any(|line| line.contains("is cloned")),
+            "{said:?}"
+        );
+        assert!(clone.join("README.md").is_file());
+        assert_eq!(
+            alpha(dir.path()).manifest().0.unwrap()["repos"],
+            rows["repos"]
+        );
+
+        // And the drop that does take a clone still refuses the work it holds.
+        let mut said = Vec::new();
+        let done = drop_repo(dir.path(), "alpha", "svc", &mut |line: Say| {
+            said.push(line.to_string());
+        });
+        assert_eq!(done.code, 2, "{said:?}");
+        assert!(clone.join("README.md").is_file());
+    }
+
+    #[test]
+    fn a_repo_the_workspace_does_not_name_changes_nothing() {
+        let dir = plane();
+        let rows = serde_json::json!({"name": "alpha", "repos": [{"name": "kept"}]});
+        alpha(dir.path()).write_manifest(&rows).unwrap();
+        let before = std::fs::read(dir.path().join("workspaces/alpha/workspace.json")).unwrap();
+
+        let (code, said) = run(dir.path(), "alpha", "other");
+        let (bad, _) = run(dir.path(), "alpha", "..");
+        let (nowhere, _) = run(dir.path(), "beta", "kept");
+
+        assert_eq!(code, 1, "{said:?}");
+        assert!(
+            said.iter().any(|line| line.contains("does not name")),
+            "{said:?}"
+        );
+        assert_eq!(bad, 1);
+        assert_eq!(nowhere, 1);
+        let after = std::fs::read(dir.path().join("workspaces/alpha/workspace.json")).unwrap();
+        assert_eq!(before, after);
     }
 }

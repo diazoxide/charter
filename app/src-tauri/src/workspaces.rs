@@ -553,6 +553,33 @@ fn drop_in(root: &Path, workspace: &str, repo: &str) -> Result<Vec<String>, Refu
     })
 }
 
+/// Take a repo the workspace names and this machine has NOT cloned out of the workspace: its
+/// row in `workspace.json`, and nothing else (#1228).
+///
+/// A cloned repo is refused here and goes through [`drop_repo`], whose guard weighs the work
+/// in the clone; this calls `wscmd::drop::drop_membership` and nothing else.
+// Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
+#[tauri::command]
+#[specta::specta]
+pub async fn drop_repo_membership(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+) -> Result<Vec<String>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || membership_dropped(&root, &workspace, &repo))
+        .await
+        .map_err(|err| format!("the removal did not finish: {err}"))?
+}
+
+fn membership_dropped(root: &Path, workspace: &str, repo: &str) -> Result<Vec<String>, String> {
+    let mut said = Vec::new();
+    let code =
+        wscmd::drop::drop_membership(root, workspace, repo, &mut |line: Say| said.push(line));
+    ran(code, said)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +758,32 @@ mod tests {
         assert_eq!(refused.at_risk.len(), 1, "{refused:?}");
         assert_eq!(refused.at_risk[0].what, "svc");
         assert!(clone.join("README.md").exists());
+    }
+
+    #[test]
+    fn a_repo_not_cloned_here_leaves_the_workspace_and_a_cloned_one_is_refused() {
+        let (_dir, root) = plane();
+        let kept = clone_in(&root, "alpha", "kept");
+        let workspace = charter_core::workspaces::Plane::open(&root)
+            .workspace("alpha")
+            .expect("a workspace");
+        workspace
+            .write_manifest(&serde_json::json!({
+                "name": "alpha",
+                "repos": [{"name": "kept"}, {"name": "named"}],
+            }))
+            .expect("a manifest");
+
+        membership_dropped(&root, "alpha", "named").expect("an uncloned repo is dropped");
+        let refused = membership_dropped(&root, "alpha", "kept").expect_err("a clone is refused");
+
+        assert!(refused.contains("is cloned"), "{refused}");
+        assert!(kept.exists());
+        let (doc, _) = workspace.manifest();
+        assert_eq!(
+            doc.expect("a manifest")["repos"],
+            serde_json::json!([{"name": "kept"}])
+        );
     }
 
     #[test]

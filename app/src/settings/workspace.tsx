@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LiveDialog } from "../LiveDialog";
 import { useProjectThemeAnswers } from "../projectTheme";
-import { useWorkspaceRepos } from "../WorkspaceRepos";
+import { useNotClonedHere, useWorkspaceRepos } from "../WorkspaceRepos";
 import {
   commands,
   type HarnessPlugins,
@@ -122,6 +122,17 @@ function reposSetting(read: WorkspaceRead): LiveSetting {
   };
 }
 
+/** What the workspace names and this machine has not cloned, each removable from it (#1228). */
+function absentSetting(read: WorkspaceRead): LiveSetting {
+  const { plane, workspace } = read;
+  return {
+    id: "workspace.repos.absent",
+    label: "Not cloned here",
+    help: "Repos this workspace names that are not cloned on this machine. Removing one takes it out of workspace.json; nothing is deleted.",
+    useControl: () => ({ ...useNotClonedHere(plane, workspace), grouped: true }),
+  };
+}
+
 /**
  * **The five groups**, in V89h's order, each with its stable id. A group with no setting is
  * hidden: Extensions with no extension, Plugins with no harness that can set one. A
@@ -149,8 +160,8 @@ export function workspaceGroups(read: WorkspaceRead, switched: () => void): Sett
     {
       id: "workspace.repos",
       label: "Repos",
-      help: "The repos cloned in this workspace.",
-      settings: [reposSetting(read)],
+      help: "The repos cloned in this workspace, and the ones it names that are not cloned here.",
+      settings: [reposSetting(read), absentSetting(read)],
     },
     {
       id: "workspace.extensions",

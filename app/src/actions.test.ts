@@ -145,6 +145,9 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`cloneMissing:${workspace}:${repos.join(",")}`);
       return { ok: true as const };
     }),
+    askDropMembership: vi.fn((workspace: string, repo: string) => {
+      calls.push(`askDropMembership:${workspace}:${repo}`);
+    }),
     newChatIn: note("newChatIn"),
     sendKey: vi.fn(async (key: string) => {
       calls.push(`sendKey:${key}`);
@@ -932,11 +935,25 @@ describe("the one list of actions", () => {
       ).toBeUndefined();
     });
 
-    it("draws Clone on the row's menu, with the line below left for taking it out", () => {
+    it("draws Clone on the row's menu, and taking it out of the workspace below the line", () => {
       expect(menuOn({ on: "absent", repo: "web" })).toEqual({
         above: ["absent.clone:web"],
-        below: [],
+        below: ["absent.drop:web"],
       });
+    });
+
+    it("asks to take each one out of the workspace, and never while it is being cloned (#1228)", async () => {
+      const hands = doing();
+      const offers = catalogue(
+        now({ focused: "alpha", absent: ["charter", "web"], cloning: ["charter"] }),
+      );
+
+      expect(by(offers, "absent.drop:web")?.title).toBe("Remove web from workspace…");
+      expect(by(offers, "absent.drop:charter")?.available).toBe(false);
+      expect(by(offers, "absent.drop:charter")?.reason).toBe("charter is being cloned.");
+      await run(offers, "absent.drop:web", hands);
+
+      expect(hands.calls).toEqual(["askDropMembership:alpha:web"]);
     });
   });
 
