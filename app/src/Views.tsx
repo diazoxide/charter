@@ -28,7 +28,6 @@ import { PanelList } from "./PanelList";
 import { HarnessSetupTab } from "./HarnessSetupTab";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
 import { FirstTaskTab, type FirstTaskDoes } from "./FirstTaskTab";
-import { ProjectSettings } from "./ProjectSettings";
 import { SettingsTab } from "./settings/SettingsTab";
 import {
   commands,
@@ -66,7 +65,6 @@ import { SESSION_VIEW } from "./sessions";
 import {
   SAVING_VIEW,
   SETTINGS_TAB_TITLE,
-  SETTINGS_VIEW,
   settingsLevelOf,
   settingsView,
   viewKey,
@@ -418,12 +416,6 @@ export function ViewPane({
             }
             testid="view-waits"
           />
-        ) : isSettings(view) ? (
-          /* **The one built-in view that is not an answer.** Opened, filed, deduplicated and
-             put back at a launch exactly as every other view is; what differs is its body: a
-             form writes, and the panel vocabulary is for reading. Keyed by the plane, so a pane
-             that comes to show another project's settings starts from its own read. */
-          <ProjectSettings key={plane} plane={plane} />
         ) : isRepoInstructions(view) ? (
           /* The agent instructions a workspace's repo carries, offered to its memory (FR-18a):
              a preview whose press is the only thing that writes. Keyed by both, as a
@@ -610,11 +602,6 @@ const PieceDiffTab = lazy(() =>
 
 /** What a light editor tab shows while its chunk arrives. */
 const OPENING = <EmptyState mark={LoaderCircle} headline="Opening the light editor…" />;
-
-/** Whether `view` is the Project settings view (charter-app#252). */
-function isSettings(view: ViewRef): boolean {
-  return viewKey(view) === viewKey(SETTINGS_VIEW);
-}
 
 /** Whether `view` is a workspace's repo instructions (FR-18a). */
 function isRepoInstructions(view: ViewRef): boolean {

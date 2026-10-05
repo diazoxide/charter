@@ -158,6 +158,43 @@ fn a_shared_file_that_is_not_toml_is_refused_in_the_words_charter_reads_it_with(
 }
 
 #[test]
+fn a_local_file_that_is_not_toml_is_refused_and_nothing_is_written() {
+    let dir = plane(COMMENTED);
+    let before = "[harness]\ndefault = \"claude\"\n";
+    save(dir.path(), Which::Local, None, before).unwrap();
+    let bad = "[harness\ndefault = \"claude\"\n";
+    let err = save(dir.path(), Which::Local, Some(before), bad).unwrap_err();
+    assert!(
+        err.iter().any(|why| why.contains("TOML")),
+        "the parser's reason is said: {err:?}"
+    );
+    assert_eq!(
+        text(dir.path(), "charter.local.toml"),
+        before,
+        "nothing was written"
+    );
+}
+
+/// The raw editor (SE-19) is how a file that does not parse is mended, so a save that leaves it
+/// still not parsing is refused rather than waved through as what the file already held: a
+/// half-mended file is never written.
+#[test]
+fn a_file_that_does_not_parse_is_never_saved_as_text_that_still_does_not() {
+    for which in [Which::Shared, Which::Local] {
+        let dir = plane(COMMENTED);
+        let broken = "[memory\nshare = 1\n";
+        fs::write(which.path(dir.path()), broken).unwrap();
+        let err = save(dir.path(), which, Some(broken), broken).unwrap_err();
+        assert!(!err.is_empty(), "{which:?}");
+        assert_eq!(
+            fs::read_to_string(which.path(dir.path())).unwrap(),
+            broken,
+            "{which:?}: nothing was written"
+        );
+    }
+}
+
+#[test]
 fn a_schema_this_charter_cannot_place_is_refused() {
     let dir = plane(COMMENTED);
     let why = refusals(dir.path(), Which::Shared, "schema = 3\n");

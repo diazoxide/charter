@@ -41,6 +41,9 @@ export type GroupOffer = { id: string; label: string };
  * polite live region under it says how many settings match (`found`), and when none do, the
  * right column says so where the group would be — above what the level's files refuse, which
  * stays on screen whatever the filter. Escape in the box clears it.
+ *
+ * **The foot of the nav** (`foot`, SE-19, V89d) is the caller's: the Project level's "Edit as
+ * TOML" link per file. It is under the groups and not one of them, so the filter leaves it be.
  */
 export function SettingsLayout({
   levels,
@@ -53,6 +56,7 @@ export function SettingsLayout({
   filter,
   onFilterChange,
   found,
+  foot,
   children,
 }: {
   levels: readonly LevelOffer[];
@@ -69,6 +73,8 @@ export function SettingsLayout({
   /** How many settings the filter leaves, while it holds words; unset while the level is still
    *  being read, so nothing is said yet. */
   found?: number;
+  /** What sits under the nav, whatever the filter. */
+  foot?: ReactNode;
   /** The chosen group: a {@link SettingGroup}. */
   children: ReactNode;
 }) {
@@ -140,6 +146,7 @@ export function SettingsLayout({
             ))}
           </nav>
         </RovingFocusGroup.Root>
+        {foot}
       </div>
       <div className="ui-settings-body">
         {none && <p className="ui-settings-none">{none}</p>}

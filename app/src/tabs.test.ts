@@ -36,6 +36,8 @@ import {
   stopWaiting,
   viewKey,
   settingsView,
+  settingsLevelOf,
+  viewNamedNow,
   showInstead,
   findView,
   type ViewRef,
@@ -817,6 +819,26 @@ describe("the Settings tab's level (SE-17, D-SE17a)", () => {
 
     expect(front(moved)).toBe(findView(project, settingsView("project"))?.tab);
     expect(findView(moved, settingsView("you"))?.tab).toBe(you);
+  });
+});
+
+describe("a view an older launch left open (SE-16, SE-19)", () => {
+  it("puts the retired Project settings page back as Settings at the Project level", () => {
+    const old: ViewRef = { from: null, view: "settings", key: "" };
+
+    const now = viewNamedNow(old, "Project settings");
+
+    expect(now).toEqual({ view: settingsView("project"), title: "Settings" });
+    expect(settingsLevelOf(now.view)).toBe("project");
+  });
+
+  it("puts Preferences back as Settings at the You level, and leaves every other view as it is", () => {
+    expect(viewNamedNow({ from: null, view: "preferences", key: "" }, "Preferences")).toEqual({
+      view: settingsView("you"),
+      title: "Settings",
+    });
+    const theirs: ViewRef = { from: "acme", view: "settings", key: "" };
+    expect(viewNamedNow(theirs, "Acme settings")).toEqual({ view: theirs, title: "Acme settings" });
   });
 });
 

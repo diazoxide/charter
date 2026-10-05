@@ -54,18 +54,8 @@ export type Direction = "row" | "column";
 export type ViewRef = { from: string | null; view: string; key: string };
 
 /**
- * **The Project settings view** (charter-app#252): a plane's `charter.toml` and
- * `charter.local.toml`, as forms and as raw TOML. One per plane, so its key is empty — the
- * same shape as every other view, opened by the same verb, deduplicated by the same `viewKey`.
- */
-export const SETTINGS_VIEW: ViewRef = { from: null, view: "settings", key: "" };
-
-/** What the Project settings tab is called. */
-export const SETTINGS_TITLE = "Project settings";
-
-/**
  * **The Saving view** (charter-app#294, ADR 0051): where a plane's unsaved work sits, what the
- * next save takes, the save button and the last saves. One per plane, like Project settings.
+ * next save takes, the save button and the last saves. One per plane.
  */
 export const SAVING_VIEW: ViewRef = { from: null, view: "saving", key: "" };
 
@@ -164,8 +154,9 @@ export function workspaceSettingsTitle(workspace: string): string {
  * Settings at a level that already has its tab brings that tab forward. The project is the one
  * whose tabs hold it. Its level switcher moves the tab itself to another level
  * ({@link showInstead}, D-SE17a), so the key always says what the tab shows. It is the view
- * `settings` because it is what Settings means from here on; the old Project settings page is
- * the same view with the empty key until SE-19 retires it.
+ * `settings` because it is what Settings means from here on. The old Project settings page was
+ * the same view with the empty key; SE-19 retired it, and a tab of it put back from an older
+ * launch is Settings at the Project level ({@link viewNamedNow}).
  *
  * The You level is the machine's and not the project's, so it is the same tab whichever project's
  * strip it was opened on: what it edits is the machine's layout file, never a file in the project.
@@ -177,8 +168,7 @@ export function settingsView(level: Exclude<SettingsLevel, "workspace">): ViewRe
 /** The levels a Settings tab can be at (`settings/groups.ts`'s `Level`, as far as it is offered). */
 export type SettingsLevel = "you" | "project" | "workspace";
 
-/** The level a view is the Settings tab at, or `undefined` for any other view — the old
- *  Project settings page (the same view, keyed `""`) included. */
+/** The level a view is the Settings tab at, or `undefined` for any other view. */
 export function settingsLevelOf(view: ViewRef): SettingsLevel | undefined {
   if (view.from !== null) return undefined;
   if (view.view === "workspace-settings") return "workspace";
@@ -190,14 +180,21 @@ export function settingsLevelOf(view: ViewRef): SettingsLevel | undefined {
 export const SETTINGS_TAB_TITLE = "Settings";
 
 /**
- * A view tab as a record from an older charter names it, as it is named now: the Preferences tab
- * (charter-app#283) is Settings at the You level since SE-16, so a launch that put one back puts
- * Settings back instead of a tab nothing draws. Every other view is itself.
+ * A view tab as a record from an older charter names it, as it is named now, so a launch that
+ * put one back puts Settings back instead of a tab nothing draws:
+ *
+ * - the Preferences tab (charter-app#283) is Settings at the You level since SE-16;
+ * - the Project settings page (charter-app#252, the view `settings` keyed `""`) is Settings at
+ *   the Project level since SE-19 retired it (D-SE19b).
+ *
+ * Every other view is itself.
  */
 export function viewNamedNow(view: ViewRef, title: string): { view: ViewRef; title: string } {
-  return view.from === null && view.view === "preferences"
-    ? { view: settingsView("you"), title: SETTINGS_TAB_TITLE }
-    : { view, title };
+  if (view.from !== null) return { view, title };
+  if (view.view === "preferences") return { view: settingsView("you"), title: SETTINGS_TAB_TITLE };
+  if (view.view === "settings" && view.key === "")
+    return { view: settingsView("project"), title: SETTINGS_TAB_TITLE };
+  return { view, title };
 }
 
 /** What a pane shows. */

@@ -787,15 +787,28 @@ const STATES: State[] = [
     drawn: /the keyring is locked/,
   },
   {
-    name: "Project settings",
-    view: { from: null, view: "settings", key: "" },
+    name: "Settings, at the Project level",
+    view: { from: null, view: "settings", key: "project" },
     drawn: /charter\.toml/,
   },
   {
-    name: "Project settings with a theme picked",
-    view: { from: null, view: "settings", key: "" },
+    name: "Settings, at the Project level, its Appearance with a theme picked",
+    view: { from: null, view: "settings", key: "project" },
     answers: { project_theme: THEME_PICKED, project_theme_drawn: "charter-light" },
     drawn: /charter\.toml picks it/,
+    then: async () => {
+      await userEvent.click(await screen.findByRole("button", { name: "Appearance" }));
+    },
+  },
+  {
+    name: "Settings, at the Project level, charter.toml as TOML",
+    view: { from: null, view: "settings", key: "project" },
+    drawn: /The whole file, comments and all/,
+    then: async () => {
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Edit charter.toml as TOML" }),
+      );
+    },
   },
   { name: "Saving", view: { from: null, view: "saving", key: "" }, drawn: /site/ },
   {
