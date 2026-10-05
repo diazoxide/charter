@@ -142,6 +142,7 @@ function AbsentRow({
                   {drop !== undefined && (
                     <button
                       type="button"
+                      className="ends-it"
                       tabIndex={0}
                       aria-label={drop.title}
                       disabled={!drop.available}

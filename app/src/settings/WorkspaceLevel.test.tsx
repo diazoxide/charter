@@ -185,11 +185,17 @@ function core(
   saved?: (sent: Record<string, unknown>) => WorkspaceSettingsSaved,
   theme: ProjectTheme = NO_THEME,
   leftOut: string | null = null,
-  { extensions = EXTENSIONS, harnesses = HARNESSES } = {},
+  {
+    extensions = EXTENSIONS,
+    harnesses = HARNESSES,
+    // `drop_repo` takes the clone, and the manifest — a hand's — keeps its row (#1228).
+    dropsClean = false,
+  } = {},
 ) {
   let file = settings;
   /** What `alpha` names and this machine has not cloned (#1228). */
   const absent = ["web"];
+  const cloned = ["api"];
   const sent: Record<string, unknown>[] = [];
   const asked: [string, Record<string, unknown>][] = [];
   mockIPC(
@@ -228,11 +234,15 @@ function core(
           trouble: [],
         };
       if (cmd === "workspace_repos")
-        return { workspace: given.workspace, repos: [{ name: "api" }], cache_refused: null };
+        return {
+          workspace: given.workspace,
+          repos: cloned.map((name) => ({ name })),
+          cache_refused: null,
+        };
       if (cmd === "workspace_panels")
         return {
           workspace: given.workspace,
-          repos: ["api"],
+          repos: [...cloned],
           paths: {},
           absent: [...absent],
           refused: [],
@@ -246,6 +256,12 @@ function core(
       if (cmd === "drop_repo_membership") {
         absent.splice(absent.indexOf(String(given.repo)), 1);
         return [`Removed '${String(given.repo)}' from workspace 'alpha'.`];
+      }
+      if (cmd === "drop_repo" && dropsClean) {
+        const repo = String(given.repo);
+        cloned.splice(cloned.indexOf(repo), 1);
+        absent.push(repo);
+        return [`Removed '${repo}' from workspace 'alpha'.`];
       }
       if (cmd === "drop_repo")
         throw {
@@ -477,6 +493,20 @@ describe("Repos not cloned here", () => {
       { plane: PLANE, workspace: "alpha", repo: "web" },
     ]);
     expect(asked("drop_repo")).toEqual([]);
+  });
+
+  it("lists a clone unticked from a hand's manifest as soon as the picker applies", async () => {
+    core(ALPHA, undefined, NO_THEME, null, { dropsClean: true });
+    const group = await at("Repos");
+
+    const api = await within(group).findByRole("checkbox", { name: "api" });
+    await waitFor(() => expect(api).toBeChecked());
+    await userEvent.click(api);
+    await userEvent.click(within(group).getByRole("button", { name: "Remove 1" }));
+
+    expect(
+      await within(group).findByRole("button", { name: "Remove api from workspace…" }),
+    ).toHaveClass("ends-it");
   });
 
   it("removes nothing when the question is cancelled", async () => {

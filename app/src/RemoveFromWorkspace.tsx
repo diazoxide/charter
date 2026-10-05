@@ -31,6 +31,11 @@ export function RemoveFromWorkspace({
   const [busy, setBusy] = useState(false);
   const [trouble, setTrouble] = useState<string | null>(null);
   const cancel = useRef<HTMLButtonElement>(null);
+  /** What had the keyboard when the question opened — the Remove… that asked it — which gets
+   *  it back when the question closes, if it is still there. */
+  const [opener] = useState(() =>
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
 
   const confirm = async () => {
     setBusy(true);
@@ -60,6 +65,12 @@ export function RemoveFromWorkspace({
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             cancel.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            if (opener?.isConnected) {
+              event.preventDefault();
+              opener.focus();
+            }
           }}
         >
           <AlertDialog.Title>{`Remove ${repo} from ${workspace}?`}</AlertDialog.Title>
