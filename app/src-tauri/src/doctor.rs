@@ -235,8 +235,8 @@ pub enum DoctorIdentityFixed {
 /// the core checks both, then writes them to git's global config, as `charter doctor --fix
 /// git-identity --name … --email …` does. Answers the fix's outcome, or each field's refusal.
 ///
-/// The plane is the window's: the identity is not the project's, but the answer is kept to
-/// the dialog that asked, as every fix's is.
+/// The plane is the window's: the core reads the identity in force there (every scope, as the
+/// doctor's row does) before it writes, and the answer is kept to the dialog that asked.
 #[tauri::command]
 #[specta::specta]
 pub async fn plane_doctor_fix_identity(
@@ -245,8 +245,8 @@ pub async fn plane_doctor_fix_identity(
     name: String,
     email: String,
 ) -> Result<DoctorIdentityFixed, String> {
-    planes.held(&plane)?;
-    tauri::async_runtime::spawn_blocking(move || identity_fixed(&name, &email))
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || identity_fixed(&root, &name, &email))
         .await
         .map_err(|err| format!("the fix did not finish: {err}"))
 }
@@ -279,8 +279,10 @@ pub async fn plane_doctor_identity(
 }
 
 /// [`plane_doctor_fix_identity`], on the calling thread.
-fn identity_fixed(name: &str, email: &str) -> DoctorIdentityFixed {
-    identity_answer(charter_core::doctor::fix::identity::apply(name, email))
+fn identity_fixed(root: &std::path::Path, name: &str, email: &str) -> DoctorIdentityFixed {
+    identity_answer(charter_core::doctor::fix::identity::apply(
+        root, name, email,
+    ))
 }
 
 /// The core's answer to the form, as the window reads it.
