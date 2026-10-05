@@ -19,14 +19,14 @@ const sidebar = (...hrefs) =>
 
 test("every page in docs/ built and in the sidebar is reachable", () => {
   const docs = tree({ "spec.md": "# S\n", "adr/0070-x.md": "# X\n" });
-  const nav = sidebar("/charter/docs/spec/", "/charter/docs/adr/0070-x/");
+  const nav = sidebar("/purlis/docs/spec/", "/purlis/docs/adr/0070-x/");
   const dist = tree({ "docs/spec/index.html": nav, "docs/adr/0070-x/index.html": nav });
   assert.deepEqual(unreachable({ docs, dist }), []);
 });
 
 test("a page with no built page is unreachable", () => {
   const docs = tree({ "spec.md": "# S\n", "updating.md": "# U\n" });
-  const nav = sidebar("/charter/docs/spec/", "/charter/docs/updating/");
+  const nav = sidebar("/purlis/docs/spec/", "/purlis/docs/updating/");
   const dist = tree({ "docs/spec/index.html": nav });
   assert.deepEqual(unreachable({ docs, dist }), [
     "updating.md: no page was built at docs/updating/index.html",
@@ -35,16 +35,16 @@ test("a page with no built page is unreachable", () => {
 
 test("a built page no sidebar links to is unreachable", () => {
   const docs = tree({ "spec.md": "# S\n", "hidden.md": "# H\n" });
-  const nav = sidebar("/charter/docs/spec/");
+  const nav = sidebar("/purlis/docs/spec/");
   const dist = tree({ "docs/spec/index.html": nav, "docs/hidden/index.html": nav });
   assert.deepEqual(unreachable({ docs, dist }), [
-    "hidden.md: the sidebar does not link to /charter/docs/hidden/",
+    "hidden.md: the sidebar does not link to /purlis/docs/hidden/",
   ]);
 });
 
 test("a page is looked for at the address Starlight gives it", () => {
   const docs = tree({ "v1.2-notes.md": "# N\n", "guides/index.md": "# G\n" });
-  const nav = sidebar("/charter/docs/v12-notes/", "/charter/docs/guides/");
+  const nav = sidebar("/purlis/docs/v12-notes/", "/purlis/docs/guides/");
   const dist = tree({ "docs/v12-notes/index.html": nav, "docs/guides/index.html": nav });
   assert.deepEqual(unreachable({ docs, dist }), []);
 });

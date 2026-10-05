@@ -6,9 +6,9 @@ import { join, relative } from "node:path";
 import { slug } from "github-slugger";
 
 /** GitHub Pages serves a project repository's site under the repository's name. */
-export const SITE = "https://diazoxide.github.io";
-export const BASE = "/charter";
-export const REPO_URL = "https://github.com/diazoxide/charter";
+export const SITE = "https://purlis.github.io";
+export const BASE = "/purlis";
+export const REPO_URL = "https://github.com/purlis/purlis";
 
 /** Every `*.md` file under `dir`, as a `/`-separated path relative to it, sorted. */
 export function markdownPages(dir) {
