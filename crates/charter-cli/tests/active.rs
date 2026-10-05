@@ -11,6 +11,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// `command` without any spelling of the variables that choose a project, which a suite run
+/// inside a chat inherits under both names (V93k): the test sets its own after.
+fn unsteered(mut command: Command) -> Command {
+    for rest in charter_core::envvar::SELECTING {
+        for spelling in charter_core::envvar::spellings(&format!("PURLIS_{rest}")) {
+            command.env_remove(spelling);
+        }
+    }
+    command
+}
+
 fn charter() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_charter"))
 }
@@ -43,7 +54,7 @@ fn run(root: &Path, args: &[&str], env: &[(&str, &str)]) -> Ran {
 /// The two paths are separate because the tree you are standing in IS a rung, and pinning the
 /// plane to the working directory would make that rung untestable.
 fn run_in(root: &Path, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Ran {
-    let mut command = Command::new(charter());
+    let mut command = unsteered(Command::new(charter()));
     command
         .args(args)
         .current_dir(cwd)
@@ -323,7 +334,7 @@ fn standing_in_a_clone_that_is_itself_a_plane_the_binary_acts_on_the_plane_holdi
 
     // `CHARTER_ROOT` is the escape hatch for anyone who genuinely means the inner plane, so
     // it must be out of the way for the walk to be what answers.
-    let out = Command::new(charter())
+    let out = unsteered(Command::new(charter()))
         .arg("root")
         .current_dir(&deep)
         .env_remove("CHARTER_ROOT")

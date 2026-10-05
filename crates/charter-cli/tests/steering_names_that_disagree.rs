@@ -57,8 +57,8 @@ fn charter(cwd: &Path, args: &[&str], env: &[(&str, &Path)], stdin: &str) -> Ran
     }
 }
 
-const SAID: &str = "PURLIS_ROOT and CHARTER_ROOT disagree — set only PURLIS_ROOT (CHARTER_ROOT is \
-                    the old name).";
+const SAID: &str = "PURLIS_ROOT and CHARTER_ROOT disagree — set both to the same value \
+                    (PURLIS_ROOT=<x> CHARTER_ROOT=<x> charter …); CHARTER_ROOT is the old name.";
 
 #[test]
 fn a_root_named_twice_with_two_values_is_refused_naming_both() {
@@ -116,4 +116,77 @@ fn a_tool_hook_blocks_and_a_state_hook_stands_aside() {
     assert_eq!(stop.code, 0, "{}", stop.err);
     assert!(stop.err.contains(SAID), "{}", stop.err);
     assert_eq!(stop.out, "");
+}
+
+/// Inside a chat both names carry the chat's project. One name typed in front of a command is
+/// refused, with a remedy that works there: both names, set to the same value.
+#[test]
+fn in_a_chat_one_name_typed_inline_is_refused_and_both_names_are_obeyed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chats = plane(tmp.path().join("chats"));
+    let other = tmp.path().join("other");
+    plane(other.clone());
+    std::fs::create_dir_all(other.join("workspaces/beta")).unwrap();
+    std::fs::write(
+        other.join("charter.toml"),
+        "schema = 1\n\n[workspace]\ndefault = \"beta\"\n",
+    )
+    .unwrap();
+
+    // The chat's twins, then `PURLIS_ROOT=<other>` typed in front of the command.
+    let inline = charter(
+        tmp.path(),
+        &["workspace", "current"],
+        &[("CHARTER_ROOT", &chats), ("PURLIS_ROOT", &other)],
+        "",
+    );
+    assert_ne!(inline.code, 0, "{}", inline.out);
+    assert!(inline.err.contains(SAID), "{}", inline.err);
+
+    // The remedy the sentence names: both, to the same value, act on the other project.
+    let both = charter(
+        tmp.path(),
+        &["workspace", "current"],
+        &[("CHARTER_ROOT", &other), ("PURLIS_ROOT", &other)],
+        "",
+    );
+    assert_eq!(
+        (both.code, both.out.as_str()),
+        (0, "beta\n"),
+        "{}",
+        both.err
+    );
+}
+
+/// A commit in a repository that is no project needs none of the project's variables, so a
+/// disagreement between them never blocks it.
+#[test]
+fn a_commit_in_a_repository_that_is_no_project_is_never_blocked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("a.txt"), "hello\n").unwrap();
+    git(&["add", "a.txt"]);
+    std::fs::write(repo.join("MSG"), "a message\n").unwrap();
+    let a = plane(tmp.path().join("a"));
+    let b = plane(tmp.path().join("b"));
+    let env = [("PURLIS_ROOT", a.as_path()), ("CHARTER_ROOT", b.as_path())];
+
+    for args in [
+        &["git-hook", "pre-commit"][..],
+        &["git-hook", "commit-msg", "MSG"],
+    ] {
+        let ran = charter(&repo, args, &env, "");
+        assert_eq!(ran.code, 0, "{args:?}: {}", ran.err);
+        assert!(!ran.err.contains("disagree"), "{args:?}: {}", ran.err);
+    }
 }

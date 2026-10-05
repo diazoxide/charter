@@ -12,6 +12,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// `command` without any spelling of the variables that choose a project, which a suite run
+/// inside a chat inherits under both names (V93k): the test sets its own after.
+fn unsteered(mut command: Command) -> Command {
+    for rest in charter_core::envvar::SELECTING {
+        for spelling in charter_core::envvar::spellings(&format!("PURLIS_{rest}")) {
+            command.env_remove(spelling);
+        }
+    }
+    command
+}
+
 const IDENTITY: [(&str, &str); 6] = [
     ("GIT_AUTHOR_NAME", "Tester"),
     ("GIT_AUTHOR_EMAIL", "t@e.invalid"),
@@ -108,7 +119,7 @@ impl World {
     }
 
     fn charter(&self, args: &[&str]) -> (i32, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_charter"))
+        let out = unsteered(Command::new(env!("CARGO_BIN_EXE_charter")))
             .args(args)
             .current_dir(&self.root)
             .env("HOME", &self.home)

@@ -1162,7 +1162,11 @@ fn env_ok(name: &str) -> Result<(), String> {
                 .to_owned(),
         );
     }
-    if base.starts_with("CHARTER_") || "CHARTER_".starts_with(base) {
+    // The product's own variables under either of their names (RN-2d, V93k).
+    if crate::names::ENV_PREFIX
+        .spellings()
+        .any(|prefix| base.starts_with(prefix) || prefix.starts_with(base))
+    {
         return Err(
             "it reaches charter's own variables, which charter sets itself. Remove it.".to_owned(),
         );

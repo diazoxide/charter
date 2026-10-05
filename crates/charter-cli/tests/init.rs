@@ -17,6 +17,17 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// `command` without any spelling of the variables that choose a project, which a suite run
+/// inside a chat inherits under both names (V93k): the test sets its own after.
+fn unsteered(mut command: Command) -> Command {
+    for rest in charter_core::envvar::SELECTING {
+        for spelling in charter_core::envvar::spellings(&format!("PURLIS_{rest}")) {
+            command.env_remove(spelling);
+        }
+    }
+    command
+}
+
 fn charter() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_charter"))
 }
@@ -51,7 +62,7 @@ impl Scene {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(charter())
+        unsteered(Command::new(charter()))
             .args(args)
             .current_dir(&self.plane)
             .env_remove("CHARTER_ROOT")
@@ -860,7 +871,7 @@ fn adopt_refuses_a_repository_this_plane_is_inside() {
     std::fs::create_dir_all(&under).unwrap();
     scene.git_repo(&repo);
 
-    let out = Command::new(charter())
+    let out = unsteered(Command::new(charter()))
         .args([
             "init",
             "--forge",
@@ -970,7 +981,7 @@ fn a_directory_that_merely_sits_inside_a_repo_still_gets_its_plane() {
     let under = scene.plane.join("planes").join("acme");
     std::fs::create_dir_all(&under).unwrap();
 
-    let out = Command::new(charter())
+    let out = unsteered(Command::new(charter()))
         .args(["init", "--forge", "github", "--owner", "acme"])
         .current_dir(&under)
         .env_remove("CHARTER_ROOT")

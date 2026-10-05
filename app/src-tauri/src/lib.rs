@@ -2096,9 +2096,10 @@ pub fn run() {
     // a standard error that, launched from the Dock, nobody reads (#647).
     charter_core::applog::install();
     // A variable that chooses the project, named twice with two values, is refused rather
-    // than read under one of its names (D-RN2d-8). Said through the app's log, which a
-    // terminal launch also sees on standard error, and the app does not start: every window it opened would act on a project it
-    // guessed.
+    // than read under one of its names (D-RN2d-8). The sentence names the remedy, both names
+    // set to the same value. It goes to the app's log, which a terminal launch also sees on
+    // standard error, and the app does not start: every window it opened would act on a
+    // project it guessed.
     if let Some(disagree) = charter_core::envvar::disagreement() {
         tracing::error!("charter: {disagree}");
         std::process::exit(2);

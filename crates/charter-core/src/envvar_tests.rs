@@ -114,8 +114,8 @@ fn a_steering_variable_whose_names_disagree_is_a_refusal_naming_both() {
         .expect("a disagreement");
     assert_eq!(
         found.to_string(),
-        "PURLIS_ROOT and CHARTER_ROOT disagree — set only PURLIS_ROOT (CHARTER_ROOT is the old \
-         name)."
+        "PURLIS_ROOT and CHARTER_ROOT disagree — set both to the same value (PURLIS_ROOT=<x> \
+         CHARTER_ROOT=<x> charter …); CHARTER_ROOT is the old name."
     );
 }
 

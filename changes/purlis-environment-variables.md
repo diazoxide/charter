@@ -8,6 +8,7 @@
   so hooks and scripts that read the old name keep working. A harness profile may set neither.
   A variable that chooses what a command acts on is refused rather than guessed when both names
   are set to different values. Those variables are the project, its state, the workspace, the
-  worktrees, the persona, and the config and data homes. The refusal says to set only the
-  `PURLIS_` one. So `CHARTER_ROOT=… charter save` inside a chat tells you what to type instead of
-  acting on the chat's own project (RN-2d, #1260).
+  worktrees, the persona, and the config and data homes. The refusal says to set both
+  names to the same value (`PURLIS_ROOT=<x> CHARTER_ROOT=<x> charter …`). So a single name
+  typed in front of a command inside a chat tells you what to type, instead of acting on the
+  chat's own project (RN-2d, #1260).

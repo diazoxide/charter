@@ -157,6 +157,10 @@ fn a_resume_template_names_the_id_it_resumes() {
 fn the_environment_is_the_harnesss_own_namespace_and_never_charters_or_a_credential() {
     for (entry, said) in [
         ("CHARTER_*", "charter's own variables"),
+        // The product's variables under either name (RN-2d): `PURLIS_*` is the canonical one.
+        ("PURLIS_*", "charter's own variables"),
+        ("PURLIS_ROOT", "charter's own variables"),
+        ("PUR*", "capitals, digits and '_'"),
         ("CHA*", "capitals, digits and '_'"),
         ("C*", "capitals, digits and '_'"),
         ("GEMINI_API_KEY", "named like a credential"),
