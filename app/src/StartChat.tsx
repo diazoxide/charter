@@ -3,7 +3,10 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { HarnessSummary } from "./HarnessCard";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import type { StartOptions, WithoutSandbox } from "./bindings";
-import { Choice, Field, SettingGroup, SettingRow } from "./settings/components";
+import { Choice, Field, SettingActions, SettingGroup, SettingRow } from "./settings/components";
+
+/** Settings › Harness, where a harness profile is declared (SE-22's address). */
+const HARNESS = "project.harness";
 
 /**
  * The value that stands for "no persona at all".
@@ -83,6 +86,9 @@ export function StartChat({
   onStart,
   onApprove,
   onInstall,
+  fixing = false,
+  onFix,
+  onOpenSettings,
   onCancel,
 }: {
   options: StartOptions;
@@ -126,6 +132,13 @@ export function StartChat({
   /** SD-30's install action: the window opens a shell tab at the project root with the
    *  install command typed and not run (ruling V78 c). Absent, the command is only shown. */
   onInstall?: () => void;
+  /** Whether a fix pressed here is running: its button says so and cannot be pressed again. */
+  fixing?: boolean;
+  /** Applies a doctor fix by its id — the `local-ignore` the refusal offers (NO-8) — and reads
+   *  the picker again. Absent, the refusal shows the fix's words alone. */
+  onFix?: (id: string) => void;
+  /** Opens Settings at a group (SE-22's address): where a refused profile is mended (NO-8). */
+  onOpenSettings?: (group: string) => void;
   onCancel: () => void;
 }) {
   const [profile, setProfile] = useState<string | undefined>(() => {
@@ -209,6 +222,20 @@ export function StartChat({
               git would carry <code>charter.local.toml</code>, so every profile it declares is
               refused until that is fixed: <code>{options.ignore_fix}</code>
             </p>
+          )}
+          {/* The doctor's own fix for this state (NO-8, #1233), the one its `harness profiles`
+              row offers, where one ignore line is the whole cure. */}
+          {options.ignore_fix_id && onFix && (
+            <SettingActions>
+              <button
+                type="button"
+                tabIndex={0}
+                disabled={fixing}
+                onClick={() => options.ignore_fix_id && onFix(options.ignore_fix_id)}
+              >
+                {fixing ? "Adding the ignore line…" : "Add the ignore line"}
+              </button>
+            </SettingActions>
           )}
           {options.declares_none && !options.ignore_fix && (
             <p className="honest">
@@ -383,6 +410,12 @@ export function StartChat({
                   </li>
                 ))}
               </ul>
+              {/* Where a profile is declared and mended (NO-8, #1233). */}
+              {onOpenSettings && (
+                <button type="button" tabIndex={0} onClick={() => onOpenSettings(HARNESS)}>
+                  Open Settings › Harness &amp; profiles
+                </button>
+              )}
             </details>
           )}
 

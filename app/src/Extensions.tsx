@@ -151,7 +151,13 @@ export function Extensions({ onClose }: { onClose: () => void }) {
           {listed?.unreadable && (
             <p className="came-back">
               charter could not read this machine&rsquo;s extension record, so nothing an extension
-              declares is in force: {listed.unreadable}
+              declares is in force: {listed.unreadable}{" "}
+              {/* The sentence names the file; once it is mended, one press reads it again
+                  rather than closing and reopening the dialog (NO-8, #1233). Approving writes
+                  nothing over a record charter could not read, so reading is the only fix. */}
+              <button type="button" tabIndex={0} onClick={() => void reread()}>
+                Read again
+              </button>
             </p>
           )}
 

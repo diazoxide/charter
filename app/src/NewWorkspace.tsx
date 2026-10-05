@@ -136,7 +136,14 @@ export function NewWorkspace({
                   aria-labelledby={ids.labelledBy}
                   aria-describedby={ids.describedBy}
                 >
-                  <RepoPicker plane={planeId} picked={repos} onPicked={setRepos} />
+                  {/* A login typed in a shell tab closes the dialog, so the tab is not
+                      under it (NO-8). */}
+                  <RepoPicker
+                    plane={planeId}
+                    picked={repos}
+                    onPicked={setRepos}
+                    onLeave={onCancel}
+                  />
                 </div>
               )}
             />

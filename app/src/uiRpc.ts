@@ -2495,6 +2495,17 @@ export type ForgeRow = {
 	signed_in: boolean,
 };
 
+/**  A forge that did not answer the picker: its sentence, and the login that would cure it. */
+export type ForgeTrouble = {
+	said: string,
+	/**
+	 *  `<cli> auth login --hostname <host>` where the forge's CLI said it is not logged in
+	 *  there, which the picker offers to type in a shell tab (NO-8). Null where logging in
+	 *  would not help.
+	 */
+	login: string | null,
+};
+
 /**
  *  A forge on the wire: the window's spelling of `charter_core::forge::Kind`, which the core
  *  keeps free of serde and specta.
@@ -3875,7 +3886,7 @@ export type ReachableRepo = {
  */
 export type ReachableRepos = {
 	repos: ReachableRepo[],
-	trouble: string[],
+	trouble: ForgeTrouble[],
 };
 
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
@@ -4484,6 +4495,12 @@ export type StartOptions = {
 	 *  until it is fixed, and this is the one fix for that state.
 	 */
 	ignore_fix: string | null,
+	/**
+	 *  The doctor's fix id for that state (`local-ignore`), where one ignore line cures it, so
+	 *  the picker offers the fix the doctor row does (NO-8). Null for a file git already
+	 *  tracks: that needs the operator's `git rm --cached`, which charter never runs.
+	 */
+	ignore_fix_id: string | null,
 	/**
 	 *  Whether this plane declares no profiles of its own. The built-ins still start, and
 	 *  the picker says so rather than looking empty or broken.

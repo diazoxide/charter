@@ -418,7 +418,17 @@ pub struct ReachableRepo {
 #[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
 pub struct ReachableRepos {
     pub repos: Vec<ReachableRepo>,
-    pub trouble: Vec<String>,
+    pub trouble: Vec<ForgeTrouble>,
+}
+
+/// A forge that did not answer the picker: its sentence, and the login that would cure it.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct ForgeTrouble {
+    pub said: String,
+    /// `<cli> auth login --hostname <host>` where the forge's CLI said it is not logged in
+    /// there, which the picker offers to type in a shell tab (NO-8). Null where logging in
+    /// would not help.
+    pub login: Option<String>,
 }
 
 /// The repos the operator's own forge login reaches, asked now and held nowhere (ADR 0055).
@@ -456,7 +466,14 @@ fn reachable_in(root: &Path) -> Result<ReachableRepos, String> {
                 description: text(r, "description"),
             })
             .collect(),
-        trouble: found.trouble,
+        trouble: found
+            .trouble
+            .into_iter()
+            .map(|t| ForgeTrouble {
+                said: t.said,
+                login: t.login,
+            })
+            .collect(),
     })
 }
 

@@ -15,6 +15,7 @@ import { emit } from "@tauri-apps/api/event";
 import App from "./App";
 import type { ByHand, Moved, OpenChat } from "./bindings";
 import { onAMac } from "./tabKeys";
+import { askLogin } from "./RepoPicker";
 
 /**
  * A plain shell tab, and what the window does when a harness is started by hand inside one
@@ -62,6 +63,7 @@ const START_OPTIONS = {
   personas: [],
   persona: null,
   ignore_fix: null,
+  ignore_fix_id: null,
   declares_none: true,
 };
 
@@ -86,13 +88,18 @@ function opened(session: number, name: string, cwd: string | null, on: Partial<O
 }
 
 /** The core, filing each chat by the directory it works in, as the real one does. */
-function core(put: ReturnType<typeof opened>[] = [], heard: Moved[] = []) {
+function core(
+  put: ReturnType<typeof opened>[] = [],
+  heard: Moved[] = [],
+  answers: Record<string, () => unknown> = {},
+) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const chats = [...put];
   let next = Math.max(0, ...chats.map((one) => one.session));
   mockIPC(
     (cmd, args) => {
       asked.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
+      if (cmd in answers) return answers[cmd]();
       if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
       if (cmd === "opened_chats") return put;
       if (cmd === "open_session") {
@@ -143,6 +150,7 @@ function core(put: ReturnType<typeof opened>[] = [], heard: Moved[] = []) {
     { shouldMockEvents: true },
   );
   return {
+    asked,
     opens: () => asked.filter(({ cmd }) => cmd === "open_session").map(({ args }) => args),
     starts: () => asked.filter(({ cmd }) => cmd === "start_chat").map(({ args }) => args),
   };
@@ -389,5 +397,122 @@ describe("a harness started by hand in a shell tab", () => {
     await settle();
 
     expect(screen.queryByRole("status", { name: "codex started by hand" })).toBeNull();
+  });
+});
+
+describe("the ways out of the start dialogs' refusals (NO-8, #1233)", () => {
+  it("types a forge login the repo picker asks for in a shell tab at the root, not run", async () => {
+    const { asked, opens } = core();
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+    await settle();
+
+    act(() => askLogin(PLANE, "gh auth login --hostname github.com"));
+
+    await waitFor(() =>
+      expect(opens()).toEqual([expect.objectContaining({ program: null, cwd: PLANE })]),
+    );
+    await waitFor(() =>
+      expect(asked.filter(({ cmd }) => cmd === "send_input").map(({ args }) => args.text)).toEqual([
+        "gh auth login --hostname github.com",
+      ]),
+    );
+  });
+
+  it("ignores a login asked for another project", async () => {
+    const { opens } = core();
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+    await settle();
+
+    act(() => askLogin("/elsewhere", "gh auth login --hostname github.com"));
+    await settle();
+
+    expect(opens()).toEqual([]);
+  });
+
+  it("applies the doctor's fix from the picker, and draws the picker read again", async () => {
+    let fixed = false;
+    const { asked } = core([], [], {
+      start_options: () =>
+        fixed
+          ? START_OPTIONS
+          : {
+              ...START_OPTIONS,
+              declares_none: false,
+              ignore_fix: "add /charter.local.toml to .gitignore",
+              ignore_fix_id: "local-ignore",
+            },
+      plane_doctor_fix: () => {
+        fixed = true;
+        return { fix: "local-ignore", refused: null, said: ["added"], complete: true };
+      },
+    });
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+
+    await fromThePalette("New tab");
+    await userEvent.click(await screen.findByRole("button", { name: "Add the ignore line" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /ignore line/ })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("dialog", { name: "Start a chat" })).toBeInTheDocument();
+    expect(asked.filter(({ cmd }) => cmd === "plane_doctor_fix").map(({ args }) => args)).toEqual([
+      { plane: PLANE, fix: "local-ignore" },
+    ]);
+  });
+
+  it("says in the picker why the fix was refused", async () => {
+    core([], [], {
+      start_options: () => ({
+        ...START_OPTIONS,
+        declares_none: false,
+        ignore_fix: "x",
+        ignore_fix_id: "local-ignore",
+      }),
+      plane_doctor_fix: () => ({
+        fix: "local-ignore",
+        refused: ".gitignore is a link git does not read",
+        said: [],
+        complete: false,
+      }),
+    });
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+
+    await fromThePalette("New tab");
+    await userEvent.click(await screen.findByRole("button", { name: "Add the ignore line" }));
+
+    expect(await screen.findByText(".gitignore is a link git does not read")).toBeInTheDocument();
+  });
+
+  it("closes the picker and opens Settings › Harness from its refused profiles", async () => {
+    const file = (which: "shared" | "local") => ({
+      which,
+      file: which === "shared" ? "charter.toml" : "charter.local.toml",
+      exists: which === "shared",
+      text: "",
+      refusals: [],
+      parsed: true,
+      fields: [],
+    });
+    core([], [], {
+      start_options: () => ({ ...START_OPTIONS, refused: [["bad", "has kind nope"]] }),
+      project_settings: () => ({ shared: file("shared"), local: file("local") }),
+    });
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+
+    await fromThePalette("New tab");
+    await userEvent.click(await screen.findByText("1 refused"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open Settings › Harness & profiles" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Start a chat" })).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByRole("region", { name: "Harness & profiles" })).toBeInTheDocument();
   });
 });

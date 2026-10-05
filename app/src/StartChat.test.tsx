@@ -24,6 +24,7 @@ const ONE: StartOptions = {
   personas: ["steward", "release"],
   persona: "steward",
   ignore_fix: null,
+  ignore_fix_id: null,
   declares_none: true,
 };
 
@@ -322,6 +323,62 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByText("1 refused"));
 
     expect(screen.getByText(/has kind opencodex/)).toBeInTheDocument();
+  });
+
+  describe("its refusals' ways out (NO-8, #1233)", () => {
+    function withWays(over: Partial<StartOptions>, fixing = false) {
+      const onFix = vi.fn();
+      const onOpenSettings = vi.fn();
+      render(
+        <StartChat
+          options={options(over)}
+          fixing={fixing}
+          onStart={vi.fn()}
+          onApprove={vi.fn()}
+          onFix={onFix}
+          onOpenSettings={onOpenSettings}
+          onCancel={vi.fn()}
+        />,
+      );
+      return { onFix, onOpenSettings, user: userEvent.setup() };
+    }
+
+    it("links the refused profiles to Settings › Harness, where profiles are declared", async () => {
+      const { onOpenSettings, user } = withWays({
+        refused: [["bad-kind", "profile 'bad-kind' has kind opencodex, which is not a harness"]],
+      });
+
+      await user.click(screen.getByText("1 refused"));
+      await user.click(screen.getByRole("button", { name: "Open Settings › Harness & profiles" }));
+
+      expect(onOpenSettings).toHaveBeenCalledWith("project.harness");
+    });
+
+    it("fixes the file git would carry with the doctor's own fix, where one line cures it", async () => {
+      const { onFix, user } = withWays({
+        declares_none: false,
+        ignore_fix: "add /charter.local.toml to .gitignore",
+        ignore_fix_id: "local-ignore",
+      });
+
+      await user.click(screen.getByRole("button", { name: "Add the ignore line" }));
+
+      expect(onFix).toHaveBeenCalledWith("local-ignore");
+    });
+
+    it("says the fix is running and cannot be pressed twice", () => {
+      withWays({ declares_none: false, ignore_fix: "x", ignore_fix_id: "local-ignore" }, true);
+
+      expect(screen.getByRole("button", { name: "Adding the ignore line…" })).toBeDisabled();
+    });
+
+    it("offers no button where one ignore line would not cure it", () => {
+      // A file git already tracks needs the operator's own `git rm --cached` first (FX-2).
+      withWays({ declares_none: false, ignore_fix: "git rm --cached", ignore_fix_id: null });
+
+      expect(screen.queryByRole("button", { name: /ignore line/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("git rm --cached");
+    });
   });
 
   it("puts Cancel under the key a stray Return finds, never the start", () => {

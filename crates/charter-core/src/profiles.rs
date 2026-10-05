@@ -295,6 +295,14 @@ impl IgnoreCheck {
     pub fn passes(&self) -> bool {
         self.reason.is_empty()
     }
+
+    /// Whether the doctor's `local-ignore` fix cures this state: git would carry the file, one
+    /// ignore line is the whole cure, and the project's `.gitignore` is not a link git would
+    /// not read. Asked by the doctor's row and by the chat picker's refusal (NO-8), so both
+    /// offer the fix in the same states.
+    pub fn one_line_cures(&self, root: &Path) -> bool {
+        !self.passes() && self.ignorable && !crate::scaffold::gitignore_is_a_link(root)
+    }
 }
 
 /// One built-in profile per registered kind, named after its kind.

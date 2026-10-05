@@ -957,6 +957,10 @@ struct StartOptions {
     /// Set when git would carry `charter.local.toml`: every declared profile is refused
     /// until it is fixed, and this is the one fix for that state.
     ignore_fix: Option<String>,
+    /// The doctor's fix id for that state (`local-ignore`), where one ignore line cures it, so
+    /// the picker offers the fix the doctor row does (NO-8). Null for a file git already
+    /// tracks: that needs the operator's `git rm --cached`, which charter never runs.
+    ignore_fix_id: Option<String>,
     /// Whether this plane declares no profiles of its own. The built-ins still start, and
     /// the picker says so rather than looking empty or broken.
     declares_none: bool,
@@ -1033,6 +1037,11 @@ fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
         // a persona they never chose.
         persona: charter_core::start::persona_for_a_new_chat(root),
         ignore_fix: (!check.passes()).then(|| check.fix.clone()),
+        ignore_fix_id: check.one_line_cures(root).then(|| {
+            charter_core::doctor::fix::FixId::LocalIgnore
+                .id()
+                .to_owned()
+        }),
         declares_none: set
             .profiles()
             .iter()
@@ -2599,6 +2608,52 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A git repo at a fresh temp dir holding the local settings file and nothing ignoring it.
+    fn plane_carrying_local_settings() -> tempfile::TempDir {
+        let plane = tempfile::tempdir().expect("a plane");
+        let git = charter_core::forklock::status(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .arg(plane.path()),
+        )
+        .expect("git runs");
+        assert!(git.success());
+        std::fs::write(charter_core::names::local_settings(plane.path()), "").expect("written");
+        plane
+    }
+
+    #[test]
+    fn the_picker_names_the_doctors_fix_where_one_ignore_line_cures_the_local_file() {
+        // NO-8 (#1233): the picker's refusal offers the `local-ignore` fix the doctor row does.
+        let plane = plane_carrying_local_settings();
+
+        let options = start_options_in(plane.path()).expect("read");
+
+        assert!(options.ignore_fix.is_some(), "git would carry the file");
+        assert_eq!(options.ignore_fix_id.as_deref(), Some("local-ignore"));
+    }
+
+    #[test]
+    fn the_picker_names_no_fix_where_an_ignore_line_would_not_cure_it() {
+        // Tracked already: an ignore line does not untrack it, and charter never runs `git rm`.
+        let plane = plane_carrying_local_settings();
+        let local = charter_core::names::local_settings(plane.path());
+        let added = charter_core::forklock::status(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(plane.path())
+                .arg("add")
+                .arg(&local),
+        )
+        .expect("git runs");
+        assert!(added.success());
+
+        let options = start_options_in(plane.path()).expect("read");
+
+        assert!(options.ignore_fix.is_some(), "git would carry the file");
+        assert_eq!(options.ignore_fix_id, None);
+    }
 
     /// A store that remembers the plane at `root` with `pins`, in that order.
     fn store_pinning(root: &std::path::Path, pins: &[&str]) -> charter_core::machine::Store {
