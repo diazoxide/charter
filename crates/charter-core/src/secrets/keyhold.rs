@@ -334,15 +334,32 @@ fn not_ours(service: &str) -> VaultError {
     ))
 }
 
-/// Write the item held to charter's app, from whichever charter this is. See the module header.
-pub fn set(service: &str, account: &str, value: &str, why: Why) -> Result<Held, VaultError> {
-    // Where the item cannot be held: write the value in place, or, for a move, leave it.
-    let in_place = || match why {
+/// What a fenced build says instead of reaching the operating system's store.
+fn fenced(service: &str) -> VaultError {
+    VaultError::new(format!(
+        "a test build never writes '{service}' in {}; its store is the stub",
+        super::keyring::STORE_NAME
+    ))
+}
+
+/// Where the item cannot be held: write the value in place, leave it for a move, and for a copy
+/// write nothing, never into an item this process did not just make.
+fn in_place(service: &str, account: &str, value: &str, why: Why) -> Result<Held, VaultError> {
+    match why {
         Why::Write => super::keyring::set_here(service, account, value).map(|()| Held::NotYet),
         Why::Move => Ok(Held::NotYet),
-        // Never into an item this process did not just make.
         Why::Copy => Err(not_ours(service)),
-    };
+    }
+}
+
+/// Write the item held to charter's app, from whichever charter this is. See the module header.
+/// A fenced build (every test build) refuses before anything is started or written: its store
+/// is the stub, and no test may start a real writer (`crate::fence`).
+pub fn set(service: &str, account: &str, value: &str, why: Why) -> Result<Held, VaultError> {
+    if crate::fence::FENCED {
+        return Err(fenced(service));
+    }
+    let in_place = || in_place(service, account, value, why);
     if THE_APP.load(Ordering::SeqCst) {
         return match make_here(service, account, value) {
             Ok(()) => Ok(Held::ToTheApp),
@@ -376,8 +393,10 @@ pub fn set(service: &str, account: &str, value: &str, why: Why) -> Result<Held, 
     }
     match through(&app, &item) {
         Ok(()) => Ok(Held::ToTheApp),
+        // A copy writes nothing more: the value is still where it was copied from.
+        Err(_) if why == Why::Copy => Err(not_ours(service)),
         // The command's own item is gone by now, so this makes a new one, the command's: never
-        // another program's. A copy is refused for it all the same (not held to the app).
+        // another program's.
         Err(_) => super::keyring::set_here(service, account, value).map(|()| Held::NotYet),
     }
 }
@@ -679,15 +698,32 @@ mod tests {
 
     #[test]
     fn a_copy_never_falls_back_to_a_write_in_place() {
-        // Outside the app and with no app beside this test binary, a write has no writer to
-        // hold it: a value is written in place, a move is left, and a copy refuses.
-        assert!(!is_the_app());
-        let refused = set("purlis/ops/3f9a2c1b", "K", "v", Why::Copy).unwrap_err();
+        // Where an item cannot be held, a move is left and a copy writes nothing. (A write in
+        // place is not asked here: it would reach the operating system's store.)
+        let refused = in_place("purlis/ops/3f9a2c1b", "K", "v", Why::Copy).unwrap_err();
         assert!(
             refused.message.contains("wrote nothing"),
             "{}",
             refused.message
         );
+        assert_eq!(
+            in_place("purlis/ops/3f9a2c1b", "K", "v", Why::Move),
+            Ok(Held::NotYet)
+        );
+    }
+
+    #[test]
+    fn a_test_build_never_starts_a_writer_or_reaches_the_real_store() {
+        // charter-core's own tests run fenced.
+        const _: () = assert!(crate::fence::FENCED);
+        for why in [Why::Write, Why::Move, Why::Copy] {
+            let refused = set("purlis/ops/3f9a2c1b", "K", "v", why).unwrap_err();
+            assert!(
+                refused.message.contains("test build"),
+                "{}",
+                refused.message
+            );
+        }
     }
 
     #[test]
