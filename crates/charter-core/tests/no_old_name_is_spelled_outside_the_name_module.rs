@@ -99,6 +99,7 @@ const STILL_SPELLED: &[(&str, usize, Why)] = &[
     ("crates/charter-core/src/planesave.rs", 1, Why::Prose),
     ("crates/charter-core/src/profiles.rs", 6, Why::Prose),
     ("crates/charter-core/src/programs.rs", 1, Why::Prose),
+    ("crates/charter-core/src/renamelocal/busy.rs", 1, Why::Prose),
     ("crates/charter-core/src/repocmd/clone.rs", 1, Why::Prose),
     ("crates/charter-core/src/repocmd/status.rs", 1, Why::Prose),
     ("crates/charter-core/src/sandbox/local.rs", 2, Why::Prose),
