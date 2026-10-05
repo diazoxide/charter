@@ -13,9 +13,13 @@ import type { LiveSetting, SettingsGroup } from "./groups";
  * listed is what the store holds. Each row's last refusal is said in that row, in the core's
  * words.
  *
- * **Undo only where it puts back exactly what was there** (D-ST2-3): an unpin, which is pinned
- * again in its place. Forget and Revoke take an approval away, and an approval is only ever
+ * **Undo only where it puts back exactly what was there** (D-ST2-3): an unpin, or forgetting a
+ * dormant pin (one whose workspace is gone, V91c as amended), which is pinned again in its
+ * place. Forgetting a project and Revoke take an approval away, and an approval is only ever
  * made by the operator answering the ask at the next open — never by an Undo here.
+ *
+ * **One action at a time** (D-ST2-5): each waits for the last one's read, so a place an Undo
+ * puts a pin back at is the place it had then, not the place a stale render showed.
  */
 export function thisMachineGroup(): SettingsGroup {
   return {
@@ -89,12 +93,21 @@ function refusal(done: Done | undefined): string | undefined {
   return done?.status === "error" ? done.error : undefined;
 }
 
+/** Every action, one at a time: each runs against the store as the last one's read left it. */
+let queue: Promise<void> = Promise.resolve();
+
 /**
- * Does `act` for the row `setting`, then reads the store again. `undo`, when given, becomes the
- * one Undo on offer; any other action ends the last one's.
+ * Does `act` for the row `setting`, then reads the store again. `undo`, when given, is asked at
+ * the action's turn — against the latest read, never the render that offered the button — for
+ * what puts it back, which becomes the one Undo on offer; any other action ends the last one's.
  */
-function acting(setting: string, act: () => Promise<Done>, undo?: () => Promise<Done>) {
-  void (async () => {
+function acting(
+  setting: string,
+  act: () => Promise<Done>,
+  undo?: (machine: ThisMachine | undefined) => () => Promise<Done>,
+) {
+  const work = async () => {
+    const back = undo?.(held.read.state === "read" ? held.read.machine : undefined);
     const why = await act()
       .then(refusal)
       .catch((err: unknown) => String(err));
@@ -106,11 +119,11 @@ function acting(setting: string, act: () => Promise<Done>, undo?: () => Promise<
         ...was,
         refused,
         undo:
-          why === undefined && undo
+          why === undefined && back
             ? {
                 setting,
                 run: () =>
-                  undo()
+                  back()
                     .then(refusal)
                     .catch((err: unknown) => String(err)),
               }
@@ -118,7 +131,8 @@ function acting(setting: string, act: () => Promise<Done>, undo?: () => Promise<
       };
     });
     await reread();
-  })();
+  };
+  queue = queue.then(work, work);
 }
 
 function useMachine(setting: string) {
@@ -246,24 +260,31 @@ const recents = list(
   }),
 );
 
-/** Unpins `workspace` in `project`, or the project itself, with the Undo that pins it back in
- *  its place. */
+/**
+ * Unpins `workspace` in `project`, or the project itself — for a pin whose workspace is gone,
+ * forgets it — with the Undo that pins it back in its place. The place is the pin's in the
+ * latest read at the action's turn: an earlier unpin still settling has moved it (F1).
+ */
 function unpin(project: MachineProject, workspace?: string) {
-  const at =
-    workspace === undefined
-      ? null
-      : project.workspace_pins.findIndex((pin) => pin.name === workspace);
   acting(
     "you.machine.pins",
     () => commands.pinOnThisMachine(project.path, workspace ?? null, false, null),
-    () => commands.pinOnThisMachine(project.path, workspace ?? null, true, at),
+    (machine) => {
+      const now = machine?.projects.find((one) => one.path === project.path) ?? project;
+      const at =
+        workspace === undefined
+          ? -1
+          : now.workspace_pins.findIndex((pin) => pin.name === workspace);
+      return () =>
+        commands.pinOnThisMachine(project.path, workspace ?? null, true, at < 0 ? null : at);
+    },
   );
 }
 
 const pins = list(
   "you.machine.pins",
   "Pins",
-  "The projects and workspaces you pinned, first in the opener and on the workspace strip. A pin to a workspace that is gone is listed here, so it can be unpinned.",
+  "The projects and workspaces you pinned, first in the opener and on the workspace strip. A pin to a workspace that is gone is kept dormant: off the strip, and back in its place if the workspace returns. Forget removes it for good.",
   (machine) => ({
     empty: "Nothing is pinned.",
     entries: machine.projects.flatMap((one) => [
@@ -280,16 +301,19 @@ const pins = list(
             />,
           ]
         : []),
-      ...one.workspace_pins.map((pin) => (
-        <Entry
-          key={`${one.path}\u0000${pin.name}`}
-          name={`${pin.name} in ${one.name}`}
-          note={pin.gone ? "gone" : undefined}
-          action="Unpin"
-          label={`Unpin ${pin.name} in ${one.name}`}
-          onAction={() => unpin(one, pin.name)}
-        />
-      )),
+      ...one.workspace_pins.map((pin) => {
+        const action = pin.gone ? "Forget" : "Unpin";
+        return (
+          <Entry
+            key={`${one.path}\u0000${pin.name}`}
+            name={`${pin.name} in ${one.name}`}
+            note={pin.gone ? "gone, kept dormant" : undefined}
+            action={action}
+            label={`${action} ${pin.name} in ${one.name}`}
+            onAction={() => unpin(one, pin.name)}
+          />
+        );
+      }),
     ]),
   }),
 );
