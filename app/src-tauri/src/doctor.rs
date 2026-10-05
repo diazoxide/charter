@@ -198,7 +198,10 @@ fn fixed(
 }
 
 /// A fix's outcome, as the dialog draws it.
-fn answered(id: charter_core::doctor::fix::FixId, outcome: charter_core::doctor::fix::Fixed) -> DoctorFixed {
+fn answered(
+    id: charter_core::doctor::fix::FixId,
+    outcome: charter_core::doctor::fix::Fixed,
+) -> DoctorFixed {
     use charter_core::doctor::fix::Fixed;
     match outcome {
         Fixed::Ran { said, complete } => DoctorFixed {

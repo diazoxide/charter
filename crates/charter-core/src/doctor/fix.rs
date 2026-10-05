@@ -284,7 +284,15 @@ fn memory_optimize(root: &Path) -> Fixed {
     let mut read = true;
     for (label, dir) in &bases {
         match crate::curate::link_unindexed(root, dir) {
-            Ok(actions) => said.extend(actions.iter().map(|a| format!("✓ {label}: {a}"))),
+            // A line that says the index was not repaired is a failure, and is marked as one.
+            Ok(actions) => said.extend(actions.iter().map(|a| {
+                let mark = if a.starts_with("index NOT repaired") {
+                    "✗"
+                } else {
+                    "✓"
+                };
+                format!("{mark} {label}: {a}")
+            })),
             Err(unread) => {
                 read = false;
                 for (path, code) in &unread {

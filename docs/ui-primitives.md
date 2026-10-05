@@ -164,9 +164,9 @@ corner, over the terminal and taking no row; the default is the band under the s
 Under the strip, Notices are stacked by `NoticeBand` (V91i, NO-2 #1229): at most two stand, the
 most important first — trouble before news, then the family order `IMPORTANCE` exports — and
 the rest are behind "+N more", which opens them as a list of the same Notices. Escape on the
-list or on "+N more" closes it and puts the focus back on "+N more"; so does a press outside it.
-A Notice already in its place is never moved, so the focus stays on its buttons as others come
-and go. A Dismiss of a
+list or on "+N more" closes it and puts the focus back on "+N more"; a press outside it also
+closes it. A Notice already in its place is never moved, so the focus stays on its buttons as
+others come and go. A Dismiss of a
 cause the core answers for lasts until the cause changes, across relaunches
 (`app/src/dismissals.ts`).
 

@@ -157,6 +157,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
   },
+  "RemoveFromWorkspace.tsx": {
+    count: 1,
+    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
   "RemovePersona.tsx": {
     count: 1,
     why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
@@ -188,6 +192,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
   },
   "TabRename.tsx": { count: 1, why: "a rename's refusal, beside the box being typed in" },
+  "TodoTab.tsx": {
+    count: 1,
+    why: "a view tab's own read refusal, inside the tab (cheap links: NO-8, #1233)",
+  },
   "Updates.tsx": {
     count: 4,
     why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
