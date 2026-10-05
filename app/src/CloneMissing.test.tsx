@@ -46,12 +46,16 @@ function core(
     missing?: string[];
     fails?: Record<string, { said: string; times: number }>;
     held?: Promise<void>;
+    /** Holds only that repo's clone until the promise settles. */
+    holds?: Record<string, Promise<void>>;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const cloned = ["svc"];
   const missing = [...(over.missing ?? ["charter", "web"])];
   const fails = { ...over.fails };
+  let inFlight = 0;
+  let peak = 0;
   mockIPC(async (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: a });
@@ -85,8 +89,15 @@ function core(
     if (cmd === "worktree_list") return [];
     if (cmd === "take_repos") return null;
     if (cmd === "clone_repo") {
-      if (over.held) await over.held;
       const repo = String(a.repo);
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        if (over.held) await over.held;
+        await over.holds?.[repo];
+      } finally {
+        inFlight -= 1;
+      }
       const failing = fails[repo];
       if (failing && failing.times > 0) {
         failing.times -= 1;
@@ -101,7 +112,12 @@ function core(
     if (cmd === "running_sessions") return [];
     return null;
   });
-  return { asked, clones: () => asked.filter((one) => one.cmd === "clone_repo") };
+  return {
+    asked,
+    clones: () => asked.filter((one) => one.cmd === "clone_repo"),
+    /** The most `clone_repo` calls the core was running at once. */
+    peak: () => peak,
+  };
 }
 
 beforeEach(() => {
@@ -200,6 +216,52 @@ describe("every repo that is not cloned here", () => {
     expect(await screen.findByTestId("clone-charter")).toBeInTheDocument();
     expect(clones().map((one) => one.args.repo)).toEqual(["charter", "web"]);
     await waitFor(() => expect(screen.queryByTestId("absent")).toBeNull());
+  });
+
+  it("moves each repo to the clones as it lands, while the rest are still cloning", async () => {
+    let release = () => {};
+    const web = new Promise<void>((done) => (release = done));
+    const { clones } = core({ holds: { web } });
+    render(<App />);
+
+    await userEvent.click(within(await absent()).getByRole("button", { name: "Clone all" }));
+
+    expect(await screen.findByTestId("clone-charter")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("absent-charter")).toBeNull());
+    await userEvent.keyboard("{F2}");
+    await screen.findByRole("dialog", { name: "Command palette" });
+    await userEvent.keyboard("Clone");
+    const titles = screen
+      .getAllByRole("option")
+      .map((row) => row.querySelector(".palette-title")?.textContent);
+    expect(titles).not.toContain("Clone charter");
+    await userEvent.keyboard("{Escape}");
+
+    release();
+    expect(await screen.findByTestId("clone-web")).toBeInTheDocument();
+    expect(clones().map((one) => one.args.repo)).toEqual(["charter", "web"]);
+  });
+
+  it("runs two rows' clones one after the other, never at once", async () => {
+    let release = () => {};
+    const charter = new Promise<void>((done) => (release = done));
+    const { clones, peak } = core({ holds: { charter } });
+    render(<App />);
+
+    await userEvent.click(within(await absent()).getByRole("button", { name: "Clone charter" }));
+    await within(absentRow("charter")).findByText("Cloning charter…");
+    await userEvent.click(within(absentRow("web")).getByRole("button", { name: "Clone web" }));
+
+    expect(
+      await within(absentRow("web")).findByText("web is waiting to be cloned."),
+    ).toBeInTheDocument();
+    expect(clones().map((one) => one.args.repo)).toEqual(["charter"]);
+    release();
+
+    expect(await screen.findByTestId("clone-web")).toBeInTheDocument();
+    expect(await screen.findByTestId("clone-charter")).toBeInTheDocument();
+    expect(clones().map((one) => one.args.repo)).toEqual(["charter", "web"]);
+    expect(peak()).toBe(1);
   });
 
   it("offers no Clone all when only one repo is missing", async () => {

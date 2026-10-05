@@ -87,7 +87,9 @@ function AbsentRow({
   offers: Catalogued;
   onPress: (offer: Offer) => void;
 }) {
-  const busy = state?.state === "waiting" || state?.state === "cloning";
+  // Cloned is busy too, until the panels read again drop the repo from this list: its Clone
+  // must not be pressable in between.
+  const busy = state !== undefined && state.state !== "failed";
   const press = () => {
     if (offer !== undefined) onPress(offer);
   };
@@ -103,7 +105,9 @@ function AbsentRow({
               <span>
                 {state.state === "cloning"
                   ? `Cloning ${repo}…`
-                  : `${repo} is waiting to be cloned.`}
+                  : state.state === "cloned"
+                    ? `Cloned ${repo}.`
+                    : `${repo} is waiting to be cloned.`}
               </span>
             </span>
           ) : (
