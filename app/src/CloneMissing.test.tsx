@@ -362,19 +362,33 @@ describe("removing a repo that is not cloned here from the workspace", () => {
     ]);
   });
 
-  it("removes nothing when it is cancelled", async () => {
+  it("removes nothing when it is cancelled, and gives the keyboard back to the Remove… that asked", async () => {
     const { drops } = core();
     render(<App />);
 
-    await userEvent.click(
-      within(await absent()).getByRole("button", { name: "Remove web from workspace…" }),
-    );
+    const remove = within(await absent()).getByRole("button", {
+      name: "Remove web from workspace…",
+    });
+    // From the keyboard, which is who needs it back: a pointer's click does not move focus in
+    // WebKit, and here the pane's separator takes it.
+    remove.focus();
+    await userEvent.keyboard("{Enter}");
     const asking = await screen.findByRole("alertdialog", { name: "Remove web from alpha?" });
     await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(drops()).toEqual([]);
     expect(absentRow("web")).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toBe(remove));
+  });
+
+  it("draws Remove… as the destructive action it is", async () => {
+    core();
+    render(<App />);
+
+    expect(
+      within(await absent()).getByRole("button", { name: "Remove web from workspace…" }),
+    ).toHaveClass("ends-it");
   });
 
   it("says the core's refusal in the question, and keeps the repo", async () => {

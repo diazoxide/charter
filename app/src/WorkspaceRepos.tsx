@@ -20,6 +20,17 @@ import { SettingActions, type RowIds } from "./settings/components";
  *
  * What is cloned is read from disk (`workspace_repos`), never from what this window asked for.
  */
+/**
+ * What Settings › Repos' picker changed in a workspace's membership, heard by the "Not cloned
+ * here" row beside it: a clone unticked from a manifest a hand wrote leaves its row there, so
+ * it is not cloned here now and must be listed at once (#1228).
+ */
+const membershipHeard = new Set<(plane: PlaneId, workspace: string) => void>();
+
+function membershipChanged(plane: PlaneId, workspace: string) {
+  for (const hear of membershipHeard) hear(plane, workspace);
+}
+
 export function useWorkspaceRepos(
   plane: PlaneId,
   workspace: string,
@@ -62,6 +73,7 @@ export function useWorkspaceRepos(
     if (adding.length > 0) await cloneRepos(plane, workspace, adding);
     setApplying(false);
     read();
+    membershipChanged(plane, workspace);
   };
 
   const failed = [...clones].filter(([, c]) => c.state === "failed");
@@ -124,8 +136,9 @@ function applyWords(adding: number, removing: number): string {
  * the explorer's "Not cloned here" row asks (`RemoveFromWorkspace`). A repo whose clone is
  * under way is not offered it.
  *
- * The list is the core's (`workspace_panels`' `absent`), read again when a removal is answered
- * and whenever this window's clones into the workspace change.
+ * The list is the core's (`workspace_panels`' `absent`), read again when a removal is answered,
+ * when the picker beside it applies, and whenever this window's clones into the workspace
+ * change.
  */
 export function useNotClonedHere(
   plane: PlaneId,
@@ -150,6 +163,15 @@ export function useNotClonedHere(
       });
   }, [plane, workspace]);
   useEffect(read, [read, clones]);
+  useEffect(() => {
+    const hear = (p: PlaneId, w: string) => {
+      if (p === plane && w === workspace) read();
+    };
+    membershipHeard.add(hear);
+    return () => {
+      membershipHeard.delete(hear);
+    };
+  }, [plane, workspace, read]);
 
   return {
     control: (ids) => (
@@ -167,7 +189,7 @@ export function useNotClonedHere(
                   <SettingActions>
                     <button
                       type="button"
-                      className="panel-view"
+                      className="ends-it"
                       tabIndex={0}
                       aria-label={dropMembershipTitle(repo)}
                       disabled={busy}
