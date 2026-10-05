@@ -1,6 +1,6 @@
 # How the window talks
 
-**Plain, active and specific.** Every label, button, empty state and error in charter says what
+**Plain, active and specific.** Every label, button, empty state and error in purlis says what
 is true, in words the reader already has, and says what to do next when there is something to
 do. This page writes down how the window already talks, so new copy matches it. Every example
 below is a string the app ships today.
@@ -23,7 +23,7 @@ empty state and error copy follow it.
   or "successfully". A save that worked says *Session saved*, not *Session saved successfully!*
 - **No exclamation marks**, and no emoji.
 - **Plain words for the result, not the mechanism.** *Its value is gone from the vault for good.*
-  If the reader needs a mechanism to decide, name it in one clause: *It needs sudo, so charter
+  If the reader needs a mechanism to decide, name it in one clause: *It needs sudo, so purlis
   types it in a shell tab and leaves running it to you.*
 
 ## Case
@@ -64,7 +64,7 @@ empty state and error copy follow it.
   *No chats in this workspace*, *Nothing needs you here.*, *Nothing remembered yet*. Use "yet"
   when the thing is expected to arrive.
 - **The body is the way out, named the way the window names it:** *Make one with the + above,
-  or New persona… in the palette.*, *Add one in the box above.*, *charter runs each chat in its own pane. Open
+  or New persona… in the palette.*, *Add one in the box above.*, *purlis runs each chat in its own pane. Open
   the first one here.*
 - **Never the storage underneath.** Leave out file layouts, store names and ADR numbers. *Todos
   are files in this workspace's store* told the reader nothing they could act on.
@@ -75,23 +75,23 @@ empty state and error copy follow it.
 
 ## Errors and refusals
 
-- **Say what happened, from charter's side, then why:** *charter could not list the branches of
+- **Say what happened, from purlis's side, then why:** *purlis could not list the branches of
   {repo}: {reason}*. The reason after the colon is the underlying error, passed through as it
   was said.
 - **Then what to do, when there is something to do:** *Could not clone {repos} into {workspace}
   — {reason} Retry from the workspace's settings.* A message with nothing to do ends after the
   reason.
 - **Never a stock phrase.** *Something went wrong*, *An error occurred*, *Unknown error*,
-  *Oops* and a leading *Error:* each say that nothing was found out. If charter really does not
-  know, say what it was doing: *charter did not answer with a reading*.
-- **A refusal says what charter will not do, and why:** *charter cannot send {key}.*, *charter
+  *Oops* and a leading *Error:* each say that nothing was found out. If purlis really does not
+  know, say what it was doing: *purlis did not answer with a reading*.
+- **A refusal says what purlis will not do, and why:** *purlis cannot send {key}.*, *purlis
   will not read …*. If it does something else instead, say that too: *{name} did not start
   ({reason}). It is still recorded, and will be tried again at the next launch.*
   (`PlaneView.tsx`, the notice for a chat that did not reopen).
 - **Don't blame the reader.** The subject is what failed, not what the reader did wrong.
 - **Say the cost of an act that cannot be undone, before it happens:** *There is no undo.*,
   *Its 2 secrets are destroyed in your system keychain and cannot be recovered.*
-- **Uncertainty is stated, not hidden:** *{name} reports no state, so charter cannot tell
+- **Uncertainty is stated, not hidden:** *{name} reports no state, so purlis cannot tell
   whether it is mid-turn.*
 
 ## Words
@@ -103,8 +103,8 @@ empty state and error copy follow it.
 - **No jargon in the window:** no ADR or ticket numbers, no internal type, module or store
   names, no protocol names where the effect can be said instead.
 - **A command is written in code font** (`<code>`) where the command line is the way to do
-  something: *You can add it later with <code>charter workspace vision</code>.* Only name
-  commands the `charter` binary has. A panel's text from Rust is plain text and cannot carry
+  something: *You can add it later with <code>purlis workspace vision</code>.* Only name
+  commands the `purlis` binary has. A panel's text from Rust is plain text and cannot carry
   code font, so a command there reads as raw backticks (#1156).
 - **Counts are digits, and plurals agree:** *1 secret*, *2 secrets* (`counted` in
   `Vaults.tsx`).
@@ -123,7 +123,7 @@ TypeScript's parser) and fails on:
   capitalised. Names (`NAMES` in `copy.ts`) and key chords such as `Ctrl+Shift+F` are taken
   out first. A name the check does not know fails on its first label, and adding it to
   `NAMES` is the fix;
-- **a capital "Charter"** in text the window shows, anywhere but the About dialog's title.
+- **a capital "purlis"** in text the window shows, anywhere but the About dialog's title.
 
 "Text the window shows" is:
 

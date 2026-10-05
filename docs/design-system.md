@@ -1,6 +1,6 @@
 # The window's design system
 
-**A theme is a data file. Every colour in charter comes from one, and so does every motion —
+**A theme is a data file. Every colour in purlis comes from one, and so does every motion —
 and nothing else may write either down.** `docs/ui-primitives.md` says what the window is built _out of_; this file says what
 it is _drawn in_; `docs/ui-copy.md` says how it _talks_.
 
@@ -23,11 +23,11 @@ The rule, in one line each:
 
 ## Why a theme is data and not CSS
 
-Before this layer, charter had two colour systems. `App.css` had five custom properties and
+Before this layer, purlis had two colour systems. `App.css` had five custom properties and
 thirty hex literals scattered through 1,330 lines; `SessionPane.tsx` built its xterm terminal
 with `theme: { background: "#181818", foreground: "#d8d8d8" }` — which is `--paper` and `--ink`
 written out a second time, in a second language, with nothing making them agree. The terminal's
-other eighteen colours were the library's defaults and were not charter's at all.
+other eighteen colours were the library's defaults and were not purlis's at all.
 
 **The two cannot be unified in CSS**, and that is the constraint that decides the design. xterm
 is handed a JavaScript object of sixteen ANSI colours plus a background, a foreground, a cursor
@@ -50,7 +50,7 @@ means. Seventy-one names in thirteen groups:
 | `control.*`                            | `base` `hover` `aimed` `count`                                                                  | things that are pressed; `aimed` is where the keyboard is, which is not where the pointer is      |
 | `text.*`                               | `primary` `secondary` `muted`                                                                   |                                                                                                   |
 | `border.*`                             | `subtle` `strong`                                                                               |                                                                                                   |
-| `accent.*`, `focus.ring`, `tab.active` | `base` `surface`                                                                                | what charter is drawing attention to                                                              |
+| `accent.*`, `focus.ring`, `tab.active` | `base` `surface`                                                                                | what purlis is drawing attention to                                                              |
 | `layer.*`                              | `project` `workspace` `chat` `selected`                                                         | which of the three strips of the axis a row is, and the tab you are on                            |
 | `needs-you.*`                          | `base` `text`                                                                                   | the one signal this app exists for                                                                |
 | `danger.*`                             | `base` `surface` `text` `wash`                                                                  | an answer that cannot be taken back                                                               |
@@ -61,7 +61,7 @@ means. Seventy-one names in thirteen groups:
 | `icon.*`                               | `folder` `motive` `grey` `red` `orange` `yellow` `green` `teal` `blue` `purple` `pink`          | a file's or a folder's icon in a tree; the only colours an icon theme names (FM-3)                 |
 
 **Two tokens may look like one token and are not.** `needs-you.base` and `danger.base` were a
-single value before this — `--stop`, `#c05c5c`, "charter's red" — and splitting them by meaning
+single value before this — `--stop`, `#c05c5c`, "purlis's red" — and splitting them by meaning
 paid for itself on the first measurement: white on `#c05c5c` is **4.26:1**, under WCAG AA, and
 the badge that failed is the count of chats waiting for the operator. `needs-you.base` is now
 `#b85050` (4.88:1) and the mark on an answer that cannot be undone is untouched. A palette token
@@ -75,8 +75,8 @@ The one exemption is `terminal.ansi.black`, held to 1.5:1 — ANSI black on a da
 in every theme there has ever been, because it is the colour a program picks when it means
 _recede_; it still has to be visible, and charter-dark measures 2.14:1.
 
-**The `layer.*` tokens are a shade that means _depth_, and nothing louder.** charter-app#171
-said which of the three strips you were looking at with an indent; charter-app#193 took the
+**The `layer.*` tokens are a shade that means _depth_, and nothing louder.** purlis#171
+said which of the three strips you were looking at with an indent; purlis#193 took the
 indent away on the operator's reading of it. Coloured rules under each strip replaced it for one
 review and were turned down on sight — _"this is not looks professional, it should be
 minimalistic, and i prefer to change little bit backgrounds of tabs and little lighter for
@@ -95,7 +95,7 @@ layer shades to be seen, and a theme should be able to lift the tabs apart witho
 other subtle rule in the window.
 
 **A workspace's colour is a hue shift of the theme in force, not a colour of its own**
-(charter-app#281, ADR 0048). A workspace names one of eight hues (`tint.PALETTE`, the same eight
+(purlis#281, ADR 0048). A workspace names one of eight hues (`tint.PALETTE`, the same eight
 the core reads) or a `#rrggbb` whose hue is taken, and the window turns only these tokens to it:
 
 - on the whole window, from the workspace in front: `accent.base`, `accent.surface`,
@@ -149,14 +149,14 @@ to change that changes one value rather than hunting for the second one.
 
 ### Where a user's theme lives
 
-`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config` — then `charter/theme.json`.
+`$PURLIS_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config` — then `charter/theme.json`.
 That is `machine.rs`'s ladder, rung for rung, and the argument is the one ADR 0040 made
 for pins: **a theme is how one operator likes their window, not a fact about the plane.** A
 theme committed to `charter.toml` would arrive with every clone and repaint somebody else's
 window in colours they never chose.
 
 **It is a file beside `machine.json`, not a fifth thing inside it.** `machine.rs` says four
-things and nothing else, and says the count is load-bearing; `charter report`'s publish consent
+things and nothing else, and says the count is load-bearing; `purlis report`'s publish consent
 is already a second file in that same directory, so a third is the shape the directory already
 has. Nothing about this needs ADR 0040 amended again.
 
@@ -180,7 +180,7 @@ new object through `pane.options.theme`, which is xterm's own way to retheme a l
 
 A theme and a **layout** — which regions are drawn, on which side, in what order and how big
 (`app/src/regions.ts`) — are both "how one operator likes their window", and both are files
-beside `machine.json`: `$CHARTER_CONFIG_HOME` (else `$XDG_CONFIG_HOME`, else `~/.config`), then
+beside `machine.json`: `$PURLIS_CONFIG_HOME` (else `$XDG_CONFIG_HOME`, else `~/.config`), then
 `charter/layout.json`. It is not a field of the machine store: ADR 0040 amended ADR
 0034 for _"how the operator arranged what this file already names"_, and a region arrangement
 names nothing that file holds.
@@ -190,7 +190,7 @@ and `order` have no control in the window yet. **It is injected, not fetched, be
 first frame.** A layout has no stand-in the way the built-in theme does: the operator's
 arrangement _is_ the thing, and one read over an asynchronous Tauri command would land after
 the window had painted the default and make it lay itself out again — the flash
-charter-app#141 left. So the Rust side reads the file before it builds the window
+purlis#141 left. So the Rust side reads the file before it builds the window
 (`purlis_core::windowprefs`, `app/src-tauri/src/windowprefs.rs`) and puts what it read into
 the page with the window's `initialization_script`; the page's first render is drawn from it
 and nothing is fetched. What the window changes — a region put away, a slot dragged — is
@@ -235,7 +235,7 @@ has it; nothing reads the key after that.
   height, for the bottom slot — above 0 and at most 100; leave it out for the default. Keep it
   inside the slot's own bounds, which a drag is held to as well: the left slot is 8–45%, the
   right 10–45%, the bottom 6–50% (`SLOTS` in `regions.ts`).
-- **`text`** is the two text sizes, in px (charter-app#283): **`window`**, the root font size
+- **`text`** is the two text sizes, in px (purlis#283): **`window`**, the root font size
   every `rem` in the stylesheet is measured by, and **`terminal`**, every chat's terminal. Each
   is a whole number from 10 to 24; leave one out for its default, 14 and 13. A size that is
   not one is its default, and the alerts drawer says so. Settings and the size keys
@@ -243,7 +243,7 @@ has it; nothing reads the key after that.
   a plane because a size is this machine's, and a plane would carry it to every clone.
 - **`editor`** is your editor (RC-20, ADR 0081 §3), where *Open in your editor* sends a file
   at a line: `vscode`, `zed`, `idea` (a JetBrains IDE) or `variable` (`$VISUAL`, else
-  `$EDITOR`, from charter's own environment, run with `+line` and the file). Leave it out and
+  `$EDITOR`, from purlis's own environment, run with `+line` and the file). Leave it out and
   none is chosen: *Open in your editor* asks for one. Any other value is none, and the alerts
   drawer says so. Settings writes it (`app/src/yourEditor.ts`). It is a word and never
   a program: the core builds the URL, or reads the variable itself, so nothing written here is
@@ -260,12 +260,12 @@ has it; nothing reads the key after that.
   that, the projects opened longest ago lose theirs first. It is here and not in a project
   because what you have already seen is yours on this machine. Delete it to see every Notice
   again.
-- **The file is read once, as the window is created.** Edit it while charter is not running,
+- **The file is read once, as the window is created.** Edit it while purlis is not running,
   or expect the next change made in the window to replace your edit.
 - **Nothing in it can stop the window.** A file that is not JSON, is not a layout, is a link or
   is over 64 KiB is refused whole and said in the alerts drawer; a field that is wrong costs only
   that field. The next change made in the window rewrites a file that did not parse — the drawer
-  says so — but never one charter could not read at all (a link, a FIFO).
+  says so — but never one purlis could not read at all (a link, a FIFO).
 
 ## Motion is data too
 
@@ -421,17 +421,17 @@ colours already make.
   can stop it, so `literals.test.ts` refuses one in the source.
 - **Preflight is not imported, and `App.css` is imported into a layer.** A reset would restyle
   1,330 lines in one commit, and `scenario tests` read the real DOM. The layer order —
-  `theme, base, charter, components, utilities` — is what the reset would have been for:
+  `theme, base, purlis, components, utilities` — is what the reset would have been for:
   unlayered CSS beats layered CSS, so `App.css` had to go _into_ a layer or no utility could
   ever override it. Turning preflight on is its own change, with its own evidence.
 
 **The Tailwind colour name is the token name**, stutter and all: `text-text-primary`,
 `border-border-subtle`. A prettier alias would be a second vocabulary.
 
-> **A dependency's stylesheet is in a layer too — `vendor`, below `charter`** (M6.8). xterm's
+> **A dependency's stylesheet is in a layer too — `vendor`, below `purlis`** (M6.8). xterm's
 > own stylesheet used to be imported from `SessionPane.tsx`, which put it **outside every
 > layer**, and unlayered CSS beats every layer at any specificity. One declaration of it did
-> collide, and it was measured (charter-app#193): `.xterm .xterm-viewport { background-color:
+> collide, and it was measured (purlis#193): `.xterm .xterm-viewport { background-color:
 #000 }`. A terminal is whole rows in a box that is not, so every pane has up to a row of slack
 > at its bottom, and that strip was pure black under a terminal drawn in `#181818` — the
 > operator's _"harness bottom seems overflowed - you can see black space"_. It was patched with
@@ -440,7 +440,7 @@ colours already make.
 > `App.css` paints the strip `var(--terminal-background)` and wins by layer order, and a live
 > theme switch repaints it with everything else. `pane-fill.e2e.ts` holds the pixel.
 >
-> **The guard is structural**, because `literals.test.ts` reads charter's own sources and a
+> **The guard is structural**, because `literals.test.ts` reads purlis's own sources and a
 > colour a dependency ships is invisible to it: the same test refuses a stylesheet imported from
 > anywhere but `styles.css`, and an `@import` there without a `layer(...)`.
 
@@ -457,7 +457,7 @@ component that has variants.
 > wearing one word. A component library is **a dependency that owns your markup** — an upstream
 > you cannot edit, an API you are stuck with, a look you fight. **A copied-in component is our
 > own code in our own repo, editable line by line.** The rule is now _no library between you and
-> the primitive, and no indirection you cannot read_, and copied-in source is neither. charter
+> the primitive, and no indirection you cannot read_, and copied-in source is neither. purlis
 > **ADR 0037**'s amendment of 2026-09-22 holds the decision and the reasoning, and is
 > authoritative over both this file and `ui-primitives.md`.
 
@@ -486,7 +486,7 @@ on the first three, because they are about what the window is drawn _in_:
 
 Still refused, unchanged by the ruling: a component library as a **dependency**, and a house
 abstraction layer over Radix — `<ConfirmModal open onConfirm>` — whether it is written here or
-copied from somewhere. Copying it would not launder it; what is refused is a charter API in
+copied from somewhere. Copying it would not launder it; what is refused is a purlis API in
 front of the primitive. **The one exception** is the settings set (ADR 0037, amended
 2026-10-04, V89f and V89j): SettingsLayout, SettingGroup, SettingRow, Field, Choice and
 SettingActions in `app/src/settings/components.tsx`, six thin pieces over the Radix primitives
@@ -516,7 +516,7 @@ The rules an icon has to meet here:
 - **Chosen by what a thing IS, not where it is.** The layout is data (`regions.ts`), so a region
   toggle drawn as "left panel" would point at the wrong edge the first time the region moved.
 - **An icon that moves says _still happening_, and nothing else loops.** `.spinning` is a running
-  pipeline and a listing charter is still waiting for; `.breathing` is a queued pipeline. A
+  pipeline and a listing purlis is still waiting for; `.breathing` is a queued pipeline. A
   settled answer is still, apart from the one `settle` it gets if it arrived while on screen.
   Reduced motion stops both loops and leaves the mark ([Motion](#motion-is-data-too)).
 - **A contrast floor applies to an icon's colour as it does to text** — 3:1 for a graphic. A
@@ -528,7 +528,7 @@ data file beside the colour theme (`app/src/theme/icons.ts`). It maps a file's w
 its extensions longest first, and a folder's name, to a symbol of path outlines, and each outline
 names one of the `icon.*` tokens — so the icons follow light and dark with the colour theme, a
 colour theme recolours every icon set, and the literal guard covers them. The hue is the point
-there: it is what tells a Rust file from a TypeScript one in a tree of hundreds. charter's own
+there: it is what tells a Rust file from a TypeScript one in a tree of hundreds. purlis's own
 set, `charter-icons`, is a 67-symbol subset of Material Icon Theme (MIT), vendored with its
 licence under `app/icons/material-icon-theme/` and shown in About; `icons.vendor.test.ts` holds
 the converted symbols to those files. A project picks another with `[theme] icons`, and an

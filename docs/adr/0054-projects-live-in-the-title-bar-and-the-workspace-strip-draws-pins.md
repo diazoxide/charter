@@ -46,7 +46,7 @@ which project; the workspace strip says which workspace. A crumb repeating both 
 width that the project tabs need. **`N sessions running` moves to the status line**, which is
 per-project and is where the operator reads the project in front.
 
-Rejected: **a dropdown switcher** in place of the crumb (`charter ▾ / ide`). It is the tidiest
+Rejected: **a dropdown switcher** in place of the crumb (`purlis ▾ / ide`). It is the tidiest
 bar, but switching projects takes two presses, and the other projects' needs-you counts are only
 visible inside a menu. That loses exactly what parallel work across projects needs.
 
@@ -91,7 +91,7 @@ Rejected:
 2. **In the show-more menu, rows that need you are sorted first**, then by activity. This is still
    a list you read, not a surface you aim at, so the ordering is ADR 0039's own rule.
 3. **The title bar's ✋ needs-you menu stays the one list of every chat, in every project**, asking
-   for you (charter-app#249). It is unchanged.
+   for you (purlis#249). It is unchanged.
 
 **Nothing is promoted onto a strip because it needs you.** A hidden workspace that jumped onto
 the strip while it waited would move tabs under the operator's hand. That is the one thing
@@ -141,7 +141,7 @@ adding that record would be a new fact about the plane, not a sort order.
 ## Amendment, 2026-09-26: what the save indicator may take, and the narrowest window
 
 The bar's right-hand end is described above as ✋, About and the updater. It also holds the save
-indicator (ADR 0051, charter-app#294), and that indicator was the one thing on the end that
+indicator (ADR 0051, purlis#294), and that indicator was the one thing on the end that
 could starve the project tabs. A blocked stage is a whole sentence: "Blocked: this plane is not
 a git repository, so there is nothing to commit to" is 437 px wide, and in a 1024 px window it
 left room for one project tab. charter#400 capped the words at `12rem` with an ellipsis. The operator
@@ -155,7 +155,7 @@ ruled on 2026-09-26 how far that goes (charter#403):
   and `title` still say "N incoming" in full, so the bar's `↓N` is the short form of the
   glossary's **Incoming** and never the only place it is said. It is the text the operator
   ruled, not a Lucide arrow: it is a count with a direction, read as one token.
-- **1024 px is the narrowest window charter supports.** At that width the bar keeps room for
+- **1024 px is the narrowest window purlis supports.** At that width the bar keeps room for
   two project tabs, whatever the indicator says (`title-bar.e2e.ts`). The window's `minWidth`
   in `tauri.conf.json` is 1024, so it cannot be made narrower than the width this is promised
   at.
@@ -179,7 +179,7 @@ that looks after the plane, its personas and its workspaces works there. So:
   `workspaces/`, so nothing on disk or in the machine store names it. Its menu is its own —
   focus it, a new chat there, a new shell there, and a new workspace.
 - **Chats and shells started from it start in the plane's own directory**, and the chat is told
-  it is in no workspace (`$CHARTER_PLANE_ROOT_SESSION`, `docs/plane-format.md`). The panels that
+  it is in no workspace (`$PURLIS_PLANE_ROOT_SESSION`, `docs/plane-format.md`). The panels that
   are a workspace's say that the plane root is not one, rather than drawing another's.
 
 A launch with nothing in front still lands on the first workspace, as before; with no workspace
@@ -194,30 +194,30 @@ to the plane's default workspace and asked the operator which workspace it was i
 operator's ruling: **any directory inside the plane but outside every workspace is the plane
 root.**
 
-- **The app marks every chat it starts there** with `$CHARTER_PLANE_ROOT_SESSION=1`: the plane's
+- **The app marks every chat it starts there** with `$PURLIS_PLANE_ROOT_SESSION=1`: the plane's
   own directory, `docs/`, `.charter/` and `workspaces/` itself. Outside the plane it still marks
   nothing.
-- **`charter` treats such a directory the same way when nothing else speaks for the session**
+- **`purlis` treats such a directory the same way when nothing else speaks for the session**
   (`active::plane_root`, the one question the CLI, the hooks and the footer all ask). The rungs
-  that speak for a session — `-w`, `$CHARTER_WORKSPACE`, a workspace's tree underfoot, the
+  that speak for a session — `-w`, `$PURLIS_WORKSPACE`, a workspace's tree underfoot, the
   session's pointer, its terminal's — still answer first. What no longer answers for it is the
   plane's two defaults, `workspaces/.default` and `[workspace] default`.
 
 **Why the defaults give way, and the pointers do not.** The defaults are not about any session:
 they are a committed line saying which workspace a caller that is *nowhere* gets — a script
-run from outside the plane with `$CHARTER_ROOT` set, a job with no directory of its own. A
+run from outside the plane with `$PURLIS_ROOT` set, a job with no directory of its own. A
 session standing in the plane is somewhere, and the window has already drawn it on the plane
 root's tab; letting a plane-wide default speak for it is how that chat was quizzed. So the
 defaults keep their whole meaning outside the plane, and `active::workspace` asked on its own
 still ends on them. The pointers are different in kind: each was written by a
-`charter workspace use` in that session or that terminal, which is somebody choosing a
+`purlis workspace use` in that session or that terminal, which is somebody choosing a
 workspace for exactly this caller. They stay above the plane root, so a session nothing pinned
 to the root still moves with `workspace use`, as it always has — only a chat the app *started*
 at the root refuses to be moved.
 
 **What it costs.** Python answered the plane's default for a session at the plane root with no
-pointer, and a terminal session there that ran `charter ws todo "…"` with no `-w` wrote into
-that default. Now it is asked to pass `-w` (or run `charter workspace use`). The recorded
+pointer, and a terminal session there that ran `purlis ws todo "…"` with no `-w` wrote into
+that default. Now it is asked to pass `-w` (or run `purlis workspace use`). The recorded
 scenarios that stood at the plane root with no pointer and needed a workspace moved on purpose,
 each with a note saying so (ADR 0046).
 

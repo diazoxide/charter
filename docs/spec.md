@@ -1,10 +1,10 @@
-# charter-app — one desktop app for running tons of harness sessions in parallel
+# purlis — one desktop app for running tons of harness sessions in parallel
 
-> Moved here from diazoxide/charter-plane's `docs/superpowers/specs/2026-09-17-charter-app.md` (at commit `0ae0961d`) by
+> Moved here from purlis/purlis-plane's `docs/superpowers/specs/2026-09-17-charter-app.md` (at commit `0ae0961d`) by
 > [ADR 0044](adr/0044-charter-apps-design-record-lives-in-charter-app.md). The text is unchanged.
 > A path it names that is not in this repository — `docs/research/…`, `docs/superpowers/…`,
 > `charter/*.py`, an ADR numbered below 0025 — is in
-> [diazoxide/charter-plane](https://github.com/diazoxide/charter-plane/tree/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7).
+> [purlis/purlis-plane](https://github.com/purlis/purlis-plane/tree/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7).
 
 **Status:** agreed 2026-09-17, amended 2026-09-18 (decisions 14-17 and the milestones: no Python in the app at any milestone) in a grill between the operator and the `steward` persona
 (workspace `ide`), and amended the same day when the operator reordered the priorities (below).
@@ -17,7 +17,7 @@ The evidence: `docs/research/2026-09-17-gui-terminal-embedding.md`.
 
 A developer runs dozens of harness sessions (Claude Code, Codex) at once, across workspaces
 and repos, and always knows which one needs them. It is one lightweight app on macOS, Linux
-and Windows, with no daemon, carrying every charter concept: the plane, workspaces, personas,
+and Windows, with no daemon, carrying every purlis concept: the plane, workspaces, personas,
 todos, memory, vaults, guards.
 
 > **Amended by [ADR 0082](adr/0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md)** (FD-1): one person's
@@ -34,7 +34,7 @@ todos, memory, vaults, guards.
 
 When two choices conflict, the higher priority wins.
 
-## Why charter is being rebuilt
+## Why purlis is being rebuilt
 
 - **Development is slow.** The tmux frame is 11.5k lines of plumbing, and tests are 3.3× the
   source.
@@ -45,7 +45,7 @@ When two choices conflict, the higher priority wins.
 ## Language
 
 - **App**: the desktop GUI. **Core**: the Rust library the app and the CLI share.
-  **`charter` binary**: the CLI on PATH, called by hooks, scripts and agents.
+  **`purlis` binary**: the CLI on PATH, called by hooks, scripts and agents.
 - **Session**: one harness process in one PTY, owned by the core. **Chat**: a session as the
   UI shows it: its tab, its workspace, its state. **Shell tab**: a chat running the operator's
   own shell, with no harness and no profile (ADR 0062).
@@ -68,30 +68,30 @@ When two choices conflict, the higher priority wins.
    - **Left:** a sidebar listing every workspace with its chats, and each chat's live state.
    - **Top:** a global "needs you" queue in the title bar, plus OS notifications: a button (a
      hand and a count) that opens a list of every chat asking across every project, each with
-     **Go** and **✕** (charter-app#249). When nothing has asked but a chat that cannot report
-     is open (a shell, a harness without charter's hooks), it is a faint hand with no count
+     **Go** and **✕** (purlis#249). When nothing has asked but a chat that cannot report
+     is open (a shell, a harness without purlis's hooks), it is a faint hand with no count
      that names those chats; with neither, nothing is drawn. Ignoring an item lasts until its
-     chat asks again (charter-app#248).
+     chat asks again (purlis#248).
    - **Center:** tabs and free split panes.
    - **Right:** panels for the focused workspace: repos, branches, CI, todos, personas, and
      the plane's vaults. Amended 2026-09-26 (SI-3): the panels are not read-only any more.
      Each write goes through the core function its CLI command calls, so the window and a
      terminal refuse the same things in the same words:
      - **Todos** are the focused workspace's, and the panel names it. A box at the top records
-       one (`charter ws todo "<text>"`), and a row's menu marks it done (journalled) or
+       one (`purlis ws todo "<text>"`), and a row's menu marks it done (journalled) or
        forgets it (not journalled).
-     - **Personas:** the heading's `+` makes one as a draft (`charter persona create`: name,
+     - **Personas:** the heading's `+` makes one as a draft (`purlis persona create`: name,
        role, delegate-when, inherits-from). A row's menu and the persona's tab open its
-       `persona.md` in the operator's own editor, because charter has no editor for it, and
-       delete it (`charter persona remove`, never forced: a persona another one extends or
+       `persona.md` in the operator's own editor, because purlis has no editor for it, and
+       delete it (`purlis persona remove`, never forced: a persona another one extends or
        uses is refused).
      - **Vaults:** the heading's `+` makes one. A row's menu and the vault's tab delete one,
        after a dialog that lists its secrets and takes the vault's name typed back. Deleting
        a keychain vault destroys every secret it holds in the keychain, and they cannot be
        recovered. Deleting any other kind of vault leaves its file or its 1Password item
-       where it is. `charter vault remove` only unregisters a vault, as before.
+       where it is. `purlis vault remove` only unregisters a vault, as before.
    - **Palette:** the command palette is the primary input, keyboard first.
-2. **No TUI.** In the terminal, charter is the CLI.
+2. **No TUI.** In the terminal, purlis is the CLI.
 3. **Session state comes from hooks only.** A hook calls `charter hook …`, which hands an
    event to the app through a socket the app owns. A harness with no such hook shows
    `unknown`. Amended 2026-09-18, by what M1.3 had to settle to build it:
@@ -111,14 +111,14 @@ When two choices conflict, the higher priority wins.
      report a conversation the chat has not seen, and `$CLAUDE_PID` is the whole of what tells
      them apart. The payload and the environment must AGREE on the conversation: using one as
      a fallback for the other is a hole, because the environment holds the OUTER chat's id.
-   - **A chat inherits none of that from charter itself.** charter may be launched from inside
+   - **A chat inherits none of that from purlis itself.** purlis may be launched from inside
      a harness session, and a chat that inherited its `CLAUDE_PID` would report the launcher's
      identity as its own.
    - **A harness started by hand in a shell tab is caught by the command that started it, not
      by anything it prints** (ADR 0062). A shell tab — the operator's own `$SHELL`, no harness,
-     `New shell` beside `New tab` — has charter's shims first on its `PATH`, kept first after
+     `New shell` beside `New tab` — has purlis's shims first on its `PATH`, kept first after
      zsh's and bash's own start files. `claude`, `codex` or `opencode` typed there runs
-     `charter shell-guard`, which says the harness runs outside charter's session tracking,
+     `purlis shell-guard`, which says the harness runs outside purlis's session tracking,
      tells the app over this socket so the tab shows a banner with **Open as chat**, and then
      runs the real program with the shims off its `PATH`. It moves no chat's state.
 4. **A worktree per writing chat.** The goal is that a chat that writes to a repo gets its own
@@ -132,7 +132,7 @@ When two choices conflict, the higher priority wins.
      fast-forward only, into the branch the piece was cut from. `remove` refuses to discard
      uncommitted changes or commits no other ref reaches unless the operator forces it, and
      names the files and commits it would discard.
-   - `charter worktree` (alias `wt`) is the command line for a chat (charter#368): `add` cuts
+   - `purlis worktree` (alias `wt`) is the command line for a chat (charter#368): `add` cuts
      a piece and logs `claimed`, `done` and `abandon "<why>"` declare the piece the chat
      stands in, and `list`, `history` and `remove` read and clear them. Each piece's row in
      the window shows what it declared, or how long it has been silent, and its menu can mark
@@ -145,12 +145,12 @@ When two choices conflict, the higher priority wins.
      would refuse or read as its own (`HEAD`, `*_HEAD`, a sha) falls back to `chat-<n>`, so the
      name never costs the start. What the window says of it is said of a branch and its folder.
    - **New branch** on a repo's row and in the palette cuts a piece from the window, under the
-     name typed or charter's `chat-<n>`, and makes it where new chats start (`worktree_add`).
+     name typed or purlis's `chat-<n>`, and makes it where new chats start (`worktree_add`).
    - **Not shipped yet:** `publish`.
 
    Neither `merge` nor `publish` takes `--all` (ADR 0020). Git is the only registry, reached
-   through the git binary: **ADR 0027**. The design is charter-plane's
-   [`docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md`](https://github.com/diazoxide/charter-plane/blob/cli-final/docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md).
+   through the git binary: **ADR 0027**. The design is purlis-plane's
+   [`docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md`](https://github.com/purlis/purlis-plane/blob/cli-final/docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md).
 5. **Lifecycle.** Closing the window hides the app to the tray. Quitting warns if a session is
    mid-turn and then ends every session. On the next launch, when anything was open, the window
    asks once — reopen every session, or start fresh — naming how many chats in which projects,
@@ -158,7 +158,7 @@ When two choices conflict, the higher priority wins.
    resume, on the conversation it was in when it was last recorded — which its own harness's
    hook keeps current, so a Codex or opencode chat past its first turn and a Claude Code chat
    after `/clear` come back where they were (Q10); Esc or closing the question reopens
-   (charter-app#250).
+   (purlis#250).
 6. **Harnesses:** Claude Code, Codex and opencode (opencode since charter#371, ADR 0058).
 7. **Remote sessions are not in v1.** Sessions sit behind one interface (spawn, read/write
    bytes, resize, exit) with local PTY as the first implementation, so SSH or devcontainers
@@ -188,25 +188,25 @@ When two choices conflict, the higher priority wins.
     them.
 14. **The app never calls Python, at any milestone.** Amended 2026-09-18 on the operator's
     instruction: "final app should not use python, fully clean implementation in rust — no need
-    to mix languages". The first plan had the app shelling out to Python `charter` for writes
+    to mix languages". The first plan had the app shelling out to Python `purlis` for writes
     and hooks until M3. It does not: whatever a feature needs is ported to Rust **before** the
     feature that needs it, so no shipped path ever crosses languages, and no scaffolding is
     written that only exists to be deleted.
 15. **Python is the oracle, not a dependency.** Every ported module passes a **differential
     test**: the same fixture plane and the same input give the same output and the same
     resulting plane in both implementations. That runs in CI, where Python is a test fixture —
-    it is never in the app, the `charter` binary, or an installer.
+    it is never in the app, the `purlis` binary, or an installer.
 16. **Security-critical parts are ported with the most care, not last:** hooks guard,
     gitpolicy, vaults and secrets each need the differential proof plus an external review
     before the Rust one answers for real. Ordering follows what a milestone needs; nothing
     ships on a Python fallback in the meantime.
 17. **Python charter is frozen.** It keeps running as today's product until cutover, and gets
-    bug fixes and security fixes only. New feature ideas go to the `charter-app` backlog.
+    bug fixes and security fixes only. New feature ideas go to the `purlis` backlog.
 
 ### Engineering
 
 18. **Repository:** a new repo, `charter-app`, which takes over the `charter` name at M4. The
-    product is still called charter. This repo stays the Python implementation and the plane.
+    product is still called purlis. This repo stays the Python implementation and the plane.
 19. **Standard tooling, enforced in CI:**
     - **Rust:** a stable toolchain pinned in `rust-toolchain.toml` (#888), `rustfmt`,
       `clippy -D warnings`, `cargo-deny` (licences and advisories).
@@ -221,15 +221,15 @@ When two choices conflict, the higher priority wins.
     - **Unit tests** stay small.
     - **Mutation testing** runs nightly on the core crate alone, with `cargo-mutants --in-diff`,
       sharded. It never blocks a PR.
-21. **Distribution:** one signed installer per OS. It installs the app and puts `charter` on
+21. **Distribution:** one signed installer per OS. It installs the app and puts `purlis` on
     PATH. The Claude Code plugin keeps calling `charter hook …`. A final PyPI release points to
     the new install.
 
 ### Multi-plane — added 2026-09-20
 
 **What this spec missed.** Decisions 1-21 never say where the app's plane comes from. In the
-tmux frame it came from the shell that ran `charter`, and ADR 0025 carried that assumption into
-an app that has no shell: charter-app resolves its plane from `std::env::current_dir()` and from
+tmux frame it came from the shell that ran `purlis`, and ADR 0025 carried that assumption into
+an app that has no shell: purlis resolves its plane from `std::env::current_dir()` and from
 nothing else, so a double-clicked `.app` — working directory `/` — resolves none, shows
 `No plane: …` and offers no way to give it one. **The app has only ever been usable when
 launched from a terminal standing inside a plane.** The operator found this by opening it on
@@ -255,14 +255,14 @@ how it is cited and nothing here is renumbered.
     plane is explicit and the working directory is never consulted again. The CLI keeps its own
     resolution untouched. M2.16 was exactly the cost of two resolvers disagreeing (`resolve`
     against `command_root`), and the app has the same split live today: `plane_root` asks
-    `plane::resolve`, which honours `$CHARTER_ROOT`; `setup` asks `plane::find_root`, which does
+    `plane::resolve`, which honours `$PURLIS_ROOT`; `setup` asks `plane::find_root`, which does
     not. **ADR 0034.**
-25. **charter keeps a machine-level record outside every plane**, under the OS application-data
+25. **purlis keeps a machine-level record outside every plane**, under the OS application-data
     directory: the planes on this machine, when each was last opened, the window arrangement,
     and the trust decisions of decision 26. `0600` where the OS has modes, gated, tolerant of
     paths that have moved or gone, and **never plane content** — deleting it must cost the
     arrangement and the approvals and nothing else. This is the second such file, not the first:
-    `charter report`'s consent has lived under the user's config home since ADR 0003.
+    `purlis report`'s consent has lived under the user's config home since ADR 0003.
     **ADR 0034.**
 26. **A plane is untrusted until the operator opens it once and approves it.** A plane's
     committed `.claude/settings.json` travels — `layer.rs`'s `WORKSPACE_KEYS = ["enabledPlugins",
@@ -273,10 +273,10 @@ how it is cited and nothing here is renumbered.
     Two limits already exist and stay named: `permissions` travels only as `ask`/`deny`, never
     `allow` (`RESTRICTIVE`), and ADR 0022 keeps harness profiles out of the committed file.
     **ADR 0035.**
-27. **`charter init` on an existing repo adopts that repo as the plane's first clone by
+27. **`purlis init` on an existing repo adopts that repo as the plane's first clone by
     default**, making the plane beside it rather than writing plane scaffolding and `.gitignore`
     rules into somebody else's repository. "Make this repo itself the plane" stays available and
-    becomes the non-default — it is how charter's own plane exists. This **diverges from the
+    becomes the non-default — it is how purlis's own plane exists. This **diverges from the
     Python oracle** (decision 15) on a command that is already ported; Python is frozen
     (decision 17), so the `init`-inside-a-repo differential scenario records an intended
     difference rather than being normalised. **ADR 0035.**
@@ -295,19 +295,19 @@ how it is cited and nothing here is renumbered.
     started.** The root tab is always drawn, drawn as an icon whose tooltip is *"Plane — chats
     here start at the plane root"*, and it cannot be dragged, pinned, renamed or deleted. Chats
     and shells started from it start in the plane's own directory. It is not a workspace: it
-    has no charter, memory or todos, and the panels that are a workspace's say so while it is
+    has no purlis, memory or todos, and the panels that are a workspace's say so while it is
     focused. Every chat the app starts is told where it started, in its environment:
-    `$CHARTER_WORKSPACE=<name>` in a workspace, `$CHARTER_PLANE_ROOT_SESSION=1` at the plane
+    `$PURLIS_WORKSPACE=<name>` in a workspace, `$PURLIS_PLANE_ROOT_SESSION=1` at the plane
     root, neither anywhere else — so no chat the app started is asked which workspace it is in.
-    A plane-root chat is in no workspace: `charter` refuses a command that needs one unless it
-    is named with `-w`, `charter workspace use` does not move it, and its briefing lists the
+    A plane-root chat is in no workspace: `purlis` refuses a command that needs one unless it
+    is named with `-w`, `purlis workspace use` does not move it, and its briefing lists the
     plane's workspaces as ones it may manage. Operator's rulings, 2026-09-26 (SI-1).
     **The plane root is anywhere in the plane outside every workspace** — `docs/` as much as
     the plane's own directory — and the app marks a chat it starts there the same way. A
     session standing there that nothing has chosen a workspace for (no `-w`, no
-    `$CHARTER_WORKSPACE`, no session or terminal pointer) is at the plane root too, even with
+    `$PURLIS_WORKSPACE`, no session or terminal pointer) is at the plane root too, even with
     `workspaces/.default` or `[workspace] default` set: those answer for a caller outside the
-    plane, not for one standing in it; unlike an app-started root chat, `charter workspace use`
+    plane, not for one standing in it; unlike an app-started root chat, `purlis workspace use`
     still moves it. A root chat's handoff is stamped `plane root`, not a workspace, and the chat
     it opens starts in the workspace the brief names; a report back to a root chat that has
     closed is kept for the plane root. Its footer names the plane root. Operator's ruling,
@@ -317,16 +317,16 @@ how it is cited and nothing here is renumbered.
 
 31. **A curation action is a chat opened with its prompt typed and never sent.** The operator
     reviews the prompt and presses Enter, and nothing can opt out of that. It is offered on a
-    workspace, a persona or the plane. charter's own three come first (`charter/safe-remove`,
+    workspace, a persona or the plane. purlis's own three come first (`charter/safe-remove`,
     `charter/compact` — "Compact & improve" — and `charter/add-curation-action`), ship inside the
     binary and cannot be overridden; then each persona's, declared one file per action at
     `personas/<persona>/curation/<id>.md` and run by that persona. A template has four
     variables and no expansion of anything else. A persona's file that is broken, or that takes
-    a built-in's id or label, is left out with a warning and fails `charter persona lint`.
-    charter's own run as the persona being curated, or else as the plane's default persona, or
-    as no persona. The core resolves a subject's list (`charter curation show <subject>`), and
-    `charter persona curation list|add|remove` manages a persona's files. In the app, a
-    workspace's, a persona's and the plane root tab's right-click menu has a "Curate ▸" submenu — charter's own, then
+    a built-in's id or label, is left out with a warning and fails `purlis persona lint`.
+    purlis's own run as the persona being curated, or else as the plane's default persona, or
+    as no persona. The core resolves a subject's list (`purlis curation show <subject>`), and
+    `purlis persona curation list|add|remove` manages a persona's files. In the app, a
+    workspace's, a persona's and the plane root tab's right-click menu has a "Curate ▸" submenu — purlis's own, then
     a group per declaring persona, then every action left out, disabled, with the reason — and
     the palette lists each as `Curate <subject>: <label>`. Choosing one opens a new chat on the
     project's default profile, as the action's runner, where it runs, named `<label> ·
@@ -338,11 +338,11 @@ how it is cited and nothing here is renumbered.
     a prompt over the 1,000 characters Codex draws whole is refused. opencode, which goes quiet
     while still starting and loses a paste then, is refused. Amended 2026-09-27, pending the
     operator's ruling (Q25). **A prompt is read whole before Enter** (operator's rulings Q28 and
-    Q29, 2026-09-27): charter's own three are one plain line each that names its skill and its
+    Q29, 2026-09-27): purlis's own three are one plain line each that names its skill and its
     subject — the skill holds the steps. A prompt a harness would draw as a placeholder
     (Claude Code 2.1.283 over 800 characters or at 4 lines, Codex 0.147.0 over 1,000
     characters; `Harness::longest_paste_drawn_whole`) opens no chat on that harness, and
-    `charter persona lint` warns about a persona's that would, rendered for a long subject name,
+    `purlis persona lint` warns about a persona's that would, rendered for a long subject name,
     naming the harness. A prompt still waiting is dropped the moment the operator sends that
     chat any input of their own; the terminal's answers to the harness's questions are not the
     operator's. **ADR 0061.**
@@ -353,8 +353,8 @@ how it is cited and nothing here is renumbered.
     summary a chat writes of its own session, never the transcript: one Markdown file in
     `workspaces/<ws>/sessions/`, or the plane's own `sessions/` for a chat at the plane root,
     whose body is exactly Goal, Done, Decisions, Open and How to resume, and whose frontmatter
-    is charter's alone — the chat, its persona, harness and conversation, the place, and the
-    pieces git reports. `charter session record` is the only writer: it holds the record to
+    is purlis's alone — the chat, its persona, harness and conversation, the place, and the
+    pieces git reports. `purlis session record` is the only writer: it holds the record to
     that shape, writes it whole, rebuilds `sessions/index.md` (newest first) and
     `workspace.md`'s one `## Sessions` line, and tells the app over the hook socket which chat
     saved which record (`SessionSaved`, a fourth kind of line that is never a report or an
@@ -363,7 +363,7 @@ how it is cited and nothing here is renumbered.
     data. **Smart close sends its prompt** — the operator's click is the consent, the one
     exception to decision 31 — and the tab closes only when the record is saved, never on
     anything the chat printed; with no record in about five minutes the tab goes back to normal
-    and stays open. `charter session list|show` read them back, and charter's `smart-close`
+    and stays open. `purlis session list|show` read them back, and purlis's `smart-close`
     skill is the procedure. **In the window**, closing a chat asks Cancel, Close or Smart close;
     Smart close is sent (one bracketed paste and Enter, in one write) at once to a waiting chat
     and at the next `Stop` to a running one, and is refused to a chat asking a question
@@ -379,7 +379,7 @@ how it is cited and nothing here is renumbered.
     tab, and **Resume** — on the row's menu, the record's tab and the palette — starts a NEW
     chat in the record's place, on its harness, given its conversation through the relaunch's
     one argument builder, as its persona where the plane still has it, with the record quoted
-    as data in its session-start briefing (`$CHARTER_RESUMING_RECORD`). A record with no
+    as data in its session-start briefing (`$PURLIS_RESUMING_RECORD`). A record with no
     conversation, or on a harness no profile here runs, starts fresh with the record and says
     why; a harness that can no longer find the conversation says so by its program failing
     before it reported anything, and the same record is then started fresh, once, and says so.
@@ -388,8 +388,8 @@ how it is cited and nothing here is renumbered.
     starts on that profile where this machine still has it and in that directory where it is
     still a directory inside the record's place — otherwise on the old guess and in the place's
     own directory, and it says which. A Claude Code chat the app starts carries
-    `Bash(charter session record *)` as an `allow`, so a Smart close never stops to ask for
-    the command that ends it, and, since V79, an `allow` for each of charter's five read-only
+    `Bash(purlis session record *)` as an `allow`, so a Smart close never stops to ask for
+    the command that ends it, and, since V79, an `allow` for each of purlis's five read-only
     MCP tools (`todo_list`, `memory_search`, `session_record_list`, `session_record_read`,
     `change_status`), while its writes and `ask_operator` still ask. Codex's approval and
     sandbox are whole-session switches, so it carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
@@ -415,10 +415,10 @@ how it is cited and nothing here is renumbered.
     filename and the stamp are kept, the index line retitled, and a save over a file that
     changed since it was read is refused, offering Reload or Overwrite. **Delete moves the file
     to `archive/` with an Undo**; a hard delete stays `forget`, on the command line only. The
-    command line has each operation too: `charter workspace edit|archive|unarchive` and
-    `charter persona edit-memory|archive-memory|unarchive-memory [--shared]`. **A memory moves
+    command line has each operation too: `purlis workspace edit|archive|unarchive` and
+    `purlis persona edit-memory|archive-memory|unarchive-memory [--shared]`. **A memory moves
     between scopes** (KN-3): a memory's tab has a Move to choice and a Move button, and the
-    command line has `charter workspace move-memory` and `charter persona move-memory`, each
+    command line has `purlis workspace move-memory` and `purlis persona move-memory`, each
     with `--to-workspace`, `--to-persona` or `--to-shared`. The file is renamed whole, its title
     and stamp kept (a journal name moved away and back comes back to the minute); a target that
     already holds a memory of that name is refused. Browsing the archive is later work. **ADR
@@ -437,7 +437,7 @@ how it is cited and nothing here is renumbered.
     refuses a path with a `.git` component or one that resolves, through a link, outside the
     worktree or to a file the list does not offer. An image is drawn as an image and markdown
     rendered, with its source a press away; a binary file, or one past 2 MiB, is said in a
-    sentence rather than drawn. The light editor is CodeMirror 6, with charter's fixed set of
+    sentence rather than drawn. The light editor is CodeMirror 6, with purlis's fixed set of
     grammars and the theme's colours; a diff is drawn in its merge view, which marks only the
     lines git reported and finds the changed words inside them. Editing (RC-10) and the Review
     tab (RC-4) come after. **ADR 0081, ADR 0084.**
@@ -502,9 +502,9 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 
 | # | What | Budget | Kind and job | Owner | Last measured |
 |---|---|---|---|---|---|
-| M1 | charter's own base: web content peak plus native side, at 200 open, scrollback excluded | ≤ 2 GB (ADR 0082's base; it binds over M2 to M5) | release absolute | SC-1, #814 | about 1.8 GB (ADR 0082) |
+| M1 | purlis's own base: web content peak plus native side, at 200 open, scrollback excluded | ≤ 2 GB (ADR 0082's base; it binds over M2 to M5) | release absolute | SC-1, #814 | about 1.8 GB (ADR 0082) |
 | M2 | web content process, peak, at the hot target | ≤ 1.5 GB. **At risk, expected to miss** | release absolute; CI relative (`stress`) | SC-1, #814 | 1,529 MB at 12 chats, not at the hot target |
-| M3 | native side (app and `charterd`), no chats | ≤ 384 MB | CI absolute and relative (`stress`) | SC-8 | 183 MB macOS, 311 MB Ubuntu |
+| M3 | native side (app and `purlisd`), no chats | ≤ 384 MB | CI absolute and relative (`stress`) | SC-8 | 183 MB macOS, 311 MB Ubuntu |
 | M4 | native cost of a hot chat, scrollback excluded | ≤ 4 MB | CI absolute (`stress`) | SC-8 | 3.1 MB macOS, 0.12 MB Ubuntu |
 | M5 | native cost of a hibernated chat; no harness process | ≤ 1 MB | CI absolute (`stress`) | SC-4, SC-8 | — |
 | M6 | idle hidden session's scrollback at the cap | ≤ 50 MB | release absolute; CI relative (`bench`) is #931 | SC-16 | 20.2 MB |
@@ -521,7 +521,7 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | L4 | synchronized-output animation | ≥ 30 fps | release absolute | SC-16 | 52.4 and 52.0 draws/s against a 60 fps display |
 | L5 | hook call p95, at 50,000 memories and the hot target | ≤ 50 ms | CI absolute (`stress`) | KN-22 | not yet measured |
 | L6 | cold start to the first frame, no chats | ≤ 2 s | CI absolute on Linux (`app builds`, median of five; at most one past a 2.5 s ceiling, reported and not gated, ADR 0086 as amended); release absolute on macOS | FR-8 | 370 ms macOS |
-| L7 | reattach with `charterd` up: first paint of the focused pane | ≤ 1 s | CI relative (`bench`); release absolute | FD-5, FD-7 | — |
+| L7 | reattach with `purlisd` up: first paint of the focused pane | ≤ 1 s | CI relative (`bench`); release absolute | FD-5, FD-7 | — |
 | L8 | relaunch with the hot target's chats to put back: interactive | ≤ 3 s | CI relative (`bench`); release absolute | SC-20 | — |
 | L9 | project switch among 10 open projects, one chat each: the press of the switcher's row to the paint of that project's chat, p95 of 30 | ≤ 200 ms | release absolute; CI relative (`bench`) is #875 and #931; evidence only (`scenario tests`, macOS and Linux) | FR-27 | — |
 | T1 | event log throughput | ≥ 1,000 events/s sustained, L5 inside its budget | CI absolute (`stress`) | FD-9 | — |
@@ -538,7 +538,7 @@ confirm it (D-0082b). A row is added in the pull request that adds its job.
 | K1 | context tax at a chat's start, per harness, on the 50,000-memory, 1,000-persona fixture | ≤ 3,000 tokens | CI absolute (`stress`) | KN-30 | — |
 | F1 | formula input: each harness's footprint per process, child runs included | value, not budget | release absolute | SC-1, #814 | Claude Code 385 MB; Codex, opencode not yet |
 | F2 | formula input: one hot chat's scrollback at the cap | value, not budget | release absolute | #814 | 20.2 MB |
-| F3 | formula input: charter's own base | M1 | release absolute | #814 | as M1 |
+| F3 | formula input: purlis's own base | M1 | release absolute | #814 | as M1 |
 | S | search and index budgets | as [ADR 0079](adr/0079-search-runs-on-derived-sqlite-indexes-one-per-project-clone-and-one-per-machine.md) §4 | as there | KN-1, KN-2, KN-22, KN-32 | — |
 
 **Not a budget, a guard:** GL-15 warns when less than 20 GB of disk is left, and starts no new
@@ -551,14 +551,14 @@ Each milestone is something the operator actually uses, not a layer.
 - **M0: walking skeleton.** Tauri + Rust core + xterm.js, with 50 fake sessions and one
   scenario test green in CI on macOS and Linux. It is measured against the limits above and
   locks the stack. GPUI is tried only if a limit is missed. **Done** — the measurements and
-  the lock are ADR 0026, and the benchmark is `node tools/bench.mjs` in charter-app.
+  the lock are ADR 0026, and the benchmark is `node tools/bench.mjs` in purlis.
 - **M1: daily driver on macOS, on Rust alone.** The app replaces the tmux frame for the
   operator, and every part of it is Rust:
   - the plane read *and written* in Rust: workspaces, chats, personas, todos, profiles
   - the workspace sidebar and the "needs you" queue
   - chats with the profile and persona picker
   - a worktree per chat (ADR 0027). The gap ADR 0027 named is closed: the harness layer is
-    written into a piece when charter cuts it and again when a chat starts there, so that chat
+    written into a piece when purlis cuts it and again when a chat starts there, so that chat
     has the plane's guards and its persona's agents
     (`crates/purlis-core/tests/a_chat_in_a_worktree_gets_the_planes_layer.rs`). `unwired` is
     left only on a tree whose layer is not in it yet, and a chat is refused there rather than
@@ -571,7 +571,7 @@ Each milestone is something the operator actually uses, not a layer.
 
   Each ported piece carries its differential test against Python.
 - **M2: the rest of the CLI.** Every remaining command the plane needs — recall, save, sync,
-  clone, doctor, news, report, git-policy — with differential tests, so the Rust `charter` is
+  clone, doctor, news, report, git-policy — with differential tests, so the Rust `purlis` is
   the only one a plane needs.
 - **M3: security-critical parts proven.** Hooks guard, gitpolicy, vaults and secrets get their
   external review against the Rust implementation (the pieces themselves land whenever a
@@ -592,7 +592,7 @@ placed inside the existing ones and the placement is part of the decision.
   whole process, and fifteen commands take one of those as `tauri::State`. The window has to
   carry the plane and that state has to be keyed by it before a second plane in a window is
   anything but a second plane writing through the first one's state.
-- **M2 also gains decision 27**, `charter init`'s new default, because `init` is already ported
+- **M2 also gains decision 27**, `purlis init`'s new default, because `init` is already ported
   and the opener is what makes the old default dangerous. Its differential scenario changes in
   the same commit that changes the default, marked as an intended divergence.
 - **M3 gains the trust gate** — decision 26. It is an ask in front of a real exposure, it is

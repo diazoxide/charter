@@ -1,6 +1,6 @@
 ### Added
 
-- **New projects run their chats sandboxed.** A project that `charter init` or the app makes
+- **New projects run their chats sandboxed.** A project that `purlis init` or the app makes
   now has `[sandbox]` with `mode = "on"` in its `charter.toml`. Its sandboxed chats can reach
   model providers, your forges and package registries (SD-2, #1056).
   - **Existing projects.** A project made before this keeps running as it did. The first time
@@ -22,12 +22,12 @@
     write or is named by a relative path, or a Claude Code profile whose program does not
     answer as Claude Code, is refused in a sandboxed project; the picker says why before you
     start it. It checks a profile's program only once you have approved the profile.
-  - **Codex.** Charter cannot keep a Codex chat inside its sandbox yet (#1123), so in a
+  - **Codex.** purlis cannot keep a Codex chat inside its sandbox yet (#1123), so in a
     sandboxed project the picker says so and a new Codex chat starts only without the sandbox.
   - **Windows.** There is no sandbox on Windows yet (#565), so chats there start without it
     and their tabs say so.
-  - **Recorded.** Each start without the sandbox is a `trust.sandbox.off` event in charter's
+  - **Recorded.** Each start without the sandbox is a `trust.sandbox.off` event in purlis's
     event log on this machine. The sandbox coming back on for that chat is `trust.sandbox.on`.
     The chat's session record says `sandbox: off`.
-  - **How often.** `charter doctor` and Project settings show how many new chats in the project
+  - **How often.** `purlis doctor` and Project settings show how many new chats in the project
     started without the sandbox on this machine. The count is never sent anywhere.

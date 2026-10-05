@@ -2,21 +2,21 @@
 
 - **opencode chats run sandboxed on macOS.** In a project with `[sandbox]` `mode = "on"`, an
   opencode chat now starts instead of being refused. opencode has no sandbox of its own, so
-  charter runs the whole harness inside a profile it writes, which starts from "deny
+  purlis runs the whole harness inside a profile it writes, which starts from "deny
   everything".
   - **Writes.** The chat can write its own directory and a temp directory of its own. Of
     opencode's own files, it can write only what a turn writes: its sessions and log. Its state
     is kept in the chat's own temp directory.
     It cannot write opencode's credentials, plugins or packages.
   - **Snapshots.** A sandboxed opencode chat makes no snapshots (#1075).
-  - **Network.** Its traffic leaves through a proxy charter runs for that chat, including
+  - **Network.** Its traffic leaves through a proxy purlis runs for that chat, including
     opencode's own requests to its model provider. The proxy carries only the hosts of the
     project's egress presets.
   - **Keychain.** The profile also keeps the chat away from the keychain, so a project with a
     keyring vault can run sandboxed opencode chats.
-  - **Hook reports.** A report charter's hooks could not hand to the app is shown in the chat's
+  - **Hook reports.** A report purlis's hooks could not hand to the app is shown in the chat's
     window, not dropped.
-  - **Linux.** Charter cannot wrap opencode on Linux yet (#1040), so there such a chat is still
+  - **Linux.** purlis cannot wrap opencode on Linux yet (#1040), so there such a chat is still
     refused, with a sentence that says so (SD-2, #695).
 
 ### Security
@@ -51,11 +51,11 @@
   not one written to pass. Approving the profile is what vouches for its program. It also
   vouches for a path no word spells, in any encoding, and for a program that reads and runs
   such a file without being handed it. The check of a command's words catches mistakes; it is
-  not the boundary. For opencode and Codex, the boundary is charter's own wrap around the whole
+  not the boundary. For opencode and Codex, the boundary is purlis's own wrap around the whole
   harness; Claude Code is not inside it yet (#1150). A command word over 4 KiB is refused.
-- **A project whose `charter.toml` cannot be read starts no chat.** Charter cannot tell whether
+- **A project whose `charter.toml` cannot be read starts no chat.** purlis cannot tell whether
   such a project runs chats sandboxed. So it says so and starts nothing, rather than starting
   the chat unsandboxed.
-- **Codex runs inside charter's own sandbox.** Codex's own sandbox could not be kept to the
-  rules charter compiles while it runs, so charter now runs Codex inside its own sandbox, as it
+- **Codex runs inside purlis's own sandbox.** Codex's own sandbox could not be kept to the
+  rules purlis compiles while it runs, so purlis now runs Codex inside its own sandbox, as it
   runs opencode (see *Codex chats run sandboxed on macOS*).

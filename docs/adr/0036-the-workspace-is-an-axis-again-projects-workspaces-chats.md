@@ -1,15 +1,15 @@
 # The workspace is an axis again: projects, workspaces, chats
 
-The operator opened charter-app for the first time on 2026-09-21 and could not work out what a
+The operator opened purlis for the first time on 2026-09-21 and could not work out what a
 tab was. His words:
 
 > what is top level TABs? is it workspace?? or just general space? i cant get, where is
-> workspace selector? as in current charter TUI - top level tab is workspace, and sessions are
+> workspace selector? as in current purlis TUI - top level tab is workspace, and sessions are
 > under workspace.
 
 He is right to be confused, and this is a defect rather than a misunderstanding. In the tmux
 frame the app replaces, **the top-level tab was the workspace** and the sessions lived under it;
-that is the shape every day of charter's use so far has trained. In the port the top level
+that is the shape every day of purlis's use so far has trained. In the port the top level
 became the project ([ADR 0033](0033-a-plane-is-a-project-and-a-window-may-hold-several.md)) and
 the workspace became a heading in the sidebar.
 
@@ -70,8 +70,8 @@ strip as well as browsed in the palette.
 plane's answer: what relates a chat to a workspace is the directory it works in, read off the
 sidebar the core builds. It is deliberately **not** a field recorded on the tab, because a copy
 of the plane's answer is a second answer that nothing invalidates when the plane changes under
-it. The one exception is the chat charter has just started, for the tick before the plane is
-read again: charter chose that directory, so it knows.
+it. The one exception is the chat purlis has just started, for the tick before the plane is
+read again: purlis chose that directory, so it knows.
 
 Four rules fall out, and each of them is a way the axis could have been half-built:
 
@@ -120,7 +120,7 @@ in" — the drift `actions.ts` exists to prevent.
 ## The consequence for the chat strip
 
 The operator hit the chat strip at about fifty chats and found four defects
-([charter-app#130](https://github.com/diazoxide/charter/issues/130)), and this record is
+([purlis#130](https://github.com/diazoxide/charter/issues/130)), and this record is
 where the first of them is half answered: a workspace rarely holds fifty, so scoping the chats
 takes most of the pressure off the strip. **Only most of it.** A strip still has to behave when
 it overflows, and the projects and workspaces strips overflow too, so the four are fixed on
@@ -132,11 +132,11 @@ their own terms:
   scrolled away with the tabs, so the way to open the fifty-first chat was to go looking for the
   button, which is the same defect as an unreachable tab on the one control that is always
   wanted. **A scrollbar and not an overflow menu**, deliberately: the palette
-  already lists every chat by name with a search and a ranking over it (charter-app#48), and the
+  already lists every chat by name with a search and a ranking over it (purlis#48), and the
   sidebar lists every workspace's chats, so a menu on the strip would be a third answer to
   "which chats are there" beside two that exist and are better.
 - **A tab carries something an operator recognises**: `3 steward`, not `3`. A number is what a
-  chat is called to charter. The persona is known at the moment a tab opens on both paths — the
+  chat is called to purlis. The persona is known at the moment a tab opens on both paths — the
   picker carries the operator's choice, and a chat put back at a launch carries its own — so it
   is never filled in later. The chat's own name is kept beside it, because that is what the core
   is told and what a split's chat is called.
@@ -162,7 +162,7 @@ their own terms:
 - A window that has not read the plane yet shows every chat on one strip rather than none.
   Nothing knows which workspace a chat is in until the plane has been read, and hiding running
   chats is worse than showing them all for a moment.
-- **Creating a workspace is not on the strip.** There is no `+`, because the Rust charter has no
+- **Creating a workspace is not on the strip.** There is no `+`, because the Rust purlis has no
   command that makes a workspace yet; the strip will grow one when it does. A `+` that opened
   nothing would be worse than its absence.
 - The palette still lists every chat in the project, not only the focused workspace's. It is the

@@ -1,13 +1,13 @@
-# A Rust charter reports the charter it brought, and names the pin it does not meet
+# A Rust purlis reports the purlis it brought, and names the pin it does not meet
 
-**Amended by [ADR 0045](0045-charters-version-is-the-apps-version.md) (2026-09-23):** `charter
+**Amended by [ADR 0045](0045-charters-version-is-the-apps-version.md) (2026-09-23):** `purlis
 version` now prints the app's version, a pin names a version of the app, and a pin on the Python
 charter's line is not drift. What follows is the record as it was decided.
 
-`charter version` in Python prints three numbers, and all three are facts about a **Python
+`purlis version` in Python prints three numbers, and all three are facts about a **Python
 package**: the `charter-cp` wheel `uv tool install` put on this machine, the release
 `[charter] version` pins, and the newest release on PyPI. It compares the first two and exits
-1 when they differ, which is the thing scripts and `charter doctor` read.
+1 when they differ, which is the thing scripts and `purlis doctor` read.
 
 charter-app's `charter` is a different artifact. It has no wheel, no index and no
 `uv tool install`; it ships inside a signed app and moves when the app moves. Two of the three
@@ -16,10 +16,10 @@ rows therefore have no subject, and the one number the binary does carry — the
 into this first: `--until` cannot default to `charter.__version__`, because `0.1.0` is below
 every entry in the corpus and every range would be empty.
 
-**`charter version` on a Rust charter reports the charter release this build's news corpus
+**`purlis version` on a Rust purlis reports the purlis release this build's news corpus
 comes up to, the build carrying it, and the pin as written — and when the pin is one the
-corpus does not reach, it says so and exits 1, as charter does. It does not print an
-`installed` wheel, it does not print a `latest`, and it does not reuse charter's *"in sync with
+corpus does not reach, it says so and exits 1, as purlis does. It does not print an
+`installed` wheel, it does not print a `latest`, and it does not reuse purlis's *"in sync with
 the lock"*.**
 
 ## The number that can be compared
@@ -31,20 +31,20 @@ brought. That makes it the same question `__version__` was standing in for, aske
 that actually moved — and it is the only number in the binary on the same scale as a pin.
 
 Comparing the workspace version against a pin instead would compare `0.1.0` with `0.62.1` and
-call every plane adrift, forever. `charter doctor`'s `version lock` row declined exactly that:
+call every plane adrift, forever. `purlis doctor`'s `version lock` row declined exactly that:
 it reports the pin and says the comparison *"is not ported to this charter yet"* rather than
 comparing against the wrong number. This ADR supplies the right number; moving that row onto
 it is the follow-up named at the end, and until it lands `version` is the surface that
 compares and `doctor` is the surface that defers — which is stated in both rather than left
 for a reader to discover.
 
-## Why the verdict is not charter's sentence
+## Why the verdict is not purlis's sentence
 
-Python says **in sync with the lock (X)** when the two numbers agree. A Rust charter that said
+Python says **in sync with the lock (X)** when the two numbers agree. A Rust purlis that said
 that would be claiming something it cannot substantiate. M2 is still porting commands: a binary
 whose corpus reaches 0.62.1 is not everything charter 0.62.1 does, and a plane pinning 0.62.1
 is pinning the Python charter's behaviour, not this one's. ADR 0013's rule — the absence of
-information is not evidence of health — applies to charter's claims about itself, so the line
+information is not evidence of health — applies to purlis's claims about itself, so the line
 states what is true and stops:
 
     ✓ this charter brought 0.62.1, which is what this control plane pins.
@@ -53,7 +53,7 @@ and on drift:
 
     ! drift: this control plane pins 0.61.0, and this charter brought 0.62.1.
 
-For the same reason the remedy is not charter's. `charter version sync` installs a published
+For the same reason the remedy is not purlis's. `purlis version sync` installs a published
 `charter-cp` release over a machine-global binary; it cannot reach a binary inside an app
 bundle, so pointing at it would be advice that does not work. What the operator can actually
 do is move the pin, or run the charter-cp the plane names, and that is what is printed.
@@ -69,40 +69,40 @@ the fixture planes it runs on are chosen so that all three states are exercised.
 
 The equality the scenarios turn on is a coincidence worth naming: at the pinned oracle commit
 the newest news entry and `charter.__version__` are both `0.62.1`, so a plane pinning that
-number is *in sync* for Python and *brought* for charter-app. They move together because both
+number is *in sync* for Python and *brought* for purlis. They move together because both
 come from the same commit — the vendored corpus and the oracle are pinned to it by
 construction — but they are not the same field, and the day they part the pin-met scenario
 goes red and says so.
 
 ## `version sync` and `version bump`
 
-Both are registered, with charter's own flags, and both refuse by name. They were clap usage
+Both are registered, with purlis's own flags, and both refuse by name. They were clap usage
 errors, which is the failure M2.21 removed from `docs list` and `docs show`: a script that
 calls a verb the tool being replaced has is owed a sentence, not a parser's exit 2. Neither can
 be ported — one installs a wheel, the other installs and verifies one before writing the pin —
 so the refusal is the implementation, and it names the mechanism rather than apologising.
 
 The sentence it names the mechanism with is one constant, `adopt::THE_APP_MOVES_IT`, shared
-with `charter update`'s refusal. Two commands describing one artifact in two paragraphs is two
+with `purlis update`'s refusal. Two commands describing one artifact in two paragraphs is two
 paragraphs to keep in step, and the day they drift an operator gets two accounts of the same
 binary.
 
 ## What this rules out
 
-- Printing the workspace version as the answer to "which charter is this", anywhere.
-- Comparing a `charter-cp` pin against `charter-app`'s own version, in any surface.
+- Printing the workspace version as the answer to "which purlis is this", anywhere.
+- Comparing a `charter-cp` pin against `purlis`'s own version, in any surface.
 - An `installed` row or a `latest` row on a binary that is not installed from an index — there
   is no honest value for either, and a dash with a footnote is a row that teaches nothing.
-- Saying *in sync with the lock*, or any other sentence that asserts parity with a charter
+- Saying *in sync with the lock*, or any other sentence that asserts parity with a purlis
   release, while the port is partial.
-- Pointing an operator at `charter version sync` from inside the app.
-- A second sentence, in a second command, for the fact that the app is what moves this charter.
+- Pointing an operator at `purlis version sync` from inside the app.
+- A second sentence, in a second command, for the fact that the app is what moves this purlis.
 - Two surfaces comparing a pin two ways: when `doctor`'s `version lock` row stops deferring, it
   asks `adopt::version_report`'s comparison, not one of its own.
 
 ## The follow-up this leaves open
 
-`charter doctor`'s `version lock` row still reports *"whether the charter serving this plane
+`purlis doctor`'s `version lock` row still reports *"whether the charter serving this plane
 matches the pin is not ported to this charter yet"*. It can now be ported, against
 `shipped_version()`, and it should be — but that row's render is compared byte for byte against
 Python's `doctor` in `tests/differential/doctor_scenarios.py`, and moving it is a change to
@@ -110,6 +110,6 @@ Python's `doctor` in `tests/differential/doctor_scenarios.py`, and moving it is 
 the decision it depends on.
 
 **Done, #573.** The row now asks `adopt::pin_verdict` (ADR 0045 replaced `shipped_version()`
-with the app's own version, and the Python differential is gone): a pin this charter meets and
+with the app's own version, and the Python differential is gone): a pin this purlis meets and
 a pin on the Python charter's line are OK, and drift is a warning that sends the reader to
-`charter version`.
+`purlis version`.

@@ -12,7 +12,7 @@ PR, and its rules are recorded here so it has one place to build from.
 
 ## The decision
 
-### A session record is a summary the chat writes, and charter files
+### A session record is a summary the chat writes, and purlis files
 
 A **session record** is one Markdown file per record: `workspaces/<ws>/sessions/
 <YYYYMMDD-HHMMSS>-<slug>.md` for a chat in a workspace, and `sessions/<…>.md` at the plane's root
@@ -21,20 +21,20 @@ transcript: at most 32 KiB, and its body is exactly five `## ` sections, in orde
 **Done**, **Decisions**, **Open**, **How to resume** — each with something under it and nothing
 before the first. A heading inside a code fence is text.
 
-**The model writes the title and the body; charter writes everything else.** The frontmatter is
-charter's alone, from facts it already holds:
+**The model writes the title and the body; purlis writes everything else.** The frontmatter is
+purlis's alone, from facts it already holds:
 
 | Key | From |
 |---|---|
 | `title`, `date` | the command's `--title`; the machine's clock |
-| `chat`, `chat-name` | `$CHARTER_CHAT`, else `$CHARTER_SESSION_ID` (the same number, set in every app chat); the name the chat's tab shows, from the app's record (`reopen::shown_name`) |
+| `chat`, `chat-name` | `$PURLIS_CHAT`, else `$PURLIS_SESSION_ID` (the same number, set in every app chat); the name the chat's tab shows, from the app's record (`reopen::shown_name`) |
 | `persona` | the persona ladder, as every command reads it; `none` for none |
 | `harness` | the program the app's record says the chat runs |
 | `conversation` | `reopen::conversation_of` — see below |
 | `workspace` | the workspace, or `plane root` |
 | `piece` (one per line) | the piece the command runs in, and each `--piece <repo>/<piece>`, with the branch `git worktree list` reports; a piece git does not report is refused |
 
-A fact charter does not have is written `unknown`, never left out, so every record has every key
+A fact purlis does not have is written `unknown`, never left out, so every record has every key
 and a reader never has to guess whether a key's absence meant something.
 
 **The conversation id is SI-8a's answer.** `reopen::conversation_of(root, number)` is the one
@@ -46,14 +46,14 @@ Claude Code chat moves to on `/clear`). A chat it holds no id for is written `un
 `## Sessions` line (the count, the latest record, a link to the index) are **rebuilt from the
 records** every time one is written. The records are the one source of truth; a hand edit to
 either lasts until the next record. `## Sessions` is in the workspace.md template, before
-`## Log`, saying there are none yet. **The skill, not charter, folds** durable decisions, terms
+`## Log`, saying there are none yet. **The skill, not purlis, folds** durable decisions, terms
 and vision changes into `## Context & decisions`, `## Glossary` and `## Vision`: those are
-judgments, and charter's line is only a pointer.
+judgments, and purlis's line is only a pointer.
 
 ### LIVE and LOCAL
 
 A workspace's records follow the workspace: the LIVE block un-ignores `sessions` and
-`sessions/**` beside `memory` and `todos`, `charter workspace live` and `reinit` write it, and a
+`sessions/**` beside `memory` and `todos`, `purlis workspace live` and `reinit` write it, and a
 LOCAL workspace keeps them on disk. `meta_paths` lists `sessions` so going LOCAL untracks them as
 it untracks memory.
 
@@ -61,21 +61,21 @@ it untracks memory.
 written by `init` and added by `reinit`). A workspace is LOCAL until somebody makes it LIVE; the
 plane root has no such switch, so the choice that publishes nothing by itself is the one that
 fails toward no change. Committing them by default would push every plane-root chat's summary to
-the plane's remote — public, for a plane like charter-plane — without anyone having chosen it.
+the plane's remote — public, for a plane like purlis-plane — without anyone having chosen it.
 Deleting the line shares them.
 
 Secrets: the skill keeps them out, and `check` refuses a record whose title or body matches the
-credential shapes `charter save` refuses a memory for (`secretshape::secret_kind`), naming the
+credential shapes `purlis save` refuses a memory for (`secretshape::secret_kind`), naming the
 kind and never the value. The save-time scan still guards whatever is committed.
 
 ### One writer, and it is what ends a Smart close
 
-`charter session record --title … [--piece …] [-w …]` with the body on standard input is the
+`purlis session record --title … [--piece …] [-w …]` with the body on standard input is the
 **only** write path. It validates (`sessionrecord::check`: title one drawable line of at most 120
 characters, body shape, size cap, no control or invisible character but a line feed or a tab, no
 credential shape), writes the record whole (temp file and rename, the name taken under a lock on
 the directory), rebuilds the index and the pointer, and then **tells the app**: one fire-and-forget
-line on `$CHARTER_HOOK_SOCKET`,
+line on `$PURLIS_HOOK_SOCKET`,
 
 ```json
 {"chat": 3, "session_saved": "/abs/plane/workspaces/alpha/sessions/20260928-140312-ship-it.md"}
@@ -84,14 +84,14 @@ line on `$CHARTER_HOOK_SOCKET`,
 `hookwire::SessionSaved`, the fourth kind of line beside a report, an ask and `StartedByHand`
 (ADR 0062), and the same shape: one connection, one line, a 250 ms write deadline, every failure
 dropped. It is read after the other three and requires `session_saved`, which none carries, so
-no line an older `charter` writes reads as one, and an app older than this reads the line as
+no line an older `purlis` writes reads as one, and an app older than this reads the line as
 nothing and drops the connection. `Listener::each_answering_noticing_and_saving` hands it to the
 app; the existing `each_answering_and_noticing` drops it.
 
-With no socket or no `$CHARTER_CHAT` (a chat started outside the app), or an app that did not
+With no socket or no `$PURLIS_CHAT` (a chat started outside the app), or an app that did not
 hear it, the record is written all the same and the command says the tab will not close by
-itself. `charter session list [-w]` and `charter session show <file>` read them back.
-`session` joins charter's core words.
+itself. `purlis session list [-w]` and `purlis session show <file>` read them back.
+`session` joins purlis's core words.
 
 **Completion is signalled by the command, never by reading output.** The app learns the record
 is saved from the line the command sends, exactly as it learns a chat's state from hooks: nothing
@@ -103,13 +103,13 @@ watches the terminal for a sentence the model printed (spec decision 3).
 sends it, because the prompt is the whole contract with the operator and nothing may run before
 they have read it. Smart close is different in kind: the operator has already chosen what
 happens — by clicking **Smart close** on a chat they are looking at — and the prompt names one
-skill of charter's own, on that chat, whose only write is a record the operator asked for. The
+skill of purlis's own, on that chat, whose only write is a record the operator asked for. The
 click is the consent, so the app **sends** the prompt. There is still no setting that makes a
 curation action send its prompt; this exception is Smart close's alone.
 
 The prompt is one line naming the skill in words, never a `/slash` command, so it works on every
-harness that reaches charter's skills (ADR 0063): *Use charter's smart-close skill to write this
-session's record and close the chat.* The skill ends with `charter session record`, and so the
+harness that reaches purlis's skills (ADR 0063): *Use purlis's smart-close skill to write this
+session's record and close the chat.* The skill ends with `purlis session record`, and so the
 command that writes the record is the command that closes the tab.
 
 ## The app's side (the next PR)
@@ -149,7 +149,7 @@ The operator's ruling (Q9): *the user can always get old sessions back.*
   built-in, because the record does not name the profile), with `Start::resume` set to its
   conversation so `start::ready` builds the harness's own resume words — the relaunch's builder,
   not a second one — and as its persona where the plane still has it. `Start::resuming` puts the
-  record's path in `$CHARTER_RESUMING_RECORD`, and the briefing quotes the record from it, every
+  record's path in `$PURLIS_RESUMING_RECORD`, and the briefing quotes the record from it, every
   line behind `> ` under a sentence saying it is data, up to 8,000 characters, in place of the
   last-session line.
 - **When the conversation cannot be given, the chat is fresh and says why**: no id in the
@@ -174,11 +174,11 @@ The operator's ruling (Q9): *the user can always get old sessions back.*
 - **A transcript, or a log.** It is large, holds everything the chat saw (secrets included), and
   is what a harness already keeps. A record is what the next chat needs, in five sections.
 - **Frontmatter the model writes.** Then a record could claim a chat, a branch or a workspace it
-  never had. The model gives two things; charter gives the rest.
+  never had. The model gives two things; purlis gives the rest.
 - **Reading the chat's output to know it is done.** Parsing harness output decides nothing
   (spec decision 3); the command that did the work says it is done.
-- **Charter folding the record into `workspace.md`.** Deciding what is durable is judgment. The
-  skill does it; charter keeps one pointer line.
+- **purlis folding the record into `workspace.md`.** Deciding what is durable is judgment. The
+  skill does it; purlis keeps one pointer line.
 - **Committing plane-root records by default.** Above.
 - **Reading the harness's "no conversation found" to fall back.** Output decides nothing (spec
   decision 3). The failed exit before any report is the signal, and its cost is said: a resumed
@@ -191,11 +191,11 @@ The operator's rulings of 2026-09-28, and what was measured to carry them out.
 
 ### The record command is pre-allowed on Claude Code, and on nothing else
 
-_Amended 2026-10-03 by V79: charter's five read-only MCP tools are pre-allowed beside it
+_Amended 2026-10-03 by V79: purlis's five read-only MCP tools are pre-allowed beside it
 (below)._
 
 A Claude Code chat the app starts carries one permission rule in its session `--settings`:
-`{"permissions": {"allow": ["Bash(charter session record *)"]}}`
+`{"permissions": {"allow": ["Bash(purlis session record *)"]}}`
 (`harness::SMART_CLOSE_ALLOW`). One `allow`, no `ask`, no `deny`, no mode. It is a session flag,
 not a file: nothing is written into the plane's `.claude/settings.json` or into a workspace layer,
 so the plane's own settings and the recorded fixtures don't change, and the layer's rule that a
@@ -203,12 +203,12 @@ grant never travels sideways (`layer::RESTRICTIVE`) still holds.
 
 **Measured on Claude Code 2.1.283**, the real `claude` in a pseudo-terminal against a stand-in
 Messages server (`ANTHROPIC_BASE_URL`, a dummy token), with a scratch `HOME` and
-`CLAUDE_CONFIG_DIR` and a stand-in `charter` on `PATH`. No real model call, and none of the
+`CLAUDE_CONFIG_DIR` and a stand-in `purlis` on `PATH`. No real model call, and none of the
 operator's settings read or written. Each measurement is one launch:
 
 | Case | What happened |
 |---|---|
-| The ADR 0064 prompt as one bracketed paste and `\r`, in **one write** | submitted; the stand-in's main request held exactly one user text, *Use charter's smart-close skill to write this session's record and close the chat.* |
+| The ADR 0064 prompt as one bracketed paste and `\r`, in **one write** | submitted; the stand-in's main request held exactly one user text, *Use purlis's smart-close skill to write this session's record and close the chat.* |
 | `--permission-mode default`, **no** allow rule, the skill's heredoc command | asked: *This command requires approval. Do you want to proceed?* (the red run) |
 | the same, **with** the allow rule | ran in about a second, no prompt |
 | a body holding backticks, `$(…)` and `$HOME` inside the quoted heredoc | ran, no prompt |
@@ -230,25 +230,25 @@ itself: #517, ruled and fixed below (SI-8f).
 
 **opencode is a documented gap.** Its default lets `bash` run without asking. It can be told
 `permission.bash` patterns for one session through `OPENCODE_CONFIG_CONTENT`, but there the more
-specific pattern wins, so `"charter session record *": "allow"` would override an operator's own
-`"charter *": "deny"`: broader than the ruling allows. The other way is a permission hook in the
-shim, which is authority charter arms nowhere (`plugin` tests). Nothing is added. A chat whose
+specific pattern wins, so `"purlis session record *": "allow"` would override an operator's own
+`"purlis *": "deny"`: broader than the ruling allows. The other way is a permission hook in the
+shim, which is authority purlis arms nowhere (`plugin` tests). Nothing is added. A chat whose
 operator configured opencode to ask will ask.
 
 SI-8c's rule is unchanged: answering a question the chat asks mid-turn doesn't cancel a Smart
 close.
 
-### Amended 2026-10-03: charter's five read-only MCP tools are pre-allowed too (V79, #1050)
+### Amended 2026-10-03: purlis's five read-only MCP tools are pre-allowed too (V79, #1050)
 
 The operator's ruling V79 widens the one-allow rule above, for Claude Code only. The same
 session `--settings` now carries the Smart close allow and five more, one per read-only tool of
-charter's own MCP server (HP-7, `chattools::PRE_ALLOWED`):
+purlis's own MCP server (HP-7, `chattools::PRE_ALLOWED`):
 
 `mcp__charter__todo_list`, `mcp__charter__memory_search`, `mcp__charter__session_record_list`,
 `mcp__charter__session_record_read` and `mcp__charter__change_status`.
 
 - **Each tool by its full name, never the server.** An `mcp__charter` rule would allow every
-  tool charter's server offers, including one added later.
+  tool purlis's server offers, including one added later.
 - **The writes and `ask_operator` still prompt.** `todo_add`, `todo_done` and `memory_add` change
   the workspace. `ask_operator` is marked read-only, but it is a question for the operator and
   goes through the harness's prompt anyway. The list is written out, not derived from the
@@ -257,16 +257,16 @@ charter's own MCP server (HP-7, `chattools::PRE_ALLOWED`):
   written to a settings file, and an operator's own `ask` or `deny` for any of these tools still
   wins, as measured above for the record command.
 
-**A rule names a server by its name, so which server answers to `charter` was measured.** Claude
+**A rule names a server by its name, so which server answers to `purlis` was measured.** Claude
 Code also loads MCP servers from a project's `.mcp.json`, from the local and user scopes and from
 the operator's own configuration, and a server registered there under the same name would answer
 to the same tool names, pre-allows included. Measured on Claude Code 2.1.288, one launch per
 case: the real `claude -p` with a scratch `HOME` and `CLAUDE_CONFIG_DIR`, a dummy token and an
 unreachable API, reading the server list and the tool list it reports at start. Two stand-in
 stdio servers both named `charter` offered different tools, one handed over with `--mcp-config`
-the way charter hands it, and one in the scope under test.
+the way purlis hands it, and one in the scope under test.
 
-| The other `charter` | Without `--mcp-config` | With charter's `--mcp-config` |
+| The other `purlis` | Without `--mcp-config` | With purlis's `--mcp-config` |
 |---|---|---|
 | project `.mcp.json`, not approved | not loaded | the session's answers; the other is never started |
 | project `.mcp.json`, approved by name | it answers | the session's answers; the other is never started |
@@ -275,7 +275,7 @@ the way charter hands it, and one in the scope under test.
 | user scope | it answers | the session's answers; the other is never started |
 
 The session's `--mcp-config` server wins in every scope, and the same-named one is not started
-at all. So the name stays `charter`, without `--strict-mcp-config`, which would also drop the
+at all. So the name stays `purlis`, without `--strict-mcp-config`, which would also drop the
 operator's own servers from every chat. It is what 2.1.288 does, not a rule Claude Code
 documents: one whose precedence changed would hand these five allows to another server, so it is
 measured again with this ADR's other Claude Code measurements. A session-unique server name was
@@ -287,7 +287,7 @@ Codex and opencode are not covered by this ruling, and nothing is added for them
 ### The record names its profile and its directory, and Resume uses them
 
 `profile:` (the app's `reopen.json` `profile` for the chat, by name) and `cwd:` (its `cwd`,
-plane-relative, `.` for the plane root, `unknown` outside the plane) are charter's frontmatter,
+plane-relative, `.` for the plane root, `unknown` outside the plane) are purlis's frontmatter,
 next to `harness:` and `workspace:`, never the model's. The CLI takes neither as a flag or from
 the chat's environment. Read back, `profile:` is kept only as a profile name, and `cwd:` only
 as plain relative components: no `..`, not absolute, no backslash, nothing undrawable.
@@ -365,7 +365,7 @@ would not close on the record — and keeps the wrapping-up mark.
 
 ### A Stop hook passes on the line the sandbox refused (#517)
 
-**What was measured.** Codex 0.147.0's default `workspace-write` sandbox runs `charter session
+**What was measured.** Codex 0.147.0's default `workspace-write` sandbox runs `purlis session
 record` without asking and lets it write the record, and refuses its connect to the hook
 socket. Its hooks run outside that sandbox. Measured again for this change with the plane
 outside the sandbox's temporary roots (`exclude_slash_tmp` and `exclude_tmpdir_env_var`, since
@@ -374,7 +374,7 @@ below `workspaces/alpha/` and could **not** write the plane's own `.charter/`. S
 line cannot wait in the plane's `.charter/sessions/`, the place first suggested for it; it waits
 in the directory of the place the chat works, which is the chat's own.
 
-**The rule.** When `charter session record` had a socket and a chat to tell and the line did not
+**The rule.** When `purlis session record` had a socket and a chat to tell and the line did not
 get through, it leaves a marker, `<place>/.charter/sessions/<chat>.saved`
 (`docs/plane-format.md`): the chat, its conversation as the app recorded it, the record's path,
 and when. The place is the one the command files a record in when it is given no `-w`, which is
@@ -398,6 +398,6 @@ Stop's line is a harmless duplicate.
 approval policy, or writing an execpolicy rule into the operator's `CODEX_HOME`.
 
 **Verified live** against codex-cli 0.147.0 with a stand-in model server in a scratch
-`CODEX_HOME`: the chat ran the real `charter session record` in its sandbox, the connect was
+`CODEX_HOME`: the chat ran the real `purlis session record` in its sandbox, the connect was
 refused and the marker left, and the `Stop` hook sent the line the tab closes on.
 

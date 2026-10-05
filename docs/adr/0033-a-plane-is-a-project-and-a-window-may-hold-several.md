@@ -1,7 +1,7 @@
 # A plane is a project, and a window may hold several
 
-The operator double-clicked charter-app and got an app that could not be used. A `.app`
-launched from the Finder inherits `/` as its working directory; charter-app resolves its plane
+The operator double-clicked purlis and got an app that could not be used. A `.app`
+launched from the Finder inherits `/` as its working directory; purlis resolves its plane
 from that directory and from nothing else, so it resolved none, drew `No plane: …` and offered
 no way to give it one. The app is usable only when it is launched from a terminal standing
 inside a plane — which is to say, only by someone who did not need a desktop app.
@@ -9,7 +9,7 @@ inside a plane — which is to say, only by someone who did not need a desktop a
 That is not a bug in a line of code. **ADR 0025 assumed the plane was given.** The spec it
 produced (`docs/superpowers/specs/2026-09-17-charter-app.md`) opens with "one window", lists
 workspaces, chats, panels and a palette, and never says where the plane comes from, because in
-the tmux frame it came from the shell that ran `charter`. A desktop app has no shell. This
+the tmux frame it came from the shell that ran `purlis`. A desktop app has no shell. This
 record and the two beside it — [ADR 0034](0034-charter-keeps-a-little-state-outside-every-plane.md)
 and [ADR 0035](0035-a-plane-is-untrusted-until-the-operator-opens-it.md) — are the decisions the
 operator took on 2026-09-20 to close that hole.
@@ -27,19 +27,19 @@ operator took on 2026-09-20 to close that hole.
   `.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| lifecycle::show(app)))`. The
   arguments and the working directory of the second launch are bound to `_` and dropped.
 
-So charter-app has one plane per process, decided once, from one directory, at startup.
+So purlis has one plane per process, decided once, from one directory, at startup.
 
 ## The decision
 
 **A project is a plane.** The top-level switcher is a plane switcher, and "Open Project…" opens
 a directory that has, or will get, a `charter.toml`.
 
-There is no second container. charter already has exactly one thing that holds personas,
+There is no second container. purlis already has exactly one thing that holds personas,
 workspaces, todos, memory and vaults, and [ADR 0007](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) deleted the
 *second plane shape* precisely so that no function would ever again have to ask which shape it
 was in. A "project" that was not a plane would be the embedded shape returning under a friendlier
 name, with every one of those forks reopened. The word changes and nothing else does: what the
-operator calls a project on the File menu is the directory charter calls a plane everywhere
+operator calls a project on the File menu is the directory purlis calls a plane everywhere
 else, and `CONTEXT.md` now says so, because `Workspace` has carried `_Avoid_: project` since the
 glossary was written and that line is now load-bearing in a way it was not.
 
@@ -62,7 +62,7 @@ same merges. Each plane's own `.charter/app/reopen.json` still restores that pla
 that record does not change. The two are deliberately separate and their scopes are the reason:
 *which planes were open and how they were arranged* is a fact about this machine, which no single
 plane can hold; *which chats a plane had* is a fact about the plane, which travels with it. Where
-the machine-level record lives and why charter is allowed one at all is ADR 0034.
+the machine-level record lives and why purlis is allowed one at all is ADR 0034.
 
 **A plane in that record that has moved or is gone is dropped with a line saying so**, never an
 error dialog. This is the rule `put_back` already follows for a chat whose profile has gone —
@@ -102,7 +102,7 @@ field, which is a change to the generated bindings and therefore to the UI.
 
 - **One process per plane.** The cheapest change by far: the state model above stays exactly as it
   is. It fails on ADR 0025's own rule. Every session is a child of the app, so N planes is N trays,
-  N quit warnings, N sockets, and an operator who quits charter and finds charter still running.
+  N quit warnings, N sockets, and an operator who quits purlis and finds purlis still running.
 - **One window per plane with no merging.** Half the feature, and the half the operator did not
   ask for. He asked for Zed's arrangement by name, and an operator with eight planes wants them
   arranged rather than scattered across eight windows the OS stacks for him.
@@ -118,8 +118,8 @@ field, which is a change to the generated bindings and therefore to the UI.
   terminal program with a window. M1 was declared a daily driver against a definition that
   assumed a terminal launch; that is not reopened, but it is worth saying that the bar moved
   under it rather than pretending it did not.
-- `charter`, the CLI, is untouched. It resolves its plane the way it always has, from the
-  directory it was run in and `$CHARTER_ROOT`. Nothing in this record reaches it.
+- `purlis`, the CLI, is untouched. It resolves its plane the way it always has, from the
+  directory it was run in and `$PURLIS_ROOT`. Nothing in this record reaches it.
 - Two records now describe what to reopen, at two scopes. A reader who finds only one of them
   will draw the wrong conclusion about the other, which is why both are named here and in ADR
   0034.

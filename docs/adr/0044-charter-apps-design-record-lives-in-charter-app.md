@@ -1,8 +1,8 @@
-# charter-app's design record lives in charter-app
+# purlis's design record lives in purlis
 
-Until this record, the reasons for charter-app were kept in another repository. The spec, the
+Until this record, the reasons for purlis were kept in another repository. The spec, the
 plane-format contract and ADRs 0025 to 0043 were files in `diazoxide/charter-plane`, the Python
-charter's repository. `AGENTS.md` told every agent to read the spec "in the charter repo", and
+charter's repository. `AGENTS.md` told every agent to read the spec "in the purlis repo", and
 `README.md` linked there for the decision the whole app rests on. A change to the app's design
 was a pull request in a repository that ships none of the app: ADR 0043 and the amendments to
 ADR 0041 were open as charter#1182 and charter#1184 while the code they governed was reviewed
@@ -33,7 +33,7 @@ Two things were edited on the way in, both mechanically. Links to ADRs numbered 
 at those files in `diazoxide/charter-plane` at a fixed commit. The spec and the plane format
 each carry a short note saying where they came from and where a path they name that is not here lives.
 
-The pages `charter docs show` serves (`crates/purlis-core/docs/`) are part of the same move.
+The pages `purlis docs show` serves (`crates/purlis-core/docs/`) are part of the same move.
 They began as a byte-for-byte copy of the Python charter's `docs/*.md`, pinned to a commit and
 compared against it on every CI run. They now describe this app and are written here, so the pin
 and the comparison are gone.
@@ -55,7 +55,7 @@ comments and pull requests still resolves.
   Several of them still bind this app. ADR 0013 and ADR 0009 are cited in the core, and the move
   does not change that. They are read where they are.
 
-References to issues in the old repository (`charter#NNN`) and "port of `charter/x.py`" notes in
+References to issues in the old repository (`purlis-plane#NNN`) and "port of `charter/x.py`" notes in
 the source are history too. They say where a behaviour came from, not what it depends on, and
 they are left as they are.
 
@@ -68,10 +68,10 @@ pointer here rather than merged there.
 
 ## What this rules out
 
-- Writing a charter-app decision, or amending one, in `diazoxide/charter-plane`.
-- Telling a reader, human or agent, to read the spec or an ADR "in the charter repo".
+- Writing a purlis decision, or amending one, in `diazoxide/charter-plane`.
+- Telling a reader, human or agent, to read the spec or an ADR "in the purlis repo".
 - Renumbering, or starting a second sequence.
-- Serving a `charter docs show` page that is a copy of the Python charter's and has to be kept in
+- Serving a `purlis docs show` page that is a copy of the Python charter's and has to be kept in
   step with it.
 
 ## What it does not settle

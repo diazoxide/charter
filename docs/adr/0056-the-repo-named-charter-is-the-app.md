@@ -2,6 +2,12 @@
 
 **Accepted 2026-09-25**, by the operator.
 
+**Amended 2026-10-05 by [ADR 0091](0091-the-product-is-purlis-and-reads-its-old-names-until-1-0.md)**
+(rulings V92 and V93): the product is now purlis, the app's repo is `purlis/purlis` and the plane
+is `purlis/purlis-plane`. This record keeps the names it was written with, because its subject is
+those names. Its rule stands: `diazoxide/charter`, `diazoxide/charter-plane` and `charter-app` are
+never reused.
+
 charter-app began as the rebuild of a Python tool that lived in `diazoxide/charter`, and it took
 the name `charter-app` because that name was taken. Neither half of that is true any more. The
 app stands alone ([ADR 0044](0044-charter-apps-design-record-lives-in-charter-app.md), [ADR

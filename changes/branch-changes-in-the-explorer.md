@@ -14,7 +14,7 @@
 - **The explorer reads a branch's changes without starting git.** It reads them by itself as
   agents write, so it no longer starts git in a branch's folder for them, and nothing that
   folder's git config names can run from that read. The read runs in a short-lived copy of
-  charter itself, which is stopped if it runs too long or uses too much memory, so a branch built
+  purlis itself, which is stopped if it runs too long or uses too much memory, so a branch built
   to hang or swell the read costs that copy and not the app (FM-4, #1107).
-- **A git read through charter's git runner no longer fetches an object the repository
+- **A git read through purlis's git runner no longer fetches an object the repository
   lacks.** Such a read now fails instead of fetching the object on its own (FM-4, #1107).

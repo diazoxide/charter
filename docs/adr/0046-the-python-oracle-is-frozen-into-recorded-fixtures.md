@@ -46,7 +46,7 @@ never compared.
   README says how the subset was chosen and what it reaches.
 
 **`cargo test -p charter-cli --test recorded_behaviour` replays a row.** It copies the fixture
-plane, lays `start` down, runs this build's `charter` in the recorded environment, and checks
+plane, lays `start` down, runs this build's `purlis` in the recorded environment, and checks
 what the differential checked of the Rust side:
 
 - the exit status;

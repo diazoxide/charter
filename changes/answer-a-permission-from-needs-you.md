@@ -5,7 +5,7 @@
   offers: allow, deny, and a rule for the rest of the session. Your choice goes back through
   Claude Code's own `PermissionRequest` hook, so the chat carries on without you opening its
   pane. The pane shows its own prompt at the same time, and either place may answer; left
-  unanswered for about a minute, the prompt is the pane's alone. charter never allows or denies
+  unanswered for about a minute, the prompt is the pane's alone. purlis never allows or denies
   anything by itself. Allow is offered only when the list shows the whole command, word for
   word and as it runs. A long command, one over several lines, one holding a credential or an
   invisible character, one asking to run outside the sandbox or in the background, or a file

@@ -4,46 +4,46 @@ A **persona** is a role identity a chat adopts — `devops`, `qa`, `keycloak-mas
 your work needs. Workspaces decide *which repos*; personas decide *who is working* and *what
 they know*.
 
-The CLI's `charter persona` has `create`, `show`, `list`, `use`, `current`, `clear`,
+The CLI's `purlis persona` has `create`, `show`, `list`, `use`, `current`, `clear`,
 `default`, `remove`, `lint`, `remember`, `recall`, `forget`, `dedupe`, `optimize`, `log`,
 `secret`, `sync-agents` and `stats`.
 
 ```
-charter persona create qa --role "QA Engineer" --delegate-when "test plans, flaky suites"
-charter persona show qa                    # its metadata and the charter it adopts
-charter persona list                       # who exists, who's active, each one's vault
-charter persona use devops                 # the active persona for this session + this pane
-charter persona clear                      # drop this session's, pane's and plane-wide choice
-charter persona lint                       # dangling uses:/extends:, missing role/vault, stale agents
-charter persona sync-agents                # a Claude Code sub-agent per persona, in .claude/agents/
-charter persona stats                      # roster health: memory, verification, dispatches
-charter persona remove qa                  # refused while another persona extends or uses it
+purlis persona create qa --role "QA Engineer" --delegate-when "test plans, flaky suites"
+purlis persona show qa                    # its metadata and the charter it adopts
+purlis persona list                       # who exists, who's active, each one's vault
+purlis persona use devops                 # the active persona for this session + this pane
+purlis persona clear                      # drop this session's, pane's and plane-wide choice
+purlis persona lint                       # dangling uses:/extends:, missing role/vault, stale agents
+purlis persona sync-agents                # a Claude Code sub-agent per persona, in .claude/agents/
+purlis persona stats                      # roster health: memory, verification, dispatches
+purlis persona remove qa                  # refused while another persona extends or uses it
 ```
 
 A persona's memory is kept up the way a workspace's is:
 
 ```
-charter persona forget devops <slug>       # delete one memory (--shared, --ephemeral)
-charter persona dedupe devops              # near-duplicate pairs, to forget one of
-charter persona optimize                   # curate every persona and _shared; --apply the safe ops
-charter persona log devops "<note>"        # note to this session's activity; no note shows it
+purlis persona forget devops <slug>       # delete one memory (--shared, --ephemeral)
+purlis persona dedupe devops              # near-duplicate pairs, to forget one of
+purlis persona optimize                   # curate every persona and _shared; --apply the safe ops
+purlis persona log devops "<note>"        # note to this session's activity; no note shows it
 ```
 
 `create` writes `personas/<name>/persona.md` as a **draft** (`draft: true`), with its
 `memory/` and `refs/`. `--delegate-when` is required unless `--extends` names a parent to
 inherit it from; a value holding a line break or `---` is refused, because each is written as
 one frontmatter line. While the draft line is there no sub-agent is generated: write what the
-persona owns, drop the line, then `charter persona sync-agents`. `--with-vault` registers its
-vault as `charter vault add <vault> --persona <name>` would, and `--use` selects it.
+persona owns, drop the line, then `purlis persona sync-agents`. `--with-vault` registers its
+vault as `purlis vault add <vault> --persona <name>` would, and `--use` selects it.
 
-`charter doctor` runs the same lint: its `personas` row summarises the roster, and `persona
+`purlis doctor` runs the same lint: its `personas` row summarises the roster, and `persona
 grant` warns when the active persona is broken and its `tools:` are still approved.
 
 A persona lives in a **committed** directory, `personas/<name>/`:
 
 ```
 personas/devops/
-├── persona.md     # frontmatter (role, tools, …) + the charter itself (prose)
+├── persona.md     # frontmatter (role, tools, …) + the purlis itself (prose)
 ├── memory/        # persistent, committed knowledge — MEMORY.md index + one file per fact
 ├── refs/          # curated docs, links and snippets for the role, also committed
 └── bin/           # optional: executables this persona carries
@@ -51,7 +51,7 @@ personas/devops/
 
 `personas/_shared/` holds the memory and refs every persona reads.
 
-## The charter format
+## The purlis format
 
 ```markdown
 ---
@@ -69,7 +69,7 @@ You are the **devops** persona — DevOps Engineer. …
 
 The frontmatter is flat `key: value` lines. The keys this version acts on:
 
-| Key | What charter does with it |
+| Key | What purlis does with it |
 | --- | --- |
 | `role` | Shown in the app's persona view, and quoted to a chat started as this persona. |
 | `delegate-when` | What work belongs here. Shown in the persona view and quoted in the session briefing. |
@@ -77,14 +77,14 @@ The frontmatter is flat `key: value` lines. The keys this version acts on:
 | `extends` | Inherit another persona's frontmatter (see *Inheritance*). |
 | `uses` | Other personas whose `tools:` this one may also run without a prompt, unless `borrows:` narrows it. |
 | `borrows` | Which of those personas' tools are unioned in: a list of names, or `none`. |
-| `vault` | The vault `charter persona secret` reads for this persona; `none` says it holds no credentials. Shown by `persona list` and named in its generated sub-agent ([secrets.md](secrets.md)). |
+| `vault` | The vault `purlis persona secret` reads for this persona; `none` says it holds no credentials. Shown by `persona list` and named in its generated sub-agent ([secrets.md](secrets.md)). |
 | `activity` | `orchestrator`, `standby` or `advisory`: memory volume is not a usage signal for this persona, so `persona stats` does not call it dormant. |
-| `draft` | `true` while the charter is unfinished: `sync-agents` generates no sub-agent for it. |
+| `draft` | `true` while the purlis is unfinished: `sync-agents` generates no sub-agent for it. |
 | `agent-tools`, `disallowed-tools`, `skills`, `dispatch-isolation`, `model`, `color`, `memory`, `agent-description`, `description` | Read by `sync-agents` into the generated sub-agent — see *Sub-agents* below. |
 
 Other keys are kept in the file and not acted on in this version.
 
-Everything below the second `---` is the **charter** itself: free prose describing the role.
+Everything below the second `---` is the **purlis** itself: free prose describing the role.
 
 ### Inheritance (`extends`)
 
@@ -97,8 +97,8 @@ the chain, the persona borrows nothing rather than every `uses:` persona's tools
 
 ## Which persona a chat is on
 
-A chat started from the app's picker on a persona gets `$CHARTER_PERSONA` set to that name,
-and the picker refuses a name this plane has no persona for. Every `charter` command and hook
+A chat started from the app's picker on a persona gets `$PURLIS_PERSONA` set to that name,
+and the picker refuses a name this plane has no persona for. Every `purlis` command and hook
 in that chat resolves it from there.
 
 Outside that, seven rungs decide, highest first. The first one that names a persona wins:
@@ -106,14 +106,14 @@ Outside that, seven rungs decide, highest first. The first one that names a pers
 | Rung | Where |
 | --- | --- |
 | `--persona <name>` | the flag, one command |
-| `$CHARTER_PERSONA` | the environment |
+| `$PURLIS_PERSONA` | the environment |
 | session pointer | `.charter/sessions/<id>.persona` |
 | terminal pointer | `.charter/terminals/<id>.persona` |
 | plane-wide file | `.charter/active-persona` |
 | declared default | `charter.toml` `[persona] default` |
 | legacy default | `personas/.default` |
 
-`$CHARTER_PERSONA` is stripped of surrounding whitespace, and a value that is empty or only
+`$PURLIS_PERSONA` is stripped of surrounding whitespace, and a value that is empty or only
 whitespace counts as unset. A `--persona` that is only whitespace is refused.
 
 **The two committed rungs name a persona only if it exists.** A rung above them that names a
@@ -121,14 +121,14 @@ persona that does not exist still wins, and the session has **no** persona — t
 default does not stand in for it, because that would hand the chat a persona, with its
 tools, that nobody chose. The session briefing says so when it happens.
 
-`charter persona current` prints the name the ladder resolved, and `charter persona list`
+`purlis persona current` prints the name the ladder resolved, and `purlis persona list`
 prints it with the rung that decided, above the roster.
 
-`charter persona use <name>` selects a persona: it writes the session pointer and, where
+`purlis persona use <name>` selects a persona: it writes the session pointer and, where
 the terminal reports a pane id, the terminal pointer — so a pane keeps its persona across
 closing and reopening the harness, and another pane is not touched. Only a process with
 neither id writes the plane-wide `.charter/active-persona`. It says which of the three it
-wrote, and warns when `$CHARTER_PERSONA` is set to something else, because that outranks
+wrote, and warns when `$PURLIS_PERSONA` is set to something else, because that outranks
 every pointer. Selecting a persona opens no vault.
 
 ### The front door
@@ -140,9 +140,9 @@ A plane declares its default persona in `charter.toml`:
 default = "steward"
 ```
 
-Set it with `charter persona default <name>`, or edit the file. `charter persona default
+Set it with `purlis persona default <name>`, or edit the file. `purlis persona default
 --clear` removes it from `charter.toml` and removes the legacy `personas/.default` too,
-because either one left behind would go on answering. `charter init` creates no personas, so
+because either one left behind would go on answering. `purlis init` creates no personas, so
 a fresh plane has no front door until you declare one.
 
 `personas/.default` is the older committed declaration. It still resolves, one rung below
@@ -175,23 +175,23 @@ Every persona's memory has two axes — **own or shared**, **persistent or ephem
 The writer picks the quadrant:
 
 ```
-charter persona remember devops "prod kubeconfig lives in the devops vault, key KUBECONFIG"
-charter persona remember devops "the migration runbook is at ..." --shared
-charter persona remember devops "trying approach X for this task" --ephemeral
+purlis persona remember devops "prod kubeconfig lives in the devops vault, key KUBECONFIG"
+purlis persona remember devops "the migration runbook is at ..." --shared
+purlis persona remember devops "trying approach X for this task" --ephemeral
 ```
 
 Persistent memory is written into the committed tree. Committing it as it is written is not
 in this version yet: when the plane's `[memory].share` is anything but `local`, `remember`
-says so, and you commit and push `memory/` with git (or `charter save`). Ephemeral memory is
+says so, and you commit and push `memory/` with git (or `purlis save`). Ephemeral memory is
 gitignored scratch for one session.
 
-Read it back with `charter persona recall devops [--query "kubeconfig"]`, or search the
+Read it back with `purlis persona recall devops [--query "kubeconfig"]`, or search the
 persona's own memory, the shared namespace, its refs and the active workspace's journal at
-once with `charter recall "<keywords>"`.
+once with `purlis recall "<keywords>"`.
 
 Memory and refs are committed and shared with the team, so a credential written into one is
 disclosed. A chat is told at once when a memory or ref it wrote looks like it holds one, and
-`charter save` refuses to commit it — see [secrets.md](secrets.md).
+`purlis save` refuses to commit it — see [secrets.md](secrets.md).
 
 ## The tool gate
 
@@ -205,8 +205,8 @@ meets the harness's ordinary prompt. It declines:
 - interpreters and wrappers — `bash`, `python`, `env`, `sudo`, `xargs`, `find`, `make` — which
   run whatever their arguments say;
 - a command with an argument that is itself an executable file;
-- destructive subcommands — `kubectl delete`, `git clean`, `charter secret` and the like;
-- anything that touches charter's own state, the vault directory or a persona definition, by
+- destructive subcommands — `kubectl delete`, `git clean`, `purlis secret` and the like;
+- anything that touches purlis's own state, the vault directory or a persona definition, by
   any spelling, link or case-folded name;
 - a command whose program is not the file the declared name refers to: a bare name only when
   the persona ships no script of that name in `bin/`, and a path only when it is that very
@@ -220,9 +220,9 @@ Scripts in `bin/` are not put on `PATH`; call them by path, and declare their na
 `tools:` like any other program. `bin/` is committed, so on a shared plane it reaches
 teammates' machines.
 
-## Sub-agents: `charter persona sync-agents`
+## Sub-agents: `purlis persona sync-agents`
 
-`charter persona sync-agents` generates one Claude Code sub-agent per persona,
+`purlis persona sync-agents` generates one Claude Code sub-agent per persona,
 `.claude/agents/<name>.md`, from its resolved definition: the charter, a description the
 router reads (built from `role`, `delegate-when`, `tools` and the vault unless
 `agent-description` or `description` says otherwise), and the frontmatter the harness acts
@@ -236,19 +236,19 @@ Each file carries a ``GENERATED by `charter persona sync-agents` `` marker
 either marks a generated file). A file at that name without either marker is hand-written
 and is left alone; a full sync removes the generated
 agents of personas that no longer exist. A persona marked `draft: true`, or whose frontmatter
-spells a key charter reads in another case or declares one twice, gets no sub-agent, and a
+spells a key purlis reads in another case or declares one twice, gets no sub-agent, and a
 generated one from before is removed — the generated file *is* the sub-agent's system prompt.
 
 A persona's MCP servers live in `personas/<name>/mcp.json` (the `.mcp.json` schema) and are
 declared in its sub-agent, so the harness starts them only when that persona is dispatched.
 A server that declares `secrets` or `secret_files` is handed the persona's vault — wrapped in
-`charter secret exec <vault> …` — only once this machine has approved the exact line
+`purlis secret exec <vault> …` — only once this machine has approved the exact line
 `sync-agents` prints for it:
 
 ```
-charter persona sync-agents                # writes the agents; names every server it withheld
-charter persona sync-agents --approve-mcp  # shows each one and asks, on a terminal
-charter persona sync-agents --approve-mcp --dry-run   # shows them and records nothing
+purlis persona sync-agents                # writes the agents; names every server it withheld
+purlis persona sync-agents --approve-mcp  # shows each one and asks, on a terminal
+purlis persona sync-agents --approve-mcp --dry-run   # shows them and records nothing
 ```
 
 `--yes` approves every server without asking and is required off a terminal. The approval is
@@ -260,11 +260,11 @@ writes that worktree's `.claude/agents/`, and says so: the generated files belon
 branch. The approvals and the vault registry stay the plane's.
 
 The output is the Python charter's, byte for byte, so the first re-sync in a plane that
-charter generated agents for before changes nothing that its personas have not.
+purlis generated agents for before changes nothing that its personas have not.
 
-## Roster health: `charter persona stats`
+## Roster health: `purlis persona stats`
 
-`charter persona stats [<name>]` reads the committed memory and the dispatch and skill logs:
+`purlis persona stats [<name>]` reads the committed memory and the dispatch and skill logs:
 per persona, how many memories it holds (`MEM`), how many are recent (`RECENT`,
 `--recent-days`, 14 by default), the share carrying a verification word (`VERIFY`), the share
 in a near-duplicate pair (`DUP`), and how often it was dispatched as a sub-agent (`DISP`). A
@@ -272,7 +272,7 @@ persona with no memory is `dormant`, one with none recent `idle`, a draft `draft
 never dispatched while others were `never dispatched`. It also names skills a persona
 declares and never uses, or uses and never declared, and how often routing advice fired
 against the dispatches that followed it — advice only the Python charter gave, read from the
-dispatch log it wrote; `routing:` is retired, and charter gives none now.
+dispatch log it wrote; `routing:` is retired, and purlis gives none now.
 
 The dispatch tally is written by a hook as sub-agents return, and can miss background
 dispatches, so `DISP` is a floor. Seeding it from past sessions' transcripts is not in this
@@ -280,6 +280,6 @@ version yet.
 
 ## Sub-agents in flight
 
-When a chat dispatches a sub-agent (the `Task` or `Agent` tool) in a plane, charter records
+When a chat dispatches a sub-agent (the `Task` or `Agent` tool) in a plane, purlis records
 it as in flight, and asks first when a persona that writes code is sent out while another
 agent is still running in the same working tree.

@@ -1,6 +1,6 @@
 ### Added
 
-- **Every chat the app starts gets charter's MCP server, whatever harness it runs.** Claude
+- **Every chat the app starts gets purlis's MCP server, whatever harness it runs.** Claude
   Code, Codex and opencode chats get the same tools, for that chat alone, beside your own MCP
   servers: `todo_list`, `todo_add` and `todo_done`, `memory_search` and `memory_add`,
   `session_record_list` and `session_record_read`, `change_status`, and `ask_operator`, which

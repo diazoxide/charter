@@ -56,11 +56,11 @@ first is ADR 0034's own words:
 **ADR 0039 predicted this needs a `reopen.json` version bump, and it does not.** 0039 reasoned
 from that file's rule that *"a record of any other version is ignored whole"*, which is true and
 is the reason a bump is expensive: every operator's open chats would be dropped at the first
-launch after the upgrade, silently, because a version-2 charter would read their version-1
+launch after the upgrade, silently, because a version-2 purlis would read their version-1
 record as "nothing to put back". A bump is owed when a field's **absence cannot be read
 honestly**. `pinned`'s absence reads honestly and reads as `false`: a record written before pins
 existed describes a plane where nothing was pinned, which is exactly what was true. So the field
-is added without a bump, an older charter ignores it, and nobody loses a day's chats to a
+is added without a bump, an older purlis ignores it, and nobody loses a day's chats to a
 version number.
 
 **And this is not a new judgement about that file — it is the one that file already made.**
@@ -113,7 +113,7 @@ Two consequences follow immediately and are part of the amendment rather than no
 
 - **A dangling pin is dropped, and says so.** A pinned workspace that has been renamed or
   removed on disk is a pin with nothing under it. It reads as "no such workspace", the way a
-  remembered plane that has gone already does — never as a workspace charter will then draw.
+  remembered plane that has gone already does — never as a workspace purlis will then draw.
   This is the hazard 0034 already names for trust entries keyed on a path, arriving at the level
   below.
 - **A pin cannot put a plane in the store, but it stops one falling out.** The recents list is

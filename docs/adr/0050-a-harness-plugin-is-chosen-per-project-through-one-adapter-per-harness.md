@@ -4,10 +4,10 @@ On 2026-09-24 the operator asked for a harness's own plugins to be chosen per pr
 extensions are (ADR 0048), and set one constraint on the design: *"we are going to be
 harness-agnostic - so we now supporting opencode or codex - and going to support other
 harnesses - so we need to be ready other harnesses plugins."* This record is the model that
-constraint produced and what each harness's adapter can and cannot do today (charter-app#274).
+constraint produced and what each harness's adapter can and cannot do today (purlis#274).
 
 "Plugin" here means **the harness's own plugin**: a Claude Code plugin such as
-`figma@claude-plugins-official`, or a Codex plugin such as `charter@charter`. It is not charter's
+`figma@claude-plugins-official`, or a Codex plugin such as `charter@charter`. It is not purlis's
 *extension*. ADR 0041 kept the two words apart, and this record keeps them apart too.
 
 ## The decision
@@ -15,16 +15,16 @@ constraint produced and what each harness's adapter can and cannot do today (cha
 **A harness-neutral model, and one adapter per harness.** A harness plugin is
 `{ id, harness, name, source }`. `id` is the one the harness itself uses. `harness` is the
 plane's word for the harness, which is a profile's `kind` (`claude`, `opencode`, `codex`).
-`source` says where charter read it from. An adapter
+`source` says where purlis read it from. An adapter
 (`charter_core::harness_plugin::Adapter`) knows one harness:
 
 - **where it records what it has installed** (`record`), and **what that is**, read from the
   harness's own files and never written;
-- **whether it can apply** a set of plugins to one chat that charter starts (`Support::PerChat`)
+- **whether it can apply** a set of plugins to one chat that purlis starts (`Support::PerChat`)
   or cannot yet (`Support::NotYet(why)`);
-- **which plugins charter fixes** whatever a project says (`pinned`).
+- **which plugins purlis fixes** whatever a project says (`pinned`).
 
-`ADAPTERS` holds one per harness charter knows, in the registry's order, and the settings tab
+`ADAPTERS` holds one per harness purlis knows, in the registry's order, and the settings tab
 draws a group for every one of them. A harness whose adapter cannot apply shows
 **"plugins for <harness> are not supported yet — <why>"**, lists what it has installed, and
 says that every choice a file makes for it is ignored. No harness is left out without a word.
@@ -37,15 +37,15 @@ says that every choice a file makes for it is ignored. No harness is left out wi
 "figma@claude-plugins-official" = false
 ```
 
-**A Local file git would carry chooses nothing** (charter-app#308, ADR 0048's
+**A Local file git would carry chooses nothing** (purlis#308, ADR 0048's
 [section](0048-a-project-chooses-among-the-extensions-this-machine-approved.md#a-local-file-git-would-carry-decides-nothing)).
 `harness_plugin::Choices::read` takes the two files through `settings::layer_text`, so while
 `charter.local.toml` is tracked or not ignored its `[harness_plugins]` is not read and a chat is
 handed what Shared and the workspace chose. Choosing the plugins a chat loads is exactly what a
 committed copy must not do for every clone. Each harness's group in the settings tabs says so,
-in the check's own sentence (charter-app#319).
+in the check's own sentence (purlis#319).
 
-**Precedence**, which is ADR 0048's, per plugin: Local over Shared — and, since charter-app#282,
+**Precedence**, which is ADR 0048's, per plugin: Local over Shared — and, since purlis#282,
 a workspace's layer between them (below). With neither file naming a
 plugin it is **not set**, and the harness decides as it always did, from its own user and
 project settings. One function, `harness_plugin::resolve`, answers it for the settings tab and
@@ -61,7 +61,7 @@ for a chat's start.
 | pinned | anything | anything | the pin | the pin |
 
 **Pins win over both files.** Claude Code has two, and they are the two values every chat the
-app starts already carried. `charter-app@inline` is always on: it is charter's own plugin, and
+app starts already carried. `charter-app@inline` is always on: it is purlis's own plugin, and
 it carries the hooks and the Bash guard, so a file that a chat can write must never be able to
 switch the guard off. `charter@charter` is always off, by the operator's ruling of 2026-09-23.
 The settings tab's save refuses a file that contradicts a pin. A file that contradicts one by
@@ -81,9 +81,9 @@ directory. A chat on no profile, the operator's shell, is handed the pins alone,
 has no declared kind to choose an adapter by, and `Harness::of_command` may not be relied on to
 pick one.
 
-## A workspace refines its project (charter-app#282)
+## A workspace refines its project (purlis#282)
 
-Added by charter-app#282, the third of #279's tickets, on the order ADR 0048's "A workspace
+Added by purlis#282, the third of #279's tickets, on the order ADR 0048's "A workspace
 refines its project" set for every table a workspace may hold: **this machine first, then
 Shared, then the workspace, then Local.** For a harness plugin "this machine" is what it has
 installed and the pins, so the whole order is: pins, then installed, then Local, then the
@@ -127,8 +127,8 @@ layer decided it: `charter.toml`, `workspace.json`, `charter.local.toml`, or not
   is the record `claude plugin list` reads: on the operator's machine, `claude plugin list
   --json` answered one row per install in that file, each with the same `id`, `scope`,
   `projectPath` and `installPath`. The only field it added was `enabled`, which comes from
-  settings, and charter does not need it to list what is installed. A plugin loaded with
-  `--plugin-dir` is not installed and is not listed. charter's own plugin is loaded that way
+  settings, and purlis does not need it to list what is installed. A plugin loaded with
+  `--plugin-dir` is not installed and is not listed. purlis's own plugin is loaded that way
   and is shown as a pin. Read from the operator's 2.1.x install: `version`
   2, and `plugins` keyed by `<name>@<marketplace>`, each holding a list of installs with a
   `scope` (`user`, `project`, `local`). A plugin installed in several scopes is listed once,
@@ -154,7 +154,7 @@ layer decided it: `charter.toml`, `workspace.json`, `charter.local.toml`, or not
   file set to `false`. Codex has two per-session switches near this. `--disable plugins` turns
   every plugin off, not one. `skills.config` does disable a single skill for one session
   (measured), but a plugin can also carry hooks and MCP servers, so disabling its skills is not
-  turning the plugin off. The only per-plugin switch is `config.toml`, and charter never
+  turning the plugin off. The only per-plugin switch is `config.toml`, and purlis never
   writes the operator's harness config. So this adapter reports *not supported yet*.
 
 ### opencode: not supported yet
@@ -162,7 +162,7 @@ layer decided it: `charter.toml`, `workspace.json`, `charter.local.toml`, or not
 - **Lists** the npm packages in the `plugin` array of `$XDG_CONFIG_HOME/opencode/opencode.json`
   (else `~/.config/opencode/opencode.json`), and every script in its `plugin/` and `plugins/`
   directories. opencode's docs name `plugins/`, and the operator's install has `plugin/`.
-  `opencode.jsonc` is not read, because charter has no JSONC reader, so a plugin named only
+  `opencode.jsonc` is not read, because purlis has no JSONC reader, so a plugin named only
   there is not listed.
 - **Cannot apply per chat**: opencode has no switch that turns one plugin off. It loads every
   plugin from every config file and plugin directory, together. Measured on 1.18.23 when the
@@ -179,7 +179,7 @@ stay as they are.
 
 **Not set is the default, not on.** An extension is on by default because the machine-wide list
 is what the operator already has (ADR 0048). A harness plugin is the operator's own install,
-and the harness already has an answer for it. charter says nothing about a plugin until a
+and the harness already has an answer for it. purlis says nothing about a plugin until a
 project does, so a project that says nothing starts its chats exactly as before.
 
 **Installed first.** A project file travels with every clone. It can choose among what this
@@ -188,15 +188,15 @@ not installed anyway.
 
 **Never write the harness's config.** Every value here is handed to one chat on its command
 line, or it is not handed at all. Writing `~/.codex/config.toml` would change every Codex the
-operator runs, outside charter as well. That is why Codex is *not supported yet* and not
-supported by editing its file. One exception, for a command the operator runs themselves: `charter plugin
+operator runs, outside purlis as well. That is why Codex is *not supported yet* and not
+supported by editing its file. One exception, for a command the operator runs themselves: `purlis plugin
 install` ([ADR 0057](0057-the-operator-installs-charters-plugin-for-chats-outside-the-app.md)).
 
 ## Amendment, 2026-09-26: a workspace rename does not move the harness's conversations
 
 The operator's ruling D10 on charter#367. Claude Code files each conversation under
 `~/.claude/projects/<encoded cwd>/` and finds it again only from that folder, so a chat reopened
-after `charter workspace rename` cannot resume it. **charter does not move that folder**: it is
+after `purlis workspace rename` cannot resume it. **purlis does not move that folder**: it is
 the harness's own file, and the rule above ("never write the harness's config") covers it.
 
 Instead the rename goes ahead and first names each chat that will start a fresh conversation:
@@ -211,9 +211,9 @@ conversation by its id from any folder, so they are not named and are not reset.
 
 - **Writing Codex's `config.toml`**, or a project `.codex/config.toml`. The first changes every
   Codex session on the machine. The second is a file in the repository that Codex reads only
-  for trusted projects, and charter would be writing into the operator's tree.
+  for trusted projects, and purlis would be writing into the operator's tree.
 - **Turning Codex plugins off through `skills.config`.** It reaches only the skills. A plugin
-  that is "off" while its hooks still run is worse than one charter says it cannot switch.
+  that is "off" while its hooks still run is worse than one purlis says it cannot switch.
 - **Passing through a plugin this machine has not installed.** The chat would be handed a name
   the harness cannot load, and the tab would show it as in force.
 - **One resolver shared with extensions.** ADR 0048's `resolve` puts this machine's approval

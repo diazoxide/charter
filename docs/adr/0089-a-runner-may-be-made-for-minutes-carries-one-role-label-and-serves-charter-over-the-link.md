@@ -1,4 +1,4 @@
-# A runner may be made for minutes, carries one role label, and serves charter over the link
+# A runner may be made for minutes, carries one role label, and serves purlis over the link
 
 **Accepted 2026-10-02** by the operator (rulings V46 to V55, V58 and V59), drafted for
 program-map ticket RR-28. It amends [ADR 0078](0078-a-runner-is-charterd-behind-a-connector-and-charters-own-keys-say-who-is-on-the-link.md),
@@ -68,7 +68,7 @@ It builds on ADR 0078 (the runner, the connector, the link, the provider seam),
 [ADR 0066](0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)
 (devices and events), [ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)
 (the sandbox and its egress presets), [ADR 0068](0068-a-chat-lives-in-charterd-and-the-app-is-its-client.md)
-(`charterd` and its client scopes), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
+(`purlisd` and its client scopes), [ADR 0069](0069-every-store-charter-writes-is-in-one-of-four-tiers.md)
 (tiers), [ADR 0071](0071-the-kill-switch-is-machine-state-the-command-line-stops-and-only-the-window-re-arms.md)
 (the kill switch), [ADR 0075](0075-an-audit-entry-is-metadata-in-a-store-of-its-own-and-telemetry-never-reads-it.md)
 (the audit and its registry) and [ADR 0082](0082-charter-serves-one-persons-agents-first-and-its-scale-is-a-hot-chat-count-per-ram-class.md)
@@ -82,9 +82,9 @@ approved per workspace, so it is a setting of **Workspace**. The **Runners** vie
 of **Workspace**: it shows the runners that workspace's chats started, the ones its workspace
 owns, and the devices its chats run on. No sixth concept is added (ADR 0072 §2).
 
-## Where charter is today
+## Where purlis is today
 
-ADR 0078 made a runner a device running `charter serve`, reached through a connector and spoken
+ADR 0078 made a runner a device running `purlis serve`, reached through a connector and spoken
 to over a Noise `XX` link. Its §6 ended: *"Short-lived sandbox services are not runners. A
 runner is a host that holds sessions for days."* No runner code exists yet; RR-1 (#720), RR-5
 (#721) and RR-14 to RR-16 (#723 to #725) are open.
@@ -99,10 +99,10 @@ would get a shell, a log stream and a port path of its own.
 
 ## The decision
 
-**A runner is any device running `charter serve` over the link, for days or for minutes. A
+**A runner is any device running `purlis serve` over the link, for days or for minutes. A
 long-lived runner is a machine the operator adds; a short-lived one is made by a provider, which
-for a local container is charter's own core and otherwise an extension on ADR 0078's seam. Every
-runner carries exactly one role label, `harness`, `app` or `browser`, which charter enforces, and
+for a local container is purlis's own core and otherwise an extension on ADR 0078's seam. Every
+runner carries exactly one role label, `harness`, `app` or `browser`, which purlis enforces, and
 any number of tags in the operator's own words. Its ports, shells, logs and browser views reach
 the window only over the link. It is private, it holds no vault value unless a human granted one
 for a ref a human chose, it is owned by a chat or by its workspace, it stops with the kill
@@ -112,13 +112,13 @@ switch, and every start is in the event log.**
 
 **Settled by V48 (a).** ADR 0078 §6's last paragraph is replaced (ADR 0078, amended, below).
 
-- **A long-lived runner** is ADR 0078's: a machine the operator adds with `charter runner add`,
+- **A long-lived runner** is ADR 0078's: a machine the operator adds with `purlis runner add`,
   defined in `<config>/runners.json`, holding chats for days.
 - **A short-lived runner** is made by a **provider** when a human or a chat asks for one, and
   destroyed when its owner is done with it (§9). Its record is a file of its own (§14), not a row
   in `runners.json`, because there may be many and they come and go by the minute.
 - **Both are the same thing once made.** Both are devices with a random id (ADR 0066), both run
-  `charter serve` (§3), both are paired by pinned link keys, and both are reached through a
+  `purlis serve` (§3), both are paired by pinned link keys, and both are reached through a
   connector the provider hands back. Nothing above the connector knows which kind a runner is.
 - **Pairing a short-lived runner happens at creation, over the connector its provider returned**,
   as ADR 0078 §3 pairs any runner. Its pinned key is kept in its record. A runner whose key does
@@ -126,35 +126,35 @@ switch, and every start is in the event log.**
 
 ### 2. Role labels and tags
 
-**Settled by V48 (b).** A label says what a runner is for, and charter enforces it in
-`charterd`, not in the window.
+**Settled by V48 (b).** A label says what a runner is for, and purlis enforces it in
+`purlisd`, not in the window.
 
-| Role label | What it may do | What charter refuses it |
+| Role label | What it may do | What purlis refuses it |
 |---|---|---|
 | `harness` | run chats, as ADR 0078's runners do | nothing ADR 0078 does not already refuse |
 | `app` | build and serve one version of a workspace repo (§5) | starting a chat; any vault value that is not an approved grant for a ref a human chose (§7) |
-| `browser` | run browsers that charter's broker drives (§6) | starting a chat; every vault value, grant or not (§7) |
+| `browser` | run browsers that purlis's broker drives (§6) | starting a chat; every vault value, grant or not (§7) |
 
 - **A runner carries exactly one role label.** A browser runner that could also serve an app
   would hold the app's grants beside a page an agent drives, which V52 forbids. A chat on a
   `harness` runner may still run a dev server, whose ports RR-24 forwards.
-- **Both ends check the label.** The desktop's `charterd` refuses to send a chat start, or to push
+- **Both ends check the label.** The desktop's `purlisd` refuses to send a chat start, or to push
   a vault value, down a link to a runner whose label forbids it. The runner's own host refuses
   them too, from the label it was created with. Either refusal is a `runner.refused` event (§13).
-- **A provider declares the role labels it may make**, and charter refuses a runner whose label
+- **A provider declares the role labels it may make**, and purlis refuses a runner whose label
   its provider did not declare. **Whether a provider's machines are the user's own is the
   operator's setting, never the provider's claim** (§4, V59 (b)). Until the operator marks a
   provider as owned, its runners may not carry `harness` and get no grants, whatever it
   declares (V48, V52). Hosted providers are a later provider extension, and this record is
   complete without one.
 - **Tags are any words the operator picks**, beside the label (`gpu`, `node-22`,
-  `staging-data`). charter enforces nothing about a tag. A persona or workspace may ask for a
+  `staging-data`). purlis enforces nothing about a tag. A persona or workspace may ask for a
   runner by label and tags, and the Runners tab filters by them.
 
-### 3. Every runner runs `charter serve` over the link
+### 3. Every runner runs `purlis serve` over the link
 
 **Settled by V48 (c).** A runner's shell, logs, ports and browser frames are streams of its link
-(ADR 0068 §4's session protocol, multiplexed per stream), whatever made the runner. charter never
+(ADR 0068 §4's session protocol, multiplexed per stream), whatever made the runner. purlis never
 uses a backend's own exec, log, port-forward or preview-URL API to reach what runs inside it.
 
 - **Why.** One authenticated path per runner, encrypted end to end by the link, with its N−1
@@ -171,10 +171,10 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 - **Logs are views, not telemetry.** An app's output and a browser's console are content. They
   are shown live in the Runners tab with a bounded scrollback, as a terminal is, and are not a
   fifth source for ADR 0083's pipeline. Making them one would be a change to that record.
-- **`charter serve --foreground` is the container's first process**, with the container runtime
+- **`purlis serve --foreground` is the container's first process**, with the container runtime
   as its supervisor (ADR 0078 §5). The app or the browser runs under it.
 - **On an `app` or `browser` runner the workload runs as a user of its own** (V59 (c)): an
-  unprivileged user apart from the one `charter serve` runs as, which cannot read the host's
+  unprivileged user apart from the one `purlis serve` runs as, which cannot read the host's
   link key, peers file, configuration or data directories, all of which are the serve user's
   and closed to every other user. The connector's `-u` names the serve user; the app, its build
   and the browser run as the workload user. A chat on a `harness` runner is confined by ADR
@@ -184,7 +184,7 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 
 **Settled by V49.**
 
-- **Docker and Podman are a core provider**, charter's own, with nothing to install. It speaks
+- **Docker and Podman are a core provider**, purlis's own, with nothing to install. It speaks
   each engine's API over its local socket, prefers Podman or rootless Docker (§10), and turns
   ADR 0078 §6's calls into the engine's create, start, stop and remove. Its connector is
   `docker exec -i` or `podman exec -i` as the container's non-root user (ADR 0078 §2).
@@ -202,17 +202,17 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
   machine, so it is owned. A not-owned provider's runners never carry `harness` and never get a
   grant (§2, §7).
 - **The core provider and an extension are called the same way.** The core provider implements
-  the seam's interface inside charter, so a second backend changes no caller.
+  the seam's interface inside purlis, so a second backend changes no caller.
 - **A devcontainer spec describes a runner's image** (the Dev Containers specification's
-  `devcontainer.json`). charter reads its image or Dockerfile, its features, the commands that
+  `devcontainer.json`). purlis reads its image or Dockerfile, its features, the commands that
   run *inside* the container (`onCreateCommand`, `updateContentCommand`, `postCreateCommand`,
   `postStartCommand`), and its `forwardPorts` as the ports to offer.
 - **A spec never widens what this record allows.** `initializeCommand` runs on the host, so
-  charter never runs it. The fields that would mount the host, add privileges, share the host's
+  purlis never runs it. The fields that would mount the host, add privileges, share the host's
   network or pass arbitrary engine arguments are refused, and the refusal names the field. A
   repo chooses what is in the image, never how the image is confined (§10).
-- **The verified `charter` enters the image at build, never by a host mount.** charter builds a
-  layer over the spec's image holding the `charter` binary it verified as ADR 0078 §5 does, and
+- **The verified `purlis` enters the image at build, never by a host mount.** purlis builds a
+  layer over the spec's image holding the `purlis` binary it verified as ADR 0078 §5 does, and
   reuses that image for every runner of the same spec and version.
 
 ### 5. App runners start from a branch or a commit
@@ -236,22 +236,22 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 - **Its ports are forwarded, never published** (§8): to the desktop's loopback, and brokered to
   the workspace's browser runners.
 
-### 6. Browser runners, and the browser MCP charter brokers
+### 6. Browser runners, and the browser MCP purlis brokers
 
 **Settled by V47.**
 
-- **A `browser` runner runs browsers, and only charter's broker drives them.** The browser's
+- **A `browser` runner runs browsers, and only purlis's broker drives them.** The browser's
   DevTools endpoint listens inside the runner, on its loopback, and is never forwarded, published
-  or handed to anyone. Its driver is charter's own code in the runner's host, in Rust like the
+  or handed to anyone. Its driver is purlis's own code in the runner's host, in Rust like the
   rest of the shipped app.
-- **A harness reaches it through a browser MCP server that charter runs for the chat**, on the
+- **A harness reaches it through a browser MCP server that purlis runs for the chat**, on the
   chat's own MCP route (HP-7), and delivers to each harness by that harness's own route (ADR 0050,
-  ADR 0063). A tool call goes from the harness to charter's server, over the link to the browser
+  ADR 0063). A tool call goes from the harness to purlis's server, over the link to the browser
   runner's host, and to the browser. The harness never receives a CDP or Playwright endpoint, a
   WebSocket URL or a port. **No tool passes protocol messages through:** each tool is a typed
   action (open, navigate, click, type, read, screenshot, close), and none takes a raw CDP or
   Playwright command, so the MCP is not a remote endpoint by another name.
-- **The broker is the boundary, not the browser.** Each call is a typed tool call charter logs
+- **The broker is the boundary, not the browser.** Each call is a typed tool call purlis logs
   as an event (§13), with its target page and outcome, never the page's content. What a page
   says back is untrusted tool output; the harness's own handling of that is unchanged.
 - **Every browser is shown live in the window.** The runner's host streams the browser's frames
@@ -271,11 +271,11 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 
 **Settled by V52.**
 
-- **An app runner declares the vault entries it needs** in its spec's charter section
+- **An app runner declares the vault entries it needs** in its spec's purlis section
   (`customizations.charter.grants`, each a vault and an entry name). A declaration is a request,
   never an approval.
 - **A grant is a human's approval of one declared entry for one workspace on this machine**,
-  made on `local-ui` only: in the window, or by `charter` on that scope. It is kept in
+  made on `local-ui` only: in the window, or by `purlis` on that scope. It is kept in
   `<config>/runner-grants.json` (§14), never in the plane, so a commit cannot grant itself
   anything. A grant names its workspace, repo, spec path, vault and entry. Revoking it takes
   effect at the next start.
@@ -283,7 +283,7 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
   an unreviewed ref, which is every agent's own branch, gets no granted value. The operator may
   approve a second entry as the grant's **test credential**, which such a runner gets instead.
   The `grant.injected` event names the ref and which rule made it human-chosen.
-- **charter injects a granted value at start**, through ADR 0078 §7's push: the desktop's host
+- **purlis injects a granted value at start**, through ADR 0078 §7's push: the desktop's host
   sends it down the link for that runner's serve command, bound to the runner and the start.
   Nothing writes it into an image, a build layer, the record, a log stream or the event log; the
   log stream's view masks a value it recognises, as a convenience and not as the boundary.
@@ -303,7 +303,7 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
   browser runners. Nothing is bound on the runner's public address, the container engine
   publishes no port, and a provider's own port or preview feature is never called for a private
   port.
-- **A public URL is made only by a human** from the Runners tab or `charter runner expose` on
+- **A public URL is made only by a human** from the Runners tab or `purlis runner expose` on
   `local-ui`: one port, a time limit the human picks (default one hour), revocable at any time,
   and listed on the runner's row with its expiry while it lasts. The provider's `expose` makes it
   where the provider can; the core provider exposes the desktop's forward on an address the human
@@ -319,7 +319,7 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 
 - **A short-lived runner is owned by the chat that started it, or by its workspace.** A runner a
   chat starts is owned by that chat and is **agent-started**. A runner a human starts, in the
-  Runners tab or by `charter runner start` on `local-ui`, is owned by its workspace and is
+  Runners tab or by `purlis runner start` on `local-ui`, is owned by its workspace and is
   **human-started**; the command names the workspace it starts in, and a human start never
   belongs to a chat. A human may **pin** an agent-started runner to its workspace, which then
   owns it as if a human had started it. A chat cannot pin.
@@ -339,9 +339,9 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 - **The kill switch stops every runner.** A stop on the desktop (ADR 0071) stops every
   short-lived runner through its provider, and stops the agents on every long-lived runner over
   its link, as ADR 0078 §7 already does. While the desktop is stopped no runner starts. A
-  provider that cannot be reached leaves its runner named as *not reached* (V29c), and charter
+  provider that cannot be reached leaves its runner named as *not reached* (V29c), and purlis
   keeps trying.
-- **An orphan is found on the next start of `charterd`.** The host reads every runner record,
+- **An orphan is found on the next start of `purlisd`.** The host reads every runner record,
   asks each provider for `status`, and stops or destroys what its owner's state says should no
   longer run.
 
@@ -356,7 +356,7 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 - **It drops every Linux capability, sets no-new-privileges, and mounts nothing from the host but
   its own work directory.** The engine's socket is never mounted into a runner. A seccomp profile
   is the engine's default or stricter.
-- **Two users inside, neither root** (§3, V59 (c)). `charter serve` runs as its own non-root
+- **Two users inside, neither root** (§3, V59 (c)). `purlis serve` runs as its own non-root
   user, and keeps only the capabilities it needs to start a process as another user; the
   workload of an `app` or `browser` runner runs as a second unprivileged user with no
   capabilities at all, under no-new-privileges, and cannot read the serve user's files.
@@ -371,8 +371,8 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 
 **Settled by V46**, with ADR 0082 §4's rule that a budget never caps the operator.
 
-- **A chat may start, stop and use runners in its own workspace** through charter's per-chat MCP
-  server (HP-7) and `charter runner start` on its hook channel. Both reach `charterd` on the
+- **A chat may start, stop and use runners in its own workspace** through purlis's per-chat MCP
+  server (HP-7) and `purlis runner start` on its hook channel. Both reach `purlisd` on the
   `chat` scope, which gains these requests and nothing else on a link: the human scopes stay
   refused to a chat (ADR 0068 §5).
 - **Each workspace has a runner budget on this machine, and it counts only agent-started
@@ -385,7 +385,7 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
   pinned runners are not counted against it and are never stopped by it, so the operator's own
   runners are never refused or stopped by a budget.
 - **The budget is a human's setting**, kept in `<config>/runner-budgets.json` (§14) and changed
-  only on `local-ui`: in the window, or by `charter` on that scope. A chat cannot raise it. Each
+  only on `local-ui`: in the window, or by `purlis` on that scope. A chat cannot raise it. Each
   change is a `runner.budget.changed` event (§13).
 - **Exposing a port or adding a grant stays a human's act** (§7, §8), whatever the budget.
 
@@ -422,7 +422,7 @@ uses a backend's own exec, log, port-forward or preview-URL API to reach what ru
 | `runner.exposed`, `runner.unexposed` | a human makes or ends a public URL | runner id, port, expiry, the cause of its end |
 | `browser.opened`, `browser.closed`, `browser.call` | the broker opens a browser, closes one, or runs a tool call | runner id, chat and run, tool name, the page's origin, outcome |
 | `browser.typed` | the operator types into a page through the browser view | runner id, the page's origin, how many keystrokes (never the keys) |
-| `grant.approved`, `grant.revoked`, `grant.injected` | a human approves or revokes a grant, or charter injects one at a start | workspace, repo, vault and entry name; for an injection the runner id, the ref, the rule that made it human-chosen, and whether the test credential was used |
+| `grant.approved`, `grant.revoked`, `grant.injected` | a human approves or revokes a grant, or purlis injects one at a start | workspace, repo, vault and entry name; for an injection the runner id, the ref, the rule that made it human-chosen, and whether the test credential was used |
 
 ADR 0075's registry gains them (ADR 0075, amended, below).
 
@@ -434,8 +434,8 @@ ADR 0075's registry gains them (ADR 0075, amended, below).
 | the grants | `<config>/runner-grants.json`: per project and workspace, each grant's repo, spec path, vault, entry, its test credential if any, the commits the operator approved for it, and when and by whom it was approved | Machine, device-bound, because each grant points into this machine's vaults |
 | the runner budgets | `<config>/runner-budgets.json`: per project and workspace, the concurrency, runner-hours and spend limits, the idle timeout, and the period's usage | Machine, device-bound |
 | whether a provider is owned | inside the provider extension's row in `<config>/extensions.json`, beside its approved fingerprint. **No store of its own** | Machine, device-bound, as that file is |
-| a runner's labels and tags | inside its record, or inside its row in `<config>/runners.json` for a long-lived runner. **No store of its own**: the three role labels are fixed in charter's code | the tier of the file they are in |
-| runner images and stopped containers | the container engine's own store | None: the engine's, which charter names and prunes but does not own |
+| a runner's labels and tags | inside its record, or inside its row in `<config>/runners.json` for a long-lived runner. **No store of its own**: the three role labels are fixed in purlis's code | the tier of the file they are in |
+| runner images and stopped containers | the container engine's own store | None: the engine's, which purlis names and prunes but does not own |
 
 **Chats may touch none of them.** A record holds a pinned key and a provider handle, the grants
 decide which values a runner receives, and the budgets decide what agents may spend. ADR 0067,
@@ -479,7 +479,7 @@ amended, adds them to the classes a chat's sandbox always denies.
 
 §5, the `chat` scope's row, gains **the runner requests of ADR 0089 §11 (start, stop and list
 the chat's own runners and its workspace's pinned ones) and the browser MCP's tool calls (ADR
-0089 §6)**, each checked by `charterd` against the chat's workspace, the runner's label and the
+0089 §6)**, each checked by `purlisd` against the chat's workspace, the runner's label and the
 workspace's budget. No human power comes with them. **Pinning, exposing, granting, changing a
 budget, marking a provider as owned and accepting a rootful engine are `local-ui` acts only**
 (D-ADR0089a): `terminal`, `approval` and `fleet-mcp` cannot do them either.
@@ -573,20 +573,20 @@ The code does not change with this record.
 
 ## What this costs
 
-- **Every runner carries a `charter` and a link.** A container that only serves an app pays for
+- **Every runner carries a `purlis` and a link.** A container that only serves an app pays for
   a host process and a handshake. It buys one path for shells, logs, ports and browsers on every
   backend, and one trust story.
 - **Brokered traffic goes through the desktop.** A browser runner reaching an app runner goes up
   one link and down another, so the desktop must be awake and the round trip is longer than a
   direct container network. It keeps every port private.
-- **A browser is driven by charter's own driver, not by the harness's favourite browser tool.**
+- **A browser is driven by purlis's own driver, not by the harness's favourite browser tool.**
   Tools that want a raw endpoint do not work against a browser runner.
-- **A repo's devcontainer spec can fail where an editor would run it.** charter refuses
+- **A repo's devcontainer spec can fail where an editor would run it.** purlis refuses
   `initializeCommand` and the fields that widen isolation, so a spec that needs them does not
   start a runner.
 - **Short-lived records are backed up**, though most describe machines that are gone, so a
   restore can stop the ones that are not.
-- **Two users in every app and browser runner.** `charter serve` keeps the capabilities to start a
+- **Two users in every app and browser runner.** `purlis serve` keeps the capabilities to start a
   process as another user, so "every capability dropped" holds for the workload, not for the
   host process.
 - **An agent's own branch runs without the real credentials.** Testing what an agent wrote

@@ -2,7 +2,7 @@
 
 [ADR 0036](0036-the-workspace-is-an-axis-again-projects-workspaces-chats.md) made the chat strip
 show one workspace's chats and fixed the four defects the operator found at fifty
-(charter-app#130). It left the strip's *behaviour over time* undecided: whether a tab may move,
+(purlis#130). It left the strip's *behaviour over time* undecided: whether a tab may move,
 what happens when there are more than fit, and whether anything can be kept where it is. The
 operator settled all three on 2026-09-21.
 
@@ -23,7 +23,7 @@ in this window that every user already has.
 touches it; ADR 0036's per-workspace view is a filter over that same list. So there is nothing to
 build, and that is precisely why it is worth a record: the tempting change is small, it is
 "helpful", and it will be proposed the first time somebody has fifty tabs and cannot find one.
-The answer is that finding is the palette's job (charter-app#48) and aiming is the strip's, and
+The answer is that finding is the palette's job (purlis#48) and aiming is the strip's, and
 they are not the same job on the same surface.
 
 ## One row, and an overflow menu sorted by activity
@@ -32,7 +32,7 @@ they are not the same job on the same surface.
 than slipped in.** ADR 0036 says, in its own words:
 
 > **A scrollbar and not an overflow menu**, deliberately: the palette already lists every chat by
-> name with a search and a ranking over it (charter-app#48), and the sidebar lists every
+> name with a search and a ranking over it (purlis#48), and the sidebar lists every
 > workspace's chats, so a menu on the strip would be a third answer to "which chats are there"
 > beside two that exist and are better.
 
@@ -72,7 +72,7 @@ at every launch and disagree between two windows on one plane.
 ## Pinning at all three levels
 
 The operator asked for this explicitly: a project, a workspace and a chat can each be pinned.
-Nothing in charter-app pins anything today.
+Nothing in purlis pins anything today.
 
 Each level stores its pin somewhere different, and the three places are already decided by other
 records:
@@ -104,7 +104,7 @@ that treats "pin" as one feature will discover this in review.
 **The `+` stays outside any scroller, and outside any overflow collapse.** As the strip's last
 child it scrolled away with the tabs, and the scenario run measured exactly that:
 `app/e2e/specs/panes.e2e.ts` opens fifty sessions by pressing `New tab` in a loop, and it could
-not press it partway through (charter-app#130, fixed in charter-app#131). The comment above
+not press it partway through (purlis#130, fixed in purlis#131). The comment above
 `<div className="adding">` in `PlaneView.tsx` records the reason.
 
 **A show-more menu is the same hazard wearing different clothes.** The failure was not "the
@@ -185,7 +185,7 @@ has moved:
 > both stay, there are two overflow mechanisms on one strip.
 
 The implementation kept both, and it kept them for the one thing this record is most insistent
-about: **charter-app#130 was fifty tabs with no way to reach the last of them**, and the rule that
+about: **purlis#130 was fifty tabs with no way to reach the last of them**, and the rule that
 came out of it is that this strip may not have an unreachable tab. A scroller makes every tab
 reachable in the DOM, in the tab order, with its own close button. A menu says there are more. Two
 jobs, and `App.css` said so at length.
@@ -245,7 +245,7 @@ is gone, it is not intersecting, and it stays hidden after the room comes back.
 
 It also fixes something this record's implementation had to live with. An intersection is answered
 in the engine's rendering step, and **macOS gives a WKWebView no rendering at all while its window
-is covered or the display is asleep** (charter-app M0.6): `panes.e2e.ts` recorded Linux seeing 3
+is covered or the display is asleep** (purlis M0.6): `panes.e2e.ts` recorded Linux seeing 3
 of 51 tabs and macOS seeing 0 of 49 on the same commit, and the spec had to be written to assert
 nothing about which tabs were visible. A `clientWidth` read in a layout effect is a synchronous
 layout, and a layout is not a paint — so the scenario spec can now assert what the strip drew.
@@ -253,7 +253,7 @@ layout, and a layout is not a paint — so the scenario spec can now assert what
 ### What this amendment costs
 
 - **A strip of two tabs draws two wide tabs.** Equal shares of the row is what equal shares means,
-  and it is the Zed shape the operator asked for — but it is not the natural-width strip charter
+  and it is the Zed shape the operator asked for — but it is not the natural-width strip purlis
   drew before, and the difference is most visible with one or two chats open.
 - **A name too long for the floor is truncated.** The whole of it is in the tab's tooltip and in
   the palette, which this record already names as the surface for reading rather than aiming.
@@ -329,7 +329,7 @@ and from there it is the library's own keyboard sensor: the arrows carry the tab
 puts it down, Escape puts it back. A screen reader is told how, and hears where the tab is.
 
 **What it costs:** each strip's drag context keeps a hidden live region of role `status` for
-what it announces. So there is no longer one status on the page, and a test about what charter
+what it announces. So there is no longer one status on the page, and a test about what purlis
 says asks for the status lines that are saying something (`app/src/test-strips.ts`).
 
 ## Amendment, 2026-09-28: a tab being smart-closed is drawn first, and moved by the click

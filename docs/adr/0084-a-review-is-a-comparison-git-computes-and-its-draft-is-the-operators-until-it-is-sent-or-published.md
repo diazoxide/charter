@@ -80,9 +80,9 @@ own below. RC-2 to RC-16, RC-18 to RC-20 and FW-16a/b build
 on it. Its concept is **Workspace**: a review is a view of a workspace's repos and its chats'
 branches, as the light editor is (ADR 0081).
 
-## Where charter is today
+## Where purlis is today
 
-charter has no diff view, no review and no editor (ADR 0081, *Where charter is today*). What it
+purlis has no diff view, no review and no editor (ADR 0081, *Where purlis is today*). What it
 has near review:
 
 - **The commit scan reads a diff**, of the lines a chat's commit adds, from inside git's
@@ -94,7 +94,7 @@ has near review:
 - **The forge seam is decided and not built.** ADR 0070 reserves `pub trait Reviews { /* FG-5a/b,
   FW-16a/b */ }` and nothing implements it. Today's forge code reads a request's state and its
   checks (`crates/purlis-core/src/forge/pr.rs`, `checks.rs`).
-- **charter runs git as a program** (`std::process::Command::new("git")` throughout
+- **purlis runs git as a program** (`std::process::Command::new("git")` throughout
   `charter-core`), with no git library in any crate.
 
 ## What the rulings already settle
@@ -124,7 +124,7 @@ means for an edit**, **the note an agent gets**, **the audit and the tiers**, an
 **A review is a comparison, a base and a head in one repo (or one per member repo for a
 cross-repo change), and git computes every comparison, in `charter-core`, with no driver or
 program from the repo under review. The Review tab draws it with the light editor's component.
-The operator's comments go into a review draft in charter's data home, which only the window
+The operator's comments go into a review draft in purlis's data home, which only the window
 writes and chats can neither read nor write. A draft leaves only by the operator's act: Send to
 agent delivers it to the chat as one prompt, at a turn boundary; Publish posts it to the request
 as one review under the operator's own sign-in; Keep keeps it. An edit made beside an idle chat
@@ -150,7 +150,7 @@ two sides:
   and nothing is staged. Staging is hunk staging's (RC-16), the operator's act.
 - **A comparison is always in a workspace's repo.** A pasted request link for a repo no
   workspace holds offers to add the repo to a workspace first, and opens the review once it is
-  cloned. The review needs the repo's objects, and a workspace is where charter keeps repos.
+  cloned. The review needs the repo's objects, and a workspace is where purlis keeps repos.
 - **A comparison of a branch is live.** While the Review tab is open, a move of the head (a
   chat's commit, an edit in the folder for (c)) is offered as *Updated: show the new changes*,
   and never redrawn under the operator's cursor. FD-11's per-repo watcher says when.
@@ -158,7 +158,7 @@ two sides:
 ### 2. git computes it, and nothing from the repo under review runs
 
 **The engine is a module of `charter-core`** (RC-2) that runs git as a program, as the rest of
-`charter-core` does. The window calls it for the Review tab, and `charterd` calls it for the
+`charter-core` does. The window calls it for the Review tab, and `purlisd` calls it for the
 editor protocol's `changes` (ADR 0081 §4). There is one implementation and no second diff in
 TypeScript.
 
@@ -171,9 +171,9 @@ TypeScript.
   RC-2's fixtures check each kind against `git diff` itself.
 - **Hide whitespace is git's** (`-w`), recomputed, not filtered in the window.
 - **Generated and lock files** are collapsed when the repo's `.gitattributes` marks them
-  `linguist-generated`, or their name is on charter's list of lock files. Collapsed is drawn on
+  `linguist-generated`, or their name is on purlis's list of lock files. Collapsed is drawn on
   request.
-- **git run by charter on a repo an agent can write must not execute programs named by that
+- **git run by purlis on a repo an agent can write must not execute programs named by that
   repo's config.** Every repo a review reads is one an agent can write: a chat's branch folder,
   the workspace's clone it shares, or a request's head from someone else. A repo's configuration
   can name programs for git to run (for diffing, filtering, paging, watching the file system,
@@ -182,7 +182,7 @@ TypeScript.
   held in one place in `charter-core` and never assembled per call. Where an override cannot
   cover a key, the engine refuses to run on that repo and says why. RC-2's tests include **a
   fixture repo whose configuration names a program for each of those places**, and assert that no
-  comparison, file list, hunk or fetch on it runs any of them. The same rule for charter's other
+  comparison, file list, hunk or fetch on it runs any of them. The same rule for purlis's other
   git calls is #810's.
 - **Content under review is data, never code.** A file's contents are drawn as text and never as
   markup; an image is drawn as an image, and an SVG is never put into the window's page as
@@ -210,7 +210,7 @@ change, each a section in `needs` order.
 - **Every line has *Open in your editor*** at that file and line (RC-20, ADR 0081 §3).
 - **What it does not do** is X26's, drawn by ADR 0081 §2: no language server in a diff, no
   refactor across files, no code from an extension inside it. An extension's review decorations
-  are data charter draws (E1, E6, ADR 0081 §2).
+  are data purlis draws (E1, E6, ADR 0081 §2).
 
 ### 4. The review draft
 
@@ -248,7 +248,7 @@ comment as `path:line` (or `path:line-line`, and *base* for a removed line) foll
 operator's text, in file order, then the overall comment. It carries no code; the agent reads
 the files.
 
-**Send to agent is the one place charter presses Enter in a chat on the operator's behalf, and
+**Send to agent is the one place purlis presses Enter in a chat on the operator's behalf, and
 it changes what ADR 0081 §4 settled for `place`.** See *ADR 0061 and ADR 0081, amended*.
 Settled by V34b, quoted above.
 
@@ -256,7 +256,7 @@ When it is delivered depends on the chat's current run (ADR 0076 §1):
 
 | The run is | Before HP-15 | Once HP-15 lands |
 |---|---|---|
-| `input-required (ready)` or `(turn-ended)` | delivered now: `charterd` checks the state and delivers the prompt as one step under the run's state lock, as ADR 0081 §4 checks `place` | the same |
+| `input-required (ready)` or `(turn-ended)` | delivered now: `purlisd` checks the state and delivers the prompt as one step under the run's state lock, as ADR 0081 §4 checks `place` | the same |
 | `working` | refused: *the chat is working; send when its turn ends* | held in HP-15's queue, shown with *Take back*, and delivered at the turn's end (V11) |
 | `input-required (asked)` | refused: a prompt delivered then could be read as the ask's answer | held, as for `working`. An ask keeps it held, and it is delivered only at `ready` or `turn-ended` |
 | `hibernated` | refused: *open the chat first*. Opening it resumes it (ADR 0076 §5, SC-20), and the operator sends again | held, and the chat is woken. The hold is checked again under the **new** run's state lock and delivered only at `ready` or `turn-ended`; an ask on resume keeps it held |
@@ -280,7 +280,7 @@ if the chat ends. This record defines no hold of its own.
   into each dialog the harness can open between turns, chooses nothing**. A harness that has not
   passed, or that fails, gets the paste without Enter: the review is typed into the prompt and
   the operator presses Enter in the chat, which is then the operator's own key press.
-- **The residual risk.** The state lock orders charter's view of the run, not the harness's
+- **The residual risk.** The state lock orders purlis's view of the run, not the harness's
   screen. On a harness that passed TS1, a dialog that TS1 does not know (a new harness version
   before the nightly runs, a dialog from a harness plugin) could still take Enter as its default.
   TS1 runs nightly against each supported version, and a failure turns Enter off for that
@@ -306,7 +306,7 @@ if the chat ends. This record defines no hold of its own.
 - **No request, no Publish.** A branch without one is offered GL-3a/b's *push and open a
   request* first.
 - **Published comments leave the draft.** The forge holds them from then on; the forge's review
-  is the review of record (U3). Reading and answering its threads in charter is FW-16a/b's.
+  is the review of record (U3). Reading and answering its threads in purlis is FW-16a/b's.
 - **Every publish is audited** as ADR 0070 §6's `forge.write`.
 
 ### 7. Approve, and changes since my last review
@@ -332,9 +332,9 @@ warns, naming the chat and its state, and saving is still the operator's choice.
 
 - **The stale check** compares the file on disk with what the editor opened. If it changed, the
   save offers *Reload* or *Overwrite*, and never merges.
-- **A saved edit is a human edit.** charter records, as an event in the event log (FD-9): the
+- **A saved edit is a human edit.** purlis records, as an event in the event log (FD-9): the
   chat, its run, the path relative to the repo, the changed line ranges, and whether the chat was
-  busy. No contents. The edit is left in the folder uncommitted; charter does not commit it.
+  busy. No contents. The edit is left in the folder uncommitted; purlis does not commit it.
 - **The edit is announced to the chat's harness at its next turn** (R8, RC-11, V34a). It is
   never a prompt sent for the operator: it is context the harness reads at the start of a turn
   the chat begins anyway. The line is:
@@ -350,7 +350,7 @@ warns, naming the chat and its state, and saving is still the operator's choice.
   - **Where it goes.** At level 2, in the harness's `UserPromptSubmit` hook output as
     `additionalContext`, beside a handed-back report (`crates/purlis-core/src/handback.rs`), or
     the harness's equivalent hook; on a harness with no prompt hook, in its `SessionStart`
-    briefing at the next run and through charter's MCP server (HP-7) in between. At level 3, in
+    briefing at the next run and through purlis's MCP server (HP-7) in between. At level 3, in
     the structured context of the next prompt the host delivers.
   - **A chat that is working** when the edit is saved gets the line at its next turn boundary,
     with the next prompt, never in the middle of the turn it is in.
@@ -450,7 +450,7 @@ The rest of ADR 0075 stands.
 
 | Store | Tier | Why |
 |---|---|---|
-| `<data>/reviews/`: one file per review, holding its draft, ticks, last reviewed head, position and sent comments | **Machine, syncable**, backed up by FR-10 (*ADR 0069, amended*) | V22b and ADR 0069 row 71. It names reviews by project, workspace, repo and branch and holds no path or code (§4). It is in charter's data home, beside the audit, because it is the operator's data and not a preference. Chats are denied it. **Added to `docs/plane-format.md` in this PR** |
+| `<data>/reviews/`: one file per review, holding its draft, ticks, last reviewed head, position and sent comments | **Machine, syncable**, backed up by FR-10 (*ADR 0069, amended*) | V22b and ADR 0069 row 71. It names reviews by project, workspace, repo and branch and holds no path or code (§4). It is in purlis's data home, beside the audit, because it is the operator's data and not a preference. Chats are denied it. **Added to `docs/plane-format.md` in this PR** |
 | `refs/charter/review/` in a workspace's clone | **None** | the repo's own git, as its worktrees are (ADR 0069 row 72); removed when nothing needs it (§2) |
 | the human-edit event | **Machine, device-bound** | the event log (ADR 0069 row 63) |
 | the three audit actions | **Machine, device-bound** | the audit store (ADR 0075) |
@@ -465,12 +465,12 @@ The code does not change with this record.
 | Where | What changes |
 |---|---|
 | `charter-core` | RC-2: the comparison types and the engine; the one fixed set of git overrides, and the fixture repo with a hostile configuration; the fetch under `refs/charter/review/`. RC-7: the review store, written through one module the window calls |
-| `charterd` | RC-7: Send to agent's one UI RPC command on `local-ui`, its check and delivery under the run's state lock, Enter only where TS1 passed; later HP-15's queue, which holds and wakes. The sandbox denies chats `<data>/reviews/` |
+| `purlisd` | RC-7: Send to agent's one UI RPC command on `local-ui`, its check and delivery under the run's state lock, Enter only where TS1 passed; later HP-15's queue, which holds and wakes. The sandbox denies chats `<data>/reviews/` |
 | The window | RC-4: the Review tab. RC-5: one CodeMirror 6 component for files and diffs. RC-6: R3's basics. RC-10: the edit and its warning. RC-3: the entry points |
 | The forge seam | RC-8a/b: the `Reviews` area's first method (*ADR 0070, amended*) |
 | Hooks and MCP | RC-11: the next-turn note |
 | Harness checks | TS1: per harness and version, a bracketed paste followed by Enter into each between-turn dialog chooses nothing; a failure turns Send's Enter off for that harness |
-| Other git calls | #810: the same rule for every git call charter makes on a repo an agent can write |
+| Other git calls | #810: the same rule for every git call purlis makes on a repo an agent can write |
 | Audit | AU-2 registers the three actions (*ADR 0075, amended*) |
 | `docs/plane-format.md` | The `<data>/reviews/` row (in this PR) |
 | `CONTEXT.md` | Gains **Review tab**, **Comparison**, **Review draft** and **Human edit**, each with its concept (in this PR) |
@@ -493,7 +493,7 @@ The code does not change with this record.
 
 ## What was rejected
 
-- **A git library (`git2`, `gix`) for the engine.** charter runs git as a program everywhere
+- **A git library (`git2`, `gix`) for the engine.** purlis runs git as a program everywhere
   else, and RC-2's acceptance is *matches `git diff`*; the program is the reference.
 - **Computing the diff in the window.** R4 puts it in the Rust core, and two engines would
   disagree.
@@ -505,7 +505,7 @@ The code does not change with this record.
 - **Copying the commented lines into the draft.** It would put code from a private repo in a
   syncable store, and git already has the lines.
 - **Typing the review into the prompt unsent everywhere**, as ADR 0081's `place` does. The
-  operator pressed *Send*, in charter's window; it is the fallback only where TS1 has not passed.
+  operator pressed *Send*, in purlis's window; it is the fallback only where TS1 has not passed.
 - **Send from the `editor` scope.** Any program that reads the editor credential could then drive
   an agent (ADR 0081, *What was rejected*).
 - **A hold of this record's own before HP-15.** Two queues would disagree about what a held
@@ -539,7 +539,7 @@ its reason:
 7. **A review starts at the first comment, tick or edit.** R2 needs a moment for *kept*.
 8. **A draft holds pointers and the operator's words, never code**, and names its review without
    a path, so it is syncable.
-9. **The review store is `<data>/reviews/`**, in charter's data home. ADR 0069 says Machine;
+9. **The review store is `<data>/reviews/`**, in purlis's data home. ADR 0069 says Machine;
    `<data>` holds the operator's data, and `<config>` its preferences.
 10. **Only the window writes a draft, and chats are denied it.** A draft goes out under the
     operator's identity.
@@ -584,7 +584,7 @@ its reason:
 §2 said the engine *"runs git as a program, as the rest of `charter-core` does"*, and *What was
 rejected* listed a git library. Two days after this record, V88a amended ADR 0027: automatic,
 read-only reads of a branch an agent can write run in-process through gitoxide, in a short-lived
-child of charter's own binary with a deadline and a memory cap (D-88f, D-88h), because a git
+child of purlis's own binary with a deadline and a memory cap (D-88f, D-88h), because a git
 process started there reads config the agent can write, and blanking its programs with `-c`
 lost a race to a config swapped mid-read. The explorer's change markers are such a read, and R1
 asks for **one** engine, so RC-2 builds the engine on that reader rather than beside it:

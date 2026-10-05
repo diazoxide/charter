@@ -1,8 +1,8 @@
 ### Security
 
 - **A link a chat plants in its own workspace no longer carries your writes anywhere else.** Your
-  `charter` commands and the app now write a workspace's todos, memory, session records and
-  changes the way charter's MCP tools do: with no link anywhere on the way, and through the
+  `purlis` commands and the app now write a workspace's todos, memory, session records and
+  changes the way purlis's MCP tools do: with no link anywhere on the way, and through the
   directory they opened. A store that is a link, or a link inside one, is never followed by a
   write, even when it points at another workspace or a persona inside the project: the write is
   refused and writes nothing. The readers that list and read those stores leave such a link out
@@ -14,4 +14,4 @@
 
 - **A memory whose index line cannot be written is no longer left on disk.** When the line could
   not be added to `MEMORY.md`, the memory file stayed behind with nothing listing it. It is now
-  removed again, for `charter`'s commands, the app and the MCP tools alike (#1058).
+  removed again, for `purlis`'s commands, the app and the MCP tools alike (#1058).

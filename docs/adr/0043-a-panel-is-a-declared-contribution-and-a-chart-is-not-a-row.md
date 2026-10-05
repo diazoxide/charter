@@ -15,7 +15,7 @@ He was offered the choice between building the panel changes he asked for that e
 hardcoded React, or defining the contract first with those panels as its first consumers. **He
 chose the contract.** This record is that contract.
 
-The work is charter-app's. The record is here because `0001`–`0042` are here, and because this
+The work is purlis's. The record is here because `0001`–`0042` are here, and because this
 extends [ADR 0041](0041-a-plugin-is-a-subprocess-or-charter-has-no-plugins.md)'s vocabulary —
 splitting the two would leave 0041's four properties in one repository and the second thing they
 govern in another. ADR 0031 and ADR 0041 both made the same move for the same reason. Every path
@@ -38,7 +38,7 @@ capability table says of the DOM and the window's pixels: **"No, ever — A them
 appearance as data. Code never reaches the tree charter draws consent prompts into."** A panel
 plainly puts something in that tree. The distinction this record relies on is the one that
 sentence itself draws: *a theme reaches appearance as data*. A panel reaches the tree as data
-too — a typed value charter parses and re-emits, never markup, never a selector, never a path.
+too — a typed value purlis parses and re-emits, never markup, never a selector, never a path.
 If that distinction is judged too fine, then this record is wrong and the honest consequence is
 that **a stranger's extension cannot contribute a panel at all**, which is a defensible answer
 and is the one the operator should be able to give.
@@ -73,21 +73,21 @@ That is the whole of it. `crates/purlis-core/src/panel.rs` is that type and its 
 ### It draws from a declared vocabulary, not arbitrary markup
 
 This was the sharpest open question and it has the clearest answer. **A stranger's extension
-supplies a value, and charter decides what that value looks like.** The alternative — an
+supplies a value, and purlis decides what that value looks like.** The alternative — an
 extension supplies markup — is refused, and the refusal is ADR 0041's, already written: the DOM
-is the tree charter draws consent prompts into, and code never reaches it.
+is the tree purlis draws consent prompts into, and code never reaches it.
 
 The vocabulary being closed is not decoration on that refusal, it is the enforcement of it. Three
 consequences fall out that a markup-based design cannot have:
 
 - **A panel cannot say *where*.** There is no `side`, no `region`, no `width`, no `class`, no
-  `style`. `order` is a hint charter sorts by. This is 0041's property 3 — *charter chooses the
+  `style`. `order` is a hint purlis sorts by. This is 0041's property 3 — *purlis chooses the
   consumer* — and it is what stops a contributed panel from covering, displacing or imitating a
   consent surface.
-- **A panel cannot name a file.** A mark is a word out of a list of seven, which charter maps to
+- **A panel cannot name a file.** A mark is a word out of a list of seven, which purlis maps to
   a glyph it already ships. 0041's third crossing is *a reference to a file* — a font, an image,
   an `@import` — and an icon is exactly the shape that invites one.
-- **A key charter did not publish is refused, not ignored.** An unknown field fails the whole
+- **A key purlis did not publish is refused, not ignored.** An unknown field fails the whole
   extension with the field named. This is harsher than the theme's rule, which drops an unknown
   token with a reason, and the difference is deliberate: a theme's unknown token costs a colour,
   where a panel's unknown key is a contribution the operator was shown in the consent prompt and
@@ -117,11 +117,11 @@ than a design preference.** With no executor there is nothing to ask:
 
 - an **extension's** panel is *declared*, so its rows are in the manifest, and the manifest was
   read and hashed when the registry was surveyed;
-- **charter's own** panels are *produced*, from the plane read the command already does.
+- **purlis's own** panels are *produced*, from the plane read the command already does.
 
 Extension panels are surveyed **once per window** and not once per workspace focus, because a
 survey re-hashes every installed extension's whole directory — 0041's named cost of
-fingerprinting code, widened by charter-app#152 from the declared list to the tree. An extension
+fingerprinting code, widened by purlis#152 from the declared list to the tree. An extension
 is machine state and never travels in a plane (0041's decision 3), so one survey serves every
 project a window holds.
 
@@ -132,7 +132,7 @@ anything in this record.
 ### What it can do
 
 **Rows run catalogue offers, by id, or they run nothing.** `app/src/actions.ts` is the one list of
-what charter can do — the palette, the bar's buttons and every context menu are views of it — and
+what purlis can do — the palette, the bar's buttons and every context menu are views of it — and
 a panel that invented its own verbs would be a second catalogue, which is the defect that list
 exists to prevent. So a row names a catalogue row by id, the window looks it up, and an id the
 catalogue has stopped offering draws no button rather than a dead one.
@@ -140,7 +140,7 @@ catalogue has stopped offering draws no button rather than a dead one.
 **And a contributed row may not carry one.** This is the load-bearing refusal in the record.
 
 > There is no executor. A contributed panel is a declaration the window renders, not code it
-> runs. A row that ran a charter verb on a click would be the first thing in charter that
+> runs. A row that ran a purlis verb on a click would be the first thing in purlis that
 > executes on an extension's say-so, through a path with no hook, no prompt and no grant — which
 > is ADR 0041's *"a second door beside the one being built"*, opened by a panel.
 
@@ -154,9 +154,9 @@ A panel runs with the operator's authority in his window. What it cannot reach:
 | Surface | Grantable to a contributed panel? |
 | --- | --- |
 | Arbitrary markup, a selector, a stylesheet, a `url()` | **No, ever.** ADR 0041's DOM row. |
-| Where it goes — region, side, width, order among charter's own by fiat | **No.** `order` is a hint charter sorts by; charter's own break ties first. |
+| Where it goes — region, side, width, order among purlis's own by fiat | **No.** `order` is a hint purlis sorts by; purlis's own break ties first. |
 | A file — an icon, a font, an image | **No.** A mark is a word out of a closed list. |
-| A charter verb on a row or an empty state | **No, in stage 1.** No executor; see above. |
+| A purlis verb on a row or an empty state | **No, in stage 1.** No executor; see above. |
 | A card that reads the plane | **No.** A declared card is the row's own words. |
 | Live rows | **No, in stage 1.** Declared rows only, read at survey time. |
 | Unbounded rows, text, or panels | **No.** 8 panels, 500 rows, 1 KiB per row, 8 KiB per card. |
@@ -165,7 +165,7 @@ A panel runs with the operator's authority in his window. What it cannot reach:
 **And one refusal that is not about execution at all.** 0041 keeps *deception* apart from *code
 execution* and a panel is where the two most easily get confused. A row is words on the operator's
 screen. It can lie, and no parser stops it. What this record does about that is narrow and
-stated: charter draws the contributing extension's id on the panel (0041 item 5 — *show what is
+stated: purlis draws the contributing extension's id on the panel (0041 item 5 — *show what is
 in force, after approval and not only at it*), the vocabulary cannot say *where* so a panel
 cannot cover a consent surface, `runs` is refused so a lie cannot be wired to an action, and
 control characters are refused rather than stripped — because what a control character does is
@@ -176,25 +176,25 @@ four.
 
 ## The asymmetries, which are findings and not omissions
 
-The brief for this work asked that if charter's own panels need a privilege a stranger's cannot
+The brief for this work asked that if purlis's own panels need a privilege a stranger's cannot
 have, that be written down rather than smoothed over. Three, and all three are the same thing:
-**charter is code that is already in the process.**
+**purlis is code that is already in the process.**
 
-1. **charter's rows carry `runs`.** A persona row runs `persona.show:<name>`, which is a
-   catalogue row the palette and a context menu already run (charter-app#174).
-2. **charter's cards may name a consumer that reads the plane.** `Detail::Persona` costs a
+1. **purlis's rows carry `runs`.** A persona row runs `persona.show:<name>`, which is a
+   catalogue row the palette and a context menu already run (purlis#174).
+2. **purlis's cards may name a consumer that reads the plane.** `Detail::Persona` costs a
    `persona_details` call, and — see below — a memories read. A declared card is `Detail::Text`,
    which reads nothing.
-3. **charter's rows get a context menu.** A menu names what a row is *about*
+3. **purlis's rows get a context menu.** A menu names what a row is *about*
    (`{ on: "persona", persona }`), and there is no way to derive that from a row: a row is words,
-   a key and at most a catalogue id. charter's personas panel knows its rows are personas.
+   a key and at most a catalogue id. purlis's personas panel knows its rows are personas.
 
-None is a property of being charter and none is permanent. Each lifts through a **grant**, not
+None is a property of being purlis and none is permanent. Each lifts through a **grant**, not
 through a special case: *this extension may offer this catalogue row*, consented per extension
 per row. That grant needs the executor, so it is stage 2.
 
 **The one asymmetry that would invalidate the contract is the one that does not exist.** Nothing
-charter's own panels do reaches the window through a path a contributed panel does not use.
+purlis's own panels do reaches the window through a path a contributed panel does not use.
 `Panels.tsx` draws both with the same loop and the same list primitive; the difference is in what
 the *values* say, not in how they are drawn. That is what makes the contract testable rather than
 aspirational, and it is what the jsdom test *"gives a contributed panel the list primitive"*
@@ -229,8 +229,8 @@ plugin"*, and the personas one must carry all of this end to end.
 
 | What he asked for | Does the contract express it? |
 | --- | --- |
-| **A count on a row** — memories per persona | **Yes.** `Row::note` is a short trailing note; a count is one. charter's own producer writes it, and a contributed panel can write one too. The count is a `read_dir` and no file opens, so it stays on the 100 ms path. |
-| **A detail surface from a row that is a list** — a persona's memories | **Yes, for charter.** `Detail::Persona` names a consumer that reads the plane; the memories arrive from `persona_memories` as **rows of the same vocabulary**, so the card's list is the primitive one surface in. **A declared panel gets `Detail::Text`** — asymmetry 2 above. |
+| **A count on a row** — memories per persona | **Yes.** `Row::note` is a short trailing note; a count is one. purlis's own producer writes it, and a contributed panel can write one too. The count is a `read_dir` and no file opens, so it stays on the 100 ms path. |
+| **A detail surface from a row that is a list** — a persona's memories | **Yes, for purlis.** `Detail::Persona` names a consumer that reads the plane; the memories arrive from `persona_memories` as **rows of the same vocabulary**, so the card's list is the primitive one surface in. **A declared panel gets `Detail::Text`** — asymmetry 2 above. |
 | **Search and lazy loading in that surface** | **Yes, for both.** It is the same primitive. A declared panel's rows are paged and searched identically; what it does not get is *live* rows, because that needs the executor. |
 | **Statistics, with visualisation, from a button** | **No. See below.** |
 
@@ -238,7 +238,7 @@ The substrate for the memories half already existed and was not rebuilt:
 `crates/purlis-core/src/memstore.rs` (`read_files`, `read_store`, `Found`) and `recall.rs`. What
 was missing was the wire, and that is what `persona_memories` is.
 
-**One thing this raises that is the operator's to rule on.** charter-app#173 chose a *popover* for
+**One thing this raises that is the operator's to rule on.** purlis#173 chose a *popover* for
 the persona card, and its argument was about six short rows that answer *what is this one for*: a
 dialog would mark the needs-you queue `aria-hidden`, which ADR 0038 says this region must never
 compete with, and a sheet is already the alerts drawer's. **That argument was not made about a
@@ -254,15 +254,15 @@ The three honest answers, and the one taken.
 **Rejected — plugins may draw arbitrary markup.** This is not this record's to reject: ADR 0041
 already did, and the row is *"No, ever"*. What it costs, said once so nobody has to reconstruct
 it: `app/src-tauri/capabilities/default.json` grants the window `core:default`, `opener:default`
-and `notification:default`, and charter's own forty `#[tauri::command]`s are reachable by
+and `notification:default`, and purlis's own forty `#[tauri::command]`s are reachable by
 anything executing in that window; the only thing keeping foreign script out is
 `tauri.conf.json`'s CSP, and admitting markup is the precise thing that CSP exists to prevent,
-done deliberately. It also gives a stranger's extension the tree charter draws its consent
+done deliberately. It also gives a stranger's extension the tree purlis draws its consent
 prompts into.
 
 **Rejected for now — the vocabulary grows a chart primitive.** This is the tempting one and it is
 nearly right. A bar chart is a labelled magnitude list: it is already the *shape* of the
-vocabulary, charter can draw it from typed numbers, and there is no path from declared data to
+vocabulary, purlis can draw it from typed numbers, and there is no path from declared data to
 markup. It would be `Block::Bars { rows: [{ label, value }] }` and it would be safe.
 
 It is refused **tonight** on ADR 0041's own rule, quoted rather than paraphrased: *"a capability
@@ -280,18 +280,18 @@ is code, and code is the executor.
 **Taken — the statistics surface is outside this contract, and for a stranger's extension it is
 blocked on ADR 0041 stage 2.** Three parts:
 
-1. **For charter's own contributions, nothing blocks it.** charter can compute statistics over
-   its own plane today. If the operator wants a persona statistics view drawn by charter, it is
+1. **For purlis's own contributions, nothing blocks it.** purlis can compute statistics over
+   its own plane today. If the operator wants a persona statistics view drawn by purlis, it is
    buildable now and needs no part of this record.
 2. **For a contributed panel, it is not expressible, and saying so is the answer.** This is the
    *"if the contract needs the executor, stop and say so"* case, and it is confined to this one
    requirement: everything else the operator asked for — the count, the list, the search, the
-   lazy load — the contract expresses today, for charter and for a stranger alike.
+   lazy load — the contract expresses today, for purlis and for a stranger alike.
 3. **The shape it will take, recorded so it is not invented under pressure.** A statistics view is
    a **second surface opened from a row**, which the vocabulary already has a mechanism for:
    `Detail` is a closed set, and a `Detail::Bars` sits beside `Detail::Text` exactly as
    `Detail::Persona` does. So the *surface* is not new. What is new is **where the numbers come
-   from**, and that has one honest answer per contributor: charter computes its own; an extension
+   from**, and that has one honest answer per contributor: purlis computes its own; an extension
    is asked, over the protocol, when the surface is opened. Stage 2.
 
 **What this costs, stated rather than discovered.** A plugin author reading *"100% pluggable"*
@@ -308,7 +308,7 @@ feature and not the feature, and is the same error as a consent prompt that over
   invented for hypothetical plugins, applied to the first capability this record was tempted by.
 - **Letting a declared row run a catalogue verb.** An executor with nothing behind it.
 - **Dropping an unknown key instead of refusing the extension.** The operator consented to a list;
-  a key charter ignored is an item on that list he does not get.
+  a key purlis ignored is an item on that list he does not get.
 - **A command per panel.** 100 ms per workspace focus, and nothing to ask in stage 1 anyway.
 - **Keeping `todos` and `personas` as the panel bodies and adding contributions beside them.** Two
   sources for one region, drifting.
@@ -322,18 +322,18 @@ feature and not the feature, and is the same error as a consent prompt that over
 ## Consequences
 
 - **The vocabulary is now a thing that has to be versioned.** A manifest written against a later
-  charter is refused by this one with the unknown key named. That is the right failure and it
+  purlis is refused by this one with the unknown key named. That is the right failure and it
   means adding a word to the vocabulary is a compatibility event, which the theme's
-  drop-with-a-reason rule let charter avoid.
+  drop-with-a-reason rule let purlis avoid.
 - **A contributed panel is inert and will disappoint.** It lists what its author wrote down. Every
   interesting panel wants live data, and live data is stage 2. This record's value is that the
   *seam* exists and is proved by two real consumers before the runtime arrives to use it — 0041's
   item 2, one entry further on.
-- **charter's own panels now pay a serialisation cost they did not.** Two panels of a handful of
+- **purlis's own panels now pay a serialisation cost they did not.** Two panels of a handful of
   rows per workspace focus, inside a command that already lists a directory and reads small files.
   Not measured against the 100 ms budget as a delta, and it should be.
 - **The region can be crowded by a stranger.** Eight panels per extension, sorted by an `order` the
-  extension chooses, including above charter's own. The needs-you queue is *not* a contribution
+  extension chooses, including above purlis's own. The needs-you queue is *not* a contribution
   and cannot be sorted below one — ADR 0038 says this region must never compete with it, so the
   queue is drawn above every panel and the vocabulary has no way to say otherwise.
 - **`#173`'s popover argument no longer covers what the persona card does**, and that is open.
@@ -344,24 +344,24 @@ feature and not the feature, and is the same error as a consent prompt that over
 
 **This amendment is not a sign-off, and the DRAFT line at the top of this record still stands.**
 It records what changed when ADR 0041's stage 2 was built (see that record's amendment of the
-same date, and charter-app#212, unmerged when this was written).
+same date, and purlis#212, unmerged when this was written).
 
 **Panels may now be fed by a producer — through a view, and not on the panel's own path.** The
 record's rule for *where a panel's data comes from* is unchanged: `workspace_panels` answers in
 one call inside the 100 ms a workspace focus has, and a contributed panel is declared. What an
-extension answers *live* is a **view**: a surface the operator opens, which charter fills by
+extension answers *live* is a **view**: a surface the operator opens, which purlis fills by
 asking the extension's program once, through the executor's gate, when it is opened. That is
 the *"second surface opened from a row"* the statistics section above named, with one change of
 place and one of name:
 
 - **It is opened from a panel's heading, or from inside a card — not declared as a `Detail`.**
   A view says what it is *about* (`panel::Subject`, a closed set of one: `personas`), and
-  charter decides where things about that subject are offered. charter's own personas panel is
+  purlis decides where things about that subject are offered. purlis's own personas panel is
   about personas, so a view about personas is a button on its heading and a section in each
-  persona's card. The extension chose a subject and nothing else — property 3, *charter chooses
+  persona's card. The extension chose a subject and nothing else — property 3, *purlis chooses
   the consumer*, carried to the first contribution that runs.
-- **A declared panel cannot claim a subject.** `about` is set only by charter's own producer;
-  a manifest that tried would be choosing which of charter's surfaces a stranger's view appears
+- **A declared panel cannot claim a subject.** `about` is set only by purlis's own producer;
+  a manifest that tried would be choosing which of purlis's surfaces a stranger's view appears
   on.
 
 **The chart block exists, and only in an answer.** `Block::Chart { title, shape, unit, points }`
@@ -393,7 +393,7 @@ popover, because six short rows are what a popover is for. **This is a decision 
 the operator**, and it is the one in this amendment most worth his attack.
 
 **The asymmetries are unchanged**, and the reason is now sharper. A view runs code, and still
-cannot put a charter verb on a row: what an extension puts in the window is data, whether its
+cannot put a purlis verb on a row: what an extension puts in the window is data, whether its
 manifest declared it or its program answered it. The grant that would lift that — *this
 extension may offer this catalogue row* — needs no new mechanism now; it needs a plugin that
 wants it, and none has asked.
@@ -407,7 +407,7 @@ the path works end to end, installed, approved, fingerprinted and asked.
 
 **This amendment is not a sign-off either, and the DRAFT line at the top of this record still
 stands.** It records a ruling the operator did make, and the design built on it that he has not
-yet ruled on. The work is charter-app#212, unmerged when this was written.
+yet ruled on. The work is purlis#212, unmerged when this was written.
 
 **The sheet above is withdrawn.** The previous amendment called the non-modal sheet *"a decision
 made without the operator … the one in this amendment most worth his attack"*, and it was put to
@@ -431,15 +431,15 @@ through the palette's rows, and splitting and closing the pane in focus. The cha
 on the session a pane shows, so a tab holding only a view has no chat to pretend about — no state
 mark, nothing for "the chat in front" to mean, and a close that ends nothing and asks nothing.
 
-**2. A view is named by data, and charter's own views and an extension's take the same path.**
+**2. A view is named by data, and purlis's own views and an extension's take the same path.**
 A view is *who draws it, which of theirs, and what it is about*: `{ from: null, view: "persona",
-key: "steward" }` for charter's persona view, `{ from: "persona-statistics", view: "statistics",
+key: "steward" }` for purlis's persona view, `{ from: "persona-statistics", view: "statistics",
 key: "" }` for an extension's. One command answers both (`open_view`), in this record's
-vocabulary and nothing else, and one renderer draws both. **charter's persona view is produced
+vocabulary and nothing else, and one renderer draws both. **purlis's persona view is produced
 as `panel::Block`s in Rust** — the definition as notes, the memory count, the memories as a
 list — rather than as a component that knows what a persona is; the window cannot tell it from
 an extension's view except by whose it is, which it says. That is the operator's test, applied
-to charter's own code: nothing the core does for the persona view is a door an extension's view
+to purlis's own code: nothing the core does for the persona view is a door an extension's view
 is refused.
 
 **3. Views are the extension point for tabs.** An approved extension that offers a view gets a
@@ -459,26 +459,26 @@ that says so, not as an error. Views start nothing, so they are not part of the 
 fingerprint (ADR 0035).
 
 **What this record does not yet say, and should before a second view kind lands:** whether an
-extension may offer a view that is about nothing charter publishes (today every extension view is
+extension may offer a view that is about nothing purlis publishes (today every extension view is
 about a `Subject`, and `personas` is the only one); whether a view may be split beside a chat by
 anything but starting a chat beside it; and what a view that wants to change something — a verb
 — would need, which is the `runs` grant this record already describes and nobody has asked for.
 
 ## Amendment, 2026-09-25: a row may carry its extension's own actions
 
-charter-app#341. **A row an extension's program answers may offer that extension's own
+purlis#341. **A row an extension's program answers may offer that extension's own
 actions**, by id, when its manifest asks for the `actions` capability and declares them (ADR
 0053). This answers what the previous amendment left open, *"what a view that wants to change
 something would need"*, and the answer is not the `runs` grant it described:
 
 - **`runs` is still refused** (`panel::NO_VERB`), in a manifest and in an answer. A row still
-  cannot put one of charter's verbs on the screen.
+  cannot put one of purlis's verbs on the screen.
 - **What a row may carry is the extension's own verb.** Pressing it asks the extension's
   program, *run action `<id>` on `<subject>`*, through the executor's gate, and the answer may
-  refresh the view's blocks. It gives the extension no charter authority. The extension already
+  refresh the view's blocks. It gives the extension no purlis authority. The extension already
   runs as the operator, and the action is one more question to it, started by his press.
 - **The manifest decides, the answer only names.** A row names action ids. The executor refuses
-  an answer that names one the manifest does not declare. The button's title, and whether charter
+  an answer that names one the manifest does not declare. The button's title, and whether purlis
   asks first, come from the manifest the operator approved.
 - **Only an answer carries them.** A declared panel has no program to run an action, so a
   manifest's row that says `actions` is refused by name.
