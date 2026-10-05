@@ -215,6 +215,7 @@ fn resolves(home: &Home) -> bool {
 
 #[test]
 fn without_a_bundle_the_registration_follows_the_copy_through_the_move_and_the_undo() {
+    charter_core::unsteered!();
     // D-RN8-13: a `purlis migrate` with no plugin beside it still moves the config home, and
     // the copy with it. Claude Code's registration is pointed at the copy where it went, so a
     // chat started outside the app keeps charter's guard — and the same on the way back.
@@ -255,6 +256,7 @@ fn without_a_bundle_the_registration_follows_the_copy_through_the_move_and_the_u
 
 #[test]
 fn a_registration_whose_copy_is_gone_is_a_failed_line_naming_the_install() {
+    charter_core::unsteered!();
     // Never a guard silently gone: when there is no copy to point at, the run says so and is
     // not complete.
     charter_core::unsteered!();
@@ -306,6 +308,7 @@ fn a_home_with_no_plugin_installed_gets_none_from_the_move() {
 
 #[test]
 fn a_plugin_installed_after_the_move_still_resolves_after_the_undo() {
+    charter_core::unsteered!();
     // The move ran with nothing installed, so it journalled no plugin step; `plugin install`
     // then put the copy in the moved config home. The undo moves that home back, so it points
     // the registration at the copy there too, plugin step or not (D-RN8-13).
