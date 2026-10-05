@@ -44,13 +44,20 @@ export type SettingsGroup = {
  * - **Add** opens an inline form of the {@link EntryField}s, as setting rows; the core's refusal
  *   of a field is said under that field, and the form keeps what was typed.
  * - **A refused Remove** names what uses the entry, each with a link to the group it is changed
- *   in; nothing cascades. A written add or remove has the one-level Undo.
+ *   in; nothing cascades. A written add or remove has the one-level Undo, which is the inverse
+ *   operation through the same core function (D-ST3-i).
+ *
+ * The entries, their identities and labels are the core's (`SettingsFile.entries`): the window
+ * computes none of them.
  */
 export type Collection = {
   /** The level's name for the collection, which its writes are sent as: `forges`. */
   name: string;
   /** What one entry is called, in Add and Remove's words: `forge`. */
   noun: string;
+  /** The text of the collection's file the entries were drawn from (`null`: not there): what
+   *  an Add or a Remove pressed now is sent against, so it is refused if the file moved. */
+  base: string | null;
   entries: readonly CollectionEntry[];
   /** The Add form's fields, in order. */
   fields: readonly EntryField[];
@@ -58,10 +65,11 @@ export type Collection = {
 
 /** One entry of a collection. */
 export type CollectionEntry = {
-  /** What the entry is called: its heading, and what Remove and its Undo name. */
+  /** The core's identity for it: what a remove is sent as. Opaque, and different once the entry
+   *  moved or changed (D-ST3-j). */
+  id: string;
+  /** What the entry is called, by the core: its heading, and what Remove and its Undo name. */
   label: string;
-  /** What a remove of it is sent as: its place in the list. */
-  index: number;
   /** The ids of the group's settings that are this entry's keys. */
   settings: readonly string[];
 };

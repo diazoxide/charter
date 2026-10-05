@@ -1407,10 +1407,13 @@ export const commands = {
 	 */
 	addProjectForge: (plane: PlaneId, base: string | null, entry: ForgeEntry) => typedError<EntryWritten, string>(__TAURI_INVOKE("add_project_forge", { plane, base, entry })),
 	/**
-	 *  Remove `[[forge]]` block `index` (from 0) of `charter.toml` — refused, naming them, while a
-	 *  repo or a setting uses it (`charter_core::settings::forges::remove`).
+	 *  Remove the `[[forge]]` block called `id` (as `charter.toml`'s `entries` list it) — refused,
+	 *  naming them, while a repo or a setting uses it (`charter_core::settings::forges::remove`).
+	 * 
+	 *  `base` is the text the entries were drawn from, so an entry that moved or changed since is
+	 *  refused rather than another removed.
 	 */
-	removeProjectForge: (plane: PlaneId, base: string | null, index: number) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_project_forge", { plane, base, index })),
+	removeProjectForge: (plane: PlaneId, base: string | null, id: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_project_forge", { plane, base, id })),
 	/**
 	 *  The plane's and each repo's save settings in force — `planesave::Settings`, the one
 	 *  resolver every save asks, shaped for the wire.
@@ -1928,12 +1931,23 @@ export type EntryReferrer = {
 	group: string | null,
 };
 
+/**  One field of a collection entry, as the Add form holds it: a list is one entry per line. */
+export type EntryValue = {
+	field: string,
+	value: string,
+};
+
 /**
  *  What adding or removing a collection entry answered: the file as it now stands, or every
  *  reason nothing was written — by field, by what uses the entry, and for the whole write
  *  (`charter_core::settings::collection::Refusal`).
  */
-export type EntryWritten = { kind: "saved"; file: SettingsFile } | { kind: "refused"; fields: EntryFieldRefusal[]; referrers: EntryReferrer[]; reasons: string[] };
+export type EntryWritten = 
+/**
+ *  Written. `added` is the new entry's identity, after an add; `removed` the entry a remove
+ *  took, as the Add form would write it again: what each one's Undo is made of (D-ST3-i).
+ */
+{ kind: "saved"; file: SettingsFile; added: string | null; removed: EntryValue[] | null } | { kind: "refused"; fields: EntryFieldRefusal[]; referrers: EntryReferrer[]; reasons: string[] };
 
 /**
  *  The question charter asks before an extension contributes anything.
@@ -4048,6 +4062,19 @@ export type SettingsEdit = {
 	value: SettingsValue | null,
 };
 
+/**  One entry of a collection, as the core lists it (`charter_core::settings::collection::Listed`). */
+export type SettingsEntry = {
+	/**  Which collection: `forges`. */
+	collection: string,
+	/**  Opaque: what a remove is sent by. A different one once the entry moved or changed. */
+	id: string,
+	label: string,
+	/**  The path every key of the entry is under. */
+	keys: SettingsStep[],
+	/**  The Add form's values that would write it again, by the entry's key. */
+	values: EntryValue[],
+};
+
 /**  One value in a file, and where it is. */
 export type SettingsField = {
 	path: SettingsStep[],
@@ -4072,10 +4099,17 @@ export type SettingsFile = {
 	parsed: boolean,
 	/**  Every value in it, in file order. */
 	fields: SettingsField[],
+	/**
+	 *  The entries of each collection the file is the home of (ST-3): `charter.toml`'s
+	 *  `[[forge]]` blocks. `null` when it holds none, and left out by a caller that lists none.
+	 */
+	entries?: SettingsEntry[] | null,
 };
 
 /**  What a move answered: both files as they now stand, or every reason neither was written. */
-export type SettingsMoved = { kind: "moved"; settings: ProjectSettings } | { kind: "refused"; reasons: string[] };
+export type SettingsMoved = 
+/**  Boxed: both files are far larger than a refusal. */
+{ kind: "moved"; settings: ProjectSettings } | { kind: "refused"; reasons: string[] };
 
 /**  What a save answered: the file as it now stands, or every reason nothing was written. */
 export type SettingsSaved = { kind: "saved"; file: SettingsFile } | { kind: "refused"; reasons: string[] };
