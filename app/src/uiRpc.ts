@@ -1842,7 +1842,7 @@ export type DoctorReport = {
 	path: string | null,
 };
 
-/**  One doctor row: the four fields `charter doctor --json` prints, and one it does not. */
+/**  One doctor row: the four fields `charter doctor --json` prints, and two it does not. */
 export type DoctorRow = {
 	name: string,
 	status: DoctorStatus,
@@ -1858,6 +1858,12 @@ export type DoctorRow = {
 	 *  warning among them would be invisible on its first day.
 	 */
 	checked: boolean,
+	/**
+	 *  The Settings group its fix is made in, by the group's stable address (`project.forges`),
+	 *  when the fix is a setting ([`Row::settings`], SE-22): the window links the row there.
+	 *  `charter doctor --json` does not print it.
+	 */
+	settings: string | null,
 };
 
 /**  A row's verdict, as the window draws it. */

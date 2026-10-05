@@ -67,13 +67,22 @@ function reading(raw: unknown): Reading {
  * regions and the tokens — that decides whether a file said something usable. So the window
  * keeps them here, one per subject, and the drawer draws them above the projects.
  */
-const said = new Map<string, AlertRow>();
-let listed: AlertRow[] = [];
+/**
+ * One thing said about this machine: an alert, and — when its fix is a setting — the Settings
+ * group it is made in, by the group's address (`you.text`; SE-22), which the drawer links to.
+ */
+export type MachineAlert = AlertRow & { settings?: string };
+
+const said = new Map<string, MachineAlert>();
+let listed: MachineAlert[] = [];
 const listeners = new Set<() => void>();
 
 /** Says something about this machine under `subject`, replacing what was said under it before,
  *  or takes it back with `undefined`. */
-export function sayAboutThisMachine(subject: string, row: Omit<AlertRow, "subject"> | undefined) {
+export function sayAboutThisMachine(
+  subject: string,
+  row: Omit<MachineAlert, "subject"> | undefined,
+) {
   if (row === undefined) {
     if (!said.delete(subject)) return;
   } else {
@@ -84,12 +93,12 @@ export function sayAboutThisMachine(subject: string, row: Omit<AlertRow, "subjec
 }
 
 /** What is being said about this machine right now. */
-export function aboutThisMachine(): AlertRow[] {
+export function aboutThisMachine(): MachineAlert[] {
   return listed;
 }
 
 /** {@link aboutThisMachine}, for a component that redraws when it changes. */
-export function useAboutThisMachine(): AlertRow[] {
+export function useAboutThisMachine(): MachineAlert[] {
   return useSyncExternalStore((listener) => {
     listeners.add(listener);
     return () => listeners.delete(listener);

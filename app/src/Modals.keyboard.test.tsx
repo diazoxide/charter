@@ -387,13 +387,21 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // a good witness: it is not a form control, so the engine always stopped at it, and the
     // hole was on the far side of it.
     const rows = [
-      { name: "git", status: "ok" as const, detail: "found", hint: "install git", checked: true },
+      {
+        name: "git",
+        status: "ok" as const,
+        detail: "found",
+        hint: "install git",
+        checked: true,
+        settings: null,
+      },
       {
         name: "tmux",
         status: "warn" as const,
         detail: "not checked (not ported)",
         hint: "a later build checks this",
         checked: false,
+        settings: null,
       },
     ];
     render(
@@ -410,6 +418,42 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
 
     expect(await reachableByKeyboard()).toEqual([
       'summary "Not checked by this build (1)"',
+      'button "Check again"',
+      'button "Close"',
+    ]);
+  });
+
+  it("reaches a doctor row's way into Settings", async () => {
+    // SE-22: a row whose fix is a setting carries a button into its Settings group.
+    render(
+      <Health
+        doctor={{
+          running: false,
+          run: () => {},
+          report: {
+            rows: [
+              {
+                name: "charter.toml",
+                status: "warn",
+                detail: "plane.mod in charter.toml is not read",
+                hint: "Fix or remove it",
+                checked: true,
+                settings: "project.saving",
+              },
+            ],
+            app_rows: [],
+            full: false,
+            path: "/usr/bin:/bin",
+          },
+        }}
+        onOpenSettings={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByTestId("status-doctor"));
+    await screen.findByRole("dialog");
+
+    expect(await reachableByKeyboard()).toEqual([
+      'button "Fix it in Settings"',
       'button "Check again"',
       'button "Close"',
     ]);

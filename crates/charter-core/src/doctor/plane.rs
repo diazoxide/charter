@@ -179,6 +179,7 @@ pub(super) fn front_door(d: &Doctor) -> Row {
                  of them has no identity"
             ),
             hint: "charter persona default <name>".to_owned(),
+            settings: None,
         };
     }
     Row::ok(NAME, "none declared")

@@ -21,7 +21,15 @@ afterEach(() => {
 const PLANE = "/home/dev/plane";
 
 function row(name: string, status: DoctorRow["status"], over: Partial<DoctorRow> = {}): DoctorRow {
-  return { name, status, detail: `${name} said`, hint: `${name} fix`, checked: true, ...over };
+  return {
+    name,
+    status,
+    detail: `${name} said`,
+    hint: `${name} fix`,
+    checked: true,
+    settings: null,
+    ...over,
+  };
 }
 
 /** A row this build does not run — a WARN with `checked: false`, as `Row::deferred` marks it. */

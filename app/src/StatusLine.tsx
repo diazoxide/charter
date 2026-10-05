@@ -98,6 +98,7 @@ export function StatusLine({
   state,
   alerts,
   doctor,
+  onOpenSettings,
   pin,
   regions,
   badges,
@@ -146,6 +147,8 @@ export function StatusLine({
   /** What the doctor last said about this project, run inside the app (`Doctor.tsx`). Absent
    *  draws no button — a caller that has no doctor to offer offers none. */
   doctor?: DoctorState;
+  /** Opens Settings at a group, for a doctor row that names a setting (SE-22). */
+  onOpenSettings?: (group: string) => void;
   /** What `charter version` says about this plane's pin, and a way to ask again. The item
    *  is drawn only when it drifts. */
   pin?: { pin?: PinReport; again: () => void };
@@ -281,7 +284,7 @@ export function StatusLine({
 
       <AlertsButton alerts={alerts} />
 
-      {doctor && <Health doctor={doctor} />}
+      {doctor && <Health doctor={doctor} onOpenSettings={onOpenSettings} />}
 
       {pin && <PinItem pin={pin.pin} again={pin.again} />}
 

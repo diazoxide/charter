@@ -14,6 +14,7 @@ import {
   type SettingsFileId,
   type SettingsGroup,
 } from "./groups";
+import { chooseGroup, settingsPlace, useShownGroup } from "./links";
 import { KEPT, projectGroups, useProjectLevel } from "./project";
 import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
@@ -89,6 +90,7 @@ function YouLevel({ levels, onLevelChange }: Switcher) {
   return (
     <Shown
       level="you"
+      place={settingsPlace("you")}
       levels={levels}
       onLevelChange={onLevelChange}
       about={`This machine only, in every project. Kept in ${where}.`}
@@ -123,6 +125,7 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
   return (
     <Shown
       level="project"
+      place={settingsPlace("project", plane)}
       {...switcher}
       about="This project, for everyone who opens it. Never put a secret in its files: keep it in a vault and name it as vault:<vault>/<key>."
       groups={groups}
@@ -170,6 +173,7 @@ function WorkspaceLevelTab({
   return (
     <Shown
       level="workspace"
+      place={settingsPlace("workspace", plane, workspace)}
       {...switcher}
       about={`The workspace ${workspace}, read between charter.toml and charter.local.toml: it refines its project for the team, and this machine has the last word. Never put a secret in its settings: keep it in a vault and name it as vault:<vault>/<key>.`}
       groups={groups}
@@ -183,9 +187,14 @@ function WorkspaceLevelTab({
 /**
  * One level, drawn: its groups that have a setting in the nav, and the chosen one on the right.
  * `waiting` stands in for the groups until the level has been read.
+ *
+ * **Which group is the place's** (SE-22, `links.ts`): the one last picked at this level and
+ * target, or the one a link last landed on — so a level comes back at the group it was left
+ * at, and a link to a group shows it even in a tab already open.
  */
 function Shown({
   level,
+  place,
   levels,
   onLevelChange,
   about,
@@ -197,6 +206,8 @@ function Shown({
   raw = [],
 }: Switcher & {
   level: Level;
+  /** Where the group shown is remembered (`links.settingsPlace`). */
+  place: string;
   about: string;
   groups: readonly SettingsGroup[];
   waiting?: ReactNode;
@@ -211,14 +222,25 @@ function Shown({
 }) {
   // Per tab and not remembered (V89c): a level drawn afresh starts with the whole nav.
   const [filter, setFilter] = useState("");
+  /** The file whose text is on the right in place of a group, while one is. */
+  const [editing, setEditing] = useState<string>();
+  const shown = useShownGroup(place);
+  // A link that lands here clears the filter and puts away a file's text, so the group it
+  // names is on screen. Adjusted during render, React's way for state that follows a value
+  // that changed. A draft typed into the text is kept, as it is when a group is picked.
+  const linked = shown?.linked ?? 0;
+  const [landed, setLanded] = useState(linked);
+  if (landed !== linked) {
+    setLanded(linked);
+    setFilter("");
+    setEditing(undefined);
+  }
+  const choose = (group: string) => chooseGroup(place, group);
   const groups = narrowed(
     declared.filter((one) => one.settings.length > 0),
     filter,
   );
-  const [chosen, choose] = useState<string>();
-  const group = groups.find((one) => one.id === chosen) ?? groups[0];
-  /** The file whose text is on the right in place of a group, while one is. */
-  const [editing, setEditing] = useState<string>();
+  const group = groups.find((one) => one.id === shown?.group) ?? groups[0];
   /** What is typed into each file's text, kept while a group is looked at. */
   const [drafts, setDrafts] = useState<Partial<Record<string, RawDraft>>>({});
   const rawFile = raw.find((one) => one.id === editing);

@@ -171,7 +171,17 @@ export function onTheLine(doctor: DoctorState): { said?: string; tone: string; l
 /** The glyph `charter doctor`'s own table draws for each verdict, so the two read alike. */
 const GLYPH: Record<DoctorRow["status"], string> = { ok: "✓", warn: "!", fail: "✗" };
 
-function Rows({ rows }: { rows: readonly DoctorRow[] }) {
+/**
+ * The rows of one heading. A row whose fix is a setting names that setting's group
+ * (`DoctorRow.settings`, SE-22), and is drawn with the way into it: `onOpenSettings`.
+ */
+function Rows({
+  rows,
+  onOpenSettings,
+}: {
+  rows: readonly DoctorRow[];
+  onOpenSettings?: (group: string) => void;
+}) {
   return (
     <ul className="doctor-rows">
       {rows.map((row) => (
@@ -187,6 +197,16 @@ function Rows({ rows }: { rows: readonly DoctorRow[] }) {
           {row.status !== "ok" && row.checked && row.hint && (
             <span className="doctor-hint">{row.hint}</span>
           )}
+          {row.settings !== null && onOpenSettings && (
+            <button
+              type="button"
+              className="doctor-settings"
+              tabIndex={0}
+              onClick={() => onOpenSettings(row.settings as string)}
+            >
+              Fix it in Settings
+            </button>
+          )}
         </li>
       ))}
     </ul>
@@ -199,8 +219,22 @@ function Rows({ rows }: { rows: readonly DoctorRow[] }) {
  * A Radix dialog (`docs/ui-primitives.md`), which is what makes the list keyboard-reachable
  * and the window behind it inert while it is up.
  */
-export function Health({ doctor }: { doctor: DoctorState }) {
+export function Health({
+  doctor,
+  onOpenSettings,
+}: {
+  doctor: DoctorState;
+  /** Opens Settings at a group (`settings/links.ts`, SE-22): what a row naming a setting's
+   *  "Fix it in Settings" does, once the dialog has closed. */
+  onOpenSettings?: (group: string) => void;
+}) {
   const [open, setOpen] = useState(false);
+  const settings =
+    onOpenSettings &&
+    ((group: string) => {
+      setOpen(false);
+      onOpenSettings(group);
+    });
   const { said, tone, label } = onTheLine(doctor);
   const { report, running, trouble, run } = doctor;
   const groups = report ? sorted(report.rows) : undefined;
@@ -261,7 +295,7 @@ export function Health({ doctor }: { doctor: DoctorState }) {
               <p className="honest">
                 What the chats this window starts can do. `charter doctor` does not print these.
               </p>
-              <Rows rows={ours} />
+              <Rows rows={ours} onOpenSettings={settings} />
             </section>
           )}
           {groups && (
@@ -269,19 +303,19 @@ export function Health({ doctor }: { doctor: DoctorState }) {
               {groups.blockers.length > 0 && (
                 <section aria-label="Blockers">
                   <h3>Blockers</h3>
-                  <Rows rows={groups.blockers} />
+                  <Rows rows={groups.blockers} onOpenSettings={settings} />
                 </section>
               )}
               {groups.warnings.length > 0 && (
                 <section aria-label="Warnings">
                   <h3>Warnings</h3>
-                  <Rows rows={groups.warnings} />
+                  <Rows rows={groups.warnings} onOpenSettings={settings} />
                 </section>
               )}
               {groups.passed.length > 0 && (
                 <section aria-label="Passed">
                   <h3>Passed</h3>
-                  <Rows rows={groups.passed} />
+                  <Rows rows={groups.passed} onOpenSettings={settings} />
                 </section>
               )}
               {groups.unchecked.length > 0 && (

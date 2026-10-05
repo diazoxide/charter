@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { commands } from "./bindings";
 import { forgetTextSizes, onTextSizes, textSizes, type TextSizes } from "./textSize";
 import { forgetYourEditor, onYourEditor, yourEditor } from "./yourEditor";
+import { forgetGroups } from "./settings/links";
 import type { YourEditor } from "./bindings";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
@@ -270,6 +271,7 @@ export function forgetThisLaunch(): void {
   writing = Promise.resolve();
   forgetTextSizes();
   forgetYourEditor();
+  forgetGroups();
   clearTimeout(textWrite);
 }
 

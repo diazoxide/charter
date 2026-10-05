@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use super::{DISPLAY_LIMIT, Doctor, NOT_CHECKED_HINT, Row};
+use super::{DISPLAY_LIMIT, Doctor, NOT_CHECKED_HINT, Row, SettingsGroup};
 use crate::profiles::{self, IgnoreCheck, Profile, Source};
 use crate::shown;
 use crate::wiring::{self, State};
@@ -14,6 +14,8 @@ use crate::wiring::{self, State};
 /// paid at every session start. What is left costs one file read, so a refused profile and a
 /// default naming nothing are still reported there.
 pub(super) fn harness_profiles(d: &Doctor) -> Row {
+    /// Where a profile and `[harness] default` are changed in Settings (SE-22).
+    const HARNESS: SettingsGroup = SettingsGroup::Harness;
     const NAME: &str = "harness profiles";
     // Read first, whatever git says, as `charter harness list` reads it.
     let set = profiles::current(&d.root);
@@ -47,7 +49,8 @@ pub(super) fn harness_profiles(d: &Doctor) -> Row {
             NAME,
             format!("{} refused: {}", set.refused.len(), who.join(", ")),
             first.reason.clone(),
-        );
+        )
+        .in_settings(HARNESS);
     }
     if let Some(value) = &set.default_refused {
         return Row::warn(
@@ -57,7 +60,8 @@ pub(super) fn harness_profiles(d: &Doctor) -> Row {
                  {names}."
             ),
             format!("set [harness] default to one of: {names}, or delete the key"),
-        );
+        )
+        .in_settings(HARNESS);
     }
     Row::ok(
         NAME,

@@ -1,8 +1,9 @@
 import { useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FolderOpen, LoaderCircle, Monitor, OctagonAlert, TriangleAlert, X } from "lucide-react";
-import type { AlertRow, PlaneAlerts, PlaneId } from "./bindings";
+import type { PlaneAlerts, PlaneId } from "./bindings";
 import type { AlertsReading } from "./alerts";
+import type { MachineAlert } from "./windowprefs";
 
 /**
  * **The alerts drawer**: an overlay over the whole window, opened from the status line's
@@ -36,6 +37,7 @@ export function AlertsDrawer({
   aboutThisMachine = [],
   planes,
   nameOf,
+  onOpenSettings,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -43,12 +45,15 @@ export function AlertsDrawer({
   /** What the window says about this machine rather than a project: a layout or theme file in
    *  charter's config directory that it could not use as written (`windowprefs.ts`). Listed
    *  above the projects, and only when there is something to say. */
-  aboutThisMachine?: AlertRow[];
+  aboutThisMachine?: MachineAlert[];
   /** The projects this window holds, in the strip's order, which is the order they are listed
    *  in. A project the core holds that this window does not is listed after them. */
   planes: readonly PlaneId[];
   /** What a project is called on its tab. */
   nameOf: (plane: PlaneId) => string;
+  /** Opens Settings at a group (SE-22): what an alert naming a setting's "Fix it in Settings"
+   *  does, once the drawer has closed. */
+  onOpenSettings?: (group: string) => void;
 }) {
   // Where the keyboard was when the drawer opened — the status line's button, in practice.
   // Radix hands focus back to a `Dialog.Trigger`, and the button that opens this is not one:
@@ -89,7 +94,16 @@ export function AlertsDrawer({
                 <Monitor className="node-icon" />
                 This machine
               </h3>
-              <Rows alerts={aboutThisMachine} />
+              <Rows
+                alerts={aboutThisMachine}
+                onOpenSettings={
+                  onOpenSettings &&
+                  ((group) => {
+                    onOpenChange(false);
+                    onOpenSettings(group);
+                  })
+                }
+              />
             </section>
           )}
           <Body reading={reading} planes={planes} nameOf={nameOf} />
@@ -181,8 +195,15 @@ function Project({
   );
 }
 
-/** One list of alerts, each with what fixes it. */
-function Rows({ alerts }: { alerts: AlertRow[] }) {
+/** One list of alerts, each with what fixes it — and, for one whose fix is a setting, the way
+ *  into that setting's group. */
+function Rows({
+  alerts,
+  onOpenSettings,
+}: {
+  alerts: MachineAlert[];
+  onOpenSettings?: (group: string) => void;
+}) {
   return (
     <ul className="drawer-alerts">
       {alerts.map((alert) => (
@@ -197,6 +218,16 @@ function Rows({ alerts }: { alerts: AlertRow[] }) {
             <span className="alert-detail">{alert.detail}</span>
           </span>
           <code className="alert-remedy">{alert.remedy}</code>
+          {alert.settings !== undefined && onOpenSettings && (
+            <button
+              type="button"
+              className="alert-settings"
+              tabIndex={0}
+              onClick={() => onOpenSettings(alert.settings as string)}
+            >
+              Fix it in Settings
+            </button>
+          )}
         </li>
       ))}
     </ul>

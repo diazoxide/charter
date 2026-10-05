@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::adopt::PinVerdict;
 
-use super::{Config, Doctor, NOT_CHECKED_HINT, Row, deferred, first_line};
+use super::{Config, Doctor, NOT_CHECKED_HINT, Row, SettingsGroup, deferred, first_line};
 
 /// The words `[harness] default` may name, in registration order — Python's
 /// `instance.launchable_harnesses`.
@@ -206,15 +206,18 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
         }
         Config::Read(cfg) => cfg,
     };
-    if let Some((summary, detail)) = worktrees_finding(&d.root, cfg)
-        .or_else(|| forge_finding(cfg))
+    // Each finding names the Settings group its key is changed in (SE-22).
+    if let Some((group, (summary, detail))) = worktrees_finding(&d.root, cfg)
+        .map(|found| (SettingsGroup::General, found))
+        .or_else(|| forge_finding(cfg).map(|found| (SettingsGroup::Forges, found)))
         // The profiles are read only when there is a default to look for, as they always were.
         .or_else(|| {
             refused_default(cfg)?;
             default_finding(cfg, &crate::profiles::current(&d.root))
+                .map(|found| (SettingsGroup::Harness, found))
         })
     {
-        return Row::warn(NAME, summary, detail);
+        return Row::warn(NAME, summary, detail).in_settings(group);
     }
     // `[[frame.component]]` is refused WHOLE when charter cannot draw it, and nothing but
     // this row says so. Whether an arrangement can be drawn is the tmux frame's question,
@@ -233,7 +236,7 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
     }
     // After the arrangement, so a save finding never hides that it went unread.
     if let Some((summary, detail)) = save_finding(&d.root) {
-        return Row::warn(NAME, summary, detail);
+        return Row::warn(NAME, summary, detail).in_settings(SettingsGroup::Saving);
     }
     if !d.has_plane {
         return Row::warn(

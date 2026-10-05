@@ -3326,6 +3326,13 @@ h2.sidebar-title .node-icon {
   overflow-wrap: anywhere;
 }
 
+/* The way into the Settings group a row's fix is made in (SE-22), under its hint. */
+.doctor-settings {
+  grid-column: 3;
+  justify-self: start;
+  margin-top: 0.2rem;
+}
+
 .doctor-unchecked {
   margin-top: 0.75rem;
   font-size: 0.85rem;
@@ -3473,6 +3480,12 @@ h2.sidebar-title .node-icon {
 
 .alert-detail {
   color: var(--text-secondary);
+}
+
+/* The way into the Settings group an alert's fix is made in (SE-22), under its remedy. */
+.alert-settings {
+  grid-column: 2;
+  justify-self: start;
 }
 
 .alert-remedy {

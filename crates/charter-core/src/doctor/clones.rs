@@ -114,6 +114,7 @@ pub(super) fn workspace_clones(d: &Doctor) -> Row {
                how this stays hidden)  Counted from what the last fetch recorded, so it can \
                under-report — never a live query, this runs at SessionStart."
             .to_owned(),
+        settings: None,
     };
     fsx::beside_unread(root, row, &unseen)
 }

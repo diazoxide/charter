@@ -247,6 +247,7 @@ import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
 import { useTextSizes } from "./textSize";
 import { focusStands } from "./Cockpit";
+import { landing, linkToGroup, type SettingsLink } from "./settings/links";
 
 /** One empty list, so a prop left out is the same list at every render. */
 const NONE: readonly never[] = [];
@@ -322,6 +323,7 @@ export const PlaneView = memo(function PlaneView({
   settingsAsked,
   savingAsked,
   settingsTabAsked,
+  settingsLinkAsked,
   firstChatAsked,
   shellAsked,
   fileAsked,
@@ -362,6 +364,9 @@ export const PlaneView = memo(function PlaneView({
   /** The same, for the Settings tab (`WindowDoing.openSettingsTab`, SE-16): a count that goes
    *  up each time the window asks for it on THIS project's strip. */
   settingsTabAsked?: number;
+  /** A link into a Settings group the window followed (SE-22), once per `at`: Settings opens
+   *  at the link's level and group on THIS project's strip. */
+  settingsLinkAsked?: { link: SettingsLink; at: number };
   /** A file ⌘P found in THIS project (FM-7), opened in its file tab once per `at`; with a
    *  `line`, a jump to it (a search hit, FM-8), opened in the branch's file tab at that line. */
   fileAsked?: { place: Place; path: string; line?: number; at: number };
@@ -2090,6 +2095,30 @@ export const PlaneView = memo(function PlaneView({
       showView(workspaceSettingsView(workspace), workspaceSettingsTitle(workspace), workspace),
     [showView],
   );
+
+  /**
+   * **Follows a link into Settings** (SE-22, `settings/links.ts`): the group is shown at its
+   * place, and the Settings tab for its level and target is opened — or brought forward, when
+   * it is open. A link this window cannot follow opens nothing.
+   */
+  const openSettingsAt = useCallback(
+    (link: SettingsLink) => {
+      const to = landing(link, plane);
+      if (to === undefined) return;
+      linkToGroup(to.place, link.group);
+      showView(to.view, to.title, to.workspace);
+    },
+    [plane, showView],
+  );
+
+  /** A link the window followed, opened the same way and for the same reason (SE-22). */
+  const settingsLinkHandled = useRef(settingsLinkAsked?.at);
+  useEffect(() => {
+    if (settingsLinkAsked === undefined || settingsLinkHandled.current === settingsLinkAsked.at)
+      return;
+    settingsLinkHandled.current = settingsLinkAsked.at;
+    openSettingsAt(settingsLinkAsked.link);
+  }, [settingsLinkAsked, openSettingsAt]);
 
   /** The Settings tab, opened the same way and for the same reason (SE-16). */
   const settingsTabHandled = useRef(settingsTabAsked);
@@ -4507,6 +4536,7 @@ export const PlaneView = memo(function PlaneView({
         workspaces={sidebar?.workspaces.length}
         state={workspaceState}
         doctor={doctor}
+        onOpenSettings={(group) => openSettingsAt({ group })}
         pin={pin}
         alerts={alerts}
         badges={facts.badges}

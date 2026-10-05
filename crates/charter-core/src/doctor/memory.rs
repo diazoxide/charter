@@ -202,6 +202,7 @@ pub(super) fn memory_indexes(d: &Doctor) -> Row {
             status,
             detail,
             hint,
+            settings: None,
         };
         fsx::beside_unread(root, row, &unread)
     };
