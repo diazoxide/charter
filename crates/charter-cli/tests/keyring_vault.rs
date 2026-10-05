@@ -168,7 +168,7 @@ fn the_keys_index_names_each_key_its_size_band_and_when_and_never_the_value() {
     assert!(!raw.contains(VALUE), "{raw}");
     let doc = index(&tmp);
     let service = doc["service"].as_str().expect("a service");
-    assert!(service.starts_with("charter/ops/"), "{service}");
+    assert!(service.starts_with("purlis/ops/"), "{service}");
     assert_eq!(doc["keys"]["API_TOKEN"]["size"], "16–31 bytes");
     let updated = doc["keys"]["API_TOKEN"]["updated"]
         .as_str()
@@ -613,7 +613,7 @@ fn a_chat_declared_vault_cannot_pull_a_moved_token_by_variable_name() {
 
 #[test]
 fn a_keyring_index_pointed_at_the_identity_service_is_refused() {
-    // #271 review U4. A keys index may only name this vault's own service, `charter/<vault>/<id>`.
+    // #271 review U4. A keys index may only name this vault's own service, `purlis/<vault>/<id>`.
     // One pointed at the identity service (or another vault's) is a corrupt index, so the token is
     // never read out as a secret value.
     let tmp = with_a_1password_vault();

@@ -585,14 +585,14 @@ fn a_pasted_token_is_kept_under_a_random_item_and_pins_the_binding_and_the_op_on
         "{id:?}"
     );
 
-    // The item is `charter/@identity/<id>`, account the source variable.
+    // The item is `purlis/@identity/<id>`, account the source variable.
     let stub: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(tmp.path().join(".charter/keyring-stub.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(
         stub,
-        serde_json::json!({ format!("charter/@identity/{id}\nOP_TEAM_TOKEN"): PASTED_TOKEN })
+        serde_json::json!({ format!("purlis/@identity/{id}\nOP_TEAM_TOKEN"): PASTED_TOKEN })
     );
 
     // Read back where the variable is not set, running exactly the pinned `op`.
@@ -605,6 +605,53 @@ fn a_pasted_token_is_kept_under_a_random_item_and_pins_the_binding_and_the_op_on
         )]
     );
     assert_eq!(identity::pinned_op(&bare, &v).unwrap(), Some(op));
+}
+
+#[test]
+fn an_identity_kept_under_the_old_charter_prefix_is_still_read_and_purlis_wins_over_it() {
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    let id = identity_record(&ctx)["ids"]["OP_TEAM_TOKEN"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stub_path = tmp.path().join(".charter/keyring-stub.json");
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let read = || identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN").unwrap();
+
+    // An install from before the rename kept the item under `charter/@identity/<id>`.
+    std::fs::write(
+        &stub_path,
+        serde_json::json!({ format!("charter/@identity/{id}\nOP_TEAM_TOKEN"): "old-token" })
+            .to_string(),
+    )
+    .unwrap();
+    assert_eq!(read().as_deref(), Some("old-token"));
+
+    // Both there: the purlis item wins.
+    std::fs::write(
+        &stub_path,
+        serde_json::json!({
+            format!("charter/@identity/{id}\nOP_TEAM_TOKEN"): "old-token",
+            format!("purlis/@identity/{id}\nOP_TEAM_TOKEN"): PASTED_TOKEN,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(read().as_deref(), Some(PASTED_TOKEN));
+
+    // Under neither, and under a lookalike of either: nothing.
+    std::fs::write(
+        &stub_path,
+        serde_json::json!({
+            format!("charterx/@identity/{id}\nOP_TEAM_TOKEN"): "x",
+            format!("purlis-/@identity/{id}\nOP_TEAM_TOKEN"): "y",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(read(), None);
 }
 
 #[test]

@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value};
 
 use super::VaultError;
-use super::keyring::{Held, SERVICE_PREFIX};
+use super::keyring::{Held, SERVICE_PREFIX, own_service};
 
 /// The argument that starts the app's binary as the one-item writer.
 pub const HOLD_ARG: &str = "charter-hold-a-keyring-item";
@@ -87,8 +87,9 @@ pub fn asked(input: &[u8]) -> Result<Item, String> {
         account: field("account")?,
         value: field("value")?,
     };
-    if !item.service.starts_with(SERVICE_PREFIX)
-        || item.service.chars().any(char::is_control)
+    // Under `purlis/` or, during the rename window, `charter/`, and shaped as a vault's or an
+    // identity's item: nothing else (#1261).
+    if !own_service(&item.service)
         || item.account.is_empty()
         || item.account.chars().any(char::is_control)
     {
@@ -371,6 +372,40 @@ mod tests {
                 value: "v".into(),
             }
         );
+    }
+
+    #[test]
+    fn the_writer_takes_items_under_both_of_the_products_prefixes_and_their_identities() {
+        for service in [
+            "purlis/ops/3f9a2c1b",
+            "charter/ops/3f9a2c1b",
+            "purlis/@identity/0123456789abcdef",
+            "charter/@identity/0123456789abcdef",
+        ] {
+            let input = format!(r#"{{"service": "{service}", "account": "K", "value": "v"}}"#);
+            assert_eq!(asked(input.as_bytes()).expect(service).service, service);
+        }
+    }
+
+    #[test]
+    fn the_writer_refuses_a_lookalike_of_the_products_prefixes() {
+        for service in [
+            "charterx/ops/3f9a2c1b",
+            "purlis-/ops/3f9a2c1b",
+            "purlisx/ops/3f9a2c1b",
+            "Purlis/ops/3f9a2c1b",
+            "charter/../x",
+            "purlis/../x",
+            "charter/ops",
+            "purlis/ops/a/b",
+            "charter//x",
+            "purlis/@identity",
+            "purlis/@other/x",
+            "edm/ops/3f9a2c1b",
+        ] {
+            let input = format!(r#"{{"service": "{service}", "account": "K", "value": "v"}}"#);
+            assert!(asked(input.as_bytes()).is_err(), "{service:?}");
+        }
     }
 
     #[test]

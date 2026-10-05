@@ -315,7 +315,8 @@ fn setting_one_field_rewrites_the_item_with_its_siblings_and_their_ids_then_read
     let t = fake.template("edit");
     assert_eq!(t["title"], "charter-team");
     assert_eq!(t["category"], "PASSWORD");
-    assert_eq!(t["tags"], serde_json::json!(["charter", "charter:team"]));
+    // Retagged with the purlis tag on every write (#1261); the item keeps its title.
+    assert_eq!(t["tags"], serde_json::json!(["purlis", "purlis:team"]));
     // Sorted by name; a field with an id keeps it, one without is given its label.
     assert_eq!(
         fields(&t),
@@ -346,6 +347,9 @@ fn setting_a_field_of_an_item_that_is_not_there_creates_it() {
         fields(&fake.template("create")),
         [("NEW".into(), "NEW".into(), "v".into())]
     );
+    let t = fake.template("create");
+    assert_eq!(t["tags"], serde_json::json!(["purlis", "purlis:team"]));
+    assert_eq!(t["title"], "charter-team");
 }
 
 #[test]
