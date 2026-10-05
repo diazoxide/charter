@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791236000081,
+  "lastUpdate": 1791238181127,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2310,6 +2310,48 @@ window.BENCHMARK_DATA = {
             "value": 102.060102,
             "unit": "ms",
             "extra": "median of 5 runs: 101.351, 101.689, 102.060, 102.121, 102.620 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "18e02c208a7bc0b60ddb6b3050f8f74467976683",
+          "message": "rename train 5: the old-name guard allows rename-local's refusal prose\n\nrenamelocal/busy.rs spells the old name once, in QUIT_FIRST (\"quit every\ncharter/purlis window, chat and terminal first\"). That text is what the\nrefusal tells the operator, so it is counted as visible prose (1) and\nwaits for RN-11a with the rest of the prose entries.\n\nRefs #1263\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T02:08:21+04:00",
+          "tree_id": "97fad8b560deafd3fa6d0aba082b0226b4b000d2",
+          "url": "https://github.com/purlis/purlis/commit/18e02c208a7bc0b60ddb6b3050f8f74467976683"
+        },
+        "date": 1791238180620,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.42861399999999994,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.397, 0.426, 0.429, 0.434, 0.455 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.292042000000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.245, 16.253, 16.292, 16.330, 16.392 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.4131735,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.284, 101.346, 101.413, 101.854, 103.443 ms"
           }
         ]
       }
