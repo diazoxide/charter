@@ -20,8 +20,8 @@ test("an index page is its directory's page", () => {
 });
 
 test("a page's address carries the site's base and a trailing slash", () => {
-  assert.equal(pageHref("v1.2-notes.md"), "/charter/docs/v12-notes/");
-  assert.equal(pageHref("guides/index.md"), "/charter/docs/guides/");
+  assert.equal(pageHref("v1.2-notes.md"), "/purlis/docs/v12-notes/");
+  assert.equal(pageHref("guides/index.md"), "/purlis/docs/guides/");
 });
 
 test("the pages of a docs tree are every .md file in it, by path, sorted", () => {

@@ -1,5 +1,5 @@
 // @ts-check
-// charter's website and its docs, one site (FR-5). Every page under `/docs/` is the
+// purlis's website and its docs, one site (FR-5). Every page under `/docs/` is the
 // repository's `docs/`, copied in by `scripts/sync-docs.mjs`; the landing page is the only page
 // written here.
 import { readdirSync } from "node:fs";
@@ -61,7 +61,7 @@ export default defineConfig({
   },
   integrations: [
     starlight({
-      title: "charter",
+      title: "purlis",
       description: "One desktop app for running many coding-agent chats in parallel.",
       social: [{ icon: "github", label: "GitHub", href: REPO_URL }],
       sidebar,
