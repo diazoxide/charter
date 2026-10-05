@@ -124,7 +124,7 @@ fn the_handshake_offers_no_file_system_and_no_terminal_and_hands_the_session_cha
     assert_eq!(
         new["mcpServers"],
         serde_json::json!([{
-            "name": "charter",
+            "name": charter_core::chattools::SERVER,
             "command": "/bin/charter",
             "args": ["mcp"],
             "env": [{"name": "PURLIS_ROOT", "value": "/project"}],

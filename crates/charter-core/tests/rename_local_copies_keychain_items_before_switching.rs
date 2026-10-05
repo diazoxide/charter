@@ -86,6 +86,7 @@ fn machine() -> Machine {
             logs: None,
             planes: Vec::new(),
             own_app: None,
+            plugin: None,
         },
     };
     assert!(service(&m).starts_with("charter/ops/"), "{}", service(&m));
