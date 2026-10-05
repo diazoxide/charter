@@ -26,6 +26,7 @@ import {
   type ForgeRow,
   type ForgeWord,
   type FoundFile,
+  type GoneProject,
   type OpenedRepo,
   type PlaneId,
   type RelaunchChoice,
@@ -40,6 +41,7 @@ type RepoTried = { refused?: string; asksForge?: string };
 import { UnsavedMark } from "./SavingView";
 import { SessionBusNotice } from "./SessionBusNotice";
 import { Notice } from "./Notice";
+import { GoneProjectNotice } from "./GoneProjectNotice";
 import { tellSaved, useRepoSaving } from "./saving";
 import {
   catalogue,
@@ -280,6 +282,16 @@ function App() {
   /** Projects the last quit had open that charter would not take back, each with its line.
    *  Never an error dialog: a restore is a convenience (ADR 0033). */
   const [notRestored, setNotRestored] = useState<string[]>([]);
+  /** The projects the last quit had open that have moved or gone: Locate… and Forget (NO-5). */
+  const [goneAtLaunch, setGoneAtLaunch] = useState<GoneProject[]>([]);
+  /** The gone projects the opener is drawing now. It owns those, so they are drawn once. */
+  const [openerGone, setOpenerGone] = useState<readonly string[] | "unread">("unread");
+  /** Bumped when a gone project is located or forgotten up here, so an opener reads again. */
+  const [goneChanged, setGoneChanged] = useState(0);
+  const goneSettled = useCallback(
+    (path: string) => setGoneAtLaunch((was) => was.filter((one) => one.path !== path)),
+    [],
+  );
   /** Whether the cold-launch restore is still going. Until it is done the window has not
    *  finished saying which projects it holds, so neither the quit nor the arrangement it
    *  writes down may act on what it holds so far. */
@@ -935,6 +947,7 @@ function App() {
           .catch(() => ({ status: "error" as const, error: "" }));
         const back = answer.status === "ok" ? answer.data : undefined;
         setNotRestored(back?.dropped ?? []);
+        setGoneAtLaunch(back?.gone ?? []);
         const [first, ...splits] = back?.windows ?? [];
         let front: PlaneId | undefined;
         for (const [at, path] of (first?.planes ?? []).entries()) {
@@ -1851,10 +1864,35 @@ function App() {
       {/* A launch without the session bus, and what that run has not got (charter#746). */}
       <SessionBusNotice chats={ending} />
 
-      {/* A project the last quit had open that charter would not take back. A line, never an
-          error dialog: the record is a convenience and the project is the truth (ADR 0033).
-          Said up here rather than on the opener, because the window may well have come back
-          on another project and the operator would never see it there. */}
+      {/* A project the last quit had open that has moved or gone, with Locate… and Forget
+          (NO-5). A line, never an error dialog: the record is a convenience and the project
+          is the truth (ADR 0033). Said up here, because the window may well have come back on
+          another project; when the opener is drawn and lists the same project, the opener's
+          line is the one, and settling it there settles it here. */}
+      {goneAtLaunch
+        .filter(
+          (gone) =>
+            !(openerUp && !settingsAlone) ||
+            (openerGone !== "unread" && !openerGone.includes(gone.path)),
+        )
+        .map((gone) => (
+          <GoneProjectNotice
+            key={gone.path}
+            gone={gone}
+            cause={`project-gone:${gone.path}`}
+            onLocated={(found) => {
+              goneSettled(gone.path);
+              setGoneChanged((n) => n + 1);
+              void openInto(found, true);
+            }}
+            onForgotten={() => {
+              goneSettled(gone.path);
+              setGoneChanged((n) => n + 1);
+            }}
+            onDismiss={() => goneSettled(gone.path)}
+          />
+        ))}
+      {/* An entry the store itself would not take back, said the same way. */}
       {notRestored.map((line) => (
         <Notice
           key={line}
@@ -1931,6 +1969,9 @@ function App() {
                 reason={launch?.reason ?? ""}
                 adding={planes.length > 0}
                 onOpen={(path) => void openInto(path, true)}
+                onGoneListed={setOpenerGone}
+                onGoneSettled={goneSettled}
+                goneChanged={goneChanged}
                 trouble={openTrouble}
                 // The first run is for a window that has never held a project: one whose last
                 // project was closed is somebody who has had one, and gets the opener.

@@ -1512,6 +1512,13 @@ impl Planes {
         self.arranging(|store| store.pin_workspace_at(&plane, workspace, at).map(drop))
     }
 
+    /// Re-points a remembered project that is gone at the folder the operator picked (NO-5),
+    /// once the core has checked a project is there, and answers the project found.
+    pub fn locate(&self, gone: &Path, picked: &Path) -> Result<PathBuf, String> {
+        let config = self.store_home("re-point a project")?;
+        machine::locate_project(config, gone, picked)
+    }
+
     /// Forgets a project on this machine (ST-2): its recent, approval, pins and tabs. A
     /// project that is gone from the disk is forgotten the same way.
     pub fn forget(&self, root: &Path) -> Result<(), String> {
@@ -2307,8 +2314,11 @@ pub struct Restorable {
     /// The windows, the main window's first. A window every one of whose projects was
     /// dropped is not here: an empty window would restore as nothing.
     pub windows: Vec<RestoredWindow>,
-    /// One line per project charter would not take back.
+    /// One line per window entry the store itself would not take back.
     pub dropped: Vec<String>,
+    /// The projects that have moved or gone, which the window offers Locate… and Forget for
+    /// (NO-5).
+    pub gone: Vec<crate::opener::GoneProject>,
 }
 
 /// One remembered window, checked against this disk.
@@ -2342,20 +2352,24 @@ pub fn restorable(loaded: machine::Loaded) -> Restorable {
     // What the store itself would not take back, already dropped with a reason by the read.
     // Only the window rows: a remembered RECENT charter would not take back is the opener's
     // news, and saying it twice on one launch is saying it twice.
-    let mut dropped: Vec<String> = loaded
+    let dropped: Vec<String> = loaded
         .dropped
         .iter()
         .filter(|why| matches!(why, machine::Dropped::Window { .. }))
         .map(ToString::to_string)
         .collect();
+    let mut gone: Vec<crate::opener::GoneProject> = Vec::new();
     for window in loaded.store.windows {
         let was_active = window.active;
         let mut these: Vec<PathBuf> = Vec::new();
         let mut active = None;
         for (at, plane) in window.planes.into_iter().enumerate() {
-            let shown = charter_core::shown::short(&plane.display().to_string());
             if let Err(why) = machine::still_a_plane(&plane) {
-                dropped.push(format!("{shown} {why}"));
+                let line = crate::opener::GoneProject::of(&plane, &why);
+                // Two windows that both held it say so once.
+                if !gone.contains(&line) {
+                    gone.push(line);
+                }
                 continue;
             }
             // One project is one tab, in one window: a second tab on one plane would be a
@@ -2384,6 +2398,7 @@ pub fn restorable(loaded: machine::Loaded) -> Restorable {
         planes,
         windows,
         dropped,
+        gone,
     }
 }
 
@@ -4527,11 +4542,13 @@ mod tests {
         });
 
         assert_eq!(back.planes, vec![there]);
-        assert_eq!(back.dropped.len(), 1, "{:?}", back.dropped);
+        assert!(back.dropped.is_empty(), "{:?}", back.dropped);
+        assert_eq!(back.gone.len(), 1, "{:?}", back.gone);
+        assert_eq!(back.gone[0].path, gone.display().to_string());
         assert!(
-            back.dropped[0].contains("no longer there"),
+            back.gone[0].said.contains("no longer there"),
             "{:?}",
-            back.dropped
+            back.gone
         );
         // The tab that was in front is the one that went, so the window comes back on the
         // project that survived rather than on an opener in front of it.
@@ -4616,7 +4633,7 @@ mod tests {
                 active: Some(0),
             }]
         );
-        assert_eq!(back.dropped.len(), 1, "{:?}", back.dropped);
+        assert_eq!(back.gone.len(), 1, "{:?}", back.gone);
     }
 
     /// Three plane ids and a registry of windows, with nothing on disk behind them: what a

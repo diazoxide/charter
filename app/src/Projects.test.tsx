@@ -105,7 +105,12 @@ function sidebarOf(root: string) {
 function core(
   over: {
     launch?: string | null;
-    restore?: { planes: string[]; active: number | null; dropped: string[] } | null;
+    restore?: {
+      planes: string[];
+      active: number | null;
+      dropped: string[];
+      gone?: { path: string; said: string }[];
+    } | null;
     chats?: Record<string, OpenChat[]>;
     /** What `project_theme_drawn` answers for each project, by its root (charter-app#273). */
     themes?: Record<string, string | null>;
@@ -137,6 +142,7 @@ function core(
       return {
         windows: back.planes.length > 0 ? [{ planes: back.planes, active: back.active }] : [],
         dropped: back.dropped,
+        gone: back.gone ?? [],
       };
     }
     if (cmd === "open_plane") return { plane: given.path, ask: null };
@@ -660,7 +666,8 @@ describe("the cold launch putting the last quit's projects back", () => {
       restore: {
         planes: [TWO],
         active: 0,
-        dropped: ["~/dev/gone is no longer there"],
+        dropped: [],
+        gone: [{ path: "/home/dev/gone", said: "~/dev/gone is no longer there" }],
       },
     });
 

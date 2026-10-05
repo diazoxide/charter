@@ -472,6 +472,12 @@ export const commands = {
 	 */
 	forgetProject: (path: string) => typedError<null, string>(__TAURI_INVOKE("forget_project", { path })),
 	/**
+	 *  Re-points a remembered project that is gone (moved, or on a disk that is not here) at a
+	 *  folder the operator picked, and answers the project found there (NO-5). The folder is
+	 *  checked first, as an open checks it, and the approval does not travel: the next open asks.
+	 */
+	locateProject: (gone: string, picked: string) => typedError<string, string>(__TAURI_INVOKE("locate_project", { gone, picked })),
+	/**
 	 *  Revokes this machine's approval of a project. It stays remembered and pinned; the next open
 	 *  asks again, as a first open does.
 	 */
@@ -2470,6 +2476,18 @@ export type GitHunk = {
 	newLines: number,
 };
 
+/**
+ *  A remembered project that is no longer a project where it was (NO-5, #1237): what the
+ *  window offers **Locate…** and **Forget** for. Never acted on by charter itself, because a
+ *  disk that is unplugged may come back.
+ */
+export type GoneProject = {
+	/**  The path the store holds it under: what Locate… and Forget are handed back. */
+	path: string,
+	/**  The line the window draws: the path, short, and why it is gone. */
+	said: string,
+};
+
 /**  What became of a reference handed to a chat. */
 export type Handed = 
 /**  Typed into the chat, unsent: `text` is what was typed. */
@@ -3847,14 +3865,18 @@ export type Recents = {
 	/**  Most recently opened first. */
 	planes: RecentPlane[],
 	/**
-	 *  One line per row charter would not offer: a plane that has moved or gone, and an entry
-	 *  the store itself would not take back.
+	 *  One line per entry the store itself would not take back.
 	 * 
 	 *  **Never an error, and never a dialog.** ADR 0034: the file is a convenience and the
 	 *  plane is the truth, so a launch that showed a modal about a memory stick that is not
 	 *  plugged in would be worse than the thing it was reporting.
 	 */
 	dropped: string[],
+	/**
+	 *  The remembered projects that have moved or gone, each with Locate… and Forget (NO-5),
+	 *  under the same rule: a line, never an error.
+	 */
+	gone: GoneProject[],
 	/**
 	 *  Why this machine remembers nothing at all, in charter's own words — a platform charter
 	 *  keeps no store on (ADR 0031: `0600` has no expression on Windows, so the guard refuses
@@ -4025,8 +4047,13 @@ export type Restore = {
 	 *  back.
 	 */
 	windows: RestoreWindow[],
-	/**  One line per project charter would not take back. */
+	/**  One line per window entry the store itself would not take back. */
 	dropped: string[],
+	/**
+	 *  The projects the last quit had open that have moved or gone, each with Locate… and
+	 *  Forget (NO-5).
+	 */
+	gone: GoneProject[],
 };
 
 /**  One window a cold launch puts back (ADR 0033, amended 2026-09-26). */

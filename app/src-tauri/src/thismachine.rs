@@ -123,6 +123,21 @@ pub fn forget_project(planes: tauri::State<'_, Planes>, path: String) -> Result<
     planes.forget(Path::new(&path))
 }
 
+/// Re-points a remembered project that is gone (moved, or on a disk that is not here) at a
+/// folder the operator picked, and answers the project found there (NO-5). The folder is
+/// checked first, as an open checks it, and the approval does not travel: the next open asks.
+#[tauri::command]
+#[specta::specta]
+pub fn locate_project(
+    planes: tauri::State<'_, Planes>,
+    gone: String,
+    picked: String,
+) -> Result<String, String> {
+    planes
+        .locate(Path::new(&gone), Path::new(&picked))
+        .map(|found| found.display().to_string())
+}
+
 /// Revokes this machine's approval of a project. It stays remembered and pinned; the next open
 /// asks again, as a first open does.
 #[tauri::command]

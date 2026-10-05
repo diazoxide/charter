@@ -1363,6 +1363,74 @@ impl Store {
             .is_some()
     }
 
+    /// Re-point the remembered `gone` at `found` (NO-5, #1237), answering whether `gone` was
+    /// remembered at all. [`locate_project`] is the way in, and it checks `found` first.
+    ///
+    /// The entry keeps its place in the list, its pins and every tab a window would put back,
+    /// because those are the operator's arrangement and the project is the one they mean.
+    /// **Its approval does not travel.** An approval is of what was at a path, and charter
+    /// cannot tell a project that moved from another folder that holds a manifest, so the next
+    /// open asks, exactly as a first open does: [`Self::revoke`]'s safe direction.
+    ///
+    /// When `found` is already remembered, that entry is the project's and keeps its place and
+    /// its approval; `gone` is folded into it, bringing its project pin and the workspace pins
+    /// it lacks, and a window holding both keeps one tab.
+    pub fn relocate(&mut self, gone: &Path, found: &Path) -> bool {
+        let Some(at) = self.recents.iter().position(|entry| entry.plane == gone) else {
+            return false;
+        };
+        // The disk came back and the operator picked the same folder: nothing to re-point.
+        if gone == found {
+            return true;
+        }
+        if self.recent(found).is_some() {
+            let folded = self.recents.remove(at);
+            if let Some(entry) = self.recents.iter_mut().find(|entry| entry.plane == found) {
+                // The pins are the operator's arrangement, so they join the project's own:
+                // its own first, then the gone entry's that it lacks, within the bound. The
+                // count of pinned projects cannot grow, since the gone entry's pin goes.
+                entry.pinned |= folded.pinned;
+                for name in folded.pinned_workspaces {
+                    if entry.pinned_workspaces.len() < MOST_PINNED_WORKSPACES
+                        && !entry.pinned_workspaces.contains(&name)
+                    {
+                        entry.pinned_workspaces.push(name);
+                    }
+                }
+            }
+        } else {
+            let entry = &mut self.recents[at];
+            entry.plane = found.to_path_buf();
+            entry.trust = None;
+        }
+        for window in &mut self.windows {
+            let front = window.planes.get(window.active).cloned();
+            let mut planes: Vec<PathBuf> = Vec::with_capacity(window.planes.len());
+            for plane in window.planes.drain(..) {
+                let plane = if plane == gone {
+                    found.to_path_buf()
+                } else {
+                    plane
+                };
+                if !planes.contains(&plane) {
+                    planes.push(plane);
+                }
+            }
+            let front = front.map(|plane| {
+                if plane == gone {
+                    found.to_path_buf()
+                } else {
+                    plane
+                }
+            });
+            window.active = front
+                .and_then(|front| planes.iter().position(|plane| *plane == front))
+                .unwrap_or(0);
+            window.planes = planes;
+        }
+        true
+    }
+
     /// Whether `plane` may be opened without asking, given what it contributes now.
     pub fn consent(&self, plane: &Path, contributes: &Contribution) -> Consent {
         let Some(trust) = self.recent(plane).and_then(|entry| entry.trust.as_ref()) else {
@@ -1396,6 +1464,45 @@ pub fn revoke_approval(config_root: &Path, plane: &Path) -> io::Result<bool> {
     let mut revoked = false;
     update(config_root, |store| revoked = store.revoke(plane))?;
     Ok(revoked)
+}
+
+/// **Locate…** a remembered project that is gone (NO-5, #1237): re-point it at the folder the
+/// operator picked, and answer the project found there.
+///
+/// `picked` is checked here, before anything is written, and the check is the open's: the
+/// folder is followed to its real path and walked up to the project it is in (a folder inside
+/// a project locates that project), and what is found must pass [`still_a_plane`]. A picked
+/// path is followed through a link rather than refused, because no approval stands behind it
+/// yet and none is carried to it ([`Store::relocate`]).
+///
+/// Refused, with the store untouched, when the folder is not in a project or `gone` is not
+/// remembered. Never done on charter's own initiative: a disk that is unplugged may come back.
+pub fn locate_project(config_root: &Path, gone: &Path, picked: &Path) -> Result<PathBuf, String> {
+    let shown = crate::shown::short(&picked.display().to_string());
+    let not_a_project = || {
+        format!(
+            "{shown} is not a project: charter found no {} there or in any folder above it",
+            crate::plane::MANIFEST
+        )
+    };
+    let here = picked.canonicalize().map_err(|_| not_a_project())?;
+    let found = crate::plane::find_root(&here).map_err(|_| not_a_project())?;
+    still_a_plane(&found).map_err(|why| {
+        format!(
+            "{} {why}",
+            crate::shown::short(&found.display().to_string())
+        )
+    })?;
+    let mut located = false;
+    update(config_root, |store| located = store.relocate(gone, &found))
+        .map_err(|why| format!("charter could not re-point that project: {why}"))?;
+    if !located {
+        return Err(format!(
+            "charter does not remember {}, so there is nothing to re-point",
+            crate::shown::short(&gone.display().to_string())
+        ));
+    }
+    Ok(found)
 }
 
 /// Something the store held that charter would not take back.

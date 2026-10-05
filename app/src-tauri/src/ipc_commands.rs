@@ -83,6 +83,7 @@ macro_rules! app_commands {
                 arrange_workspace_pins,
                 thismachine::this_machine,
                 thismachine::forget_project,
+                thismachine::locate_project,
                 thismachine::revoke_approval,
                 thismachine::pin_on_this_machine,
                 pin_chat,
