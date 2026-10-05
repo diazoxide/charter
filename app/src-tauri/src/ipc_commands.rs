@@ -119,6 +119,7 @@ macro_rules! app_commands {
                 workspaces::take_repos,
                 workspaces::clone_repo,
                 workspaces::drop_repo,
+                workspaces::drop_repo_membership,
                 workspace_repos,
                 alerts_everywhere,
                 start_options,

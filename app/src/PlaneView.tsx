@@ -82,6 +82,7 @@ import { usePlaneSaving, useRepoSavingKept, WAY_OUT, type WayOut } from "./savin
 import { HARNESS_SETUP, type HarnessSetupAsk } from "./harnessSetup";
 import { curationSubjects, useCurations } from "./curations";
 import { LiveDialog, LiveMark } from "./LiveDialog";
+import { RemoveFromWorkspace } from "./RemoveFromWorkspace";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { Menued } from "./Menus";
 import { afterDrop, reslotted } from "./reorder";
@@ -420,6 +421,8 @@ export const PlaneView = memo(function PlaneView({
   const { saving } = usePlaneSaving(plane);
   /** The workspace whose LIVE/LOCAL confirmation is open (charter-app#301). */
   const [liveAsk, setLiveAsk] = useState<string>();
+  /** The repo the "Remove from workspace" question is about, while it is open (#1228). */
+  const [membershipAsk, setMembershipAsk] = useState<{ workspace: string; repo: string }>();
   /**
    * The workspace the operator last PICKED, which is not always the one drawn.
    *
@@ -3511,6 +3514,7 @@ export const PlaneView = memo(function PlaneView({
         setFocusedBranch({ workspace: cut.workspace, repo: cut.repo, piece: cut.piece }),
       newBranch,
       cloneMissing,
+      askDropMembership: (workspace: string, repo: string) => setMembershipAsk({ workspace, repo }),
       newChatIn: newTabIn,
       sendKey,
       openProject: windowDoes.openProject,
@@ -5044,6 +5048,25 @@ export const PlaneView = memo(function PlaneView({
             });
             // Read the plane again: the marks come from what is on disk, not from this press.
             setReplan((asked) => asked + 1);
+          }}
+        />
+      )}
+
+      {membershipAsk !== undefined && (
+        <RemoveFromWorkspace
+          plane={plane}
+          workspace={membershipAsk.workspace}
+          repo={membershipAsk.repo}
+          onClose={() => setMembershipAsk(undefined)}
+          onDone={(said) => {
+            setMembershipAsk(undefined);
+            setReport({
+              from: `absent.drop:${membershipAsk.repo}`,
+              refused: false,
+              words: said.join(" "),
+            });
+            // The list is what is on disk: read again, so the repo leaves "Not cloned here".
+            rereadPanels();
           }}
         />
       )}
