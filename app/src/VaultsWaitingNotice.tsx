@@ -15,7 +15,8 @@ import { Notice } from "./Notice";
  * while the person is expecting it.
  *
  * An item the person does not allow keeps its vault waiting, and the Notice stays with the press
- * to try again. Dismissible: nothing is lost by leaving them, and the next launch says so again.
+ * to try again. What went wrong is one short line here; what each vault said is in the app's
+ * log. Dismissible: nothing is lost by leaving them, and the next launch says so again.
  */
 export function VaultsWaitingNotice() {
   const [waiting, setWaiting] = useState<VaultsToMove | null>(null);
@@ -52,11 +53,11 @@ export function VaultsWaitingNotice() {
         const done = answer.data;
         setWaiting(done.left);
         if (done.left) {
-          const failed = done.said
-            .filter((line) => line.startsWith("✗"))
-            .map((line) => line.slice(1).trim());
+          // Short, in the strip; what each vault said is in the app's log.
           setTrouble(
-            failed.length > 0 ? failed.join(" ") : "macOS did not allow every secret to be read.",
+            done.failed > 0
+              ? `${done.failed === 1 ? "One" : done.failed} could not be moved; the app's log says why.`
+              : "macOS did not allow every secret to be read.",
           );
         }
       })

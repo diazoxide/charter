@@ -42,7 +42,10 @@ export const commands = {
 	restartOnTheSessionBus: () => typedError<null, string>(__TAURI_INVOKE("restart_on_the_session_bus")),
 	/**  The vaults this launch's keychain copy left waiting, or nothing. */
 	vaultsToMove: () => __TAURI_INVOKE<{
-	/**  How many wait: keyring vaults and vaults' identity records. */
+	/**
+	 *  How many vaults wait: each counted once, whether its keyring items, its identity record
+	 *  or both wait.
+	 */
 	vaults: number,
 	/**  How many items they hold: the most times the system asks when they are finished. */
 	items: number,
@@ -50,7 +53,8 @@ export const commands = {
 	/**
 	 *  Finish moving the vaults that wait, on the person's press: the copy with the Keychain's
 	 *  dialogs on, so the system asks once for each item. On a blocking thread, because each ask
-	 *  waits for the person; one press at a time.
+	 *  waits for the person; one press at a time. Refused when this app does not hold the config
+	 *  home's lock.
 	 */
 	finishMovingVaults: () => typedError<FinishedMoving, string>(__TAURI_INVOKE("finish_moving_vaults")),
 	/**
@@ -2408,12 +2412,12 @@ export type FilesSearched = {
 	ended: SearchEnd | null,
 };
 
-/**  What finishing them came to. */
+/**  What finishing them came to. What each step said is in the app's log. */
 export type FinishedMoving = {
 	/**  What still waits, if anything: an item the person did not allow keeps its vault here. */
 	left: VaultsToMove | null,
-	/**  One line a step, as `purlis migrate` says them. */
-	said: string[],
+	/**  How many vaults or records could not be moved this time. */
+	failed: number,
 };
 
 /**  What the first-run screen shows about this machine. */
@@ -4738,7 +4742,10 @@ export type VaultSummary = {
 
 /**  What the window says about the vaults that wait. */
 export type VaultsToMove = {
-	/**  How many wait: keyring vaults and vaults' identity records. */
+	/**
+	 *  How many vaults wait: each counted once, whether its keyring items, its identity record
+	 *  or both wait.
+	 */
 	vaults: number,
 	/**  How many items they hold: the most times the system asks when they are finished. */
 	items: number,
