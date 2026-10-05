@@ -197,6 +197,7 @@ fn kept_open_on(root: &Path, branch: &str) {
             head: "a".repeat(40),
             target: "main".into(),
         }),
+        held: false,
     }
     .write(root);
 }
@@ -222,14 +223,8 @@ fn a_request_still_open_from_the_charter_save_branch_carries_on_there_until_it_i
     kept_open_on(&root, &old);
     assert_eq!(save_branch(&root, &plane), old);
 
-    // A request forgotten without being seen to merge or close — the plane was moved off its
-    // commit by hand — may still be open: the old branch carries on, so none is opened twice.
-    let mut kept = Kept::read(&root);
-    kept.pr = None;
-    kept.write(&root);
-    assert_eq!(save_branch(&root, &plane), old);
-
-    // Once a settle has seen it merged or closed, the next save goes to the purlis name.
+    // Once it is settled — merged, or closed — what is kept names no request, and the next
+    // save goes to the purlis name.
     let mut kept = Kept::read(&root);
     forget_old_branch(&root, &plane, &mut kept);
     kept.write(&root);
@@ -237,6 +232,42 @@ fn a_request_still_open_from_the_charter_save_branch_carries_on_there_until_it_i
         save_branch(&root, &plane),
         format!("purlis/{}", crate::planesave::default_rest(&root))
     );
+
+    // A request forgotten without being seen to merge or close — the plane was moved off its
+    // commit by hand — is held, and may still be open: the old branch carries on, so none is
+    // opened twice. The hold is kept on disk, and only a settle that saw it end lets it go.
+    kept_open_on(&root, &old);
+    let mut kept = Kept::read(&root);
+    kept.pr = None;
+    kept.held = true;
+    kept.write(&root);
+    assert!(Kept::read(&root).held);
+    assert_eq!(save_branch(&root, &plane), old);
+    let mut kept = Kept::read(&root);
+    forget_old_branch(&root, &plane, &mut kept);
+    kept.write(&root);
+    assert!(!Kept::read(&root).held);
+    assert_eq!(
+        save_branch(&root, &plane),
+        format!("purlis/{}", crate::planesave::default_rest(&root))
+    );
+}
+
+#[test]
+fn a_clone_upgraded_after_its_last_request_merged_saves_to_the_purlis_name() {
+    // What a pre-rename clone keeps once its last request merged: the old branch, the commit it
+    // pushed there, and no request. Nothing may still be open, so new work says purlis.
+    let (_dir, root, _bare) = plane_and_remote();
+    let plane = crate::planesave::Settings::from_text(None, None).plane;
+    let rest = crate::planesave::default_rest(&root);
+    std::fs::create_dir_all(kept_path(&root).parent().unwrap()).unwrap();
+    std::fs::write(
+        kept_path(&root),
+        serde_json::json!({"branch": format!("charter/{rest}"), "pushed": "a".repeat(40), "pr": null})
+            .to_string(),
+    )
+    .unwrap();
+    assert_eq!(save_branch(&root, &plane), format!("purlis/{rest}"));
 }
 
 #[test]
