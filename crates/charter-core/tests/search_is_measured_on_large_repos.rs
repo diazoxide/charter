@@ -368,13 +368,70 @@ fn a_reported_budget_is_printed_and_never_fails_the_run() {
     assert_eq!(Budgets::from(Some("1")), Budgets::Fail);
 }
 
+#[test]
+fn a_read_the_capped_reader_cannot_answer_is_a_miss_and_any_other_refusal_fails() {
+    charter_core::unsteered!();
+    let mut held = Held {
+        missed: Vec::new(),
+        budgets: true,
+    };
+    let stopped = files::Refused::Read(
+        "charter could not read the branch: the read stopped without an answer: it took too \
+         long or too much memory, or failed"
+            .into(),
+    );
+    assert_eq!(
+        held.answered::<()>("the uncommitted comparison", Err(stopped)),
+        None
+    );
+    assert_eq!(held.missed.len(), 1, "{:?}", held.missed);
+    assert!(
+        held.missed[0].starts_with("the uncommitted comparison: no answer (Read(\"charter could"),
+        "{:?}",
+        held.missed
+    );
+    assert_eq!(held.answered("one file's hunks", Ok(7)), Some(7));
+    assert_eq!(held.missed.len(), 1);
+    // A refusal the reader did answer with is a wrong answer, not a slow one: it still fails.
+    let wrong = std::panic::catch_unwind(move || {
+        held.answered::<()>(
+            "a comparison's file list",
+            Err(files::Refused::Read("no such ref 'main'".into())),
+        )
+    });
+    assert!(wrong.is_err());
+}
+
 impl Held {
+    /// The answer `read` came back with; or, where the capped reader gave none (its deadline,
+    /// its memory cap, or its child failing), `None` and a miss named `what`. On a slow disk at
+    /// this size that is the measurement: a read missed by more than its budget, said like any
+    /// other miss rather than ending the run (ADR 0086; the 300,000-file comparison of #1209).
+    /// Any other refusal is an answer, and a wrong one: it fails here.
+    fn answered<T>(&mut self, what: &str, read: Result<T, files::Refused>) -> Option<T> {
+        match read {
+            Ok(answer) => Some(answer),
+            Err(why @ files::Refused::Read(_)) if no_answer(&why) => {
+                self.missed.push(format!("{what}: no answer ({why:?})"));
+                None
+            }
+            Err(why) => panic!("{what}: {why:?}"),
+        }
+    }
+
     fn within(&mut self, what: &str, took: Duration, budget: Duration) {
         if self.budgets && took > budget {
             self.missed
                 .push(format!("{what}: {} past {}", ms(took), ms(budget)));
         }
     }
+}
+
+/// Whether `why` is the capped reader giving no answer at all: every way it ends a read
+/// itself (past its deadline or memory cap, a child that fails, an answer too large) says
+/// "charter could not read the branch", while a refusal the reader answered with does not.
+fn no_answer(why: &files::Refused) -> bool {
+    matches!(why, files::Refused::Read(said) if said.starts_with("charter could not read the branch: "))
 }
 
 fn measure_find(scope: &[Place<'_>], held: &mut Held) {
@@ -475,16 +532,9 @@ fn measure_status(plane: &Path, clone: &Path, held: &mut Held) {
     let mut clean = Vec::new();
     for _ in 0..3 {
         let one = Instant::now();
-        let status = match files::status(&reader, plane, branch) {
-            Ok(status) => status,
-            // The reader's own deadline or memory cap ended the read: on a slow disk at this
-            // size that is the measurement, a status read missed by more than its budget, and
-            // it is said like any other miss rather than ending the run (ADR 0086).
-            Err(why) => {
-                held.missed
-                    .push(format!("status read: no answer ({why:?})"));
-                return;
-            }
+        let Some(status) = held.answered("status read", files::status(&reader, plane, branch))
+        else {
+            return;
         };
         clean.push(one.elapsed());
         assert!(status.changes.is_empty(), "{:?}", status.changes);
@@ -500,36 +550,36 @@ fn measure_status(plane: &Path, clone: &Path, held: &mut Held) {
     let mut answered = true;
     for _ in 0..3 {
         let one = Instant::now();
-        match files::status(&reader, plane, branch) {
-            Ok(status) => {
-                changed.push(one.elapsed());
-                assert_eq!(status.changes.len(), 6, "{:?}", status.changes);
-            }
-            Err(why) => {
-                held.missed
-                    .push(format!("status read: no answer ({why:?})"));
-                answered = false;
-                break;
-            }
-        }
+        let Some(status) = held.answered("status read", files::status(&reader, plane, branch))
+        else {
+            answered = false;
+            break;
+        };
+        changed.push(one.elapsed());
+        assert_eq!(status.changes.len(), 6, "{:?}", status.changes);
     }
     std::fs::write(&readme, before).unwrap();
     for n in 0..5 {
         std::fs::remove_file(clone.join(format!("agent_added_{n}.rs"))).unwrap();
     }
-    if !answered {
-        return;
-    }
+    // The clean reads were measured either way: they are printed and held, and a miss on the
+    // six changes is said beside them.
     let say = |all: &[Duration]| all.iter().map(|d| ms(*d)).collect::<Vec<_>>().join(", ");
     println!(
         "FM-12 | status | clean: {}; six changes: {}",
         say(&clean),
-        say(&changed)
+        if answered {
+            say(&changed)
+        } else {
+            "no answer".to_string()
+        }
     );
     for one in clean.iter().chain(&changed) {
         held.within("status read", *one, STATUS);
     }
-    probe_status(clone);
+    if answered {
+        probe_status(clone);
+    }
 }
 
 /// What a status costs on this machine apart from charter: gitoxide's own counters for the
@@ -673,7 +723,14 @@ fn measure_compare(plane: &Path, clone: &Path, held: &mut Held) {
     let mut compared = None;
     for _ in 0..3 {
         let one = Instant::now();
-        let answer = files::compare(&reader, plane, branch, &comparison).expect("a comparison");
+        // A comparison the capped reader cannot answer is a miss, not a panic (#1209); what was
+        // measured before it is still printed and held.
+        let Some(answer) = held.answered(
+            "a comparison's file list",
+            files::compare(&reader, plane, branch, &comparison),
+        ) else {
+            return;
+        };
         listed.push(one.elapsed());
         assert_eq!(
             answer.files.len(),
@@ -683,29 +740,6 @@ fn measure_compare(plane: &Path, clone: &Path, held: &mut Held) {
         );
         compared = Some(answer);
     }
-    let compared = compared.unwrap();
-    let mut rows = Vec::new();
-    for one in compared.files.iter().take(50) {
-        let started = Instant::now();
-        files::compare_file(
-            &reader,
-            plane,
-            branch,
-            &compared.sides,
-            &one.path,
-            one.from.as_deref(),
-        )
-        .expect("a file's hunks");
-        rows.push(started.elapsed());
-    }
-    let mut uncommitted = Vec::new();
-    for _ in 0..3 {
-        let one = Instant::now();
-        let answer = files::compare(&reader, plane, branch, &files::Comparison::Uncommitted)
-            .expect("a comparison");
-        uncommitted.push(one.elapsed());
-        assert!(answer.files.is_empty(), "{:?}", answer.files);
-    }
     let say = |all: &[Duration]| all.iter().map(|d| ms(*d)).collect::<Vec<_>>().join(", ");
     println!(
         "RC-2 | compare | {REVIEWED_FILES} files, list with line counts: {}; git diff --numstat: \
@@ -713,19 +747,48 @@ fn measure_compare(plane: &Path, clone: &Path, held: &mut Held) {
         say(&listed),
         say(&git_took)
     );
+    for one in &listed {
+        held.within("a comparison's file list", *one, STATUS);
+    }
+    let compared = compared.unwrap();
+    let mut rows = Vec::new();
+    for one in compared.files.iter().take(50) {
+        let started = Instant::now();
+        let hunks = files::compare_file(
+            &reader,
+            plane,
+            branch,
+            &compared.sides,
+            &one.path,
+            one.from.as_deref(),
+        );
+        if held.answered("one file's hunks", hunks).is_none() {
+            return;
+        }
+        rows.push(started.elapsed());
+    }
     println!(
         "RC-2 | compare | one file's hunks, 50 rows: median {}, worst {}, total {}",
         ms(median(rows.clone())),
         ms(*rows.iter().max().unwrap()),
         ms(rows.iter().sum())
     );
+    let mut uncommitted = Vec::new();
+    for _ in 0..3 {
+        let one = Instant::now();
+        let Some(answer) = held.answered(
+            "the uncommitted comparison",
+            files::compare(&reader, plane, branch, &files::Comparison::Uncommitted),
+        ) else {
+            return;
+        };
+        uncommitted.push(one.elapsed());
+        assert!(answer.files.is_empty(), "{:?}", answer.files);
+    }
     println!(
         "RC-2 | compare | nothing uncommitted: {}",
         say(&uncommitted)
     );
-    for one in &listed {
-        held.within("a comparison's file list", *one, STATUS);
-    }
 }
 
 #[test]
