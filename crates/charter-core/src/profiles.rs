@@ -55,7 +55,7 @@ pub fn named_like_a_credential(name: &str) -> bool {
 }
 
 /// The prefix of charter's own variables, which charter sets itself (ruling 14).
-const CHARTER_PREFIX: &str = "CHARTER_";
+pub(crate) const CHARTER_PREFIX: &str = "CHARTER_";
 
 /// The one key under `[harness]` that names the default rather than declaring a profile.
 const DEFAULT: &str = "default";

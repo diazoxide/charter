@@ -51,10 +51,12 @@ fn dir_from(named: Option<OsString>) -> Option<PathBuf> {
     }
 }
 
+/// The app's bundle identifier, which names its log folder.
+pub(crate) const APP: &str = "dev.charter.app";
+
 /// Tauri's `app_log_dir` for charter's identifier, worked out without Tauri: the core never
 /// depends on it, and the app wants its log before Tauri has started.
 pub fn app_log_dir() -> Option<PathBuf> {
-    const APP: &str = "dev.charter.app";
     if cfg!(target_os = "macos") {
         Some(dirs::home_dir()?.join("Library/Logs").join(APP))
     } else {

@@ -24,6 +24,9 @@ pub fn root() -> Option<PathBuf> {
     Some(found)
 }
 
+/// The data home's folder under `$XDG_DATA_HOME` or the OS data directory.
+pub(crate) const DIR: &str = "charter";
+
 /// `<data>` as the environment `env` answers it. An empty value names nothing.
 pub fn root_in(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
     let named = |name: &str| {
@@ -32,8 +35,8 @@ pub fn root_in(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
             .map(PathBuf::from)
     };
     let found = named(HOME_VAR)
-        .or_else(|| named("XDG_DATA_HOME").map(|xdg| xdg.join("charter")))
-        .or_else(|| dirs::data_dir().map(|dir| dir.join("charter")))?;
+        .or_else(|| named("XDG_DATA_HOME").map(|xdg| xdg.join(DIR)))
+        .or_else(|| dirs::data_dir().map(|dir| dir.join(DIR)))?;
     // A relative value is taken from the directory charter was started in, so the answer is
     // always an absolute path.
     std::path::absolute(found).ok()

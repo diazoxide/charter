@@ -750,6 +750,32 @@ fn outside_a_plane_the_gated_arms_are_silent_and_the_others_are_not() {
 }
 
 #[test]
+fn a_project_marked_only_by_purlis_toml_opens_the_gated_arms_as_charter_toml_does() {
+    // D-RN1-13: the plane is FOUND by either name, so the guard's gate must open on either
+    // name too, or every plane-gated arm would stand aside in a project every command acts on.
+    let old = a_plane();
+    let new = a_plane();
+    std::fs::rename(
+        new.path().join("charter.toml"),
+        new.path().join("purlis.toml"),
+    )
+    .expect("the purlis marker");
+
+    let mut refused = 0;
+    for gated in [
+        "git clone git@github.com:o/r.git",
+        "charter handoff beta",
+        "gh release create v1.0.0",
+    ] {
+        let (_, by_old, _) = guard(old.path(), &bash(gated), &[]);
+        let (_, by_new, _) = guard(new.path(), &bash(gated), &[]);
+        assert_eq!(decision(&by_new), decision(&by_old), "{gated:?}");
+        refused += usize::from(decision(&by_new).is_some());
+    }
+    assert!(refused > 0, "no gated arm fired in either plane");
+}
+
+#[test]
 fn the_two_payload_fields_no_command_can_see_are_read() {
     // A7's whole reason for being the hook's and not the command's. Neither `agent_id` nor
     // `permission_mode` is anything `charter handoff` could ask about once it is running.

@@ -227,12 +227,19 @@ fn is_persona(personas: &Path, name: &str) -> bool {
 }
 
 /// `renamed leftovers` (RN-1, V93e): a name in the plane root that exists under both its
-/// purlis and its old spelling. Only the purlis one is read, so whatever the old one holds is
-/// silently ignored — state split between two names.
+/// purlis and its old spelling — state that may be split between two names.
 ///
-/// **No row unless there is a leftover**: a plane with only old names, or only new ones, is
-/// what the window expects, and its doctor prints exactly what it printed before the rename.
+/// **It names both and blames neither.** While the rename is half done most readers still read
+/// the old name, so the new one is not simply "the one that counts", and deleting either can
+/// drop settings something still reads. The `rename-plane` fix reconciles them; until it
+/// ships, the row says so and carries no fix id.
+///
+/// **No row unless this is a project with a leftover**: a plane with only old names, or only
+/// new ones, prints exactly what it printed before the rename.
 pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
+    if !d.has_plane {
+        return None;
+    }
     let file = |path: &Path| {
         path.file_name().map_or_else(
             || path.display().to_string(),
@@ -241,19 +248,19 @@ pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
     };
     let found: Vec<String> = crate::names::leftovers_in_plane(&d.root)
         .iter()
-        .flat_map(|at| {
-            let read = file(at.path());
-            at.leftovers
-                .iter()
-                .map(move |old| format!("{} ({read} is read)", file(old)))
+        .map(|at| {
+            let mut both = vec![file(at.path())];
+            both.extend(at.leftovers.iter().map(|old| file(old)));
+            both.join(" and ")
         })
         .collect();
     (!found.is_empty()).then(|| {
         Row::warn(
             "renamed leftovers",
-            format!("ignored beside their new name: {}", found.join(", ")),
-            "When both names exist only the new one is read, so nothing under the old name \
-             is used. Move anything you still need into the new one, then delete the old one.",
+            format!("under both names: {}", found.join(", ")),
+            "This project holds the same thing under its purlis and its charter name, so \
+             settings or state may be split between them. Keep both for now: the \
+             `rename-plane` fix will reconcile them into the purlis names.",
         )
     })
 }

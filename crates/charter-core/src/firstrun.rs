@@ -86,7 +86,7 @@ impl std::fmt::Display for NotMade {
 pub fn ensure_local_plane(config_root: &Path, forge: ForgeFrom<'_>) -> Result<PathBuf, NotMade> {
     let at = local_plane(config_root);
     let root = at.canonicalize().ok();
-    if let Some(root) = root.filter(|root| root.join(crate::plane::MANIFEST).is_file()) {
+    if let Some(root) = root.filter(|root| crate::plane::is_plane(root)) {
         return Ok(root);
     }
     // Asked before anything is made, so a question leaves no empty directory behind.

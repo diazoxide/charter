@@ -138,6 +138,7 @@ fn every_entry_has_a_unique_id_and_the_kinds_the_spec_names_are_covered() {
         Kind::PluginId,
         Kind::BundleId,
         Kind::Binary,
+        Kind::ThemeId,
     ] {
         assert!(
             ALL.iter().any(|n| n.kind == kind),
@@ -194,6 +195,71 @@ fn the_entries_carry_the_names_on_disk_today() {
         SYNC_AGENTS_MARKER.reads[0]
     );
     assert_eq!(crate::roster::BEGIN, PERSONAS_BEGIN.reads[0]);
+    assert_eq!(
+        crate::secrets::identity::SERVICE_BASE,
+        KEYCHAIN_IDENTITY_PREFIX.reads[0]
+    );
+    // No constant names the state folder alone; the paths under it are spelled whole.
+    assert!(crate::cistate::CACHE.starts_with(&format!("{}/", STATE_DIR.reads[0])));
+    // Every remaining entry, so no old name in this module is one the code never had.
+    assert_eq!(crate::profiles::COMMITTED_FILE, PLANE_MANIFEST.reads[0]);
+    assert_eq!(crate::extension::MANIFEST, EXTENSION_MANIFEST.reads[0]);
+    assert_eq!(crate::opencode::FILE_NAME, OPENCODE_SHIM.reads[0]);
+    assert_eq!(crate::opencode::PYTHON_MARK, OPENCODE_MARK.history[0]);
+    assert_eq!(crate::machine::DIR, CONFIG_HOME.reads[0]);
+    assert_eq!(crate::datahome::DIR, DATA_HOME.reads[0]);
+    assert_eq!(crate::manifest::KEY, GENERATED_KEY.reads[0]);
+    assert_eq!(crate::change::push::BLOCK_END, CHANGE_BLOCK_END.history[0]);
+    assert_eq!(crate::secrets::onepassword::TAG, ONEPASSWORD_TAG.reads[0]);
+    assert_eq!(crate::profiles::CHARTER_PREFIX, ENV_PREFIX.reads[0]);
+    assert_eq!(crate::planegit::BRANCH_PREFIX, BRANCH_PREFIX.history[0]);
+    assert_eq!(crate::plugin::NAME, PLUGIN_NAME.reads[0]);
+    assert_eq!(crate::plugin::FORMERLY, PLUGIN_LOADED_AS.history[1]);
+    assert_eq!(
+        crate::plugin_install::MARKETPLACE,
+        PLUGIN_MARKETPLACE.history[0]
+    );
+    assert_eq!(
+        format!("{}:", crate::plugin::NAME),
+        SKILL_NAMESPACE.reads[0]
+    );
+    assert_eq!(
+        format!("mcp__{}__", crate::chattools::SERVER),
+        MCP_TOOL_PREFIX.reads[0]
+    );
+    assert_eq!(crate::applog::APP, BUNDLE_ID.reads[0]);
+    assert_eq!(
+        crate::leakguard::CHARTER_PROGS,
+        [BINARY.reads[0], BINARY.history[0]]
+    );
+    assert_eq!(
+        crate::extension::BUILT_IN_THEMES,
+        [THEME_DARK.reads[0], THEME_LIGHT.reads[0]]
+    );
+    assert_eq!(
+        crate::extension::BUILT_IN_ICON_THEMES,
+        [ICON_THEME.reads[0]]
+    );
+}
+
+#[test]
+fn every_old_name_an_entry_holds_is_pinned_by_the_test_above() {
+    // A new entry must add its line above: count the pins against the old names held.
+    let held: usize = ALL.iter().map(|n| n.reads.len() + n.history.len()).sum();
+    let source = include_str!("names_tests.rs");
+    let body = source
+        .split("fn the_entries_carry_the_names_on_disk_today")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .unwrap();
+    let pinned = body.matches(".reads[").count() + body.matches(".history[").count();
+    // PLANE_MANIFEST.reads[0] is pinned twice, by `plane::MANIFEST` and `COMMITTED_FILE`.
+    assert_eq!(
+        pinned - 1,
+        held,
+        "{held} old names held, {} pinned",
+        pinned - 1
+    );
 }
 
 // --------------------------------------------------------------------------------------- //

@@ -83,6 +83,9 @@ pub enum Why {
         feature: String,
         since: Option<String>,
     },
+    /// `purlis.toml` is the project's manifest, and this build still reads part of the
+    /// project under the old names only (D-RN1-12). Lifted once every reader knows both.
+    PurlisNamesPartlyRead,
 }
 
 impl Why {
@@ -96,7 +99,9 @@ impl Why {
             Why::SchemaUnplaceable { .. } => {
                 "Fix the `schema` line, or upgrade charter: update the app."
             }
-            Why::SchemaTooNew { .. } | Why::Missing { .. } => "Upgrade charter: update the app.",
+            Why::SchemaTooNew { .. } | Why::Missing { .. } | Why::PurlisNamesPartlyRead => {
+                "Upgrade charter: update the app."
+            }
         }
     }
 }
@@ -125,6 +130,11 @@ impl std::fmt::Display for Why {
                 "{detail}, so charter {me} cannot tell whether it has every feature this \
                  project requires"
             )?,
+            Why::PurlisNamesPartlyRead => write!(
+                f,
+                "this project is marked by purlis.toml, and charter {me} reads only part of a \
+                 project under its purlis names"
+            )?,
             Why::Missing { feature, since } => {
                 let needs = match since {
                     Some(since) => {
@@ -148,7 +158,7 @@ impl std::fmt::Display for Why {
     }
 }
 
-/// Read `charter.toml` at `root`.
+/// Read the manifest at `root`: `purlis.toml` when it is there, else `charter.toml`.
 ///
 /// **Fails closed.** A `charter.toml` that cannot be read, a `schema` this charter does not
 /// understand, and a `requires` entry it cannot read each make the project read-only, because
@@ -159,7 +169,8 @@ impl std::fmt::Display for Why {
 /// (V37a), which is what makes a charter older than FR-24 refuse it; a charter that knows
 /// `requires` does not need the `schema` to read it.
 pub fn read(root: &Path) -> Compat {
-    let raw = match std::fs::read(root.join(crate::plane::MANIFEST)) {
+    let manifest = crate::plane::manifest(root);
+    let raw = match std::fs::read(&manifest) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Compat::Writable,
         Err(e) => return unreadable(e.to_string()),
@@ -181,7 +192,7 @@ pub fn read(root: &Path) -> Compat {
         }
     }
     let Some(requires) = cfg.get("requires") else {
-        return Compat::Writable;
+        return partly_read(&manifest);
     };
     let Some(entries) = requires.as_array() else {
         return Compat::ReadOnly(Why::RequiresUnreadable {
@@ -205,7 +216,20 @@ pub fn read(root: &Path) -> Compat {
                 .map(str::to_owned),
         });
     }
-    Compat::Writable
+    partly_read(&manifest)
+}
+
+/// **Fails safe while the rename is half done** (D-RN1-12): a project whose manifest is
+/// `purlis.toml` is one most of this build's readers do not see yet, so it is read-only to it.
+fn partly_read(manifest: &Path) -> Compat {
+    if manifest
+        .file_name()
+        .is_some_and(|n| n == crate::names::PLANE_MANIFEST.write)
+    {
+        Compat::ReadOnly(Why::PurlisNamesPartlyRead)
+    } else {
+        Compat::Writable
+    }
 }
 
 fn unreadable(detail: String) -> Compat {
@@ -244,6 +268,38 @@ mod tests {
         assert!(said.contains("memory-proposals"), "{said}");
         assert!(said.contains("0.9.0"), "{said}");
         assert!(said.contains("read-only"), "{said}");
+    }
+
+    fn purlis_project(toml: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("purlis.toml"), toml).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_schema_too_new_in_purlis_toml_is_refused_as_in_charter_toml() {
+        assert_eq!(
+            read(purlis_project("schema = 99\n").path()),
+            Compat::ReadOnly(Why::SchemaTooNew { found: 99 })
+        );
+    }
+
+    #[test]
+    fn a_project_marked_only_by_purlis_toml_is_read_only_until_every_reader_knows_it() {
+        let dir = purlis_project("schema = 2\n");
+        let Compat::ReadOnly(why) = read(dir.path()) else {
+            panic!("a purlis.toml project must be read-only to this build");
+        };
+        assert_eq!(why, Why::PurlisNamesPartlyRead);
+        let said = why.to_string();
+        assert!(said.contains("purlis.toml"), "{said}");
+        assert!(said.contains("read-only"), "{said}");
+        // Beside a charter.toml it is the same: purlis.toml is the manifest.
+        std::fs::write(dir.path().join("charter.toml"), "schema = 2\n").unwrap();
+        assert_eq!(
+            read(dir.path()),
+            Compat::ReadOnly(Why::PurlisNamesPartlyRead)
+        );
     }
 
     #[test]

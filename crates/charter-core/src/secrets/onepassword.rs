@@ -31,7 +31,7 @@ use super::run::{self, Ran, RunError};
 use super::{Ctx, VaultError};
 
 /// Every item charter creates carries this tag.
-const TAG: &str = "charter";
+pub(crate) const TAG: &str = "charter";
 
 /// The category whose primary field is a concealed password.
 const CATEGORY: &str = "PASSWORD";

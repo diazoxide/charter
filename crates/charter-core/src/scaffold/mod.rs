@@ -409,10 +409,11 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         }
     };
 
-    // charter.toml
-    if let Some(path) = run.gate(root, crate::plane::MANIFEST) {
+    // charter.toml — or the purlis.toml already there, which is never written a sibling
+    let manifest = crate::plane::manifest_to_keep(root);
+    if let Some(path) = run.gate(root, manifest) {
         if path.exists() {
-            run.present.push("charter.toml".to_owned());
+            run.present.push(manifest.to_owned());
         } else {
             match std::fs::write(
                 &path,
@@ -1563,7 +1564,7 @@ fn forge_and_owner(run: &mut Run, root: &Path, args: &InitArgs) -> Option<(Strin
 /// charter can heal, and answering "no" here only costs that run its scaffolding, which is
 /// the side to be wrong on.
 fn already_a_plane(root: &Path) -> bool {
-    gate(root, crate::plane::MANIFEST).is_ok_and(|path| path.exists())
+    gate(root, crate::plane::manifest_to_keep(root)).is_ok_and(|path| path.exists())
 }
 
 /// `commands._first_clone_step`, plus the source `--adopt` names: the one thing a repository

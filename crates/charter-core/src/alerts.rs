@@ -478,7 +478,7 @@ const EBADF: i32 = 9;
 
 /// `_plane_root_alert`: the root being worked in, or `None` — the ordinary case.
 fn plane_root(root: &Path, shared: bool) -> Option<Alert> {
-    if !root.join(crate::plane::MANIFEST).is_file() {
+    if !crate::plane::is_plane(root) {
         return None;
     }
     // Two cases, one answer: a plane that is not a repository, and one that is a subdirectory

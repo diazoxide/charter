@@ -215,7 +215,7 @@ pub(crate) enum Config {
 impl Config {
     /// `instance.load`, with the failure kept as the sentence Python records.
     pub(crate) fn load(root: &Path) -> Self {
-        let path = root.join(crate::plane::MANIFEST);
+        let path = crate::plane::manifest(root);
         let Ok(raw) = std::fs::read(&path) else {
             return Self::Read(toml::Table::new());
         };
@@ -419,7 +419,7 @@ impl Doctor {
     pub fn at(root: &Path, cwd: &Path, pinned: bool, preflight: bool) -> Self {
         Self {
             root: root.to_path_buf(),
-            has_plane: root.join(crate::plane::MANIFEST).is_file(),
+            has_plane: crate::plane::is_plane(root),
             pinned,
             cwd: cwd.to_path_buf(),
             preflight,

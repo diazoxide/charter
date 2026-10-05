@@ -463,7 +463,9 @@ pub(super) fn schema(d: &Doctor) -> Row {
     // than in a row of its own: the row's question is "can this charter work on this project's
     // format", and a second row would say the same thing twice.
     if let crate::compat::Compat::ReadOnly(
-        why @ (crate::compat::Why::Missing { .. } | crate::compat::Why::RequiresUnreadable { .. }),
+        why @ (crate::compat::Why::Missing { .. }
+        | crate::compat::Why::RequiresUnreadable { .. }
+        | crate::compat::Why::PurlisNamesPartlyRead),
     ) = crate::compat::read(&d.root)
     {
         return Row::fail(

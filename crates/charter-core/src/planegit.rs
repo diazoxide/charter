@@ -62,6 +62,9 @@ use crate::secretshape;
 use crate::shown;
 use crate::worktree::git;
 
+/// The start of the branch a per-push landing goes to (`charter/<sha>`).
+pub(crate) const BRANCH_PREFIX: &str = "charter/";
+
 /// What a push of the plane root's HEAD did, in one word. Python's module constants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -989,9 +992,9 @@ fn open_pull_request_branch(root: &Path) -> Option<String> {
     // next save advance the branch the whole pull-request path exists to leave alone.
     rec.get("landed")
         .and_then(serde_json::Value::as_str)
-        .and_then(|name| name.strip_prefix("charter/"))
+        .and_then(|name| name.strip_prefix(BRANCH_PREFIX))
         .filter(|sha| is_object_name(sha))
-        .map(|sha| format!("charter/{sha}"))
+        .map(|sha| format!("{BRANCH_PREFIX}{sha}"))
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -1048,7 +1051,10 @@ fn land_via_branch(
     let sha = git::run(root, &["rev-parse", "--short", "HEAD"], git::READ)
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
-    let fresh = format!("charter/{}", if sha.is_empty() { "change" } else { &sha });
+    let fresh = format!(
+        "{BRANCH_PREFIX}{}",
+        if sha.is_empty() { "change" } else { &sha }
+    );
     let kind = forge::request_words_of(root, root);
     let noun = kind.request_noun();
     let reuse = open_pull_request_branch(root).filter(|r| *r != fresh);
@@ -1531,9 +1537,7 @@ pub fn tree_of(plane: &Path, start: &Path) -> Option<PathBuf> {
 pub fn nested_plane_in(plane: &Path, start: &Path) -> Option<PathBuf> {
     let here = start.canonicalize().ok()?;
     let target = plane.canonicalize().ok()?;
-    let marked = here
-        .ancestors()
-        .find(|d| d.join(crate::plane::MANIFEST).is_file())?;
+    let marked = here.ancestors().find(|d| crate::plane::is_plane(d))?;
     let inner = crate::plane::plane_of(marked);
     // The chain is WALKED rather than shortcut through `outermost`: in a plane inside a plane
     // inside a plane, under `$CHARTER_ROOT=<the middle one>`, the outermost is not the tree

@@ -1756,7 +1756,7 @@ pub fn still_a_plane(plane: &Path) -> Result<(), String> {
     if !found.is_dir() {
         return Err("is not a directory any more".to_owned());
     }
-    if !plane.join(crate::plane::MANIFEST).is_file() {
+    if !crate::plane::is_plane(plane) {
         return Err(format!(
             "is not a plane any more: it holds no {}",
             crate::plane::MANIFEST
