@@ -332,7 +332,7 @@ export type Does =
    *  when it is `"main"` (charter#126). Nothing is closed and nothing is started: its chats go
    *  on running, and the window it arrives in draws them. */
   | { verb: "moveProject"; plane: string; to: string | null }
-  /** Opens that project's Project settings tab (charter-app#252) — bringing the project to the
+  /** Opens Settings at that project's Project level (SE-19; charter-app#252) — bringing the project to the
    *  front first when it is not. It writes nothing by itself: a save is the tab's, through the
    *  core's own checks. */
   | { verb: "openSettings"; plane: string }
@@ -657,7 +657,7 @@ export type Doing = {
   closeProject: (plane: string) => Promise<Ran>;
   /** Moves that project into another window, or a new one. The core can refuse. */
   moveProject: (plane: string, to: string | null) => Promise<Ran>;
-  /** Brings that project to the front and opens its Project settings tab. */
+  /** Brings that project to the front and opens Settings at its Project level. */
   openSettings: (plane: string) => void;
   /** Brings that project to the front and opens its Saving tab. */
   openSaving: (plane: string) => void;

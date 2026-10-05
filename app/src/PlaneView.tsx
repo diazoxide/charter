@@ -173,8 +173,6 @@ import {
   SAVING_TITLE,
   SAVING_VIEW,
   SETTINGS_TAB_TITLE,
-  SETTINGS_TITLE,
-  SETTINGS_VIEW,
   settingsView,
   viewNamedNow,
   workspaceSettingsTitle,
@@ -2048,7 +2046,8 @@ export const PlaneView = memo(function PlaneView({
   });
 
   /**
-   * The Project settings tab, opened when the window asks for it (charter-app#252). Asked
+   * Settings at the Project level (SE-19; the Project settings page before it, charter-app#252),
+   * opened when the window asks for it — the project's menu and the palette. Asked
    * through the window even from this project's own palette, so there is one way in: the
    * window brings the project forward and this opens its tab. `handled` keeps a rebuilt
    * `showView` — it changes with the focused workspace — from opening it a second time for
@@ -2058,7 +2057,7 @@ export const PlaneView = memo(function PlaneView({
   useEffect(() => {
     if (settingsAsked === undefined || handled.current === settingsAsked) return;
     handled.current = settingsAsked;
-    showView(SETTINGS_VIEW, SETTINGS_TITLE);
+    showView(settingsView("project"), SETTINGS_TAB_TITLE);
   }, [settingsAsked, showView]);
 
   /** A file ⌘P found here (FM-7), opened in its file tab the way the explorer opens one. */
@@ -4840,7 +4839,7 @@ export type WindowDoing = {
   /** Moves a project into another window, or a new one (charter#126). The window's, because
    *  the window is what holds projects. */
   moveProject: (plane: string, to: string | null) => Promise<Ran>;
-  /** Brings a project to the front and opens its Project settings tab (charter-app#252). The
+  /** Brings a project to the front and opens Settings at its Project level (SE-19). The
    *  window's, because the project may not be the one in front, and only the window can bring
    *  it there. */
   openSettings: (plane: string) => void;

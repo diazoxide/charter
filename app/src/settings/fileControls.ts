@@ -16,10 +16,9 @@ import type {
 
 /**
  * **What a project's settings files hold, as controls** (charter-app#252): each key a form can
- * write, how it reads its value out of the file, and the edits a new value makes. Declared once
- * and drawn twice until SE-19 retires the old page: by Project settings' two sections
- * (`ProjectSettings.tsx`) and by the Settings tab's Project level (`project.ts`, SE-17), which
- * regroups the same controls into V89h's groups. A workspace's (its extensions, theme, colour
+ * write, how it reads its value out of the file, and the edits a new value makes. First the old
+ * Project settings page's two sections (retired by SE-19); now drawn by the Settings tab's
+ * Project level (`project.ts`, SE-17), which regroups the same controls into V89h's groups. A workspace's (its extensions, theme, colour
  * and plugins) are drawn only by the Workspace level (`workspace.tsx`, SE-20).
  */
 /**

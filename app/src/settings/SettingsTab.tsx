@@ -1,6 +1,8 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
-import type { PlaneId } from "../bindings";
+import { commands, type PlaneId, type SettingsWhich } from "../bindings";
+import { extensionsChanged } from "../extensionsOn";
+import { projectThemeChanged } from "../projectTheme";
 import { DEFAULT_THEME, inForce } from "../theme/theme";
 import { atCreation } from "../windowprefs";
 import { Choice, Field, SettingGroup, SettingRow, SettingsLayout, type RowIds } from "./components";
@@ -13,7 +15,8 @@ import {
   type LiveSetting,
   type SettingsGroup,
 } from "./groups";
-import { projectGroups, useProjectLevel } from "./project";
+import { KEPT, projectGroups, useProjectLevel } from "./project";
+import { RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
 
@@ -34,6 +37,9 @@ import { youGroups } from "./you";
  * at.
  *
  * "Preferences" was this tab's You level before it had a name (charter-app#283), and is retired.
+ * So is the long Project settings page with its Form / Raw TOML switch (charter-app#252, SE-19):
+ * its forms are the Project level's groups, and its raw view is the level's **Edit as TOML**
+ * link per file (`RawToml.tsx`).
  */
 export function SettingsTab({
   plane,
@@ -98,6 +104,27 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
     () => (project.state === "read" ? projectGroups(project.read) : []),
     [project],
   );
+  const reread = project.state === "read" ? project.reread : undefined;
+  // Each file as its whole text (SE-19, V89d). A save is the core's to check and to write, as
+  // the old page's raw view was; once written, the level reads its files and what is in force
+  // again, and the window what it draws for this project.
+  const raw: RawFile[] =
+    project.state === "read"
+      ? (["shared", "local"] as const).map((which: SettingsWhich) => ({
+          id: which,
+          file: project.read[which],
+          kept: KEPT[which],
+          save: (base, text) =>
+            commands.saveProjectSettings(plane, which, base, { kind: "raw", text }).then((said) => {
+              if (said.status === "error") return { refused: [said.error] };
+              if (said.data.kind === "refused") return { refused: said.data.reasons };
+              reread?.();
+              extensionsChanged(plane);
+              projectThemeChanged(plane);
+              return { saved: true as const };
+            }),
+        }))
+      : [];
   const standing =
     project.state === "read"
       ? [project.read.shared, project.read.local].flatMap((file) =>
@@ -113,6 +140,7 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
       waiting={waitingFor(project)}
       standing={standing}
       driver={project.state === "read" ? project : undefined}
+      raw={raw}
     />
   );
 }
@@ -169,6 +197,7 @@ function Shown({
   waiting,
   standing = [],
   driver,
+  raw = [],
 }: Switcher & {
   level: Level;
   about: string;
@@ -178,6 +207,8 @@ function Shown({
   standing?: readonly string[];
   /** What writes the level's file settings, once the level has been read. */
   driver?: Driven<unknown>;
+  /** The level's files as raw TOML, each with its link at the foot of the nav (SE-19). */
+  raw?: readonly RawFile[];
 }) {
   // Per tab and not remembered (V89c): a level drawn afresh starts with the whole nav.
   const [filter, setFilter] = useState("");
@@ -187,6 +218,11 @@ function Shown({
   );
   const [chosen, choose] = useState<string>();
   const group = groups.find((one) => one.id === chosen) ?? groups[0];
+  /** The file whose text is on the right in place of a group, while one is. */
+  const [editing, setEditing] = useState<string>();
+  /** What is typed into each file's text, kept while a group is looked at. */
+  const [drafts, setDrafts] = useState<Partial<Record<string, RawDraft>>>({});
+  const rawFile = raw.find((one) => one.id === editing);
   const found =
     waiting === undefined ? groups.reduce((all, one) => all + one.settings.length, 0) : undefined;
   return (
@@ -196,16 +232,25 @@ function Shown({
       onLevelChange={onLevelChange}
       about={about}
       groups={groups}
-      group={group?.id ?? ""}
-      onGroupChange={choose}
+      group={rawFile ? "" : (group?.id ?? "")}
+      onGroupChange={(to) => {
+        setEditing(undefined);
+        choose(to);
+      }}
       filter={filter}
       onFilterChange={(to) => {
         // The group on screen stays the chosen one while it is still matched, and is the one
         // shown again once the box is cleared.
         if (group) choose(group.id);
+        setEditing(undefined);
         setFilter(to);
       }}
-      found={found}
+      found={rawFile ? undefined : found}
+      foot={
+        raw.length > 0 && waiting === undefined ? (
+          <RawLinks files={raw} editing={rawFile?.id} onEdit={setEditing} />
+        ) : undefined
+      }
     >
       {waiting ?? (
         <>
@@ -221,7 +266,16 @@ function Shown({
               </ul>
             </div>
           )}
-          {group && <ShownGroup key={group.id} group={group} driver={driver} />}
+          {rawFile ? (
+            <RawEditor
+              key={rawFile.id}
+              raw={rawFile}
+              draft={drafts[rawFile.id]}
+              onDraft={(to) => setDrafts((was) => ({ ...was, [rawFile.id]: to }))}
+            />
+          ) : (
+            group && <ShownGroup key={group.id} group={group} driver={driver} />
+          )}
         </>
       )}
     </SettingsLayout>

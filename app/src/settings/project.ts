@@ -42,8 +42,7 @@ import type { FileSetting, SettingsGroup } from "./groups";
  *
  * **The groups are data**, declared once in {@link projectGroups} with their stable ids, and
  * **their settings are the old page's controls** (`fileControls.ts`), each with the file it is
- * kept in, so the two pages cannot disagree about what a key means until SE-19 retires the old
- * one. A group's settings depend on what the files and the core say (a forge block, an
+ * kept in; SE-19 retired that page, and its raw view is the level's Edit as TOML. A group's settings depend on what the files and the core say (a forge block, an
  * extension, a repo), so the declaration is a function of what was read; a group with no
  * setting is hidden.
  *
@@ -67,7 +66,7 @@ export type ProjectRead = {
 };
 
 /** The sentence a setting's help ends on: where it is kept, and who sees it. */
-const KEPT: Record<SettingsWhich, string> = {
+export const KEPT: Record<SettingsWhich, string> = {
   shared: "Kept in charter.toml, which your team sees.",
   local: "Kept in charter.local.toml, on this machine only.",
 };
@@ -118,8 +117,9 @@ const ALL_EGRESS = ["model-providers", "forge", "toolchains"];
  */
 function sandboxSettings(shared: Shown, sandbox: SandboxState | undefined): Control[] {
   const set = valueAt(shared, SANDBOX_MODE) !== undefined;
+  // The opt-out count is this machine's, and is never sent (ADR 0067 §7, V78 d).
   const said = sandbox?.on
-    ? `On: every chat charter starts here runs in a sandbox. ${sandbox.said ?? ""}`.trim()
+    ? `On: every chat charter starts here runs in a sandbox.${sandbox.said ? ` ${sandbox.said}. Counted on this machine only, and never sent.` : ""}`
     : "Not set: chats here run without a sandbox. On runs every chat sandboxed.";
   const egress = key("sandbox", "egress");
   return [

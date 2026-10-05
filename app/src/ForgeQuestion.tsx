@@ -24,7 +24,7 @@ export function ForgeQuestion({ ask }: { ask: ForgeAsk }) {
       <p id={heading}>Which forge are its repos on?</p>
       <p className="came-back">
         charter reads the forge from the remote of the repo the project is made for, and here it
-        could not: {ask.why}. You can change it later in Project settings.
+        could not: {ask.why}. You can change it later in Settings, at the Project level.
       </p>
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189). */}
       <div className="doing">

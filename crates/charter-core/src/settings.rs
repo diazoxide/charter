@@ -587,8 +587,10 @@ pub fn save(root: &Path, which: Which, base: Option<&str>, text: &str) -> Result
     }
     // What the file already holds is not this save's to answer for: an edit to one key is not
     // refused because another key was already being ignored. A secret and a Local file git
-    // would commit are, whatever the file held before.
-    let standing = if exists {
+    // would commit are, whatever the file held before. So is text that does not parse: the raw
+    // editor is how a broken file is mended, and a half-mended one is never written (SE-19).
+    let parses = text.parse::<toml::Table>().is_ok();
+    let standing = if exists && parses {
         read_refusals(root, which, &now)
     } else {
         Vec::new()

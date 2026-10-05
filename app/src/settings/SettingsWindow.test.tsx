@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -12,7 +12,9 @@ import { GLOBAL } from "../windowprefs";
 /**
  * **Reaching Settings from the window** (SE-16, #1166): the palette, the app menu's Settings…
  * (`⌘,`, which the core says with an event), and with no project open. What the tab shows is
- * `SettingsTab.test.tsx`'s. "Preferences" is gone from all of them.
+ * `SettingsTab.test.tsx`'s. "Preferences" is gone from all of them, and so is the old Project
+ * settings page (SE-19): the project's menu and its palette row open Settings at the Project
+ * level, and a tab of the old page an older launch left open comes back as that.
  */
 
 vi.mock("../SessionPane", () => ({
@@ -192,6 +194,59 @@ describe("Settings, from the window", () => {
     render(<App />);
 
     await waitFor(() => expect(groups()).toBeInTheDocument());
+    expect(settingsTabs()).toHaveLength(1);
+  });
+
+  it("opens at the Project level from the project tab's menu, as one tab however often asked", async () => {
+    core(PLANE);
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    const fromTheMenu = async () => {
+      fireEvent.contextMenu(await screen.findByRole("tab", { name: /plane/ }));
+      await screen.findByRole("menu");
+      await userEvent.click(screen.getByRole("menuitem", { name: "Project settings…" }));
+    };
+
+    await fromTheMenu();
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Project" })).toBeChecked());
+    expect(screen.queryByTestId("settings-shared")).not.toBeInTheDocument();
+    expect(settingsTabs()).toHaveLength(1);
+
+    await fromTheMenu();
+    expect(settingsTabs()).toHaveLength(1);
+  });
+
+  it("opens at the Project level from the palette's Project settings…", async () => {
+    core(PLANE);
+    render(<App />);
+    await screen.findByRole("tab", { name: /plane/ });
+
+    await palette("Project settings…");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Project" })).toBeChecked());
+    expect(settingsTabs()).toHaveLength(1);
+  });
+
+  it("puts a Project settings tab an older launch left open back as Settings at the Project level", async () => {
+    core(PLANE, [
+      {
+        from: null,
+        view: "settings",
+        key: "",
+        title: "Project settings",
+        workspace: null,
+        at: 0,
+        active: true,
+        pinned: false,
+      },
+    ]);
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Project" })).toBeChecked());
     expect(settingsTabs()).toHaveLength(1);
   });
 });
