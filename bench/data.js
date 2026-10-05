@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791168320282,
+  "lastUpdate": 1791170442562,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1764,6 +1764,48 @@ window.BENCHMARK_DATA = {
             "value": 101.560234,
             "unit": "ms",
             "extra": "median of 5 runs: 100.850, 101.499, 101.560, 102.030, 102.610 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "dc620c4046d1ac5a10de9053665525eaa7c17f43",
+          "message": "stress: a comparison the capped reader cannot answer is a budget miss, not a panic\n\nThe 300,000-file evidence-only run (37252093589) panicked on the uncommitted\ncomparison's `.expect` when the capped reader stopped without an answer. ADR 0086,\nas amended, says an evidence-only run reports each budget it missed and never\nfails for one.\n\nA new `Held::answered` turns only \"no answer from the capped reader\" (its\ndeadline, its memory cap, its child failing: every refusal that says \"charter\ncould not read the branch\") into a named miss. Any other refusal is still a\nfailure, and so is a wrong answer. `measure_compare` uses it for the file list,\none file's hunks and the uncommitted comparison. It prints and holds each part as\nsoon as that part is measured, so a later miss doesn't drop earlier timings.\n`measure_status` uses it too, and keeps its clean timings when the six-change\nreads miss. The find, search and scan steps don't go through the capped reader.\n\nRefs #1209\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T07:17:27+04:00",
+          "tree_id": "bdf3d52a9bb2ffb5efded39a0f5968203d661539",
+          "url": "https://github.com/diazoxide/charter/commit/dc620c4046d1ac5a10de9053665525eaa7c17f43"
+        },
+        "date": 1791170441603,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4552035,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.435, 0.442, 0.455, 0.469, 0.477 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.650356000000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.232, 16.277, 16.650, 16.702, 16.821 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.254574,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.212, 101.277, 102.255, 102.486, 103.160 ms"
           }
         ]
       }
