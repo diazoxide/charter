@@ -75,19 +75,24 @@ type Asked = { cmd: string; args: unknown };
 /** The core, with the chats it has open and what the machine store says is pinned. */
 function core(
   open: ReturnType<typeof chat>[],
-  pins: { project: boolean; workspaces: string[]; missing: string[] } = {
+  pins: { project: boolean; workspaces: string[]; missing: string[]; order?: string[] } = {
     project: false,
     workspaces: [],
     missing: [],
   },
   refuse?: string,
+  /** Refuses a pin (not an unpin) with these words, as the store's bound does; and the
+   *  workspaces the project has, when not the three. */
+  { refusePin, names: there }: { refusePin?: string; names?: string[] } = {},
 ): { asked: Asked[] } {
   const asked: Asked[] = [];
   // What is on the plane and what the store has pinned, kept the way the core keeps them: a
   // workspace made from the window is on the plane afterwards, and a pin written is there
   // when the store is asked again.
-  const names = ["alpha", "beta", "gamma"];
-  const pinnedNow = new Set(pins.workspaces);
+  const names = there ?? ["alpha", "beta", "gamma"];
+  // Every pin in the store's order, gone ones included, as `Store::pinned_workspaces` keeps
+  // them: `order` when a test says where a gone pin sits, else the kept ones then the gone.
+  const pinnedNow = new Set(pins.order ?? [...pins.workspaces, ...pins.missing]);
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
     const given = (args ?? {}) as Record<string, unknown>;
@@ -99,7 +104,25 @@ function core(
     if (cmd === "running_sessions") return [];
     // In the order they were pinned in, as the store answers (charter#402): a `Set` keeps
     // insertion order, and an unpin followed by a pin puts the name last.
-    if (cmd === "plane_pins") return { ...pins, workspaces: [...pinnedNow] };
+    if (cmd === "plane_pins") {
+      const order = [...pinnedNow];
+      return {
+        project: pins.project,
+        workspaces: order.filter((one) => names.includes(one)),
+        missing: order.filter((one) => !names.includes(one)),
+        order,
+      };
+    }
+    if (cmd === "arrange_workspace_pins") {
+      // `Store::arrange_workspaces`: the pins it names take, in its sequence, the places those
+      // same pins held; a name that is not pinned is passed over.
+      const named = (given.workspaces as string[]).filter((one) => pinnedNow.has(one));
+      let next = 0;
+      const arranged = [...pinnedNow].map((one) => (named.includes(one) ? named[next++] : one));
+      pinnedNow.clear();
+      arranged.forEach((one) => pinnedNow.add(one));
+      return null;
+    }
     if (cmd === "workspace_create") {
       names.push(given.name as string);
       return [`✓ workspace ${String(given.name)} created`];
@@ -108,6 +131,7 @@ function core(
       // A refusal is a THROWN value and not an `Error`, which is what `typedError` turns
       // into `{ status: "error" }` — the same shape the core's own refusals arrive in.
       if (refuse !== undefined) throw refuse;
+      if (cmd === "pin_workspace" && given.pinned && refusePin !== undefined) throw refusePin;
       if (cmd === "pin_workspace") {
         if (given.pinned) pinnedNow.add(given.workspace as string);
         else pinnedNow.delete(given.workspace as string);
@@ -267,15 +291,172 @@ describe("a pinned workspace", () => {
     expect(rows.some((row) => row.includes("outside"))).toBe(false);
   });
 
-  it("says so when a pin no longer names a workspace, and does not draw it", async () => {
-    // The hazard ADR 0034 names for a trust entry keyed on a path, one scope down: a
-    // reference that no longer resolves must not become something charter offers.
-    core([chat(1, "one", "alpha")], { project: false, workspaces: [], missing: ["was-here"] });
+  /** The Notice whose sentence matches `words`, once it is up. */
+  const noticeSaying = async (words: RegExp) =>
+    (await screen.findByText(words)).closest("[data-cause]") as HTMLElement;
+  const dormant = (name: string) => noticeSaying(new RegExp(`^${name} is gone, kept dormant`));
+  const forgotten = (name: string) => noticeSaying(new RegExp(`^Forgot the pin to ${name}`));
+  /** The pin order the window last asked the store for. */
+  const lastArranged = (asks: Asked[]) =>
+    (asked(asks, "arrange_workspace_pins").at(-1)?.args as { workspaces: string[] } | undefined)
+      ?.workspaces;
+  const unpins = (asks: Asked[]) =>
+    asked(asks, "pin_workspace").filter(
+      (one) => (one.args as Record<string, unknown>).pinned === false,
+    );
+
+  it("is kept dormant once its workspace is gone: named, not drawn, never written away", async () => {
+    // V91c as amended: the pin stays in the machine store, in its place. The hazard ADR 0034
+    // names stays answered: a gone workspace is never drawn as one the project has.
+    const { asked: asks } = core([chat(1, "one", "alpha")], {
+      project: false,
+      workspaces: ["beta", "gamma"],
+      missing: ["was-here"],
+      order: ["beta", "was-here", "gamma"],
+    });
     render(<App />);
 
-    expect(await screen.findByText(/was-here is not on this plane any more/)).toBeInTheDocument();
-    // Only the workspace you are in: nothing that IS on the plane is pinned (ADR 0054).
-    await vi.waitFor(() => expect(workspaceNames()).toEqual(["alpha"]));
+    const notice = await dormant("was-here");
+    expect(notice.getAttribute("data-cause")).toBe("pin-dormant:was-here");
+    expect(within(notice).getByRole("button", { name: "Forget" })).toBeInTheDocument();
+    await vi.waitFor(() => expect(workspaceNames()).toEqual(["beta", "gamma", "alpha"]));
+    await new Promise((settle) => setTimeout(settle, 50));
+    expect(unpins(asks)).toEqual([]);
+  });
+
+  it("is drawn again in its own place when its workspace comes back", async () => {
+    // A relaunch after a pull: the store kept the order, so nothing has to put it back.
+    core([chat(1, "one", "alpha")], {
+      project: false,
+      workspaces: ["beta", "gamma"],
+      missing: ["delta"],
+      order: ["beta", "delta", "gamma"],
+    });
+    render(<App />);
+    await dormant("delta");
+    cleanup();
+    clearMocks();
+
+    core(
+      [chat(1, "one", "alpha")],
+      { project: false, workspaces: [], missing: [], order: ["beta", "delta", "gamma"] },
+      undefined,
+      { names: ["alpha", "beta", "gamma", "delta"] },
+    );
+    render(<App />);
+
+    await waitFor(() => expect(workspaceNames()).toEqual(["beta", "delta", "gamma", "alpha"]));
+    expect(screen.queryByText(/kept dormant/)).toBeNull();
+  });
+
+  it("is forgotten for good by Forget, and Undo puts it back in its place", async () => {
+    const { asked: asks } = core([chat(1, "one", "alpha")], {
+      project: false,
+      workspaces: ["beta", "gamma"],
+      missing: ["was-here"],
+      order: ["beta", "was-here", "gamma"],
+    });
+    render(<App />);
+
+    await userEvent.click(
+      within(await dormant("was-here")).getByRole("button", { name: "Forget" }),
+    );
+
+    await waitFor(() =>
+      expect(unpins(asks).map((one) => one.args)).toContainEqual(
+        expect.objectContaining({ workspace: "was-here", pinned: false }),
+      ),
+    );
+    const undo = await forgotten("was-here");
+    await waitFor(() => expect(screen.queryByText(/kept dormant/)).toBeNull());
+
+    await userEvent.click(within(undo).getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(lastArranged(asks)).toEqual(["beta", "was-here", "gamma"]));
+    expect(await dormant("was-here")).toBeInTheDocument();
+  });
+
+  for (const first of ["x1", "y2"]) {
+    it(`puts two forgotten pins back in the order they had, ${first} undone first`, async () => {
+      const { asked: asks } = core([chat(1, "one", "alpha")], {
+        project: false,
+        workspaces: ["alpha", "beta", "gamma"],
+        missing: ["x1", "y2"],
+        order: ["alpha", "x1", "beta", "y2", "gamma"],
+      });
+      render(<App />);
+      const second = first === "x1" ? "y2" : "x1";
+      await userEvent.click(within(await dormant("x1")).getByRole("button", { name: "Forget" }));
+      await forgotten("x1");
+      await userEvent.click(within(await dormant("y2")).getByRole("button", { name: "Forget" }));
+      await forgotten("y2");
+
+      await userEvent.click(within(await forgotten(first)).getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(lastArranged(asks)).toContain(first));
+      await userEvent.click(within(await forgotten(second)).getByRole("button", { name: "Undo" }));
+
+      await waitFor(() =>
+        expect(lastArranged(asks)).toEqual(["alpha", "x1", "beta", "y2", "gamma"]),
+      );
+    });
+  }
+
+  it("is put back first when the operator unpinned the pin before it", async () => {
+    const { asked: asks } = core([chat(1, "one", "beta")], {
+      project: false,
+      workspaces: ["alpha", "beta", "gamma"],
+      missing: ["x1"],
+      order: ["alpha", "x1", "beta", "gamma"],
+    });
+    render(<App />);
+    await userEvent.click(within(await dormant("x1")).getByRole("button", { name: "Forget" }));
+    const undo = await forgotten("x1");
+
+    await runFromPalette("Unpin workspace alpha");
+    await waitFor(() =>
+      expect(unpins(asks).map((one) => one.args)).toContainEqual(
+        expect.objectContaining({ workspace: "alpha" }),
+      ),
+    );
+    await userEvent.click(within(undo).getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(lastArranged(asks)).toEqual(["x1", "beta", "gamma"]));
+  });
+
+  it("comes back when the Undo is refused, so it can be pressed again", async () => {
+    core(
+      [chat(1, "one", "alpha")],
+      { project: false, workspaces: [], missing: ["was-here"] },
+      undefined,
+      { refusePin: "charter pins at most 12 workspaces in one project. Unpin one first." },
+    );
+    render(<App />);
+    await userEvent.click(
+      within(await dormant("was-here")).getByRole("button", { name: "Forget" }),
+    );
+
+    await userEvent.click(
+      within(await forgotten("was-here")).getByRole("button", { name: "Undo" }),
+    );
+
+    expect(await screen.findByText(/pins at most 12 workspaces/)).toBeInTheDocument();
+    expect(await forgotten("was-here")).toBeInTheDocument();
+  });
+
+  it("goes with a Dismiss and stays pinned", async () => {
+    const { asked: asks } = core([chat(1, "one", "alpha")], {
+      project: false,
+      workspaces: [],
+      missing: ["was-here"],
+    });
+    render(<App />);
+
+    await userEvent.click(
+      within(await dormant("was-here")).getByRole("button", { name: "Dismiss" }),
+    );
+
+    await waitFor(() => expect(screen.queryByText(/kept dormant/)).toBeNull());
+    expect(unpins(asks)).toEqual([]);
   });
 });
 

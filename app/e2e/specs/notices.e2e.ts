@@ -1,0 +1,165 @@
+import { existsSync, realpathSync, renameSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { $, browser, expect } from "@wdio/globals";
+import { anEmptyRecord, copyFixturePlane } from "../harness.js";
+import { closeProject } from "../opening.js";
+
+/**
+ * **A pin to a workspace that is gone is kept dormant** (NO-1 #1223, ruling V91c as amended),
+ * in the built app against the real core and the real machine store.
+ *
+ * `app/src/Pins.test.tsx` drives the same thing against a mocked core. What only a real window
+ * can show is the whole path: a workspace directory going away on disk, the project watcher
+ * telling the window, the Notice, the store **still holding the pin** — read back from the core,
+ * never from the strip — and the workspace coming back drawn in its own place.
+ *
+ * **Its own project, copied into the run's tree**, as `workspace-lifecycle.e2e.ts` does: this
+ * spec moves a workspace directory away, so it is never pointed at the project the launch
+ * opened. **It restores what it changed** — the directory, this project's pins in the store, and
+ * the window, which lets the project go through its `×` — because one app process serves the
+ * whole run and a spec that leaked state broke train 38.
+ */
+
+const PROJECTS = '[role="tablist"][aria-label="Projects"]';
+
+type Pins = { project: boolean; workspaces: string[]; missing: string[]; order: string[] };
+
+const NAME = "dormant-pins";
+
+/** This spec's own project: the fixture plane, with nothing to put back on open. */
+const mine = (() => {
+  const copied = copyFixturePlane();
+  const renamed = join(dirname(copied), NAME);
+  renameSync(copied, renamed);
+  const root = realpathSync(renamed);
+  anEmptyRecord(root);
+  return root;
+})();
+
+/** What the app answered a command with, insisting it answered at all. */
+async function ask<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  const answer = await browser.executeAsync(
+    (
+      name: string,
+      passed: Record<string, unknown>,
+      done: (out: { ok?: unknown; trouble?: string }) => void,
+    ) => {
+      void window.__TAURI__.core
+        .invoke(name, passed)
+        .then((ok) => done({ ok }))
+        .catch((e: unknown) => done({ trouble: String(e) }));
+    },
+    command,
+    args,
+  );
+  if (answer.trouble !== undefined) throw new Error(`${command} refused: ${answer.trouble}`);
+  return answer.ok as T;
+}
+
+const pins = () => ask<Pins>("plane_pins", { plane: mine });
+const pinOrder = async () => (await pins()).order;
+
+/** The workspaces the strip is showing, left to right, after the project root's tab. */
+async function stripNames(): Promise<string[]> {
+  return browser.execute(
+    (selector: string) =>
+      [
+        ...(document.querySelector(selector)?.querySelectorAll('[role="tab"]:not(.plane-root)') ??
+          []),
+      ].map((tab) => tab.querySelector(".workspace-name")?.textContent ?? ""),
+    '[role="tablist"][aria-label="Workspaces"]',
+  );
+}
+
+describe("a pin to a workspace that is gone", function () {
+  this.timeout(180_000);
+
+  /** The project the launch opened, which this spec never touches. */
+  let first = "";
+  /** This project's pins before the spec changed any. */
+  let found: string[] = [];
+  /** The workspace moved away, and where it went. */
+  let gone = "";
+  const away = join(dirname(mine), "notices-moved-away");
+
+  before(async () => {
+    first = (await ask<string[]>("open_planes"))[0];
+    // Through the opener, as `workspace-lifecycle.e2e.ts` opens its own project and for its
+    // reason: a window learns it holds a project by opening one.
+    await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
+    const box = await $("#open-by-path");
+    await box.waitForDisplayed({ timeout: 20_000 });
+    await box.addValue(mine);
+    await $("button=Open").click();
+    const question = await $('[role="dialog"]');
+    await question.waitForDisplayed({ timeout: 30_000 });
+    await $("button=Open project").click();
+    await browser.waitUntil(async () => (await ask<string[]>("open_planes")).includes(mine), {
+      timeout: 30_000,
+      timeoutMsg: "this spec's project never opened",
+    });
+    found = await pinOrder();
+  });
+
+  after(async () => {
+    // The directory back, then the pins as they were found, then the window as it was found.
+    if (gone !== "" && existsSync(away)) renameSync(away, join(mine, "workspaces", gone));
+    const now = await pinOrder();
+    for (const name of now.filter((one) => !found.includes(one)))
+      await ask("pin_workspace", { plane: mine, workspace: name, pinned: false });
+    for (const name of found.filter((one) => !now.includes(one)))
+      await ask("pin_workspace", { plane: mine, workspace: name, pinned: true });
+    await ask("arrange_workspace_pins", { plane: mine, workspaces: found });
+    expect(await pinOrder()).toEqual(found);
+    // **Let go of through the window, not behind its back**, as `view-tabs.e2e.ts` does:
+    // `close_plane` asked directly leaves the window drawing a project the core no longer holds.
+    const selector = `${PROJECTS} button[aria-label="Close project ${NAME}"]`;
+    if (await $(selector).isExisting()) await closeProject(selector);
+    await browser.waitUntil(async () => !(await ask<string[]>("open_planes")).includes(mine), {
+      timeout: 20_000,
+      timeoutMsg: "this spec's project was not let go of",
+    });
+    expect((await ask<string[]>("open_planes"))[0]).toBe(first);
+  });
+
+  it("is kept dormant while its workspace is gone, and drawn in its place when it is back", async () => {
+    // Two pins, so coming back FIRST is not what pinning alone would do (it appends).
+    for (const name of ["alpha", "beta"]) {
+      if (!(await pinOrder()).includes(name))
+        await ask("pin_workspace", { plane: mine, workspace: name, pinned: true });
+    }
+    const before = await pinOrder();
+    gone = before[0];
+    let saw: string[] = [];
+    await browser.waitUntil(
+      async () => {
+        saw = await stripNames();
+        return JSON.stringify(saw.slice(0, before.length)) === JSON.stringify(before);
+      },
+      { timeout: 30_000, timeoutMsg: `the strip stayed ${JSON.stringify(saw)}` },
+    );
+
+    renameSync(join(mine, "workspaces", gone), away);
+
+    const notice = await $(`[data-cause="pin-dormant:${gone}"]`);
+    await notice.waitForDisplayed({ timeout: 30_000 });
+    expect(await notice.getText()).toContain(`${gone} is gone, kept dormant`);
+    await expect(notice.$("button=Forget")).toBeExisting();
+    // Never written away: the store holds it, in its place, and names it gone.
+    const held = await pins();
+    expect(held.order).toEqual(before);
+    expect(held.missing).toEqual([gone]);
+    expect(await stripNames()).not.toContain(gone);
+
+    renameSync(away, join(mine, "workspaces", gone));
+
+    await browser.waitUntil(
+      async () => {
+        saw = await stripNames();
+        return JSON.stringify(saw.slice(0, before.length)) === JSON.stringify(before);
+      },
+      { timeout: 30_000, timeoutMsg: `the pin came back as ${JSON.stringify(saw)}` },
+    );
+    await notice.waitForExist({ timeout: 20_000, reverse: true });
+  });
+});

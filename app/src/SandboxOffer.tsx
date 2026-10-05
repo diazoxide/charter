@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { commands, type PlaneId } from "./bindings";
+import { Notice } from "./Notice";
 
 /**
  * **The one-time offer of the sandbox to a project made before it existed** (ADR 0067 §1,
@@ -55,7 +56,14 @@ export function SandboxOffer({ plane }: { plane: PlaneId }) {
       .catch((err: unknown) => setTrouble(String(err)));
 
   return (
-    <div className="came-back" role="status" data-testid="sandbox-offer">
+    <Notice
+      cause="sandbox-offer"
+      label="The sandbox offer"
+      fixes={[
+        { label: "Turn the sandbox on", onPress: () => answer(true) },
+        { label: "Keep it off", onPress: () => answer(false) },
+      ]}
+    >
       <p>
         This project runs its chats without the sandbox. Turned on, every new chat runs sandboxed:
         it reaches only model providers, your forges and package registries, and never your vaults.
@@ -72,12 +80,6 @@ export function SandboxOffer({ plane }: { plane: PlaneId }) {
           {trouble}
         </p>
       )}
-      <button type="button" className="dismiss" tabIndex={0} onClick={() => answer(true)}>
-        Turn the sandbox on
-      </button>{" "}
-      <button type="button" className="dismiss" tabIndex={0} onClick={() => answer(false)}>
-        Keep it off
-      </button>
-    </div>
+    </Notice>
   );
 }

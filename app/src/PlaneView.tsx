@@ -136,6 +136,7 @@ import {
   usePlaneChanged,
 } from "./planeChanged";
 import { usePlaneUpdated } from "./PlaneUpdated";
+import { Notice } from "./Notice";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
@@ -431,6 +432,15 @@ export const PlaneView = memo(function PlaneView({
     trouble?: string;
     busy: boolean;
   }>();
+  /**
+   * **The Notices dismissed in this window, by cause** (`Notice.tsx`). For this run only:
+   * keeping a dismissal across a relaunch until its cause changes is NO-2's (#1229).
+   */
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const dismiss = useCallback(
+    (cause: string) => setDismissed((was) => new Set(was).add(cause)),
+    [],
+  );
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
   /** What the core last said about where a chat is working, and which directory it was
@@ -612,8 +622,20 @@ export const PlaneView = memo(function PlaneView({
    * design ADR 0039 predicted would discover this in review.
    */
   const [pinnedWorkspaces, setPinnedWorkspaces] = useState<string[]>([]);
-  /** Pins that no longer name a workspace on the plane, said rather than drawn. */
-  const [danglingPins, setDanglingPins] = useState<string[]>([]);
+  /**
+   * **Dormant pins** (V91c as amended, NO-1): pins whose workspace is gone. They stay in the
+   * machine store, in their place in the order, and are never drawn; when the workspace comes
+   * back (a pull, another branch, a relaunch) the store's answer draws them again, in place.
+   */
+  const [dormantPins, setDormantPins] = useState<string[]>([]);
+  /** Every pin, dormant ones included, in the store's order (`plane_pins`' `order`). */
+  const [pinOrder, setPinOrder] = useState<string[]>([]);
+  /**
+   * **Dormant pins the operator forgot this run**, each with the pins that came before it in the
+   * order, nearest first: its Notice's Undo puts it back after the nearest of them still pinned,
+   * so several Undos in any order, or an unpin made in between, give back the order they had.
+   */
+  const [forgottenPins, setForgottenPins] = useState<{ name: string; after: string[] }[]>([]);
   /** The chats this operator has pinned, by session. Seeded from the record the core put
    *  back, and kept current by the one handler that writes it. */
   const [pinnedChats, setPinnedChats] = useState<number[]>([]);
@@ -967,7 +989,10 @@ export const PlaneView = memo(function PlaneView({
         // window must not go blank because one command answered oddly.
         const said = answer.data as Partial<typeof answer.data> | null | undefined;
         setPinnedWorkspaces(Array.isArray(said?.workspaces) ? said.workspaces : []);
-        setDanglingPins(Array.isArray(said?.missing) ? said.missing : []);
+        setPinOrder(Array.isArray(said?.order) ? said.order : []);
+        // Named, never drawn, and never written away (V91c as amended): a dormant pin is the
+        // operator's to forget.
+        setDormantPins(Array.isArray(said?.missing) ? said.missing : []);
       })
       // A window that cannot ask draws nothing pinned: the workspace strip holds the one you
       // are in, and the rest are behind its show-more — the arrangement an operator who has
@@ -2420,6 +2445,59 @@ export const PlaneView = memo(function PlaneView({
       return { ok: true };
     },
     [plane],
+  );
+
+  /**
+   * **Forgets a dormant pin**, for good: the existing unpin (`Store::pin_workspace`). The pins
+   * before it are kept, nearest first, so this run's Undo can put it back in its place.
+   */
+  const forgetDormantPin = useCallback(
+    async (name: string) => {
+      const after = pinOrder.slice(0, Math.max(pinOrder.indexOf(name), 0)).reverse();
+      const unpinned = await pinWorkspace(name, false);
+      if (!unpinned.ok) {
+        setReport({ from: "workspace.unpin", refused: true, words: unpinned.refused });
+        return;
+      }
+      setForgottenPins((was) => [...was.filter((one) => one.name !== name), { name, after }]);
+    },
+    [pinOrder, pinWorkspace],
+  );
+
+  /**
+   * **Undoes a Forget**: pins the workspace again and puts it back after the nearest pin that
+   * came before it and is still pinned, or first when none is. Pinning appends, so the order is
+   * written after it; arranging moves only the pins it names (`Store::arrange_workspaces`).
+   */
+  const undoForget = useCallback(
+    async (name: string, after: string[]) => {
+      /** Puts the Notice back, with what refused, so a refused Undo can be pressed again. */
+      const refused = (words: string) => {
+        setForgottenPins((was) => [...was.filter((one) => one.name !== name), { name, after }]);
+        setReport({ from: "workspace.pin", refused: true, words });
+      };
+      setForgottenPins((was) => was.filter((one) => one.name !== name));
+      const pinned = await pinWorkspace(name, true);
+      if (!pinned.ok) return refused(pinned.refused);
+      // The store's order now, read rather than remembered: another Undo may have just put a
+      // neighbour back.
+      const now = await commands
+        .planePins(plane)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (now.status === "error") return refused(now.error);
+      const said = now.data as Partial<typeof now.data> | null | undefined;
+      const rest = (Array.isArray(said?.order) ? said.order : []).filter((one) => one !== name);
+      const anchor = after.find((one) => rest.includes(one));
+      const place = anchor === undefined ? 0 : rest.indexOf(anchor) + 1;
+      const order = [...rest.slice(0, place), name, ...rest.slice(place)];
+      const arranged = await commands
+        .arrangeWorkspacePins(plane, order)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (arranged.status === "error")
+        setReport({ from: "workspace.pin", refused: true, words: arranged.error });
+      setPinning((asked) => asked + 1);
+    },
+    [pinWorkspace, plane],
   );
 
   /**
@@ -4304,10 +4382,13 @@ export const PlaneView = memo(function PlaneView({
             The project's path is not here either, for the same reason and since #172. */}
       </header>
 
+      {/* **The window's standing lines are Notices** (`Notice.tsx`, V91a–d): each has a way
+          out, and `Notice.guard.test.ts` fails on one drawn any other way. Those with nothing
+          better to offer yet have Dismiss; NO-3 and NO-4 give them their own. */}
       {trouble && (
-        <p className="trouble" role="alert">
+        <Notice cause="window-trouble" tone="trouble" onDismiss={() => setTrouble(undefined)}>
           {trouble}
-        </p>
+        </Notice>
       )}
 
       {/* What happened to the chat in front when it was put back. Only a chat that came from
@@ -4315,32 +4396,40 @@ export const PlaneView = memo(function PlaneView({
       {/* Both notes name the chat by what its tab says — `frontTab.name`, the one field the
           strip prints — and not by its recorded number, which the operator never reads
           ("5 came back" beside a tab that says "steward 5"). */}
-      {frontTab && frontChat?.resumed && (
-        <p className="came-back">
+      {frontTab && frontChat?.resumed && !dismissed.has(`chat-resumed:${frontChat.session}`) && (
+        <Notice
+          cause={`chat-resumed:${frontChat.session}`}
+          onDismiss={() => dismiss(`chat-resumed:${frontChat.session}`)}
+        >
           <strong>{frontTab.name}</strong> was resumed — conversation{" "}
           <code>{frontChat.resumed}</code>
-        </p>
+        </Notice>
       )}
       {/* What a Resume from a session record had to guess because the record could not say
           it — its profile, its directory (SI-8e) — said beside what happened, never instead. */}
-      {frontTab && frontChat?.guessed && (
-        <p className="came-back">
+      {frontTab && frontChat?.guessed && !dismissed.has(`chat-guessed:${frontChat.session}`) && (
+        <Notice
+          cause={`chat-guessed:${frontChat.session}`}
+          onDismiss={() => dismiss(`chat-guessed:${frontChat.session}`)}
+        >
           <strong>{frontTab.name}</strong>: {frontChat.guessed}.
-        </p>
+        </Notice>
       )}
       {/* Only for a harness. Every chat is a shell until the harness picker lands, and a
           shell has no conversation to bring back — saying so on every relaunch, forever,
           is noise about the normal case. */}
-      {frontTab && frontChat?.fresh && frontChat.harness && (
-        <p className="came-back">
-          <strong>{frontTab.name}</strong> came back as a new chat: {frontChat.fresh}
-        </p>
-      )}
+      {frontTab &&
+        frontChat?.fresh &&
+        frontChat.harness &&
+        !dismissed.has(`chat-fresh:${frontChat.session}`) && (
+          <Notice
+            cause={`chat-fresh:${frontChat.session}`}
+            onDismiss={() => dismiss(`chat-fresh:${frontChat.session}`)}
+          >
+            <strong>{frontTab.name}</strong> came back as a new chat: {frontChat.fresh}
+          </Notice>
+        )}
 
-      {/* A pin that no longer names a workspace. **Said and never drawn**: a strip that
-          showed it would be offering a workspace the plane does not have, and a pin that
-          vanished with no word is an arrangement the operator will make again and lose
-          again. It is news rather than a fault, so it is not an alert. */}
       {/* **A smart close that ended on its record** (SI-8f): its tab has gone, so this is where
           the window says so — quietly, as news and not as a question, with the record one
           press away in its own view tab (SI-8d). */}
@@ -4348,50 +4437,66 @@ export const PlaneView = memo(function PlaneView({
           a notice like the one below, answered once, never a dialog. */}
       <SandboxOffer plane={plane} />
       {savedNotice && (
-        <p className="came-back" role="status">
-          Session saved{savedNotice.record ? ` — ${savedNotice.record.title}` : "."}{" "}
-          {savedNotice.record && (
-            <button
-              type="button"
-              className="dismiss"
-              tabIndex={0}
-              onClick={() => {
-                const record = savedNotice.record;
-                setSavedNotice(undefined);
-                if (record) showView(sessionView(record.path), sessionTitle(record.title));
-              }}
-            >
-              Open record
-            </button>
-          )}{" "}
-          <button
-            type="button"
-            className="dismiss"
-            tabIndex={0}
-            onClick={() => setSavedNotice(undefined)}
-          >
-            Dismiss
-          </button>
-        </p>
+        <Notice
+          cause="session-saved"
+          link={
+            savedNotice.record
+              ? {
+                  label: "Open record",
+                  onPress: () => {
+                    const record = savedNotice.record;
+                    setSavedNotice(undefined);
+                    if (record) showView(sessionView(record.path), sessionTitle(record.title));
+                  },
+                }
+              : undefined
+          }
+          onDismiss={() => setSavedNotice(undefined)}
+        >
+          Session saved{savedNotice.record ? ` — ${savedNotice.record.title}` : "."}
+        </Notice>
       )}
 
-      {danglingPins.length > 0 && (
-        <p className="came-back" role="status">
-          {danglingPins.length === 1
-            ? `The pinned workspace ${danglingPins[0]} is not on this plane any more.`
-            : `${danglingPins.length} pinned workspaces are not on this plane any more: ${danglingPins.join(", ")}.`}{" "}
-          Unpin from the palette, or put the workspace back.
-        </p>
-      )}
+      {/* **A pin whose workspace is gone is kept dormant** (V91c as amended): never drawn, since
+          a strip that showed it would offer a workspace the project does not have (ADR 0034's
+          hazard, one scope down), and never written away. It is drawn again in its place when
+          the workspace comes back. Forget is the operator's, with an Undo for this run. */}
+      {dormantPins
+        .filter((name) => !dismissed.has(`pin-dormant:${name}`))
+        .map((name) => (
+          <Notice
+            key={name}
+            cause={`pin-dormant:${name}`}
+            fixes={[{ label: "Forget", onPress: () => void forgetDormantPin(name) }]}
+            onDismiss={() => dismiss(`pin-dormant:${name}`)}
+          >
+            {name} is gone, kept dormant: its pin comes back in its place when the workspace does.
+          </Notice>
+        ))}
+      {forgottenPins.map(({ name, after }) => (
+        <Notice
+          key={name}
+          cause={`pin-forgotten:${name}`}
+          fixes={[{ label: "Undo", onPress: () => void undoForget(name, after) }]}
+          onDismiss={() => setForgottenPins((was) => was.filter((one) => one.name !== name))}
+        >
+          Forgot the pin to {name}.
+        </Notice>
+      ))}
 
       {/* A memory's Delete, which can be undone for a few seconds (SI-9b, ADR 0065 Q8). */}
       {memoryEdits.undo}
 
       {wouldNotStart.map(([name, why]) => (
-        <p className="came-back trouble" role="status" key={name}>
+        <Notice
+          key={name}
+          cause={`chat-did-not-start:${name}`}
+          tone="trouble"
+          onDismiss={() => setWouldNotStart((was) => was.filter(([one]) => one !== name))}
+        >
           <strong>{name}</strong> did not start ({why}). It is still recorded, and will be tried
           again at the next launch.
-        </p>
+        </Notice>
       ))}
 
       {/* **The four regions** (ADR 0038): by default the explorer on the left, the
@@ -4971,15 +5076,15 @@ function filedFor(cwd: string | null, focused: string | undefined): string {
  */
 function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: boolean) => void }) {
   return (
-    <div className="pane-by-hand" role="status" aria-label={`${note.harness} started by hand`}>
-      <span>{note.harness} runs outside charter&apos;s session tracking here.</span>
-      <button type="button" tabIndex={0} onClick={() => onAnswer(true)}>
-        Open as chat
-      </button>
-      <button type="button" tabIndex={0} className="dismiss" onClick={() => onAnswer(false)}>
-        Dismiss
-      </button>
-    </div>
+    <Notice
+      cause={`by-hand:${note.harness}`}
+      at="pane"
+      label={`${note.harness} started by hand`}
+      fixes={[{ label: "Open as chat", onPress: () => onAnswer(true) }]}
+      onDismiss={() => onAnswer(false)}
+    >
+      {note.harness} runs outside charter&apos;s session tracking here.
+    </Notice>
   );
 }
 
@@ -4991,12 +5096,14 @@ function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: b
  */
 function StartNotice({ notes, onDismiss }: { notes: readonly string[]; onDismiss: () => void }) {
   return (
-    <div className="pane-by-hand" role="status" aria-label="What this chat's start found">
-      <span>{notes.join(" ")}</span>
-      <button type="button" tabIndex={0} className="dismiss" onClick={onDismiss}>
-        Dismiss
-      </button>
-    </div>
+    <Notice
+      cause="start-found"
+      at="pane"
+      label="What this chat's start found"
+      onDismiss={onDismiss}
+    >
+      {notes.join(" ")}
+    </Notice>
   );
 }
 

@@ -40,7 +40,7 @@ describe("the sandbox offer", () => {
     core(DUE);
     render(<SandboxOffer plane={PLANE} />);
 
-    expect(await screen.findByTestId("sandbox-offer")).toHaveAttribute("role", "status");
+    expect(await screen.findByRole("status", { name: "The sandbox offer" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -49,7 +49,7 @@ describe("the sandbox offer", () => {
     render(<SandboxOffer plane={PLANE} />);
 
     await waitFor(() => expect(asked.map((one) => one.cmd)).toContain("sandbox_state"));
-    expect(screen.queryByTestId("sandbox-offer")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "The sandbox offer" })).not.toBeInTheDocument();
   });
 
   it("turns the sandbox on only when asked to, and is gone once answered", async () => {
@@ -60,7 +60,9 @@ describe("the sandbox offer", () => {
       .setup()
       .click(await screen.findByRole("button", { name: "Turn the sandbox on" }));
 
-    await waitFor(() => expect(screen.queryByTestId("sandbox-offer")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "The sandbox offer" })).not.toBeInTheDocument(),
+    );
     expect(asked.find((one) => one.cmd === "answer_sandbox_offer")?.args).toEqual({
       plane: PLANE,
       turnOn: true,
@@ -73,7 +75,9 @@ describe("the sandbox offer", () => {
 
     await userEvent.setup().click(await screen.findByRole("button", { name: "Keep it off" }));
 
-    await waitFor(() => expect(screen.queryByTestId("sandbox-offer")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "The sandbox offer" })).not.toBeInTheDocument(),
+    );
     expect(asked.find((one) => one.cmd === "answer_sandbox_offer")?.args).toEqual({
       plane: PLANE,
       turnOn: false,
@@ -84,7 +88,7 @@ describe("the sandbox offer", () => {
     core(DUE);
     render(<SandboxOffer plane={PLANE} />);
 
-    expect(await screen.findByTestId("sandbox-offer")).toHaveTextContent(
+    expect(await screen.findByRole("status", { name: "The sandbox offer" })).toHaveTextContent(
       "Never sandboxed on this machine, so a new chat on them starts only without it: Codex: charter can wrap it on macOS only, so far.",
     );
   });

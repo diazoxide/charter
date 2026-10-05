@@ -41,6 +41,14 @@ afterEach(() => {
 });
 
 const PLANE = "/home/dev/plane";
+
+/** The Notice a memory's Delete leaves, with its Undo (`Notice`, cause `memory-deleted`). */
+const memoryUndo = () =>
+  waitFor(() => {
+    const line = document.querySelector<HTMLElement>('[data-cause="memory-deleted"]');
+    if (!line) throw new Error("no Undo line yet");
+    return line;
+  });
 const ALPHA = `${PLANE}/workspaces/alpha`;
 
 const CHAT = {
@@ -313,7 +321,7 @@ describe("Delete, in the window", () => {
     // The heading's Delete, the same catalogue row the row's menu lists.
     await userEvent.click(screen.getByRole("button", { name: /Delete memory/ }));
 
-    const undo = await screen.findByTestId("memory-undo");
+    const undo = await memoryUndo();
     expect(undo).toHaveTextContent("Deleted “Never pkill by name”");
     await waitFor(() => expect(tabNames()).toEqual(["steward 1", "steward"]));
     expect(asked.find((one) => one.cmd === "memory_archive")?.args).toMatchObject({
@@ -328,7 +336,7 @@ describe("Delete, in the window", () => {
 
     await userEvent.click(within(undo).getByRole("button", { name: "Undo" }));
 
-    await waitFor(() => expect(screen.queryByTestId("memory-undo")).toBeNull());
+    await waitFor(() => expect(document.querySelector('[data-cause="memory-deleted"]')).toBeNull());
     expect(asked.find((one) => one.cmd === "memory_unarchive")?.args).toMatchObject({
       scope: { kind: "persona", name: "steward" },
       archived: "never-pkill-2",
@@ -344,7 +352,7 @@ describe("Delete, in the window", () => {
 
     await userEvent.click(await screen.findByRole("menuitem", { name: /Delete memory/ }));
 
-    await screen.findByTestId("memory-undo");
+    await memoryUndo();
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
   });

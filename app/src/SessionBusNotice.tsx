@@ -3,6 +3,7 @@ import { listen } from "./here";
 
 import { commands, SESSION_BUS_ANSWERS, type BusNotice } from "./bindings";
 import { MidTurn, mightBeMidTurn, type Ending } from "./QuitWarning";
+import { Notice } from "./Notice";
 
 /**
  * The line a launch without the session bus puts at the top of the window (charter#746).
@@ -20,7 +21,7 @@ import { MidTurn, mightBeMidTurn, type Ending } from "./QuitWarning";
  * mid-turn is named and asked about first, with Restart to update's question (`MidTurn`), and the
  * next launch offers them back the way it does after a quit.
  *
- * The same line as a slow launch's (`came-back`), and dismissible like it.
+ * A Notice, as a slow launch's is, and dismissible like it.
  *
  * `chats` is every chat the window holds, as the quit warning is given them.
  */
@@ -57,23 +58,20 @@ export function SessionBusNotice({ chats = [] }: { chats?: readonly Ending[] }) 
   if (!notice || dismissed) return null;
   return (
     <>
-      <p className="came-back trouble" role="status">
+      <Notice
+        cause="session-bus"
+        tone="trouble"
+        fixes={
+          notice.can_restart
+            ? [{ label: "Restart with the full desktop integration", onPress: toRestart }]
+            : undefined
+        }
+        onDismiss={() => setDismissed(true)}
+      >
         {notice.says}
-        {notice.can_restart && (
-          <>
-            {" "}
-            The session bus answers now. A restart ends every chat, and the next launch offers them
-            back.
-            {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
-            <button type="button" className="offer" tabIndex={0} onClick={toRestart}>
-              Restart with the full desktop integration
-            </button>
-          </>
-        )}
-        <button type="button" className="dismiss" tabIndex={0} onClick={() => setDismissed(true)}>
-          Dismiss
-        </button>
-      </p>
+        {notice.can_restart &&
+          " The session bus answers now. A restart ends every chat, and the next launch offers them back."}
+      </Notice>
       {asking && (
         <MidTurn
           title="Restart with the full desktop integration"
