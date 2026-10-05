@@ -1389,6 +1389,14 @@ export const commands = {
 	 */
 	planeDoctor: (plane: PlaneId, full: boolean) => typedError<DoctorReport, string>(__TAURI_INVOKE("plane_doctor", { plane, full })),
 	/**
+	 *  Apply one doctor fix by its id to the plane the window names (FX-1): the Doctor dialog's
+	 *  Fix button. The same core entry point `charter doctor --fix <id>` calls, so the window and
+	 *  the terminal make the same fix. The window asks the doctor again afterwards.
+	 * 
+	 *  On a blocking thread, as [`plane_doctor`] is: a fix writes files and takes the plane's lock.
+	 */
+	planeDoctorFix: (plane: PlaneId, fix: string) => typedError<DoctorFixed, string>(__TAURI_INVOKE("plane_doctor_fix", { plane, fix })),
+	/**
 	 *  Both of this plane's settings files, and what charter says about each.
 	 * 
 	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
@@ -1871,6 +1879,21 @@ export type Curations = {
 	cannot: string | null,
 };
 
+/**  What applying a fix came to, as the Doctor dialog draws it. */
+export type DoctorFixed = {
+	/**  The fix that was asked for, by its id. */
+	fix: string,
+	/**  Why it was refused, before anything was written. `None` when it ran. */
+	refused: string | null,
+	/**  What it changed, line by line, in the words and marks `charter doctor --fix` prints. */
+	said: string[],
+	/**
+	 *  Whether it did everything it was asked to. `false` for a refusal, and for a fix that
+	 *  ran and could not do part of it, which `said` names.
+	 */
+	complete: boolean,
+};
+
 /**  What the doctor said, and what it was asked with. */
 export type DoctorReport = {
 	/**  Every row, in the order `charter doctor` prints them. */
@@ -1893,7 +1916,10 @@ export type DoctorReport = {
 	path: string | null,
 };
 
-/**  One doctor row: the four fields `charter doctor --json` prints, and two it does not. */
+/**
+ *  One doctor row: the fields `charter doctor --json` prints, and two it does not (`checked`,
+ *  `settings`).
+ */
 export type DoctorRow = {
 	name: string,
 	status: DoctorStatus,
@@ -1915,6 +1941,12 @@ export type DoctorRow = {
 	 *  `charter doctor --json` does not print it.
 	 */
 	settings: string | null,
+	/**
+	 *  The fix charter can make for this finding itself (FX-1, `charter_core::doctor::fix`),
+	 *  by the id `charter doctor --fix <id>` takes: the dialog draws a Fix button for it, which
+	 *  calls [`plane_doctor_fix`]. `None` for a row charter cannot fix, and for the app's own.
+	 */
+	fix: string | null,
 };
 
 /**  A row's verdict, as the window draws it. */
