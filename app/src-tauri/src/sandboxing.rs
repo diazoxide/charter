@@ -143,7 +143,7 @@ fn never_here(os: sandbox::Os) -> Vec<String> {
         .collect()
 }
 
-/// The project's sandbox, for the offer notice and Project settings.
+/// The project's sandbox, for the offer notice and Settings.
 #[tauri::command]
 #[specta::specta]
 pub fn sandbox_state(

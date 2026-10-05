@@ -64,8 +64,18 @@ function core({
           const change = given.change as SettingsChange;
           sent.push({ which, base: given.base as string | null, change });
           if (refuse) return { kind: "refused", reasons: refuse };
-          if (change.kind !== "raw") return undefined;
-          files[which] = { ...files[which], exists: true, text: change.text };
+          if (change.kind === "raw")
+            files[which] = { ...files[which], exists: true, text: change.text };
+          else {
+            // A form's change: each key set or gone, and a text that differs.
+            let fields = [...files[which].fields];
+            for (const edit of change.edits) {
+              const at = JSON.stringify(edit.path);
+              fields = fields.filter((one) => JSON.stringify(one.path) !== at);
+              if (edit.value !== null) fields.push({ path: edit.path, value: edit.value });
+            }
+            files[which] = { ...files[which], fields, text: `${files[which].text}# form\n` };
+          }
           return { kind: "saved", file: files[which] };
         }
       }
@@ -94,8 +104,10 @@ async function atProject() {
   await screen.findByRole("button", { name: "General" });
 }
 
-const editAsToml = (name: string) =>
-  userEvent.click(screen.getByRole("button", { name: `Edit ${name} as TOML` }));
+/** A file's link, by the name it shows, in the links at the foot of the nav. */
+const link = (name: string) =>
+  within(screen.getByRole("group", { name: "Edit as TOML" })).getByRole("button", { name });
+const editAsToml = (name: string) => userEvent.click(link(name));
 const raw = (name: string) => screen.getByRole("textbox", { name: `${name}, as TOML` });
 
 /** Settles the plane-changed event a write outside the tab sends. */
@@ -127,10 +139,7 @@ describe("Edit as TOML", () => {
 
     expect(raw("charter.toml")).toHaveValue(SHARED_TEXT);
     expect(screen.queryByRole("region", { name: "General" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Edit charter.toml as TOML" })).toHaveAttribute(
-      "aria-current",
-      "true",
-    );
+    expect(link("charter.toml")).toHaveAttribute("aria-current", "true");
     expect(screen.getByRole("button", { name: "Save charter.toml" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Discard" })).toBeDisabled();
   });
@@ -268,5 +277,106 @@ describe("Edit as TOML", () => {
     await editAsToml("charter.toml");
 
     expect(raw("charter.toml")).toHaveValue("[plane\n");
+  });
+
+  it("never saves over an outside change, even once the edit was typed back to what it read", async () => {
+    const { files, sent } = core();
+    await atProject();
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "#");
+    files.shared = { ...files.shared, text: `${SHARED_TEXT}# edited by hand\n` };
+    await changedOnDisk();
+
+    // Typed back to exactly the text it read, then typed again.
+    await userEvent.type(raw("charter.toml"), "{Backspace}");
+    expect(
+      await screen.findByText(/charter\.toml changed on disk since this edit began/),
+    ).toBeInTheDocument();
+    await userEvent.type(raw("charter.toml"), "# mine\n");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].base).toBe(SHARED_TEXT);
+  });
+
+  it("saves the next edit against what the last save wrote", async () => {
+    const { sent } = core();
+    await atProject();
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "# one\n");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+
+    await userEvent.type(raw("charter.toml"), "# two\n");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1].base).toBe(`${SHARED_TEXT}# one\n`);
+  });
+
+  it("takes away a form change's Undo once the file is saved as TOML", async () => {
+    core();
+    await atProject();
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Groups" })).getByRole("button", {
+        name: "Saving",
+      }),
+    );
+    await userEvent.selectOptions(screen.getByLabelText("Mode"), "commit");
+    expect(await screen.findByRole("button", { name: "Undo" })).toBeInTheDocument();
+
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "# mine\n");
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save charter.toml" })).toBeDisabled(),
+    );
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Groups" })).getByRole("button", {
+        name: "Saving",
+      }),
+    );
+
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  it("gives the focus back to the text after Save, Discard and a refusal", async () => {
+    core({ refuse: ["charter.toml is not valid TOML"] });
+    await atProject();
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "[[broken");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+    await screen.findByRole("alert");
+    expect(raw("charter.toml")).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(raw("charter.toml")).toHaveFocus();
+  });
+
+  it("gives the focus back to the text after a save that is written", async () => {
+    core();
+    await atProject();
+    await editAsToml("charter.toml");
+    await userEvent.type(raw("charter.toml"), "# mine\n");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save charter.toml" }));
+
+    await waitFor(() => expect(raw("charter.toml")).toHaveFocus());
+  });
+
+  it("says, under what charter refuses, where a file that is not TOML is mended", async () => {
+    const { files } = core();
+    files.shared = {
+      ...files.shared,
+      text: "[plane\n",
+      parsed: false,
+      refusals: ["charter.toml is not valid TOML"],
+    };
+    render(<SettingsTab plane={PLANE} level="project" />);
+
+    expect(
+      await screen.findByText("Open charter.toml under Edit as TOML to mend it."),
+    ).toBeInTheDocument();
   });
 });

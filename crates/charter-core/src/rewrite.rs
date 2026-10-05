@@ -105,7 +105,7 @@ pub enum Mode {
     /// `workspace.json`, a generated `settings.json`. An existing file keeps its permissions,
     /// and one somebody made read-only is refused. A new file gets the umask's answer.
     Kept,
-    /// [`Mode::Kept`], except that a new file is created 0600 — the Project settings tab's
+    /// [`Mode::Kept`], except that a new file is created 0600 — the Settings tab's
     /// files, which nobody else on the machine has any business reading.
     KeptOrPrivate,
     /// Charter's own state — a consent record, a hook's bookkeeping. 0600 whatever the file

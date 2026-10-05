@@ -292,7 +292,7 @@ export const commands = {
 	 *  through here. A word that is not a harness charter starts is refused, and nothing is typed.
 	 */
 	typeInstaller: (plane: PlaneId, session: number, harness: string) => typedError<null, string>(__TAURI_INVOKE("type_installer", { plane, session, harness })),
-	/**  The project's sandbox, for the offer notice and Project settings. */
+	/**  The project's sandbox, for the offer notice and Settings. */
 	sandboxState: (plane: PlaneId) => typedError<SandboxState, string>(__TAURI_INVOKE("sandbox_state", { plane })),
 	/**
 	 *  The person's answer to the one-time offer: `turn_on` writes `[sandbox] mode = "on"` into
@@ -2325,7 +2325,7 @@ export type HarnessPlugins = {
 	plugins: HarnessPlugin[],
 	/**
 	 *  The ignore check's sentence while git would carry `charter.local.toml` and it names a
-	 *  plugin of this harness — the one the Project settings tab's Local section says — so this
+	 *  plugin of this harness — the one the Settings tab says at the Project level — so this
 	 *  group says why a plugin set there is not applied (charter-app#319). The core's
 	 *  `Choices::local_left_out`, asked for this harness.
 	 */
@@ -3369,7 +3369,7 @@ export type ProjectAnswer = {
 	asks_forge: string | null,
 };
 
-/**  One extension in one project, as the Project settings tab draws it. */
+/**  One extension in one project, as the Settings tab draws it. */
 export type ProjectExtension = {
 	id: string,
 	name: string,
@@ -3417,7 +3417,7 @@ export type ProjectExtensions = {
 	extensions: ProjectExtension[],
 	/**
 	 *  The ignore check's sentence while git would carry `charter.local.toml` and it sets an
-	 *  extension — the one the Project settings tab's Local section says — so the Extensions
+	 *  extension — the one the Settings tab says at the Project level — so the Extensions
 	 *  group says why a value set there is not applied. The core's `Choices::local_left_out`.
 	 */
 	local_left_out: string | null,
@@ -3430,7 +3430,7 @@ export type ProjectSettings = {
 };
 
 /**
- *  A project's theme, as the Project settings tab draws it —
+ *  A project's theme, as the Settings tab draws it —
  *  `extension::project::theme::resolve`, shaped for the wire.
  */
 export type ProjectTheme = {
@@ -3818,7 +3818,7 @@ export type SavedRecord = {
 
 /**
  *  How far a save of the plane and of each repo goes in this project, and which file decided
- *  each key: what the Project settings tab's Plane and Repos groups say beside each control.
+ *  each key: what the Settings tab's Saving group says beside each control.
  */
 export type SavingInForce = {
 	plane: PlaneInForce,

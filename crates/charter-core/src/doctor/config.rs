@@ -257,7 +257,7 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
 /// this machine's profiles, which a `[harness] default` may name.
 ///
 /// The row reports the first; a writer refuses on any of them (charter-app#252), so the
-/// Project settings tab refuses exactly what the doctor would warn is being ignored, in the
+/// Settings tab refuses exactly what the doctor would warn is being ignored, in the
 /// same sentences.
 pub(crate) fn findings(
     root: &Path,

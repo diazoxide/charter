@@ -11,7 +11,7 @@
 //! sits between the two files: with Local refused, the workspace has the last word.
 //!
 //! **And each reader says it left the file out** (charter-app#319), in the ignore check's own
-//! sentence — the one the Project settings tab's Local section says — so every group of a
+//! sentence — the one the Settings tab says at the Project level — so every group of a
 //! settings tab that shows what is in force can say why a Local value is not.
 
 use std::fs;

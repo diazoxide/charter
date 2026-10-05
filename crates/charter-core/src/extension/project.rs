@@ -183,7 +183,7 @@ impl Choices {
     }
 
     /// Why `charter.local.toml` is not among the choices, when it is there, git would carry it,
-    /// and it said something here: the ignore check's sentence, which the Project settings tab's Local section says too
+    /// and it said something here: the ignore check's sentence, which the Settings tab says at the Project level too
     /// (charter-app#319). A settings tab says it in every group that shows these in force, so a
     /// value set in Local and not applied is never shown without its reason.
     pub fn local_left_out(&self) -> Option<&str> {

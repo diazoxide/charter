@@ -1,4 +1,4 @@
-//! A plane's settings files, as the Project settings tab reads, checks and writes them
+//! A plane's settings files, as the Settings tab reads, checks and writes them
 //! (charter-app#252).
 //!
 //! Two files, and the difference between them is who sees it:
@@ -104,7 +104,7 @@ pub enum LayerText {
     /// No file, or one that cannot be read: it says nothing, and there is nothing to say about it.
     Nothing,
     /// A Local file git would carry, left out. `why` is [`profiles::ignore_check`]'s sentence,
-    /// which is also what the Project settings tab's Local section says about it ([`read`]).
+    /// which is also what the Settings tab says at the Project level about it ([`read`]).
     /// `text` is what the file says, which no reader takes — only asks whether it said anything
     /// in its own table, so a group says the file was left out only where it would have decided
     /// something (charter-app#319).
@@ -154,7 +154,7 @@ impl LayerText {
 /// not read from it either.
 ///
 /// **Every reader of the two files reads them here**, and nowhere else, so a reader added later
-/// cannot forget the check. The Project settings tab shows the file's text whatever this says,
+/// cannot forget the check. The Settings tab shows the file's text whatever this says,
 /// with the check's sentence among its refusals ([`read`]), so what is not applied is said there
 /// with its fix. **And a reader keeps that sentence** ([`LayerText::LeftOut`], charter-app#319)
 /// when the file said something in its table: each group of a settings tab that shows what is in

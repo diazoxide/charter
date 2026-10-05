@@ -1,8 +1,6 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { LoaderCircle } from "lucide-react";
-import { commands, type PlaneId, type SettingsWhich } from "../bindings";
-import { extensionsChanged } from "../extensionsOn";
-import { projectThemeChanged } from "../projectTheme";
+import type { PlaneId, SettingsWhich } from "../bindings";
 import { DEFAULT_THEME, inForce } from "../theme/theme";
 import { atCreation } from "../windowprefs";
 import { Choice, Field, SettingGroup, SettingRow, SettingsLayout, type RowIds } from "./components";
@@ -16,7 +14,7 @@ import {
   type SettingsGroup,
 } from "./groups";
 import { KEPT, projectGroups, useProjectLevel } from "./project";
-import { RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
+import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
 
@@ -104,25 +102,15 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
     () => (project.state === "read" ? projectGroups(project.read) : []),
     [project],
   );
-  const reread = project.state === "read" ? project.reread : undefined;
-  // Each file as its whole text (SE-19, V89d). A save is the core's to check and to write, as
-  // the old page's raw view was; once written, the level reads its files and what is in force
-  // again, and the window what it draws for this project.
+  // Each file as its whole text (SE-19, V89d), written through the level's driver: the core
+  // checks it and writes it, in the queue every setting's write is in.
   const raw: RawFile[] =
     project.state === "read"
       ? (["shared", "local"] as const).map((which: SettingsWhich) => ({
           id: which,
           file: project.read[which],
           kept: KEPT[which],
-          save: (base, text) =>
-            commands.saveProjectSettings(plane, which, base, { kind: "raw", text }).then((said) => {
-              if (said.status === "error") return { refused: [said.error] };
-              if (said.data.kind === "refused") return { refused: said.data.reasons };
-              reread?.();
-              extensionsChanged(plane);
-              projectThemeChanged(plane);
-              return { saved: true as const };
-            }),
+          save: (base, text) => project.writeRaw(which, base, text),
         }))
       : [];
   const standing =
@@ -139,6 +127,13 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
       groups={groups}
       waiting={waitingFor(project)}
       standing={standing}
+      mend={
+        project.state === "read"
+          ? [project.read.shared, project.read.local]
+              .filter((file) => !file.parsed)
+              .map((file) => `Open ${named(file)} under Edit as TOML to mend it.`)
+          : []
+      }
       driver={project.state === "read" ? project : undefined}
       raw={raw}
     />
@@ -196,6 +191,7 @@ function Shown({
   groups: declared,
   waiting,
   standing = [],
+  mend = [],
   driver,
   raw = [],
 }: Switcher & {
@@ -205,6 +201,8 @@ function Shown({
   waiting?: ReactNode;
   /** What charter refuses in the level's files as they stand. */
   standing?: readonly string[];
+  /** Where a file that is not read as it stands is mended: said under {@link standing}. */
+  mend?: readonly string[];
   /** What writes the level's file settings, once the level has been read. */
   driver?: Driven<unknown>;
   /** The level's files as raw TOML, each with its link at the foot of the nav (SE-19). */
@@ -254,7 +252,7 @@ function Shown({
     >
       {waiting ?? (
         <>
-          {standing.length > 0 && (
+          {standing.length + mend.length > 0 && (
             <div className="ui-settings-standing">
               <p className="note">charter does not take this from the files as they stand:</p>
               <ul>
@@ -264,6 +262,11 @@ function Shown({
                   </li>
                 ))}
               </ul>
+              {mend.map((where) => (
+                <p key={where} className="note">
+                  {where}
+                </p>
+              ))}
             </div>
           )}
           {rawFile ? (

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { Shown } from "./fileControls";
 
 /**
@@ -13,10 +13,15 @@ import type { Shown } from "./fileControls";
  * is refused in the core's words and nothing is written.
  *
  * **A file changed outside the tab** — by hand, by a chat — is read again by the level's driver.
- * While nothing is typed the editor shows the file as it now is. An edit under way is kept, and
- * says the file moved under it: its Save is still made against the text it began from, which
- * the core refuses as changed on disk, so an outside edit is never overwritten unseen; Discard
- * takes up the file as it now is.
+ * While no edit is under way the editor shows the file as it now is. An edit is kept, and says
+ * the file moved under it, for as long as it lasts — typed back to what it began from included:
+ * every keystroke of it keeps the text it began from, its Save is made against that, which the
+ * core refuses as changed on disk, so an outside edit is never overwritten unseen. Discard takes
+ * up the file as it now is.
+ *
+ * **A save goes through the level's driver** (`Driven.writeRaw`), in the queue every setting's
+ * write is in: what it wrote is what the next edit begins from, at once, and the last change's
+ * Undo is gone.
  */
 
 /** One file a level offers as raw TOML. */
@@ -27,16 +32,17 @@ export type RawFile = {
   file: Shown;
   /** The sentence on where the file is kept and who sees it. */
   kept: string;
-  /** Writes `text` over the file whose text was `base` (`null`: not there yet). */
-  save: (base: string | null, text: string) => Promise<{ saved: true } | { refused: string[] }>;
+  /** Writes `text` over the file whose text was `base` (`null`: not there yet); answers why
+   *  nothing was written, or `undefined` once it was. */
+  save: (base: string | null, text: string) => Promise<readonly string[] | undefined>;
 };
 
 /**
- * What is typed into one file's editor, kept by the tab so it survives a look at a group: the
- * text, the file's text it began from (`base`, `null` for a file not there yet), and the text
- * the file was read as when it was last typed (`seen`).
+ * An edit of one file, kept by the tab so it survives a look at a group: the text, and the
+ * file's text it began from (`base`, `null` for a file not there yet). It lasts until it is
+ * saved or discarded.
  */
-export type RawDraft = { base: string | null; text: string; seen: string };
+export type RawDraft = { base: string | null; text: string };
 
 /** The file's name, without its folder. */
 export function named(file: Shown): string {
@@ -65,7 +71,6 @@ export function RawLinks({
           type="button"
           // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
           tabIndex={0}
-          aria-label={`Edit ${named(one.file)} as TOML`}
           aria-current={one.id === editing ? "true" : undefined}
           onClick={() => onEdit(one.id)}
         >
@@ -87,33 +92,27 @@ export function RawEditor({
   onDraft: (to: RawDraft | undefined) => void;
 }) {
   const heading = useId();
+  const box = useRef<HTMLTextAreaElement>(null);
   const [saving, setSaving] = useState(false);
   const [refused, setRefused] = useState<readonly string[]>();
   const { file } = raw;
   const name = named(file);
   const base = file.exists ? file.text : null;
-  const changed = (one: RawDraft) => one.text !== (one.base ?? "");
-  // A draft with nothing typed in it is the file as it was once read: once the file reads
-  // differently — written here, or outside the tab — the editor shows it as it now is.
-  const live = draft && (changed(draft) || draft.seen === file.text) ? draft : undefined;
-  const text = live?.text ?? file.text;
-  const dirty = live !== undefined && changed(live);
-  const moved = dirty && live.base !== base;
+  const text = draft?.text ?? file.text;
+  const dirty = draft !== undefined && draft.text !== (draft.base ?? "");
+  /** The file is no longer what the edit began from. */
+  const moved = draft !== undefined && draft.base !== base;
+  const focus = () => box.current?.focus();
 
   const save = async () => {
-    if (!dirty) return;
+    if (!draft || !dirty) return;
     setSaving(true);
-    const said = await raw
-      .save(live.base, live.text)
-      .catch((err: unknown) => ({ refused: [String(err)] }));
+    const why = await raw.save(draft.base, draft.text).catch((err: unknown) => [String(err)]);
     setSaving(false);
-    if ("refused" in said) {
-      setRefused(said.refused);
-      return;
-    }
-    setRefused(undefined);
-    // What was written is what the file now holds, shown until the level has read it again.
-    onDraft({ base: live.text, text: live.text, seen: file.text });
+    setRefused(why);
+    // Once written, the file is what was written: the edit is over.
+    if (why === undefined) onDraft(undefined);
+    focus();
   };
 
   return (
@@ -131,18 +130,16 @@ export function RawEditor({
         </p>
       )}
       <textarea
+        ref={box}
         className="ui-field ui-raw-text"
         value={text}
         spellCheck={false}
         autoComplete="off"
         rows={Math.max(12, text.split("\n").length + 1)}
         aria-label={`${name}, as TOML`}
+        // An edit keeps the text it began from for as long as it lasts.
         onChange={(event) =>
-          onDraft({
-            base: dirty ? live.base : base,
-            text: event.currentTarget.value,
-            seen: file.text,
-          })
+          onDraft({ base: draft ? draft.base : base, text: event.currentTarget.value })
         }
       />
       <div className="ui-raw-actions">
@@ -152,10 +149,11 @@ export function RawEditor({
         <button
           type="button"
           tabIndex={0}
-          disabled={!dirty || saving}
+          disabled={!(dirty || moved) || saving}
           onClick={() => {
             setRefused(undefined);
             onDraft(undefined);
+            focus();
           }}
         >
           Discard

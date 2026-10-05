@@ -458,7 +458,7 @@ pub struct ProjectExtensionSetting {
     pub source: String,
 }
 
-/// One extension in one project, as the Project settings tab draws it.
+/// One extension in one project, as the Settings tab draws it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct ProjectExtension {
     pub id: String,
@@ -478,7 +478,7 @@ pub struct ProjectExtension {
 pub struct ProjectExtensions {
     pub extensions: Vec<ProjectExtension>,
     /// The ignore check's sentence while git would carry `charter.local.toml` and it sets an
-    /// extension — the one the Project settings tab's Local section says — so the Extensions
+    /// extension — the one the Settings tab says at the Project level — so the Extensions
     /// group says why a value set there is not applied. The core's `Choices::local_left_out`.
     pub local_left_out: Option<String>,
 }
@@ -806,7 +806,7 @@ pub struct ThemeOption {
     pub label: String,
 }
 
-/// A project's theme, as the Project settings tab draws it —
+/// A project's theme, as the Settings tab draws it —
 /// `extension::project::theme::resolve`, shaped for the wire.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct ProjectTheme {
@@ -1530,7 +1530,8 @@ mod tests {
     #[test]
     fn extensions_and_theme_carry_why_the_local_file_was_left_out_in_project_and_workspace() {
         // charter-app#319: a value set in Local and not applied is never shown without its
-        // reason, so each answer carries the ignore check's sentence — the Local section's.
+        // reason, so each answer carries the ignore check's sentence — the one
+        // charter.local.toml's refusals say.
         let (_dir, at, config) = made();
         let found =
             extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
