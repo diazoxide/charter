@@ -757,7 +757,7 @@ The request is one line: the protocol number, the extension and view ids, the su
 persona the view was opened from (when it was), and the value `handed.rs` built. The program is
 started with **an empty environment plus eight variables a program needs to be a program**
 (`PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TMPDIR`) and three that say
-what it is (`PURLIS_EXTENSION`, `PURLIS_PROTOCOL`, and `CHARTER_EXTENSION_STATE` when it has a
+what it is (`PURLIS_EXTENSION`, `PURLIS_PROTOCOL`, and `PURLIS_EXTENSION_STATE` when it has a
 state directory) — decision 2's row *"the harness environment: No"*, applied to purlis's own
 environment. It is started through `forklock`, so it cannot inherit a chat's half-open terminal
 (purlis#53). It is started in the extension's own directory.
