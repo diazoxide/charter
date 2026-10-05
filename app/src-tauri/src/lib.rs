@@ -2079,6 +2079,27 @@ fn without_channel_commands(bindings: &str) -> String {
     out
 }
 
+/// The shared lock this app holds on the config home for its life (`renamelocal::busy::LOCK`).
+struct HoldsTheConfigHome(#[allow(dead_code)] std::fs::File);
+
+/// What the launch's rename-local said, for the app's log.
+#[cfg(not(feature = "e2e"))]
+fn log_the_rename(renamed: &charter_core::renamelocal::Moved) {
+    match &renamed.refused {
+        Some(why) => tracing::warn!("charter: the local rename waits: {why}"),
+        None => {
+            for line in &renamed.said {
+                tracing::info!("charter: rename-local: {line}");
+            }
+            if !renamed.complete {
+                tracing::warn!(
+                    "charter: rename-local left some old names in place; they are still read"
+                );
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Before anything else, chats included: the host has no controlling terminal, because a
@@ -2229,6 +2250,22 @@ pub fn run() {
             // when it is stale on the promise that no second app is running.
             #[cfg(target_os = "linux")]
             instance::one_per_user(app);
+            // This machine's local state moves to the purlis names (RN-5, V93f): after the
+            // single-instance handoff and the one-per-user lock, so a second launch never
+            // migrates, and before any project, chat or watch opens a file under one. Anything
+            // else of charter's still running makes it wait for the next launch (D-RN5-11).
+            // Off in the scenario build, whose specs name the old folders (D-RN5-7).
+            #[cfg(not(feature = "e2e"))]
+            if let Some(renamed) = charter_core::renamelocal::at_launch() {
+                log_the_rename(&renamed);
+            }
+            // From here on this app holds the config home: no rename-local of a later launch,
+            // or of a terminal, moves it while the app runs.
+            if let Some(root) = charter_core::machine::config_root()
+                && let Some(held) = charter_core::renamelocal::busy::hold_shared(&root)
+            {
+                app.manage(HoldsTheConfigHome(held));
+            }
             // How this launch stands with the session bus, for the window's notice
             // (`portal.rs`): nothing to say on one that has it.
             app.manage(portal::SessionBus::of(
@@ -2262,7 +2299,8 @@ pub fn run() {
             reached("the window is built");
             // Where a panic is kept, now that the app can be told where its logs belong. An app
             // with no log directory still has standard error, which is all it had before.
-            if let Ok(logs) = app.path().app_log_dir() {
+            // Tauri's folder for this identifier, or the purlis one rename-local moved it to.
+            if let Some(logs) = charter_core::applog::log_dir_for(&app.config().identifier) {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());

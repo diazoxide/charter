@@ -55,13 +55,34 @@ fn dir_from(named: Option<OsString>) -> Option<PathBuf> {
 pub(crate) const APP: &str = "dev.charter.app";
 
 /// Tauri's `app_log_dir` for charter's identifier, worked out without Tauri: the core never
-/// depends on it, and the app wants its log before Tauri has started.
+/// depends on it, and the app wants its log before Tauri has started. The purlis identifier's
+/// folder once rename-local has moved the logs there ([`log_dir_for`]).
 pub fn app_log_dir() -> Option<PathBuf> {
+    log_dir_for(APP)
+}
+
+/// The log folder Tauri gives the app whose identifier is `identifier`.
+pub fn log_dir_named(identifier: &str) -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
-        Some(dirs::home_dir()?.join("Library/Logs").join(APP))
+        Some(dirs::home_dir()?.join("Library/Logs").join(identifier))
     } else {
-        Some(dirs::data_local_dir()?.join(APP).join("logs"))
+        Some(dirs::data_local_dir()?.join(identifier).join("logs"))
     }
+}
+
+/// The log folder of the app whose identifier is `identifier`, under any name it has had
+/// (`names::BUNDLE_ID`, a scenario build's suffix kept): the purlis one when it is there, else
+/// the old one that is, else `identifier`'s own — the folder Tauri would name (V93e, RN-5).
+pub fn log_dir_for(identifier: &str) -> Option<PathBuf> {
+    let own = log_dir_named(identifier)?;
+    let Some(rest) = crate::names::BUNDLE_ID.strip(identifier) else {
+        return Some(own);
+    };
+    let found = crate::names::BUNDLE_ID
+        .spellings()
+        .filter_map(|id| log_dir_named(&format!("{id}{rest}")))
+        .find(|dir| dir.is_dir());
+    Some(found.unwrap_or(own))
 }
 
 /// How many daily files are kept, today's among them: a week is long enough to look back at

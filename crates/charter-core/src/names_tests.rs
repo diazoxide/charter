@@ -279,6 +279,7 @@ fn the_entries_carry_the_names_on_disk_today() {
     assert_eq!(crate::opencode::FILE_NAME, OPENCODE_SHIM.reads[0]);
     assert_eq!(crate::machine::DIR, CONFIG_HOME.reads[0]);
     assert_eq!(crate::datahome::DIR, DATA_HOME.reads[0]);
+    assert_eq!(crate::machine::DAEMON_DIR, DAEMON_DIR.reads[0]);
     assert_eq!(crate::secrets::onepassword::TAG, ONEPASSWORD_TAG.write);
     // The old prefix of every environment variable, which chats and shells an older build
     // started still carry (RN-2d, `crate::envvar`).

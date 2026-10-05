@@ -223,6 +223,7 @@ fn a_fix_id_is_spelled_one_way_and_read_back_the_same() {
     assert_eq!(
         FixId::ALL.map(FixId::id),
         [
+            "rename-local",
             "plugin-install",
             "reinit",
             "local-ignore",
@@ -262,6 +263,8 @@ fn every_fix_but_discover_is_applied_by_bare_fix() {
     assert!(FixId::Discover.by_name_only());
     // rename-plane makes a commit every teammate pulls: never automatic (V93g).
     assert!(FixId::RenamePlane.by_name_only());
+    // rename-local moves this machine's folders, not the project's (D-RN5-5).
+    assert!(FixId::RenameLocal.by_name_only());
 }
 
 // ---- local-ignore -------------------------------------------------------------------------

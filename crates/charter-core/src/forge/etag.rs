@@ -59,8 +59,11 @@ pub struct EtagDir {
 /// denies it to read and to write (`sandbox::Denied`, the human-powers class): what is in it was
 /// fetched with the human's sign-in token.
 pub fn root(config_root: &Path) -> PathBuf {
-    crate::machine::dir(config_root).join("forge-etags")
+    crate::machine::dir(config_root).join(DIR)
 }
+
+/// The store's folder inside charter's directory in the config home.
+pub const DIR: &str = "forge-etags";
 
 impl EtagDir {
     /// The store for what the native transport fetched as `account`, under the machine store
