@@ -272,8 +272,14 @@ pub fn disguised_handoff(line: &str) -> bool {
         }
         let first = py_slice(&chars, seg[0].start, seg[0].end);
         let second = py_slice(&chars, seg[1].start, seg[1].end);
+        // Every name the command line has (RN-3). The one spelling the host's rule matches is
+        // still the `charter` one until the hooks written into a project name the new one
+        // (RN-7), so the new name, bare, is refused here for its spelling too.
+        let named = crate::cliname::INSTALLED
+            .iter()
+            .any(|name| first == *name || disguised_as(&first, name));
         if (first.as_str(), second.as_str()) != ("charter", "handoff")
-            && (first == "charter" || disguised_as(&first, "charter"))
+            && named
             && (second == "handoff" || disguised_as(&second, "handoff"))
         {
             return true;

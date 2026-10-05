@@ -39,11 +39,12 @@
 //!   upstream as charter#1172), and every sibling guard already `continue`s past a segment that
 //!   is not its business. This port `continue`s, which moved the recorded answer of the
 //!   read-first row in `fixtures/corpora/shellseg-oracle.jsonl` on purpose (ADR 0046).
-//! * **`is_charter` rather than `base == "charter"`**, so `edm change land` (the pre-rename
-//!   binary) and `python3 -m charter change land` are the same command here as they are to the
-//!   leak guard. Both put charter's own NAME in `words` instead of in `prog`, which is why the
-//!   leading name is dropped from `words` before the table is read. The table entry alone would
-//!   have been a dead line: the lookup used to live under `elif base in ("gh", "glab")`.
+//! * **`is_charter` rather than `base == "charter"`**, so `purlis change land` (the name it
+//!   ships as since RN-3), `edm change land` (the pre-rename binary) and `python3 -m charter
+//!   change land` are the same command here as they are to the leak guard. Some spellings put
+//!   charter's own NAME in `words` instead of in `prog`, which is why the leading name is
+//!   dropped from `words` before the table is read. The table entry alone would have been a
+//!   dead line: the lookup used to live under `elif base in ("gh", "glab")`.
 
 mod merge;
 mod token;
@@ -266,10 +267,12 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
             // **The reader had to widen with the set.** `PUBLISH_FORGE`'s charter row would be a
             // tuple nothing could reach if this branch were still `base in ("gh", "glab")`.
             let forge = base == "gh" || base == "glab";
+            // Every name of charter's own is read as the one its table row is keyed on, so
+            // `purlis change land` and `edm change land` are `charter change land` (RN-3).
             let name = if forge {
                 base.clone()
             } else {
-                CHARTER_PROGS[0].to_string()
+                crate::cliname::ALIAS.to_string()
             };
             // `edm change land` and `python3 -m charter change land` put charter's own NAME in
             // `words` instead of in `prog` — and `-m` drops out with the other flags — so the

@@ -302,7 +302,7 @@ pub fn forge_prose_command(cmd: &str) -> Option<String> {
 /// is keyed on today's verbs. The Python draws the same line.
 pub fn charter_words(prog: &str, argv: &[String]) -> Option<Vec<String>> {
     let base = base_lower(prog);
-    if base == "charter" {
+    if crate::cliname::is_installed(&base) {
         return Some(argv.iter().skip(1).cloned().collect());
     }
     if base.starts_with("python") {
@@ -310,7 +310,7 @@ pub fn charter_words(prog: &str, argv: &[String]) -> Option<Vec<String>> {
         // a `-m` whose next word is not `charter` answers `None` rather than scanning on.
         for k in 1..argv.len().saturating_sub(1) {
             if argv[k] == "-m" {
-                return if argv[k + 1] == "charter" {
+                return if crate::cliname::is_installed(&argv[k + 1]) {
                     Some(argv[k + 2..].to_vec())
                 } else {
                     None
@@ -461,7 +461,10 @@ pub fn forge_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
 /// works is one backslash per backtick: inside double quotes ``\` `` is a literal backtick and
 /// the apostrophes keep working.
 pub fn charter_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
-    if !shellwrap::may_name(cmd, "charter") {
+    if !crate::cliname::INSTALLED
+        .iter()
+        .any(|name| shellwrap::may_name(cmd, name))
+    {
         return None;
     }
     if !may_substitute(cmd) {

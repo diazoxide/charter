@@ -456,6 +456,22 @@ fn a_template_word_is_a_plain_flag_or_value_and_never_a_path_an_assignment_or_a_
 }
 
 #[test]
+fn the_product_itself_is_never_a_declarations_program_by_any_of_its_names() {
+    // It runs whatever its arguments say (`secret exec`, an extension's command), so it is a
+    // launcher as much as `env` is — under the name it ships as and the ones it had (RN-3).
+    for program in ["purlis", "PURLIS", "charter", "edm"] {
+        let why = refused(
+            "aider",
+            &format!("name = \"aider\"\nprogram = {program:?}\n"),
+        );
+        assert!(
+            why.contains("an interpreter or a launcher"),
+            "{program}: {why}"
+        );
+    }
+}
+
+#[test]
 fn a_shell_an_interpreter_a_launcher_or_a_built_ins_program_is_never_a_declarations_program() {
     for program in [
         "sh",

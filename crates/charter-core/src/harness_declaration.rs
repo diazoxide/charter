@@ -1081,6 +1081,8 @@ const LAUNCHERS: &[&str] = &[
     "automator",
     "shortcuts",
     "login",
+    // The product itself, by every name it has had (RN-3): `crate::cliname::RECOGNISED`.
+    "purlis",
     "charter",
     "edm",
 ];

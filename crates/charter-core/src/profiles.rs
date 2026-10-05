@@ -185,8 +185,9 @@ const COMMAND_WORDS: [&str; 54] = [
     "wt",
 ];
 
-/// The names charter itself is invoked under (`charter/hooks.py:837`).
-const CHARTER_PROGS: [&str; 2] = ["charter", "edm"];
+/// The names charter itself is invoked under (`charter/hooks.py:837`), `purlis` among them
+/// (RN-3).
+const CHARTER_PROGS: [&str; 3] = crate::cliname::RECOGNISED;
 
 /// Where a profile came from. A refusal carries the file's name as text, because it may name
 /// `charter.toml`, which never sources a profile.

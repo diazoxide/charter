@@ -1554,8 +1554,9 @@ export const commands = {
 	 */
 	aboutCharter: () => __TAURI_INVOKE<About>("about_charter"),
 	/**
-	 *  Links the app's `charter` into `/usr/local/bin`, asking macOS for an administrator's
-	 *  password when that directory is not this user's to write. Answers the sentence to say.
+	 *  Links the app's command line into `/usr/local/bin` as `purlis` and as `charter`, asking
+	 *  macOS for an administrator's password once when that directory is not this user's to write.
+	 *  Answers the sentence to say.
 	 */
 	installCliOnPath: () => typedError<string, string>(__TAURI_INVOKE("install_cli_on_path")),
 	/**

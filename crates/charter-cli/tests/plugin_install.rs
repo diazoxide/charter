@@ -66,7 +66,9 @@ fn install_wires_both_harnesses_to_this_charter_and_a_second_run_changes_nothing
         "{text}"
     );
 
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_charter"))
+    // The command line itself, `purlis`, though the install ran through its `charter` alias:
+    // a hook runs the binary, not the alias that handed it on (RN-3).
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_purlis"))
         .canonicalize()
         .unwrap();
     let hooks = m.read("config/charter/plugin/hooks/hooks.json");
@@ -147,7 +149,9 @@ fn install_puts_the_opencode_guard_where_opencode_reads_plugins_and_uninstall_ta
     assert_eq!(out.status.code(), Some(0), "{}", said(&out));
     assert!(said(&out).contains("opencode:\n"), "{}", said(&out));
 
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_charter"))
+    // The command line itself, `purlis`, though the install ran through its `charter` alias:
+    // a hook runs the binary, not the alias that handed it on (RN-3).
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_purlis"))
         .canonicalize()
         .unwrap();
     let shim = m.read("home/.config/opencode/plugin/charter.ts");

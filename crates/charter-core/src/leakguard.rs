@@ -110,10 +110,11 @@ const READERS: [&str; 16] = [
 /// cannot know, and forgetting `here` there would be the fail-OPEN direction.
 const CHDIR_BUILTINS: [&str; 2] = ["cd", "pushd"];
 
-/// charter itself, including its pre-rename name — `_CHARTER_PROGS`. Kept because this is a
-/// security guard and the cost of an extra alternative is one string, while the cost of
-/// dropping it is a denial that stops happening on a machine where the old binary is installed.
-pub(crate) const CHARTER_PROGS: [&str; 2] = ["charter", "edm"];
+/// charter itself, by every name it has had — `_CHARTER_PROGS`, widened with `purlis` (RN-3).
+/// Kept because this is a security guard and the cost of an extra alternative is one string,
+/// while the cost of dropping it is a denial that stops happening on a machine where the old
+/// binary is installed.
+pub(crate) const CHARTER_PROGS: [&str; 3] = crate::cliname::RECOGNISED;
 
 /// The state entries whose CONTENT is the secret, as an EXACT name — `_GUARDED_STATE_EXACT`.
 ///

@@ -55,7 +55,9 @@ use std::path::Path;
 
 use crate::forge::Forge;
 use crate::handoffguard::{self, Caller};
-use crate::{commitguard, credguard, floorguard, leakguard, planeroot, proseguard, pyjson};
+use crate::{
+    commitguard, consentspelling, credguard, floorguard, leakguard, planeroot, proseguard, pyjson,
+};
 
 /// What to do when a guard is WRONG about your case (charter#370) — `_OVERRIDE_NOTE`.
 ///
@@ -248,6 +250,14 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
         // than deciding which part of it is safe. Nothing here holds a command anyway.
         return Some(Verdict::new(reason, None, why));
     }
+    // A7b: any consent-gated command spelt under a name the project's consent rules do not
+    // spell, which the host would run with no prompt (RN-3, D-RN3-9). GATED, as A7 is: the
+    // rules it stands in for are a plane's.
+    if plane.is_some()
+        && let Some(why) = consentspelling::refusal(cmd)
+    {
+        return Some(Verdict::new(consentspelling::REASON, None, why));
+    }
     // A8: a commit that would skip the hooks a chat's git runs charter's scan in (SQ-16, ADR
     // 0074). UNGATED: a chat commits in repositories outside any plane. charter's own, after
     // every arm the Python had, so no recorded answer moves.
@@ -348,6 +358,21 @@ mod tests {
             verdict_of(ssh, &fix, true).map(|v| v.reason),
             Some(REASON_SINGLE_CREDENTIAL.to_string())
         );
+    }
+
+    /// A7b, like A7, stands in for a plane's consent rules, so it speaks only in a plane.
+    #[test]
+    fn a_consent_gated_command_under_the_new_name_is_refused_in_a_plane() {
+        let fix = Fixture::new();
+        for cmd in ["purlis report bug --yes x", "purlis ws todo promote 1"] {
+            assert_eq!(verdict_of(cmd, &fix, false), None, "{cmd}: A7b is gated");
+            assert_eq!(
+                verdict_of(cmd, &fix, true).map(|v| v.reason),
+                Some(consentspelling::REASON.to_string()),
+                "{cmd}"
+            );
+        }
+        assert_eq!(verdict_of("charter report bug --yes x", &fix, true), None);
     }
 
     #[test]
