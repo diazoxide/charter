@@ -16,9 +16,18 @@
 //!
 //! # Only what is missing (D-FX3-8)
 //!
-//! The fix fills in an identity; it never replaces one. [`apply`] reads the global identity
-//! again just before it writes, refuses when both keys are set, and otherwise writes only the
-//! unset key(s). The window's form shows a key that is set, locked, from [`current`].
+//! The fix fills in an identity; it never replaces one. Just before it writes, [`apply`] reads
+//! the identity in force in the project, the same view the row reads: every scope, asked from
+//! the project, with includes and `includeIf` followed. It refuses when both keys are set, and
+//! otherwise writes only the unset key(s). The window's form shows a key that is set, locked,
+//! from [`current`] (the global config, includes followed).
+//!
+//! # Not beside an identity picked by folder (D-FX3-9)
+//!
+//! A global config with any `includeIf.<condition>.path` chooses an identity by where a commit
+//! is made. A `[user]` this fix appended would sit after those includes and win in every
+//! folder, replacing the identity the operator arranged for each one. So the fix refuses
+//! and names what to do instead ([`BY_FOLDER`]).
 //!
 //! # Checked in the core
 //!
@@ -66,13 +75,49 @@ impl Current {
     }
 }
 
-/// The global `user.name` and `user.email`, read through the runner the write goes through.
-/// What the window's form shows locked, and what [`apply`] re-reads before it writes.
+/// The global `user.name` and `user.email`, with the files the global config includes
+/// followed, read through the runner the write goes through: what the window's form shows
+/// locked.
 pub fn current() -> Result<Current, String> {
+    let global = |key| {
+        ask(
+            Path::new("/"),
+            &["config", "--global", "--includes", "--get", key],
+        )
+    };
     Ok(Current {
-        name: get_global("user.name")?,
-        email: get_global("user.email")?,
+        name: global("user.name")?,
+        email: global("user.email")?,
     })
+}
+
+/// The identity a commit in `root` is made with: every scope, includes and `includeIf`
+/// followed, asked from `root` — the view the `git identity` row reads (D-FX3-9).
+fn in_force(root: &Path) -> Result<Current, String> {
+    let get = |key| ask(root, &["config", "--get", key]);
+    Ok(Current {
+        name: get("user.name")?,
+        email: get("user.email")?,
+    })
+}
+
+/// What [`apply`] refuses when the global config picks an identity by folder (D-FX3-9).
+pub const BY_FOLDER: &str = "your global git config picks identities by folder \
+     (includeIf); set user.name/user.email yourself";
+
+/// Does the global config, includes followed, carry any `includeIf.<condition>.path`?
+fn picks_by_folder() -> Result<bool, String> {
+    ask(
+        Path::new("/"),
+        &[
+            "config",
+            "--global",
+            "--includes",
+            "--get-regexp",
+            r"^includeif\..*\.path$",
+        ],
+    )
+    .map(|found| !found.is_empty())
 }
 
 /// The longest name or email this fix writes, in characters.
@@ -80,23 +125,34 @@ pub const LIMIT: usize = 256;
 
 /// Write what is MISSING of git's global identity from `name` and `email` (D-FX3-8).
 ///
-/// **Never over what is there.** The global identity is read again immediately before the
-/// write, so a dialog opened before the identity was set from a terminal cannot replace it:
+/// **Never over what is there.** The identity in force in `root` — every scope, includes
+/// followed, the view the doctor's row reads — is read again immediately before the write, so
+/// a dialog opened before the identity was set from a terminal cannot replace it, nor can a
+/// `[user]` appended to the global file shadow one an included file holds:
+/// - a global config that picks identities by folder (`includeIf`): [`Fixed::Refused`]
+///   ([`BY_FOLDER`]), because which identity a commit gets depends on where it is made, and an
+///   appended global `[user]` would change that for every folder (D-FX3-9);
 /// - both keys set: [`Fixed::Refused`], and nothing is written;
 /// - otherwise only the unset key(s) are checked and written. What was given for a key that
 ///   is set is left out, and said when it differs.
 ///
 /// Each value is trimmed first. `Err` is the input for an unset key refused, field by field,
 /// with nothing written. `Ok(Fixed::Ran)` is incomplete when git refused part of the write.
-pub fn apply(name: &str, email: &str) -> Result<Fixed, Invalid> {
+pub fn apply(root: &Path, name: &str, email: &str) -> Result<Fixed, Invalid> {
     let (name, email) = (name.trim(), email.trim());
-    let now = match current() {
+    let unread = |why: String| {
+        Ok(Fixed::Refused(format!(
+            "git's identity could not be read, so nothing was written: {why}"
+        )))
+    };
+    match picks_by_folder() {
+        Ok(true) => return Ok(Fixed::Refused(BY_FOLDER.to_owned())),
+        Ok(false) => {}
+        Err(why) => return unread(why),
+    }
+    let now = match in_force(root) {
         Ok(now) => now,
-        Err(why) => {
-            return Ok(Fixed::Refused(format!(
-                "git's global identity could not be read, so nothing was written: {why}"
-            )));
-        }
+        Err(why) => return unread(why),
     };
     if now.complete() {
         return Ok(Fixed::Refused(format!(
@@ -155,14 +211,11 @@ pub fn apply(name: &str, email: &str) -> Result<Fixed, Invalid> {
     Ok(Fixed::Ran { said, complete })
 }
 
-/// `git config --global --get <key>`: its value, empty when it is unset (git's exit 1).
-fn get_global(key: &str) -> Result<String, String> {
-    let run = crate::worktree::git::run(
-        Path::new("/"),
-        &["config", "--global", "--get", key],
-        crate::doctor::CHECK_TIMEOUT,
-    )
-    .map_err(|e| e.to_string())?;
+/// One `git config` read from `dir`: what it printed, empty when nothing matched (git's
+/// exit 1).
+fn ask(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let run = crate::worktree::git::run(dir, args, crate::doctor::CHECK_TIMEOUT)
+        .map_err(|e| e.to_string())?;
     match run.code {
         Some(0) => Ok(run.line().to_owned()),
         Some(1) => Ok(String::new()),

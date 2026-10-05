@@ -1467,8 +1467,8 @@ export const commands = {
 	 *  the core checks both, then writes them to git's global config, as `charter doctor --fix
 	 *  git-identity --name … --email …` does. Answers the fix's outcome, or each field's refusal.
 	 * 
-	 *  The plane is the window's: the identity is not the project's, but the answer is kept to
-	 *  the dialog that asked, as every fix's is.
+	 *  The plane is the window's: the core reads the identity in force there (every scope, as the
+	 *  doctor's row does) before it writes, and the answer is kept to the dialog that asked.
 	 */
 	planeDoctorFixIdentity: (plane: PlaneId, name: string, email: string) => typedError<DoctorIdentityFixed, string>(__TAURI_INVOKE("plane_doctor_fix_identity", { plane, name, email })),
 	/**

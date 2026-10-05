@@ -3506,7 +3506,7 @@ fn doctor(
         for id in ids {
             let lines = match (id, identity) {
                 (FixId::GitIdentity, Some((name, email))) => {
-                    match registry::identity::apply(name, email) {
+                    match registry::identity::apply(doctor.root(), name, email) {
                         Ok(fixed) => {
                             fix_failed |= !fixed.complete();
                             fixed.lines()
