@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791240423521,
+  "lastUpdate": 1791241771945,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2436,6 +2436,48 @@ window.BENCHMARK_DATA = {
             "value": 104.227304,
             "unit": "ms",
             "extra": "median of 5 runs: 103.225, 103.849, 104.227, 104.372, 104.723 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "272fd673a632c304772e6c95d3822f7de5f3fc9e",
+          "message": "train 47: the status line's alert e2e expects the drawer's Reinit button\n\nNO-6 draws an Alerts drawer row as a Notice whose button is its way out,\nso the workspace-behind-the-layout row offers Reinit in place of the\n`charter ws reinit --all` text the spec looked for. The spec now asks\nfor the row's words and its Reinit button.\n\nRefs #1238\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T02:59:05+04:00",
+          "tree_id": "3bc3a5289adad8e6eaca2688f78c123b978e1d28",
+          "url": "https://github.com/purlis/purlis/commit/272fd673a632c304772e6c95d3822f7de5f3fc9e"
+        },
+        "date": 1791241770994,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5978684999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.590, 0.594, 0.598, 0.599, 0.622 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.003626999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 15.894, 15.971, 16.004, 16.008, 16.577 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.62571,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.249, 101.458, 101.626, 101.913, 102.570 ms"
           }
         ]
       }
