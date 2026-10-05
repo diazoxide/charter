@@ -182,9 +182,90 @@ fn record_matches(rec: &Map<String, Value>, vault: &Vault) -> bool {
 }
 
 /// Whether this machine's registry marks `vault`'s identity as moved AND the pinned binding still
-/// matches. Reads no keyring.
+/// matches, under a base charter knows (a record naming another fails every read, so it is not
+/// shown as held either). Reads no keyring.
 pub fn in_keyring(ctx: &Ctx, vault: &Vault) -> bool {
-    record(ctx, vault).is_some_and(|rec| record_matches(&rec, vault))
+    record(ctx, vault)
+        .is_some_and(|rec| record_matches(&rec, vault) && base_of(&rec, vault).is_ok())
+}
+
+/// The item `source`'s token lives under for record item `id`, under the old base and under the
+/// purlis one: `(charter/@identity/<id>, purlis/@identity/<id>)`.
+pub fn item_services(id: &str) -> (String, String) {
+    (
+        format!("{}/{id}", READ_BASES[1].1),
+        format!("{}/{id}", READ_BASES[0].1),
+    )
+}
+
+/// Every record in this machine's half still read under the old base (it has no [`BASE`]), by
+/// vault name, with its items' ids by source: what the keychain copy (RN-6) copies. Reads no
+/// keyring, and a half that cannot be read has none.
+pub fn on_the_old_base(ctx: &Ctx) -> Vec<(String, BTreeMap<String, String>)> {
+    let Ok(local) = registry::load_local(ctx) else {
+        return Vec::new();
+    };
+    registry::usable_vaults(&local)
+        .iter()
+        .filter_map(|(name, entry)| {
+            let rec = entry.get("config")?.get(MARK)?.as_object()?;
+            if rec.get("held").and_then(Value::as_str) != Some(IN_KEYRING) || rec.contains_key(BASE)
+            {
+                return None;
+            }
+            Some((name.clone(), ids_of(rec)?))
+        })
+        .collect()
+}
+
+/// A record's `ids`, when every one is a string that can end a service.
+fn ids_of(rec: &Map<String, Value>) -> Option<BTreeMap<String, String>> {
+    rec.get("ids")?
+        .as_object()?
+        .iter()
+        .map(|(source, id)| {
+            let id = id.as_str()?;
+            (!id.is_empty() && !id.contains('/') && !id.chars().any(char::is_control))
+                .then(|| (source.clone(), id.to_owned()))
+        })
+        .collect()
+}
+
+/// Switch the record of `vault` in this machine's half to the purlis base (`to_purlis`), or
+/// back to the old one, and change nothing else in it: `false`, with the half untouched, unless
+/// the record is still the one with exactly `ids` on the other base. The keychain copy's switch,
+/// made only after it verified every item (RN-6), and its undo's.
+pub fn switch_base(
+    ctx: &Ctx,
+    vault: &str,
+    ids: &BTreeMap<String, String>,
+    to_purlis: bool,
+) -> Result<bool, VaultError> {
+    let mut local = registry::load_local(ctx)?;
+    let Some(rec) = local
+        .get_mut("vaults")
+        .and_then(Value::as_object_mut)
+        .and_then(|vaults| vaults.get_mut(vault))
+        .and_then(|entry| entry.get_mut("config"))
+        .and_then(|config| config.get_mut(MARK))
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(false);
+    };
+    let on_purlis = rec.get(BASE).and_then(Value::as_str) == Some(BASE_NOW);
+    let on_old = !rec.contains_key(BASE);
+    let same = rec.get("held").and_then(Value::as_str) == Some(IN_KEYRING)
+        && ids_of(rec).as_ref() == Some(ids);
+    if !same || (to_purlis && !on_old) || (!to_purlis && !on_purlis) {
+        return Ok(false);
+    }
+    if to_purlis {
+        rec.insert(BASE.into(), Value::String(BASE_NOW.into()));
+    } else {
+        rec.shift_remove(BASE);
+    }
+    registry::save_local(ctx, &local)?;
+    Ok(true)
 }
 
 /// Each identity variable the vault is read through, and where it is read from now. Never reads

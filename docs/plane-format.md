@@ -3321,7 +3321,7 @@ literal `fixture-not-a-secret`.
 | `account` | string | `--account` | 1Password account pin — **LOCAL_ONLY, never written to the shared half** | stable | `charter/secrets/registry.py:50`, `:298`, `:317` |
 | `env` | object `{TARGET: SOURCE}` | `--env TARGET=SOURCE` / `--token-env X` | env var NAMES only (e.g. `{"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_TOKEN"}`); never a value | stable | `charter/commands_secrets.py:188`, `charter/commands_secrets.py:80`; read `charter/secrets/base.py:291` |
 | `version` | string | hand-written only | `browser://` resolver's npx package version | stable | `charter/secrets/reference.py:104` |
-| `identity` | object | the vault tab's token box / *Move…*, into the **local half only** | The moved-token record: `{"held":"keyring","base":"purlis","bindings":{TARGET:SOURCE},"op_vault":…,"account":…,"op_cmd":…,"op_team":…,"ids":{SOURCE:<id>}}`. Each source is read from the keyring item `<base>/@identity/<id>` (account the source name) first and the environment second. **`base` says which base, and only that one is read:** a move made now writes `"base":"purlis"` and its item under `purlis/@identity/<id>`; a record without the field was made before the rename and is read only from `charter/@identity/<id>` during the rename window (#1261). The keychain copy switches a record to `purlis` after it has verified the copy (RN-6); a `base` charter does not know is an error. A read happens **only while the vault's effective `env`/op-vault/account still equal `bindings`/`op_vault`/`account`** and the pinned `op_cmd`/`op_team` verify. **Read from `.charter/vaults.json` alone**; a committed one is ignored, so a commit cannot mark or redirect (#271 review, U2/U5). charter-app only (#237, ADR 0047 as amended); a Python charter ignores the key | stable | `crates/charter-core/src/secrets/identity.rs` (`MARK`, `BASE`, `READ_BASES`, `record`, `record_matches`, `pinned_op`) |
+| `identity` | object | the vault tab's token box / *Move…*, into the **local half only** | The moved-token record: `{"held":"keyring","base":"purlis","bindings":{TARGET:SOURCE},"op_vault":…,"account":…,"op_cmd":…,"op_team":…,"ids":{SOURCE:<id>}}`. Each source is read from the keyring item `<base>/@identity/<id>` (account the source name) first and the environment second. **`base` says which base, and only that one is read:** a move made now writes `"base":"purlis"` and its item under `purlis/@identity/<id>`; a record without the field was made before the rename and is read only from `charter/@identity/<id>` during the rename window (#1261). `rename-local`'s keychain copy switches a record to `purlis` only after every item of it read back the same from `purlis/@identity/<id>`, and `purlis migrate --undo` removes the field again (RN-6); a `base` charter does not know is an error. A read happens **only while the vault's effective `env`/op-vault/account still equal `bindings`/`op_vault`/`account`** and the pinned `op_cmd`/`op_team` verify. **Read from `.charter/vaults.json` alone**; a committed one is ignored, so a commit cannot mark or redirect (#271 review, U2/U5). charter-app only (#237, ADR 0047 as amended); a Python charter ignores the key | stable | `crates/charter-core/src/secrets/identity.rs` (`MARK`, `BASE`, `READ_BASES`, `record`, `record_matches`, `pinned_op`) |
 
 Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepassword.py:134`,
 `:149`) and never written.
@@ -3435,7 +3435,9 @@ Shape with placeholder values:
 
 charter-app only (ADR 0047); the Python charter has no keyring provider and never reads it.
 
-- **Format:** JSON object: `service` (string, or `null` before the vault's first write) and
+- **Format:** JSON object: `service` (string, or `null` before the vault's first write; a
+  vault made before the rename names `charter/<vault>/<id>`, and `rename-local`'s keychain copy
+  points it at `purlis/<vault>/<id>` once every item read back the same there, RN-6) and
   `keys`, an object `key → {"size": <size band>, "updated": <RFC 3339 UTC, to the second>}`.
   **Never a value.** `size` is `fingerprint::size_band` of the value (`1–15 bytes`,
   `16–31 bytes`, … `1024+ bytes`), never its length.
@@ -5075,7 +5077,11 @@ the same rule holds for the session host's `purlisd/`/`charterd/` in it, for `<d
 for the app's log folder (`dev.purlis.app`/`dev.charter.app`). `rename-local` journals every move
 in `<config>/rename-local/journal.jsonl` and lists each project whose state folder it moved in
 `<config>/rename-local/state-moved`, one resolved root a line; `purlis migrate --undo` replays the
-journal backwards. `.purlis.lock`, beside `<config>` in the config root, is an empty advisory lock:
+journal backwards. The keychain copy (RN-6) journals each item it writes under `purlis/…`
+(`copied`), each keyring vault whose index it points from its `charter/…` service to the purlis
+one (`switched`, with each key's `updated` then) and each identity record it gives
+`"base": "purlis"` (`rebased`), each only after every item read back the same; the undo points
+them back and keeps every item under both names. `.purlis.lock`, beside `<config>` in the config root, is an empty advisory lock:
 the app and `mcp` hold it shared while they run, and `rename-local` takes it exclusively, so it
 never moves the folders under them. The Tauri directories are the app's, identifier `dev.charter.app`. The keyring rows are the operating system's store (ADR 0047).
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
