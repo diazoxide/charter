@@ -244,17 +244,20 @@ Management permission was requested, and the replaced bundle launched and update
 
 ## The `charter` command in a terminal
 
-The app ships its own `charter`, and every chat the app starts finds that one first on its
-`PATH`. A terminal does not, until it is put there:
+The app ships its own command line as `purlis`, with `charter` beside it as an alias that runs
+it, for the rename's window (RN-3). Every chat the app starts finds both first on its `PATH`. A
+terminal does not, until they are put there:
 
 - **macOS**: run **Install `charter` command in PATH** from the command palette. It links
-  `/usr/local/bin/charter` to the `charter` inside `charter.app`, the way VS Code's "Install
-  'code' command in PATH" does, and macOS asks for an administrator's password when that
-  directory is not yours. A link rather than a copy, so the command follows every update the
-  app installs. It never replaces a `charter` somebody else put there — the Python charter,
-  most likely — and says so instead; remove that one first if you want this one.
-- **Linux**: the `.deb` installs `/usr/bin/charter`. The AppImage runs from a mount point that
-  changes at every launch, so there is nothing stable to link to.
+  `/usr/local/bin/purlis` and `/usr/local/bin/charter` to the `purlis` inside the app, the way
+  VS Code's "Install 'code' command in PATH" does, and macOS asks once for an administrator's
+  password when that directory is not yours. Links rather than copies, so the commands follow
+  every update the app installs. A `charter` link an older app made is moved to the new
+  binary. It never replaces a command somebody else put there — the Python charter, most
+  likely — and says so instead, while still linking the other name; remove that one first if
+  you want this one.
+- **Linux**: the `.deb` installs `/usr/bin/purlis` and `/usr/bin/charter`. The AppImage runs from
+  a mount point that changes at every launch, so there is nothing stable to link to.
 
 ## Counting weekly users, without an identifier
 

@@ -287,7 +287,7 @@ fn is_charters_own(claim: &serde_json::Value) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    named == "charter" && verb == "statusline"
+    crate::cliname::is_installed(named) && verb == "statusline"
 }
 
 #[cfg(test)]
@@ -418,6 +418,10 @@ mod tests {
             "charter statusline",
             "'/opt/charter.app/Contents/MacOS/charter' statusline",
             "/usr/local/bin/charter statusline",
+            // The name the command line ships as since RN-3.
+            "purlis statusline",
+            "'/opt/purlis.app/Contents/MacOS/purlis' statusline",
+            "/usr/local/bin/purlis statusline",
         ] {
             let (_d, cwd) = project(&fills(command), ".claude/settings.json");
 
@@ -439,6 +443,8 @@ mod tests {
             "charter status",
             "charter",
             "sh -c 'charter statusline'",
+            "my-purlis-wrapper statusline",
+            "purlis status",
         ] {
             let (_d, cwd) = project(&fills(command), ".claude/settings.json");
 

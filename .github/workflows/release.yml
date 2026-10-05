@@ -379,14 +379,18 @@ jobs:
           CARGO_AUDITABLE_VERSION: 0.7.6
         run: cargo install --locked cargo-auditable --version "$CARGO_AUDITABLE_VERSION"
 
-      - name: The charter binary the app's hooks run, and the built-in extensions
+      # `purlis` is the command line; `charter` is its alias for the rename's window, a small
+      # program that runs the `purlis` beside it (RN-3). Both ship, each as a file of its own.
+      - name: The purlis binary the app's hooks run, its charter alias, and the built-in extensions
         run: cargo auditable build --release --locked -p charter-cli -p persona-statistics
 
       - name: Stage them where Tauri's bundler picks them up
         run: |
           set -euo pipefail
           mkdir -p app/src-tauri/binaries
-          cp target/release/charter "app/src-tauri/binaries/charter-${{ steps.names.outputs.triple }}"
+          for name in purlis charter; do
+            cp "target/release/$name" "app/src-tauri/binaries/$name-${{ steps.names.outputs.triple }}"
+          done
           rm -rf app/src-tauri/extensions
           target/release/persona-statistics assemble app/src-tauri/extensions/persona-statistics
 
@@ -562,7 +566,7 @@ jobs:
           bundle=target/release/bundle/macos/charter.app
           echo "this run asked for: $MACOS_SIGNING"
           codesign --verify --deep --strict --verbose=2 "$bundle"
-          for path in "$bundle" "$bundle/Contents/MacOS/charter"; do
+          for path in "$bundle" "$bundle/Contents/MacOS/purlis" "$bundle/Contents/MacOS/charter"; do
             info=$(codesign -dv --verbose=4 "$path" 2>&1)
             echo "--- $path"
             echo "$info" | grep -E '^(Authority|TeamIdentifier|Signature|CodeDirectory)=' || true
@@ -604,7 +608,8 @@ jobs:
             echo "### $bundle/Contents/MacOS (CFBundleExecutable is '$exe')"
             ls -l "$bundle/Contents/MacOS"
             echo; echo "otool -L of the app:"; otool -L "$bundle/Contents/MacOS/$exe"
-            echo; echo "otool -L of the charter binary its hooks run:"; otool -L "$bundle/Contents/MacOS/charter"
+            echo; echo "otool -L of the purlis binary its hooks run:"; otool -L "$bundle/Contents/MacOS/purlis"
+            echo; echo "otool -L of its charter alias:"; otool -L "$bundle/Contents/MacOS/charter"
             echo; echo "codesign of the bundle:"; codesign -dv --verbose=2 "$bundle" 2>&1 || true
           else
             echo "### what the .deb ships"
@@ -796,10 +801,11 @@ jobs:
           fi
 
       # Last, so a build that is wrong is still downloadable and still says it is wrong. The
-      # app resolves the binary its hooks run as `<the directory of my own exe>/charter`. A
-      # missing sidecar leaves every chat at `unknown`; a sidecar that IS the app's own
-      # executable makes every hook launch a second GUI. Both are invisible until run.
-      - name: The charter binary really is beside the app, and is not the app
+      # app resolves the binary its hooks run as `<the directory of my own exe>/purlis`, and
+      # `charter` beside it is the alias that runs that `purlis` (RN-3). A missing sidecar
+      # leaves every chat at `unknown`; a sidecar that IS the app's own executable makes every
+      # hook launch a second GUI. Both are invisible until run.
+      - name: The purlis binary and its charter alias really are beside the app, and are not the app
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
@@ -807,28 +813,33 @@ jobs:
             # and `pipefail` then fails a perfectly correct .deb (run 35511509471).
             listing=$(dpkg -c dist/*.deb)
             grep '[[:space:]]usr/bin/' <<<"$listing" || true
-            grep -q '[[:space:]]usr/bin/charter$' <<<"$listing" \
-              || { echo "FAIL: no usr/bin/charter in the .deb — no hook would ever fire"; exit 1; }
+            for name in purlis charter; do
+              grep -q "[[:space:]]usr/bin/$name\$" <<<"$listing" \
+                || { echo "FAIL: no usr/bin/$name in the .deb — no hook would ever fire"; exit 1; }
+            done
             n=$(grep -c '[[:space:]]usr/bin/[^/][^/]*$' <<<"$listing" || true)
-            [ "$n" -ge 2 ] || { echo "FAIL: only $n binary in usr/bin — the sidecar IS the app"; exit 1; }
+            [ "$n" -ge 3 ] || { echo "FAIL: only $n binaries in usr/bin — a sidecar IS the app"; exit 1; }
             exit 0
           fi
           bundle=target/release/bundle/macos/charter.app
           dir=$bundle/Contents/MacOS
           exe=$dir/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$bundle/Contents/Info.plist")
-          test -x "$dir/charter" || { echo "FAIL: no executable charter beside the app in $dir"; exit 1; }
           test -x "$exe" || { echo "FAIL: CFBundleExecutable names a file that is not there: $exe"; exit 1; }
-          [ "$(shasum -a 256 "$dir/charter" | cut -d' ' -f1)" != "$(shasum -a 256 "$exe" | cut -d' ' -f1)" ] \
-            || { echo "FAIL: the sidecar IS the app — every hook would launch the GUI"; exit 1; }
-          "$dir/charter" --version
+          for name in purlis charter; do
+            test -x "$dir/$name" || { echo "FAIL: no executable $name beside the app in $dir"; exit 1; }
+            [ "$(shasum -a 256 "$dir/$name" | cut -d' ' -f1)" != "$(shasum -a 256 "$exe" | cut -d' ' -f1)" ] \
+              || { echo "FAIL: the $name sidecar IS the app — every hook would launch the GUI"; exit 1; }
+            "$dir/$name" --version
+          done
 
   # **A CycloneDX SBOM for each platform a release ships** (#584). What it covers, exactly:
   #
-  #   - The Rust crates of the three charter binaries (the app, the `charter` command beside it
-  #     and the `persona-statistics` extension), read out of the built binaries themselves:
+  #   - The Rust crates of the charter binaries (the app, the `purlis` command beside it with
+  #     its `charter` alias, and the `persona-statistics` extension), read out of the built
+  #     binaries themselves:
   #     `build` links each with `cargo auditable`, which embeds the crates it was compiled from.
   #     macOS: read from the unpacked `.app`. Linux: from the unpacked `.deb`. The AppImage
-  #     carries the same three binaries, but it also bundles system libraries (WebKitGTK and
+  #     carries the same binaries, but it also bundles system libraries (WebKitGTK and
   #     what it needs) that this SBOM does not list, and nor does it list the macOS frameworks.
   #   - The web front end's npm packages, from `app/package-lock.json`, production packages
   #     only. The bundler compiles them into the app, where no scanner can see them, so these

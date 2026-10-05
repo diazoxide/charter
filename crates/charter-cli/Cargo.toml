@@ -8,9 +8,16 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# The command line ships as `purlis` (RN-3, #1255). `charter` is the name it had before, kept as
+# an alias for the rename's window (V93k): a small program that runs the `purlis` beside it with
+# the same invocation, so the bundle carries one copy of the CLI rather than two.
+[[bin]]
+name = "purlis"
+path = "src/main.rs"
+
 [[bin]]
 name = "charter"
-path = "src/main.rs"
+path = "src/alias.rs"
 
 [dependencies]
 charter-core.workspace = true

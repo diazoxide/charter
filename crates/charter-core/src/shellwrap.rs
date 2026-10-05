@@ -571,7 +571,7 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
             continue;
         }
         let base = base_lower(&front);
-        if base == "charter"
+        if crate::cliname::is_installed(&base)
             && let Some(verb) = secret_exec_verb(&toks)
         {
             // `charter secret exec <vault> … -- <command>` RUNS `<command>`, with a vault's

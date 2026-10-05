@@ -194,6 +194,15 @@ describe("harnessMemory", () => {
     ];
     expect(harnessMemory(rows, 700)).toEqual({ pids: [801], rssKb: 20_000, largestKb: 20_000 });
   });
+
+  it("finds the host under the name the command line ships as, purlis, too", () => {
+    const rows = [
+      APP,
+      process(820, 1, 40_000, "/Users/me/bin/purlis serve", "purlis"),
+      process(821, 820, 25_000, "/t/fake-harness --name f", "fake-harness"),
+    ];
+    expect(harnessMemory(rows, 700)).toEqual({ pids: [821], rssKb: 25_000, largestKb: 25_000 });
+  });
 });
 
 describe("parseFootprints", () => {

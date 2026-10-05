@@ -1249,7 +1249,9 @@ pub fn brief_heredocs(line: &Line) -> HashSet<usize> {
             && seg.len() >= 2
             && seg[0].bare
             && seg[1].bare
-            && seg[0].text.eq_ignore_ascii_case("charter")
+            && crate::cliname::INSTALLED
+                .iter()
+                .any(|name| seg[0].text.eq_ignore_ascii_case(name))
             && seg[1].text.eq_ignore_ascii_case("handoff")
         {
             briefs.extend(k..k + opened);

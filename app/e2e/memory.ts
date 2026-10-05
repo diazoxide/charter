@@ -142,9 +142,15 @@ function tree(rows: ProcessRow[], root: ProcessRow): ProcessRow[] {
   return found;
 }
 
-/** Whether `row` is the session host, `charterd`, which is `charter serve` (ADR 0068 §1). */
+/**
+ * Whether `row` is the session host, `charterd`, which is `purlis serve` — or `charter serve`,
+ * its alias for the rename's window (ADR 0068 §1; RN-3).
+ */
 function isTheHost(row: ProcessRow): boolean {
-  return runs(row.program, "charter") && /\sserve(\s|$)/.test(row.command);
+  return (
+    (runs(row.program, "purlis") || runs(row.program, "charter")) &&
+    /\sserve(\s|$)/.test(row.command)
+  );
 }
 
 /**

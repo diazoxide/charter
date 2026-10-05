@@ -95,20 +95,26 @@ use hooks::Moved;
 use lifecycle::Quitting;
 use planes::{Launch, PlaneId, Planes, Restoring, Showing};
 
-/// The `charter` binary a hook runs, or none when the app cannot find one.
+/// The command-line binary a hook runs, or none when the app cannot find one.
 ///
 /// Its own directory first, because the app and the binary are built and shipped together —
 /// the one on `PATH` may be an older install, or the Python charter, and a hook pointed at
 /// either would be answering a different program's idea of these events. `CHARTER_BINARY`
 /// overrides it, which is how a scenario test points the hooks at the binary it just built.
 ///
+/// Beside the app, `purlis` first — the command line itself — and then `charter`, the alias
+/// that runs it (RN-3), so a build that carries only the old name still arms its hooks.
+///
 /// It must EXIST: arming a hook at a path that is not there would put an error in the
 /// harness's log on every single event, which is worse than the chats reading `unknown`.
 pub(crate) fn charter_binary() -> Option<PathBuf> {
     let named = charter_core::envvar::var_os("PURLIS_BINARY").map(PathBuf::from);
-    let beside = std::env::current_exe()
+    let dir = std::env::current_exe()
         .ok()
-        .and_then(|exe| Some(exe.parent()?.join("charter")));
+        .and_then(|exe| Some(exe.parent()?.to_owned()));
+    let beside = charter_core::cliname::INSTALLED
+        .iter()
+        .filter_map(move |name| Some(dir.as_ref()?.join(name)));
     named.into_iter().chain(beside).find(|path| path.is_file())
 }
 

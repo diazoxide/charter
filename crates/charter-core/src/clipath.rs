@@ -15,6 +15,10 @@
 //! charter, and replacing it is the operator's decision, not a side effect of a menu item. A
 //! link this action made before, to this app or to an older copy of it, is replaced.
 //!
+//! **Two links for the rename's window** (RN-3, #1255): `purlis`, the name the command line ships
+//! as, and `charter`, the name it had, both at the app's one binary. Each is decided on its own,
+//! so a `charter` installed another way stays where it is and `purlis` is linked all the same.
+//!
 //! The decision is here and pure; the one privileged step (`osascript … with administrator
 //! privileges`) is the app's, because it is a dialog on the operator's screen.
 
@@ -24,8 +28,8 @@ use std::path::{Path, PathBuf};
 /// one VS Code, Homebrew on Intel and most `.pkg` installers use.
 pub const MACOS_DIR: &str = "/usr/local/bin";
 
-/// The command's name.
-pub const COMMAND: &str = "charter";
+/// The commands the install puts there: `purlis` first, then `charter` for the window.
+pub const COMMANDS: [&str; 2] = crate::cliname::INSTALLED;
 
 /// What putting the command at `link` would do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,15 +71,19 @@ pub fn plan(link: &Path, binary: &Path) -> Plan {
     ))
 }
 
-/// Whether `path` is the `charter` inside a macOS app bundle — the one thing this action ever
-/// links to, so a link to one is a link this action made.
+/// Whether `path` is the command line inside a macOS app bundle, by either of its names — the
+/// one thing this action ever links to, so a link to one is a link this action made, before the
+/// rename or after it.
 fn an_apps_binary(path: &Path) -> bool {
     let mut parts = path.components().rev();
     let named = |part: Option<std::path::Component<'_>>, want: &str| {
         part.is_some_and(|p| p.as_os_str() == want)
     };
-    named(parts.next(), COMMAND)
-        && named(parts.next(), "MacOS")
+    parts.next().is_some_and(|p| {
+        p.as_os_str()
+            .to_str()
+            .is_some_and(crate::cliname::is_installed)
+    }) && named(parts.next(), "MacOS")
         && named(parts.next(), "Contents")
         && parts
             .next()
@@ -91,6 +99,19 @@ pub enum Linked {
     Refused(String),
     /// The directory is not this user's to write: the operating system has to ask.
     NeedsAdmin,
+}
+
+/// Put `binary` in `dir` under every name in [`COMMANDS`], as far as this user can: each link
+/// beside the answer for it, in that order.
+pub fn link_all(dir: &Path, binary: &Path) -> Vec<(PathBuf, Linked)> {
+    COMMANDS
+        .iter()
+        .map(|name| {
+            let at = dir.join(name);
+            let answer = link(&at, binary);
+            (at, answer)
+        })
+        .collect()
 }
 
 /// Put `binary` at `link` as a symlink, as far as this user can.
@@ -147,8 +168,11 @@ fn failed(link: &Path, e: &std::io::Error) -> Linked {
 
 /// The sentence a link that is in place is reported with.
 pub fn said(link: &Path, binary: &Path, already: bool) -> String {
+    let name = link
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
     format!(
-        "{} {} → {}. A new terminal finds `charter` there.",
+        "{} {} → {}. A new terminal finds `{name}` there.",
         if already {
             "Already on PATH:"
         } else {
@@ -159,7 +183,8 @@ pub fn said(link: &Path, binary: &Path, already: bool) -> String {
     )
 }
 
-/// Other `charter`s a terminal could find before this one, for the sentence after a link.
+/// Other commands by `link`'s name a terminal could find before it, for the sentence after a
+/// link.
 ///
 /// Only the user directories charter already knows a shell puts on `PATH`
 /// ([`crate::programs::USER_BIN`]): which of those comes first is the operator's shell's
@@ -171,7 +196,7 @@ pub fn others(home: Option<&Path>, link: &Path) -> Vec<PathBuf> {
     };
     crate::programs::USER_BIN
         .iter()
-        .map(|dir| home.join(dir).join(COMMAND))
+        .filter_map(|dir| Some(home.join(dir).join(link.file_name()?)))
         .filter(|other| other != link && std::fs::symlink_metadata(other).is_ok())
         .collect()
 }
@@ -286,6 +311,84 @@ mod tests {
 
     fn link_it(link: &Path, binary: &Path) -> Linked {
         super::link(link, binary)
+    }
+
+    /// The PATH install puts `purlis` on PATH and keeps `charter` there for the rename's window
+    /// (RN-3): two links, both at the app's one binary.
+    #[test]
+    fn the_install_links_purlis_and_keeps_charter_both_at_the_apps_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = app(dir.path());
+        let bin = dir.path().join("bin");
+
+        let answers = link_all(&bin, &binary);
+
+        let linked: Vec<&Path> = answers.iter().map(|(link, _)| link.as_path()).collect();
+        assert_eq!(linked, [bin.join("purlis"), bin.join("charter")]);
+        for (link, answer) in &answers {
+            assert!(matches!(answer, Linked::Done(_)), "{answer:?}");
+            assert_eq!(std::fs::read_link(link).unwrap(), binary);
+        }
+        let Linked::Done(said) = &answers[0].1 else {
+            unreachable!()
+        };
+        assert!(said.contains("`purlis`"), "{said}");
+    }
+
+    /// An install from before the rename left `charter` linked at the app's old `charter`; it is
+    /// the app's, so it is moved to this binary beside the new `purlis` link.
+    #[test]
+    fn a_charter_link_an_older_app_made_is_moved_to_this_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = purlis_app(dir.path());
+        let old = app(&dir.path().join("old"));
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(&old, bin.join("charter")).unwrap();
+
+        for (link, answer) in link_all(&bin, &binary) {
+            assert!(matches!(answer, Linked::Done(_)), "{answer:?}");
+            assert_eq!(std::fs::read_link(&link).unwrap(), binary);
+        }
+    }
+
+    /// A `charter` installed another way stays, and `purlis` is linked all the same: one
+    /// refusal does not cost the operator the other command.
+    #[test]
+    fn somebody_elses_charter_stays_and_purlis_is_linked_anyway() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = purlis_app(dir.path());
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("charter"), "#!/bin/sh\n").unwrap();
+
+        let answers = link_all(&bin, &binary);
+
+        assert!(matches!(answers[0].1, Linked::Done(_)), "{answers:?}");
+        assert_eq!(std::fs::read_link(bin.join("purlis")).unwrap(), binary);
+        assert!(matches!(answers[1].1, Linked::Refused(_)), "{answers:?}");
+        assert_eq!(std::fs::read(bin.join("charter")).unwrap(), b"#!/bin/sh\n");
+    }
+
+    #[test]
+    fn another_purlis_in_a_user_directory_is_named_too() {
+        let home = tempfile::tempdir().unwrap();
+        let theirs = home.path().join(".local/bin/purlis");
+        std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+        std::fs::write(&theirs, "").unwrap();
+
+        assert_eq!(
+            others(Some(home.path()), Path::new("/usr/local/bin/purlis")),
+            [theirs]
+        );
+    }
+
+    /// `<name>.app/Contents/MacOS/purlis`, the binary the app ships the command line as.
+    fn purlis_app(dir: &Path) -> PathBuf {
+        let binary = dir.join("purlis.app/Contents/MacOS/purlis");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "").unwrap();
+        binary
     }
 
     /// A link to a file that is gone was left by an app that has since been moved or deleted:

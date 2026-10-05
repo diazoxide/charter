@@ -446,6 +446,10 @@ fn charter_is_recognised_however_it_is_spelt_including_through_python() {
         "[\"edm\", \"status\"]",
         "[\"/usr/bin/CHARTER\"]",
         "[\"python3\", \"-m\", \"charter\"]",
+        // The name the command line ships as since RN-3, spelt every way the old one is.
+        "[\"purlis\"]",
+        "[\"/usr/bin/PURLIS\", \"status\"]",
+        "[\"python3\", \"-m\", \"purlis\"]",
     ] {
         let dir = plane(
             "",

@@ -71,7 +71,7 @@ fn literal(c: char) -> bool {
 /// The two forge CLIs carry the same verbs (#1068): an irreversible act on the forge asks first
 /// whichever CLI a persona declares. `the_forge_clis_rows_ask_about_the_same_verbs` fails when
 /// one gains a verb the other lacks.
-const DANGEROUS: [(&str, &[&str]); 7] = [
+const DANGEROUS: [(&str, &[&str]); 8] = [
     (
         "kubectl",
         &[
@@ -97,6 +97,8 @@ const DANGEROUS: [(&str, &[&str]); 7] = [
         "agentmail",
         &["send", "reply", "forward", "delete", "remove"],
     ),
+    // The product itself, by every name it has had (RN-3): `crate::cliname::RECOGNISED`.
+    ("purlis", &["secret", "vault", "change"]),
     ("charter", &["secret", "vault", "change"]),
     ("edm", &["secret", "vault", "change"]),
 ];
@@ -282,7 +284,7 @@ pub fn dangerous(binary: &str, args: &[String]) -> bool {
 /// extension that is not installed, a command it does not declare and a config home charter
 /// cannot find all read as writes. A core command is not decided here ([`dangerous`] is).
 pub fn writes_through_an_extension(binary: &str, args: &[String]) -> bool {
-    if binary != "charter" {
+    if !crate::cliname::is_installed(binary) {
         return false;
     }
     let Some((id, command)) = crate::extension::cli::extension_command(args) else {
@@ -1304,11 +1306,18 @@ mod tests {
             !installed,
             "a command the installed manifest says only reads, with the record {expected:?}"
         );
+        // The name the command line ships as answers the same (RN-3).
+        assert_eq!(
+            writes_through_an_extension("purlis", &words("probe list")),
+            !installed
+        );
         for line in ["probe push", "probe", "other list"] {
-            assert!(
-                writes_through_an_extension("charter", &words(line)),
-                "`charter {line}` read as one that only reads"
-            );
+            for name in ["charter", "purlis"] {
+                assert!(
+                    writes_through_an_extension(name, &words(line)),
+                    "`{name} {line}` read as one that only reads"
+                );
+            }
         }
         assert!(!writes_through_an_extension("gh", &words("probe list")));
     }

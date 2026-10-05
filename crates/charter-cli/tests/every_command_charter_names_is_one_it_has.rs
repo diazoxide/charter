@@ -19,6 +19,11 @@
 //! in backticks, after those verbs, or opening a line of a fenced code block — is checked the
 //! same way.
 //!
+//! **Both names** (RN-3, #1255). The command line ships as `purlis` and answers to `charter` for
+//! the rename's window, so a message may name either: `purlis <word>` is read exactly as
+//! `charter <word>` is, and each word is asked of both binaries — a command one name runs and
+//! the other refuses would be a message true under one name only.
+//!
 //! **Asked of the binary, not of a list.** Each word is checked with `charter <word> --help`
 //! (and `charter <word> <sub> --help` where the first has subcommands), so an alias clap
 //! accepts counts and a list here cannot drift from the parser.
@@ -171,7 +176,11 @@ fn skill_texts(page: &str) -> Vec<String> {
             fenced = !fenced;
             continue;
         }
-        if fenced && let Some(rest) = trimmed.strip_prefix("charter ") {
+        if fenced
+            && let Some(rest) = NAMES
+                .iter()
+                .find_map(|name| trimmed.strip_prefix(&format!("{name} ")))
+        {
             out.push(format!("`charter {rest}`"));
         }
     }
@@ -181,7 +190,7 @@ fn skill_texts(page: &str) -> Vec<String> {
 /// `(first word, optional second word)` of every suggestion in `text`.
 fn suggestions(text: &str) -> Vec<(String, Option<String>)> {
     let re = regex::Regex::new(
-        r"(?:`charter ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?|(?:\b[Rr]un|\b[Tt]ry|\b[Uu]se|\bwith|:)\s+charter ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?)",
+        r"(?:`(?:charter|purlis) ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?|(?:\b[Rr]un|\b[Tt]ry|\b[Uu]se|\bwith|:)\s+(?:charter|purlis) ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?)",
     )
     .expect("the pattern compiles");
     re.captures_iter(text)
@@ -199,25 +208,40 @@ fn suggestions(text: &str) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// The names a message may call the command line by: the one it ships as, and its alias.
+const NAMES: [&str; 2] = ["purlis", "charter"];
+
+/// The binary under each name, as this build made them.
+const BINARIES: [&str; 2] = [env!("CARGO_BIN_EXE_purlis"), env!("CARGO_BIN_EXE_charter")];
+
 /// Words that follow "charter" when it is the subject of a sentence rather than a command.
 const PROSE: [&str; 15] = [
     "is", "was", "will", "would", "could", "can", "cannot", "does", "did", "has", "had", "found",
     "reads", "never", "says",
 ];
 
-/// `charter <words> --help`, answered by this build.
-fn help(words: &[&str]) -> Option<String> {
-    let out = Command::new(env!("CARGO_BIN_EXE_charter"))
+/// `<binary> <words> --help`, answered by this build.
+fn help_of(binary: &str, words: &[&str]) -> Option<String> {
+    let out = Command::new(binary)
         .args(words)
         .arg("--help")
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .current_dir(std::env::temp_dir())
         .output()
-        .expect("charter runs");
+        .expect("the binary runs");
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `<words> --help` under every name, or `None` when any one of them refuses it.
+fn help(words: &[&str]) -> Option<String> {
+    let answers: Vec<String> = BINARIES
+        .iter()
+        .map(|binary| help_of(binary, words))
+        .collect::<Option<_>>()?;
+    answers.into_iter().next()
 }
 
 /// Whether `charter first [second]` is a command this binary has.
@@ -316,6 +340,30 @@ fn a_skills_code_block_line_is_a_suggestion_and_prose_outside_one_is_not() {
     assert!(found.contains(&("wt".into(), Some("add".into()))));
     assert!(found.contains(&("persona".into(), Some("list".into()))));
     assert!(!found.iter().any(|(f, _)| f == "is"), "{found:?}");
+}
+
+#[test]
+fn a_suggestion_under_the_new_name_is_read_as_one_under_the_old() {
+    assert_eq!(
+        suggestions("Run `purlis persona show x`, or try purlis wt add y."),
+        vec![
+            ("persona".to_owned(), Some("show".to_owned())),
+            ("wt".to_owned(), Some("add".to_owned())),
+        ]
+    );
+    let page = "```bash\npurlis frob add x\n```\n";
+    let found: Vec<(String, Option<String>)> = skill_texts(page)
+        .iter()
+        .flat_map(|t| suggestions(t))
+        .collect();
+    assert_eq!(found, vec![("frob".to_owned(), Some("add".to_owned()))]);
+    // Asked of both binaries, and each answers.
+    for binary in BINARIES {
+        assert!(help_of(binary, &["wt", "add"]).is_some(), "{binary}");
+        assert!(help_of(binary, &["frob"]).is_none(), "{binary}");
+    }
+    assert!(exists("wt", Some("add")));
+    assert!(!exists("frob", Some("add")));
 }
 
 #[test]

@@ -1774,6 +1774,15 @@ mod merge_rules_tests {
 mod tests {
     use super::*;
 
+    /// The guard's list of consent-gated commands is the list of rules written here.
+    #[test]
+    fn the_consent_patterns_are_the_ask_rules_init_writes() {
+        assert_eq!(
+            [HANDOFF_ASK, REPORT_ASK, PROMOTE_ASK].map(|ask| ask.pattern),
+            settings::CONSENT_PATTERNS
+        );
+    }
+
     /// Verified against CPython 3.14: `commands._fold_entries(...)`.
     #[test]
     fn entries_for_one_file_fold_onto_one_line_in_the_order_they_came() {

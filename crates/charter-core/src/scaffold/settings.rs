@@ -51,6 +51,11 @@ pub const PROMOTE_PATTERN: &str = "charter *todo*promote*";
 /// The same pattern as Claude Code's rule syntax.
 pub const PROMOTE_RULE: &str = "Bash(charter *todo*promote*)";
 
+/// Every consent rule `init` writes, as its pattern: the commands the host asks the operator
+/// about before they run. The guard reads this list to refuse the same commands under a name
+/// the patterns do not spell ([`crate::consentspelling`]), so the two cannot drift apart.
+pub const CONSENT_PATTERNS: [&str; 3] = [HANDOFF_PATTERN, REPORT_PATTERN, PROMOTE_PATTERN];
+
 /// The one hook charter wires itself (`commands._GUARD_HOOK`).
 pub fn guard_hook() -> Value {
     json!({
@@ -449,24 +454,35 @@ pub fn guard_runs_in(groups: &[Value]) -> bool {
 }
 
 /// Every `<name>` that `hooks._HOOK_CMD_RE` — `\bcharter\s+hook\s+([A-Za-z0-9_-]+)` — finds
-/// in `command`, left to right.
+/// in `command`, left to right, under every name the command line is installed as (RN-3): an
+/// installed plugin records the `purlis` path, and its guard is the same guard.
 ///
 /// Hand-rolled to that regex's letter: `charter` must start a word (so `xcharter` does not
 /// count and `/usr/bin/charter` does), the gaps are Python's `\s` (wider than Rust's
 /// whitespace), and the name is the longest run of `[A-Za-z0-9_-]` — so
 /// `charter hook pretooluse-read` names `pretooluse-read`, which is a different handler.
 pub fn handlers(command: &str) -> Vec<String> {
+    let mut found: Vec<(usize, String)> = crate::cliname::INSTALLED
+        .iter()
+        .flat_map(|name| handlers_named(command, name))
+        .collect();
+    found.sort_by_key(|(at, _)| *at);
+    found.into_iter().map(|(_, handler)| handler).collect()
+}
+
+/// [`handlers`] for one program name, each with where its name starts.
+fn handlers_named(command: &str, program: &str) -> Vec<(usize, String)> {
     let word = |c: char| c.is_alphanumeric() || c == '_';
     let space = crate::memstore::is_python_space;
     let mut out = Vec::new();
     let mut from = 0;
-    while let Some(found) = command[from..].find("charter") {
+    while let Some(found) = command[from..].find(program) {
         let at = from + found;
         from = at + 1;
         if command[..at].chars().next_back().is_some_and(word) {
             continue;
         }
-        let rest = &command[at + "charter".len()..];
+        let rest = &command[at + program.len()..];
         let gap = rest.len() - rest.trim_start_matches(space).len();
         if gap == 0 {
             continue;
@@ -486,7 +502,7 @@ pub fn handlers(command: &str) -> Vec<String> {
             continue;
         }
         from = command.len() - rest[gap + name.len()..].len();
-        out.push(name);
+        out.push((at, name));
     }
     out
 }
@@ -711,6 +727,18 @@ mod tests {
             ("charter hookpretooluse", vec![]),
             ("charter\u{1f}hook\u{1f}pretooluse", vec!["pretooluse"]),
             ("charter hook", vec![]),
+            // The name the command line ships as since RN-3: an installed plugin records the
+            // `purlis` path, and its guard is the same guard.
+            ("purlis hook pretooluse", vec!["pretooluse"]),
+            (
+                "/opt/p.app/Contents/MacOS/purlis hook pretooluse",
+                vec!["pretooluse"],
+            ),
+            ("xpurlis hook pretooluse", vec![]),
+            (
+                "purlis hook stop && charter hook sessionstart",
+                vec!["stop", "sessionstart"],
+            ),
         ] {
             assert_eq!(handlers(command), want, "{command:?}");
         }

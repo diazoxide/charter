@@ -283,7 +283,8 @@ fn reference() -> &'static Regex {
         let slot = REFERENCE_SLOT;
         let alternatives = [
             format!(r"vault:(?P<vault>{slot})/(?P<key>{slot})"),
-            format!(r"charter secret get (?P<cli_vault>{slot}) (?P<cli_key>{slot})"),
+            // Either name the command line answers to (RN-3).
+            format!(r"(?:charter|purlis) secret get (?P<cli_vault>{slot}) (?P<cli_key>{slot})"),
             format!(r"op://(?P<op_vault>{slot})/(?P<op_item>{slot})/(?P<op_field>{slot})"),
             format!(r"vault://(?P<path>{slot}(?:/{slot})*)#(?P<field>{slot})"),
         ]
@@ -805,6 +806,8 @@ mod tests {
             "token: vault:forge/gh",
             "token: \"vault:forge/gh\"",
             "token: 'charter secret get forge token'",
+            // The name the command line ships as since RN-3.
+            "token: 'purlis secret get forge token'",
             "token: op://plane/forge/token",
             "token: vault://plane/forge#token",
         ] {
