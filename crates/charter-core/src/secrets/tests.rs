@@ -705,7 +705,9 @@ fn a_record_from_before_the_rename_reads_only_its_charter_item() {
 
     // A base charter does not know is refused, never guessed.
     set_base(&ctx, Some("charterx"));
-    assert!(read().is_err());
+    let refused = read().unwrap_err().message;
+    assert!(refused.contains("keyring base"), "{refused}");
+    assert!(!refused.contains("  "), "{refused:?}");
 }
 
 #[test]

@@ -73,7 +73,8 @@ fn base_of(rec: &Map<String, Value>, vault: &Vault) -> Result<&'static str, Vaul
         .map(|(_, base)| *base)
         .ok_or_else(|| {
             VaultError::new(format!(
-                "vault '{}' has a moved identity whose record names a keyring base charter does                  not know. Put the token in again from the vault's tab.",
+                "vault '{}' has a moved identity whose record names a keyring base charter does \
+                 not know. Put the token in again from the vault's tab.",
                 vault.name
             ))
         })
