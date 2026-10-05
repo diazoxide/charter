@@ -89,7 +89,10 @@ export function RawEditor({
 }: {
   raw: RawFile;
   draft: RawDraft | undefined;
-  onDraft: (to: RawDraft | undefined) => void;
+  /** Sets the edit, or works it out from the edit as it now is. */
+  onDraft: (
+    to: RawDraft | undefined | ((now: RawDraft | undefined) => RawDraft | undefined),
+  ) => void;
 }) {
   const heading = useId();
   const box = useRef<HTMLTextAreaElement>(null);
@@ -106,12 +109,15 @@ export function RawEditor({
 
   const save = async () => {
     if (!draft || !dirty) return;
+    const sent = draft.text;
     setSaving(true);
-    const why = await raw.save(draft.base, draft.text).catch((err: unknown) => [String(err)]);
+    const why = await raw.save(draft.base, sent).catch((err: unknown) => [String(err)]);
     setSaving(false);
     setRefused(why);
-    // Once written, the file is what was written: the edit is over.
-    if (why === undefined) onDraft(undefined);
+    // Once written, the file is what was written: the edit is over, unless more was typed
+    // while the save was on its way, which is then an edit of what was written.
+    if (why === undefined)
+      onDraft((now) => (now && now.text !== sent ? { base: sent, text: now.text } : undefined));
     focus();
   };
 

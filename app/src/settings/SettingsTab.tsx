@@ -274,7 +274,12 @@ function Shown({
               key={rawFile.id}
               raw={rawFile}
               draft={drafts[rawFile.id]}
-              onDraft={(to) => setDrafts((was) => ({ ...was, [rawFile.id]: to }))}
+              onDraft={(to) =>
+                setDrafts((was) => ({
+                  ...was,
+                  [rawFile.id]: typeof to === "function" ? to(was[rawFile.id]) : to,
+                }))
+              }
             />
           ) : (
             group && <ShownGroup key={group.id} group={group} driver={driver} />
