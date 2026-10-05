@@ -487,6 +487,7 @@ impl Doctor {
         rows.push(deferred::row("plane-root guard", deferred::GUARD));
         rows.push(deferred::row("guard seen", deferred::GUARD));
         rows.push(plane::nested(self));
+        rows.extend(plane::renamed_leftovers(self));
         rows.push(clones::workspace_clones(self));
         rows.extend(clones::hidden_agents_md(self));
         rows.push(deferred::row("workspace layer", deferred::WORKSPACE_LAYER));

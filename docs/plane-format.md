@@ -434,6 +434,11 @@ scaffold, `inventory/repos.json`, `docs/topology.md`, and the generated README r
 - **Marker:** `charter.toml` at the directory — `is_file`, never a directory
   (`charter/root.py:17`, `charter/root.py:62`). **Status: stable** — it is the one thing a
   second implementation must agree on to find the same plane.
+  **Rename window (#1253, RN-1):** `purlis.toml` marks a plane too. When a directory holds
+  both, `purlis.toml` is the manifest and `charter.toml` is ignored (V93e), and the doctor's
+  `renamed leftovers` row names it. The state folder is `.purlis/` when that folder exists,
+  else `.charter/`. Every name the rename moves, with its old spellings, is in
+  `crates/charter-core/src/names.rs`.
 - **Resolution order** (`charter/root.py:32`, `find_root`):
   1. `$CHARTER_ROOT` wins outright; it is `expanduser`'d and `resolve`'d, and a value with no
      `charter.toml` under it **raises** rather than falling back to the walk

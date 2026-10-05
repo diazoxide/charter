@@ -1,9 +1,25 @@
-//! The control plane: the directory whose `charter.toml` everything else hangs off.
+//! The control plane: the directory whose `purlis.toml` or `charter.toml` everything else
+//! hangs off.
 
 use std::path::{Path, PathBuf};
 
-/// The file that marks a directory as a plane root.
+use crate::names::{self, Found};
+
+/// The OLD name of the file that marks a directory as a plane root, which the call sites not yet
+/// moved onto [`crate::names`] still join. A plane is recognised by either name ([`is_plane`]);
+/// [`manifest`] says which file a plane's manifest is.
 pub const MANIFEST: &str = "charter.toml";
+
+/// Whether `dir` is a plane root: it holds a `purlis.toml` or a `charter.toml` FILE.
+pub fn is_plane(dir: &Path) -> bool {
+    names::PLANE_MANIFEST.file_in(dir).found != Found::Neither
+}
+
+/// The manifest of the plane at `root`: `purlis.toml` when it is there, else `charter.toml`
+/// when that is, else `purlis.toml` — the purlis name wins (V93e).
+pub fn manifest(root: &Path) -> PathBuf {
+    names::PLANE_MANIFEST.file_in(root).name
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PlaneError {
@@ -112,7 +128,7 @@ fn worktree_plane_above(here: &Path) -> Option<PathBuf> {
 ///
 /// `is_file`, never `exists`: a DIRECTORY called `charter.toml` is not a marker.
 fn marked_above(start: &Path) -> Option<&Path> {
-    start.ancestors().find(|dir| dir.join(MANIFEST).is_file())
+    start.ancestors().find(|dir| is_plane(dir))
 }
 
 /// The plane a process should act on: `$CHARTER_ROOT` if it is set, else [`find_root`] from
@@ -174,7 +190,7 @@ pub fn place(cwd: &Path) -> Place {
     if let Some(named) = crate::steer::var_os("CHARTER_ROOT").filter(|v| !v.is_empty()) {
         let named = expand_user(Path::new(&named));
         if let Ok(root) = named.canonicalize()
-            && root.join(MANIFEST).is_file()
+            && is_plane(&root)
         {
             return Place {
                 root,
@@ -238,10 +254,20 @@ pub fn standing_in_nested_plane(start: &Path) -> Option<PathBuf> {
 /// directory to keep one vault and one state across several clones. It is here rather than in
 /// either caller because `save` WRITES the push record and `doctor` READS it, and a state
 /// directory the two disagree about is a record written where nothing looks for it.
+///
+/// **`.purlis/` only when it is there** (RN-1). Otherwise `.charter/`, whether or not it exists
+/// yet: every writer not yet moved onto [`crate::names`] still writes `.charter/…` itself, so
+/// answering `.purlis/` for a fresh plane would split its state between two folders.
 pub fn state_dir(root: &Path) -> PathBuf {
     match crate::steer::var_os("CHARTER_HOME") {
         Some(home) if !home.is_empty() => PathBuf::from(home),
-        _ => root.join(".charter"),
+        _ => {
+            let at = names::STATE_DIR.dir_in(root);
+            match at.found {
+                Found::Purlis => at.name,
+                Found::Old | Found::Neither => root.join(names::STATE_DIR.newest_old()),
+            }
+        }
     }
 }
 
@@ -301,7 +327,7 @@ impl std::fmt::Display for CloneKey {
 /// present there too.
 pub fn plane_of(marked: &Path) -> PathBuf {
     match main_worktree_of(marked) {
-        Some(main) if main.join(MANIFEST).is_file() => main,
+        Some(main) if is_plane(&main) => main,
         _ => marked.to_path_buf(),
     }
 }
@@ -358,7 +384,7 @@ pub(crate) fn outermost(marked: &Path) -> PathBuf {
 pub(crate) fn enclosing(root: &Path) -> Option<PathBuf> {
     let here = root.canonicalize().ok()?;
     here.ancestors().skip(1).find_map(|parent| {
-        if !parent.join(MANIFEST).is_file() {
+        if !is_plane(parent) {
             return None;
         }
         let spaces = parent.join("workspaces").canonicalize().ok()?;
@@ -486,6 +512,85 @@ mod tests {
         ] {
             assert_eq!(CloneKey::parse(word), None, "{word:?}");
         }
+    }
+
+    // ---- the rename window (RN-1, V93e): `purlis.toml` or `charter.toml` ------------- //
+
+    #[test]
+    fn a_project_marked_only_by_the_old_name_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("charter.toml"), "").unwrap();
+        let deep = root.join("workspaces/ide/svc");
+        fs::create_dir_all(&deep).unwrap();
+
+        assert_eq!(find_root(&deep), Ok(root.clone()));
+        assert_eq!(manifest(&root), root.join("charter.toml"));
+    }
+
+    #[test]
+    fn a_project_marked_only_by_the_purlis_name_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("purlis.toml"), "").unwrap();
+        let deep = root.join("workspaces/ide/svc");
+        fs::create_dir_all(&deep).unwrap();
+
+        assert_eq!(find_root(&deep), Ok(root.clone()));
+        assert!(is_plane(&root));
+        assert_eq!(manifest(&root), root.join("purlis.toml"));
+    }
+
+    #[test]
+    fn a_project_marked_by_both_names_reads_the_purlis_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::write(root.join("charter.toml"), "").unwrap();
+        fs::write(root.join("purlis.toml"), "").unwrap();
+
+        assert_eq!(find_root(&root), Ok(root.clone()));
+        assert_eq!(manifest(&root), root.join("purlis.toml"));
+    }
+
+    #[test]
+    fn a_directory_marked_by_neither_name_is_no_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        // A FOLDER of the new name is not a marker, as a folder of the old name never was.
+        fs::create_dir(root.join("purlis.toml")).unwrap();
+
+        assert!(!is_plane(&root));
+        assert!(find_root(&root).is_err());
+    }
+
+    #[test]
+    fn a_project_inside_another_projects_workspaces_hops_out_whichever_name_each_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let outer = dir.path().canonicalize().unwrap();
+        fs::write(outer.join("purlis.toml"), "").unwrap();
+        let inner = outer.join("workspaces/ide/clone");
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(inner.join("charter.toml"), "").unwrap();
+
+        assert_eq!(find_root(&inner), Ok(outer));
+    }
+
+    #[test]
+    fn the_state_folder_is_the_purlis_one_only_when_it_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        // Neither: the old name, which every unmoved writer still uses — so behaviour does
+        // not change for a project with only old names, nor split its state in two.
+        assert_eq!(state_dir(&root), root.join(".charter"));
+
+        fs::create_dir(root.join(".charter")).unwrap();
+        assert_eq!(state_dir(&root), root.join(".charter"));
+
+        fs::create_dir(root.join(".purlis")).unwrap();
+        assert_eq!(state_dir(&root), root.join(".purlis"));
+
+        fs::remove_dir(root.join(".charter")).unwrap();
+        assert_eq!(state_dir(&root), root.join(".purlis"));
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //!
 //! **Precedence (V93e).** The purlis name wins. An old name is read only when the purlis name
 //! is absent; when both exist the old one is a *leftover*, which the doctor reports
-//! ([`crate::doctor`]'s `renamed-leftover` row). [`Name::pick`] is that rule, written once, over
+//! (the doctor's `renamed leftovers` row). [`Name::pick`] is that rule, written once, over
 //! any notion of "exists" — a file, a folder, an environment variable, a keychain item.
 //!
 //! This is the EXPAND step of an expand–contract rename: callers move onto these entries one
@@ -97,6 +97,16 @@ impl Name {
         std::iter::once(self.write)
             .chain(self.reads.iter().copied())
             .chain(self.history.iter().copied())
+    }
+
+    /// The newest old spelling: what a writer not yet moved onto this module still writes.
+    /// The purlis name for an entry that has no old one.
+    pub fn newest_old(&self) -> &'static str {
+        self.reads
+            .first()
+            .or(self.history.first())
+            .copied()
+            .unwrap_or(self.write)
     }
 
     /// Whether `text` is any spelling this name has ever had.
@@ -536,6 +546,42 @@ pub const ALL: &[Name] = &[
     BUNDLE_ID,
     BINARY,
 ];
+
+/// The names a plane root holds, and whether each is a file or a folder: what the doctor's
+/// `renamed leftovers` row looks at.
+pub const IN_PLANE_ROOT: &[(Name, Shape)] = &[
+    (PLANE_MANIFEST, Shape::File),
+    (LOCAL_SETTINGS, Shape::File),
+    (SCAN_ALLOW, Shape::File),
+    (STATE_DIR, Shape::Folder),
+];
+
+/// What a name on disk must be to count as there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    File,
+    Folder,
+}
+
+impl Name {
+    /// [`Self::file_in`] or [`Self::dir_in`], by `shape`.
+    pub fn shaped_in(&self, dir: &Path, shape: Shape) -> At {
+        match shape {
+            Shape::File => self.file_in(dir),
+            Shape::Folder => self.dir_in(dir),
+        }
+    }
+}
+
+/// Every name in the plane at `root` that exists under more than one spelling: the spelling
+/// read, and the ones beside it that are ignored. Empty for a plane with one spelling of each.
+pub fn leftovers_in_plane(root: &Path) -> Vec<At> {
+    IN_PLANE_ROOT
+        .iter()
+        .map(|(name, shape)| name.shaped_in(root, *shape))
+        .filter(|at| !at.leftovers.is_empty())
+        .collect()
+}
 
 #[cfg(test)]
 #[path = "names_tests.rs"]

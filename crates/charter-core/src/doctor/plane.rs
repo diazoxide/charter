@@ -1,4 +1,5 @@
-//! `nested plane` and `front door`: which plane answered, and whose identity it opens with.
+//! `nested plane`, `renamed leftovers` and `front door`: which plane answered, under which
+//! name, and whose identity it opens with.
 
 use std::path::{Path, PathBuf};
 
@@ -223,4 +224,36 @@ fn is_persona(personas: &Path, name: &str) -> bool {
     crate::contain::segment_ok(name)
         && (personas.join(name).join("persona.md").exists()
             || personas.join(format!("{name}.md")).exists())
+}
+
+/// `renamed leftovers` (RN-1, V93e): a name in the plane root that exists under both its
+/// purlis and its old spelling. Only the purlis one is read, so whatever the old one holds is
+/// silently ignored — state split between two names.
+///
+/// **No row unless there is a leftover**: a plane with only old names, or only new ones, is
+/// what the window expects, and its doctor prints exactly what it printed before the rename.
+pub(super) fn renamed_leftovers(d: &Doctor) -> Option<Row> {
+    let file = |path: &Path| {
+        path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        )
+    };
+    let found: Vec<String> = crate::names::leftovers_in_plane(&d.root)
+        .iter()
+        .flat_map(|at| {
+            let read = file(at.path());
+            at.leftovers
+                .iter()
+                .map(move |old| format!("{} ({read} is read)", file(old)))
+        })
+        .collect();
+    (!found.is_empty()).then(|| {
+        Row::warn(
+            "renamed leftovers",
+            format!("ignored beside their new name: {}", found.join(", ")),
+            "When both names exist only the new one is read, so nothing under the old name \
+             is used. Move anything you still need into the new one, then delete the old one.",
+        )
+    })
 }
