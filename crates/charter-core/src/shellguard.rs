@@ -214,7 +214,7 @@ const ZDOTDIR_ENV: &str = "ZDOTDIR";
 fn put(path: &Path, text: &str, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let beside = path.with_extension(format!("charter-{}", std::process::id()));
+    let beside = path.with_extension(format!("purlis-{}", std::process::id()));
     std::fs::write(&beside, text)?;
     std::fs::set_permissions(&beside, std::fs::Permissions::from_mode(mode))?;
     std::fs::rename(&beside, path).inspect_err(|_| {
@@ -244,17 +244,18 @@ if [ -x "$charter" ]; then
 fi
 # The app that wrote this has gone: run the real one, without this directory on PATH. Once
 # only, so a PATH that names this directory another way cannot bring it back here for ever.
-if [ -n "$CHARTER_SHIM_PASSED" ]; then
+if [ -n "${passed}" ]; then
   echo "charter: no {word} on PATH outside charter's shell-tab shims" >&2
   exit 127
 fi
-CHARTER_SHIM_PASSED=1
-export CHARTER_SHIM_PASSED
+{passed}=1
+export {passed}
 PATH=$(printf '%s\n' "$PATH" | tr ':' '\n' | grep -vxF "$shims" | paste -s -d : -)
 export PATH
 exec {word} "$@"
 "#,
         command = COMMAND,
+        passed = format!("{}SHIM_PASSED", crate::names::ENV_PREFIX.write),
     )
 }
 

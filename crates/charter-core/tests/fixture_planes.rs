@@ -1413,6 +1413,27 @@ fn only_the_planes_own_data_directories_are_writable() {
 }
 
 #[test]
+fn persona_state_is_data_in_whichever_state_folder_the_plane_has() {
+    charter_core::unsteered!();
+    // A plane rename-local has moved keeps its state in `.purlis/` (RN-2z): persona memory
+    // there is data, and the old folder's beside it is not.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("purlis.toml"), "schema = 1\n").unwrap();
+    std::fs::create_dir_all(root.join(".purlis")).unwrap();
+    assert_eq!(
+        charter_core::contain::writable(root, &root.join(".purlis/persona-state/s/x.md")),
+        Ok(())
+    );
+    for refused in [".purlis/vaults/x.json", ".charter/persona-state/s/x.md"] {
+        assert!(
+            charter_core::contain::writable(root, &root.join(refused)).is_err(),
+            "{refused} is not a data directory"
+        );
+    }
+}
+
+#[test]
 fn a_record_missing_a_field_is_no_record_at_all() {
     charter_core::unsteered!();
     // The consent bypass this guards: if a missing `env` defaulted to empty instead of

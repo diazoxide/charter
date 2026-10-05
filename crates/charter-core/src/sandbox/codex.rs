@@ -349,7 +349,7 @@ fn replace(path: &Path, bytes: &[u8], mode: u32) {
         .map_or(0, |since| since.as_nanos());
     let Some(name) = path.file_name() else { return };
     let temp = path.with_file_name(format!(
-        "{}.charter-{}-{}-{nanos}",
+        "{}.purlis-{}-{}-{nanos}",
         name.to_string_lossy(),
         std::process::id(),
         MADE.fetch_add(1, Ordering::SeqCst)

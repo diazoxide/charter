@@ -196,7 +196,7 @@ pub use cli::CliCommand;
 pub const RECORD: &str = "extensions.json";
 
 /// The one file that makes a directory an extension.
-pub const MANIFEST: &str = "charter-extension.json";
+pub const MANIFEST: &str = crate::names::EXTENSION_MANIFEST.reads[0];
 
 /// The one version of the record charter writes and reads. Any other version reads as an
 /// unreadable record — which asks about everything and refuses to clobber — because there is

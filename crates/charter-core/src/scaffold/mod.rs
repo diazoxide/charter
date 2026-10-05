@@ -193,6 +193,13 @@ impl InitArgs {
     }
 }
 
+/// The variable the project's committed `.claude/settings.json` names its harness under:
+/// spelled for the plane at `root` ([`crate::names::Name::writes_for`]), so a project not yet
+/// migrated keeps the name a teammate's older build reads.
+fn harness_env(root: &Path) -> String {
+    format!("{}HARNESS", crate::names::ENV_PREFIX.writes_for(root))
+}
+
 /// The `.gitignore` a fresh plane gets (`commands._GITIGNORE_BASELINE`).
 pub const GITIGNORE_BASELINE: &str = "\
 # Per-task workspaces (workspaces/<name>/). LOCAL by default = fully private (clones,
@@ -487,7 +494,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
 
     let settings_ok = settings_gate(&mut run, root);
     if settings_ok {
-        match settings::ensure_env(root, "CHARTER_HARNESS", "claude-code") {
+        match settings::ensure_env(root, &harness_env(root), "claude-code") {
             Wrote::Created => run.created.push(".claude/settings.json (env)".to_owned()),
             // Only an ask or allow rule can meet a deny; an `env` key never does.
             Wrote::Present | Wrote::Denied => {
@@ -704,7 +711,7 @@ pub fn reinit(place: &Place) -> Outcome {
 
     let settings_ok = settings_gate(&mut run, root);
     if settings_ok {
-        match settings::ensure_env(root, "CHARTER_HARNESS", "claude-code") {
+        match settings::ensure_env(root, &harness_env(root), "claude-code") {
             Wrote::Created => run.created.push(".claude/settings.json (env)".to_owned()),
             Wrote::Failed(path, e) => write_failed(&mut run, &path, &e),
             _ => {}
@@ -2965,6 +2972,25 @@ mod tests {
         }
         assert_eq!(outcome.said, said);
         assert_eq!(outcome.code, 0);
+    }
+
+    /// The harness variable in the committed settings is spelled for the plane (RN-2z): a
+    /// migrated plane gets the purlis name, an unmigrated one keeps the name older builds read.
+    #[test]
+    fn reinit_names_the_harness_variable_as_the_plane_is_spelled() {
+        for (manifest, wanted, not) in [
+            ("purlis.toml", "PURLIS_HARNESS", "CHARTER_HARNESS"),
+            ("charter.toml", "CHARTER_HARNESS", "PURLIS_HARNESS"),
+        ] {
+            let (_dir, root) = empty_plane();
+            std::fs::write(root.join(manifest), "schema = 1\n").expect("a manifest");
+
+            reinit(&at(&root, true));
+
+            let written = std::fs::read_to_string(root.join(settings::SETTINGS)).expect("settings");
+            assert!(written.contains(wanted), "{manifest}: {written}");
+            assert!(!written.contains(not), "{manifest}: {written}");
+        }
     }
 
     /// `cmd_reinit`'s blocked branch: the blocker in `reinit`'s words, then `  created:` and
