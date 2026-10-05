@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791209636260,
+  "lastUpdate": 1791212863390,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2142,6 +2142,48 @@ window.BENCHMARK_DATA = {
             "value": 101.824378,
             "unit": "ms",
             "extra": "median of 5 runs: 100.878, 101.220, 101.824, 101.891, 102.641 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "79d4fd6ad30b7f2d86456176e1e5b1fc19a4e7b2",
+          "message": "rename train 1: pin the keychain and 1Password old names RN-4 moved\n\nRN-1's review round pinned identity::SERVICE_BASE and onepassword::TAG\nto their entries' old names. RN-4 moved both to the purlis spelling, so\nin the train they are pinned to `write`, and the old names each entry\nstill reads are pinned through the constants that read them:\nkeyring::OWN_PREFIXES[1], identity::READ_BASES[1] and onepassword's\nOLD_TAG. The pin count matches the old names held again.\n\nRefs #1254\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T19:04:59+04:00",
+          "tree_id": "24354a48dc7dae5836f9b5fd5e786f9833b47d4e",
+          "url": "https://github.com/purlis/purlis/commit/79d4fd6ad30b7f2d86456176e1e5b1fc19a4e7b2"
+        },
+        "date": 1791212862223,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.47235150000000004,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.469, 0.470, 0.472, 0.487, 0.493 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.347838,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.205, 16.332, 16.348, 16.393, 16.408 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.487864,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.552, 100.905, 101.488, 101.562, 101.838 ms"
           }
         ]
       }
