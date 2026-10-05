@@ -110,7 +110,8 @@ fn fix_installs_charters_plugin_says_what_it_did_and_then_reports() {
 
     let out = doctor_with(&root, &home, &["--json", "--fix"], &vars);
     let said = String::from_utf8_lossy(&out.stderr);
-    assert!(said.contains("codex:\n  done "), "{said}");
+    assert!(said.contains("fix plugin-install:\n"), "{said}");
+    assert!(said.contains("  codex:\n    done "), "{said}");
     let after = rows(&out);
     let install = row(&after, "plugin install");
     assert_eq!(install["status"], "ok", "{install}");
@@ -266,4 +267,178 @@ fn fix_with_an_id_no_fix_has_is_refused_and_names_the_fixes() {
         "it names the fixes there are: {said}"
     );
     assert!(!root.join("personas").exists(), "nothing was fixed");
+}
+
+/// git, for a test's own setup, with nothing of the developer's config.
+fn git(root: &Path, args: &[&str]) {
+    let ran = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", root.join("home"))
+        .output()
+        .expect("git runs");
+    assert!(ran.status.success(), "git {args:?}: {ran:?}");
+}
+
+#[test]
+fn fix_local_ignore_adds_the_one_ignore_line_and_reports_the_profiles_clean() {
+    let (_d, root) = plane();
+    git(&root, &["init", "-q"]);
+    std::fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
+    std::fs::write(
+        root.join("charter.local.toml"),
+        "[harness.claude-work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    )
+    .unwrap();
+    let home = root.join("home");
+    let before = rows(&doctor(&root, &home, &["--json"]));
+    assert_eq!(row(&before, "harness profiles")["fix"], "local-ignore");
+
+    let out = doctor(&root, &home, &["--json", "--fix", "local-ignore"]);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix local-ignore:"), "{said}");
+    assert!(said.contains("/charter.local.toml"), "{said}");
+    let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(ignore.starts_with("node_modules/\n"), "{ignore:?}");
+    assert!(
+        ignore.lines().any(|l| l == "/charter.local.toml"),
+        "{ignore:?}"
+    );
+    let profiles = rows(&out);
+    let profiles = row(&profiles, "harness profiles");
+    assert_eq!(profiles["status"], "ok", "{profiles}");
+    assert!(profiles.get("fix").is_none(), "{profiles}");
+    // `--fix <id>` is that fix alone: bare `--fix`'s ask rule is not added.
+    assert!(!root.join(".claude/settings.json").exists(), "{said}");
+}
+
+#[test]
+fn fix_local_ignore_on_a_tracked_local_file_is_refused_and_untracks_nothing() {
+    let (_d, root) = plane();
+    git(&root, &["init", "-q"]);
+    std::fs::write(root.join("charter.local.toml"), "[harness]\n").unwrap();
+    git(&root, &["add", "charter.local.toml"]);
+
+    let out = doctor(&root, &root.join("home"), &["--fix", "local-ignore"]);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("✗ refused:"), "{said}");
+    assert!(
+        said.contains("git rm --cached charter.local.toml"),
+        "{said}"
+    );
+    assert!(!root.join(".gitignore").exists(), "{said}");
+}
+
+#[test]
+fn fix_memory_optimize_links_an_unindexed_memory_and_reports_the_indexes_clean() {
+    let (_d, root) = plane();
+    let mem = root.join("workspaces/alpha/memory");
+    std::fs::create_dir_all(&mem).unwrap();
+    std::fs::write(mem.join("MEMORY.md"), "").unwrap();
+    std::fs::write(mem.join("note.md"), "# Note\nkept\n").unwrap();
+    let home = root.join("home");
+    let before = rows(&doctor(&root, &home, &["--json"]));
+    assert_eq!(row(&before, "memory indexes")["fix"], "memory-optimize");
+
+    let out = doctor(&root, &home, &["--json", "--fix", "memory-optimize"]);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix memory-optimize:"), "{said}");
+    assert!(said.contains("repaired index"), "{said}");
+    assert!(
+        std::fs::read_to_string(mem.join("MEMORY.md"))
+            .unwrap()
+            .contains("(note.md)")
+    );
+    assert_eq!(row(&rows(&out), "memory indexes")["status"], "ok");
+}
+
+#[test]
+fn fix_plugin_install_installs_the_plugin_alone() {
+    let (_d, root) = plane();
+    let home = root.join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let vars = [("CHARTER_CONFIG_HOME", root.to_str().unwrap())];
+    let before = rows(&doctor_with(&root, &home, &["--json"], &vars));
+    assert_eq!(row(&before, "plugin install")["fix"], "plugin-install");
+
+    let out = doctor_with(&root, &home, &["--json", "--fix", "plugin-install"], &vars);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix plugin-install:\n"), "{said}");
+    assert!(said.contains("  codex:\n    done "), "{said}");
+    assert_eq!(row(&rows(&out), "plugin install")["status"], "ok");
+    assert!(!root.join(".claude/settings.json").exists(), "{said}");
+}
+
+#[test]
+fn bare_fix_installs_the_plugin_once_however_many_rows_offer_it() {
+    let (_d, root) = plane();
+    let home = root.join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let vars = [("CHARTER_CONFIG_HOME", root.to_str().unwrap())];
+
+    let out = doctor_with(&root, &home, &["--json", "--fix"], &vars);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(said.matches("fix plugin-install:").count(), 1, "{said}");
+    assert_eq!(said.matches("  codex:\n    done ").count(), 1, "{said}");
+}
+
+#[test]
+fn fix_discover_against_a_forge_that_is_not_logged_in_is_refused_and_writes_nothing() {
+    let (_d, root) = plane();
+    std::fs::write(
+        root.join("charter.toml"),
+        "schema = 1\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n",
+    )
+    .unwrap();
+    // A stand-in `gh` first on `PATH` that is not logged in: no test reaches a network.
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    stand_in::program(
+        &bin,
+        "gh",
+        "#!/bin/sh\necho 'You are not logged into any GitHub hosts.' >&2\nexit 1\n",
+    );
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let home = root.join("home");
+    let before = rows(&doctor_with(&root, &home, &["--json"], &[("PATH", &path)]));
+    assert_eq!(row(&before, "inventory")["fix"], "discover");
+
+    let out = doctor_with(
+        &root,
+        &home,
+        &["--json", "--fix", "discover"],
+        &[("PATH", &path)],
+    );
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("fix discover:\n  ✗ refused:"), "{said}");
+    assert!(said.contains("not authenticated"), "{said}");
+    assert!(!root.join("inventory/repos.json").exists(), "{said}");
+}
+
+#[test]
+fn fix_plugin_install_where_charter_cannot_tell_the_harnesses_is_refused() {
+    let (_d, root) = plane();
+    let home = root.join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let vars = [
+        ("CHARTER_CONFIG_HOME", root.to_str().unwrap()),
+        ("CLAUDE_CONFIG_DIR", ""),
+    ];
+
+    let out = doctor_with(&root, &home, &["--fix", "plugin-install"], &vars);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("fix plugin-install:\n  ✗ refused:"), "{said}");
+    assert!(said.contains("CLAUDE_CONFIG_DIR"), "{said}");
+    assert!(!home.join(".codex/config.toml").exists(), "{said}");
 }

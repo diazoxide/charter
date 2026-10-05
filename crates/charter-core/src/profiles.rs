@@ -275,6 +275,10 @@ impl ProfileSet {
 pub struct IgnoreCheck {
     pub reason: String,
     pub fix: String,
+    /// Whether one ignore line is the whole cure: git would commit the file and does not
+    /// track it yet. The doctor's `local-ignore` fix is offered only then; a tracked file needs
+    /// the operator's `git rm --cached` first, which charter never runs.
+    pub ignorable: bool,
 }
 
 impl IgnoreCheck {
@@ -1064,6 +1068,7 @@ fn check_of(state: GitState) -> IgnoreCheck {
             fix: "git rm --cached charter.local.toml, commit that removal, then charter \
                   reinit"
                 .to_owned(),
+            ignorable: false,
         },
         GitState::Committable => IgnoreCheck {
             reason: "git would commit charter.local.toml, so charter reads nothing in it \
@@ -1071,6 +1076,7 @@ fn check_of(state: GitState) -> IgnoreCheck {
                      .gitignore."
                 .to_owned(),
             fix: "charter reinit".to_owned(),
+            ignorable: true,
         },
         GitState::Unknown(why) => {
             let why = shown::short(&why);
@@ -1084,6 +1090,7 @@ fn check_of(state: GitState) -> IgnoreCheck {
                     "run git status --ignored -- charter.local.toml in the plane by hand; \
                      git said: {why}"
                 ),
+                ignorable: false,
             }
         }
         GitState::NotARepo | GitState::Ignored => IgnoreCheck::default(),

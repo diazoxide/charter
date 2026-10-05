@@ -357,6 +357,31 @@ describe("the Fix button", () => {
     expect(fix).toHaveAttribute("title", "charter doctor --fix reinit");
   });
 
+  it("draws Fix on each row the first wave of fixes covers", async () => {
+    // FX-2: the rows and the ids the core gives them.
+    const fixable: Array<[string, string]> = [
+      ["plugin install", "plugin-install"],
+      ["plugin", "plugin-install"],
+      ["plugin files", "plugin-install"],
+      ["harness profiles", "local-ignore"],
+      ["memory indexes", "memory-optimize"],
+      ["inventory", "discover"],
+    ];
+    mockIPC((cmd) =>
+      cmd === "plane_doctor"
+        ? report(fixable.map(([name, fix]) => row(name, "warn", { fix })))
+        : null,
+    );
+    render(<Wired />);
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+
+    for (const [name, fix] of fixable) {
+      const pressable = await within(dialog).findByRole("button", { name: `Fix ${name}` });
+      expect(pressable).toHaveAttribute("title", `charter doctor --fix ${fix}`);
+    }
+  });
+
   it("forgets what the last fix said once the dialog closes", async () => {
     mockIPC((cmd) => {
       if (cmd === "plane_doctor") return report([missing]);

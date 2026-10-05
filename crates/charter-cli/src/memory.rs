@@ -1098,26 +1098,13 @@ pub fn workspace_optimize(
         voice::info("No workspaces to optimize.");
         return Ok(0);
     }
-    let stores: Vec<charter_core::curate::Store> = names
-        .iter()
-        .map(|n| charter_core::curate::Store {
-            label: n.clone(),
-            dir: root.join("workspaces").join(n).join("memory"),
-            verified_pct: None,
-        })
-        .collect();
-    let how = charter_core::curate::Optimizing {
+    let mut sink = crate::speak;
+    Ok(charter_core::curate::optimize_workspaces(
+        root,
+        &names,
         apply,
         stale_days,
         today,
-        proposals: "  proposals (not auto-applied — decide these yourself):",
-        tidy: "\nNo safe ops to apply — the journal is already tidy.",
-    };
-    let mut sink = crate::speak;
-    Ok(charter_core::curate::optimize(
-        root,
-        &stores,
-        &how,
         &mut || reactive(plane),
         &mut sink,
     ))

@@ -16,10 +16,12 @@
 //!   the old one gets both loaded in a terminal chat (measured, Claude Code 2.1.283).
 //!
 //! Every row reads files and writes none. The repair for the first three is
-//! `charter plugin install`, which `charter doctor --fix` runs.
+//! `charter plugin install`, which `charter doctor --fix` runs, and which each of them offers
+//! as the `plugin-install` fix (FX-2) when it warns.
 
 use std::path::PathBuf;
 
+use super::fix::FixId;
 use super::{Doctor, Row, fsx};
 use crate::plugin_install::{self as install, Adapter, Machine};
 
@@ -104,6 +106,7 @@ pub(super) fn plugin_install(d: &Doctor) -> Row {
         detail,
         format!("{REPAIR} installs it. The chats the app starts are armed by the app either way."),
     )
+    .fixed_by(FixId::PluginInstall)
 }
 
 pub(super) fn plugin(d: &Doctor) -> Row {
@@ -160,6 +163,7 @@ pub(super) fn plugin(d: &Doctor) -> Row {
              `charter plugin install --dry-run` says what differs."
         ),
     )
+    .fixed_by(FixId::PluginInstall)
 }
 
 pub(super) fn plugin_files(d: &Doctor) -> Row {
@@ -209,6 +213,7 @@ pub(super) fn plugin_files(d: &Doctor) -> Row {
              points the hooks at this charter."
         ),
     )
+    .fixed_by(FixId::PluginInstall)
 }
 
 pub(super) fn superseded_plugin(d: &Doctor) -> Row {
