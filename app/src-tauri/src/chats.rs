@@ -174,6 +174,18 @@ struct Running {
     confinement: Option<charter_core::sandbox::Confinement>,
 }
 
+/// A chat a launch could not start, as the window lists it (NO-3): by its id, which Retry now
+/// and Forget name it by, with its name and why.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct NotStarted {
+    /// The chat's id (ADR 0066), stable across launches and never shared.
+    pub id: String,
+    /// What its tab was called. Two waiting chats can share one.
+    pub name: String,
+    /// Why it did not start.
+    pub why: String,
+}
+
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
     /// Whatever runs the sessions (FD-3). A trait object, so nothing here can reach past
@@ -1276,10 +1288,28 @@ impl Chats {
             .collect();
         let open = lock(&self.open);
         let front = *lock(&self.front);
+        // **One chat, once** (NO-3): a chat being retried is waiting and open at once until its
+        // start returns, and one being started fresh is open twice, under its old session and
+        // its new. The record holds each id once — as the newest session open under it.
+        let mut newest: HashMap<&str, u32> = HashMap::new();
+        for (&session, running) in open.iter() {
+            if let Some(id) = running.chat.identity.id.as_deref() {
+                let at = newest.entry(id).or_insert(session);
+                *at = (*at).max(session);
+            }
+        }
+        let superseded = |chat: &Chat, session: Option<u32>| {
+            chat.identity
+                .id
+                .as_deref()
+                .and_then(|id| newest.get(id))
+                .is_some_and(|&at| session != Some(at))
+        };
         // The ones that could not be started come first, in the order they were recorded,
         // so they keep their place and are tried again at the next launch.
         let mut chats: Vec<Chat> = lock(&self.would_not_start)
             .iter()
+            .filter(|(chat, _)| !superseded(chat, None))
             .map(|(chat, _)| Chat {
                 pid: None,
                 ..chat.clone()
@@ -1289,6 +1319,9 @@ impl Chats {
         // puts them back in.
         chats.extend(ordered.into_iter().filter_map(|session| {
             let chat = &open.get(&session)?.chat;
+            if superseded(chat, Some(session)) {
+                return None;
+            }
             Some(Chat {
                 active: front == Some(session),
                 // The number it is actually running under, which is the key its workspace
@@ -1447,53 +1480,66 @@ impl Chats {
         (self.record_it)(&self.record());
     }
 
-    /// The chats a launch could not start, by name and reason. The window says so.
-    pub fn would_not_start(&self) -> Vec<(String, String)> {
+    /// The chats a launch could not start, by id, name and reason. The window says so.
+    ///
+    /// **By id**, because a name says less than it seems to: a split's chat takes its tab's
+    /// name and tab numbers start again at every launch, so two waiting chats can share one,
+    /// and a Forget meant for the second must never drop the first (NO-3 review). Every waiting
+    /// chat has an id: [`Self::put_back`] mints one before it tries a chat that had none.
+    pub fn would_not_start(&self) -> Vec<NotStarted> {
         lock(&self.would_not_start)
             .iter()
-            .map(|(chat, why)| (chat.name.clone(), why.clone()))
+            .map(|(chat, why)| NotStarted {
+                id: chat.identity.id.clone().unwrap_or_default(),
+                name: chat.name.clone(),
+                why: why.clone(),
+            })
             .collect()
     }
 
     /// **Retry now** on a chat a launch could not start (NO-3): starts it again the way the
     /// launch did ([`Self::start_recorded`], as a relaunch), and answers its session.
     ///
-    /// The chat is taken out of the waiting list BEFORE it is tried, so a record written while
-    /// it starts never names it twice — once waiting, once running — under one id (#856 review
-    /// F3). If it fails again it goes back in its place with the new reason, and the record is
-    /// written either way. When two waiting chats share a name, the first is the one meant: the
-    /// window lists them by name, in this order.
-    pub fn retry(&self, name: &str, root: &std::path::Path, size: Size) -> Result<u32, String> {
-        let (at, chat) = {
-            let mut waiting = lock(&self.would_not_start);
-            let at = waiting
-                .iter()
-                .position(|(chat, _)| chat.name == name)
-                .ok_or_else(|| format!("{name} is not waiting to start"))?;
-            (at, waiting.remove(at).0)
-        };
+    /// **Never twice, never lost.** The chat stays in the waiting list while it starts, so a
+    /// record written meanwhile still has it; [`Self::record`] leaves out a waiting chat whose id
+    /// is open, so one written after the start has it once, as running. It leaves the list only
+    /// once it has started, and if it fails again it stays with the new reason.
+    pub fn retry(&self, id: &str, root: &std::path::Path, size: Size) -> Result<u32, String> {
+        let chat = lock(&self.would_not_start)
+            .iter()
+            .find(|(chat, _)| chat.identity.id.as_deref() == Some(id))
+            .map(|(chat, _)| chat.clone())
+            .ok_or_else(|| format!("chat {id} is not waiting to start"))?;
         let started = self.start_recorded(&chat, root, size, Why::Relaunch);
-        if let Err(why) = &started {
+        {
             let mut waiting = lock(&self.would_not_start);
-            let at = at.min(waiting.len());
-            waiting.insert(at, (chat, why.clone()));
+            match &started {
+                Ok(_) => waiting.retain(|(one, _)| one.identity.id.as_deref() != Some(id)),
+                Err(why) => {
+                    for (one, was) in waiting.iter_mut() {
+                        if one.identity.id.as_deref() == Some(id) {
+                            *was = why.clone();
+                        }
+                    }
+                }
+            }
         }
         self.write_it_down();
         started
     }
 
-    /// **Forget this chat** (NO-3): drops a chat a launch could not start from the record.
+    /// **Forget this chat** (NO-3): drops a chat a launch could not start from the record, by
+    /// its id.
     ///
     /// The one way such a chat leaves it. It is kept on purpose otherwise, so that a directory
-    /// that moved, or a harness mid-reinstall, does not delete it ([`Self::put_back`]). The
-    /// first waiting chat of that name is the one meant, as for [`Self::retry`].
-    pub fn forget(&self, name: &str) -> Result<(), String> {
+    /// that moved, or a harness mid-reinstall, does not delete it ([`Self::put_back`]).
+    pub fn forget(&self, id: &str) -> Result<(), String> {
         {
             let mut waiting = lock(&self.would_not_start);
             let at = waiting
                 .iter()
-                .position(|(chat, _)| chat.name == name)
-                .ok_or_else(|| format!("{name} is not waiting to start"))?;
+                .position(|(chat, _)| chat.identity.id.as_deref() == Some(id))
+                .ok_or_else(|| format!("chat {id} is not waiting to start"))?;
             waiting.remove(at);
         }
         self.write_it_down();
@@ -1502,46 +1548,34 @@ impl Chats {
 
     /// **Start fresh** (NO-3, the plane-updated mark): chat `session` started again, on the
     /// plane as it is now, as **the same chat** under its id in a run that begins `fresh`, with
-    /// no conversation resumed (ADR 0066) — [`Self::start_ready_instead_of`]'s way, for a chat
-    /// that is still open.
+    /// no conversation resumed (ADR 0066).
     ///
     /// Its profile is looked up again, as at a relaunch ([`Self::start_recorded`]), so an edit
-    /// to it is what the new run starts on. The old program is the close's to end, as there:
-    /// the window closes the old tab once the new one is open. If the new one cannot start,
-    /// the old one is left as it was and the answer says why.
+    /// to it is what the new run starts on. **The old one stays open until the new one has
+    /// started**, so a refused start leaves it running and recorded as it was; while both are
+    /// open, [`Self::record`] writes the newer. Ending the old one is the caller's next step
+    /// (`Held::start_chat_fresh`), which takes it off the board too.
     pub fn start_fresh(
         &self,
         session: u32,
         root: &std::path::Path,
         size: Size,
     ) -> Result<u32, String> {
-        let taken = lock(&self.open)
-            .remove(&session)
+        let was = lock(&self.open)
+            .get(&session)
+            .map(|one| one.chat.clone())
             .ok_or_else(|| format!("chat {session} is not open"))?;
         let again = Chat {
             identity: charter_core::reopen::Identity {
                 run: None,
-                ..taken.chat.identity.clone()
+                ..was.identity.clone()
             },
             resume: None,
             pid: None,
             number: None,
-            ..taken.chat.clone()
+            ..was
         };
-        match self.start_recorded(&again, root, size, Why::Again) {
-            Ok(started) => {
-                let mut let_go = lock(&self.let_go);
-                if let_go.len() >= LET_GO_HELD {
-                    let_go.clear();
-                }
-                let_go.insert(session, taken.chat.identity);
-                Ok(started)
-            }
-            Err(why) => {
-                lock(&self.open).insert(session, taken);
-                Err(why)
-            }
-        }
+        self.start_recorded(&again, root, size, Why::Again)
     }
 
     /// How many chats are remembered, which is not the same as how many are running: this
@@ -3112,7 +3146,7 @@ mod tests {
         // And the ones it would not start are kept, not thrown away, saying why.
         let kept = chats.would_not_start();
         assert_eq!(kept.len(), 3);
-        assert_eq!(kept[0].1, "more than 4 chats were recorded");
+        assert_eq!(kept[0].why, "more than 4 chats were recorded");
         chats.end_all();
     }
 
@@ -3142,8 +3176,8 @@ mod tests {
 
         let trouble = chats.would_not_start();
         assert_eq!(trouble.len(), 1);
-        assert_eq!(trouble[0].0, "ide.7");
-        assert!(!trouble[0].1.is_empty(), "no reason was kept");
+        assert_eq!(trouble[0].name, "ide.7");
+        assert!(!trouble[0].why.is_empty(), "no reason was kept");
     }
 
     #[test]
@@ -3184,20 +3218,45 @@ mod tests {
         }
     }
 
+    /// The id of the one chat a record put back that is waiting to start.
+    fn waiting_id(chats: &Chats) -> String {
+        let waiting = chats.would_not_start();
+        assert_eq!(waiting.len(), 1, "one chat waiting");
+        assert!(!waiting[0].id.is_empty(), "a waiting chat has an id");
+        waiting[0].id.clone()
+    }
+
+    /// How many times each record written since `from` holds the chat with id `id`.
+    fn times_recorded(wrote: &Mutex<Vec<Record>>, from: usize, id: &str) -> Vec<usize> {
+        lock(wrote)[from..]
+            .iter()
+            .map(|record| {
+                record
+                    .chats
+                    .iter()
+                    .filter(|one| one.identity.id.as_deref() == Some(id))
+                    .count()
+            })
+            .collect()
+    }
+
+    const HERE: &str = "/nonexistent-plane";
+
     #[test]
     fn a_chat_that_did_not_start_is_started_by_retry_once_what_it_needs_is_back() {
         // NO-3: Retry now, after the harness was reinstalled. The chat is the recorded one,
-        // under its id, and it is recorded once — as running, not also as waiting.
+        // under its id — and every record written on the way holds it exactly once: never
+        // twice (waiting and running), never not at all.
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("claude").display().to_string();
         let (chats, wrote) = recorded();
         chats.put_back_here(&one_recorded(&program), SIZE);
-        let id = chats.record().chats[0].identity.id.clone();
-        assert_eq!(chats.would_not_start().len(), 1);
+        let id = waiting_id(&chats);
+        let from = lock(&wrote).len();
 
         assert_eq!(a_claude(dir.path()), program);
         let session = chats
-            .retry("ide.7", std::path::Path::new("/nonexistent-plane"), SIZE)
+            .retry(&id, std::path::Path::new(HERE), SIZE)
             .expect("it starts now");
 
         assert!(chats.would_not_start().is_empty());
@@ -3207,9 +3266,12 @@ mod tests {
             .map(|one| (one.session, one.name))
             .collect();
         assert_eq!(open, vec![(session, "ide.7".to_owned())]);
-        let last = lock(&wrote).last().cloned().expect("a record was written");
-        assert_eq!(last.chats.len(), 1, "recorded once");
-        assert_eq!(last.chats[0].identity.id, id, "the same chat");
+        let times = times_recorded(&wrote, from, &id);
+        assert!(!times.is_empty(), "the retry wrote the record");
+        assert!(
+            times.iter().all(|&n| n == 1),
+            "recorded once each time: {times:?}"
+        );
         chats.end_all();
     }
 
@@ -3217,15 +3279,26 @@ mod tests {
     fn a_retry_that_fails_again_keeps_the_chat_and_says_why() {
         let (chats, wrote) = recorded();
         chats.put_back_here(&one_recorded("/definitely/not/a/program"), SIZE);
+        let id = waiting_id(&chats);
 
         let refused = chats
-            .retry("ide.7", std::path::Path::new("/nonexistent-plane"), SIZE)
+            .retry(&id, std::path::Path::new(HERE), SIZE)
             .expect_err("the program is still not there");
 
-        assert_eq!(chats.would_not_start(), vec![("ide.7".to_owned(), refused)]);
-        let last = lock(&wrote).last().cloned().expect("a record was written");
-        let names: Vec<String> = last.chats.iter().map(|c| c.name.clone()).collect();
-        assert_eq!(names, vec!["ide.7"], "still recorded");
+        assert_eq!(
+            chats.would_not_start(),
+            vec![NotStarted {
+                id: id.clone(),
+                name: "ide.7".to_owned(),
+                why: refused
+            }]
+        );
+        let last = lock(&wrote).len() - 1;
+        assert_eq!(
+            times_recorded(&wrote, last, &id),
+            vec![1],
+            "still recorded, once"
+        );
     }
 
     #[test]
@@ -3233,7 +3306,9 @@ mod tests {
         let (chats, wrote) = recorded();
         chats.put_back_here(&one_recorded("/definitely/not/a/program"), SIZE);
 
-        chats.forget("ide.7").expect("it is there to forget");
+        chats
+            .forget(&waiting_id(&chats))
+            .expect("it is there to forget");
 
         assert!(chats.would_not_start().is_empty());
         let last = lock(&wrote).last().cloned().expect("a record was written");
@@ -3241,30 +3316,69 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_that_is_not_waiting_to_start_cannot_be_retried_or_forgotten() {
-        let (chats, _) = recorded();
-        let here = std::path::Path::new("/nonexistent-plane");
-        assert!(chats.forget("ide.7").is_err());
-        assert!(chats.retry("ide.7", here, SIZE).is_err());
+    fn of_two_waiting_chats_with_one_name_forget_drops_only_the_one_named_by_its_id() {
+        // A split's chat takes its tab's name, and tab numbers start again at every launch:
+        // two waiting chats can be called the same. Forget names one by its id (NO-3 review).
+        let (chats, wrote) = recorded();
+        chats.put_back_here(
+            &Record {
+                views: Vec::new(),
+                chats: vec![
+                    chat("/definitely/not/a/program", "3", None),
+                    chat("/definitely/not/a/program/either", "3", None),
+                ],
+                dealt: 0,
+                relaunch_after_update: false,
+                clone_seat: None,
+                focus: None,
+            },
+            SIZE,
+        );
+        let waiting = chats.would_not_start();
+        assert_eq!(waiting.len(), 2);
+        assert_ne!(waiting[0].id, waiting[1].id, "each has its own id");
+
+        chats.forget(&waiting[1].id).expect("the second is there");
+
+        assert_eq!(chats.would_not_start(), vec![waiting[0].clone()]);
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        let ids: Vec<Option<String>> = last.chats.iter().map(|c| c.identity.id.clone()).collect();
+        assert_eq!(
+            ids,
+            vec![Some(waiting[0].id.clone())],
+            "the first is still recorded"
+        );
     }
 
     #[test]
-    fn start_fresh_is_the_same_chat_in_a_new_run_with_no_conversation_resumed() {
-        // NO-3: the plane-updated mark's Start fresh. The chat keeps its id and its name, and
-        // the program it ran is the close's to end, as for `start_ready_instead_of`.
+    fn a_chat_that_is_not_waiting_to_start_cannot_be_retried_or_forgotten() {
+        let (chats, _) = recorded();
+        let here = std::path::Path::new(HERE);
+        assert!(chats.forget(ID).is_err());
+        assert!(chats.retry(ID, here, SIZE).is_err());
+    }
+
+    #[test]
+    fn start_fresh_is_the_same_chat_in_a_new_run_recorded_once_while_both_run() {
+        // NO-3: the plane-updated mark's Start fresh. The chat keeps its id and its name. The
+        // old one stays open until the new one has started, and ending it is the caller's
+        // (`Held::start_chat_fresh`) — in between, the record writes the newer, once.
         let dir = tempfile::tempdir().unwrap();
         let claude = a_claude(dir.path());
         let (chats, wrote) = recorded();
         let open = chats.put_back_here(&one_recorded(&claude), SIZE);
         let was = open[0].session;
-        let id = chats.record().chats[0].identity.id.clone();
+        let id = chats.record().chats[0].identity.id.clone().unwrap();
 
         let session = chats
-            .start_fresh(was, std::path::Path::new("/nonexistent-plane"), SIZE)
+            .start_fresh(was, std::path::Path::new(HERE), SIZE)
             .expect("it starts again");
+        assert_ne!(session, was);
+        let both = chats.record();
+        assert_eq!(both.chats.len(), 1, "one chat, while two programs run");
+        assert_eq!(both.chats[0].number, Some(session), "as the newer");
         chats.close(was).unwrap();
 
-        assert_ne!(session, was);
         let open: Vec<(u32, String)> = chats
             .open_now()
             .into_iter()
@@ -3273,7 +3387,7 @@ mod tests {
         assert_eq!(open, vec![(session, "ide.7".to_owned())]);
         let last = lock(&wrote).last().cloned().expect("a record was written");
         assert_eq!(last.chats.len(), 1);
-        assert_eq!(last.chats[0].identity.id, id, "the same chat");
+        assert_eq!(last.chats[0].identity.id.as_deref(), Some(id.as_str()));
         assert_ne!(
             last.chats[0].resume,
             Some(SessionId::new(ID).unwrap()),
@@ -3283,11 +3397,41 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_fresh_start_keeps_the_old_chat_open_and_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, _) = recorded();
+        let open = chats.put_back_here(&one_recorded(&claude), SIZE);
+        let was = open[0].session;
+        // The program goes while the chat runs: a start of it now cannot happen.
+        std::fs::remove_file(&claude).unwrap();
+
+        chats
+            .start_fresh(was, std::path::Path::new(HERE), SIZE)
+            .expect_err("its program is gone");
+
+        let open: Vec<u32> = chats
+            .open_now()
+            .into_iter()
+            .map(|one| one.session)
+            .collect();
+        assert_eq!(open, vec![was], "still open");
+        let names: Vec<String> = chats
+            .record()
+            .chats
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        assert_eq!(names, vec!["ide.7"], "still recorded");
+        chats.end_all();
+    }
+
+    #[test]
     fn a_chat_that_is_not_open_cannot_be_started_fresh() {
         let (chats, _) = recorded();
         assert!(
             chats
-                .start_fresh(42, std::path::Path::new("/nonexistent-plane"), SIZE)
+                .start_fresh(42, std::path::Path::new(HERE), SIZE)
                 .is_err()
         );
     }

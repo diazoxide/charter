@@ -1000,6 +1000,26 @@ export function panesOf(tabs: Tabs, id: number): { pane: number; session: number
   );
 }
 
+/**
+ * **The chat `from` was showing, now `to`, in the same pane** (NO-3's Start fresh): the same
+ * chat started again in a new session. Its tab, its place on the strip, its split and the
+ * pane's focus all stay as they were; every other pane is left alone. Answers `tabs` itself
+ * when no pane shows `from`.
+ */
+export function replaceSession(tabs: Tabs, from: number, to: number): Tabs {
+  for (const id of tabs.order) {
+    const tab = tabs.byId[id];
+    const found = contents(tab.layout).find(
+      ({ content }) => content.kind === "session" && content.session === from,
+    );
+    if (!found || found.content.kind !== "session") continue;
+    const content: Content = { ...found.content, session: to };
+    const layout = replace(tab.layout, found.pane, (pane) => ({ ...pane, content }));
+    return { ...tabs, byId: { ...tabs.byId, [id]: { ...tab, layout } } };
+  }
+  return tabs;
+}
+
 /** The sessions with a pane on screen: the only ones a terminal is drawing. */
 export function visibleSessions(tabs: Tabs): number[] {
   return tabs.inFront === undefined ? [] : panesOf(tabs, tabs.inFront).map((one) => one.session);

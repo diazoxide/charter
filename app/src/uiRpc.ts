@@ -404,25 +404,30 @@ export const commands = {
 	 */
 	openedChats: (plane: PlaneId) => typedError<OpenChat[], string>(__TAURI_INVOKE("opened_chats", { plane })),
 	/**
-	 *  The chats this launch could not start, by name and reason. They are still recorded, and
-	 *  will be tried again at the next launch.
+	 *  The chats this launch could not start, by id, name and reason. They are still recorded, and
+	 *  will be tried again at the next launch — or now, by Retry now — until the operator forgets
+	 *  one.
 	 */
-	chatsThatWouldNotStart: (plane: PlaneId) => typedError<([string, string])[], string>(__TAURI_INVOKE("chats_that_would_not_start", { plane })),
+	chatsThatWouldNotStart: (plane: PlaneId) => typedError<NotStarted[], string>(__TAURI_INVOKE("chats_that_would_not_start", { plane })),
 	/**
-	 *  Retry now (NO-3): starts the chat named `name` that this launch could not start, the way
+	 *  Retry now (NO-3): starts the chat with id `id` that this launch could not start, the way
 	 *  the launch tried to. It is the chat as the window draws it, or why it still did not start —
 	 *  and then it is still recorded, with that reason.
+	 * 
+	 *  On a blocking thread, as `start_chat` is: a chat on a profile resolves its launch and checks
+	 *  its program before it runs, and the window must not wait on that.
 	 */
-	retryChatThatDidNotStart: (plane: PlaneId, name: string, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("retry_chat_that_did_not_start", { plane, name, columns, rows })),
+	retryChatThatDidNotStart: (plane: PlaneId, id: string, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("retry_chat_that_did_not_start", { plane, id, columns, rows })),
 	/**
-	 *  Forget this chat (NO-3): drops the chat named `name` that this launch could not start from
+	 *  Forget this chat (NO-3): drops the chat with id `id` that this launch could not start from
 	 *  the record. Kept otherwise, on purpose, so a moved directory never deletes a chat.
 	 */
-	forgetChatThatDidNotStart: (plane: PlaneId, name: string) => typedError<null, string>(__TAURI_INVOKE("forget_chat_that_did_not_start", { plane, name })),
+	forgetChatThatDidNotStart: (plane: PlaneId, id: string) => typedError<null, string>(__TAURI_INVOKE("forget_chat_that_did_not_start", { plane, id })),
 	/**
 	 *  Start fresh (NO-3): chat `session` started again on the plane's instructions as they are
 	 *  now — the same chat, in a new run with no conversation resumed (ADR 0066). The answer is the
-	 *  new one as the window draws it; the window then closes the old one, which ends its program.
+	 *  new one as the window draws it. The old one is ended here once the new one has started; a
+	 *  refused start ends nothing. On a blocking thread, as `start_chat` is.
 	 */
 	startChatFresh: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("start_chat_fresh", { plane, session, columns, rows })),
 	/**
@@ -2887,6 +2892,19 @@ export type NewBranch = {
 	 *  not land — in the window's words.
 	 */
 	warnings: string[],
+};
+
+/**
+ *  A chat a launch could not start, as the window lists it (NO-3): by its id, which Retry now
+ *  and Forget name it by, with its name and why.
+ */
+export type NotStarted = {
+	/**  The chat's id (ADR 0066), stable across launches and never shared. */
+	id: string,
+	/**  What its tab was called. Two waiting chats can share one. */
+	name: string,
+	/**  Why it did not start. */
+	why: string,
 };
 
 /**  One section of the changelog, as the dialog draws it. */
