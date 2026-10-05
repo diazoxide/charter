@@ -215,3 +215,21 @@ would only bring back a snapshot of a chat that is gone.
   - (c) no exclude, because the file would sit one command from a commit.
 
   (d), no file, is also rejected.
+
+## Later decisions
+
+- **NO-4 (#1231, 2026-10-05): Open file and Move aside… for the `AGENTS.md` V35 reports.** The
+  start note that names one offers both. Move aside… asks first, then renames the file to
+  `AGENTS.aside.md` (or the next free `AGENTS.aside-N.md`) and never writes over a file.
+  Opening the file is a narrow exception to the light editor's rule that only what git does not
+  ignore opens (ADR 0084 §2). The exception applies only to the file charter's own line hides,
+  and the core checks that before either action:
+  - the file is `AGENTS.md` at the top of a branch of this project, placed by name, with no link
+    on the way and one name on disk;
+  - it is untracked, and charter's record does not vouch for it;
+  - it is one the V35 check names;
+  - git names charter's `/AGENTS.md` line in charter's block of the exclude file as the rule that
+    ignores it (`git check-ignore -v`). When any other rule ignores it, that rule wins, and the
+    file is refused.
+
+  A file that fails any of these is refused here. It opens only where the general rule allows.

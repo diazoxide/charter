@@ -692,3 +692,113 @@ fn the_operators_agents_md_opens_in_their_editor_though_charters_line_hides_it()
     };
     assert!(url.ends_with("svc/AGENTS.md:1:1"), "{url}");
 }
+
+/// Both of NO-4's actions on the clone's `AGENTS.md`, as their refusals, or a panic naming
+/// which one went through.
+fn both_refused(f: &support::Fixture) -> (String, String) {
+    let open = guest::their_agents_md_in_your_editor(
+        &f.plane,
+        files::Branch::repo("alpha", "svc"),
+        charter_core::youreditor::Editor::VsCode,
+        &|_| None,
+    )
+    .expect_err("Open file is refused");
+    let moved = guest::move_agents_md_aside(&f.plane, files::Branch::repo("alpha", "svc"))
+        .expect_err("Move aside is refused");
+    (open, moved)
+}
+
+#[test]
+fn an_agents_md_hidden_by_the_operators_own_rule_is_neither_opened_nor_moved() {
+    charter_core::unsteered!();
+    let f = plane();
+    std::fs::write(f.clone.join(".gitignore"), "AGENTS.md\n").unwrap();
+    std::fs::write(f.clone.join("AGENTS.md"), "# mine\n").unwrap();
+
+    let (open, moved) = both_refused(&f);
+
+    assert!(open.contains("charter's"), "{open}");
+    assert!(moved.contains("charter's"), "{moved}");
+    assert_eq!(read(&f.clone.join("AGENTS.md")), "# mine\n");
+    assert!(!f.clone.join("AGENTS.aside.md").exists());
+}
+
+#[test]
+fn an_agents_md_the_operators_rule_also_hides_is_theirs_to_handle() {
+    charter_core::unsteered!();
+    // Charter's line is there too, but the operator's `.gitignore` is the rule git applies.
+    let (f, _piece) = hidden_in_the_clone();
+    std::fs::write(f.clone.join(".gitignore"), "AGENTS.md\n").unwrap();
+
+    both_refused(&f);
+
+    assert_eq!(
+        read(&f.clone.join("AGENTS.md")),
+        "# the operator's, made later\n"
+    );
+}
+
+#[test]
+fn an_agents_md_nothing_hides_is_not_this_exceptions() {
+    charter_core::unsteered!();
+    let f = plane();
+    std::fs::write(f.clone.join("AGENTS.md"), "# shows in git status\n").unwrap();
+
+    both_refused(&f);
+
+    assert!(f.clone.join("AGENTS.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_agents_md_is_neither_opened_nor_moved() {
+    charter_core::unsteered!();
+    let (f, _piece) = hidden_in_the_clone();
+    std::fs::remove_file(f.clone.join("AGENTS.md")).unwrap();
+    std::fs::write(f.clone.join("notes.md"), "elsewhere\n").unwrap();
+    std::os::unix::fs::symlink("notes.md", f.clone.join("AGENTS.md")).unwrap();
+
+    both_refused(&f);
+
+    assert!(
+        f.clone
+            .join("AGENTS.md")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!f.clone.join("AGENTS.aside.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_agents_md_with_a_second_name_is_neither_opened_nor_moved() {
+    charter_core::unsteered!();
+    let (f, _piece) = hidden_in_the_clone();
+    std::fs::remove_file(f.clone.join("AGENTS.md")).unwrap();
+    std::fs::write(f.clone.join(".gitignore"), ".env\n").unwrap();
+    std::fs::write(f.clone.join(".env"), "TOKEN=x\n").unwrap();
+    std::fs::hard_link(f.clone.join(".env"), f.clone.join("AGENTS.md")).unwrap();
+
+    let (open, _moved) = both_refused(&f);
+
+    assert!(open.contains("name"), "{open}");
+    assert!(f.clone.join("AGENTS.md").exists());
+}
+
+#[test]
+fn move_aside_reaches_the_operators_agents_md_in_a_sibling_piece() {
+    charter_core::unsteered!();
+    let f = plane();
+    let piece = cut(&f, "p1");
+    let sibling = cut(&f, "p2");
+    start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
+    std::fs::write(sibling.join("AGENTS.md"), "# mine, in p2\n").unwrap();
+
+    let moved = guest::move_agents_md_aside(&f.plane, files::Branch::piece("alpha", "svc", "p2"))
+        .expect("charter's line is what hides it");
+
+    assert_eq!(moved, "AGENTS.aside.md");
+    assert_eq!(read(&sibling.join("AGENTS.aside.md")), "# mine, in p2\n");
+}

@@ -4,6 +4,7 @@ import { cleanup, render as renderBare, screen, waitFor, within } from "@testing
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import type { TheirAgentsMd } from "./bindings";
 import { forgetYourEditor, setYourEditor } from "./yourEditor";
 
 /**
@@ -63,11 +64,11 @@ const HIDDEN =
 type Asked = { cmd: string; args: Record<string, unknown> };
 
 /** The clone whose AGENTS.md the start names as the operator's (NO-4). */
-const SVC = { workspace: "alpha", repo: "svc", piece: null };
+const SVC: TheirAgentsMd = { workspace: "alpha", repo: "svc", piece: null };
 
 function core(
   notices: string[],
-  agentsMd: (typeof SVC)[] = [],
+  agentsMd: TheirAgentsMd[] = [],
   { refuseMove }: { refuseMove?: string } = {},
 ): Asked[] {
   let started = 0;
@@ -203,5 +204,34 @@ describe("a chat's start notice", () => {
     const note = await startNotice();
     expect(within(note).queryByRole("button", { name: "Open file" })).toBeNull();
     expect(within(note).queryByRole("button", { name: "Move aside…" })).toBeNull();
+  });
+
+  it("tells apart a repo's own folder and a branch of the same name", async () => {
+    const asked = core([HIDDEN], [SVC, { workspace: "alpha", repo: "svc", piece: "svc" }]);
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(
+      within(await startNotice()).getByRole("button", { name: "Move svc aside…" }),
+    );
+    await userEvent.click(within(await startNotice()).getByRole("button", { name: "Move aside" }));
+
+    await waitFor(() =>
+      expect(named(asked, "move_their_agents_md_aside").map((one) => one.args)).toEqual([
+        expect.objectContaining({ repo: "svc", piece: null }),
+      ]),
+    );
+    const left = await startNotice();
+    await waitFor(() =>
+      expect(within(left).queryByRole("button", { name: "Move svc aside…" })).toBeNull(),
+    );
+    // The one left is the branch's: its Move aside… reaches `svc/svc`, not the folder again.
+    await userEvent.click(within(left).getByRole("button", { name: "Move aside…" }));
+    await userEvent.click(within(await startNotice()).getByRole("button", { name: "Move aside" }));
+    await waitFor(() =>
+      expect(named(asked, "move_their_agents_md_aside").at(-1)?.args).toEqual(
+        expect.objectContaining({ repo: "svc", piece: "svc" }),
+      ),
+    );
   });
 });

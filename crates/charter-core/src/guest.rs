@@ -1029,9 +1029,12 @@ pub fn hidden_agents_md(tree: &Path) -> HiddenAgentsMd {
 /// again (NO-4).
 const ASIDE: &str = "AGENTS.aside";
 
-/// The operator's `AGENTS.md` at the top of `branch` (V35): there, a plain file, untracked, and
-/// not one charter's record vouches for. Refused, in a sentence, otherwise. The branch is placed
-/// by name ([`crate::files::place`]): no link, nothing outside the branch, never git's own.
+/// The operator's `AGENTS.md` at the top of `branch` (V35): there, a plain file with one name,
+/// untracked, not one charter's record vouches for, and **hidden by charter's own exclude line
+/// and by no other rule** — one [`hidden_agents_md`] names, whose ignore git traces to that line
+/// ([`hidden_by_charters_line`]). Refused, in a sentence, otherwise: the core decides which
+/// files these actions reach, never the window. The branch is placed by name
+/// ([`crate::files::place`]): no link, nothing outside the branch, never git's own.
 fn their_agents_md(plane: &Path, branch: crate::files::Branch<'_>) -> Result<PathBuf, String> {
     let file = crate::files::place(plane, branch, AGENTS_MD)
         .map_err(|refused| refused.to_string())?
@@ -1039,6 +1042,19 @@ fn their_agents_md(plane: &Path, branch: crate::files::Branch<'_>) -> Result<Pat
     let shown = file.display();
     if !file.is_file() {
         return Err(format!("{shown} is not a file"));
+    }
+    // One name only: a second name would let this file carry another file's contents.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let names = std::fs::symlink_metadata(&file)
+            .map_err(|e| format!("charter cannot read {shown}: {e}"))?
+            .nlink();
+        if names > 1 {
+            return Err(format!(
+                "{shown} has more than one name on disk, so charter does not hand it on"
+            ));
+        }
     }
     let tree = file.parent().unwrap_or(plane);
     if tracked(tree, AGENTS_MD) {
@@ -1057,7 +1073,70 @@ fn their_agents_md(plane: &Path, branch: crate::files::Branch<'_>) -> Result<Pat
              yours to move aside"
         ));
     }
+    let at = crate::contain::resolved(&file);
+    let named = at.is_some()
+        && hidden_agents_md(tree)
+            .found
+            .iter()
+            .any(|found| crate::contain::resolved(found) == at);
+    if !named || !hidden_by_charters_line(tree) {
+        return Err(format!(
+            "{shown} is not hidden by charter's own exclude line alone, so it is yours to open \
+             or move as you would any file"
+        ));
+    }
     Ok(file)
+}
+
+/// Whether the ignore rule git applies to `tree`'s `AGENTS.md` is charter's own `/AGENTS.md`
+/// line, inside charter's block of the exclude file `tree` reads. Asked of git itself
+/// (`check-ignore -v`), which names the rule that wins: where another rule also matches and
+/// takes precedence, it is that rule's, and this is `false`. A git that cannot answer is `false`.
+fn hidden_by_charters_line(tree: &Path) -> bool {
+    let Some(exclude) = exclude_file(tree) else {
+        return false;
+    };
+    let Ok(run) = crate::worktree::git::run(
+        tree,
+        &["check-ignore", "-v", "--no-index", "--", AGENTS_MD],
+        crate::worktree::git::READ,
+    ) else {
+        return false;
+    };
+    if !run.ok() {
+        return false;
+    }
+    // `<source>:<line>:<pattern>\t<path>`. The source can hold a colon, so it is split from
+    // the right: the pattern is `/AGENTS.md`, and the line number sits just before it.
+    let Some((rule, _path)) = run.line().split_once('\t') else {
+        return false;
+    };
+    let Some((rest, pattern)) = rule.rsplit_once(':') else {
+        return false;
+    };
+    let Some((source, number)) = rest.rsplit_once(':') else {
+        return false;
+    };
+    let Ok(number) = number.parse::<usize>() else {
+        return false;
+    };
+    let source = Path::new(source);
+    let source = if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        tree.join(source)
+    };
+    let exclude_at = crate::contain::resolved(&exclude);
+    if pattern != format!("/{AGENTS_MD}")
+        || exclude_at.is_none()
+        || crate::contain::resolved(&source) != exclude_at
+    {
+        return false;
+    }
+    let text = std::fs::read_to_string(&exclude).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    // git counts from 1; the block's lines are `begin + 1 .. after` counted from 0.
+    span(&lines).is_some_and(|(begin, after)| number > begin + 1 && number <= after)
 }
 
 /// **Open file** for the operator's `AGENTS.md` at the top of `branch` (NO-4): what to launch to
