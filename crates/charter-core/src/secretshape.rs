@@ -74,8 +74,26 @@ const REFERENCE_SLOT: &str = r"[A-Za-z0-9_][A-Za-z0-9._-]*";
 const REFERENCE_NAMES_MAX: usize = 32;
 
 /// Prefixes that mark a name as a credential whatever its length, so a short or truncated
-/// token cannot pass as a vault name. Python's `_CREDENTIAL_PREFIXES`, in its order.
-const CREDENTIAL_PREFIXES: [&str; 22] = [
+/// token cannot pass as a vault name, and that mark a bare token as a credential wherever it
+/// stands ([`prefixed_token`]). Python's `_CREDENTIAL_PREFIXES` in its order, then the
+/// documented prefixes it lacked, each from its provider's own documentation:
+///
+/// - GitHub, "GitHub's token formats" in
+///   <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-authentication-to-github>:
+///   `ghp_` a personal access token (classic), `gho_` an OAuth access token, `ghu_` a GitHub
+///   App user access token, `ghs_` a GitHub App installation access token, `ghr_` a GitHub App
+///   refresh token — each the prefix and 36 characters — and `github_pat_` a fine-grained
+///   personal access token.
+/// - GitLab, "Token prefixes" in <https://docs.gitlab.com/security/tokens/>: `glpat-` a
+///   personal, impersonation, project or group access token, `gloas-` an OAuth application
+///   secret, `gldt-` a deploy token, `glrt-` and `glrtr-` a runner authentication token,
+///   `glcbt-` a CI/CD job token, `glptt-` a trigger token, `glft-` a feed token, `glimt-` an
+///   incoming mail token, `glagent-` an agent for Kubernetes token, `glwt-` a workspace token,
+///   `glsoat-` a SCIM token, `glffct-` a feature flags client token.
+/// - Slack, <https://docs.slack.dev/authentication/tokens>: `xoxb-` a bot token, `xoxp-` a
+///   user token, `xapp-` an app-level token (a rotating one is `xoxe.xapp-`), `xwfp-` a
+///   workflow token.
+const CREDENTIAL_PREFIXES: [&str; 36] = [
     "ghp_",
     "gho_",
     "ghu_",
@@ -98,6 +116,20 @@ const CREDENTIAL_PREFIXES: [&str; 22] = [
     "hf_",
     "AKIA",
     "ASIA",
+    "gloas-",
+    "gldt-",
+    "glrt-",
+    "glrtr-",
+    "glcbt-",
+    "glptt-",
+    "glft-",
+    "glimt-",
+    "glagent-",
+    "glwt-",
+    "glsoat-",
+    "glffct-",
+    "xapp-",
+    "xwfp-",
 ];
 
 /// CPython's `\s`, spelled for `regex`: Unicode `White_Space` and the four separator
@@ -296,8 +328,13 @@ fn names_where_a_credential_lives(value: &str) -> bool {
 ///
 /// Every match of a rule that carries a value is asked whether that value merely NAMES where a
 /// credential lives, so one exempt assignment does not excuse the next one on the line below.
+/// A bare token behind one of [`CREDENTIAL_PREFIXES`] is asked last, so every guard built on
+/// this answer — a settings save, a written memory, a session record, a handoff brief — refuses
+/// the same tokens [`found`] does, and every kind the Python rules named stays the one named.
 pub fn secret_kind(text: &str) -> Option<&'static str> {
-    secret_at(text).map(|(label, _)| label)
+    secret_at(text)
+        .or_else(|| token_at(text))
+        .map(|(label, _)| label)
 }
 
 /// [`secret_kind`], with the byte offset of the match that decided it — the one walk both
@@ -1194,5 +1231,78 @@ mod joined_tests {
         ]);
 
         assert_eq!(spans, [(2..14, "a"), (20..25, "c"), (25..30, "d")]);
+    }
+}
+
+#[cfg(test)]
+mod documented_token_tests {
+    use super::{found, leaks, secret_kind, token_kind};
+
+    /// A made-up token body: `n` characters of the token alphabet, built here so no
+    /// token-shaped literal sits in the source.
+    fn fake_body(n: usize) -> String {
+        "Ab1".chars().cycle().take(n).collect()
+    }
+
+    /// Every documented token format a bare token is recognised by, each as one made-up token.
+    fn documented_tokens() -> Vec<String> {
+        let classic = fake_body(36);
+        let mut tokens: Vec<String> = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"]
+            .iter()
+            .map(|prefix| [prefix, classic.as_str()].concat())
+            .collect();
+        tokens.push(["github_pat_", &fake_body(22), "_", &fake_body(59)].concat());
+        tokens.extend(
+            [
+                "glpat-", "gloas-", "gldt-", "glrt-", "glrtr-", "glcbt-", "glptt-", "glft-",
+                "glimt-", "glagent-", "glwt-", "glsoat-", "glffct-",
+            ]
+            .iter()
+            .map(|prefix| [prefix, fake_body(20).as_str()].concat()),
+        );
+        tokens.push(["xapp-1-", &fake_body(40)].concat());
+        tokens.push(["xwfp-", &fake_body(40)].concat());
+        tokens
+    }
+
+    #[test]
+    fn a_bare_token_of_every_documented_format_is_a_secret_to_every_guard() {
+        for token in documented_tokens() {
+            let line = format!("the deploy uses {token} now");
+            let head: String = token.chars().take(8).collect();
+            assert_eq!(
+                secret_kind(&line),
+                Some("a token by its forge's prefix"),
+                "{head}…"
+            );
+            assert!(token_kind(&line).is_some(), "{head}…");
+            assert!(found(&line).is_some(), "{head}…");
+            assert!(!leaks(&line).is_empty(), "{head}…");
+        }
+    }
+
+    #[test]
+    fn a_bare_token_in_a_settings_document_is_a_secret() {
+        let token = ["glpat-", &fake_body(20)].concat();
+        let text = format!("{{\n  \"remote\": \"{token}\"\n}}");
+        assert_eq!(secret_kind(&text), Some("a token by its forge's prefix"));
+    }
+
+    #[test]
+    fn a_name_that_only_starts_like_a_token_is_not_a_secret() {
+        for text in [
+            "git switch ghp-fix",
+            "ghp_fix",
+            "the glpat- prefix",
+            "gldt-docs",
+            "github_pat_ is a prefix",
+            "xapp-short",
+            "token",
+            "a note about forge tokens",
+            "fn read_ghp_token_from_env() {}",
+        ] {
+            assert_eq!(secret_kind(text), None, "{text}");
+            assert_eq!(token_kind(text), None, "{text}");
+        }
     }
 }
