@@ -23,13 +23,15 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use super::Step;
 use super::Which;
-use super::collection::{FieldRefusal, Referrer, Refusal};
+use super::collection::{FieldRefusal, Listed, Referrer, Refusal};
+use crate::doctor::SettingsGroup;
 use crate::forge::{self, Forge, Kind};
 use crate::worktree::git;
 
 /// The Settings group a save policy is changed in: the deep link a referrer carries.
-const SAVING: &str = "project.saving";
+const SAVING: SettingsGroup = SettingsGroup::Saving;
 
 /// One forge, as the Add form sends it: each field as typed. An empty `kind` is the default
 /// kind, an empty `host` that kind's own host, and an empty `owner` none.
@@ -134,7 +136,7 @@ fn check(cfg: &toml::Table, entry: &Clean) -> Vec<FieldRefusal> {
                     forge.kind.display()
                 ),
             });
-            break;
+            return out;
         }
         if forge == new && owner == entry.owner {
             out.push(FieldRefusal {
@@ -148,7 +150,90 @@ fn check(cfg: &toml::Table, entry: &Clean) -> Vec<FieldRefusal> {
             break;
         }
     }
+    // A kind's own host is known whatever the blocks say: a block of another kind there would
+    // retype it for every repo on it.
+    if out.is_empty()
+        && let Some(known) = forge::known_in(cfg).get(&new.host)
+        && known.kind != new.kind
+    {
+        out.push(FieldRefusal {
+            field: "host",
+            why: format!(
+                "{} is {}'s own host: one host is one forge",
+                new.host,
+                known.kind.display()
+            ),
+        });
+    }
     out
+}
+
+/// A stable fingerprint of `text` (FNV-1a), for an entry's identity.
+fn fingerprint(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// **Every `[[forge]]` block of `text`, as the collection lists it** — in file order, each with
+/// its identity, its label and the Add form's values that would write it again. `text` that is
+/// not TOML, or whose `forge` is not a list of tables, lists nothing.
+///
+/// **The identity** is `forge:<place>:<fingerprint of the block>` (D-ST3-j): opaque to the
+/// window, and different for a block that moved or changed, so a remove sent for a block that is
+/// no longer where and what it was is refused rather than taking its neighbour.
+pub fn listed(text: &str) -> Vec<Listed> {
+    let Ok(cfg) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(toml::Value::Array(blocks)) = cfg.get("forge") else {
+        return Vec::new();
+    };
+    blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(at, block)| {
+            let table = block.as_table()?;
+            let text = |key: &str| {
+                table
+                    .get(key)
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned()
+            };
+            let kind = Some(text("kind"))
+                .filter(|kind| !kind.is_empty())
+                .unwrap_or_else(|| forge::DEFAULT_KIND.word().to_owned());
+            let owner = Some(text("group"))
+                .filter(|group| !group.is_empty())
+                .unwrap_or_else(|| text("owner"));
+            let host = text("host");
+            let shown_host = Kind::parse(&kind)
+                .filter(|_| host.is_empty())
+                .map_or_else(|| host.clone(), |kind| kind.default_host().to_owned());
+            let exclude = forge::exclude_of(&cfg, at).join("\n");
+            let n = at + 1;
+            Some(Listed {
+                id: format!("forge:{at}:{}", fingerprint(&block.to_string())),
+                label: if owner.is_empty() {
+                    format!("Forge {n}: {kind} at {shown_host}")
+                } else {
+                    format!("Forge {n}: {kind} {owner} at {shown_host}")
+                },
+                keys: vec![Step::Key("forge".to_owned()), Step::Index(at)],
+                values: vec![
+                    ("kind", kind),
+                    ("owner", owner),
+                    ("host", host),
+                    ("exclude", exclude),
+                ],
+            })
+        })
+        .collect()
 }
 
 /// `text` as TOML a form can edit, or the whole write's refusal.
@@ -224,8 +309,9 @@ fn removed(text: &str, index: usize) -> Result<String, Refusal> {
 }
 
 /// **Adds `entry` as a new `[[forge]]` block** to `charter.toml` at `root`, read by the caller as
-/// `base` — or says, by field and for the whole write, why nothing was written.
-pub fn add(root: &Path, base: Option<&str>, entry: &Entry) -> Result<(), Refusal> {
+/// `base` — answering the new entry's identity ([`listed`]), or saying, by field and for the
+/// whole write, why nothing was written.
+pub fn add(root: &Path, base: Option<&str>, entry: &Entry) -> Result<String, Refusal> {
     super::unchanged(root, Which::Shared, base).map_err(Refusal::file)?;
     let text = base.unwrap_or_default();
     let cfg: toml::Table = text.parse().unwrap_or_default();
@@ -238,15 +324,35 @@ pub fn add(root: &Path, base: Option<&str>, entry: &Entry) -> Result<(), Refusal
         });
     }
     let after = added(text, &entry)?;
-    super::save(root, Which::Shared, base, &after).map_err(Refusal::file)
+    super::save(root, Which::Shared, base, &after).map_err(Refusal::file)?;
+    listed(&after)
+        .pop()
+        .map(|one| one.id)
+        .ok_or_else(|| Refusal::file(vec!["the forge was written, and is not read back".into()]))
 }
 
-/// **Removes `[[forge]]` block `index`** (from 0) of `charter.toml` at `root`, read by the caller
-/// as `base` — unless something uses it ([`referrers`]), when nothing is written and each user
-/// is named.
-pub fn remove(root: &Path, base: Option<&str>, index: usize) -> Result<(), Refusal> {
+/// **Removes the `[[forge]]` block called `id`** ([`listed`]) from `charter.toml` at `root`, read
+/// by the caller as `base` — unless something uses it ([`referrers`]), when nothing is written
+/// and each user is named. Answers the block as the Add form would write it again: what an
+/// Undo adds back.
+pub fn remove(root: &Path, base: Option<&str>, id: &str) -> Result<Entry, Refusal> {
     super::unchanged(root, Which::Shared, base).map_err(Refusal::file)?;
     let text = base.unwrap_or_default();
+    let Some((index, entry)) = listed(text)
+        .into_iter()
+        .enumerate()
+        .find(|(_, one)| one.id == id)
+    else {
+        return Err(Refusal::file(vec![
+            "That forge is not in charter.toml as it was shown, so nothing was removed. Read \
+             the file again, then remove it again."
+                .to_owned(),
+        ]));
+    };
+    let index = match entry.keys.get(1) {
+        Some(Step::Index(at)) => *at,
+        _ => index,
+    };
     let after = removed(text, index)?;
     let referrers = referrers(root, text, &after);
     if !referrers.is_empty() {
@@ -255,7 +361,21 @@ pub fn remove(root: &Path, base: Option<&str>, index: usize) -> Result<(), Refus
             ..Refusal::default()
         });
     }
-    super::save(root, Which::Shared, base, &after).map_err(Refusal::file)
+    super::save(root, Which::Shared, base, &after).map_err(Refusal::file)?;
+    let value = |field: &str| {
+        entry
+            .values
+            .iter()
+            .find(|(key, _)| *key == field)
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default()
+    };
+    Ok(Entry {
+        kind: value("kind"),
+        owner: value("owner"),
+        host: value("host"),
+        exclude: value("exclude").lines().map(str::to_owned).collect(),
+    })
 }
 
 /// Who uses what `before` declares and `after` does not: see the module's rule.

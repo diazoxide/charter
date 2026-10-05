@@ -113,24 +113,37 @@ heading and Remove over the entry's own `SettingRow`s, and an Add form whose fie
 `SettingRow`s around a `Field` or a `Choice`, ending in `SettingActions`' Add and Cancel. ST-4 (harness profiles) and every later
 collection follow the same shape, in three layers:
 
-- **The core: one module per collection, `add` and `remove`.** `charter_core::settings::forges`
-  is the model (`crates/charter-core/src/settings/collection.rs` says the contract). `add(root,
-  base, &Entry)` checks the whole entry and writes it to the collection's home file; `remove(root,
-  base, <entry>)` takes it out unless something uses it. Both take `base`, the text the window
-  read, and end in `settings::save`, so a file changed since is refused and the next read's
-  refusals still apply. A refusal (`collection::Refusal`) has three parts: `fields` (by the
-  entry's own key, said under that field of the Add form), `referrers` (who uses the entry, each
-  with the Settings group it is changed in, as a deep link), and `file` (the whole write). The
-  window keeps no rules of its own (V91l).
-- **The wire: one command per write**, `add_project_forge` and `remove_project_forge`, answering
-  `EntryWritten`: the file as it now stands, or the three-part refusal.
+- **The core: one module per collection, `listed`, `add` and `remove`.**
+  `charter_core::settings::forges` is the model (`crates/charter-core/src/settings/collection.rs`
+  says the contract). `listed(text)` gives each entry an **opaque identity** (a forge's is
+  `forge:<place>:<fingerprint of the block>`, so it changes once the block moves or changes; a
+  profile's will be its name), its label, where its keys are, and the Add form's values that
+  would write it again. `add(root, base, &Entry)` checks the whole entry, writes it to the
+  collection's home file and answers the new identity; `remove(root, base, id)` takes the entry
+  out unless something uses it, and answers what it took. A refusal (`collection::Refusal`) has
+  three parts: `fields` (by the entry's own key, said under that field of the Add form),
+  `referrers` (who uses the entry, each with the Settings group it is changed in, followed as an
+  SE-22 deep link), and `file` (the whole write).
+- **The drawn base.** Every add and remove is sent against **the text the entries were drawn
+  from**, taken when the button is pressed (`Collection.base`, carried in `EntryOp`), never the
+  text as it stands when the write's turn in the queue comes. The core checks it, as every
+  settings write does, so a Remove queued behind an Undo is refused rather than made to the
+  entry now in its place.
+- **Undo is the inverse operation, through the core** (D-ST3-i): the Undo of an add is a remove
+  of the identity the add answered, with its reference check; the Undo of a remove is an add of
+  what the remove answered. An Undo is refused for exactly what that operation would be refused
+  for — a repo catalogued on the host since, say — and works when the file was not there before.
+- **The wire: the file lists its entries** (`SettingsFile.entries`), and one command per write,
+  `add_project_forge` and `remove_project_forge`, answering `EntryWritten`: the file as it now
+  stands with what was added or removed, or the three-part refusal.
 - **The window: the group declares a `collection`** (`groups.ts`'s `Collection`: its name, the
-  noun Add and Remove say, its entries with the ids of their settings, and the Add form's
-  fields), the level maps its name to the commands (`project.ts`'s `entry`), and the driver
-  writes it (`driver.ts`'s `entry`), in the same queue as every key. A written add or remove
-  has the one-level Undo, which puts the file's text back as it was through the level's
-  whole-text write: exact, comments included, and refused if the file moved since. A collection
-  group is offered in the nav while it has no entry, since that is where one is added.
+  noun Add and Remove say, the drawn base, its entries as the core listed them with the ids of
+  their settings, and the Add form's fields), the level maps its name to the commands and
+  answers each write's inverse (`project.ts`'s `entry`), and the driver writes it
+  (`driver.ts`'s `entry`), in the same queue as every key. A refused Remove is said under that
+  entry, by its identity, and a refused Undo at the head of the collection, until the next write.
+  The window computes no label, host or rule of its own (V91l). A collection group is offered in
+  the nav while it has no entry, since that is where one is added.
 
 ## The Notice is a house piece too, by its own amendment
 

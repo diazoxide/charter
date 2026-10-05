@@ -20,7 +20,7 @@ import {
   type SettingsFileId,
   type SettingsGroup,
 } from "./groups";
-import { chooseGroup, settingsPlace, useShownGroup } from "./links";
+import { chooseGroup, levelOf, linkToGroup, settingsPlace, useShownGroup } from "./links";
 import { KEPT, projectGroups, useProjectLevel } from "./project";
 import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
@@ -403,10 +403,9 @@ function Shown({
                 driver={driver}
                 onNew={create}
                 onGo={(to) => {
-                  // A link clears the filter, so the group it names is in the nav.
-                  setFilter("");
-                  setEditing(undefined);
-                  choose(to);
+                  // SE-22's link, at this level: it lands on the group and clears the filter.
+                  // A referrer at another level is ST-4's (#1241).
+                  if (levelOf(to) === level) linkToGroup(place, to);
                 }}
               />
             )

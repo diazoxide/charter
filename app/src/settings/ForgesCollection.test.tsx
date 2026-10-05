@@ -1,46 +1,79 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsTab } from "./SettingsTab";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
-import type { EntryWritten, ForgeEntry, SettingsField, SettingsFile } from "../bindings";
+import { forgetGroups } from "./links";
+import type {
+  EntryReferrer,
+  EntryWritten,
+  ForgeEntry,
+  SettingsField,
+  SettingsFile,
+} from "../bindings";
 
 /**
  * **Settings › Forges as a collection** (ST-3, #1227): Add opens an inline form of setting rows,
- * each `[[forge]]` block has Remove, a written add or remove has the one-level Undo, and what the
- * core refuses is said where it belongs. The core is the mock here — what it checks and what it
- * writes is `charter_core::settings::forges`'s tests; held here is what the person sees and what
- * the window sends.
+ * each `[[forge]]` block has Remove, a written add or remove has the one-level Undo — the
+ * inverse operation through the core — and what the core refuses is said where it belongs.
+ *
+ * The core is a model here, as small as the window's contract with it: the blocks, the text
+ * they are written as, an identity per block that changes once it moves, and a write refused
+ * when the text it is sent against is not the text on disk. What it checks beyond that is
+ * `charter_core::settings::forges`'s tests; held here is what the person sees and what the
+ * window sends.
  */
 
 const PLANE = "/home/dev/plane";
 
-const ONE_FORGE = `schema = 1\n\n[[forge]]\nkind = "github"\nowner = "acme"\n`;
+type Block = { kind: string; owner: string; host: string };
+
+const text = (blocks: readonly Block[]) =>
+  `schema = 1\n${blocks.map((one) => `\n[[forge]]\nkind = "${one.kind}"\nowner = "${one.owner}"\n${one.host ? `host = "${one.host}"\n` : ""}`).join("")}`;
+
+const idOf = (blocks: readonly Block[], at: number) =>
+  `forge:${at}:${blocks[at].kind}-${blocks[at].owner}`;
+
+const labelOf = (one: Block, at: number) =>
+  `Forge ${at + 1}: ${one.kind} ${one.owner} at ${one.host || `${one.kind}.com`}`;
 
 const field = (keys: (string | number)[], value: string): SettingsField => ({
   path: keys.map((one) => (typeof one === "number" ? { index: one } : { key: one })),
   value: { kind: "text", value },
 });
 
-const file = (text: string, fields: SettingsField[]): SettingsFile => ({
-  which: "shared",
-  file: "charter.toml",
-  exists: true,
-  text,
-  refusals: [],
-  parsed: true,
-  fields,
-});
-
-const SHARED = file(ONE_FORGE, [
-  field(["schema"], "1"),
-  field(["forge", 0, "kind"], "github"),
-  field(["forge", 0, "owner"], "acme"),
-]);
-
-const NONE = file("schema = 1\n", [field(["schema"], "1")]);
+/** `charter.toml` as the core answers it for `blocks`. */
+function fileOf(blocks: readonly Block[]): SettingsFile {
+  return {
+    which: "shared",
+    file: "charter.toml",
+    exists: true,
+    text: text(blocks),
+    refusals: [],
+    parsed: true,
+    fields: [
+      field(["schema"], "1"),
+      ...blocks.flatMap((one, at) => [
+        field(["forge", at, "kind"], one.kind),
+        field(["forge", at, "owner"], one.owner),
+      ]),
+    ],
+    entries: blocks.map((one, at) => ({
+      collection: "forges",
+      id: idOf(blocks, at),
+      label: labelOf(one, at),
+      keys: [{ key: "forge" }, { index: at }],
+      values: [
+        { field: "kind", value: one.kind },
+        { field: "owner", value: one.owner },
+        { field: "host", value: one.host },
+        { field: "exclude", value: "" },
+      ],
+    })),
+  };
+}
 
 const LOCAL: SettingsFile = {
   which: "local",
@@ -69,30 +102,47 @@ const SAVING = {
   repos_left_out: null,
 };
 
+const ACME: Block = { kind: "github", owner: "acme", host: "" };
+const BETA: Block = { kind: "github", owner: "beta", host: "" };
+
 type Asked =
   | { cmd: "add"; base: string | null; entry: ForgeEntry }
-  | { cmd: "remove"; base: string | null; index: number }
-  | { cmd: "raw"; base: string | null; text: string };
+  | { cmd: "remove"; base: string | null; id: string };
 
-/** The core, as a mock: `add` and `remove` answer with what they are handed, or write. */
+const MOVED = "charter.toml changed on disk since this tab read it, so nothing was saved.";
+
+const refusal = (
+  over: Partial<{
+    fields: { field: string; why: string }[];
+    referrers: EntryReferrer[];
+    reasons: string[];
+  }>,
+): EntryWritten => ({ kind: "refused", fields: [], referrers: [], reasons: [], ...over });
+
+/**
+ * The core, as a model of the window's contract with it. `refuseAdd` / `refuseRemove` answer
+ * with a refusal instead of writing; `holdAdds` makes each add wait for `release()`.
+ */
 function core({
-  shared = SHARED,
-  add,
-  remove,
+  blocks: start = [ACME],
+  refuseAdd,
+  refuseRemove,
+  holdAdds = false,
 }: {
-  shared?: SettingsFile;
-  add?: (entry: ForgeEntry) => EntryWritten;
-  remove?: (index: number) => EntryWritten;
+  blocks?: Block[];
+  refuseAdd?: (entry: ForgeEntry) => EntryWritten | undefined;
+  refuseRemove?: (id: string) => EntryWritten | undefined;
+  holdAdds?: boolean;
 } = {}) {
-  const files = { shared, local: LOCAL };
+  let blocks = [...start];
   const asked: Asked[] = [];
+  const held: (() => void)[] = [];
   mockIPC(
-    (cmd, args) => {
+    async (cmd, args) => {
       const given = (args ?? {}) as Record<string, unknown>;
       switch (cmd) {
         case "project_settings":
-          // A copy, as the wire hands one: the window never holds the core's own object.
-          return { ...files };
+          return { shared: fileOf(blocks), local: LOCAL };
         case "project_extensions":
           return { extensions: [], local_left_out: null };
         case "project_harness_plugins":
@@ -108,45 +158,60 @@ function core({
           return { on: false, offer: false, said: null, never: [] };
         case "add_project_forge": {
           const entry = given.entry as ForgeEntry;
-          asked.push({ cmd: "add", base: given.base as string | null, entry });
-          const answer = add?.(entry);
+          const base = given.base as string | null;
+          asked.push({ cmd: "add", base, entry });
+          if (holdAdds) await new Promise<void>((go) => held.push(go));
+          if (base !== text(blocks)) return refusal({ reasons: [MOVED] });
+          const answer = refuseAdd?.(entry);
           if (answer) return answer;
-          const at = new Set(
-            files.shared.fields
-              .filter((one) => one.path[0]?.key === "forge")
-              .map((one) => JSON.stringify(one.path[1])),
-          ).size;
-          files.shared = file(`${files.shared.text}\n[[forge]]\nkind = "${entry.kind}"\n`, [
-            ...files.shared.fields,
-            field(["forge", at, "kind"], entry.kind),
-            field(["forge", at, "owner"], entry.owner),
-          ]);
-          return { kind: "saved", file: files.shared };
+          blocks = [...blocks, { kind: entry.kind, owner: entry.owner, host: entry.host }];
+          return {
+            kind: "saved",
+            file: fileOf(blocks),
+            added: idOf(blocks, blocks.length - 1),
+            removed: null,
+          };
         }
         case "remove_project_forge": {
-          const index = given.index as number;
-          asked.push({ cmd: "remove", base: given.base as string | null, index });
-          const answer = remove?.(index);
+          const id = given.id as string;
+          const base = given.base as string | null;
+          asked.push({ cmd: "remove", base, id });
+          if (base !== text(blocks)) return refusal({ reasons: [MOVED] });
+          const at = blocks.findIndex((_, place) => idOf(blocks, place) === id);
+          if (at < 0)
+            return refusal({ reasons: ["That forge is not in charter.toml as it was shown"] });
+          const answer = refuseRemove?.(id);
           if (answer) return answer;
-          files.shared = NONE;
-          return { kind: "saved", file: files.shared };
-        }
-        case "save_project_settings": {
-          const change = given.change as { kind: "raw"; text: string };
-          asked.push({ cmd: "raw", base: given.base as string | null, text: change.text });
-          files.shared = change.text === ONE_FORGE ? SHARED : file(change.text, []);
-          return { kind: "saved", file: files.shared };
+          const took = blocks[at];
+          blocks = blocks.filter((_, place) => place !== at);
+          return {
+            kind: "saved",
+            file: fileOf(blocks),
+            added: null,
+            removed: [
+              { field: "kind", value: took.kind },
+              { field: "owner", value: took.owner },
+              { field: "host", value: took.host },
+              { field: "exclude", value: "" },
+            ],
+          };
         }
       }
       return undefined;
     },
     { shouldMockEvents: true },
   );
-  return { asked };
+  return {
+    asked,
+    owners: () => blocks.map((one) => one.owner),
+    /** Lets the oldest held add be answered. */
+    release: () => act(async () => held.shift()?.()),
+  };
 }
 
 beforeEach(() => {
   forgetThisLaunch();
+  forgetGroups();
   (globalThis as Record<string, unknown>)[GLOBAL] = {
     layout: { path: "/home/dev/layout.json", found: false, document: null, trouble: null },
     theme: { path: "", found: false, document: null, trouble: null },
@@ -159,6 +224,8 @@ afterEach(() => {
 });
 
 const nav = () => screen.getByRole("navigation", { name: "Groups" });
+const block = (name: string | RegExp) => screen.findByRole("group", { name });
+const removeOf = (label: string) => screen.getByRole("button", { name: `Remove ${label}` });
 
 async function atForges() {
   render(<SettingsTab plane={PLANE} level="project" />);
@@ -171,23 +238,21 @@ async function atForges() {
 
 describe("Settings › Forges", () => {
   it("is offered while the project declares no forge, so one can be added", async () => {
-    core({ shared: NONE });
+    core({ blocks: [] });
     render(<SettingsTab plane={PLANE} level="project" />);
     await screen.findByRole("button", { name: "General" });
     expect(within(nav()).getByRole("button", { name: "Forges" })).toBeInTheDocument();
   });
 
-  it("heads each block with what it is, over its own rows, with its Remove", async () => {
+  it("heads each block with the core's label, over its own rows, with its Remove", async () => {
     core();
     await atForges();
-    const block = screen.getByRole("group", { name: "Forge 1: github acme at github.com" });
-    expect(within(block).getByLabelText("Forge 1: owner")).toHaveValue("acme");
-    expect(
-      within(block).getByRole("button", { name: "Remove Forge 1: github acme at github.com" }),
-    ).toBeInTheDocument();
+    const one = await block("Forge 1: github acme at github.com");
+    expect(within(one).getByLabelText("Forge 1: owner")).toHaveValue("acme");
+    expect(removeOf("Forge 1: github acme at github.com")).toBeInTheDocument();
   });
 
-  it("adds a forge from an inline form of rows, sent whole against the text it read", async () => {
+  it("adds a forge from an inline form of rows, sent whole against the text it was drawn from", async () => {
     const { asked } = core();
     await atForges();
 
@@ -202,7 +267,7 @@ describe("Settings › Forges", () => {
     await waitFor(() => expect(asked).toHaveLength(1));
     expect(asked[0]).toEqual({
       cmd: "add",
-      base: ONE_FORGE,
+      base: text([ACME]),
       entry: {
         kind: "gitlab",
         owner: "platform",
@@ -210,11 +275,9 @@ describe("Settings › Forges", () => {
         exclude: ["sandbox", "old"],
       },
     });
-    expect(
-      await screen.findByRole("group", { name: "Forge 2: gitlab platform at gitlab.com" }),
-    ).toBeInTheDocument();
+    expect(await block("Forge 2: gitlab platform at git.acme.dev")).toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "New forge" })).not.toBeInTheDocument();
-    expect(screen.getByText("Added forge gitlab platform.")).toBeInTheDocument();
+    expect(screen.getByText("Added Forge 2: gitlab platform at git.acme.dev.")).toBeInTheDocument();
   });
 
   it("opens Add on its first field, and Escape closes it with the focus back on Add", async () => {
@@ -232,12 +295,8 @@ describe("Settings › Forges", () => {
 
   it("says a refused field under that field, and keeps what was typed", async () => {
     core({
-      add: () => ({
-        kind: "refused",
-        fields: [{ field: "host", why: "host 'https://x/' is not a hostname" }],
-        referrers: [],
-        reasons: [],
-      }),
+      refuseAdd: () =>
+        refusal({ fields: [{ field: "host", why: "host 'https://x/' is not a hostname" }] }),
     });
     await atForges();
     await userEvent.click(screen.getByRole("button", { name: "Add forge" }));
@@ -253,61 +312,131 @@ describe("Settings › Forges", () => {
     );
   });
 
-  it("removes a block and undoes it by putting the file's text back", async () => {
-    const { asked } = core();
+  it("removes a block by its identity, and undoes it by adding it back through the core", async () => {
+    const { asked, owners } = core();
     await atForges();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Remove Forge 1: github acme at github.com" }),
-    );
-    await waitFor(() => expect(asked).toHaveLength(1));
-    expect(asked[0]).toEqual({ cmd: "remove", base: ONE_FORGE, index: 0 });
-    await waitFor(() =>
-      expect(screen.queryByRole("group", { name: /^Forge 1/ })).not.toBeInTheDocument(),
-    );
+    await userEvent.click(removeOf("Forge 1: github acme at github.com"));
+    await waitFor(() => expect(owners()).toEqual([]));
+    expect(asked[0]).toEqual({ cmd: "remove", base: text([ACME]), id: idOf([ACME], 0) });
     expect(screen.getByText("Removed Forge 1: github acme at github.com.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add forge" })).toHaveFocus();
 
     await userEvent.click(screen.getByRole("button", { name: "Undo" }));
 
-    await waitFor(() => expect(asked).toHaveLength(2));
-    expect(asked[1]).toEqual({ cmd: "raw", base: "schema = 1\n", text: ONE_FORGE });
-    expect(
-      await screen.findByRole("group", { name: "Forge 1: github acme at github.com" }),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(owners()).toEqual(["acme"]));
+    expect(asked[1]).toEqual({
+      cmd: "add",
+      base: text([]),
+      entry: { kind: "github", owner: "acme", host: "", exclude: [] },
+    });
+    expect(await block("Forge 1: github acme at github.com")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
   });
 
-  it("names what uses a block it does not remove, with a link to where each is changed", async () => {
-    core({
-      remove: () => ({
-        kind: "refused",
-        fields: [],
-        referrers: [
-          { what: "The repo billing (inventory/repos.json) is on git.acme.dev.", group: null },
-          {
-            what: '[repos.billing] mode = "pr" in charter.toml opens a request on git.acme.dev.',
-            group: "project.saving",
-          },
-        ],
-        reasons: [],
+  it("undoes an add by removing that entry, refused with its users when one came since", async () => {
+    const { asked, owners } = core({
+      refuseRemove: (id) =>
+        id === idOf([ACME, { kind: "gitlab", owner: "ops", host: "" }], 1)
+          ? refusal({
+              referrers: [
+                { what: "The repo tools (inventory/repos.json) is on gitlab.com.", group: null },
+              ],
+            })
+          : undefined,
+    });
+    await atForges();
+    await userEvent.click(screen.getByRole("button", { name: "Add forge" }));
+    await userEvent.type(screen.getByLabelText("Owner"), "ops");
+    await userEvent.click(
+      within(screen.getByRole("form", { name: "New forge" })).getByRole("button", {
+        name: "Add forge",
       }),
+    );
+    await waitFor(() => expect(owners()).toEqual(["acme", "ops"]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(asked[1]).toEqual({
+      cmd: "remove",
+      base: text([ACME, { kind: "gitlab", owner: "ops", host: "" }]),
+      id: idOf([ACME, { kind: "gitlab", owner: "ops", host: "" }], 1),
+    });
+    expect(alert).toHaveTextContent("This forge is not removed while this uses it:");
+    expect(alert).toHaveTextContent("The repo tools (inventory/repos.json) is on gitlab.com.");
+    expect(owners()).toEqual(["acme", "ops"]);
+  });
+
+  it("sends a Remove against the text it was drawn from, so one queued behind an Undo takes nothing else", async () => {
+    // The review's sequence: [acme, beta]; Remove acme; Undo, slow; Remove beta, now Forge 1.
+    const { asked, owners, release } = core({ blocks: [ACME, BETA], holdAdds: true });
+    await atForges();
+    await userEvent.click(removeOf("Forge 1: github acme at github.com"));
+    await waitFor(() => expect(owners()).toEqual(["beta"]));
+    const drawn = text([BETA]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(asked).toHaveLength(2));
+    await userEvent.click(removeOf("Forge 1: github beta at github.com"));
+    await release();
+
+    await waitFor(() => expect(asked).toHaveLength(3));
+    expect(asked[2]).toEqual({ cmd: "remove", base: drawn, id: idOf([BETA], 0) });
+    // acme came back at the end, and nothing else went: the core refused the stale Remove.
+    await waitFor(() => expect(owners()).toEqual(["beta", "acme"]));
+    expect(await screen.findByText(MOVED)).toBeInTheDocument();
+  });
+
+  it("names what uses a block it does not remove, by that block, with a link to where each is changed", async () => {
+    core({
+      blocks: [ACME, BETA],
+      refuseRemove: () =>
+        refusal({
+          referrers: [
+            { what: "The repo billing (inventory/repos.json) is on github.com.", group: null },
+            {
+              what: '[repos.billing] mode = "pr" in charter.toml opens a request on github.com.',
+              group: "project.saving",
+            },
+          ],
+        }),
     });
     await atForges();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Remove Forge 1: github acme at github.com" }),
-    );
+    await userEvent.click(removeOf("Forge 2: github beta at github.com"));
 
     const alert = await screen.findByRole("alert");
+    expect(within(await block("Forge 2: github beta at github.com")).getByRole("alert")).toBe(
+      alert,
+    );
     expect(alert).toHaveTextContent("This forge is not removed while these use it:");
-    expect(alert).toHaveTextContent("The repo billing (inventory/repos.json) is on git.acme.dev.");
     expect(within(alert).getAllByRole("button", { name: "Fix it in Settings" })).toHaveLength(1);
-    expect(screen.getByRole("group", { name: /^Forge 1/ })).toBeInTheDocument();
 
     await userEvent.click(within(alert).getByRole("button", { name: "Fix it in Settings" }));
     expect(within(nav()).getByRole("button", { name: "Saving" })).toHaveAttribute(
       "aria-current",
       "true",
     );
+  });
+
+  it("clears a refused Remove once anything else is written", async () => {
+    core({
+      refuseRemove: () =>
+        refusal({ referrers: [{ what: "The repo billing is on github.com.", group: null }] }),
+    });
+    await atForges();
+    await userEvent.click(removeOf("Forge 1: github acme at github.com"));
+    await screen.findByRole("alert");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add forge" }));
+    await userEvent.type(screen.getByLabelText("Owner"), "ops");
+    await userEvent.click(
+      within(screen.getByRole("form", { name: "New forge" })).getByRole("button", {
+        name: "Add forge",
+      }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 });

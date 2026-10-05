@@ -37,9 +37,12 @@ import type { FileSetting, SettingsFileId } from "./groups";
  *   last change's Undo is gone, so an Undo never writes a key back over the text;
  * - **an entry of a collection is added or removed** (ST-3, the collection write seam) through the
  *   core's one function for that collection, which checks the whole entry and answers by field, by
- *   what uses the entry, and for the whole file ({@link EntryRefusal}). Its Undo puts the file's
- *   text back as it was before, through the level's whole-text write, so it is refused rather
- *   than written over an edit made since.
+ *   what uses the entry, and for the whole file ({@link EntryRefusal}). **It is sent against the
+ *   text the entries were drawn from** ({@link EntryOp}'s `base`, taken when the person pressed
+ *   the button), never the text as it stands when the write's turn comes, so a remove queued
+ *   behind another write is refused rather than made to the entry now in its place. **Its Undo
+ *   is the inverse operation through the same core function** (D-ST3-i) — a remove of what was
+ *   added, an add of what was removed — so an Undo is refused for what that operation would be.
  *
  * **Nothing here loosens what the level says may not be loosened**: its `mayUndo` is asked of
  * every Undo, every reset and every move, and one it refuses is not offered (D-SE17g).
@@ -47,11 +50,13 @@ import type { FileSetting, SettingsFileId } from "./groups";
 
 /**
  * **One add or remove in a collection** (ST-3): `collection` is the level's name for it
- * (`forges`); an add carries each field of the Add form as typed, by the entry's own key.
+ * (`forges`); an add carries each field of the Add form as typed, by the entry's own key, and a
+ * remove the entry's identity, which the core gave it. `base` is the text of the collection's
+ * file the entries were drawn from (`null`: not there), which the core checks it against.
  */
 export type EntryOp =
-  | { collection: string; add: Readonly<Record<string, string>> }
-  | { collection: string; remove: number };
+  | { collection: string; base: string | null; add: Readonly<Record<string, string>> }
+  | { collection: string; base: string | null; remove: string };
 
 /** Something that uses an entry, which stops its removal, and the group it is changed in. */
 export type EntryReferrer = { what: string; group: string | null };
@@ -63,8 +68,19 @@ export type EntryRefusal = {
   reasons: readonly string[];
 };
 
-/** What an add or a remove answered: the level, and the file it wrote; or why nothing was. */
-export type EntryWrote<T> = { saved: T; file: SettingsFileId } | { refused: EntryRefusal };
+/**
+ * What an add or a remove answered: the level, the file it wrote, what was done (said beside
+ * its Undo) and the operation that undoes it; or why nothing was written.
+ */
+export type EntryWrote<T> =
+  { saved: T; file: SettingsFileId; said: string; undo: EntryOp } | { refused: EntryRefusal };
+
+/** A collection's last refused Remove or Undo: the entry it was for (none for an Undo). */
+export type EntryRefused = {
+  collection: string;
+  entry: string | undefined;
+  refusal: EntryRefusal;
+};
 
 /** A level's settings files, by which file each is. */
 export type Files = Partial<Record<SettingsFileId, Shown>>;
@@ -87,9 +103,11 @@ export type Driven<T> = {
   undoable: string | undefined;
   /** What the last add or remove did, said beside its Undo. */
   undoSaid: string | undefined;
-  /** Adds or removes an entry for the collection `id` (its group's id), saying `said` beside
-   *  its Undo once written; answers why nothing was written, or `undefined` once it was. */
-  entry: (id: string, op: EntryOp, said: string) => Promise<EntryRefusal | undefined>;
+  /** Adds or removes an entry for the collection `id` (its group's id); answers why nothing
+   *  was written, or `undefined` once it was. */
+  entry: (id: string, op: EntryOp) => Promise<EntryRefusal | undefined>;
+  /** The last refused Remove or Undo in a collection, until the next write or Undo. */
+  entryRefused: EntryRefused | undefined;
   /** Writes `draft` to `file`: the file the value comes from, else the one picked for it. */
   write: (setting: FileSetting, draft: string, file?: SettingsFileId) => void;
   /** Writes `text` as the whole of `which`, whose text was `base` when the edit began
@@ -146,17 +164,11 @@ export type Level<T> = {
 
 /**
  * The last change made here: the setting, its file, and what puts it back — the edits a key's
- * change is undone with, or the whole text an add or a remove is (`text`: the file was `before`,
- * and the change left it `after`).
+ * change is undone with, or the operation that undoes an add or a remove in a collection.
  */
 type Change =
   | { setting: string; file: SettingsFileId; back: SettingsEdit[] }
-  | {
-      setting: string;
-      file: SettingsFileId;
-      text: { before: string; after: string };
-      said: string;
-    };
+  | { setting: string; undo: EntryOp; said: string };
 
 /**
  * **The file a setting's value comes from** at this level, or `undefined` when no file here
@@ -205,6 +217,7 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
   const [pending, setPending] = useState<Record<string, string>>({});
   const [refused, setRefused] = useState<Record<string, readonly string[]>>({});
   const [last, setLast] = useState<Change>();
+  const [entryRefused, setEntryRefused] = useState<EntryRefused>();
   const latest = useRef(level);
   // The level's functions as of the last render, before any effect below uses them.
   useLayoutEffect(() => {
@@ -301,6 +314,8 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
 
   const write = useCallback(
     (setting: FileSetting, draft: string, to?: SettingsFileId) => {
+      // Any write ends what a collection's last refusal said.
+      setEntryRefused(undefined);
       setPending((was) => ({ ...was, [setting.id]: draft }));
       enqueue(async () => {
         const now = held.current && latest.current.files(held.current);
@@ -318,6 +333,8 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
   const reset = useCallback(
     (setting: FileSetting) => {
       setPending((was) => ({ ...was, [setting.id]: "" }));
+      // Any write ends what a collection's last refusal said.
+      setEntryRefused(undefined);
       enqueue(async () => {
         const now = held.current && latest.current.files(held.current);
         const which = now && heldIn(setting, now);
@@ -335,6 +352,8 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
 
   const move = useCallback(
     (setting: FileSetting, to: SettingsWhich) => {
+      // Any write ends what a collection's last refusal said.
+      setEntryRefused(undefined);
       enqueue(async () => {
         const was = held.current;
         const now = was && latest.current.files(was);
@@ -365,22 +384,33 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
     [enqueue, mayChange, readFiles, took],
   );
 
-  /** Writes `text` as the whole of `which`, against `base`, for `id`: a refusal is kept by it. */
-  const sendText = useCallback(
-    async (id: string, which: SettingsFileId, base: string, text: string) => {
+  /** Runs `op` for the collection `id`; answers why nothing was written. A refusal of a
+   *  remove or an Undo is kept as the collection's, by the entry it was for. */
+  const sendEntry = useCallback(
+    async (id: string, op: EntryOp, undoing: boolean): Promise<EntryRefusal | undefined> => {
       const was = held.current;
-      const save = latest.current.saveRaw;
-      if (was === undefined || save === undefined) return;
-      const said = await save(which, base, text, was).catch((err: unknown): Wrote<T> => ({
-        refused: [String(err)],
+      const write = latest.current.entry;
+      if (was === undefined || write === undefined)
+        return { fields: {}, referrers: [], reasons: ["Nothing here can be added to."] };
+      const wrote = await write(op, was).catch((err: unknown): EntryWrote<T> => ({
+        refused: { fields: {}, referrers: [], reasons: [String(err)] },
       }));
-      if ("refused" in said) {
-        setRefused((before) => ({ ...before, [id]: said.refused }));
+      if ("refused" in wrote) {
+        if (undoing || "remove" in op)
+          setEntryRefused({
+            collection: id,
+            entry: undoing || !("remove" in op) ? undefined : op.remove,
+            refusal: wrote.refused,
+          });
+        // What is shown is what is on disk: a refusal may be the file having moved.
         await readFiles();
-        return;
+        return wrote.refused;
       }
-      took(said.saved);
+      took(wrote.saved);
       setRefused((before) => without(before, id));
+      // One level: an Undo is not itself undone.
+      setLast(undoing ? undefined : { setting: id, undo: wrote.undo, said: wrote.said });
+      return undefined;
     },
     [readFiles, took],
   );
@@ -389,56 +419,27 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
     const change = last;
     if (!change) return;
     setLast(undefined);
+    setEntryRefused(undefined);
     enqueue(async () => {
-      if ("text" in change)
-        await sendText(change.setting, change.file, change.text.after, change.text.before);
+      if ("undo" in change) await sendEntry(change.setting, change.undo, true);
       else await send(change.setting, change.file, change.back);
     });
-  }, [enqueue, last, send, sendText]);
+  }, [enqueue, last, send, sendEntry]);
 
   const entry = useCallback(
-    (id: string, op: EntryOp, said: string) =>
+    (id: string, op: EntryOp) =>
       new Promise<EntryRefusal | undefined>((answer) => {
-        enqueue(async () => {
-          const was = held.current;
-          const write = latest.current.entry;
-          if (was === undefined || write === undefined) {
-            answer({ fields: {}, referrers: [], reasons: ["Nothing here can be added to."] });
-            return;
-          }
-          const wrote = await write(op, was).catch((err: unknown): EntryWrote<T> => ({
-            refused: { fields: {}, referrers: [], reasons: [String(err)] },
-          }));
-          if ("refused" in wrote) {
-            // What is shown is what is on disk: a refusal may be the file having moved.
-            await readFiles();
-            answer(wrote.refused);
-            return;
-          }
-          const before = latest.current.files(was)[wrote.file];
-          const after = latest.current.files(wrote.saved)[wrote.file];
-          took(wrote.saved);
-          setRefused((was) => without(was, id));
-          // Undone by putting the text back, which needs a file that was there to put back.
-          setLast(
-            before?.exists && after && latest.current.saveRaw
-              ? {
-                  setting: id,
-                  file: wrote.file,
-                  text: { before: before.text, after: after.text },
-                  said,
-                }
-              : undefined,
-          );
-          answer(undefined);
-        });
+        setEntryRefused(undefined);
+        enqueue(async () => answer(await sendEntry(id, op, false)));
       }),
-    [enqueue, readFiles, took],
+    [enqueue, sendEntry],
   );
 
   const writeRaw = useCallback(
     (which: SettingsFileId, base: string | null, text: string) =>
       new Promise<readonly string[] | undefined>((answer) => {
+        // Any write ends what a collection's last refusal said.
+        setEntryRefused(undefined);
         enqueue(async () => {
           const was = held.current;
           const save = latest.current.saveRaw;
@@ -477,6 +478,7 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
     undoable: last?.setting,
     undoSaid: last && "said" in last ? last.said : undefined,
     entry,
+    entryRefused,
     write,
     writeRaw,
     undo,

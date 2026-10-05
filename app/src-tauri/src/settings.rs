@@ -76,6 +76,31 @@ pub struct SettingsFile {
     pub parsed: bool,
     /// Every value in it, in file order.
     pub fields: Vec<SettingsField>,
+    /// The entries of each collection the file is the home of (ST-3): `charter.toml`'s
+    /// `[[forge]]` blocks. `null` when it holds none, and left out by a caller that lists none.
+    #[specta(optional)]
+    pub entries: Option<Vec<SettingsEntry>>,
+}
+
+/// One entry of a collection, as the core lists it (`charter_core::settings::collection::Listed`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SettingsEntry {
+    /// Which collection: `forges`.
+    pub collection: String,
+    /// Opaque: what a remove is sent by. A different one once the entry moved or changed.
+    pub id: String,
+    pub label: String,
+    /// The path every key of the entry is under.
+    pub keys: Vec<SettingsStep>,
+    /// The Add form's values that would write it again, by the entry's key.
+    pub values: Vec<EntryValue>,
+}
+
+/// One field of a collection entry, as the Add form holds it: a list is one entry per line.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct EntryValue {
+    pub field: String,
+    pub value: String,
 }
 
 /// Both files.
@@ -176,7 +201,8 @@ pub(crate) fn save(
 #[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SettingsMoved {
-    Moved { settings: ProjectSettings },
+    /// Boxed: both files are far larger than a refusal.
+    Moved { settings: Box<ProjectSettings> },
     Refused { reasons: Vec<String> },
 }
 
@@ -228,10 +254,10 @@ pub(crate) fn move_keys(
     };
     match settings::move_keys(root, to.into(), from_base, to_base, &paths) {
         Ok(()) => Ok(SettingsMoved::Moved {
-            settings: ProjectSettings {
+            settings: Box::new(ProjectSettings {
                 shared: file_of(root, SettingsWhich::Shared)?,
                 local: file_of(root, SettingsWhich::Local)?,
-            },
+            }),
         }),
         Err(reasons) => Ok(SettingsMoved::Refused { reasons }),
     }
@@ -262,8 +288,12 @@ pub struct EntryReferrer {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EntryWritten {
+    /// Written. `added` is the new entry's identity, after an add; `removed` the entry a remove
+    /// took, as the Add form would write it again: what each one's Undo is made of (D-ST3-i).
     Saved {
         file: SettingsFile,
+        added: Option<String>,
+        removed: Option<Vec<EntryValue>>,
     },
     Refused {
         fields: Vec<EntryFieldRefusal>,
@@ -312,21 +342,31 @@ pub(crate) fn add_forge(
         host: entry.host,
         exclude: entry.exclude,
     };
-    written(root, settings::forges::add(root, base, &entry))
+    match settings::forges::add(root, base, &entry) {
+        Ok(id) => Ok(EntryWritten::Saved {
+            file: file_of(root, SettingsWhich::Shared)?,
+            added: Some(id),
+            removed: None,
+        }),
+        Err(refusal) => Ok(refused(refusal)),
+    }
 }
 
-/// Remove `[[forge]]` block `index` (from 0) of `charter.toml` — refused, naming them, while a
-/// repo or a setting uses it (`charter_core::settings::forges::remove`).
+/// Remove the `[[forge]]` block called `id` (as `charter.toml`'s `entries` list it) — refused,
+/// naming them, while a repo or a setting uses it (`charter_core::settings::forges::remove`).
+///
+/// `base` is the text the entries were drawn from, so an entry that moved or changed since is
+/// refused rather than another removed.
 #[tauri::command]
 #[specta::specta]
 pub async fn remove_project_forge(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     base: Option<String>,
-    index: u32,
+    id: String,
 ) -> Result<EntryWritten, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || remove_forge(&root, base.as_deref(), index))
+    tauri::async_runtime::spawn_blocking(move || remove_forge(&root, base.as_deref(), &id))
         .await
         .map_err(|err| format!("removing the forge did not finish: {err}"))?
 }
@@ -335,39 +375,43 @@ pub async fn remove_project_forge(
 pub(crate) fn remove_forge(
     root: &std::path::Path,
     base: Option<&str>,
-    index: u32,
+    id: &str,
 ) -> Result<EntryWritten, String> {
-    written(root, settings::forges::remove(root, base, index as usize))
+    match settings::forges::remove(root, base, id) {
+        Ok(took) => Ok(EntryWritten::Saved {
+            file: file_of(root, SettingsWhich::Shared)?,
+            added: None,
+            removed: Some(values_on_the_wire(vec![
+                ("kind", took.kind),
+                ("owner", took.owner),
+                ("host", took.host),
+                ("exclude", took.exclude.join("\n")),
+            ])),
+        }),
+        Err(refusal) => Ok(refused(refusal)),
+    }
 }
 
-/// A collection write's answer, for the wire: `charter.toml` as it now stands, or the refusal.
-fn written(
-    root: &std::path::Path,
-    said: Result<(), settings::collection::Refusal>,
-) -> Result<EntryWritten, String> {
-    match said {
-        Ok(()) => Ok(EntryWritten::Saved {
-            file: file_of(root, SettingsWhich::Shared)?,
-        }),
-        Err(refusal) => Ok(EntryWritten::Refused {
-            fields: refusal
-                .fields
-                .into_iter()
-                .map(|one| EntryFieldRefusal {
-                    field: one.field.to_owned(),
-                    why: one.why,
-                })
-                .collect(),
-            referrers: refusal
-                .referrers
-                .into_iter()
-                .map(|one| EntryReferrer {
-                    what: one.what,
-                    group: one.group.map(str::to_owned),
-                })
-                .collect(),
-            reasons: refusal.file,
-        }),
+/// A collection write's refusal, for the wire.
+fn refused(refusal: settings::collection::Refusal) -> EntryWritten {
+    EntryWritten::Refused {
+        fields: refusal
+            .fields
+            .into_iter()
+            .map(|one| EntryFieldRefusal {
+                field: one.field.to_owned(),
+                why: one.why,
+            })
+            .collect(),
+        referrers: refusal
+            .referrers
+            .into_iter()
+            .map(|one| EntryReferrer {
+                what: one.what,
+                group: one.group.map(|group| group.id().to_owned()),
+            })
+            .collect(),
+        reasons: refusal.file,
     }
 }
 
@@ -384,8 +428,39 @@ pub(crate) fn file_of(
         refusals: read.refusals,
         parsed: fields.is_some(),
         fields: fields_on_the_wire(fields.unwrap_or_default()),
+        entries: entries_of(which, &read.text),
         text: read.text,
     })
+}
+
+/// The collections `which` is the home of, listed by the core: `charter.toml`'s forges.
+fn entries_of(which: SettingsWhich, text: &str) -> Option<Vec<SettingsEntry>> {
+    let listed = match which {
+        SettingsWhich::Shared => settings::forges::listed(text),
+        SettingsWhich::Local => Vec::new(),
+    };
+    (!listed.is_empty()).then(|| {
+        listed
+            .into_iter()
+            .map(|one| SettingsEntry {
+                collection: "forges".to_owned(),
+                id: one.id,
+                label: one.label,
+                keys: one.keys.into_iter().map(step_of).collect(),
+                values: values_on_the_wire(one.values),
+            })
+            .collect()
+    })
+}
+
+fn values_on_the_wire(values: Vec<(&'static str, String)>) -> Vec<EntryValue> {
+    values
+        .into_iter()
+        .map(|(field, value)| EntryValue {
+            field: field.to_owned(),
+            value,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -709,7 +784,7 @@ mod tests {
         };
         assert_eq!(fields[0].field, "kind");
 
-        let EntryWritten::Saved { file } =
+        let EntryWritten::Saved { file, .. } =
             add_forge(dir.path(), Some(text), entry("gitlab", "git.acme.dev")).unwrap()
         else {
             panic!("a good forge is written");
@@ -727,7 +802,7 @@ mod tests {
         )
         .unwrap();
         let EntryWritten::Refused { referrers, .. } =
-            remove_forge(dir.path(), Some(&file.text), 0).unwrap()
+            remove_forge(dir.path(), Some(&file.text), &file.entries.unwrap()[0].id).unwrap()
         else {
             panic!("a forge a repo is on is not removed");
         };

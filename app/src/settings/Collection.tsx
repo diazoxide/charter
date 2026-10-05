@@ -6,11 +6,12 @@ import type { Collection, CollectionEntry, EntryField, Setting } from "./groups"
 /**
  * **A collection, drawn** (ST-3, V91e–g): each entry a heading with its Remove over its own rows,
  * then Add, which opens an inline form of setting rows. Every write is the driver's `entry`
- * (`driver.ts`), which asks the core's one function for the collection; nothing is checked
- * here. What the core refuses is said where it belongs: a field's refusal under that field, a
- * Remove's referrers under the entry with a link to the group each is changed in, and a refusal
- * of the whole write under the form or the entry. The last add or remove offers its Undo at the
- * head of the collection, saying what it did.
+ * (`driver.ts`), which asks the core's one function for the collection against the text the
+ * entries were drawn from (`collection.base`); nothing is checked here, and every label is the
+ * core's. What the core refuses is said where it belongs: a field's refusal under that field, a
+ * Remove's referrers under the entry (by its identity) with a link to the group each is changed
+ * in, an Undo's at the head of the collection. The last add or remove offers its Undo at the
+ * head, saying what it did.
  */
 export function CollectionView({
   id,
@@ -32,34 +33,34 @@ export function CollectionView({
   onGo: (group: string) => void;
 }) {
   const { noun } = collection;
-  /** Why the last Remove was refused, by the entry it was for. */
-  const [refused, setRefused] = useState<{ index: number; refusal: EntryRefusal }>();
-  const [removing, setRemoving] = useState<number>();
+  const [removing, setRemoving] = useState<string>();
   const adding = useRef<HTMLButtonElement>(null);
+  const whole = useRef<HTMLDivElement>(null);
+  /** Where the focus goes once what had it is gone: Add, or the collection itself. */
+  const settle = () => (adding.current ?? whole.current)?.focus();
   const undoSaid = driver.undoable === id ? driver.undoSaid : undefined;
-  const undoRefused = driver.refused[id];
+  const refused = driver.entryRefused?.collection === id ? driver.entryRefused : undefined;
   const ofEntry = (entry: CollectionEntry) =>
     settings.filter((one) => entry.settings.includes(one.id));
   const mine = new Set(collection.entries.flatMap((entry) => entry.settings));
 
   const remove = async (entry: CollectionEntry) => {
-    setRemoving(entry.index);
-    setRefused(undefined);
-    const refusal = await driver.entry(
-      id,
-      { collection: collection.name, remove: entry.index },
-      `Removed ${entry.label}.`,
-    );
+    setRemoving(entry.id);
+    // Sent against the text this entry was drawn from, whatever is queued before it.
+    const refusal = await driver.entry(id, {
+      collection: collection.name,
+      base: collection.base,
+      remove: entry.id,
+    });
     setRemoving(undefined);
-    if (refusal) setRefused({ index: entry.index, refusal });
     // The entry is gone: the focus goes to Add, which is always there.
-    else adding.current?.focus();
+    if (!refusal) settle();
   };
 
   return (
-    <div className="ui-collection">
+    <div className="ui-collection" ref={whole} tabIndex={-1}>
       {settings.filter((one) => !mine.has(one.id)).map(row)}
-      {(undoSaid !== undefined || (undoRefused?.length ?? 0) > 0) && (
+      {(undoSaid !== undefined || (refused && refused.entry === undefined)) && (
         <div className="ui-collection-done" role="status">
           {undoSaid !== undefined && (
             <>
@@ -71,23 +72,20 @@ export function CollectionView({
                 tabIndex={0}
                 onClick={() => {
                   driver.undo();
-                  adding.current?.focus();
+                  settle();
                 }}
               >
                 Undo
               </button>
             </>
           )}
-          {undoRefused && <Refused reasons={undoRefused} />}
+          {refused && refused.entry === undefined && (
+            <Refused noun={noun} refusal={refused.refusal} onGo={onGo} />
+          )}
         </div>
       )}
       {collection.entries.map((entry) => (
-        <div
-          key={entry.index}
-          className="ui-collection-entry"
-          role="group"
-          aria-label={entry.label}
-        >
+        <div key={entry.id} className="ui-collection-entry" role="group" aria-label={entry.label}>
           <div className="ui-collection-head">
             <h4>{entry.label}</h4>
             <button
@@ -101,49 +99,53 @@ export function CollectionView({
               Remove
             </button>
           </div>
-          {refused?.index === entry.index && (
-            <div className="ui-setting-error" role="alert">
-              {refused.refusal.referrers.length > 0 && (
-                <p>
-                  {`This ${noun} is not removed while ${refused.refusal.referrers.length === 1 ? "this uses" : "these use"} it:`}
-                </p>
-              )}
-              {refused.refusal.referrers.map((one, at) => (
-                <p key={at}>
-                  {one.what}
-                  {one.group !== null && (
-                    <>
-                      {" "}
-                      <button
-                        type="button"
-                        className="ui-setting-reset"
-                        tabIndex={0}
-                        onClick={() => onGo(one.group ?? "")}
-                      >
-                        Fix it in Settings
-                      </button>
-                    </>
-                  )}
-                </p>
-              ))}
-              {refused.refusal.reasons.map((why, at) => (
-                <p key={`reason-${at}`}>{why}</p>
-              ))}
-            </div>
+          {refused?.entry === entry.id && (
+            <Refused noun={noun} refusal={refused.refusal} onGo={onGo} />
           )}
           {ofEntry(entry).map(row)}
         </div>
       ))}
-      <AddForm id={id} collection={collection} driver={driver} adding={adding} />
+      <AddForm id={id} collection={collection} driver={driver} adding={adding} whole={whole} />
     </div>
   );
 }
 
-function Refused({ reasons }: { reasons: readonly string[] }) {
+/** What a Remove or an Undo was refused for: who uses the entry, each with its link, and why. */
+function Refused({
+  noun,
+  refusal,
+  onGo,
+}: {
+  noun: string;
+  refusal: EntryRefusal;
+  onGo: (group: string) => void;
+}) {
+  const users = refusal.referrers.length;
   return (
     <div className="ui-setting-error" role="alert">
-      {reasons.map((why, at) => (
-        <p key={at}>{why}</p>
+      {users > 0 && (
+        <p>{`This ${noun} is not removed while ${users === 1 ? "this uses" : "these use"} it:`}</p>
+      )}
+      {refusal.referrers.map((one, at) => (
+        <p key={at}>
+          {one.what}
+          {one.group !== null && (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="ui-setting-reset"
+                tabIndex={0}
+                onClick={() => onGo(one.group ?? "")}
+              >
+                Fix it in Settings
+              </button>
+            </>
+          )}
+        </p>
+      ))}
+      {refusal.reasons.map((why, at) => (
+        <p key={`reason-${at}`}>{why}</p>
       ))}
     </div>
   );
@@ -164,11 +166,13 @@ function AddForm({
   collection,
   driver,
   adding,
+  whole,
 }: {
   id: string;
   collection: Collection;
   driver: Driven<unknown>;
   adding: RefObject<HTMLButtonElement | null>;
+  whole: RefObject<HTMLDivElement | null>;
 }) {
   const { noun, fields } = collection;
   const [values, setValues] = useState<Record<string, string>>();
@@ -176,14 +180,15 @@ function AddForm({
   const [sending, setSending] = useState(false);
   const form = useId();
   const open = values !== undefined;
-  // The first field takes the focus as the form is drawn; Add takes it back once it closes.
+  // The first field takes the focus as the form is drawn; Add takes it back once it closes, or
+  // the collection itself when Add is not there.
   const opened = useRef(false);
   useEffect(() => {
     if (open)
       document.getElementById(form)?.querySelector<HTMLElement>("input, select, textarea")?.focus();
-    else if (opened.current) adding.current?.focus();
+    else if (opened.current) (adding.current ?? whole.current)?.focus();
     opened.current = open;
-  }, [open, form, adding]);
+  }, [open, form, adding, whole]);
   const close = () => {
     setValues(undefined);
     setRefusal(undefined);
@@ -206,11 +211,11 @@ function AddForm({
     setValues((was) => (was === undefined ? was : { ...was, [field]: to }));
   const send = async () => {
     setSending(true);
-    const said = await driver.entry(
-      id,
-      { collection: collection.name, add: values },
-      `Added ${[noun, values.kind, values.owner].filter(Boolean).join(" ")}.`,
-    );
+    const said = await driver.entry(id, {
+      collection: collection.name,
+      base: collection.base,
+      add: values,
+    });
     setSending(false);
     if (said) setRefusal(said);
     else close();
@@ -257,7 +262,13 @@ function AddForm({
           }
         />
       ))}
-      {refusal && refusal.reasons.length > 0 && <Refused reasons={refusal.reasons} />}
+      {refusal && refusal.reasons.length > 0 && (
+        <div className="ui-setting-error" role="alert">
+          {refusal.reasons.map((why, at) => (
+            <p key={at}>{why}</p>
+          ))}
+        </div>
+      )}
       <SettingActions>
         <button type="submit" tabIndex={0} disabled={sending}>
           {`Add ${noun}`}

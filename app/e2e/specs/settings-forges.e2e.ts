@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 
@@ -79,8 +79,14 @@ describe("Settings › Forges", () => {
   });
 
   after(async () => {
-    // Whatever happened, the file is what it was before this spec.
-    if (original !== null && readFileSync(file, "utf8") !== original) writeFileSync(file, original);
+    // Whatever happened, the file is what it was before this spec: put back, or taken away
+    // again when there was none. A `before` that failed read nothing, so touches nothing.
+    if (file !== "") {
+      const now = existsSync(file) ? readFileSync(file, "utf8") : null;
+      if (original === null) {
+        if (now !== null) rmSync(file);
+      } else if (now !== original) writeFileSync(file, original);
+    }
     if (!tabWasOpen) {
       const closer = await $(`${TABS} button[aria-label="Close ${SETTINGS}"]`);
       if (await closer.isExisting()) await closer.click();

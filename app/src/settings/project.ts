@@ -17,7 +17,6 @@ import {
   answered,
   entries,
   EXTENSIONS,
-  forgeBlocks,
   harnessPluginGroups,
   key,
   listAt,
@@ -139,35 +138,27 @@ function assistedBy(path: string[]): Control {
   });
 }
 
-/** What each kind's own host is, when a block names none — `forge::Kind::default_host`. */
-const KIND_HOST: Readonly<Record<string, string>> = {
-  gitlab: "gitlab.com",
-  github: "github.com",
-};
-
 /**
- * **Forges as a collection** (ST-3): each `[[forge]]` block an entry over its own rows, and the
- * Add form's four fields, written by `charter_core::settings::forges` (`add_project_forge`,
- * `remove_project_forge`).
+ * **Forges as a collection** (ST-3): each `[[forge]]` block the core lists in `charter.toml` an
+ * entry over its own rows, and the Add form's four fields, written by
+ * `charter_core::settings::forges` (`add_project_forge`, `remove_project_forge`).
  */
-function forgesCollection(shared: Shown, settings: readonly FileSetting[]): Collection {
-  return {
+function forgesCollection(shared: SettingsFile, settings: readonly FileSetting[]): Collection {
+  const under = (keys: readonly SettingsStep[], key: readonly SettingsStep[]) =>
+    keys.every((step, at) => JSON.stringify(step) === JSON.stringify(key[at]));
+  const collection: Collection = {
     name: "forges",
     noun: "forge",
-    entries: forgeBlocks(shared).map((index) => {
-      const at = (key: string) =>
-        shown(valueAt(shared, [{ key: "forge" }, { index }, { key }])).trim();
-      const kind = at("kind") || "gitlab";
-      const owner = at("group") || at("owner");
-      const host = at("host") || KIND_HOST[kind] || kind;
-      return {
-        label: `Forge ${index + 1}: ${kind}${owner ? ` ${owner}` : ""} at ${host}`,
-        index,
+    base: shared.exists ? shared.text : null,
+    entries: (shared.entries ?? [])
+      .filter((one) => one.collection === "forges")
+      .map((one) => ({
+        id: one.id,
+        label: one.label,
         settings: settings
-          .filter((one) => one.key[0]?.key === "forge" && one.key[1]?.index === index)
-          .map((one) => one.id),
-      };
-    }),
+          .filter((setting) => under(one.keys, setting.key))
+          .map((setting) => setting.id),
+      })),
     fields: [
       {
         field: "kind",
@@ -197,6 +188,7 @@ function forgesCollection(shared: Shown, settings: readonly FileSetting[]): Coll
       },
     ],
   };
+  return collection;
 }
 
 /** `[sandbox] mode`, which this tab turns on and never back off (D-SE17g). */
@@ -360,7 +352,7 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
       label: "Forges",
       help: "Where the project's repos are found: one block per [[forge]] in charter.toml.",
       settings: forgeSettings,
-      ...(sharedOk ? { collection: forgesCollection(shared, forgeSettings) } : {}),
+      ...(sharedOk ? { collection: forgesCollection(read.shared, forgeSettings) } : {}),
     },
     {
       id: "project.extensions",
@@ -512,35 +504,56 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
             : { saved: { ...both, [which]: said.data.file } },
       );
 
-  /** An add or a remove in one of the level's collections, through the core's function for it. */
+  /**
+   * An add or a remove in one of the level's collections, through the core's function for it,
+   * against the text the entries were drawn from (`op.base`). A written one answers what it did,
+   * in the core's label, and its inverse: a remove of what was added, an add of what was
+   * removed (D-ST3-i).
+   */
   const entry = (op: EntryOp, both: ProjectFiles): Promise<EntryWrote<ProjectFiles>> => {
-    const base = both.shared.exists ? both.shared.text : null;
+    const refused = (reasons: string[]) => ({ refused: { fields: {}, referrers: [], reasons } });
     if (op.collection !== "forges")
-      return Promise.resolve({
-        refused: {
-          fields: {},
-          referrers: [],
-          reasons: [`No collection is called ${op.collection}.`],
-        },
-      });
+      return Promise.resolve(refused([`No collection is called ${op.collection}.`]));
     const asked =
       "add" in op
-        ? commands.addProjectForge(plane, base, {
+        ? commands.addProjectForge(plane, op.base, {
             kind: op.add.kind ?? "",
             owner: op.add.owner ?? "",
             host: op.add.host ?? "",
             exclude: entries(op.add.exclude ?? ""),
           })
-        : commands.removeProjectForge(plane, base, op.remove);
+        : commands.removeProjectForge(plane, op.base, op.remove);
     return asked.then((said): EntryWrote<ProjectFiles> => {
-      if (said.status === "error")
-        return { refused: { fields: {}, referrers: [], reasons: [said.error] } };
-      if (said.data.kind === "saved")
-        return { saved: { ...both, shared: said.data.file }, file: "shared" };
-      const fields: Record<string, string[]> = {};
-      for (const one of said.data.fields) (fields[one.field] ??= []).push(one.why);
+      if (said.status === "error") return refused([said.error]);
+      const answer = said.data;
+      if (answer.kind === "refused") {
+        const fields: Record<string, string[]> = {};
+        for (const one of answer.fields) (fields[one.field] ??= []).push(one.why);
+        return {
+          refused: { fields, referrers: answer.referrers, reasons: answer.reasons },
+        };
+      }
+      const file = answer.file;
+      const after = file.exists ? file.text : null;
+      const saved = { ...both, shared: file };
+      const labelOf = (id: string, in_: SettingsFile) =>
+        (in_.entries ?? []).find((one) => one.id === id)?.label ?? "the forge";
+      if ("add" in op)
+        return {
+          saved,
+          file: "shared",
+          said: `Added ${labelOf(answer.added ?? "", file)}.`,
+          undo: { collection: op.collection, base: after, remove: answer.added ?? "" },
+        };
       return {
-        refused: { fields, referrers: said.data.referrers, reasons: said.data.reasons },
+        saved,
+        file: "shared",
+        said: `Removed ${labelOf(op.remove, both.shared)}.`,
+        undo: {
+          collection: op.collection,
+          base: after,
+          add: Object.fromEntries((answer.removed ?? []).map((one) => [one.field, one.value])),
+        },
       };
     });
   };
