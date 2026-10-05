@@ -73,7 +73,7 @@ one of them needs, and the local file's line stays while that file exists in any
 Once the file is gone and the plane no longer declares it, its line goes.
 
 **A file charter wrote in a clone stays hidden while it is there**, whatever charter's own
-records say — a generated file, its `.charter-generated` record, a temp file an interrupted
+records say — a generated file, its `.purlis-generated` record, a temp file an interrupted
 write left — in every checkout charter wires that reads the same `.git/info/exclude`. That
 includes a generated file you have since rewritten: charter never overwrites it, and if it is
 your own file and you mean to commit it, `git add -f` it. A line goes only once its path is
@@ -83,9 +83,9 @@ and so does a line whose path cannot be checked.
 
 Charter writes each of those files whole — to a temp file beside it, flushed to disk, then
 renamed over it — so a kill leaves the old content or the new and never half of either. A temp
-file a kill leaves behind is named `.charter-generated.<pid>.<random>.tmp`, and the block hides
+file a kill leaves behind is named `.purlis-generated.<pid>.<random>.tmp`, and the block hides
 that pattern anywhere in the checkout, so a file of your own whose name matches it
-(`.charter-generated.notes.tmp`) is hidden too. Before rewriting a generated file charter
+(`.purlis-generated.notes.tmp`) is hidden too. Before rewriting a generated file charter
 records the write as pending, and it overwrites only content one of its records lists; anything
 else is yours or the harness's. Where the record cannot be published — a checkout root that is
 not writable, a read-only or full disk — charter writes nothing there and keeps the lines.
@@ -97,8 +97,10 @@ parse is not a plane that declares nothing: every workspace keeps its last good 
 
 Codex has no command-pattern permissions at all, so there is nothing to carry there.
 
-It is **charter's file, and only while it stays charter's**. A `.charter-generated` sidecar
-records a hash of what charter wrote. A file that still matches is refreshed when the
+It is **charter's file, and only while it stays charter's**. A `.purlis-generated` sidecar
+records a hash of what charter wrote (one charter wrote as `.charter-generated` before the
+rename is read, and moved to the new name the next time the layer is written, so nothing it
+vouched for becomes yours). A file that still matches is refreshed when the
 plane's settings move; one that does not is yours — left completely untouched and never
 repaired. `charter workspace reinit` (or `--all`) is the repair for a file that still is
 charter's. `charter doctor` has a `workspace layer` row, and in this version it says the
@@ -364,7 +366,7 @@ notes in the plane keeps working. Every other link is named with "is a symlink, 
 writes nothing through one; replacing it with a real file clears this", or "a real directory"
 where a directory belongs. It gets the same exit 0, and it does not flag the workspace. The
 files themselves are created exclusively as well, so a link that appears between the check and
-the write makes the create fail, not follow the link. The `.charter-structure` stamp is written
+the write makes the create fail, not follow the link. The `.purlis-structure` stamp is written
 with an open that refuses a link, so it is never written through one either; a stamp that could
 not be written leaves the workspace flagged for `reinit`.
 

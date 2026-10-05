@@ -2,7 +2,7 @@
 //!
 //! Before #432 and #434 each whole-file writer named its own temp file beside its target:
 //! `reopen.json.writing`, `machine.json.<pid>.<tag>.writing` and so on. Every writer now goes
-//! through [`crate::rewrite::replace`], whose temps are `.charter-generated.*.tmp`, so nothing
+//! through [`crate::rewrite::replace`], whose temps are `.purlis-generated.*.tmp`, so nothing
 //! that runs today ever writes the old names again — and a temp an older charter was killed
 //! in front of is never renamed away or cleaned up by anyone.
 //!

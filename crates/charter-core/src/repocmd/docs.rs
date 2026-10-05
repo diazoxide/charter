@@ -135,7 +135,7 @@ fn refresh_readme(root: &Path, say: Sink) -> Roster {
         return Roster::Unread;
     }
     let (generic, total) = dispatch::generic_share(&counts);
-    let Some(new) = roster::splice(&current, &roster::block(&rows, generic, total)) else {
+    let Some(new) = roster::splice(&current, &roster::block(root, &rows, generic, total)) else {
         return Roster::Unchanged;
     };
     if new == current {
@@ -306,10 +306,28 @@ mod tests {
     }
 
     #[test]
+    fn a_migrated_plane_rewrites_charters_roster_block_in_place_under_the_purlis_marker() {
+        let old = crate::names::PERSONAS_BEGIN.reads[0];
+        let readme = format!("# Mine\n\n{old}\nstale\n{}\n\n## After\n", roster::END);
+        let dir = plane(Some(&readme));
+        std::fs::write(dir.path().join("purlis.toml"), "").unwrap();
+        let (code, _) = run(dir.path());
+        assert_eq!(code, 0);
+        let now = std::fs::read_to_string(dir.path().join("README.md")).unwrap();
+        assert!(!now.contains(old), "{now}");
+        assert!(now.contains(crate::names::PERSONAS_BEGIN.write), "{now}");
+        assert_eq!(now.matches("<!-- BEGIN personas").count(), 1, "{now}");
+        assert!(
+            now.starts_with("# Mine\n\n") && now.ends_with("\n\n## After\n"),
+            "{now}"
+        );
+    }
+
+    #[test]
     fn a_marked_readme_keeps_everything_outside_the_markers() {
         let readme = format!(
             "# Mine\n\nBefore.\n\n{}\nstale\n{}\n\n## After\n",
-            roster::BEGIN,
+            crate::names::PERSONAS_BEGIN.reads[0],
             roster::END
         );
         let dir = plane(Some(&readme));
@@ -324,6 +342,10 @@ mod tests {
         );
         let now = std::fs::read_to_string(dir.path().join("README.md")).unwrap();
         assert!(now.starts_with("# Mine\n\nBefore.\n\n"), "{now}");
+        assert!(
+            now.contains(crate::names::PERSONAS_BEGIN.reads[0]) && !now.contains("purlis"),
+            "a plane not yet migrated keeps charter's marker: {now}"
+        );
         assert!(now.ends_with("\n\n## After\n"), "{now}");
         assert!(
             now.contains("## Personas — roster & routing health"),
@@ -363,7 +385,11 @@ mod tests {
         // count nobody took went into a COMMITTED file as a zero. The roster is left exactly
         // as it was, the directory is named, and the exit says the roster is stale.
         use std::os::unix::fs::PermissionsExt;
-        let readme = format!("{}\nstale\n{}\n", roster::BEGIN, roster::END);
+        let readme = format!(
+            "{}\nstale\n{}\n",
+            crate::names::PERSONAS_BEGIN.reads[0],
+            roster::END
+        );
         let dir = plane(Some(&readme));
         let store = dir.path().join("personas/steward/memory");
         std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o000)).unwrap();
@@ -421,7 +447,11 @@ mod tests {
         let dir = plane(None);
         let elsewhere = tempfile::tempdir().unwrap();
         let outside = elsewhere.path().join("README.md");
-        let readme = format!("{}\nstale\n{}\n", roster::BEGIN, roster::END);
+        let readme = format!(
+            "{}\nstale\n{}\n",
+            crate::names::PERSONAS_BEGIN.reads[0],
+            roster::END
+        );
         std::fs::write(&outside, &readme).unwrap();
         std::os::unix::fs::symlink(&outside, dir.path().join("README.md")).unwrap();
         let (code, said) = run(dir.path());

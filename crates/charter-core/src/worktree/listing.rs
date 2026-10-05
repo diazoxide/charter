@@ -65,7 +65,7 @@ struct Scope {
     listed: HashMap<PathBuf, Listed>,
     /// [`live_trees`]' verdict, by the same key.
     answers: HashMap<PathBuf, (Option<Vec<PathBuf>>, String)>,
-    /// Whether git tracks a checkout's `.charter-generated`, by checkout.
+    /// Whether git tracks a checkout's layer record, by checkout.
     tracked: HashMap<PathBuf, bool>,
     /// Whether a path in a checkout holds an untracked file of the operator's.
     untracked: HashMap<(PathBuf, String), bool>,

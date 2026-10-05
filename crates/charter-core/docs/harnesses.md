@@ -143,7 +143,7 @@ to date.
 project settings from the session's working directory and does not walk up, so a chat
 launched in `workspaces/<ws>/` would otherwise get none of the plane's ask/deny rules, none
 of its `enabledPlugins` and none of its `env`. Charter writes the plane's copy into
-`workspaces/<ws>/.claude/settings.json`, records what it wrote in a `.charter-generated`
+`workspaces/<ws>/.claude/settings.json`, records what it wrote in a `.purlis-generated`
 sidecar, and never touches a file whose hash it cannot vouch for. Charter's own plugin does
 not depend on this file: it arrives on the command line. `charter workspace reinit` is the
 repair.

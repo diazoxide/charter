@@ -120,7 +120,7 @@ fn a_plane_with_nothing_to_carry_writes_nothing_and_refuses_nothing() {
     let added = cut(&f, "piece");
 
     assert!(!added.path.join(".claude").exists(), "nothing was written");
-    assert!(!added.path.join(".charter-generated").exists());
+    assert!(!added.path.join(".purlis-generated").exists());
     assert!(
         !exclude_of(&added.path).contains("charter"),
         "and no block was added to a file git's own template already wrote"
@@ -163,9 +163,9 @@ fn the_block_goes_in_the_exclude_the_clone_reads_and_not_the_worktrees_own() {
     let common = f.clone.join(".git/info/exclude");
     let text = std::fs::read_to_string(&common).expect("the clone's exclude was written");
     assert!(text.contains("/.claude/settings.json"), "{text}");
-    assert!(text.contains("/.charter-generated"), "{text}");
+    assert!(text.contains("/.purlis-generated"), "{text}");
     assert!(
-        text.contains(".charter-generated.*.tmp"),
+        text.contains(".purlis-generated.*.tmp"),
         "the temp a kill leaves behind is hidden before the first one exists: {text}"
     );
     assert_eq!(
@@ -204,8 +204,8 @@ fn a_line_a_sibling_needs_is_never_taken_away_by_the_next_piece() {
     std::fs::write(
         &common,
         text.replace(
-            "/.charter-generated\n",
-            &format!("{only_the_first}\n/.charter-generated\n"),
+            "/.purlis-generated\n",
+            &format!("{only_the_first}\n/.purlis-generated\n"),
         ),
     )
     .unwrap();
@@ -218,7 +218,7 @@ fn a_line_a_sibling_needs_is_never_taken_away_by_the_next_piece() {
         "a sibling's line survives the next piece's wire: {after}"
     );
     assert_eq!(
-        after.matches("# >>> charter").count(),
+        after.matches("# >>> purlis").count(),
         1,
         "and there is still exactly one block: {after}"
     );
@@ -246,8 +246,8 @@ fn a_line_for_a_path_no_checkout_has_any_more_is_let_go() {
     std::fs::write(
         &common,
         text.replace(
-            "/.charter-generated\n",
-            &format!("{gone}\n/.charter-generated\n"),
+            "/.purlis-generated\n",
+            &format!("{gone}\n/.purlis-generated\n"),
         ),
     )
     .unwrap();
@@ -271,14 +271,14 @@ fn wiring_the_same_tree_again_changes_not_one_byte() {
     let f = layered_plane("thing");
     let added = cut(&f, "piece");
     let exclude = exclude_of(&added.path);
-    let marker = std::fs::read_to_string(added.path.join(".charter-generated")).unwrap();
+    let marker = std::fs::read_to_string(added.path.join(".purlis-generated")).unwrap();
 
     let again = guest::wire(&f.plane, &added.path);
 
     assert!(again.complete(), "{again:?}");
     assert_eq!(exclude_of(&added.path), exclude);
     assert_eq!(
-        std::fs::read_to_string(added.path.join(".charter-generated")).unwrap(),
+        std::fs::read_to_string(added.path.join(".purlis-generated")).unwrap(),
         marker
     );
     let all_current = again
@@ -440,7 +440,7 @@ fn a_record_naming_a_path_outside_the_checkout_is_dropped_whole() {
     let f = layered_plane("thing");
     let added = cut(&f, "piece");
     std::fs::write(
-        added.path.join(".charter-generated"),
+        added.path.join(".purlis-generated"),
         "{\".claude/settings.json\": \"deadbeef\", \"../../../outside.json\": \"deadbeef\"}\n",
     )
     .unwrap();
@@ -465,7 +465,7 @@ fn a_record_naming_a_path_outside_the_checkout_is_dropped_whole() {
     // `../../../outside.json` is charter putting a pattern about somebody else's tree into
     // somebody else's repository.
     assert!(
-        std::fs::read_to_string(added.path.join(".charter-generated"))
+        std::fs::read_to_string(added.path.join(".purlis-generated"))
             .unwrap()
             .contains("outside.json"),
         "charter leaves a file it does not trust exactly as it found it"
@@ -659,7 +659,7 @@ fn a_chat_outside_every_worktree_is_left_alone() {
     for here in [f.plane.clone(), f.workspace(), f.clone.clone()] {
         start::layered_or_refusal(&here, &f.plane, None).expect("nothing to do");
         assert!(
-            !here.join(".charter-generated").exists(),
+            !here.join(".purlis-generated").exists(),
             "charter wrote a record into {}",
             here.display()
         );
@@ -694,7 +694,7 @@ fn a_directory_shaped_like_a_piece_is_still_asked_whether_charter_may_write_ther
 
     assert!(refusal.contains("does not name a repo"), "{refusal}");
     assert!(
-        !odd.join(".charter-generated").exists(),
+        !odd.join(".purlis-generated").exists(),
         "and nothing was written there"
     );
 }
@@ -910,7 +910,7 @@ fn a_rewire_with_nothing_to_change_says_present_and_one_charter_owns_nothing_in_
 
     assert_eq!(wired.block, guest::Block::Untouched, "{wired:?}");
     assert!(
-        !exclude_of(&piece.path).contains("# >>> charter"),
+        !exclude_of(&piece.path).contains("# >>> purlis"),
         "{}",
         exclude_of(&piece.path)
     );
@@ -1066,12 +1066,12 @@ fn charters_marker_line_is_added_even_beside_a_marker_charter_cannot_read() {
     // marker's own line is never withheld over one. The red light for a mutation that asks
     // the siblings about the marker too.
     let f = layered_plane("thing");
-    std::fs::write(f.clone.join(".charter-generated"), "not a record\n").unwrap();
+    std::fs::write(f.clone.join(".purlis-generated"), "not a record\n").unwrap();
 
     let piece = cut(&f, "piece");
 
     let exclude = exclude_of(&piece.path);
-    assert!(exclude.contains("/.charter-generated\n"), "{exclude}");
+    assert!(exclude.contains("/.purlis-generated\n"), "{exclude}");
 }
 
 #[test]

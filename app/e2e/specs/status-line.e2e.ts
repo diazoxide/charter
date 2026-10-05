@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { textOfEach } from "../reading.js";
@@ -253,7 +253,12 @@ describe("the status line", () => {
     // drawer asks the core again as it opens, so what it lists is the plane as it is now.
     await untilTheStripIsRead();
     const plane = await planeRoot();
-    const marker = join(plane, "workspaces", "beta", ".charter-structure");
+    // The stamp under whichever name it has: a plane charter laid out carries
+    // `.charter-structure` until a write moves it to `.purlis-structure`.
+    const stamps = [".purlis-structure", ".charter-structure"].map((n) =>
+      join(plane, "workspaces", "beta", n),
+    );
+    const marker = stamps.find((p) => existsSync(p)) ?? stamps[0];
     const was = readFileSync(marker, "utf8");
     try {
       writeFileSync(marker, "4\n");

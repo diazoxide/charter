@@ -77,6 +77,7 @@ pub mod text;
 
 use std::path::{Path, PathBuf};
 
+use crate::names;
 use crate::plane::Place;
 use settings::Wrote;
 
@@ -902,11 +903,6 @@ fn merge_rules(run: &mut Run, root: &Path) {
     }
 }
 
-/// The first line of charter's managed block in the plane's `.gitattributes` (ADR 0051).
-pub const MERGE_RULES_BEGIN: &str = "# >>> charter merge rules (managed by charter) >>>";
-/// Its last line.
-pub const MERGE_RULES_END: &str = "# <<< charter merge rules <<<";
-
 /// The files a plane only ever grows by whole lines, merged by git's `union` driver so two
 /// machines appending to them never conflict (`docs/plane-format.md`, `.gitattributes`).
 const MERGE_RULES: [&str; 7] = [
@@ -919,11 +915,12 @@ const MERGE_RULES: [&str; 7] = [
     "workspaces/*/memory/MEMORY.md merge=union",
 ];
 
-/// The managed block, exactly as the plane format records it.
-fn merge_rules_block() -> String {
-    let mut out = vec![MERGE_RULES_BEGIN];
+/// The managed block, exactly as the plane format records it, under the markers the plane at
+/// `plane` writes ([`names::Name::writes_for`]): charter's until it is migrated (ADR 0051).
+fn merge_rules_block(plane: &Path) -> String {
+    let mut out = vec![names::MERGE_RULES_BEGIN.writes_for(plane)];
     out.extend(MERGE_RULES);
-    out.push(MERGE_RULES_END);
+    out.push(names::MERGE_RULES_END.writes_for(plane));
     out.join("\n")
 }
 
@@ -932,6 +929,10 @@ fn merge_rules_block() -> String {
 ///
 /// A BEGIN with no END after it is left as it is — half a managed block is something somebody
 /// edited — and the block is added below it.
+///
+/// Either name's markers make the block (V93i): a block is rewritten where it stands, never
+/// left beside a second one — under the purlis markers once the plane is migrated, and under
+/// charter's until then, so a teammate on an older build still finds its block (V93g).
 pub fn ensure_gitattributes(path: &Path) -> Result<bool, String> {
     // A file that is not there is empty; one that cannot be read is said, in the OS's words,
     // rather than written over as if it were empty.
@@ -940,20 +941,21 @@ pub fn ensure_gitattributes(path: &Path) -> Result<bool, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(strerror(&e)),
     };
-    let block = merge_rules_block();
+    let block = merge_rules_block(path.parent().unwrap_or(Path::new("")));
     // Whole lines only, and only a COMPLETE block: the last BEGIN line with an END line after
     // it. A BEGIN or an END on its own is something somebody edited, and is left exactly as
     // it is — the rules are added below it, and the next run finds that complete block.
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let is = |line: &str, marker: &str| line.trim_end_matches(['\n', '\r']) == marker;
+    let is =
+        |line: &str, marker: &names::Name| marker.recognises(line.trim_end_matches(['\n', '\r']));
     let complete = lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| is(line, MERGE_RULES_BEGIN))
+        .filter(|(_, line)| is(line, &names::MERGE_RULES_BEGIN))
         .filter_map(|(start, _)| {
             lines[start + 1..]
                 .iter()
-                .position(|line| is(line, MERGE_RULES_END))
+                .position(|line| is(line, &names::MERGE_RULES_END))
                 .map(|offset| (start, start + 1 + offset))
         })
         .next_back();
@@ -1744,6 +1746,74 @@ mod merge_rules_tests {
         assert!(now.starts_with("*.png binary\n"), "{now}");
         assert!(!now.contains("old.jsonl"), "{now}");
         assert_eq!(now.matches(MERGE_RULES_BEGIN).count(), 1, "{now}");
+    }
+
+    /// What a plane that is not migrated writes: charter's markers (V93g).
+    const MERGE_RULES_BEGIN: &str = names::MERGE_RULES_BEGIN.reads[0];
+    const MERGE_RULES_END: &str = names::MERGE_RULES_END.reads[0];
+
+    /// Exactly what charter wrote before the rename, between somebody's own lines.
+    const CHARTERS_ATTRIBUTES: &str = "*.png binary\n\
+                   # >>> charter merge rules (managed by charter) >>>\n\
+                   old.jsonl merge=union\n\
+                   # <<< charter merge rules <<<\n\
+                   *.pdf binary\n";
+
+    #[test]
+    fn a_plane_not_yet_migrated_keeps_charters_merge_rules_block_byte_for_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+        let path = dir.path().join(".gitattributes");
+        std::fs::write(&path, CHARTERS_ATTRIBUTES).unwrap();
+
+        assert!(ensure_gitattributes(&path).unwrap(), "the stale rules");
+        let now = std::fs::read_to_string(&path).unwrap();
+        let block = merge_rules_block(dir.path());
+        assert!(block.starts_with(MERGE_RULES_BEGIN), "{block}");
+        assert_eq!(now, format!("*.png binary\n{block}\n*.pdf binary\n"));
+        assert!(!now.contains("purlis"), "{now}");
+        assert!(!ensure_gitattributes(&path).unwrap(), "byte for byte after");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), now);
+
+        // A purlis block in such a plane is recognised too: one block, charter's markers.
+        std::fs::write(
+            &path,
+            now.replace(MERGE_RULES_BEGIN, names::MERGE_RULES_BEGIN.write)
+                .replace(MERGE_RULES_END, names::MERGE_RULES_END.write),
+        )
+        .unwrap();
+        assert!(ensure_gitattributes(&path).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), now);
+    }
+
+    #[test]
+    fn a_migrated_plane_rewrites_charters_merge_rules_block_in_place_under_the_purlis_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("purlis.toml"), "").unwrap();
+        let path = dir.path().join(".gitattributes");
+        std::fs::write(&path, CHARTERS_ATTRIBUTES).unwrap();
+
+        assert!(ensure_gitattributes(&path).unwrap());
+        let now = std::fs::read_to_string(&path).unwrap();
+        assert!(!now.contains("charter merge rules"), "{now}");
+        assert!(!now.contains("old.jsonl"), "{now}");
+        assert_eq!(
+            now,
+            format!(
+                "*.png binary\n{}\n*.pdf binary\n",
+                merge_rules_block(dir.path())
+            ),
+            "rewritten where it stood"
+        );
+        assert_eq!(now.matches("merge rules (managed by").count(), 1, "{now}");
+        assert!(
+            now.starts_with("*.png binary\n# >>> purlis merge rules (managed by purlis) >>>\n"),
+            "{now}"
+        );
+        assert!(
+            !ensure_gitattributes(&path).unwrap(),
+            "the purlis block is recognised"
+        );
     }
 
     #[test]

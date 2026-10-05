@@ -108,9 +108,9 @@ mod tests {
             "workspace.json",
             "memory/MEMORY.md",
             "refs/README.md",
-            ".charter-structure",
+            ".purlis-structure",
             ".claude/settings.json",
-            ".charter-generated",
+            ".purlis-generated",
         ] {
             assert!(ws.join(rel).exists(), "{rel} is missing");
         }

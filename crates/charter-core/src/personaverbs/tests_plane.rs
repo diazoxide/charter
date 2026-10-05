@@ -83,6 +83,30 @@ pub fn recorded(name: &str) -> serde_json::Value {
     serde_json::from_str(line).unwrap()
 }
 
+/// A recorded file entry's text: inline, or — for a file the recording stored by content, as a
+/// re-recording does for anything over 2 KiB — from the blob store beside the scenarios.
+pub fn recorded_text(file: &serde_json::Value) -> String {
+    if let Some(text) = file["text"].as_str() {
+        return text.to_owned();
+    }
+    let sha = file["blob"]
+        .as_str()
+        .expect("a file entry is text or a blob");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/recorded/behaviour-blobs.jsonl.gz");
+    let mut text = String::new();
+    std::io::Read::read_to_string(
+        &mut flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap()),
+        &mut text,
+    )
+    .unwrap();
+    text.lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|row| row["sha256"] == sha)
+        .and_then(|row| row["text"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("no text blob {sha}"))
+}
+
 /// The text a recorded row expects on `stream` (`stdout` or `stderr`), compared exactly.
 pub fn expected(row: &serde_json::Value, stream: &str) -> String {
     assert_eq!(row["expect"][stream]["rule"], "exact", "{}", row["name"]);

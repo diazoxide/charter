@@ -50,7 +50,8 @@
 //! `.claude/settings.local.json`, where "Yes, and don't ask again" lands — whose digest moves
 //! without the file becoming anybody else's.
 //!
-//! A `.charter-generated` git **tracks** is not charter's record at all. Charter's own is
+//! A layer record (`.purlis-generated`, or `.charter-generated` from before the rename) git
+//! **tracks** is not charter's record at all. Charter's own is
 //! per-checkout and untracked, so a tracked one is content some cloned repository committed,
 //! and trusting its digests is how a repo names charter's files as its own to redirect.
 
@@ -58,6 +59,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::layer::{self, digest, write_into, write_whole};
+use crate::names;
 
 /// The sidecar recording what charter last generated in a checkout, as
 /// `{relative path: sha256 of the text charter wrote}`.
@@ -93,8 +95,12 @@ const WALKUP_DIRS: [&str; 2] = [".claude/agents", ".claude/skills"];
 /// Delimited rather than "charter's lines are the ones charter recognises": an operator's own
 /// `/.claude/settings.json` line, written before charter ever arrived, is indistinguishable
 /// from charter's by content alone, and a removal would take it with it.
-pub const EXCLUDE_BEGIN: &str = "# >>> charter (generated layer — `charter workspace reinit`) >>>";
-pub const EXCLUDE_END: &str = "# <<< charter <<<";
+///
+/// These are the lines written. A block between either name's lines is charter's
+/// ([`names::EXCLUDE_BEGIN`], [`names::EXCLUDE_END`]), and one charter wrote is rewritten in
+/// place under these, never left beside a second block (V93i).
+pub const EXCLUDE_BEGIN: &str = names::EXCLUDE_BEGIN.write;
+pub const EXCLUDE_END: &str = names::EXCLUDE_END.write;
 
 /// The lines inside the block, for the person who finds them in a repo they own.
 const EXCLUDE_NOTE: [&str; 3] = [
@@ -106,7 +112,15 @@ const EXCLUDE_NOTE: [&str; 3] = [
 /// Every temp [`write_whole`] writes through, as a pattern. Unanchored, because a temp is
 /// written beside every file charter writes, and listed before the first one exists so a temp
 /// a kill leaves behind stays hidden.
-const TEMP_PATTERN: &str = ".charter-generated.*.tmp";
+const TEMP_PATTERN: &str = ".purlis-generated.*.tmp";
+
+/// Whether `rel` is the temp pattern under any name the temps have had: a block charter wrote
+/// lists `.charter-generated.*.tmp`, and its line stays while a temp of that name is left.
+fn is_temp_pattern(rel: &str) -> bool {
+    names::GENERATED_TEMP_PREFIX
+        .strip(rel)
+        .is_some_and(|rest| rest == "*.tmp")
+}
 
 /// What charter found, or did, at one generated path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -382,7 +396,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 /// which is the direction this module is deliberately wrong in.
 ///
 /// **A pure read, with no subprocess in it.** Whether the repository *commits* a
-/// `.charter-generated` — which would make it somebody's content rather than charter's record
+/// layer record — which would make it somebody's content rather than charter's record
 /// — is [`tracked`]'s question, and it is a fact about the REPOSITORY rather than about each
 /// tree. Asking it here would put a `git ls-files` behind every sidebar row, and this is
 /// called once per piece on every render.
@@ -432,7 +446,7 @@ pub fn tracked(tree: &Path, rel: &str) -> bool {
 ///
 /// ```text
 /// $ git -C workspaces/beta/svc status --porcelain
-/// ?? .charter-generated
+/// ?? .purlis-generated
 /// ?? .claude/
 /// ```
 ///
@@ -476,22 +490,22 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
             block: Block::Untouched,
         };
     }
-    // A `.charter-generated` this repository COMMITS is the one case where charter cannot
-    // keep its promise. Charter's record is per-checkout and untracked, so a tracked one is
+    // A layer record this repository COMMITS, under either name, is the one case where
+    // charter cannot keep its promise. Charter's record is per-checkout and untracked, so a tracked one is
     // content somebody committed — and charter publishing its own over it would show as a
     // modified TRACKED file, which no `info/exclude` line can hide. So nothing is written and
     // the tree is reported blocked, rather than charter dirtying a repo it is a guest in.
-    if commits_a_marker(tree) {
+    if let Some(committed) = commits_a_marker(tree) {
         return Wired {
             rows: Vec::new(),
             hidden: Hidden::Blocked(
                 format!(
-                    "this repository commits a {MARKER}, and charter's own is per-checkout and \
-                     never committed — writing over it would change a tracked file"
+                    "this repository commits a {committed}, and charter's own is per-checkout \
+                     and never committed — writing over it would change a tracked file"
                 ),
                 format!(
-                    "Stop committing {MARKER} in that repository, or start this chat somewhere \
-                     charter is not a guest."
+                    "Stop committing {committed} in that repository, or start this chat \
+                     somewhere charter is not a guest."
                 ),
             ),
             block: Block::Untouched,
@@ -526,6 +540,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
             .filter(|rel| rel.as_str() != MARKER),
     );
 
+    let listed = !first_pass.is_empty();
     let (first, left) = if first_pass.is_empty() {
         (Wrote::Present, BTreeSet::new())
     } else {
@@ -533,6 +548,12 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
         rels.push(MARKER.to_owned());
         register_excludes(plane, tree, &rels, false)
     };
+    if listed && !matches!(first, Wrote::Blocked(_)) {
+        // The block now lists the purlis name, so a record charter wrote under the old one
+        // moves to it here, bytes unchanged, and is hidden on arrival. A move that fails leaves
+        // it readable where it is.
+        let _ = layer::carry_over(tree);
+    }
     if let Wrote::Blocked(why) = &first {
         // The divergence this function's docs argue for: charter would write everything but
         // the machine-local file here. Nothing is written, and the chat is refused.
@@ -711,12 +732,17 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     }
 }
 
-/// Whether the repository at `tree` commits a `.charter-generated`. Charter's own is
+/// Whether the repository at `tree` commits a layer record, and under which name. Charter's own is
 /// per-checkout and untracked, so writing over a tracked one would change a tracked file,
 /// which no `info/exclude` line can hide. [`wire`] reports the tree blocked over it, and
 /// [`wire_for_chat`] writes no guidance.
-fn commits_a_marker(tree: &Path) -> bool {
-    tree.join(MARKER).exists() && tracked(tree, MARKER)
+///
+/// Under any name the record has had: one committed as `.charter-generated` would otherwise be
+/// read as charter's record, or removed as a leftover — a tracked file either way.
+fn commits_a_marker(tree: &Path) -> Option<&'static str> {
+    names::GENERATED_SIDECAR
+        .spellings()
+        .find(|name| tree.join(name).exists() && tracked(tree, name))
 }
 
 /// The block's settling pass: charter's block in `tree`'s exclude, written again from what
@@ -811,9 +837,9 @@ fn guide(plane: &Path, tree: &Path, text: &str) -> Guidance {
     if tracked(tree, AGENTS_MD) {
         return Guidance::Tracked;
     }
-    if commits_a_marker(tree) {
+    if let Some(committed) = commits_a_marker(tree) {
         return Guidance::Withheld(format!(
-            "this repository commits a {MARKER}, and charter's record is never committed"
+            "this repository commits a {committed}, and charter's record is never committed"
         ));
     }
     let record = layer::read_record(tree);
@@ -832,6 +858,10 @@ fn guide(plane: &Path, tree: &Path, text: &str) -> Guidance {
         rels.push(MARKER.to_owned());
     }
     let (first, left) = register_excludes(plane, tree, &rels, false);
+    if !matches!(first, Wrote::Blocked(_)) {
+        // As in `wire`: hidden first, then moved.
+        let _ = layer::carry_over(tree);
+    }
     if let Wrote::Blocked(why) = first {
         return Guidance::Withheld(format!(
             "its line could not be written to the exclude ({why})"
@@ -1682,7 +1712,9 @@ fn register_excludes(
     // not there is `created` and one whose lines moved is `refreshed`, which is the word
     // charter's own report uses and the only thing that tells an operator whether their
     // files have just become hidden or already were.
-    let had = text.lines().any(|line| line == EXCLUDE_BEGIN);
+    let had = text
+        .lines()
+        .any(|line| names::EXCLUDE_BEGIN.recognises(line));
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -1773,7 +1805,7 @@ fn shared_rels(
     wired_here.extend(others.iter().filter(|t| wired(plane, t.as_path())).cloned());
 
     let mut shown: BTreeMap<String, String> = BTreeMap::new();
-    // Never the marker: an untracked `.charter-generated` is charter's even where charter
+    // Never the marker: an untracked `.purlis-generated` is charter's even where charter
     // cannot read it, and `charter_owned` vouches for none there. The temp pattern names no
     // file that is ever found. While the list cannot be trusted there is no tree to ask, and
     // a line is added as before — `unaccounted` already names that doubt.
@@ -1825,7 +1857,7 @@ fn shared_rels(
     let leaving_now: Vec<String> = current.difference(&need).cloned().collect();
     for rel in leaving_now {
         for t in &wired_here {
-            let there = if rel == TEMP_PATTERN {
+            let there = if is_temp_pattern(&rel) {
                 temps_left(beside.iter().map(|d| t.join(d)))
             } else if leaving && t.as_path() == tree && !COWRITTEN.contains(&rel.as_str()) {
                 continue;
@@ -1922,7 +1954,9 @@ fn wired(plane: &Path, t: &Path) -> bool {
     {
         return true;
     }
-    crate::worktree::listing::exists(&t.join(MARKER)) != Some(false)
+    names::GENERATED_SIDECAR
+        .spellings()
+        .any(|name| crate::worktree::listing::exists(&t.join(name)) != Some(false))
 }
 
 /// Whether checkout `t` holds a file at `rel` that charter did not write and git would show as
@@ -1962,7 +1996,8 @@ fn temps_left(dirs: impl Iterator<Item = PathBuf>) -> Option<bool> {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
                     let name = name.to_string_lossy();
-                    if name.starts_with(crate::rewrite::TEMP_PREFIX) && name.ends_with(".tmp") {
+                    if names::GENERATED_TEMP_PREFIX.strip(&name).is_some() && name.ends_with(".tmp")
+                    {
                         return Some(true);
                     }
                 }
@@ -2049,7 +2084,7 @@ fn already(text: &str) -> BTreeSet<String> {
     // an equivalent mutant, excluded in `.cargo/mutants.toml` on that ground.
     lines[begin + 1..after]
         .iter()
-        .filter(|line| line.starts_with('/') || **line == TEMP_PATTERN)
+        .filter(|line| line.starts_with('/') || is_temp_pattern(line))
         .map(|line| line.trim_start_matches('/').to_owned())
         .collect()
 }
@@ -2066,7 +2101,7 @@ fn rendered(rels: &[String]) -> String {
     let mut lines: Vec<String> = vec![EXCLUDE_BEGIN.to_owned()];
     lines.extend(EXCLUDE_NOTE.iter().map(|l| (*l).to_owned()));
     for rel in rels {
-        lines.push(if rel == TEMP_PATTERN {
+        lines.push(if is_temp_pattern(rel) {
             rel.clone()
         } else {
             format!("/{rel}")
@@ -2087,10 +2122,12 @@ fn rendered(rels: &[String]) -> String {
 /// now — because two spellings of where the block ends are two answers to which lines are
 /// charter's.
 fn span(lines: &[&str]) -> Option<(usize, usize)> {
-    let begin = lines.iter().position(|l| *l == EXCLUDE_BEGIN)?;
+    let begin = lines
+        .iter()
+        .position(|l| names::EXCLUDE_BEGIN.recognises(l))?;
     let after = lines[begin + 1..]
         .iter()
-        .position(|l| *l == EXCLUDE_END)
+        .position(|l| names::EXCLUDE_END.recognises(l))
         .map(|k| begin + k + 2)
         .unwrap_or(lines.len());
     Some((begin, after))
@@ -2151,8 +2188,8 @@ mod tests {
             vec![
                 "/.claude/agents/steward.md",
                 "/.claude/settings.json",
-                "/.charter-generated",
-                ".charter-generated.*.tmp",
+                "/.purlis-generated",
+                ".purlis-generated.*.tmp",
                 EXCLUDE_END,
             ]
         );
@@ -2174,8 +2211,8 @@ mod tests {
             lines[4..].to_vec(),
             vec![
                 "/zz/last.md",
-                "/.charter-generated",
-                ".charter-generated.*.tmp",
+                "/.purlis-generated",
+                ".purlis-generated.*.tmp",
                 EXCLUDE_END,
             ]
         );
@@ -2213,6 +2250,53 @@ mod tests {
 
         assert_eq!(fixed.matches(EXCLUDE_BEGIN).count(), 1, "{fixed}");
         assert!(fixed.contains(EXCLUDE_END), "{fixed}");
+    }
+
+    /// A block exactly as charter wrote it before the rename, between somebody's lines.
+    const CHARTERS_BLOCK: &str = "# mine\n\
+        # >>> charter (generated layer — `charter workspace reinit`) >>>\n\
+        # a note\n\
+        /.claude/settings.json\n\
+        /.charter-generated\n\
+        .charter-generated.*.tmp\n\
+        # <<< charter <<<\n\
+        /build\n";
+
+    #[test]
+    fn a_block_charter_wrote_is_read_back_line_for_line() {
+        let held = already(CHARTERS_BLOCK);
+        assert_eq!(
+            held,
+            BTreeSet::from([
+                SETTINGS.to_owned(),
+                ".charter-generated".to_owned(),
+                ".charter-generated.*.tmp".to_owned(),
+            ])
+        );
+        assert!(is_temp_pattern(".charter-generated.*.tmp"));
+        assert!(is_temp_pattern(TEMP_PATTERN));
+        assert!(!is_temp_pattern(".charter-generated"));
+    }
+
+    #[test]
+    fn a_block_charter_wrote_is_rewritten_in_place_under_the_purlis_markers() {
+        let fixed = replace_block(CHARTERS_BLOCK, &rendered(&ordered(&[SETTINGS])));
+        assert_eq!(
+            fixed,
+            format!("# mine\n{}/build\n", rendered(&ordered(&[SETTINGS]))),
+            "where it stood, once"
+        );
+        assert!(!fixed.contains("# >>> charter"), "{fixed}");
+        assert_eq!(fixed.matches("generated layer").count(), 1, "{fixed}");
+        assert_eq!(already(&fixed), already(&rendered(&ordered(&[SETTINGS]))));
+    }
+
+    #[test]
+    fn a_block_opened_under_one_name_and_closed_under_the_other_is_one_block() {
+        let mixed = CHARTERS_BLOCK.replace("# <<< charter <<<", EXCLUDE_END);
+        let fixed = replace_block(&mixed, &rendered(&ordered(&[SETTINGS])));
+        assert!(fixed.ends_with("/build\n"), "{fixed}");
+        assert_eq!(fixed.matches("generated layer").count(), 1, "{fixed}");
     }
 
     #[test]

@@ -134,7 +134,7 @@ fn a_template_lays_out_its_personas_and_its_review_checklist_in_the_project() {
     for persona in ["rust-engineer", "rust-reviewer"] {
         let agent = read(&root.join(".claude/agents").join(format!("{persona}.md")));
         assert!(
-            agent.contains(charter_core::personaverbs::agents::MARKER),
+            charter_core::personaverbs::agents::carries_marker(&agent),
             "a chat can hand work to {persona}, as to a persona made with `persona create`: {agent}"
         );
     }

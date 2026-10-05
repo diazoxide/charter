@@ -173,13 +173,21 @@ fn stale_is_a_missing_baseline_file_or_an_old_marker_and_nothing_else() {
     // No marker at all is version 0.
     std::fs::remove_file(wd.join(STRUCTURE_MARKER)).unwrap();
     assert!(needs_reinit(&root, "alpha"));
-    // The pre-rename name still answers, without being renamed on a render path.
-    std::fs::write(wd.join(LEGACY_STRUCTURE_MARKER), "5\n").unwrap();
-    assert!(!needs_reinit(&root, "alpha"));
-    assert!(!wd.join(STRUCTURE_MARKER).exists());
+    // Each pre-rename name still answers, without being renamed on a render path.
+    for legacy in [".charter-structure", ".edm-structure"] {
+        std::fs::write(wd.join(legacy), "5\n").unwrap();
+        assert!(!needs_reinit(&root, "alpha"), "{legacy}");
+        assert!(!wd.join(STRUCTURE_MARKER).exists());
+        std::fs::remove_file(wd.join(legacy)).unwrap();
+    }
+    // The newest one there decides: charter's over the one before it.
+    std::fs::write(wd.join(".edm-structure"), "5\n").unwrap();
+    std::fs::write(wd.join(".charter-structure"), "4\n").unwrap();
+    assert!(needs_reinit(&root, "alpha"));
+    std::fs::remove_file(wd.join(".edm-structure")).unwrap();
+    std::fs::remove_file(wd.join(".charter-structure")).unwrap();
 
     // A marker that is not a regular file is not a version charter wrote.
-    std::fs::remove_file(wd.join(LEGACY_STRUCTURE_MARKER)).unwrap();
     std::fs::create_dir(wd.join(STRUCTURE_MARKER)).unwrap();
     assert!(needs_reinit(&root, "alpha"));
     std::fs::remove_dir(wd.join(STRUCTURE_MARKER)).unwrap();
