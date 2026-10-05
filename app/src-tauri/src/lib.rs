@@ -181,18 +181,23 @@ pub(crate) struct Shipped {
     pub git_hooks: Option<charter_core::githooks::GitHooks>,
 }
 
-/// What rename-local installs the harness plugin from at launch (RN-8): this app's `charter`
-/// and its bundled plugin, on the build that brings the installed plugin up to date on its own
-/// (`plugin_install::refreshes_on_its_own`); `None` elsewhere, and the plugin is left alone.
+/// What rename-local moves the harness plugin with at launch (RN-8): this app's `charter` and
+/// its bundled plugin on the build that brings the installed plugin up to date on its own
+/// (`plugin_install::refreshes_on_its_own`). A development build hands no bundle, so it only
+/// keeps Claude Code's registration pointing at the copy the move carried (D-RN8-13). A fenced
+/// build touches no harness's configuration at all.
 #[cfg(not(feature = "e2e"))]
 fn plugin_to_move(app: &tauri::AppHandle) -> Option<charter_core::plugin_install::Machine> {
     use charter_core::plugin_install as install;
-    if !install::refreshes_on_its_own(charter_core::fence::FENCED, cfg!(debug_assertions)) {
+    if charter_core::fence::FENCED {
         return None;
     }
-    let binary = charter_binary()?;
+    let binary = charter_binary().or_else(|| std::env::current_exe().ok())?;
     let binary = binary.canonicalize().unwrap_or(binary);
-    install::Machine::from_env(binary, Some(bundled_plugin(app)?)).ok()
+    let bundle = install::refreshes_on_its_own(false, cfg!(debug_assertions))
+        .then(|| bundled_plugin(app))
+        .flatten();
+    install::Machine::from_env(binary, bundle).ok()
 }
 
 /// Re-run `charter plugin install` for each harness whose installed copy runs this app's

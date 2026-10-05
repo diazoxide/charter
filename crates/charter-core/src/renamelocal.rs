@@ -93,7 +93,9 @@ pub struct Local {
     /// socket are its own, not a second app's ([`busy::Instances::of`]). `None` in a terminal.
     pub own_app: Option<String>,
     /// The harnesses' folders, the charter a hook runs and the bundled plugin, for the plugin's
-    /// step; `None` leaves the plugin alone. Its `charter_dir` is not read: the step asks
+    /// step. With a bundle the plugin is installed under the purlis names; without one, Claude
+    /// Code's registration is pointed at the copy where it moved (D-RN8-13). `None` only where
+    /// the harnesses' folders cannot be told. Its `charter_dir` is not read: the step asks
     /// [`crate::machine::dir`] once the config home has moved.
     pub plugin: Option<crate::plugin_install::Machine>,
 }
@@ -131,7 +133,12 @@ impl Local {
             logs,
             planes: planes.to_vec(),
             own_app: None,
-            plugin: None,
+            // The harnesses' folders, with no bundle: enough to keep Claude Code's registration
+            // pointing at the copy when the config home moves. A caller with the app's plugin
+            // hands it in instead.
+            plugin: std::env::current_exe()
+                .ok()
+                .and_then(|exe| crate::plugin_install::Machine::from_env(exe, None).ok()),
         })
     }
 
@@ -480,16 +487,29 @@ fn move_one(
 }
 
 /// The harness plugin under the purlis names (see the module), from `m` with charter's
-/// directory where it is now.
+/// directory where it is now. Without a bundle to install from, Claude Code's registration is
+/// still pointed at the copy where it moved ([`crate::plugin_install::repoint`], D-RN8-13), and
+/// what cannot be is a failed line naming `purlis plugin install`: never a guard silently gone.
 fn move_plugin(local: &Local, moved: &mut Moved, m: &crate::plugin_install::Machine) {
     use crate::plugin_install as install;
     let mut m = m.clone();
     m.charter_dir = local.home();
-    let wanted = install::adapters().any(|a| {
-        a.home(&m).is_dir()
-            && matches!(a.installed(&m), Ok(true))
-            && a.install(&m).is_ok_and(|plan| plan.changes())
-    });
+    let wanted = if m.bundle.is_some() {
+        install::adapters().any(|a| {
+            a.home(&m).is_dir()
+                && matches!(a.installed(&m), Ok(true))
+                && a.install(&m).is_ok_and(|plan| plan.changes())
+        })
+    } else {
+        match install::repoint(&m, true) {
+            None => false,
+            Some(probe) if probe.plan.is_err() => {
+                report(moved, &[probe]);
+                return;
+            }
+            Some(_) => true,
+        }
+    };
     if !wanted {
         return;
     }
@@ -499,30 +519,39 @@ fn move_plugin(local: &Local, moved: &mut Moved, m: &crate::plugin_install::Mach
         ));
         return;
     }
-    for (ok, line) in install::said(&install::move_ids(&m, &install::NOW)) {
-        if ok {
-            moved.done(line);
-        } else {
-            moved.failed(line);
-        }
+    if m.bundle.is_some() {
+        report(moved, &install::move_ids(&m, &install::NOW));
+    } else {
+        report(moved, &Vec::from_iter(install::repoint(&m, false)));
     }
 }
 
-/// The plugin's step put back: installed under the names it had before, from `local.plugin`,
-/// once every move is undone and charter's directory is the old folder again.
+/// The plugin's step put back: installed under the names it had before when `local.plugin`
+/// has a bundle, once every move is undone and charter's directory is the old folder again;
+/// without one, Claude Code's registration pointed at the copy where it moved back to.
 fn unmove_plugin(local: &Local, moved: &mut Moved) {
     use crate::plugin_install as install;
     let Some(m) = &local.plugin else {
         moved.failed(
-            "the harness plugin: this charter cannot find the plugin it ships, so the plugin \
-             was not put back under its old names. Run the undo with the `purlis` inside the app"
+            "the harness plugin: this charter cannot tell where the harnesses keep their \
+             settings, so Claude Code may still name the plugin's old folder; run `purlis \
+             plugin install`"
                 .to_owned(),
         );
         return;
     };
     let mut m = m.clone();
     m.charter_dir = local.home();
-    for (ok, line) in install::said(&install::move_ids(&m, &install::BEFORE)) {
+    if m.bundle.is_some() {
+        report(moved, &install::move_ids(&m, &install::BEFORE));
+    } else {
+        report(moved, &Vec::from_iter(install::repoint(&m, false)));
+    }
+}
+
+/// Each harness's line, done or failed.
+fn report(moved: &mut Moved, outcomes: &[crate::plugin_install::Outcome]) {
+    for (ok, line) in crate::plugin_install::said(outcomes) {
         if ok {
             moved.done(line);
         } else {
@@ -1038,9 +1067,9 @@ fn undo_one(local: &Local, seams: &Seams, moved: &mut Moved, entry: &Entry) {
 /// by now, and a move under the open file would have the next day's file made under the old
 /// name again. `purlis migrate` and the `rename-local` fix move it, with the app closed.
 ///
-/// `plugin` is what the plugin's step installs from (the app's own `charter` and bundled plugin),
-/// or `None` to leave the plugin alone — as a build that does not refresh it on its own
-/// (`plugin_install::refreshes_on_its_own`) does.
+/// `plugin` is what the plugin's step installs from (the app's own `charter` and bundled plugin,
+/// or no bundle to only keep the registration pointing at the moved copy), or `None` to leave
+/// the harnesses alone, as a fenced build does.
 pub fn at_launch(
     identifier: &str,
     plugin: Option<crate::plugin_install::Machine>,

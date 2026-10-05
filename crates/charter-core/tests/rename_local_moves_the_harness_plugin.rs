@@ -193,25 +193,86 @@ fn the_undo_puts_the_plugin_back_under_its_old_names_where_the_old_config_home_i
     assert!(!home.opencode("purlis.ts").exists());
 }
 
+/// Whether every plugin the user settings enable from a marketplace of charter's resolves: the
+/// marketplace's folder is there and holds a plugin of that name — what a `claude` started in a
+/// terminal needs to load charter's guard.
+fn resolves(home: &Home) -> bool {
+    let settings = home.settings();
+    let enabled = home.enabled();
+    !enabled.is_empty()
+        && enabled.iter().all(|id| {
+            let (name, market) = id.split_once('@').unwrap();
+            let Some(dir) = settings["extraKnownMarketplaces"][market]["source"]["path"].as_str()
+            else {
+                return false;
+            };
+            std::fs::read_to_string(Path::new(dir).join(".claude-plugin/plugin.json"))
+                .ok()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                .is_some_and(|manifest| manifest["name"] == name)
+        })
+}
+
 #[test]
-fn without_a_plugin_to_install_from_the_harnesses_are_left_as_they_are() {
+fn without_a_bundle_the_registration_follows_the_copy_through_the_move_and_the_undo() {
+    // D-RN8-13: a `purlis migrate` with no plugin beside it still moves the config home, and
+    // the copy with it. Claude Code's registration is pointed at the copy where it went, so a
+    // chat started outside the app keeps charter's guard — and the same on the way back.
     charter_core::unsteered!();
     let mut home = installed_before_the_rename();
-    let settings = std::fs::read(home.claude("settings.json")).unwrap();
-    let harnesses = home.local.plugin.take().unwrap();
+    home.local.plugin.as_mut().unwrap().bundle = None;
+    let config = home.local.config_root.clone();
+    assert!(resolves(&home));
 
     let moved = renamelocal::run(&home.local, &nobody_running());
 
-    assert!(moved.complete, "{:#?}", moved.said);
+    assert!(moved.complete && moved.changed, "{:#?}", moved.said);
+    assert!(config.join("purlis/plugin").is_dir());
     assert_eq!(
-        std::fs::read(harnesses.claude_config.join("settings.json")).unwrap(),
-        settings
+        home.registered("charter-app").as_deref(),
+        Some(config.join("purlis/plugin").to_str().unwrap())
     );
+    assert!(resolves(&home), "{}", home.settings());
     assert!(
-        harnesses
-            .opencode_config
-            .join("plugin/charter.ts")
-            .is_file()
+        moved
+            .said
+            .iter()
+            .any(|line| line.starts_with("✓ the claude plugin: point the `charter-app`")),
+        "{:#?}",
+        moved.said
+    );
+
+    let undone = renamelocal::undo(&home.local, &nobody_running());
+
+    assert!(undone.complete, "{:#?}", undone.said);
+    assert!(config.join("charter/plugin").is_dir());
+    assert_eq!(
+        home.registered("charter-app").as_deref(),
+        Some(config.join("charter/plugin").to_str().unwrap())
+    );
+    assert!(resolves(&home), "{}", home.settings());
+}
+
+#[test]
+fn a_registration_whose_copy_is_gone_is_a_failed_line_naming_the_install() {
+    // Never a guard silently gone: when there is no copy to point at, the run says so and is
+    // not complete.
+    charter_core::unsteered!();
+    let mut home = installed_before_the_rename();
+    home.local.plugin.as_mut().unwrap().bundle = None;
+    std::fs::remove_dir_all(machine::dir(&home.local.config_root).join("plugin")).unwrap();
+
+    let moved = renamelocal::run(&home.local, &nobody_running());
+
+    assert!(!moved.complete, "{:#?}", moved.said);
+    assert!(
+        moved
+            .said
+            .iter()
+            .any(|line| line.starts_with("✗ the claude plugin:")
+                && line.contains("purlis plugin install")),
+        "{:#?}",
+        moved.said
     );
 }
 

@@ -541,6 +541,93 @@ pub fn move_ids(m: &Machine, ids: &Ids) -> Vec<Outcome> {
     out
 }
 
+/// **Claude Code's registration pointed at where its copy is now**, with no bundle needed
+/// (D-RN8-13): the copy lives in charter's directory, which `rename-local` moves, and a
+/// registration naming the folder it left loads nothing — no guard in a chat started outside
+/// the app. Every marketplace of charter's ([`EVERY_IDS`]) whose folder is gone is pointed at
+/// [`plugin_dir`] when the copy is there; when it is not, the plan is an `Err` naming
+/// `purlis plugin install`. `None` when no registration of charter's names a folder that is
+/// gone. Unless `dry_run`, the plan is applied.
+pub fn repoint(m: &Machine, dry_run: bool) -> Option<Outcome> {
+    let a = &ClaudeCode;
+    if !a.home(m).is_dir() {
+        return None;
+    }
+    let path = ClaudeCode::settings(m);
+    let (mut map, raw) = match json_object(&path) {
+        Ok(read) => read,
+        Err(why) => {
+            return Some(Outcome {
+                harness: a.harness(),
+                plan: Err(why),
+                skipped: None,
+                failed: None,
+                applied: 0,
+            });
+        }
+    };
+    let dir = plugin_dir(m);
+    let copy = dir.join(".claude-plugin/plugin.json").is_file();
+    let mut plan = Plan::default();
+    let mut gone: Vec<String> = Vec::new();
+    if let Some(Value::Object(markets)) = map.get_mut("extraKnownMarketplaces") {
+        for ids in &EVERY_IDS {
+            let Some(at) = markets
+                .get_mut(ids.marketplace)
+                .and_then(|entry| entry.pointer_mut("/source/path"))
+            else {
+                continue;
+            };
+            let Some(was) = at.as_str().map(PathBuf::from) else {
+                continue;
+            };
+            if was.is_dir() {
+                continue;
+            }
+            gone.push(was.display().to_string());
+            if copy {
+                *at = json!(dir.display().to_string());
+                plan.step(
+                    &path,
+                    format!(
+                        "point the `{}` marketplace at {}, where its copy moved",
+                        ids.marketplace,
+                        dir.display()
+                    ),
+                    true,
+                );
+            }
+        }
+    }
+    if gone.is_empty() {
+        return None;
+    }
+    let plan = if copy {
+        plan.settle(0, Write::File(path, render_json(map, &raw)));
+        Ok(plan)
+    } else {
+        Err(format!(
+            "{} registers charter's plugin at {}, which is not there, and no copy is at {}: a \
+             `claude` started outside the app runs without charter's guard until `purlis plugin \
+             install` writes one",
+            path.display(),
+            gone.join(" and "),
+            dir.display()
+        ))
+    };
+    let (applied, failed) = match (&plan, dry_run) {
+        (Ok(plan), false) => apply(plan),
+        _ => (0, None),
+    };
+    Some(Outcome {
+        harness: a.harness(),
+        plan,
+        skipped: None,
+        failed,
+        applied,
+    })
+}
+
 /// One line per harness [`move_ids`] (or [`refresh`]) wrote for, and whether each finished:
 /// what `rename-local` says of the plugin.
 pub fn said(outcomes: &[Outcome]) -> Vec<(bool, String)> {

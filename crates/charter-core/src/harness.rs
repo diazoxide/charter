@@ -1003,8 +1003,9 @@ mod tests {
         // Nor the server as a whole, which would allow every one of its tools.
         for allow in &allowed {
             let allow = allow.as_str().expect("a rule");
+            let server = format!("mcp__{}", crate::chattools::SERVER);
             assert!(
-                allow != "mcp__charter" && !allow.starts_with("mcp__purlis__*"),
+                allow != server && !allow.starts_with(&format!("{server}__*")),
                 "{allow}"
             );
         }
