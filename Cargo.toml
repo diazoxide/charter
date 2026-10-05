@@ -54,6 +54,14 @@ undocumented_unsafe_blocks = "deny"
 [profile.dev.package.persona-statistics]
 strip = "debuginfo"
 
+# What every mutant of the nightly mutation run is built with, chosen by `profile = "mutants"` in
+# `.cargo/mutants.toml` (the cargo-mutants book's own recommendation). The test profile without
+# debug info: on 2026-10-03 a mutant's build was 90-120 s of its 131 s, most of it linking
+# charter-core's test binaries, and no mutation verdict reads a backtrace (#1200).
+[profile.mutants]
+inherits = "test"
+debug = "none"
+
 [profile.release]
 codegen-units = 1
 lto = true
