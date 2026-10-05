@@ -47,7 +47,7 @@ fn every_rust_binary_the_release_ships_is_built_with_its_dependency_list() {
     assert_eq!(
         run_lines(&step(
             build,
-            "The charter binary the app's hooks run, and the built-in extensions"
+            "The purlis binary the app's hooks run, its charter alias, and the built-in extensions"
         )),
         ["cargo auditable build --release --locked -p charter-cli -p persona-statistics"]
     );
