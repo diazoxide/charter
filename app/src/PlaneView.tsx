@@ -5381,8 +5381,11 @@ function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: b
  *  `AGENTS.md` they name as the operator's and hidden by charter's line (NO-4). */
 type StartNotes = { notes: readonly string[]; agentsMd: readonly TheirAgentsMd[] };
 
-/** A branch's own name in a sentence: its piece, or the repo's for the repo's own folder. */
-const branchName = (at: TheirAgentsMd) => at.piece ?? at.repo;
+/** A branch in a sentence or a button: the repo for its own folder, `repo/piece` for a piece.
+ *  Every file one start names is in the same repository, so this tells them apart. */
+const branchName = (at: TheirAgentsMd) => (at.piece === null ? at.repo : `${at.repo}/${at.piece}`);
+/** A branch's identity: what the moved set is kept by. */
+const branchKey = (at: TheirAgentsMd) => JSON.stringify([at.workspace, at.repo, at.piece]);
 
 /**
  * **What a chat's start found to say** (ADR 0085, V35): why its `AGENTS.md` was not written,
@@ -5408,9 +5411,9 @@ function StartNotice({
   const [asking, setAsking] = useState<TheirAgentsMd>();
   /** What the actions answered: where a file went, or the core's refusal. */
   const [said, setSaid] = useState<string>();
-  /** The branches whose file has been moved aside, by name: nothing more to do there. */
+  /** The branches whose file has been moved aside, by {@link branchKey}: nothing more to do. */
   const [moved, setMoved] = useState<readonly string[]>([]);
-  const left = found.agentsMd.filter((at) => !moved.includes(branchName(at)));
+  const left = found.agentsMd.filter((at) => !moved.includes(branchKey(at)));
   const one = left.length === 1;
 
   const openFile = (at: TheirAgentsMd) => {
@@ -5433,7 +5436,7 @@ function StartNotice({
           setSaid(done.error);
           return;
         }
-        setMoved((was) => [...was, branchName(at)]);
+        setMoved((was) => [...was, branchKey(at)]);
         setSaid(
           `The AGENTS.md of ${branchName(at)} was moved to ${done.data}: git status shows it again.`,
         );
