@@ -249,8 +249,9 @@ describe("the status line", () => {
   });
 
   it("lists an alert the plane has, counts it, and stops counting it once it is fixed", async () => {
-    // A workspace behind the current layout: charter's `reinit` alert, with its command. The
-    // drawer asks the core again as it opens, so what it lists is the plane as it is now.
+    // A workspace behind the current layout: charter's `reinit` alert, with its Reinit button
+    // (NO-6: a row's way out is a button, not a command to type). The drawer asks the core again
+    // as it opens, so what it lists is the plane as it is now.
     await untilTheStripIsRead();
     const plane = await planeRoot();
     // The stamp under whichever name it has: a plane charter laid out carries
@@ -264,7 +265,8 @@ describe("the status line", () => {
       writeFileSync(marker, "4\n");
       const drawer = await openTheDrawer();
       const project = await drawer.$(`[aria-label="Alerts in ${basename(plane)}"]`);
-      await expect(project).toHaveText(expect.stringContaining("charter ws reinit --all"));
+      await expect(project).toHaveText(expect.stringContaining("behind the current layout"));
+      await expect(project.$("button=Reinit")).toBeExisting();
       await expect(project).toHaveText(expect.stringContaining("beta"));
       await closeTheDrawer();
       await untilTheButtonSays("Alerts: 1");
