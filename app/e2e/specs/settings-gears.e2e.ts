@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, realpathSync, renameSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { anEmptyRecord, copyFixturePlane } from "../harness.js";
+import { closeProject } from "../opening.js";
 
 /**
  * **The quiet gears, and ⌘, at the focused level**, in the built app (SE-23, #1173; V89g and
@@ -19,7 +20,10 @@ import { anEmptyRecord, copyFixturePlane } from "../harness.js";
  * after it.
  *
  * **Its own project, copied into the run's tree** (charter-app#129's fence): it writes a setting,
- * so it may only ever be pointed at a plane the run itself made, and it closes it at the end.
+ * so it may only ever be pointed at a plane the run itself made. **It closes it through the
+ * window**, by the tab's own ×, as `saving.e2e.ts` does: `close_plane` lets the core go of a
+ * project but does not take its tab off the strip, and one app process serves the whole run, so
+ * a project left in front here, with its Settings tab, is the strip every later spec reads.
  */
 
 const PROJECTS = '[role="tablist"][aria-label="Projects"]';
@@ -75,6 +79,8 @@ async function levelBecomes(want: string): Promise<void> {
 }
 
 const sharedFile = () => join(mine, "charter.toml");
+/** The committed file as the copy had it, put back when the spec is done. */
+const sharedBefore = readFileSync(join(mine, "charter.toml"), "utf8");
 const localFile = () => join(mine, "charter.local.toml");
 
 describe("the settings gears, and ⌘, at the focused level", function () {
@@ -102,28 +108,63 @@ describe("the settings gears, and ⌘, at the focused level", function () {
   });
 
   after(async () => {
+    // The window as it was found: this spec's project closed from its own tab, which takes its
+    // Settings tab with it and brings the launch's project back to the front.
+    const closer = `${PROJECTS} button[aria-label="Close project ${basename(mine)}"]`;
+    if (await $(closer).isExisting()) {
+      await closeProject(closer);
+      await browser.waitUntil(async () => !(await $(closer).isExisting()), {
+        timeout: 20_000,
+        timeoutMsg: "this spec's project stayed on the strip",
+      });
+    }
+    // Anything the window could not close is let go of in the core all the same.
     for (const plane of (await ask<string[]>("open_planes")).filter((one) => one !== first)) {
       await ask("close_plane", { plane });
     }
+    writeFileSync(sharedFile(), sharedBefore);
   });
 
   it("opens Project settings from the gear on the project in front, and writes charter.toml", async () => {
     // The plane root is not a workspace, so nothing narrower than the project is focused.
     await $(`${WORKSPACES} [role="tab"].plane-root`).click();
 
-    // Quiet until the pointer is on its tab: the pointer goes there first, as a person's does.
-    const tab = await $(`${PROJECTS} [role="tab"][aria-selected="true"]`);
-    await tab.moveTo();
+    // Quiet until its tab is under the pointer or the keyboard, and neither can be made to show
+    // it from here: a WebDriver pointer move does not make WebKit match `:hover` (macOS and
+    // WebKitGTK, run 37260967190), a WebDriver Tab is synthesised inside the page and moves no
+    // focus, and whether a scripted focus matches `:focus-visible` depends on what the specs
+    // before this one did with the pointer. So the gear is pressed as it is, and its quiet is
+    // `SettingsGears.test.tsx`'s to hold: the stylesheet's rules, and that a Tab from the strip
+    // reaches it (D-SE23f). What this holds is the path from that press to the file.
     const gear = await $(`${PROJECTS} button.gear[aria-label^="Project settings"]`);
-    await gear.waitForClickable({ timeout: 20_000 });
-    await gear.click();
+    await gear.waitForExist({ timeout: 20_000 });
+    await browser.execute((selector: string) => {
+      document.querySelector<HTMLElement>(`${selector} button.gear`)?.click();
+    }, PROJECTS);
 
     await levelBecomes("Project");
 
     await $('nav[aria-label="Groups"]').$("button=Saving").click();
     // An on/off setting is a native `<select>` (on, off, not set), so it is chosen, not clicked.
-    const sign = await $("aria/Sign commits");
-    await sign.selectByAttribute("value", "on");
+    // Found by its `<label for>`, which wdio's `aria/` selector does not resolve here; and
+    // chosen as the engine does on a pick, by its value and a `change`, because wdio's
+    // `selectByAttribute` leaves the value unset in this driver (measured on macOS).
+    const signId = await browser.execute(
+      () =>
+        [...document.querySelectorAll("label")].find(
+          (one) => one.textContent?.trim() === "Sign commits",
+        )?.htmlFor ?? "",
+    );
+    expect(signId).not.toBe("");
+    await browser.execute((id: string) => {
+      const select = document.getElementById(id) as HTMLSelectElement;
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set?.call(
+        select,
+        "on",
+      );
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }, signId);
+    await expect($(`[id="${signId}"]`)).toHaveValue("on");
 
     // Shared by default, so it lands in the committed file and not in this machine's.
     await browser.waitUntil(
