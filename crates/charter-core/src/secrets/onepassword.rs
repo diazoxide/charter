@@ -6,7 +6,7 @@
 //! ```text
 //! charter vault 'devops', key 'AWS_ACCESS_KEY_ID'
 //!     → 1Password item  charter-devops   (or `op-item` from the registry)
-//!       tagged          charter, charter:devops
+//!       tagged          purlis, purlis:devops   (charter, charter:devops before the rename)
 //!       field           AWS_ACCESS_KEY_ID, concealed
 //! ```
 //!
@@ -29,9 +29,20 @@ use serde_json::{Map, Value};
 use super::registry::Vault;
 use super::run::{self, Ran, RunError};
 use super::{Ctx, VaultError};
+use crate::names::ONEPASSWORD_TAG;
 
-/// Every item charter creates carries this tag.
-pub(crate) const TAG: &str = "charter";
+/// Every item charter writes carries this tag, and `<TAG>:<vault>` (`purlis`, #1261). Nothing
+/// reads it back but the legacy-layout check, which looks for [`OLD_TAG`].
+pub(crate) const TAG: &str = ONEPASSWORD_TAG.write;
+
+/// The tag items written before the rename carry. The one-item-per-key layout the legacy check
+/// looks for was only ever written under it.
+const OLD_TAG: &str = ONEPASSWORD_TAG.reads[0];
+
+/// A vault's item is `charter-<vault>` unless the registry names another. Unchanged by the
+/// rename: the title is how an existing item is FOUND, so renaming it would lose every vault's
+/// secrets until a migration moves the item.
+const ITEM_PREFIX: &str = "charter";
 
 /// The category whose primary field is a concealed password.
 const CATEGORY: &str = "PASSWORD";
@@ -117,7 +128,7 @@ fn op_item_unchecked(vault: &Vault) -> String {
         .map(|v| crate::memstore::py_strip(v).to_string())
         .unwrap_or_default();
     if v.is_empty() {
-        format!("{TAG}-{}", vault.name)
+        format!("{ITEM_PREFIX}-{}", vault.name)
     } else {
         v
     }
@@ -250,7 +261,7 @@ pub fn keys(ctx: &Ctx, vault: &Vault) -> Result<Vec<String>, VaultError> {
 /// `_list_items`: item titles in the op-vault, tagged as charter's unless `tagged` is false.
 fn list_items(ctx: &Ctx, vault: &Vault, tagged: bool) -> Result<Vec<String>, VaultError> {
     let v = op_vault(vault)?;
-    let tag = format!("{TAG}:{}", vault.name);
+    let tag = format!("{OLD_TAG}:{}", vault.name);
     let mut args = vec!["item", "list", "--vault", v.as_str()];
     if tagged {
         args.push("--tags");
@@ -535,7 +546,7 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
         }
     };
     if n == 0 {
-        let prefix = format!("{TAG}-{}-", vault.name);
+        let prefix = format!("{ITEM_PREFIX}-{}-", vault.name);
         let legacy = match list_items(ctx, vault, true) {
             Ok(items) => items.into_iter().filter(|t| t.starts_with(&prefix)).count(),
             Err(e) => {

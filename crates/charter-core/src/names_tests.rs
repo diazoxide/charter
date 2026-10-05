@@ -92,10 +92,24 @@ fn a_prefix_recognises_what_starts_with_any_of_its_names() {
         KEYCHAIN_IDENTITY_PREFIX.strip("charter/@identity/ab"),
         Some("/ab")
     );
+    // The keychain writes the purlis names and reads both during the window (#1261).
     assert_eq!(
         crate::secrets::identity::SERVICE_BASE,
-        KEYCHAIN_IDENTITY_PREFIX.reads[0]
+        KEYCHAIN_IDENTITY_PREFIX.write
     );
+    assert_eq!(
+        crate::secrets::identity::READ_BASES,
+        ["purlis/@identity", "charter/@identity"]
+    );
+    for (base, prefix) in crate::secrets::identity::READ_BASES
+        .iter()
+        .zip(crate::secrets::keyring::OWN_PREFIXES)
+    {
+        assert_eq!(
+            *base,
+            format!("{prefix}{}", crate::secrets::identity::OWNER)
+        );
+    }
 }
 
 #[test]
@@ -164,8 +178,14 @@ fn the_entries_carry_the_names_on_disk_today() {
     );
     assert_eq!(
         crate::secrets::keyring::SERVICE_PREFIX,
-        KEYCHAIN_PREFIX.reads[0]
+        KEYCHAIN_PREFIX.write
     );
+    assert_eq!(
+        crate::secrets::keyring::OWN_PREFIXES,
+        ["purlis/", "charter/"]
+    );
+    assert_eq!(KEYCHAIN_PREFIX.reads, ["charter/"]);
+    assert_eq!(ONEPASSWORD_TAG.reads, ["charter"]);
     assert_eq!(crate::provenance::CHANGE, TRAILER_CHANGE.history[0]);
     assert_eq!(crate::provenance::CHAT, TRAILER_CHAT.history[0]);
     assert_eq!(crate::provenance::PERSONA, TRAILER_PERSONA.history[0]);
@@ -210,7 +230,7 @@ fn the_entries_carry_the_names_on_disk_today() {
     assert_eq!(crate::datahome::DIR, DATA_HOME.reads[0]);
     assert_eq!(crate::manifest::KEY, GENERATED_KEY.reads[0]);
     assert_eq!(crate::change::push::BLOCK_END, CHANGE_BLOCK_END.history[0]);
-    assert_eq!(crate::secrets::onepassword::TAG, ONEPASSWORD_TAG.reads[0]);
+    assert_eq!(crate::secrets::onepassword::TAG, ONEPASSWORD_TAG.write);
     assert_eq!(crate::profiles::CHARTER_PREFIX, ENV_PREFIX.reads[0]);
     assert_eq!(crate::planegit::BRANCH_PREFIX, BRANCH_PREFIX.history[0]);
     assert_eq!(crate::plugin::NAME, PLUGIN_NAME.reads[0]);

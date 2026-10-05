@@ -48,9 +48,39 @@ use serde_json::{Map, Value};
 
 use super::registry::Vault;
 use super::{Ctx, VaultError, fingerprint};
+use crate::names::KEYCHAIN_PREFIX;
 
-/// Every service charter writes starts with this, and every service it reads must.
-pub const SERVICE_PREFIX: &str = "charter/";
+/// Every service charter makes now starts with this (`purlis/`, #1261).
+pub const SERVICE_PREFIX: &str = KEYCHAIN_PREFIX.write;
+
+/// The prefixes a service charter reads or holds may start with: [`SERVICE_PREFIX`], and the
+/// old `charter/` while the rename window lasts (V93l). Exactly these, a security boundary: a
+/// service under any other is not charter's, and charter is never a deputy for it. Written out,
+/// not derived from every spelling the name module knows, so a name recognised only for
+/// history can never widen it.
+pub const OWN_PREFIXES: [&str; 2] = [KEYCHAIN_PREFIX.write, KEYCHAIN_PREFIX.reads[0]];
+
+/// What follows the product's own prefix in `service`, or `None` when it has neither.
+fn own_tail(service: &str) -> Option<&str> {
+    OWN_PREFIXES.iter().find_map(|p| service.strip_prefix(p))
+}
+
+/// Whether `id` can be the last segment of a service: not empty, one segment, no control
+/// character.
+fn id_ok(id: &str) -> bool {
+    !id.is_empty() && !id.contains('/') && !id.chars().any(char::is_control)
+}
+
+/// Whether `service` names an item charter makes: `<own prefix><vault>/<id>` for a vault
+/// [`registry::name_ok`] accepts, or `<own prefix>@identity/<id>` for a moved identity
+/// ([`super::identity`]); under one of [`OWN_PREFIXES`] and nothing else. What the app's
+/// one-item writer ([`super::keyhold`]) checks before it writes anything.
+pub fn own_service(service: &str) -> bool {
+    let Some((owner, id)) = own_tail(service).and_then(|rest| rest.split_once('/')) else {
+        return false;
+    };
+    (owner == super::identity::OWNER || super::registry::name_ok(owner)) && id_ok(id)
+}
 
 /// The file a fenced build keeps its keyring in, under the state directory. Plaintext, and only
 /// ever written by a build that a test or a scenario run made.
@@ -459,19 +489,19 @@ fn save_index(ctx: &Ctx, vault: &Vault, index: &Index) -> Result<(), VaultError>
     super::plain_file::write_private(&p, &Value::Object(doc))
 }
 
-/// Whether `service` is one charter wrote for THIS vault: `charter/<vault>/<id>`, and nothing
+/// Whether `service` is one charter wrote for THIS vault: `purlis/<vault>/<id>`, and nothing
 /// else. Scoped to the vault on purpose — a prefix-only check let an index name
-/// `charter/identity` or another vault's `charter/<other>/<hex>`, so a keyring vault could be
+/// `charter/identity` or another vault's `purlis/<other>/<hex>`, so a keyring vault could be
 /// pointed at an item it must never read as a secret (#271 review, U4). The `<id>` is the
 /// random tail [`new_service`] makes: one path segment, no control character.
+///
+/// During the rename window (#1261) `<vault>` may follow either of [`OWN_PREFIXES`]: an index
+/// written before the rename names a `charter/` service, and its items are still found there.
 pub fn service_ok_for(service: &str, vault: &str) -> bool {
-    let want = format!("{SERVICE_PREFIX}{vault}/");
-    match service.strip_prefix(&want) {
-        Some(tail) => {
-            !tail.is_empty() && !tail.contains('/') && !tail.chars().any(char::is_control)
-        }
-        None => false,
-    }
+    own_tail(service)
+        .and_then(|rest| rest.strip_prefix(vault))
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(id_ok)
 }
 
 /// Whether `key` can name a keyring item: not empty, and no control character.
@@ -489,7 +519,7 @@ fn check_key(key: &str) -> Result<(), VaultError> {
     }
 }
 
-/// A new service for `vault`: `charter/<vault>/<8 hex>`.
+/// A new service for `vault`: `purlis/<vault>/<8 hex>`.
 fn new_service(vault: &Vault) -> Result<String, VaultError> {
     let mut bytes = [0u8; 4];
     getrandom::fill(&mut bytes)
@@ -909,18 +939,124 @@ mod tests {
     }
 
     #[test]
-    fn a_vault_service_is_charters_for_that_vault_with_one_plain_segment_after_it() {
+    fn a_vault_service_is_the_products_for_that_vault_with_one_plain_segment_after_it() {
+        // Both prefixes during the rename window (#1261), and nothing else.
+        assert!(service_ok_for("purlis/ops/3f9a2c1b", "ops"));
         assert!(service_ok_for("charter/ops/3f9a2c1b", "ops"));
         for bad in [
             "charter/ops/",
+            "purlis/ops/",
             "charter/ops/a/b",
+            "purlis/ops/a/b",
             "charter/ops/a\nb",
             "charter/other/3f9a2c1b",
+            "purlis/other/3f9a2c1b",
             "charter/identity",
+            "purlis/@identity/3f9a2c1b",
+            "charter/@identity/3f9a2c1b",
             "someone-else/ops/3f9a2c1b",
+            // Lookalikes of the two prefixes.
+            "charterx/ops/3f9a2c1b",
+            "purlisx/ops/3f9a2c1b",
+            "purlis-/ops/3f9a2c1b",
+            "Purlis/ops/3f9a2c1b",
+            "CHARTER/ops/3f9a2c1b",
+            "/purlis/ops/3f9a2c1b",
+            " charter/ops/3f9a2c1b",
+            "purlis//ops/3f9a2c1b",
+            "charter/../ops/3f9a2c1b",
+            "purlis/charter/ops/3f9a2c1b",
+            "edm/ops/3f9a2c1b",
         ] {
             assert!(!service_ok_for(bad, "ops"), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_products_own_services_are_under_exactly_the_two_prefixes() {
+        assert_eq!(OWN_PREFIXES, ["purlis/", "charter/"]);
+        for good in [
+            "purlis/ops/3f9a2c1b",
+            "charter/ops/3f9a2c1b",
+            "purlis/@identity/0123456789abcdef",
+            "charter/@identity/0123456789abcdef",
+            "charter/my.vault_1-x/3f9a2c1b",
+        ] {
+            assert!(own_service(good), "{good:?}");
+        }
+        for bad in [
+            "charterx/ops/3f9a2c1b",
+            "purlis-/ops/3f9a2c1b",
+            "charter/../x",
+            "purlis/../x",
+            "charter/./x",
+            "charter/ops",
+            "charter/ops/",
+            "charter//x",
+            "charter/ops/a/b",
+            "charter/ops/a\nb",
+            "charter/@identity",
+            "charter/@identity/",
+            "charter/@other/x",
+            "charter/.hidden/x",
+            "Claude Code-credentials",
+            "",
+        ] {
+            assert!(!own_service(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_secret_stored_under_the_old_charter_prefix_is_still_found_and_kept_there() {
+        // An install from before the rename: its index names a `charter/` service.
+        let (_dir, ctx, ops) = plane();
+        write_index(
+            &ctx,
+            &ops,
+            r#"{"service": "charter/ops/3f9a2c1b", "keys": {"API_TOKEN": {"size": "", "updated": ""}}}"#,
+        );
+        let stub = FileStore::at(ctx.state.join(STUB_FILE));
+        stub.set("charter/ops/3f9a2c1b", "API_TOKEN", VALUE)
+            .unwrap();
+
+        assert_eq!(get(&ctx, &ops, "API_TOKEN").unwrap(), VALUE);
+
+        // One vault keeps one service until the keychain copy moves it (RN-6): a key added
+        // now sits beside its siblings, never split across two prefixes.
+        set(&ctx, &ops, "OTHER", "other").unwrap();
+        assert_eq!(
+            load_index(&ctx, &ops).unwrap().service.as_deref(),
+            Some("charter/ops/3f9a2c1b")
+        );
+        assert_eq!(
+            stub.get("charter/ops/3f9a2c1b", "OTHER")
+                .unwrap()
+                .unwrap()
+                .into_inner(),
+            "other"
+        );
+    }
+
+    #[test]
+    fn a_new_vault_writes_its_secrets_under_the_purlis_prefix() {
+        let (_dir, ctx, ops) = plane();
+        set(&ctx, &ops, "API_TOKEN", VALUE).unwrap();
+
+        let service = load_index(&ctx, &ops).unwrap().service.unwrap();
+        let tail = service.strip_prefix("purlis/ops/").expect(&service);
+        assert!(
+            tail.len() == 8 && tail.chars().all(|c| c.is_ascii_hexdigit()),
+            "{service}"
+        );
+        let stub = FileStore::at(ctx.state.join(STUB_FILE));
+        assert_eq!(
+            stub.get(&service, "API_TOKEN")
+                .unwrap()
+                .unwrap()
+                .into_inner(),
+            VALUE
+        );
+        assert_eq!(get(&ctx, &ops, "API_TOKEN").unwrap(), VALUE);
     }
 
     /// A keyring vault `ops` in a fresh plane.
@@ -1070,7 +1206,7 @@ mod tests {
         assert!(set_with(&Refusing, &ctx, &ops, "API_TOKEN", VALUE, "t").is_err());
 
         let index = load_index(&ctx, &ops).unwrap();
-        assert!(index.service.is_some_and(|s| s.starts_with("charter/ops/")));
+        assert!(index.service.is_some_and(|s| s.starts_with("purlis/ops/")));
         assert!(index.keys.is_empty(), "a key the store refused was listed");
     }
 

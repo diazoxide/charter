@@ -9,7 +9,8 @@
 //! pinned in this machine's registry half beside it.** A record is written only by an operator
 //! action (the vault tab's password box, or a move from the app's own environment). It holds:
 //!
-//! - a **random item id per (vault, plane)** — the keyring item is `charter/@identity/<id>`,
+//! - a **random item id per (vault, plane)** — the keyring item is `purlis/@identity/<id>`
+//!   (`charter/@identity/<id>` from before the rename is still read),
 //!   account the source variable's name. Random and local, so a chat cannot name another plane's
 //!   item, and two planes that both bind `$OP_TEAM_TOKEN` never share one (#271 review, U2);
 //! - the **binding the move was made against** — the `env` map, the op-vault, the account. The
@@ -29,12 +30,23 @@ use serde_json::{Map, Value};
 
 use super::registry::{self, Vault};
 use super::{Ctx, VaultError, keyring};
+use crate::names::KEYCHAIN_IDENTITY_PREFIX;
 
-/// The keyring service every moved identity item lives under, before its random id. The `@`
-/// cannot begin a vault name ([`registry::name_ok`]), so no vault's own service
-/// (`charter/<vault>/…`) can ever collide with one of these, and [`keyring::service_ok_for`]
+/// The keyring service every moved identity item is written under, before its random id. The
+/// `@` cannot begin a vault name ([`registry::name_ok`]), so no vault's own service
+/// (`purlis/<vault>/…`) can ever collide with one of these, and [`keyring::service_ok_for`]
 /// never accepts one as a vault's secret item (#271 review, U4).
-pub const SERVICE_BASE: &str = "charter/@identity";
+pub const SERVICE_BASE: &str = KEYCHAIN_IDENTITY_PREFIX.write;
+
+/// The services an identity item is read under, newest first: [`SERVICE_BASE`], then the old
+/// `charter/@identity` while the rename window lasts (#1261, V93e: the purlis item wins).
+pub const READ_BASES: [&str; 2] = [
+    KEYCHAIN_IDENTITY_PREFIX.write,
+    KEYCHAIN_IDENTITY_PREFIX.reads[0],
+];
+
+/// The segment after the product's keyring prefix that marks an identity item.
+pub const OWNER: &str = "@identity";
 
 /// The config field, in the local registry half, that records a moved identity.
 pub const MARK: &str = "identity";
@@ -178,10 +190,15 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
     else {
         return Ok(None);
     };
-    Ok(keyring::store(ctx)
-        .get(&item_service(id), source)?
-        .map(keyring::Secret::into_inner)
-        .filter(|v| !v.is_empty()))
+    // The first base that holds the item wins, even an empty one (V93e); an old item is read
+    // only where the purlis one is absent.
+    let store = keyring::store(ctx);
+    for base in READ_BASES {
+        if let Some(found) = store.get(&format!("{base}/{id}"), source)? {
+            return Ok(Some(found.into_inner()).filter(|v| !v.is_empty()));
+        }
+    }
+    Ok(None)
 }
 
 /// The absolute `op` a keyring-held read must run, verified against the pinned path and Team id;
@@ -222,7 +239,7 @@ pub fn pinned_op(ctx: &Ctx, vault: &Vault) -> Result<Option<PathBuf>, VaultError
     Ok(Some(path))
 }
 
-/// The keyring service for item `id`.
+/// The keyring service a new item `id` is written under.
 fn item_service(id: &str) -> String {
     format!("{SERVICE_BASE}/{id}")
 }
