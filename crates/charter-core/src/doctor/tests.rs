@@ -1160,6 +1160,65 @@ fn a_front_door_that_walks_out_of_personas_is_not_a_persona() {
     assert_eq!(one(&root, "front door").status, Status::Warn);
 }
 
+// ---- renamed leftovers (RN-1, V93e) ---------------------------------------------------------
+
+#[test]
+fn a_project_with_only_old_names_has_no_leftover_row() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir(root.join(".charter")).unwrap();
+    assert!(
+        doctor(&root)
+            .run()
+            .iter()
+            .all(|r| r.name != "renamed leftovers")
+    );
+}
+
+#[test]
+fn a_project_with_only_purlis_names_has_no_leftover_row() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::rename(root.join("charter.toml"), root.join("purlis.toml")).unwrap();
+    std::fs::create_dir(root.join(".purlis")).unwrap();
+    assert!(
+        doctor(&root)
+            .run()
+            .iter()
+            .all(|r| r.name != "renamed leftovers")
+    );
+}
+
+#[test]
+fn both_names_of_one_thing_are_a_warning_naming_the_one_that_is_ignored() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::write(root.join("purlis.toml"), "schema = 1\n").unwrap();
+    std::fs::create_dir(root.join(".charter")).unwrap();
+    std::fs::create_dir(root.join(".purlis")).unwrap();
+
+    let r = one(&root, "renamed leftovers");
+    assert_eq!(r.status, Status::Warn);
+    assert!(
+        r.detail.contains("charter.toml (purlis.toml is read)"),
+        "{}",
+        r.detail
+    );
+    assert!(
+        r.detail.contains(".charter (.purlis is read)"),
+        "{}",
+        r.detail
+    );
+    assert!(!r.hint.is_empty());
+    assert_eq!(r.fix, None);
+}
+
+#[test]
+fn the_leftover_row_sits_with_the_rows_about_which_project_answered() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::write(root.join("purlis.toml"), "schema = 1\n").unwrap();
+    let names: Vec<String> = doctor(&root).run().into_iter().map(|r| r.name).collect();
+    let at = names.iter().position(|n| n == "renamed leftovers").unwrap();
+    assert_eq!(names[at - 1], "nested plane");
+}
+
 // ---- routing (retired, charter#369) -----------------------------------------------------------
 
 #[test]
