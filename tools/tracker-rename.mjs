@@ -2,7 +2,8 @@
 // Renames the tracker from charter to purlis (RN-12, #1256; operator rulings V93a, V93d, V93n).
 //
 // It edits milestone titles and descriptions, and issue titles and bodies, open and closed, in
-// the repos it is given. Pull requests are left as written. It has two modes:
+// the repos it is given. Pull requests, comments, labels and repo descriptions are
+// tracker-rename-rest.mjs's (RN-12b), with these same rules. It has two modes:
 //
 //   node tools/tracker-rename.mjs --repo purlis/purlis --repo purlis/purlis-plane \
 //       --out tracker-dry-run.json > tracker-dry-run.txt
@@ -26,7 +27,7 @@
 // Python package and distribution, and words that merely contain "charter" (`charters`), which
 // the summary counts so that every occurrence is accounted for. In prose the old repo names
 // become the new ones (`charter-app#4` is `purlis#4`, D-RN12-9) and `charterd` is `purlisd`.
-// Pull requests and the rename's own milestone (M60) are not touched at all.
+// Pull requests and the rename's own milestone (M60) are not touched here.
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -39,6 +40,16 @@ export const DEFAULT_SKIP_MILESTONES = ["M60 · Rename to purlis"];
 // Spans that stay as written, each with the name it is counted under. Order matters only for
 // overlaps: the first rule to claim a character keeps it.
 const KEEP = [
+  // An HTML comment is a record something reads back, byte for byte (D-RN12b-9): the PR markers
+  // `<!-- charter-save -->` and `<!-- BEGIN/END charter change -->`, the
+  // `<!-- mutants-report dirty: […] -->` record tools/mutants-report.py parses, quoted fixtures.
+  ["html-comment", /<!--[\s\S]*?-->/g],
+  // Names the code or a vault still writes under the old name: the GitLab label `ws todo promote`
+  // writes, and 1Password item titles (#1275).
+  ["gitlab-label", /(?<![\w-])charter::ws::[\w<>.-]*/g],
+  ["op-item", /\bop-item:\s*[`"']?charter-[\w<>.-]+/g],
+  // The retired Python implementation, said as such ("the Python charter", "the old charter").
+  ["retired-python", /\b(?:Python|old)\s+charter\b/gi],
   // A URL records where something was. `diazoxide/charter` redirects, and is never reused.
   ["url", /\b(?:https?|ftp):\/\/[^\s<>()[\]"'`]+/g],
   ["url", /\]\([^)\s]*\)/g],
@@ -68,9 +79,19 @@ const KEEP = [
     "old-plugin-id",
     /(?<![\w.-])charter(?:-app)?@[\w.-]+|(?<![\w.-])[\w-]+@charter(?:-app)?(?![\w-])/g,
   ],
+  // The plugin's old name, `charter-app`, said as a plugin's name (#408: "the plugin is called
+  // charter, not charter-app"; "the bundled `charter-app` plugin"). Short of a sentence's end.
+  [
+    "old-plugin-id",
+    /(?<=\bplugins?\b[^.\n?!;:]{0,30})(?<![\w./@-])charter-app(?![\w@:/-])|(?<![\w./@-])charter-app(?=[`*]*\s+plugins?\b)/g,
+  ],
   // `Charter-*` trailers are in git history for good and are recognised, never rewritten (V93j).
   ["commit-trailer", /(?<![\w-])Charter-(?:[A-Z][\w-]*|\*)?(?![a-z])/g],
   // The persona's charter is the English word: the role a persona plays, not the product.
+  [
+    "persona-charter",
+    /\bthe\s+charter(?=\s+(?:body|prose|concatenation)\b|-format\b|\s*\(or\s+personas\/)/gi,
+  ],
   [
     "persona-charter",
     /\b(?:persona(?:'s|s'|s)?|role(?:'s)?|(?:its|their|his|her|your|my|own))\s+(?:own\s+)?charters?\b(?!\.\w)/gi,
@@ -95,6 +116,8 @@ const KEEP = [
 
 // What is renamed. Each match is replaced and counted under the rule's name.
 const RENAME = [
+  // The app crate, named to cargo, becomes purlis-app (RN-13, V93c), not the repo (D-RN12b-4).
+  ["crate", /(?<=(?:^|\s)(?:-p|--package)[\s=])charter-app(?![\w-])/g, () => "purlis-app"],
   // The repos' new names, in prose (D-RN12-9): charter-app was the app repo, now purlis/purlis.
   ["repo-name", /(?<![\w./@-])charter-app\s?#(\d+)/g, (_m, n) => `purlis#${n}`],
   ["repo-name", /(?<![\w./@-])charter-plane\s?#(\d+)/g, (_m, n) => `purlis-plane#${n}`],
@@ -191,9 +214,9 @@ const bump = (counts, key, n = 1) => {
   if (n) counts[key] = (counts[key] ?? 0) + n;
 };
 
-function renameProse(text, renamed, kept, words) {
+function renameProse(text, renamed, kept, words, keep, collapsed) {
   const claimed = new Uint8Array(text.length);
-  for (const [rule, re] of KEEP) {
+  for (const [rule, re] of [...keep, ...KEEP]) {
     for (const m of text.matchAll(re)) {
       if (!/charter/i.test(m[0])) continue;
       const end = m.index + m[0].length;
@@ -209,6 +232,35 @@ function renameProse(text, renamed, kept, words) {
       if (claimed.subarray(m.index, end).some((c) => c)) continue;
       claimed.fill(1, m.index, end);
       edits.push({ at: m.index, end, to: to(...m), rule });
+    }
+  }
+  // A line where two different old names would read the same afterwards ("charter, not
+  // charter-app" as "purlis, not purlis") loses its meaning. It stays as written, counted as
+  // `collapse` and listed, for a person to word by hand (D-RN12b-6).
+  const lineOf = (at) => text.slice(0, at).split("\n").length - 1;
+  const byLine = new Map();
+  for (const e of edits) {
+    // A command (`charter save`) names no product or repo, so it never collides (D-RN12b-10).
+    if (e.rule === "cli") continue;
+    const line = lineOf(e.at);
+    if (!byLine.has(line)) byLine.set(line, new Map());
+    const olds = byLine.get(line);
+    if (!olds.has(e.to)) olds.set(e.to, new Set());
+    olds.get(e.to).add(text.slice(e.at, e.end).toLowerCase().replace(/\s+/g, ""));
+  }
+  const dropped = new Set(
+    [...byLine]
+      .filter(([, olds]) => [...olds.values()].some((names) => names.size > 1))
+      .map(([line]) => line),
+  );
+  if (dropped.size) {
+    const all = text.split("\n");
+    for (const line of dropped) collapsed.push(all[line]);
+    for (let i = edits.length - 1; i >= 0; i--) {
+      const e = edits[i];
+      if (!dropped.has(lineOf(e.at))) continue;
+      bump(kept, "collapse", text.slice(e.at, e.end).match(/charter/gi).length);
+      edits.splice(i, 1);
     }
   }
   // Whatever no rule claimed is part of a longer word (`charters`, `_charter_argv`). It is left
@@ -234,23 +286,26 @@ function renameProse(text, renamed, kept, words) {
 /**
  * Applies the rename rules to one title or body. Returns the new text, the edits counted by
  * rule (`renamed`), the occurrences left alone on purpose, counted by why (`kept`), and the
- * longer words containing "charter" that were left alone (`words`).
+ * longer words containing "charter" that were left alone (`words`), and the lines kept because
+ * two old names in them would have read the same (`collapsed`). `keep` adds `[rule, regex]`
+ * spans to leave alone, claimed before the rules' own (tracker-rename-rest.mjs's PR markers).
  */
-export function renameText(text) {
+export function renameText(text, { keep = [] } = {}) {
   const renamed = {};
   const kept = {};
   const words = {};
-  if (text == null) return { text, renamed, kept, words };
+  const collapsed = [];
+  if (text == null) return { text, renamed, kept, words, collapsed };
   let out = "";
   for (const seg of segments(text)) {
     if (seg.kind === "prose") {
-      out += renameProse(seg.text, renamed, kept, words);
+      out += renameProse(seg.text, renamed, kept, words, keep, collapsed);
     } else {
       bump(kept, `${seg.kind}-block`, seg.text.match(/charter/gi)?.length ?? 0);
       out += seg.text;
     }
   }
-  return { text: out, renamed, kept, words };
+  return { text: out, renamed, kept, words, collapsed };
 }
 
 // ---- GitHub, through `gh` ----
@@ -273,7 +328,7 @@ function askedToWait(output, now = Date.now()) {
   return null;
 }
 
-function ghRunner({ gh, retryWaitMs, warn }) {
+export function ghRunner({ gh, retryWaitMs, warn }) {
   return async function call(args, input) {
     for (let attempt = 0; ; attempt++) {
       const r = spawnSync(gh, args, {
@@ -296,7 +351,7 @@ function ghRunner({ gh, retryWaitMs, warn }) {
   };
 }
 
-const lines = (out) =>
+export const lines = (out) =>
   out
     .split("\n")
     .filter((l) => l.trim())
@@ -368,6 +423,7 @@ export async function plan(call, repos, skipMilestones) {
   const renamed = {};
   const kept = {};
   const words = {};
+  const collapsed = [];
   let found = 0;
   let scanned = 0;
   let skipped = 0;
@@ -386,6 +442,12 @@ export async function plan(call, repos, skipMilestones) {
       add(kept, body.kept);
       add(words, title.words);
       add(words, body.words);
+      for (const [field, r] of [
+        ["title", title],
+        ["body", body],
+      ])
+        for (const line of r.collapsed)
+          collapsed.push({ repo, kind: item.kind, number: item.number, field, line });
       add(renamed, title.renamed);
       add(renamed, body.renamed);
       if (title.text === item.title && body.text === item.body) continue;
@@ -414,11 +476,12 @@ export async function plan(call, repos, skipMilestones) {
     renamed,
     kept,
     words,
+    collapsed,
     found,
   };
 }
 
-function diffLines(label, before, after) {
+export function diffLines(label, before, after) {
   if (before === after) return [];
   const a = (before ?? "").split("\n");
   const b = (after ?? "").split("\n");
@@ -431,10 +494,20 @@ function diffLines(label, before, after) {
   return out;
 }
 
-const fmtCounts = (counts) =>
+export const fmtCounts = (counts) =>
   Object.entries(counts)
     .sort((x, y) => y[1] - x[1])
     .map(([k, v]) => `  ${k.padEnd(20)} ${v}`);
+
+/** The lines kept as written because two old names in them would read the same (collapse). */
+export function collapseLines(list = []) {
+  return [
+    `lines kept because two old names would read the same (collapse): ${list.length}`,
+    ...list.map(
+      (c) => `  ${c.repo} ${c.kind} ${c.number ?? c.id} ${c.field}: ${c.line.trim().slice(0, 200)}`,
+    ),
+  ];
+}
 
 export function report(p) {
   const out = [];
@@ -468,6 +541,7 @@ export function report(p) {
     ...fmtCounts(p.kept),
     "words containing charter, left alone (contains-charter above):",
     ...fmtCounts(p.words),
+    ...collapseLines(p.collapsed),
     `occurrences of charter in the items scanned (skipped ones aside): ${p.found}` +
       ` = ${edits} edited + ${leftAlone} left alone` +
       (p.found === edits + leftAlone
