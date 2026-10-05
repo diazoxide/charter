@@ -7,6 +7,17 @@ import { RemoveFromWorkspace } from "./RemoveFromWorkspace";
 import { SettingActions, type RowIds } from "./settings/components";
 
 /**
+ * What Settings › Repos' picker changed in a workspace's membership, heard by the "Not cloned
+ * here" row beside it: a clone unticked from a manifest a hand wrote leaves its row there, so
+ * it is not cloned here now and must be listed at once (#1228).
+ */
+const membershipHeard = new Set<(plane: PlaneId, workspace: string) => void>();
+
+function membershipChanged(plane: PlaneId, workspace: string) {
+  for (const hear of membershipHeard) hear(plane, workspace);
+}
+
+/**
  * **A workspace's repos, in Settings at its level** (ADR 0055; SE-20): the same picker as a new
  * workspace's, ticked with what is cloned here now, drawn as one row of the settings set — the
  * control is the picker, what is under way is said under it, and a refusal is the row's error.
@@ -20,17 +31,6 @@ import { SettingActions, type RowIds } from "./settings/components";
  *
  * What is cloned is read from disk (`workspace_repos`), never from what this window asked for.
  */
-/**
- * What Settings › Repos' picker changed in a workspace's membership, heard by the "Not cloned
- * here" row beside it: a clone unticked from a manifest a hand wrote leaves its row there, so
- * it is not cloned here now and must be listed at once (#1228).
- */
-const membershipHeard = new Set<(plane: PlaneId, workspace: string) => void>();
-
-function membershipChanged(plane: PlaneId, workspace: string) {
-  for (const hear of membershipHeard) hear(plane, workspace);
-}
-
 export function useWorkspaceRepos(
   plane: PlaneId,
   workspace: string,
