@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791158830808,
+  "lastUpdate": 1791161025762,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1554,6 +1554,48 @@ window.BENCHMARK_DATA = {
             "value": 101.942263,
             "unit": "ms",
             "extra": "median of 5 runs: 100.617, 101.529, 101.942, 102.052, 102.207 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "152e2dda66582b76f612ee03e0d4f47413f4af84",
+          "message": "updates: the weekly count's review fold-ins (OB-17)\n\n- Guard: `weekly_endpoint` is a way of naming Charter's address in\n  only_the_updater_and_report_name_charters_own_address. A temporary caller in clipath.rs\n  failed the guard with the new entry and passed it without. The guard also stopped\n  scanning a file at a mid-file `#[cfg(test)] mod name;` declaration, so a caller after\n  line 138 of charter-core's lib.rs went unseen. It now stops only at an inline test module.\n- offer_from gives the week back when the weekly request was never sent, and reads the\n  manifest. A test covers this.\n- docs/updating.md:\n  - the macOS opt-out route (`launchctl setenv DO_NOT_TRACK 1`, or start from a shell) and\n    #1185;\n  - that GitHub can join one IP's weekly fetch to its usual fetches, and that the fallback\n    makes two requests back to back;\n  - two more biases: anyone can inflate the count, and a request counted and then failed\n    is counted again;\n  - the fixed headers named: Host, Accept, Accept-Encoding and the user agent;\n  - ragged lines rewrapped.\n- \"Nothing is published\" now reads \"charter publishes no estimate; the raw count is public,\n  as every asset's is\", in the ADR and in updating.md. main.rs's module comment is rewrapped.\n\nCloses #688\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T04:40:56+04:00",
+          "tree_id": "320d88b65d48a48822e4797eab1fece4937a3800",
+          "url": "https://github.com/diazoxide/charter/commit/152e2dda66582b76f612ee03e0d4f47413f4af84"
+        },
+        "date": 1791161024485,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.441404,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.411, 0.436, 0.441, 0.446, 0.446 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.337739,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.076, 16.173, 16.338, 16.400, 16.791 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.3306105,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.007, 101.093, 101.331, 101.633, 101.685 ms"
           }
         ]
       }
