@@ -571,6 +571,8 @@ fn a_move_rekeys_every_view_keyed_by_the_workspaces_name() {
             "workspace/alpha/deploys",
             "workspace/beta/deploys",
         ),
+        // A new memory's tab, keyed by the draft slug (`memories::DRAFT`).
+        ("memory", "workspace/alpha/\\", "workspace/beta/\\"),
         ("memory-archive", "workspace/alpha", "workspace/beta"),
         ("piece-files", "alpha/api/fix-login", "beta/api/fix-login"),
         ("piece-files", "alpha/api/", "beta/api/"),
