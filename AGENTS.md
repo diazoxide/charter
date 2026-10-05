@@ -106,8 +106,11 @@ TIMEOUT stays a survivor, because it may be a suite cut short. Shards run on dif
 so one shard's suite says nothing about another's: on 2026-09-25 ten slow shards reported 432
 TIMEOUTs and no MISSED mutant, and this rule is what keeps such a night red.
 
-When the nightly is not clean it keeps one issue in this repo up to date, and closes it, with
-any copies, only when a full run is clean. Five consecutive red nights went unread in September
+When the nightly is not clean it keeps one issue in this repo up to date. Sunday tests one of
+13 weekly slices of the crate (whole files), so the issue records which files are not known
+clean: a night that is not clean adds the files it tested, a slice that runs clean clears only
+its own, and the issue closes, with any copies, when none is left or a full run is clean. A
+partial or cancelled run never closes it. Five consecutive red nights went unread in September
 2026 while fifty PRs merged past them; that is what the issue is for. Which issue, and what it
 is told, is `tools/mutants-report.py notice`, tested in `tools/mutants-report.test.mjs`.
 

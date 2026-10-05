@@ -19,8 +19,9 @@ So the two questions are asked separately and answered separately:
 * **`gather`** — is there anything to REPORT? Survivors from every shard, collected into one
   table, with the shards that never reported named rather than quietly dropped from the
   denominator, and the mutants that hung the suite listed apart as caught.
-* **`notice`** — what does the nightly's one issue say? Opened or updated on a red night,
-  closed only on a clean full one.
+* **`slice`** — which files does this Sunday test? The crate in weekly slices of whole files.
+* **`notice`** — what does the nightly's one issue say? Opened or updated on a red night, and
+  closed when every file it holds has since run clean in a slice, or on a clean full run.
 
 Each mode writes GitHub's step summary when `$GITHUB_STEP_SUMMARY` is set, so the answer is
 on the run's own page rather than at the end of a 6,000-line log.
@@ -399,6 +400,43 @@ def cmd_gather(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# Sunday's weekly slice                                                          #
+# ---------------------------------------------------------------------------- #
+
+
+def mutant_files(lines) -> dict[str, int]:
+    """How many mutants each file holds, from `cargo mutants --list` (`file:line:col: name`)."""
+    counts: dict[str, int] = {}
+    for line in lines:
+        line = line.strip()
+        if line:
+            file = line.split(":", 1)[0]
+            counts[file] = counts.get(file, 0) + 1
+    return counts
+
+
+def cmd_slice(args: argparse.Namespace) -> int:
+    """Print the files of this week's slice, one a line.
+
+    The crate is cut into `--slices` runs of whole files, in path order, each holding about the
+    same number of mutants: a file goes to the slice its middle mutant falls in. Week `W` tests
+    slice `W mod --slices`, so consecutive Sundays walk the crate and start again. Whole files,
+    because a slice's verdict is about its files (`notice` keeps the alert per file), and path
+    order, because a file added or grown moves the cuts near it by a file at most, where a hash
+    of the path would hold still but leave one slice twice the size of another."""
+    counts = mutant_files(sys.stdin)
+    total = sum(counts.values())
+    wanted = args.week % args.slices
+    before = 0
+    for file in sorted(counts):
+        middle = before + counts[file] / 2
+        if min(int(middle * args.slices / total), args.slices - 1) == wanted:
+            print(file)
+        before += counts[file]
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # the nightly's one issue                                                        #
 # ---------------------------------------------------------------------------- #
 
@@ -440,6 +478,57 @@ def night_report(args: argparse.Namespace) -> list[str] | None:
     return lines
 
 
+# The line of the issue's body that records which files are not known clean, as JSON: a list of
+# paths, or "*" for the whole crate. An HTML comment, so the issue reads as prose.
+MARKER = "<!-- mutants-report dirty: "
+WHOLE = "*"
+
+
+def read_list(path: str | None) -> set[str] | None:
+    """A file of paths, one a line, or None when `plan` did not leave it (it failed, or never
+    ran): a list that is not there is a run that cannot say what it covered."""
+    if not path:
+        return None
+    try:
+        lines = pathlib.Path(path).read_text().splitlines()
+    except OSError:
+        return None
+    return {line.strip() for line in lines if line.strip()}
+
+
+def recorded(body: str | None, is_open: bool) -> set[str] | str:
+    """Which files the issue says are not known clean. No issue open: none, because it is
+    opened by the first red night and closed only when nothing is left. An issue open without
+    the record (one written before slices, as HY-7 left #480): the whole crate."""
+    if not is_open:
+        return set()
+    for line in (body or "").splitlines():
+        if line.startswith(MARKER) and line.endswith(" -->"):
+            try:
+                value = json.loads(line[len(MARKER) : -len(" -->")])
+            except json.JSONDecodeError:
+                return WHOLE
+            return value if value == WHOLE else set(value)
+    return WHOLE
+
+
+def state_section(dirty: set[str] | str, files: set[str] | None) -> str:
+    record = WHOLE if dirty == WHOLE else sorted(dirty)
+    if dirty == WHOLE:
+        said = (
+            "**None of charter-core's files is known clean**: the last run could not list them."
+        )
+    else:
+        verb = "is" if len(dirty) == 1 else "are"
+        of = len(files or dirty)
+        said = f"**{len(dirty)} of charter-core's {of} files {verb} not known clean.**"
+    return (
+        f"{MARKER}{json.dumps(record)} -->\n"
+        f"{said} Sunday tests one weekly slice of the crate, and a slice that runs clean clears "
+        "its own files. The issue closes when no file is left, or on a clean full run."
+    )
+
+
 def cmd_notice(args: argparse.Namespace) -> int:
     """Decide what the nightly's one issue is told, and print it as one action a line for the
     workflow to carry out: `create`, `edit N`, `close N`, or `duplicate N KEPT`.
@@ -448,38 +537,84 @@ def cmd_notice(args: argparse.Namespace) -> int:
     All of them: `gh issue list` stops at a page, and with more issues open than one page
     holds the nightly's own fell off it, so two red nights filed #973 and #1140 as copies of
     #480 rather than telling it. Matched on the exact title, never `--search`, whose relevance
-    matching would happily return somebody else's issue and get it edited."""
-    ours = []
+    matching would happily return somebody else's issue and get it edited.
+
+    The issue keeps, in its body, the files of charter-core that are not known clean, because
+    Sunday tests a slice of the crate and not all of it (#1200):
+
+    * a night that is not clean adds what it tested: a slice its files, a diff night the files
+      its mutants came from, and a full run, a failed `plan` or a run without its lists the
+      whole crate;
+    * a clean slice clears its own files, and nothing else; a clean full run clears all of them;
+    * a clean diff night clears nothing: it tested the lines that changed, not their files;
+    * the issue closes only on a clean slice or full run that leaves nothing, so a partial or
+      cancelled run can never close it."""
+    ours: list[tuple[int, str]] = []
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
         issue = json.loads(line)
         if issue.get("title") == args.title:
-            ours.append(int(issue["number"]))
+            ours.append((int(issue["number"]), issue.get("body") or ""))
     ours.sort()
+    numbers = [number for number, _ in ours]
 
     wrong = night_report(args)
     if wrong is None:
         print("nothing in charter-core changed since the last green run", file=sys.stderr)
         return 0
-    if not wrong:
-        if args.scope != "full":
-            # A clean DIFF says the new code is covered, not that the crate is. Only a full
-            # run may close the issue; an open one stays open, and nothing new is said.
-            print(f"a clean {args.scope} run; only a full run closes the issue", file=sys.stderr)
+    clean = not wrong
+    files = read_list(args.files)
+    tested = read_list(args.tested) if args.plan == "success" else None
+
+    dirty = recorded(ours[0][1] if ours else None, bool(ours))
+    if dirty == WHOLE and files is not None:
+        dirty = set(files)
+    if clean and args.scope == "full":
+        dirty = set()
+    elif clean and args.scope == "slice" and tested is not None and dirty != WHOLE:
+        dirty = dirty - tested
+    elif not clean:
+        if tested is None or args.scope not in ("diff", "slice"):
+            dirty = set(files) if files is not None else WHOLE
+        elif dirty != WHOLE:
+            dirty = dirty | tested
+    if dirty != WHOLE and files is not None:
+        # A file deleted from the crate has no mutant left to survive.
+        dirty = dirty & files
+
+    if clean:
+        if args.scope not in ("slice", "full"):
+            # A clean DIFF says the new lines are covered, not that their files are. An open
+            # issue stays open, and nothing new is said.
+            print(f"a clean {args.scope} run clears no file", file=sys.stderr)
             return 0
-        for number in ours:
-            print(f"close {number}")
+        if not dirty:
+            for number in numbers:
+                print(f"close {number}")
+            return 0
+        if not ours:
+            return 0
+        # What the last red night said stays; only the record of what is left changes.
+        said = ours[0][1].split(MARKER, 1)[0].rstrip()
+        pathlib.Path(args.body_file).write_text(
+            (said + "\n\n" if said else "") + state_section(dirty, files) + "\n"
+        )
+        print(f"edit {numbers[0]}")
         return 0
 
     pathlib.Path(args.body_file).write_text(
-        f"Last run: {args.run_url}\n\n" + "\n".join(wrong) + "\n"
+        f"Last run: {args.run_url}\n\n"
+        + "\n".join(wrong)
+        + "\n\n"
+        + state_section(dirty, files)
+        + "\n"
     )
     if not ours:
         print("create")
         return 0
-    kept, copies = ours[0], ours[1:]
+    kept, copies = numbers[0], numbers[1:]
     print(f"edit {kept}")
     for number in copies:
         print(f"duplicate {number} {kept}")
@@ -522,12 +657,23 @@ def main() -> int:
     )
     gather.set_defaults(func=cmd_gather)
 
-    notice = sub.add_parser("notice", help="decide what the nightly's one issue is told")
+    sliced = sub.add_parser("slice", help="print the files of one week's slice of the crate")
+    sliced.add_argument("--slices", type=int, required=True, help="how many slices a cycle has")
+    sliced.add_argument("--week", type=int, required=True, help="weeks since the Unix epoch")
+    sliced.set_defaults(func=cmd_slice)
+
+    notice = sub.add_parser("notice",help="decide what the nightly's one issue is told")
     notice.add_argument("--title", required=True, help="the issue's exact title")
     notice.add_argument("--run-url", required=True, help="this run's page")
     for job in ("plan", "baseline", "core", "survivors"):
         notice.add_argument(f"--{job}", default="", help=f"the `{job}` job's result")
-    notice.add_argument("--scope", default="", help="`plan`'s scope: diff, full or none")
+    notice.add_argument("--scope", default="", help="`plan`'s scope: diff, slice, full or none")
+    notice.add_argument(
+        "--tested", help="`plan`'s list of the files this run's mutants come from, one a line"
+    )
+    notice.add_argument(
+        "--files", help="`plan`'s list of every file of the crate that has a mutant, one a line"
+    )
     notice.add_argument("--body-file", required=True, help="where to write the issue's body")
     notice.set_defaults(func=cmd_notice)
 

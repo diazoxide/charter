@@ -1,7 +1,8 @@
 name: mutants
 
 # Mutation testing never gates a PR (spec decision 19). It runs on the core crate alone —
-# nightly on what changed, weekly on everything — and this file is about what its RED means.
+# nightly on what changed, weekly on one slice of everything — and this file is about what its
+# RED means.
 #
 # It meant nothing for five consecutive nights. 2026-09-19 through 2026-09-21 all failed and
 # roughly fifty PRs merged past the red X, because "failure" was the answer to four different
@@ -81,11 +82,32 @@ name: mutants
 #    green run in the last 72 hours it takes the last 24 hours instead of a diff that grows into
 #    a whole-crate run every night the survivors stay red.
 #    What the diff cannot see — a deleted test that stops catching an UNCHANGED line — is what
-#    Sunday's full run is for, and only a full run can say the crate is clean: a clean diff
-#    night never closes the issue below.
+#    Sunday is for, and a clean diff night never closes the issue below.
+#
+# 5. **Sunday tests one slice of the crate, not all of it** (#1200). By 2026-10-03 charter-core
+#    had 21,035 mutants: at 131 s each that is ~765 runner-hours, ~96 h of wall clock at eight
+#    wide, and the last full run (2026-09-27, run 36308723145) ran 37 h without finishing. A
+#    full run that never finishes never closes the issue. So Sunday tests slice `W mod SLICES`
+#    of the crate, `W` being the weeks since the Unix epoch: whole files in path order, cut to
+#    about the same number of mutants each (`tools/mutants-report.py slice`). With SLICES=13 a
+#    slice was 1,550-1,771 mutants on 2026-10-05 (21,192 in all): at most 23 shards of
+#    `PER_SHARD`, three waves of eight, and at the slowest shard's 164 s a mutant ~11 h, well
+#    inside the day before Monday's diff night. Thirteen weeks is a quarter: every file is
+#    tested at least once a quarter. When a slice outgrows three waves the run still finishes,
+#    a wave later; the fix then is a larger SLICES, never more shards at once (that spends the
+#    account's job slots, and is the operator's call).
+#    The issue records which FILES are not known clean. A night that is not clean adds what it
+#    tested; a slice that runs clean clears only its own files; the issue closes when none is
+#    left. `workflow_dispatch` can still ask for the whole crate.
+#
+# 6. **Every mutant builds without debug info** (`[profile.mutants]` in `Cargo.toml`, chosen by
+#    `profile = "mutants"` in `.cargo/mutants.toml`, as the cargo-mutants book recommends). On
+#    2026-10-03 the build was 90-120 s of a mutant's 131 s, and most of a build is linking
+#    charter-core's test binaries, whose debug info no mutation verdict reads.
 #
 # And because the real failure here was that nobody LOOKED for five days, the last job keeps
-# one issue in this repo up to date with the answer, and closes it when a full run is clean.
+# one issue in this repo up to date with the answer, and closes it when every file it holds
+# has run clean again.
 # The run's own summary page carries the survivor table; the issue carries the link.
 #
 # Note there is deliberately no `RUSTFLAGS: -D warnings` here, unlike `ci.yml`. cargo-mutants
@@ -98,14 +120,14 @@ on:
   schedule:
     # Monday to Saturday: what changed since the last green run.
     - cron: "17 3 * * 1-6"
-    # Sunday: the whole crate. `plan` tells the two apart by this exact string.
+    # Sunday: this week's slice of the crate. `plan` tells the two apart by this exact string.
     - cron: "17 3 * * 0"
   workflow_dispatch:
     inputs:
       scope:
-        description: "diff (since the last green run) or full (the whole crate, ~12 h)"
+        description: "diff (since the last green run), slice (this week's slice) or full (the whole crate, days)"
         type: choice
-        options: [diff, full]
+        options: [diff, slice, full]
         default: diff
 
 permissions:
@@ -128,8 +150,11 @@ env:
   # below says how it was sized. `survivors` reads it too, to tell a mutant that hung the suite
   # (caught) from one that outran a suite cut short (not known to be caught).
   MUTANT_TIMEOUT: "240"
-  # The weekly full run's cron line, as `github.event.schedule` reports it.
-  FULL_CRON: "17 3 * * 0"
+  # The weekly slice's cron line, as `github.event.schedule` reports it.
+  SLICE_CRON: "17 3 * * 0"
+  # How many weekly slices cover the whole crate. Point 5 at the top says how it was sized; a
+  # change restarts no clock, because the issue records files, not slices.
+  SLICES: "13"
   # Pinned on purpose. An unpinned tool in a nightly changes its own answers, and "the
   # nightly went red" then has one more possible cause. 27.1.0 is what ran on 2026-09-21 and
   # what the sizing above was measured against.
@@ -168,8 +193,8 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" = workflow_dispatch ]; then
             SCOPE="${ASKED:-diff}"
-          elif [ "$SCHEDULE" = "$FULL_CRON" ]; then
-            SCOPE="full"
+          elif [ "$SCHEDULE" = "$SLICE_CRON" ]; then
+            SCOPE="slice"
           else
             SCOPE="diff"
           fi
@@ -194,15 +219,34 @@ jobs:
             fi
           fi
 
+          # Every mutant of the crate, and so every file that has one: `notice` keeps its record
+          # of what is not known clean in these files.
+          cargo mutants --package charter-core --list > mutants.all
+          cut -d: -f1 mutants.all | sort -u > mutants.files
+          : > mutants.diff
           if [ "$SCOPE" = diff ]; then
             git diff "$BASE" HEAD -- crates/charter-core > mutants.diff
             # An empty diff lists nothing (cargo-mutants says so on stderr and exits 0).
-            COUNT="$(cargo mutants --package charter-core --in-diff mutants.diff --list | wc -l)"
+            cargo mutants --package charter-core --in-diff mutants.diff --list > mutants.run
+            cut -d: -f1 mutants.run | sort -u > mutants.tested
+          elif [ "$SCOPE" = slice ]; then
+            WEEK=$(( $(date -u +%s) / 604800 ))
+            python3 tools/mutants-report.py slice --slices "$SLICES" --week "$WEEK" \
+              < mutants.all > mutants.tested
+            mapfile -t SLICE < mutants.tested
+            if [ "${#SLICE[@]}" -gt 0 ]; then
+              # The shards list exactly this, so the count and the matrix agree with them.
+              cargo mutants --package charter-core "${SLICE[@]/#/--file=}" --list > mutants.run
+            else
+              : > mutants.run
+            fi
+            WHY="of slice $(( WEEK % SLICES + 1 )) of $SLICES: ${#SLICE[@]} files, from $(head -n1 mutants.tested) to $(tail -n1 mutants.tested)"
           else
             WHY="${WHY:-of the whole crate}"
-            : > mutants.diff
-            COUNT="$(cargo mutants --package charter-core --list | wc -l)"
+            cp mutants.all mutants.run
+            cp mutants.files mutants.tested
           fi
+          COUNT="$(wc -l < mutants.run)"
 
           SHARDS=$(( (COUNT + PER_SHARD - 1) / PER_SHARD ))
           if [ "$COUNT" -eq 0 ]; then
@@ -221,7 +265,10 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plan-diff
-          path: mutants.diff
+          path: |
+            mutants.diff
+            mutants.tested
+            mutants.files
           if-no-files-found: error
 
   baseline:
@@ -250,7 +297,7 @@ jobs:
       # skip it. `--no-fail-fast` for `ci.yml`'s reason: cargo stops at the first failing test
       # binary and skips every later one, so a single flake would hide the rest.
       - name: The unmutated tree, once, for every shard
-        run: cargo test --package charter-core --locked --no-fail-fast
+        run: cargo test --package charter-core --profile mutants --locked --no-fail-fast
 
   core:
     name: shard ${{ matrix.shard }}
@@ -313,19 +360,31 @@ jobs:
       # has to sit clearly above the whole suite, or TIMEOUT means nothing.
       #
       # `--in-diff` on a `diff` run only; on a full run `plan` leaves `mutants.diff` empty and
-      # it is not passed, because cargo-mutants reads an empty diff as "nothing to test".
+      # it is not passed, because cargo-mutants reads an empty diff as "nothing to test". A
+      # `slice` run names its files, exactly as `plan` listed them.
       - name: cargo mutants
         timeout-minutes: 300
         continue-on-error: true
-        run: >
-          cargo mutants
-          --package charter-core
-          --shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }}
-          --sharding round-robin
-          --baseline skip
-          --timeout ${{ env.MUTANT_TIMEOUT }}
-          --build-timeout 900
-          ${{ needs.plan.outputs.scope == 'diff' && '--in-diff mutants.diff' || '' }}
+        env:
+          SCOPE: ${{ needs.plan.outputs.scope }}
+        run: |
+          set -euo pipefail
+          WHICH=()
+          case "$SCOPE" in
+            diff) WHICH=(--in-diff mutants.diff) ;;
+            slice)
+              mapfile -t SLICE < mutants.tested
+              WHICH=("${SLICE[@]/#/--file=}")
+              ;;
+          esac
+          cargo mutants \
+            --package charter-core \
+            --shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }} \
+            --sharding round-robin \
+            --baseline skip \
+            --timeout ${{ env.MUTANT_TIMEOUT }} \
+            --build-timeout 900 \
+            "${WHICH[@]}"
       # `always()`, so this runs after a timeout, after a crash, and after a clean run. It is
       # the only thing that turns a killed step into a sentence.
       - name: What this shard actually finished
@@ -372,7 +431,7 @@ jobs:
           --known .github/mutants-survivors.txt
           --write-current mutants-survivors.current.txt
           --timeout ${{ env.MUTANT_TIMEOUT }}
-          ${{ needs.plan.outputs.scope == 'diff' && '--partial' || '' }}
+          ${{ needs.plan.outputs.scope != 'full' && '--partial' || '' }}
       # Always, and especially when the step above went red: this is the file you copy over
       # `.github/mutants-survivors.txt` once you have decided the new entries are acceptable.
       - if: always()
@@ -388,8 +447,9 @@ jobs:
     #
     # One issue, found by its exact title among EVERY open issue, with its BODY rewritten each
     # red night — never a new issue while one is open and never a comment, so this cannot
-    # become noise — and closed only when a FULL run is clean. A copy filed by an older
-    # version of this job is closed as a duplicate of the oldest.
+    # become noise — and closed only when every file it holds has run clean again in a slice,
+    # or a FULL run is clean. A copy filed by an older version of this job is closed as a
+    # duplicate of the oldest.
     name: say so where someone will see it
     needs: [plan, baseline, core, survivors]
     if: always() && github.event_name == 'schedule'
@@ -402,6 +462,13 @@ jobs:
         with:
           # This job holds `issues: write`; the checkout needs no git credentials after it.
           persist-credentials: false
+      # What `plan` tested and which files the crate has. Missing when `plan` failed, and
+      # `notice` then counts the whole crate as not known clean.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          name: plan-diff
+          path: plan
       # What to say is decided by `tools/mutants-report.py notice`, which has tests; this step
       # only fetches every open issue and carries the decision out.
       - name: Open, update or close the nightly's issue
@@ -423,12 +490,13 @@ jobs:
           # 200 newest, and once more than 200 were open the nightly's own issue was not among
           # them, so red nights filed copies (#973, #1140) instead of telling #480.
           gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" \
-            --jq '.[] | select(.pull_request | not) | {number, title}' > "$RUNNER_TEMP/issues.jsonl"
+            --jq '.[] | select(.pull_request | not) | {number, title, body}' > "$RUNNER_TEMP/issues.jsonl"
 
           python3 tools/mutants-report.py notice \
             --title "$TITLE" --run-url "$RUN_URL" \
             --plan "$PLAN" --scope "$SCOPE" --baseline "$BASELINE" \
             --core "$CORE" --survivors "$SURVIVORS" \
+            --tested plan/mutants.tested --files plan/mutants.files \
             --body-file "$BODY_FILE" \
             < "$RUNNER_TEMP/issues.jsonl" > "$RUNNER_TEMP/actions.txt"
 
@@ -437,7 +505,7 @@ jobs:
             case "$verb" in
               create) gh issue create --title "$TITLE" --body-file "$BODY_FILE" ;;
               edit) gh issue edit "$number" --body-file "$BODY_FILE" ;;
-              close) gh issue close "$number" --comment "The nightly is clean again: $RUN_URL" ;;
+              close) gh issue close "$number" --comment "Every file this issue held has run clean again: $RUN_URL" ;;
               duplicate)
                 gh issue close "$number" --reason "not planned" \
                   --comment "Duplicate of #$kept, which carries the nightly from now on: $RUN_URL" ;;

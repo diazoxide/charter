@@ -137,9 +137,20 @@ const TITLE = "nightly mutation testing is not clean";
 const RUN_URL = "https://github.com/diazoxide/charter/actions/runs/1";
 
 // `notice` reads the open issues as `gh api --paginate` prints them: one JSON object a line.
-function notice(jobs, issues) {
+// `tested` and `files` are what `plan` wrote: the files this run's mutants come from, and every
+// file of the crate that has a mutant. Either may be missing, as when `plan` itself failed.
+function notice(jobs, issues, { tested, files } = {}) {
   const root = mkdtempSync(join(tmpdir(), "charter-notice-"));
   const body = join(root, "body.md");
+  const lists = [];
+  for (const [flag, list] of [
+    ["--tested", tested],
+    ["--files", files],
+  ]) {
+    const path = join(root, flag.slice(2));
+    if (list) writeFileSync(path, list.map((file) => file + "\n").join(""));
+    lists.push(flag, path);
+  }
   const result = report(
     [
       "notice",
@@ -159,6 +170,7 @@ function notice(jobs, issues) {
       jobs.survivors ?? "success",
       "--body-file",
       body,
+      ...lists,
     ],
     { input: issues.map((issue) => JSON.stringify(issue)).join("\n") },
   );
@@ -197,7 +209,7 @@ test("copies of the issue are folded into the oldest one", () => {
   assert.deepEqual(actions, ["edit 480", "duplicate 973 480", "duplicate 1140 480"]);
 });
 
-test("only a clean full run closes the issue, and every copy of it", () => {
+test("a clean full run closes the issue, and every copy of it; a clean diff run never does", () => {
   assert.deepEqual(notice({ scope: "full" }, backlog(480, 1140)).actions, [
     "close 480",
     "close 1140",
@@ -219,4 +231,206 @@ test("a night with nothing to test leaves the issue alone", () => {
 test("an issue that only contains the title is not the nightly's", () => {
   const { actions } = notice({ core: "failure" }, [{ number: 7, title: `Re: ${TITLE}` }]);
   assert.deepEqual(actions, ["create"]);
+});
+
+// ------------------------------------------------------------------------------------------ //
+// Sunday's weekly slice                                                                      //
+// ------------------------------------------------------------------------------------------ //
+
+// `cargo mutants --list`, one mutant a line: `count` mutants in `file`.
+function listing(counts) {
+  return Object.entries(counts)
+    .flatMap(([file, count]) =>
+      Array.from({ length: count }, (_, i) => `${file}:${i + 1}:1: replace f${i} -> bool with true`),
+    )
+    .join("\n");
+}
+
+function slice(week, slices, counts) {
+  const result = report(["slice", "--slices", String(slices), "--week", String(week)], {
+    input: listing(counts),
+  });
+  assert.equal(result.code, 0, result.out + result.err);
+  return result.out.trim().split("\n").filter(Boolean);
+}
+
+test("a week's slice is whole files, cut by mutant count and rotating with the week", () => {
+  const counts = { "src/d.rs": 30, "src/a.rs": 10, "src/c.rs": 10, "src/b.rs": 10 };
+  // Sixty mutants in three slices of about twenty: a file goes to the slice its middle falls in.
+  assert.deepEqual(slice(0, 3, counts), ["src/a.rs", "src/b.rs"]);
+  assert.deepEqual(slice(1, 3, counts), ["src/c.rs"]);
+  assert.deepEqual(slice(2, 3, counts), ["src/d.rs"]);
+  // The fourth week starts the cycle again.
+  assert.deepEqual(slice(3, 3, counts), ["src/a.rs", "src/b.rs"]);
+  assert.deepEqual(slice(4, 3, counts), ["src/c.rs"]);
+});
+
+test("every file falls in exactly one slice of a cycle", () => {
+  const counts = Object.fromEntries(
+    Array.from({ length: 40 }, (_, i) => [`src/m${String(i).padStart(2, "0")}.rs`, 1 + ((i * 7) % 13)]),
+  );
+  const seen = [];
+  for (let week = 0; week < 6; week++) {
+    const files = slice(week, 6, counts);
+    assert.ok(files.length > 0, `week ${week} has a slice`);
+    seen.push(...files);
+  }
+  assert.deepEqual(seen.sort(), Object.keys(counts).sort());
+});
+
+// ------------------------------------------------------------------------------------------ //
+// the issue, slice by slice                                                                  //
+// ------------------------------------------------------------------------------------------ //
+
+const CRATE = ["src/a.rs", "src/b.rs", "src/c.rs", "src/d.rs"];
+
+// The issue as the last night left it: the body `notice` wrote, under the nightly's title.
+function left(number, body) {
+  return [{ number, title: TITLE, body }];
+}
+
+test("an issue that does not say which files are clean holds the whole crate", () => {
+  // #480 as HY-7 left it: no record of any slice. One clean slice is not the whole crate.
+  const { actions, body } = notice(
+    { scope: "slice" },
+    [{ number: 480, title: TITLE, body: "Last run: an older one" }],
+    { tested: ["src/a.rs", "src/b.rs"], files: CRATE },
+  );
+  assert.deepEqual(actions, ["edit 480"]);
+  assert.match(body, /\*\*2 of charter-core's 4 files are not known clean/);
+  // What the last red night said stays: a clean slice adds to the record, it does not erase it.
+  assert.match(body, /Last run: an older one/);
+});
+
+test("a clean slice clears only its own files, and the last of them closes the issue", () => {
+  const red = notice({ scope: "slice", survivors: "failure" }, [], {
+    tested: ["src/a.rs", "src/b.rs"],
+    files: CRATE,
+  });
+  assert.deepEqual(red.actions, ["create"]);
+  assert.match(red.body, /\*\*2 of charter-core's 4 files are not known clean/);
+
+  // Another slice ran clean: nothing it tested was dirty, so nothing changes and it stays open.
+  const other = notice({ scope: "slice" }, left(9, red.body), {
+    tested: ["src/c.rs", "src/d.rs"],
+    files: CRATE,
+  });
+  assert.deepEqual(other.actions, ["edit 9"]);
+  assert.match(other.body, /\*\*2 of charter-core's 4 files/);
+
+  const half = notice({ scope: "slice" }, left(9, red.body), {
+    tested: ["src/a.rs"],
+    files: CRATE,
+  });
+  assert.deepEqual(half.actions, ["edit 9"]);
+  assert.match(half.body, /\*\*1 of charter-core's 4 files is not known clean/);
+
+  const last = notice({ scope: "slice" }, left(9, half.body), {
+    tested: ["src/b.rs"],
+    files: CRATE,
+  });
+  assert.deepEqual(last.actions, ["close 9"]);
+});
+
+test("a slice that did not finish, or was cancelled, never closes the issue", () => {
+  for (const jobs of [
+    { core: "failure" },
+    { core: "cancelled" },
+    { baseline: "cancelled" },
+    { survivors: "cancelled" },
+    { plan: "cancelled" },
+  ]) {
+    // Its own files were the only ones left, and they are still not known clean.
+    const red = notice({ scope: "slice", survivors: "failure" }, [], {
+      tested: ["src/a.rs"],
+      files: CRATE,
+    });
+    const { actions, body } = notice({ scope: "slice", ...jobs }, left(9, red.body), {
+      tested: ["src/a.rs"],
+      files: CRATE,
+    });
+    assert.deepEqual(actions, ["edit 9"], JSON.stringify(jobs));
+    assert.match(body, /not known clean/, JSON.stringify(jobs));
+  }
+});
+
+test("a clean slice whose list of files is missing clears nothing", () => {
+  const red = notice({ scope: "slice", survivors: "failure" }, [], {
+    tested: ["src/a.rs"],
+    files: CRATE,
+  });
+  assert.deepEqual(notice({ scope: "slice" }, left(9, red.body), { files: CRATE }).actions, [
+    "edit 9",
+  ]);
+  // Without the crate's list, an issue that holds the whole crate cannot say what is left.
+  const whole = left(9, "Last run: an older one");
+  assert.deepEqual(notice({ scope: "slice" }, whole, { tested: CRATE }).actions, ["edit 9"]);
+});
+
+test("a red diff night marks the files it changed, and their slice running clean closes it", () => {
+  const red = notice({ scope: "diff", survivors: "failure" }, [], {
+    tested: ["src/c.rs"],
+    files: CRATE,
+  });
+  assert.deepEqual(red.actions, ["create"]);
+  assert.match(red.body, /\*\*1 of charter-core's 4 files is not known clean/);
+  // A clean diff night after it is not a clean c.rs: it tested only the lines that changed.
+  assert.deepEqual(
+    notice({ scope: "diff" }, left(9, red.body), { tested: ["src/c.rs"], files: CRATE }).actions,
+    [],
+  );
+  assert.deepEqual(
+    notice({ scope: "slice" }, left(9, red.body), { tested: ["src/c.rs", "src/d.rs"], files: CRATE })
+      .actions,
+    ["close 9"],
+  );
+});
+
+test("a diff night that did not finish marks the files it changed", () => {
+  const first = notice({ scope: "slice", survivors: "failure" }, [], {
+    tested: ["src/a.rs"],
+    files: CRATE,
+  });
+  const { actions, body } = notice({ scope: "diff", core: "failure" }, left(9, first.body), {
+    tested: ["src/d.rs"],
+    files: CRATE,
+  });
+  assert.deepEqual(actions, ["edit 9"]);
+  assert.match(body, /\*\*2 of charter-core's 4 files are not known clean/);
+});
+
+test("a night that cannot say what it tested marks the whole crate", () => {
+  const first = notice({ scope: "slice", survivors: "failure" }, [], {
+    tested: ["src/a.rs"],
+    files: CRATE,
+  });
+  const lost = notice({ plan: "failure" }, left(9, first.body), {});
+  assert.deepEqual(lost.actions, ["edit 9"]);
+  // The next slice with lists again counts the whole crate, less what it cleared.
+  const next = notice({ scope: "slice" }, left(9, lost.body), {
+    tested: ["src/a.rs", "src/b.rs"],
+    files: CRATE,
+  });
+  assert.match(next.body, /\*\*2 of charter-core's 4 files are not known clean/);
+});
+
+test("a file deleted from the crate does not hold the issue open", () => {
+  const red = notice({ scope: "slice", survivors: "failure" }, [], {
+    tested: ["src/a.rs", "src/gone.rs"],
+    files: [...CRATE, "src/gone.rs"],
+  });
+  const { actions } = notice({ scope: "slice" }, left(9, red.body), {
+    tested: ["src/a.rs"],
+    files: CRATE,
+  });
+  assert.deepEqual(actions, ["close 9"]);
+});
+
+test("a red full run marks the whole crate", () => {
+  const { actions, body } = notice({ scope: "full", survivors: "failure" }, [], {
+    tested: CRATE,
+    files: CRATE,
+  });
+  assert.deepEqual(actions, ["create"]);
+  assert.match(body, /\*\*4 of charter-core's 4 files are not known clean/);
 });

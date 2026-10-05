@@ -12,6 +12,10 @@
 # integration tests, which are separate crates, can reach it. cargo-mutants skips `cfg(test)`
 # code on its own; this keeps that true for such a file. Product code never goes here.
 
+# Every mutant builds with `[profile.mutants]` in `Cargo.toml`: no debug info, which no verdict
+# reads and which made most of a mutant's build time (#1200).
+profile = "mutants"
+
 # `testrun` was `cfg(test)` until charter-app#267 made the integration tests re-run through it.
 exclude_globs = ["crates/charter-core/src/testrun.rs"]
 
