@@ -1261,15 +1261,13 @@ mod pr_saves {
         )
     }
 
-    #[test]
-    fn a_request_open_from_the_charter_save_branch_carries_on_there_until_it_merges() {
-        charter_core::unsteered!();
-        if !in_child() {
-            return;
-        }
+    /// A plane naming no save_branch, whose PR 12 was opened before the rename from this clone's
+    /// default as it was then, `charter/save/<host>-<clone>`: answers it, that branch, and the
+    /// purlis name of the same default.
+    fn opened_before_the_rename(host: &str) -> (Plane, String, String) {
         // V93j. The plane names no save_branch, so its default is this clone's own. Before the
         // rename it was `charter/save/<host>-<clone>`, and PR 12 is open from there.
-        let plane = plane("renamed-prefix.test", "pr");
+        let plane = plane(host, "pr");
         let manifest = std::fs::read_to_string(plane.root.join("charter.toml")).unwrap();
         std::fs::write(
             plane.root.join("charter.toml"),
@@ -1317,6 +1315,77 @@ mod pr_saves {
             .to_string(),
         )
         .unwrap();
+
+        (plane, old, new)
+    }
+
+    #[test]
+    fn a_request_from_the_charter_save_branch_closed_without_merging_blocks_until_the_next_save() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // V93j: the block about the pre-rename request holds, as any block does, until a
+        // person saves again — and that save opens the new request from the purlis name.
+        let (plane, old, new) = opened_before_the_rename("renamed-closed.test");
+        plane.state(12, false);
+
+        planegit::fetch(&plane.root, true).expect("the fetch");
+
+        let standing = plane.standing();
+        assert_eq!(standing.stage, Stage::Blocked, "{standing:?}");
+        assert!(
+            standing
+                .blocked
+                .as_deref()
+                .is_some_and(|why| why.contains("closed without merging")),
+            "{standing:?}"
+        );
+        assert_eq!(plane.record()["landed"], old.as_str());
+
+        lookup_from(&plane, &new, None);
+        let created = written_from(&plane, "POST", &new, 13, &["work.md"]);
+        let (code, said) = plane.save_as(None, Trigger::Manual);
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&created), "{said}");
+        assert_eq!(plane.standing().pr, Some(plane.url(13)));
+    }
+
+    #[test]
+    fn a_request_from_the_charter_save_branch_forgotten_by_a_reset_is_never_opened_twice() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // A person moves the plane off PR 12's commit, so the next settle forgets PR 12 — but
+        // nothing has seen it merge or close, and it may still be open. The save goes on from
+        // the old branch, where the forge's lookup finds PR 12 and updates it.
+        let (plane, old, new) = opened_before_the_rename("renamed-reset.test");
+        git(&plane.root, &["reset", "-q", "--hard", "HEAD~1"]);
+        // The background look settles first, and forgets PR 12 without asking the forge.
+        planegit::fetch(&plane.root, true).expect("the fetch");
+        lookup_from(&plane, &old, Some(12));
+        let updated = written_from(&plane, "PATCH", &old, 12, &["again.md"]);
+
+        let (code, said) = plane.save("again.md", "again.md");
+
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&updated), "{said}");
+        assert_eq!(plane.remote(&old), plane.head(), "{said}");
+        assert_eq!(
+            git(&plane.bare, &["for-each-ref", "refs/heads/purlis/"]),
+            "",
+            "no second request from {new}: {said}"
+        );
+    }
+
+    #[test]
+    fn a_request_open_from_the_charter_save_branch_carries_on_there_until_it_merges() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let (plane, old, new) = opened_before_the_rename("renamed-prefix.test");
 
         // While it is open, the next save updates it from where it is.
         plane.state(12, true);

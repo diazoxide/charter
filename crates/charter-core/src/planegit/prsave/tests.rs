@@ -222,15 +222,35 @@ fn a_request_still_open_from_the_charter_save_branch_carries_on_there_until_it_i
     kept_open_on(&root, &old);
     assert_eq!(save_branch(&root, &plane), old);
 
-    // Once it is settled — merged, or closed — what is kept names no request, and the next
-    // save goes to the purlis name.
+    // A request forgotten without being seen to merge or close — the plane was moved off its
+    // commit by hand — may still be open: the old branch carries on, so none is opened twice.
     let mut kept = Kept::read(&root);
     kept.pr = None;
+    kept.write(&root);
+    assert_eq!(save_branch(&root, &plane), old);
+
+    // Once a settle has seen it merged or closed, the next save goes to the purlis name.
+    let mut kept = Kept::read(&root);
+    forget_old_branch(&root, &plane, &mut kept);
     kept.write(&root);
     assert_eq!(
         save_branch(&root, &plane),
         format!("purlis/{}", crate::planesave::default_rest(&root))
     );
+}
+
+#[test]
+fn a_block_about_the_charter_save_branch_still_holds_once_its_request_is_forgotten() {
+    // A request closed without merging blocks the plane, and the block names the branch it was
+    // on. Forgetting the request moves the next push to the purlis name; the block still holds.
+    let (_dir, root, _bare) = plane_and_remote();
+    let old = format!("charter/{}", crate::planesave::default_rest(&root));
+    let head = run(&root, &["rev-parse", "HEAD"]);
+    let rec =
+        serde_json::json!({"outcome": "blocked", "branch": "main", "landed": old, "head": head});
+    assert!(still_holds(&root, &rec, &head));
+    let other = serde_json::json!({"outcome": "blocked", "branch": "main", "landed": "charter/save/elsewhere-000000", "head": head});
+    assert!(!still_holds(&root, &other, &head));
 }
 
 #[test]

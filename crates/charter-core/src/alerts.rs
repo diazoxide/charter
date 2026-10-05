@@ -74,8 +74,8 @@ pub enum Severity {
 /// What the plane root is doing with a memory commit that did not land.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Memory {
-    /// On the remote under `charter/<sha>`, waiting on a request, named in the words of the
-    /// forge the plane's origin is on. Nothing is at risk.
+    /// On the remote under `purlis/<sha>` (`charter/<sha>` before the rename), waiting on a
+    /// request, named in the words of the forge the plane's origin is on. Nothing is at risk.
     AwaitingRequest(crate::forge::Kind),
     /// Reached nowhere: the next `git reset --hard origin/<branch>` deletes it.
     NotPushed,
