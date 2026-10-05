@@ -1,6 +1,13 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -56,18 +63,32 @@ function chat(
 }
 
 /**
+ * **The machine's layout file**, as the core keeps it: the window's layout as it last wrote it,
+ * and the dismissals, which only `set_dismissed` writes, one project at a time, and which a
+ * `write_layout` leaves as they are (`charter_core::windowprefs`).
+ */
+const disk: { layout?: Record<string, unknown>; dismissed: Record<string, string[]> } = {
+  dismissed: {},
+};
+
+/**
  * The core: a project with `alpha`, the chats it puts back, the pins whose workspace is gone,
- * and the chats that would not start. `pins` makes the store's read never answer, or refuse.
+ * and the chats that would not start. `pins` makes the store's read never answer, refuse, or
+ * answer without being sure; `chats` makes the read of the chats put back refuse.
  */
 function core(
   open: ReturnType<typeof chat>[] = [chat(1, "one")],
-  world: { gone: string[]; wouldNotStart?: [string, string][]; pins?: "hangs" | "refuses" } = {
-    gone: [],
-  },
+  world: {
+    gone: string[];
+    wouldNotStart?: [string, string][];
+    pins?: "hangs" | "refuses" | "unsure";
+    chats?: "refuses";
+  } = { gone: [] },
 ): { asked: Asked[] } {
   const asked: Asked[] = [];
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
+    const given = (args ?? {}) as Record<string, unknown>;
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "plane_sidebar")
       return {
@@ -85,44 +106,85 @@ function core(
         persona: "steward",
         unfiled: [],
       };
-    if (cmd === "opened_chats") return open;
+    if (cmd === "opened_chats") {
+      if (world.chats === "refuses") throw "the project's record could not be read";
+      return open;
+    }
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return world.wouldNotStart ?? [];
     if (cmd === "running_sessions") return [];
     if (cmd === "plane_pins") {
       if (world.pins === "hangs") return new Promise(() => undefined);
       if (world.pins === "refuses") throw "the machine store could not be read";
-      return { project: false, workspaces: [], missing: [...world.gone], order: [...world.gone] };
+      // `pins_in` with a rename in flight, or `workspaces/` not there: it names nothing gone
+      // and says it is not sure.
+      if (world.pins === "unsure")
+        return { project: false, workspaces: [], missing: [], order: world.gone, certain: false };
+      return {
+        project: false,
+        workspaces: [],
+        missing: [...world.gone],
+        order: [...world.gone],
+        certain: true,
+      };
+    }
+    if (cmd === "write_layout") {
+      // The core keeps the file's dismissals over any a window sends.
+      const layout = JSON.parse(given.text as string) as Record<string, unknown>;
+      disk.layout = Object.fromEntries(
+        Object.entries(layout).filter(([field]) => field !== "dismissed"),
+      );
+      return null;
+    }
+    if (cmd === "pin_workspace" && given.pinned === false) {
+      world.gone = world.gone.filter((one) => one !== given.workspace);
+      return null;
+    }
+    if (cmd === "set_dismissed") {
+      const causes = given.causes as string[];
+      const others = Object.entries(disk.dismissed).filter(([one]) => one !== given.plane);
+      disk.dismissed = Object.fromEntries(
+        causes.length > 0 ? [...others, [given.plane as string, causes]] : others,
+      );
+      return null;
     }
     return null;
   });
   return { asked };
 }
 
-/** The layout file, as the last launch left it: a launch that wrote nothing leaves it as is. */
-let onDisk: string | undefined;
-
-/** Quits, and launches again on what the window last wrote to the layout file, handed to the
- *  next window as it is created. */
-function relaunchFrom(asks: Asked[]) {
-  const written = asks.filter((one) => one.cmd === "write_layout").at(-1);
-  onDisk = (written?.args as { text?: string } | undefined)?.text ?? onDisk;
+/** Quits, and launches again on the layout file as the core left it, handed to the next window
+ *  as it is created. */
+function relaunch() {
   cleanup();
   clearMocks();
   forgetThisLaunch();
+  const found = disk.layout !== undefined || Object.keys(disk.dismissed).length > 0;
   (globalThis as Record<string, unknown>)[GLOBAL] = {
     layout: {
       path: "layout.json",
-      found: onDisk !== undefined,
-      document: onDisk === undefined ? null : JSON.parse(onDisk),
+      found,
+      document: found
+        ? {
+            ...(disk.layout ?? { version: 1, regions: [] }),
+            ...(Object.keys(disk.dismissed).length > 0
+              ? { dismissed: structuredClone(disk.dismissed) }
+              : {}),
+          }
+        : null,
       trouble: null,
     },
     theme: { path: "theme.json", found: false, document: null, trouble: null },
   };
 }
 
+/** What the window asked the core to keep for this project, last. */
+const keptLast = (asks: Asked[]) =>
+  (asks.filter((one) => one.cmd === "set_dismissed").at(-1)?.args as { causes?: string[] })?.causes;
+
 beforeEach(() => {
-  onDisk = undefined;
+  disk.layout = undefined;
+  disk.dismissed = {};
   forgetThisLaunch();
 });
 
@@ -150,9 +212,9 @@ describe("a dismissed Notice", () => {
     render(<App />);
     await dismiss(await dormant("delta"));
     expect(screen.queryByText(/^delta is gone/)).toBeNull();
-    await waitFor(() => expect(asked.some((one) => one.cmd === "write_layout")).toBe(true));
+    await waitFor(() => expect(keptLast(asked)).toBeDefined());
 
-    relaunchFrom(asked);
+    relaunch();
     core([chat(1, "one")], { gone: ["delta"] });
     render(<App />);
     await screen.findByRole("tablist", { name: "Workspaces" });
@@ -167,45 +229,45 @@ describe("a dismissed Notice", () => {
     let { asked } = core([chat(1, "one")], { gone: ["delta"] });
     render(<App />);
     await dismiss(await dormant("delta"));
-    await waitFor(() => expect(asked.some((one) => one.cmd === "write_layout")).toBe(true));
+    await waitFor(() => expect(keptLast(asked)).toBeDefined());
 
-    relaunchFrom(asked);
+    relaunch();
     ({ asked } = core([chat(1, "one")], { gone: [] }));
     render(<App />);
     await screen.findByRole("tablist", { name: "Workspaces" });
-    await waitFor(() => expect(asked.some((one) => one.cmd === "write_layout")).toBe(true));
-    const written = asked.filter((one) => one.cmd === "write_layout").at(-1);
-    expect(JSON.parse((written?.args as { text: string }).text).dismissed).toBeUndefined();
+    await waitFor(() => expect(keptLast(asked)).toEqual([]));
+    expect(disk.dismissed).toEqual({});
 
-    relaunchFrom(asked);
+    relaunch();
     core([chat(1, "one")], { gone: ["delta"] });
     render(<App />);
     expect(await dormant("delta")).toBeInTheDocument();
   });
 
-  it("is not let go by a launch whose store did not answer", async () => {
-    // Before the store answers, and when it cannot, the window holds no pins at all: that is
-    // the window not knowing, not the pin having gone, so nothing is let go.
+  it("is not let go by a launch whose store did not answer, or was not sure", async () => {
+    // Before the store answers, when it cannot, and when it answers without being sure (a
+    // rename between its steps, `workspaces/` not there), the window holds no pins at all: that
+    // is not knowing, not the pin having gone, so nothing is let go (D-NO2-10).
     let { asked } = core([chat(1, "one")], { gone: ["delta"] });
     render(<App />);
     await dismiss(await dormant("delta"));
-    await waitFor(() => expect(asked.some((one) => one.cmd === "write_layout")).toBe(true));
+    await waitFor(() => expect(keptLast(asked)).toBeDefined());
 
-    for (const pins of ["hangs", "refuses"] as const) {
-      relaunchFrom(asked);
+    for (const pins of ["hangs", "refuses", "unsure"] as const) {
+      relaunch();
       ({ asked } = core([chat(1, "one")], { gone: ["delta"], pins }));
       render(<App />);
       await screen.findByRole("tablist", { name: "Workspaces" });
       await settle();
     }
 
-    relaunchFrom(asked);
+    relaunch();
     core([chat(1, "one")], { gone: ["delta"] });
     render(<App />);
     await screen.findByRole("tablist", { name: "Workspaces" });
     await settle();
     expect(screen.queryByText(/^delta is gone/)).toBeNull();
-  });
+  }, 20_000); // Five launches: given the time five take on a loaded machine.
 
   it("about what a relaunch did to a chat stays dismissed while it keeps doing it", async () => {
     const fresh = [chat(1, "one", { fresh: "its conversation was not found" })];
@@ -214,9 +276,9 @@ describe("a dismissed Notice", () => {
     const note = await screen.findByText(/came back as a new chat/);
     expect(noticeOf(note).getAttribute("data-cause")).toBe("chat-fresh:1");
     await dismiss(note);
-    await waitFor(() => expect(asked.some((one) => one.cmd === "write_layout")).toBe(true));
+    await waitFor(() => expect(keptLast(asked)).toBeDefined());
 
-    relaunchFrom(asked);
+    relaunch();
     core(fresh, { gone: [] });
     render(<App />);
     await screen.findByRole("tablist", { name: "Workspaces" });
@@ -224,14 +286,99 @@ describe("a dismissed Notice", () => {
     expect(screen.queryByText(/came back as a new chat/)).toBeNull();
   });
 
+  it("about a chat is not let go by a launch that could not read the chats", async () => {
+    const fresh = [chat(1, "one", { fresh: "its conversation was not found" })];
+    const { asked } = core(fresh, { gone: [] });
+    render(<App />);
+    await dismiss(await screen.findByText(/came back as a new chat/));
+    await waitFor(() => expect(keptLast(asked)).toEqual(["chat-fresh:1"]));
+
+    relaunch();
+    core(fresh, { gone: [], chats: "refuses" });
+    render(<App />);
+    await screen.findByRole("tablist", { name: "Workspaces" });
+    await settle();
+
+    relaunch();
+    core(fresh, { gone: [] });
+    render(<App />);
+    await screen.findByRole("tablist", { name: "Workspaces" });
+    await settle();
+    expect(screen.queryByText(/came back as a new chat/)).toBeNull();
+  });
+
+  it("about a chat is let go once it comes back otherwise, and shows when it returns", async () => {
+    const fresh = [chat(1, "one", { fresh: "its conversation was not found" })];
+    let { asked } = core(fresh, { gone: [] });
+    render(<App />);
+    await dismiss(await screen.findByText(/came back as a new chat/));
+    await waitFor(() => expect(keptLast(asked)).toEqual(["chat-fresh:1"]));
+
+    relaunch();
+    ({ asked } = core([chat(1, "one")], { gone: [] }));
+    render(<App />);
+    await waitFor(() => expect(keptLast(asked)).toEqual([]));
+
+    relaunch();
+    core(fresh, { gone: [] });
+    render(<App />);
+    expect(await screen.findByText(/came back as a new chat/)).toBeInTheDocument();
+  });
+
+  it("about a resumed chat names its conversation, so another one shows", async () => {
+    // D-NO2-9: the occurrence is the conversation the chat was resumed by.
+    const resumed = (conversation: string) => [chat(1, "one", { resumed: conversation })];
+    const { asked } = core(resumed("conv-a"), { gone: [] });
+    render(<App />);
+    const note = await screen.findByText(/was resumed/);
+    expect(noticeOf(note).getAttribute("data-cause")).toBe("chat-resumed:1:conv-a");
+    await dismiss(note);
+    await waitFor(() => expect(keptLast(asked)).toEqual(["chat-resumed:1:conv-a"]));
+
+    relaunch();
+    core(resumed("conv-a"), { gone: [] });
+    render(<App />);
+    await screen.findByRole("tablist", { name: "Workspaces" });
+    await settle();
+    expect(screen.queryByText(/was resumed/)).toBeNull();
+
+    relaunch();
+    core(resumed("conv-b"), { gone: [] });
+    render(<App />);
+    expect(await screen.findByText(/was resumed/)).toBeInTheDocument();
+  });
+
+  it("is kept beside another window's, in another project", async () => {
+    // D-NO2-1 as amended: each window writes only its own project's list, through the core,
+    // and never the whole map it read at launch.
+    const { asked } = core([chat(1, "one")], { gone: ["delta"] });
+    render(<App />);
+    await dormant("delta");
+    // Another window, on another project, dismissed something after this one launched.
+    disk.dismissed["/home/dev/other"] = ["pin-dormant:theirs"];
+    await dismiss(await dormant("delta"));
+    await waitFor(() => expect(keptLast(asked)).toEqual(["pin-dormant:delta"]));
+
+    const kept = asked.filter((one) => one.cmd === "set_dismissed");
+    expect(kept.every((one) => (one.args as { plane: string }).plane === PLANE)).toBe(true);
+    const layouts = asked.filter((one) => one.cmd === "write_layout");
+    expect(layouts.some((one) => (one.args as { text: string }).text.includes("dismissed"))).toBe(
+      false,
+    );
+    expect(disk.dismissed).toEqual({
+      [PLANE]: ["pin-dormant:delta"],
+      "/home/dev/other": ["pin-dormant:theirs"],
+    });
+  });
+
   it("about an event is not kept: the next occurrence shows", async () => {
     // A chat that did not start is an event of this launch; its Dismiss ends that occurrence.
-    const { asked } = core([chat(1, "one")], { gone: [], wouldNotStart: [["two", "no profile"]] });
+    core([chat(1, "one")], { gone: [], wouldNotStart: [["two", "no profile"]] });
     render(<App />);
     await dismiss(await screen.findByText(/did not start/));
     await settle();
 
-    relaunchFrom(asked);
+    relaunch();
     core([chat(1, "one")], { gone: [], wouldNotStart: [["two", "no profile"]] });
     render(<App />);
     expect(await screen.findByText(/did not start/)).toBeInTheDocument();
@@ -267,6 +414,53 @@ describe("the Notices under the strip", () => {
     // Each is a whole Notice, with its ways out.
     const listed = document.querySelector('.notice-more-list [data-cause="pin-dormant:baker"]');
     expect(within(listed as HTMLElement).getByRole("button", { name: "Forget" })).toBeTruthy();
+  });
+
+  it("keep the focus where it is when a new one arrives", async () => {
+    // F2: a Notice already in its place is not moved, so a button the operator is on keeps
+    // the focus while another arrives below it.
+    core([chat(1, "one", { fresh: "its conversation was not found" })], {
+      gone: ["able"],
+      wouldNotStart: [["two", "no profile"]],
+    });
+    render(<App />);
+    const trouble = noticeOf(await screen.findByText(/did not start/));
+    const theirs = within(trouble).getByRole("button", { name: "Dismiss" });
+    theirs.focus();
+
+    fireEvent.click(
+      within(noticeOf(await dormant("able"))).getByRole("button", { name: "Forget" }),
+    );
+    await screen.findByText(/^Forgot the pin to able/);
+
+    expect(band()).toEqual(["chat-did-not-start:two", "pin-forgotten:able"]);
+    expect(document.activeElement).toBe(theirs);
+  });
+
+  it("close their list on Escape, back to +N more, and on a press outside it", async () => {
+    // F3.
+    four();
+    const more = await screen.findByRole("button", { name: "+2 more" });
+    // From the keyboard: on +N more, Enter opens the list and Escape closes it.
+    more.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    await userEvent.keyboard("{Escape}");
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(more);
+
+    await userEvent.click(more);
+    const listed = document.querySelector('.notice-more-list [data-cause="pin-dormant:baker"]');
+    within(listed as HTMLElement)
+      .getByRole("button", { name: "Forget" })
+      .focus();
+    await userEvent.keyboard("{Escape}");
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(more);
+
+    await userEvent.click(more);
+    await userEvent.click(screen.getByRole("tablist", { name: "Workspaces" }));
+    expect(more.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("move up as one is dismissed, and +N more goes once nothing is behind it", async () => {

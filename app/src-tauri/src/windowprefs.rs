@@ -80,6 +80,29 @@ pub async fn adopt_layout(text: String) -> Result<bool, String> {
         .map_err(|err| err.to_string())
 }
 
+/// Keeps the Notices dismissed in one project until their cause changes (NO-2, V91j):
+/// `causes` replaces that project's list in the layout file and nothing else, so two windows
+/// dismissing in different projects both keep theirs. An empty list takes the project out.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_dismissed(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    causes: Vec<String>,
+) -> Result<(), String> {
+    // Only a project this window holds: the key is its root as the registry resolved it, the
+    // same string the window keys its dismissals by.
+    planes.held(&plane)?;
+    let root = config_root()?;
+    let project = plane.as_str().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        windowprefs::set_dismissed(&root, &project, &causes)
+    })
+    .await
+    .map_err(|err| format!("keeping what was dismissed did not finish: {err}"))?
+    .map_err(|err| err.to_string())
+}
+
 /// The config home, or the reason charter keeps no layout on this machine.
 fn config_root() -> Result<std::path::PathBuf, String> {
     charter_core::machine::config_root().ok_or_else(|| {

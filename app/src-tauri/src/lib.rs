@@ -1462,6 +1462,14 @@ struct Pins {
     /// What an Undo of a Forget needs to put a pin back in its own place: `workspaces` and
     /// `missing` are each in order, but not in order with each other.
     order: Vec<String>,
+    /// **Whether `missing` is the whole answer**: every pin the listing lacks was found gone.
+    ///
+    /// False when charter could not be sure of any of them — no root or `workspaces/`, a
+    /// listing it could not read whole, a rename between its steps, a link whose target is
+    /// away. `missing` then names only what is gone for certain, and may leave some out, so
+    /// the window must not take a pin it lacks as one that came back: a dismissed Notice is
+    /// let go only on a certain answer (NO-2, D-NO2-10).
+    certain: bool,
 }
 
 /// What this operator has pinned in this project.
@@ -1498,14 +1506,19 @@ fn pins_in(store: &charter_core::machine::Store, root: &std::path::Path) -> Pins
             && std::fs::symlink_metadata(under.join(name))
                 .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
     };
+    let lacked = missing.len();
+    let missing: Vec<String> = if whole {
+        missing.into_iter().filter(gone).collect()
+    } else {
+        Vec::new()
+    };
     Pins {
         project: store.recent(root).is_some_and(|entry| entry.pinned),
         workspaces: kept.into_iter().map(str::to_owned).collect(),
-        missing: if whole {
-            missing.into_iter().filter(gone).collect()
-        } else {
-            Vec::new()
-        },
+        // Certain only when every pin the listing lacks was found gone: one passed over (a
+        // rename's, an unreadable link's) is a pin charter cannot say anything about.
+        certain: whole && renaming.is_none() && missing.len() == lacked,
+        missing,
         order: store
             .recent(root)
             .map(|entry| entry.pinned_workspaces.clone())
@@ -2460,6 +2473,7 @@ mod tests {
         assert_eq!(pins.workspaces, ["beta", "gamma"]);
         assert_eq!(pins.missing, ["was-here"]);
         assert_eq!(pins.order, ["beta", "was-here", "gamma"]);
+        assert!(pins.certain, "a whole listing is a certain answer");
     }
 
     /// A plane with `beta` and `gamma` under `workspaces/`, and a store pinning `pins`.
@@ -2477,7 +2491,9 @@ mod tests {
         let (plane, store) = plane_pinning(&["beta", "gamma"]);
         std::fs::remove_dir_all(plane.path().join("workspaces")).expect("removed");
 
-        assert_eq!(pins_in(&store, plane.path()).missing, Vec::<String>::new());
+        let pins = pins_in(&store, plane.path());
+        assert_eq!(pins.missing, Vec::<String>::new());
+        assert!(!pins.certain, "no listing is no answer about what has gone");
     }
 
     #[test]
@@ -2490,6 +2506,7 @@ mod tests {
 
         assert_eq!(pins.missing, Vec::<String>::new());
         assert_eq!(pins.order, ["beta", "gamma"]);
+        assert!(!pins.certain);
     }
 
     #[cfg(unix)]
@@ -2507,6 +2524,7 @@ mod tests {
         std::fs::set_permissions(&under, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         if refused {
             assert_eq!(pins.missing, Vec::<String>::new());
+            assert!(!pins.certain);
         }
     }
 
@@ -2523,13 +2541,14 @@ mod tests {
         )
         .expect("written");
 
-        assert_eq!(pins_in(&store, plane.path()).missing, Vec::<String>::new());
+        let pins = pins_in(&store, plane.path());
+        assert_eq!(pins.missing, Vec::<String>::new());
+        assert!(!pins.certain, "a rename between its steps is not an answer");
 
         std::fs::remove_file(&journal).expect("removed");
-        assert_eq!(
-            pins_in(&store, plane.path()).missing,
-            ["old-name", "new-name"]
-        );
+        let pins = pins_in(&store, plane.path());
+        assert_eq!(pins.missing, ["old-name", "new-name"]);
+        assert!(pins.certain);
     }
 
     #[cfg(unix)]
@@ -2543,7 +2562,12 @@ mod tests {
         )
         .expect("linked");
 
-        assert_eq!(pins_in(&store, plane.path()).missing, ["was-here"]);
+        let pins = pins_in(&store, plane.path());
+        assert_eq!(pins.missing, ["was-here"]);
+        assert!(
+            !pins.certain,
+            "a link whose target is away is not known gone or there"
+        );
     }
 
     #[test]
@@ -2558,6 +2582,7 @@ mod tests {
 
         assert_eq!(pins.missing, Vec::<String>::new());
         assert_eq!(pins.order, ["beta", "gamma"]);
+        assert!(!pins.certain);
     }
 
     /// Writes `BINDINGS`, for when the commands above change:

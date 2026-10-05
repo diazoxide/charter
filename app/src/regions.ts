@@ -3,7 +3,7 @@ import { commands } from "./bindings";
 import { forgetTextSizes, onTextSizes, textSizes, type TextSizes } from "./textSize";
 import { forgetYourEditor, onYourEditor, yourEditor } from "./yourEditor";
 import { forgetGroups } from "./settings/links";
-import { dismissedEverywhere, forgetDismissals, onDismissals, type Dismissed } from "./dismissals";
+import { forgetDismissals } from "./dismissals";
 import type { YourEditor } from "./bindings";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
@@ -157,8 +157,6 @@ type Document = {
   text: TextSizes;
   /** Your editor (`yourEditor.ts`, RC-20), when one is chosen. */
   editor?: YourEditor;
-  /** The Notices dismissed until their cause changes, per project (`dismissals.ts`, NO-2). */
-  dismissed?: Dismissed;
 };
 
 /** A document read field by field, and what had to be put right to read it. */
@@ -333,13 +331,11 @@ const where = (path: string) => path || "the layout file";
 
 const asDocument = (regions: Arrangement): Document => {
   const editor = yourEditor();
-  const dismissed = dismissedEverywhere();
   return {
     version: VERSION,
     regions,
     text: textSizes(),
     ...(editor !== undefined ? { editor } : {}),
-    ...(Object.keys(dismissed).length > 0 ? { dismissed } : {}),
   };
 };
 
@@ -357,9 +353,6 @@ onTextSizes(() => {
 
 /** Your editor was chosen (RC-20): one change, written at once. */
 onYourEditor(() => remember(remembered()));
-
-/** A Notice dismissed, or a dismissal let go (NO-2): one change, written at once. */
-onDismissals(() => remember(remembered()));
 
 /** Every write, in the order the window made it. Tauri runs commands on a thread pool, and two
  *  writes that raced there could land the older one last. */

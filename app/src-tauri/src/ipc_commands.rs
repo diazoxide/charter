@@ -229,6 +229,7 @@ macro_rules! app_commands {
                 clipath::install_cli_on_path,
                 windowprefs::write_layout,
                 windowprefs::adopt_layout,
+                windowprefs::set_dismissed,
             ],
             vault_values: [
                 vaults::vault_secret_reveal,

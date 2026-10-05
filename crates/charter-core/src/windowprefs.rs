@@ -205,7 +205,7 @@ fn theme_problem(document: &serde_json::Value) -> Option<String> {
 /// path charter could not read is a compromised path or a failing disk, and writing over it
 /// fixes nothing.
 pub fn write_layout(config_root: &Path, text: &str) -> io::Result<()> {
-    let document: serde_json::Value = serde_json::from_str(text).map_err(|why| {
+    let mut document: serde_json::Value = serde_json::from_str(text).map_err(|why| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("the window sent a layout that is not JSON: {why}"),
@@ -217,18 +217,152 @@ pub fn write_layout(config_root: &Path, text: &str) -> io::Result<()> {
             format!("the window sent a layout that {why}"),
         ));
     }
-    if let Err(why) =
-        crate::machine::read_beside(config_root, LAYOUT, MAX_BYTES, "the window's layout")
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("charter will not overwrite a layout it could not read: {why}"),
-        ));
-    }
+    let _held = crate::machine::Lock::named(config_root, LAYOUT_LOCK);
+    let on_disk =
+        match crate::machine::read_beside(config_root, LAYOUT, MAX_BYTES, "the window's layout") {
+            Ok(text) => text,
+            Err(why) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("charter will not overwrite a layout it could not read: {why}"),
+                ));
+            }
+        };
+    // **The dismissals are the file's, never the window's** (NO-2): a window holds what it read
+    // at its launch, and another window may have dismissed since. [`set_dismissed`] writes them.
+    let kept = on_disk
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|mut was| was.get_mut(DISMISSED).map(serde_json::Value::take));
+    let object = document
+        .as_object_mut()
+        .expect("layout_problem refuses a document that is not an object");
+    match kept {
+        Some(dismissed) => object.insert(DISMISSED.to_owned(), dismissed),
+        None => object.remove(DISMISSED),
+    };
+    write_document(config_root, &document)
+}
+
+fn write_document(config_root: &Path, document: &serde_json::Value) -> io::Result<()> {
     let dir = crate::machine::private_dir(config_root)?;
-    let pretty = serde_json::to_string_pretty(&document)
+    let pretty = serde_json::to_string_pretty(document)
         .expect("a document that was just parsed can always be written");
     crate::machine::write_beside(config_root, &dir.join(LAYOUT), (pretty + "\n").as_bytes())
+}
+
+/// The layout's field for the Notices dismissed until their cause changes (NO-2, V91j).
+pub const DISMISSED: &str = "dismissed";
+
+/// The lock a read-modify-write of the layout file holds, beside it.
+const LAYOUT_LOCK: &str = "layout.json.lock";
+
+/// The most the dismissals may take of the file, written out: half of [`MAX_BYTES`], so the
+/// regions, the sizes and the editor always have the other half, and the file is never one the
+/// next launch refuses whole for its size (F4).
+pub const DISMISSED_MOST_BYTES: u64 = MAX_BYTES / 2;
+
+/// **Keeps the Notices dismissed in one project** (NO-2, V91j), replacing only that project's
+/// list in the layout file, under the file's lock: every other project's, and everything else
+/// in the file, is as the file has it. Two windows each dismissing in their own project both
+/// keep theirs. An empty list takes the project out.
+///
+/// **Bounded** ([`DISMISSED_MOST_BYTES`]): past it, the projects opened longest ago (the
+/// machine store's recents) lose theirs first, and `project` keeps what fits last. A dismissal
+/// dropped this way only shows its Notice again.
+///
+/// No file yet is a layout with nothing in it but this; a file charter could not read, or
+/// cannot use, is refused and left as it is.
+pub fn set_dismissed(config_root: &Path, project: &str, causes: &[String]) -> io::Result<()> {
+    let _held = crate::machine::Lock::named(config_root, LAYOUT_LOCK);
+    let text = crate::machine::read_beside(config_root, LAYOUT, MAX_BYTES, "the window's layout")
+        .map_err(|why| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("charter will not write into a layout it could not read: {why}"),
+        )
+    })?;
+    let mut document = match text {
+        None => serde_json::json!({ "version": LAYOUT_VERSION, "regions": [] }),
+        Some(text) => {
+            let document: serde_json::Value = serde_json::from_str(&text).map_err(|why| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("the layout is not JSON, so nothing is written into it: {why}"),
+                )
+            })?;
+            if let Some(why) = layout_problem(&document) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("the layout {why}, so nothing is written into it"),
+                ));
+            }
+            document
+        }
+    };
+    let object = document
+        .as_object_mut()
+        .expect("layout_problem refuses a document that is not an object");
+    let mut dismissed = match object.remove(DISMISSED) {
+        Some(serde_json::Value::Object(held)) => held,
+        _ => serde_json::Map::new(),
+    };
+    dismissed.remove(project);
+    if !causes.is_empty() {
+        dismissed.insert(project.to_owned(), serde_json::json!(causes));
+    }
+    within_bound(config_root, project, &mut dismissed);
+    if !dismissed.is_empty() {
+        object.insert(DISMISSED.to_owned(), serde_json::Value::Object(dismissed));
+    }
+    write_document(config_root, &document)
+}
+
+/// Drops dismissals until they fit [`DISMISSED_MOST_BYTES`]: other projects, opened longest
+/// ago first, then `project`'s own from the end.
+fn within_bound(
+    config_root: &Path,
+    project: &str,
+    dismissed: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    let size = |dismissed: &serde_json::Map<String, serde_json::Value>| {
+        serde_json::to_string_pretty(dismissed).map_or(u64::MAX, |text| text.len() as u64)
+    };
+    if size(dismissed) <= DISMISSED_MOST_BYTES {
+        return;
+    }
+    let store = crate::machine::read(config_root).store;
+    let opened = |one: &str| store.recent(Path::new(one)).map_or(0, |entry| entry.opened);
+    let mut others: Vec<String> = dismissed
+        .keys()
+        .filter(|one| *one != project)
+        .cloned()
+        .collect();
+    others.sort_by_key(|one| std::cmp::Reverse(opened(one)));
+    while size(dismissed) > DISMISSED_MOST_BYTES {
+        let Some(oldest) = others.pop() else { break };
+        dismissed.remove(&oldest);
+    }
+    // Then `project`'s own, last first. Each cause is counted off as it goes (its text, its
+    // quotes, the indent, the comma and the line), and the whole is measured again after, so a
+    // list of thousands is not written out once per cause.
+    let mut over = size(dismissed).saturating_sub(DISMISSED_MOST_BYTES);
+    while over > 0 {
+        let Some(serde_json::Value::Array(own)) = dismissed.get_mut(project) else {
+            return;
+        };
+        let Some(last) = own.pop() else {
+            dismissed.remove(project);
+            return;
+        };
+        if own.is_empty() {
+            dismissed.remove(project);
+            return;
+        }
+        over = over.saturating_sub(last.to_string().len() as u64 + 8);
+        if over == 0 {
+            over = size(dismissed).saturating_sub(DISMISSED_MOST_BYTES);
+        }
+    }
 }
 
 /// Writes the layout **only when there is no file yet**, and says whether it did.
@@ -448,6 +582,106 @@ mod tests {
         let document = read_layout(home.path()).document.expect("in force");
         assert_eq!(document["text"]["window"], 16);
         assert_eq!(document["text"]["terminal"], 12);
+    }
+
+    // ---------------------------------------------------------------- dismissed (NO-2)
+
+    fn dismissed_in(home: &Path) -> serde_json::Value {
+        read_layout(home).document.expect("in force")["dismissed"].clone()
+    }
+
+    #[test]
+    fn two_windows_dismissing_in_different_projects_both_keep_theirs() {
+        // Each window holds only what it read at its launch; writing that whole map back would
+        // take the other window's dismissal away. Each writes its own project's, under the lock.
+        let home = home();
+        write_layout(home.path(), A_LAYOUT).unwrap();
+        set_dismissed(home.path(), "/one", &["pin-dormant:a".to_owned()]).unwrap();
+        set_dismissed(home.path(), "/two", &["pin-dormant:b".to_owned()]).unwrap();
+
+        assert_eq!(
+            dismissed_in(home.path()),
+            serde_json::json!({ "/one": ["pin-dormant:a"], "/two": ["pin-dormant:b"] })
+        );
+    }
+
+    #[test]
+    fn a_layout_written_by_a_window_leaves_the_dismissals_on_disk_alone() {
+        // A window's layout carries the dismissals it read at launch, or none: either is stale.
+        let home = home();
+        set_dismissed(home.path(), "/one", &["pin-dormant:a".to_owned()]).unwrap();
+        write_layout(
+            home.path(),
+            r#"{"version":1,"regions":[],"dismissed":{"/one":[],"/old":["pin-dormant:x"]}}"#,
+        )
+        .unwrap();
+        write_layout(home.path(), A_LAYOUT).unwrap();
+
+        assert_eq!(
+            dismissed_in(home.path()),
+            serde_json::json!({ "/one": ["pin-dormant:a"] })
+        );
+        assert_eq!(
+            read_layout(home.path()).document.unwrap()["regions"][0]["side"],
+            "right"
+        );
+    }
+
+    #[test]
+    fn a_project_with_nothing_dismissed_is_taken_out() {
+        let home = home();
+        set_dismissed(home.path(), "/one", &["pin-dormant:a".to_owned()]).unwrap();
+        set_dismissed(home.path(), "/one", &[]).unwrap();
+        assert!(
+            dismissed_in(home.path()).is_null(),
+            "no field once nothing is dismissed"
+        );
+    }
+
+    #[test]
+    fn dismissals_never_grow_the_file_past_what_a_launch_reads() {
+        // F4: a file over MAX_BYTES is refused whole at the next launch, layout and all. So
+        // the projects opened longest ago lose theirs first, and the one being written last.
+        let home = home();
+        crate::machine::update(home.path(), |store| {
+            for (at, project) in (0u64..).zip(["/p0", "/p1", "/p2", "/p3", "/p4", "/p5"]) {
+                store.remember(Path::new(project), 100 + at);
+            }
+        })
+        .unwrap();
+        let causes = |n: &str| -> Vec<String> {
+            (0..200)
+                .map(|i| format!("pin-dormant:{n}-{i:0>40}"))
+                .collect()
+        };
+        for project in ["/p5", "/p0", "/p1", "/p2", "/p3", "/p4"] {
+            set_dismissed(home.path(), project, &causes(project)).unwrap();
+        }
+
+        let size = std::fs::metadata(layout_path(home.path())).unwrap().len();
+        assert!(size <= DISMISSED_MOST_BYTES + 1024, "{size} bytes");
+        let kept = dismissed_in(home.path());
+        let kept = kept.as_object().unwrap();
+        assert!(kept.contains_key("/p4"), "the one just written is kept");
+        assert!(kept.contains_key("/p5"), "the one opened last is kept");
+        assert!(!kept.contains_key("/p0"), "the one opened first goes first");
+
+        // And one project alone past the bound keeps what fits of its own.
+        let many: Vec<String> = (0..2000).map(|i| format!("pin-dormant:{i:0>60}")).collect();
+        set_dismissed(home.path(), "/p5", &many).unwrap();
+        assert!(std::fs::metadata(layout_path(home.path())).unwrap().len() <= MAX_BYTES);
+        assert!(read_layout(home.path()).trouble.is_none());
+    }
+
+    #[test]
+    fn dismissals_are_never_written_into_a_layout_charter_cannot_use() {
+        let home = home();
+        put(home.path(), LAYOUT, "{ half a layout");
+        set_dismissed(home.path(), "/one", &["pin-dormant:a".to_owned()]).expect_err("refused");
+        assert_eq!(
+            std::fs::read_to_string(layout_path(home.path())).unwrap(),
+            "{ half a layout"
+        );
     }
 
     #[test]
