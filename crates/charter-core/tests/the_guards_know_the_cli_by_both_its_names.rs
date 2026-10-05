@@ -189,6 +189,7 @@ fn a_consent_gated_command_spelt_purlis_is_refused_until_the_rules_name_it() {
         "purlis workspace todo promote 1 -w alpha",
         "purlis -w alpha ws todo promote 1",
         "cd /tmp && purlis ws todo promote 1",
+        "echo \"$(purlis report bug --yes x)\"",
         "purlis handoff beta",
     ] {
         let why = no_rules(cmd).unwrap_or_else(|| panic!("{cmd} was let through"));
@@ -240,6 +241,7 @@ fn a_consent_gated_command_in_a_data_heredoc_is_data_and_one_a_shell_runs_is_not
     for cmd in [
         "git commit -F - <<'EOF'\npurlis report bug --yes x\nEOF",
         "cat > notes.md <<'EOF'\npurlis ws todo promote 1\nEOF",
+        "gh pr create --title t --body \"$(cat <<'EOF'\npurlis report bug --yes x\n`purlis ws todo promote 1`\nEOF\n)\"",
     ] {
         assert_eq!(no_rules(cmd), None, "{cmd}");
     }
@@ -264,9 +266,124 @@ fn a_consent_gated_command_in_a_shell_string_is_refused() {
         assert!(no_rules(cmd).is_some(), "{cmd} was let through");
     }
     for cmd in [
-        "sh -c 'charter report bug --yes x'",
         "sh -c 'purlis report bug'",
         "echo 'purlis report bug --yes x'",
+    ] {
+        assert_eq!(no_rules(cmd), None, "{cmd}");
+    }
+}
+
+/// Every guard reads a program's name as the filesystem does, ignoring case: on one that folds
+/// case `CHARTER` runs the same binary, and a persona's grant must not run its secrets, its
+/// vaults or its changes without a prompt because of a Shift key.
+#[test]
+fn the_persona_gate_reads_the_programs_name_in_any_case() {
+    charter_core::unsteered!();
+    for name in ["PURLIS", "Charter", "EDM"] {
+        for verb in ["secret get db", "vault add x", "change land"] {
+            assert!(
+                personagate::dangerous(name, &words(verb)),
+                "`{name} {verb}` ran on a grant"
+            );
+        }
+    }
+    assert!(personagate::dangerous("Kubectl", &words("delete pod x")));
+    assert!(personagate::dangerous(
+        "GH",
+        &words("release delete-asset v1 a")
+    ));
+    assert!(!personagate::dangerous("PURLIS", &words("status")));
+}
+
+/// The host asks before `charter report … --yes` and `charter … todo … promote` only when the
+/// command is spelt the way its rule is: the bare name at the start of its command. Any other
+/// spelling the guard reads as the same command — a path, another case, a prefix, quoting, a
+/// subshell — is one the rule does not match, so the guard refuses it and names the spelling
+/// that asks.
+#[test]
+fn a_consent_gated_command_spelt_charter_any_other_way_is_refused() {
+    charter_core::unsteered!();
+    for cmd in [
+        "/usr/local/bin/charter report bug --yes x",
+        "./charter ws todo promote 1",
+        "~/.local/bin/charter report bug --yes x",
+        "/Applications/purlis.app/Contents/MacOS/charter ws todo promote 1",
+        "CHARTER report bug --yes x",
+        "python3 -m charter report bug --yes x",
+        "FOO=1 charter report bug --yes x",
+        "env charter ws todo promote 1",
+        "timeout 60 charter report bug --yes x",
+        "\\charter report bug --yes x",
+        "'charter' ws todo promote 1",
+        "charter 'report' bug --yes x",
+        "charter report bug --y\\es x",
+        "(charter report bug --yes x)",
+        "echo $(charter ws todo promote 1)",
+        "echo \"`charter report bug --yes x`\"",
+        "echo \"$(charter ws todo promote 1)\"",
+        "cd /tmp && /usr/local/bin/charter ws todo promote 1",
+    ] {
+        let why = no_rules(cmd).unwrap_or_else(|| panic!("{cmd} was let through"));
+        assert!(why.contains("`charter "), "{cmd}: {why}");
+    }
+}
+
+/// …and the spelling the rule matches, every command no rule gates and every mention of one in
+/// data stay the host's to judge, so the backstop costs nothing where a prompt is already shown.
+#[test]
+fn the_spelling_the_hosts_rule_matches_and_mere_mentions_are_left_alone() {
+    charter_core::unsteered!();
+    for cmd in [
+        "charter report bug --yes x",
+        "charter report --yes=1 bug",
+        "charter -w alpha ws todo promote 1",
+        "cd /tmp && charter ws todo promote 1",
+        "charter report bug --yes x 2>&1 | tail -5",
+        "/usr/local/bin/charter report bug",
+        "./charter ws todo list",
+        "CHARTER status",
+        "echo charter report bug --yes x",
+        "echo '/usr/local/bin/charter report bug --yes x'",
+        "echo \"./charter ws todo promote 1\"",
+        "git commit -m \"$(cat msg.txt)\" -m 'then CHARTER report bug --yes x'",
+        "grep -rn 'charter ws todo promote' docs",
+        "git commit -m 'run ./charter report bug --yes x to file it'",
+        "git commit -F - <<'EOF'\n/usr/local/bin/charter report bug --yes x\nEOF",
+        "cat > notes.md <<'EOF'\n./charter ws todo promote 1\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nDocs: run /usr/local/bin/charter report bug --yes x\nEOF\n)\"",
+        "gh pr create --title t --body \"$(cat <<'EOF'\n`./charter ws todo promote 1` asks first\nEOF\n)\"",
+        "git commit -m 'docs: `CHARTER report bug --yes x` is refused'",
+        // A handoff is A7's to judge, which reads its spelling more closely than this does.
+        "/usr/local/bin/charter handoff beta",
+        "python3 -m charter handoff beta",
+    ] {
+        assert_eq!(no_rules(cmd), None, "{cmd}");
+    }
+}
+
+/// The host's rule reads the outer command, so a report or a promote spelt `charter …` inside a
+/// string or a heredoc a shell runs gets no prompt. The guard reads one level in, as A7 does
+/// for a handoff and as A7b does for the new name.
+#[test]
+fn a_consent_gated_command_spelt_charter_inside_a_shell_string_is_refused() {
+    charter_core::unsteered!();
+    for cmd in [
+        "sh -c 'charter report bug --yes x'",
+        "bash -c \"charter ws todo promote 1\"",
+        "bash -lc 'cd /tmp && charter report bug --yes x'",
+        "eval charter ws todo promote 1",
+        "eval 'charter report bug --yes x'",
+        "bash <<'EOF'\ncharter report bug --yes x\nEOF",
+        "cat <<'EOF' | sh\ncharter ws todo promote 1\nEOF",
+    ] {
+        let why = no_rules(cmd).unwrap_or_else(|| panic!("{cmd} was let through"));
+        assert!(why.contains("`charter "), "{cmd}: {why}");
+    }
+    for cmd in [
+        "sh -c 'charter report bug'",
+        "sh -c 'echo charter report bug --yes x'",
+        "bash -c 'grep \"charter ws todo promote\" docs'",
+        "bash <<'EOF'\ncharter status\nEOF",
     ] {
         assert_eq!(no_rules(cmd), None, "{cmd}");
     }

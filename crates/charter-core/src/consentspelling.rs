@@ -12,8 +12,10 @@
 //! the `charter` rule, in every settings file the host reads for the call
 //! ([`settings::twin_in_force`]), and only spelt exactly as the twin starts — the bare word
 //! `purlis` at the start of its segment, unquoted and unescaped in the source; not a path,
-//! another case, `python -m` or an assignment in front. A project without the twin, or with
-//! it weaker in any file, still refuses: it fails closed.
+//! another case, `python -m` or an assignment in front — and, as #1279 asks of the `charter`
+//! spelling, only where the segment's source as written matches the twin's glob. Inside a string,
+//! a heredoc or a substitution a shell runs it stays refused, twin or not. A project without the
+//! twin, or with it weaker in any file, still refuses: it fails closed.
 //!
 //! **Read as A7 reads a handoff**: over the call with every heredoc a reader takes as data
 //! stripped ([`heredoc::strip_reader_heredocs`]), so a commit message or a note that mentions
@@ -22,17 +24,34 @@
 //! [`crate::handoffguard::shell_string_handoff`] reads it.
 //!
 //! **Read off the table the rules are written from**, so a rule added there is refused under
-//! the new name with nothing else to remember. **Only the names the rules do not spell**: the
-//! `charter` spelling is the host's to judge, and is not asked about here.
+//! the new name with nothing else to remember.
+//!
+//! # The rules' own name, spelt another way (#1279)
+//!
+//! A host rule is a glob over the command **as written**, so the `charter` spelling gets a
+//! prompt only when the command starts with the bare name the rule spells. Everything else the
+//! guard reads as the same command — a path to the binary, another case, a `VAR=` prefix or a
+//! wrapper, a quoted or escaped word, a subshell or a substitution — is a string the rule does
+//! not match, and would run with no prompt. So a segment that runs a consent-gated command under
+//! the rules' name is refused unless its source text is one a rule matches. **Fail-closed**: a
+//! spelling the host might also accept is still refused, and the refusal names the one it
+//! certainly asks about. The same command inside a string or a heredoc a shell runs is refused
+//! under either name, because the rule reads only the outer command.
+//!
+//! **A handoff is A7's** ([`crate::handoffguard`]), which reads its spelling and its brief more
+//! closely than this does, so the rules' name spelling a handoff is not judged here.
 
 use std::path::Path;
 
 use crate::cliname;
 use crate::handoffguard::as_the_shell_reads;
 use crate::heredoc;
+use crate::leakguard;
 use crate::proseguard::charter_words;
 use crate::pypath;
-use crate::scaffold::settings::{self, CONSENT_PATTERNS};
+use crate::scaffold::settings::{
+    self, CONSENT_PATTERNS, HANDOFF_PATTERN, PROMOTE_PATTERN, PURLIS_CONSENT_PATTERNS,
+};
 use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
 
@@ -42,17 +61,49 @@ pub const REASON: &str = "consent-spelling";
 /// The name every project's consent rules are spelt with.
 const RULES_NAME: &str = cliname::ALIAS;
 
-/// Why `cmd` is refused in the project at `plane`, or `None`: a segment that runs the command
-/// line under a name the project's consent rules do not spell, as a command one of them would
-/// ask about — in the call itself, with the heredocs a reader takes as data left out, or in a
-/// string a shell it starts runs.
+/// A consent-gated command a segment runs: the name it calls the command line by, the words
+/// after it, and the rule that asks about it.
+struct Gated {
+    name: String,
+    words: Vec<String>,
+    pattern: &'static str,
+}
+
+impl Gated {
+    /// Spelt under a name the rules do not spell.
+    fn under_a_new_name(&self) -> bool {
+        self.name != RULES_NAME
+    }
+
+    /// Not a handoff under the rules' name, which is A7's to judge.
+    fn not_a7s(&self) -> bool {
+        self.under_a_new_name() || self.pattern != HANDOFF_PATTERN
+    }
+
+    /// What the rule asks about, as a command to type.
+    fn as_the_rule_spells_it(&self) -> &'static str {
+        match self.pattern {
+            HANDOFF_PATTERN => "handoff",
+            PROMOTE_PATTERN => "ws todo promote",
+            _ => "report … --yes",
+        }
+    }
+}
+
+/// Why `cmd` is refused in the project at `plane`, or `None`: a segment that runs a
+/// consent-gated command the host's rule would not ask about — under a name the project's rules
+/// do not spell, inside a string or a heredoc a shell runs, or under either name spelt other
+/// than its rule matches. Read with every heredoc a reader takes as data left out.
 ///
 /// `anchors` are where the host's settings may come from: the session's start folder and the
 /// call's `cwd` ([`settings::twin_in_force`]). None given keeps the new spelling refused.
 pub fn refusal(cmd: &str, plane: &Path, anchors: &[&Path]) -> Option<String> {
     let stripped = heredoc::strip_reader_heredocs(cmd);
     let at = At { plane, anchors };
-    refusal_in(&stripped, at).or_else(|| in_a_shell_string(&stripped, at))
+    refusal_in(&stripped, at)
+        .or_else(|| in_a_shell_string(&stripped))
+        .or_else(|| in_a_shells_heredoc(cmd))
+        .or_else(|| not_as_the_rule_spells_it(&stripped))
 }
 
 /// Where the call is made: the project, and the directory the host runs it in.
@@ -62,8 +113,93 @@ struct At<'a> {
     anchors: &'a [&'a Path],
 }
 
-/// [`refusal_in`] over each string a segment of `text` hands a shell, one level deep.
-fn in_a_shell_string(text: &str, at: At<'_>) -> Option<String> {
+/// The first segment of `text` that runs a consent-gated command `keep` accepts — in the words
+/// as written, or in a substitution a `"…"` holds ([`quoted_substitutions`]), which the word
+/// reader keeps whole inside its quoted word.
+fn gated(text: &str, keep: impl Fn(&Gated) -> bool) -> Option<Gated> {
+    gated_in(text, &keep).or_else(|| {
+        quoted_substitutions(text)
+            .iter()
+            .find_map(|inner| gated_in(&lines_it_runs(inner), &keep))
+    })
+}
+
+/// The text of each `$( … )` and backtick inside double quotes in `text`: the shell runs it,
+/// though the word it sits in is quoted ([`shellseg::quote_map`] opens a command context there).
+fn quoted_substitutions(text: &str) -> Vec<String> {
+    let quoted = shellseg::quote_map(text);
+    let chars: Vec<char> = text.chars().collect();
+    let quoted_at = |i: usize| quoted.get(i).copied().unwrap_or(true);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let body = match chars[i] {
+            '$' if quoted_at(i) && chars.get(i + 1) == Some(&'(') && !quoted_at(i + 2) => {
+                Some(i + 2)
+            }
+            '`' if quoted_at(i) && !quoted_at(i + 1) => Some(i + 1),
+            _ => None,
+        };
+        let Some(from) = body else {
+            i += 1;
+            continue;
+        };
+        // Back in the quoted context one past the closing `)` or backtick.
+        let to = (from..chars.len())
+            .find(|&k| quoted_at(k))
+            .unwrap_or(chars.len());
+        out.push(chars[from..to.saturating_sub(1).max(from)].iter().collect());
+        i = to.max(i + 1);
+    }
+    out
+}
+
+/// The lines of `text` a shell runs: a heredoc body a reader takes as data — a commit message,
+/// a pull request's body — left out ([`leakguard::lines_a_command_could_run`]).
+fn lines_it_runs(text: &str) -> String {
+    leakguard::lines_a_command_could_run(text)
+        .into_iter()
+        .map(|(row, _)| row)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// [`gated`] over the words as written.
+fn gated_in(text: &str, keep: &impl Fn(&Gated) -> bool) -> Option<Gated> {
+    shellseg::segment_argv(text).iter().find_map(|toks| {
+        let (prog, _env, argv) = shellwrap::split_env(toks);
+        let words = charter_words(&prog, &argv)?;
+        let name = name_used(&prog, &argv)?;
+        let as_the_rule_reads = format!("{RULES_NAME} {}", words.join(" "));
+        let pattern = CONSENT_PATTERNS
+            .iter()
+            .copied()
+            .find(|pattern| matches(&as_the_rule_reads, pattern))?;
+        let it = Gated {
+            name,
+            words,
+            pattern,
+        };
+        keep(&it).then_some(it)
+    })
+}
+
+/// What a command a shell runs from a string or a heredoc body is told, under either name.
+fn shell_string_refusal(it: &Gated) -> String {
+    let name = &it.name;
+    let what = it.as_the_rule_spells_it();
+    format!(
+        "`{name} {what}` is refused inside a string or a heredoc a shell runs (`sh -c '…'`, \
+         `eval`, `bash <<'EOF'`). It waits for your consent through a rule spelt \
+         `{RULES_NAME} …`, and the host matches that rule against the outer command only, so \
+         nothing would ask you. Run it directly, spelt `{RULES_NAME} {what}`, the bare name at \
+         the start of its command."
+    )
+}
+
+/// One level into each string a segment of `text` hands a shell: a consent-gated command there
+/// under either name.
+fn in_a_shell_string(text: &str) -> Option<String> {
     let toks = shellseg::split_punctuation(shellseg::lex(text).ok()?);
     heredoc::segments_of(&toks)
         .iter()
@@ -71,74 +207,142 @@ fn in_a_shell_string(text: &str, at: At<'_>) -> Option<String> {
             let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
             shellwrap::shell_scripts(&words)
                 .iter()
-                .find_map(|inner| refusal_in(&as_the_shell_reads(inner), at))
+                .find_map(|inner| gated(&as_the_shell_reads(inner), Gated::not_a7s))
+        })
+        .map(|it| shell_string_refusal(&it))
+}
+
+/// A consent-gated command under either name on a line a heredoc feeds a shell
+/// ([`leakguard::lines_a_command_could_run`], the plan the leak guard and A7 share): the rule
+/// saw only the `bash` that opened it.
+fn in_a_shells_heredoc(cmd: &str) -> Option<String> {
+    leakguard::lines_a_command_could_run(cmd)
+        .iter()
+        .filter(|(_, in_a_shells_body)| *in_a_shells_body)
+        .find_map(|(row, _)| gated(&as_the_shell_reads(row), Gated::not_a7s))
+        .map(|it| shell_string_refusal(&it))
+}
+
+/// A segment of `text` that runs a consent-gated command under the rules' own name, whose
+/// source a rule does not match. Text the lexer cannot read is judged whole, and refused if it
+/// holds such a command at all.
+fn not_as_the_rule_spells_it(text: &str) -> Option<String> {
+    let rules_name = |it: &Gated| !it.under_a_new_name() && it.not_a7s();
+    let Ok(toks) = shellseg::lex(text) else {
+        return gated(text, rules_name).map(|it| spelling_refusal(&it));
+    };
+    let toks = shellseg::split_punctuation(toks);
+    let chars: Vec<char> = text.chars().collect();
+    heredoc::segments_of(&toks)
+        .iter()
+        .find_map(|(seg, _before)| {
+            let (first, last) = (seg.first()?, seg.last()?);
+            let Some(source) = source_of(&chars, first.start, last.end) else {
+                // No offsets to read the spelling off: judged on the words, and never as asked.
+                let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
+                return gated(&words.join(" "), rules_name).map(|it| spelling_refusal(&it));
+            };
+            let it = gated(&source, rules_name)?;
+            let asked = CONSENT_PATTERNS
+                .iter()
+                .any(|pattern| pypath::fnmatch(&source, pattern));
+            (!asked).then(|| spelling_refusal(&it))
         })
 }
 
+/// The source text between two character offsets, or `None` where the lexer measured neither
+/// — read as a spelling no rule matches.
+fn source_of(chars: &[char], start: isize, end: isize) -> Option<String> {
+    let (start, end) = (usize::try_from(start).ok()?, usize::try_from(end).ok()?);
+    chars.get(start..end).map(|c| c.iter().collect())
+}
+
+/// What a command under the rules' name, spelt another way, is told.
+fn spelling_refusal(it: &Gated) -> String {
+    let what = it.as_the_rule_spells_it();
+    format!(
+        "`{RULES_NAME} {what}` waits for your consent through a rule spelt `{RULES_NAME} …`, and \
+         the host matches that rule against the command as written, so this spelling (a path, \
+         another case, a prefix or wrapper, a quote, a subshell or a substitution) gets no \
+         prompt. Spell it `{RULES_NAME} {what}`, the bare name at the start of its command."
+    )
+}
+
 /// The refusal for the first segment of `text` that is a consent-gated command under a name the
-/// project's rules do not spell.
+/// project's rules do not spell. The new name is let through only for a segment spelt as the
+/// project's twin rule starts and matches ([`spelt_as_a_twin`]) where that twin is in force
+/// ([`ruled_under`]); found inside a `"$( … )"` it is refused under any spelling, since the
+/// host's rule reads only the outer command.
 fn refusal_in(text: &str, at: At<'_>) -> Option<String> {
-    shellseg::segment_argv(text).iter().find_map(|toks| {
-        let (prog, _env, argv) = shellwrap::split_env(toks);
-        let words = charter_words(&prog, &argv)?;
-        let name = name_used(&prog, &argv)?;
-        if name == RULES_NAME {
-            return None;
-        }
-        let as_the_rule_reads = format!("{RULES_NAME} {}", words.join(" "));
-        let gated: Vec<&str> = CONSENT_PATTERNS
+    let lifted = |it: &Gated| {
+        it.name == cliname::PRIMARY && spelt_as_a_twin(text) && ruled_under(&it.words, at)
+    };
+    let it = gated_in(text, &|it: &Gated| it.under_a_new_name() && !lifted(it)).or_else(|| {
+        quoted_substitutions(text)
             .iter()
-            .copied()
-            .filter(|pattern| matches(&as_the_rule_reads, pattern))
-            .collect();
-        if gated.is_empty() || (spelt_bare(text) && ruled_under(&prog, &gated, at)) {
-            return None;
-        }
-        let verb = words.first().map_or("", String::as_str);
-        Some(format!(
-            "`{name} {verb}` waits for your consent through a rule spelt `{RULES_NAME} …`, \
-             which this spelling does not match, so nothing would ask you. Spell it \
-             `{RULES_NAME} {verb} …` until this project's rules name `{primary}` too \
-             (`{RULES_NAME} doctor --fix rename-plane` writes them).",
-            primary = cliname::PRIMARY,
-        ))
-    })
+            .find_map(|inner| gated_in(&lines_it_runs(inner), &Gated::under_a_new_name))
+    })?;
+    let (name, words) = (&it.name, &it.words);
+    let verb = words.first().map_or("", String::as_str);
+    Some(format!(
+        "`{name} {verb}` waits for your consent through a rule spelt `{RULES_NAME} …`, \
+         which this spelling does not match, so nothing would ask you. Spell it \
+         `{RULES_NAME} {verb} …` until this project's rules name `{primary}` too \
+         (`{RULES_NAME} doctor --fix rename-plane` writes them).",
+        primary = cliname::PRIMARY,
+    ))
 }
 
-/// Whether the host asks before the command under the spelling `prog`, in the project at
-/// `plane`: `prog` is the bare new name, exactly as a twin rule starts, and the project carries
-/// the twin of every consent rule the command meets, in every harness.
-fn ruled_under(prog: &str, gated: &[&str], at: At<'_>) -> bool {
-    prog == cliname::PRIMARY
-        && gated
-            .iter()
-            .all(|pattern| settings::twin_in_force(at.plane, at.anchors, pattern, cliname::PRIMARY))
+/// Whether the host asks before the command `words` under the new name, in the project at
+/// `at`: the project carries the twin of every consent rule the command meets, in every
+/// harness.
+fn ruled_under(words: &[String], at: At<'_>) -> bool {
+    let as_the_rule_reads = format!("{RULES_NAME} {}", words.join(" "));
+    CONSENT_PATTERNS
+        .iter()
+        .filter(|pattern| matches(&as_the_rule_reads, pattern))
+        .all(|pattern| settings::twin_in_force(at.plane, at.anchors, pattern, cliname::PRIMARY))
 }
 
-/// Whether every segment of `text` that runs the command line under the new name starts with
-/// that name as its SOURCE spells it: the first word, bare (no quote or escape touched it), and
-/// its characters in the source exactly `purlis`. `'purlis'`, `\purlis` and `pur''lis` lex to the
-/// same word and match no host rule, so they stay refused (D-RN7-4). A line that does not lex
-/// answers `false`.
-fn spelt_bare(text: &str) -> bool {
+/// Whether every segment of `text` that runs the command line under the new name is spelt as a
+/// twin rule matches it. It starts with that name as its SOURCE spells it: the first word, bare
+/// (no quote or escape touched it), and its characters in the source exactly `purlis`.
+/// `'purlis'`, `\purlis` and `pur''lis` lex to the same word and match no host rule, so they stay
+/// refused (D-RN7-4). And a consent-gated one's source, as written, matches a twin's glob, as
+/// #1279 asks of the `charter` spelling: `purlis 'report' … --yes` or `--y\es` is refused. A
+/// line that does not lex answers `false`.
+fn spelt_as_a_twin(text: &str) -> bool {
     let Ok(toks) = shellseg::lex(text) else {
         return false;
     };
     let toks = shellseg::split_punctuation(toks);
     let chars: Vec<char> = text.chars().collect();
     heredoc::segments_of(&toks).iter().all(|(seg, _before)| {
+        let (Some(first), Some(last)) = (seg.first(), seg.last()) else {
+            return true;
+        };
         let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
         let (prog, _env, argv) = shellwrap::split_env(&words);
-        let renamed = name_used(&prog, &argv).is_some_and(|name| name != RULES_NAME);
+        let source = source_of(&chars, first.start, last.end);
+        // Read over the source, so a command in a `$( … )` or `( … )` the segment holds counts.
+        let gated = gated_in(
+            source.as_deref().unwrap_or(&words.join(" ")),
+            &Gated::under_a_new_name,
+        )
+        .is_some();
+        let renamed = gated || name_used(&prog, &argv).is_some_and(|name| name != RULES_NAME);
         if !renamed {
             return true;
         }
-        seg.first().is_some_and(|first| {
-            first.bare
-                && first.text == cliname::PRIMARY
-                && crate::handoffguard::source_of(&chars, first.start, first.end)
-                    == cliname::PRIMARY
-        })
+        let bare = first.bare
+            && first.text == cliname::PRIMARY
+            && crate::handoffguard::source_of(&chars, first.start, first.end) == cliname::PRIMARY;
+        bare && (!gated
+            || source.is_some_and(|source| {
+                PURLIS_CONSENT_PATTERNS
+                    .iter()
+                    .any(|pattern| pypath::fnmatch(&source, pattern))
+            }))
     })
 }
 

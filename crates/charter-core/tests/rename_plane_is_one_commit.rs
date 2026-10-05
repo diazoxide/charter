@@ -477,11 +477,39 @@ fn the_purlis_spelling_is_let_through_once_the_project_carries_its_rules() {
             "{cmd} after the rename"
         );
     }
+    for cmd in [
+        "cd /tmp && purlis ws todo promote 1",
+        "purlis report bug --yes x 2>&1 | tail -5",
+        "charter report bug --yes x",
+    ] {
+        assert_eq!(
+            charter_core::consentspelling::refusal(cmd, &root, &[&root]),
+            None,
+            "{cmd} after the rename"
+        );
+    }
     // Still refused: spellings no rule matches, and the guard's other refusals.
     for cmd in [
         "/usr/local/bin/purlis report bug --yes x",
         "PURLIS report bug --yes x",
         "python3 -m purlis report bug --yes x",
+        // #1279 holds under the new name too: only the source a twin's glob matches as written
+        // is the host's to ask about, and a shell's string, heredoc or substitution never is.
+        "purlis 'report' bug --yes x",
+        "purlis report bug --y\\es x",
+        "FOO=1 purlis report bug --yes x",
+        "env purlis ws todo promote 1",
+        "(purlis report bug --yes x)",
+        "echo $(purlis ws todo promote 1)",
+        "echo \"$(purlis ws todo promote 1)\"",
+        "echo \"`purlis report bug --yes x`\"",
+        "sh -c 'purlis report bug --yes x'",
+        "eval purlis ws todo promote 1",
+        "bash <<'EOF'\npurlis report bug --yes x\nEOF",
+        "purlis status && /usr/local/bin/purlis ws todo promote 1",
+        // …and the old name keeps #1279's refusals in a renamed project.
+        "/usr/local/bin/charter report bug --yes x",
+        "sh -c 'charter report bug --yes x'",
     ] {
         assert!(
             charter_core::consentspelling::refusal(cmd, &root, &[&root]).is_some(),
