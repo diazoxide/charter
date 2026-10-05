@@ -450,7 +450,13 @@ test("sentences about the rename itself keep the old name", () => {
 });
 
 test("a body with no charter in it, or no body at all, is unchanged", () => {
-  assert.deepEqual(renameText(null), { text: null, renamed: {}, kept: {}, words: {} });
+  assert.deepEqual(renameText(null), {
+    text: null,
+    renamed: {},
+    kept: {},
+    words: {},
+    collapsed: [],
+  });
   assert.equal(renamed("purlis is fine\r\nas it is"), "purlis is fine\r\nas it is");
   assert.equal(renamed("line one charter\r\nline two"), "line one purlis\r\nline two");
 });
@@ -569,4 +575,89 @@ test("every occurrence is accounted for: renamed, or left alone under a named re
   assert.equal(edits + kept, text.match(/charter/gi).length);
   assert.equal(r.kept["contains-charter"], 3);
   assert.deepEqual(r.words, { charters: 1, _charter_argv: 1, charter_chat: 1 });
+});
+
+test("the app crate named to cargo becomes purlis-app, not the repo's name (D-RN12b-4)", () => {
+  assert.equal(
+    renamed(
+      "Run `cargo test -p charter-app -- --ignored`, then `cargo clippy --package=charter-app`.",
+    ),
+    "Run `cargo test -p purlis-app -- --ignored`, then `cargo clippy --package=purlis-app`.",
+  );
+  assert.equal(renamed("charter-app#4 is in charter-app"), "purlis#4 is in purlis");
+});
+
+test("the plugin's old name charter-app, said as a plugin's name, stays (#408)", () => {
+  assert.equal(
+    renamed("The harness plugin is called charter, not charter-app"),
+    "The harness plugin is called purlis, not charter-app",
+  );
+  assert.equal(
+    renamed("the bundled `charter-app` plugin loads"),
+    "the bundled `charter-app` plugin loads",
+  );
+  assert.equal(
+    renamed("The plugin name `charter-app` is gone."),
+    "The plugin name `charter-app` is gone.",
+  );
+  // Elsewhere charter-app is still the repo (D-RN12-9).
+  assert.equal(
+    renamed("A plugin like this? Ask charter-app's panels."),
+    "A plugin like this? Ask purlis's panels.",
+  );
+});
+
+test("two old names that would read the same keep their line as written (D-RN12b-6)", () => {
+  const r = renameText(
+    "Not charter-app #5 but charter-app#5.\ncharter, unlike charter-app, is a product.\n",
+  );
+  assert.equal(r.text, "Not purlis#5 but purlis#5.\ncharter, unlike charter-app, is a product.\n");
+  assert.equal(r.kept.collapse, 2);
+  assert.deepEqual(r.collapsed, ["charter, unlike charter-app, is a product."]);
+});
+
+test("every HTML comment is a record and stays byte for byte, in issues too (D-RN12b-9)", () => {
+  const body =
+    'The charter mutants run.\n<!-- mutants-report dirty: ["charter-core"] -->\n' +
+    "Its PR says `printf 'Why.\\n\\n<!-- END charter change -->'`.";
+  assert.equal(
+    renamed(body),
+    'The purlis mutants run.\n<!-- mutants-report dirty: ["charter-core"] -->\n' +
+      "Its PR says `printf 'Why.\\n\\n<!-- END charter change -->'`.",
+  );
+  assert.equal(renameText(body).kept["html-comment"], 2);
+});
+
+test("a cli edit never collides; the Python or old charter is kept, so its line is still renamed", () => {
+  const r = renameText("charter-app runs `charter save` for you.");
+  assert.equal(r.text, "purlis runs `purlis save` for you.");
+  assert.deepEqual(r.collapsed, []);
+  assert.equal(
+    renamed("charter-app stands alone, with nothing from the old charter or the Python charter."),
+    "purlis stands alone, with nothing from the old charter or the Python charter.",
+  );
+});
+
+test("the persona's charter is kept, as a body, prose or a persona's file (RN-12 miss)", () => {
+  assert.equal(
+    renamed(
+      "A persona declares its servers in the charter (or personas/<name>/mcp.json), charter writes them.",
+    ),
+    "A persona declares its servers in the charter (or personas/<name>/mcp.json), purlis writes them.",
+  );
+  assert.equal(
+    renamed("the charter body and the charter prose"),
+    "the charter body and the charter prose",
+  );
+});
+
+test("1Password item titles and the GitLab workspace label keep charter (RN-12 miss)", () => {
+  assert.equal(
+    renamed("The registry got `op-item: charter-<persona>` from charter."),
+    "The registry got `op-item: charter-<persona>` from purlis.",
+  );
+  assert.equal(
+    renamed("charter labels it `ws:alpha` on GitHub and `charter::ws::alpha` on GitLab."),
+    "purlis labels it `ws:alpha` on GitHub and `charter::ws::alpha` on GitLab.",
+  );
 });
