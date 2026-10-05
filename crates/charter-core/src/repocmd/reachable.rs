@@ -47,8 +47,14 @@ impl Trouble {
 
 /// What [`reachable`] says of `forge` when its login check refused with `why`.
 fn trouble(forge: &forge::Forge, why: &forge::ForgeError) -> Trouble {
-    let login = (*why.failure() != forge::Failure::Transport)
-        .then(|| format!("{} auth login --hostname {}", forge.kind.cli(), forge.host));
+    // Only a refused credential, or the CLI's own "not authenticated" sentence (which charter
+    // cannot classify): a rate limit, a missing right or a missing owner is not cured by
+    // logging in again, and no CLI or a deadline is not either.
+    let login = matches!(
+        why.failure(),
+        forge::Failure::Auth | forge::Failure::Unrecognised
+    )
+    .then(|| format!("{} auth login --hostname {}", forge.kind.cli(), forge.host));
     Trouble {
         said: why.to_string(),
         login,
@@ -150,5 +156,22 @@ mod tests {
         let missing = ForgeError::transport("charter could not find gh on PATH");
 
         assert_eq!(trouble(&github, &missing).login, None);
+    }
+
+    #[test]
+    fn a_refusal_a_login_would_not_cure_offers_no_login() {
+        use crate::forge::Failure;
+        let github = Forge::build("github", None).expect("a forge");
+        for failure in [
+            Failure::RateLimited { reset: None },
+            Failure::Forbidden,
+            Failure::NotFound,
+            Failure::Conflict,
+        ] {
+            let why = ForgeError::of(failure.clone(), "refused");
+            assert_eq!(trouble(&github, &why).login, None, "{failure:?}");
+        }
+        let refused = ForgeError::of(Failure::Auth, "bad credentials");
+        assert!(trouble(&github, &refused).login.is_some());
     }
 }

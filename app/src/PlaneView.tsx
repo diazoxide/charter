@@ -265,6 +265,10 @@ import {
   type SettingsLinkAsk,
 } from "./settings/links";
 
+/** Any C0 or C1 control character, or DEL: what a line typed and left unrun must not hold. */
+// eslint-disable-next-line no-control-regex
+const HAS_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
 /** One empty list, so a prop left out is the same list at every render. */
 const NONE: readonly never[] = [];
 
@@ -1835,11 +1839,17 @@ export const PlaneView = memo(function PlaneView({
     const login = (event: Event) => {
       const asked = (event as CustomEvent<LoginAsk>).detail;
       if (asked.plane !== plane || sidebar === undefined) return;
+      // "Typed, not run" holds here, not only in the core's host check: a line with a control
+      // character in it (a newline is a Return) is refused and typed nowhere.
+      if (HAS_CONTROL.test(asked.line)) {
+        refusedBy("shell", "charter will not type a login line that holds a control character");
+        return;
+      }
       openShell(sidebar.root, OUTSIDE, { line: asked.line, held: true });
     };
     window.addEventListener(FORGE_LOGIN, login);
     return () => window.removeEventListener(FORGE_LOGIN, login);
-  }, [openShell, plane, sidebar]);
+  }, [openShell, plane, refusedBy, sidebar]);
 
   /**
    * **A blocked save's two ways out** (charter-app#295), asked by the Saving tab: a chat started
