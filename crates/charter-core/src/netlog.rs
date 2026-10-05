@@ -428,7 +428,7 @@ fn host_of(uri: &http::Uri) -> Option<String> {
 /// a line here is a record of a call already made and never an input to anything.
 fn store_root() -> Option<PathBuf> {
     let root = crate::machine::rooted(
-        std::env::var_os(crate::machine::HOME_VAR),
+        crate::envvar::var_os(crate::machine::HOME_VAR),
         std::env::var_os("XDG_CONFIG_HOME"),
         dirs::home_dir(),
     )?;

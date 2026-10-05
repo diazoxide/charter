@@ -226,6 +226,8 @@ impl SessionHost for Sessions {
             spec.env.push((CHAT_ENV.into(), id.to_string().into()));
             spec.env.push((TOKEN_ENV.into(), token.expose().into()));
         }
+        // What the host added, under both names too (V93k), as `compose` gave the rest.
+        spec.env = charter_core::envvar::twinned(std::mem::take(&mut spec.env));
         // Before the program exists, so its very first hook lands somewhere.
         announce(id);
         let engine = AlacrittyEngine::new(opening.size, SCROLLBACK as usize);

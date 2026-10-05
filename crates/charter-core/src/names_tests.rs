@@ -244,7 +244,9 @@ fn the_entries_carry_the_names_on_disk_today() {
     assert_eq!(crate::manifest::KEY, GENERATED_KEY.reads[0]);
     assert_eq!(crate::change::push::BLOCK_END, CHANGE_BLOCK_END.history[0]);
     assert_eq!(crate::secrets::onepassword::TAG, ONEPASSWORD_TAG.write);
-    assert_eq!(crate::profiles::CHARTER_PREFIX, ENV_PREFIX.reads[0]);
+    // The old prefix of every environment variable, which chats and shells an older build
+    // started still carry (RN-2d, `crate::envvar`).
+    assert_eq!("CHARTER_", ENV_PREFIX.reads[0]);
     assert_eq!(crate::planegit::BRANCH_PREFIX, BRANCH_PREFIX.history[0]);
     assert_eq!(crate::plugin::NAME, PLUGIN_NAME.reads[0]);
     assert_eq!(crate::plugin::FORMERLY, PLUGIN_LOADED_AS.history[1]);
@@ -292,6 +294,42 @@ fn every_old_name_an_entry_holds_is_pinned_by_the_test_above() {
         held,
         "{held} old names held, {} pinned",
         pinned - 1
+    );
+}
+
+#[test]
+fn every_variable_the_product_sets_is_written_under_the_purlis_prefix() {
+    // RN-2d (V93k): the product writes `PURLIS_<X>` and reads `CHARTER_<X>` only as the
+    // fallback ([`crate::envvar`]). The plugin's hook text keeps its one old name until the
+    // plugin is renamed; a chat is given both names, so either reads.
+    for written in [
+        crate::hookwire::SOCKET_ENV,
+        crate::hookwire::CHAT_ENV,
+        crate::hookwire::TOKEN_ENV,
+        crate::hookwire::HARNESS_ENV,
+        crate::skills::LISTED_ENV,
+        crate::start::FOOTER_ENV,
+        crate::chatenv::SESSION_BUS_KEPT,
+        crate::datahome::HOME_VAR,
+        crate::machine::HOME_VAR,
+        crate::active::WORKSPACE_ENV,
+        crate::active::PLANE_ROOT_ENV,
+        crate::active::SESSION_ID_ENV,
+        crate::active::PERSONA_ENV,
+        crate::noterminal::RELAUNCHED_ENV,
+        crate::sessionrecord::RESUMING_ENV,
+        crate::shellguard::USER_ZDOTDIR_ENV,
+        crate::glstate::NO_BACKGROUND_CHECKS,
+    ] {
+        assert!(written.starts_with(ENV_PREFIX.write), "{written}");
+    }
+    assert_eq!(
+        Some(crate::plugin::BINARY_ENV),
+        ENV_PREFIX
+            .reads
+            .first()
+            .map(|old| format!("{old}HOOK_BINARY"))
+            .as_deref()
     );
 }
 

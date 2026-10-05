@@ -393,7 +393,7 @@ fn judged(asked: [Option<i64>; 2], default: usize, floor: usize) -> usize {
 
 /// This process's own environment, for the callers that are not a test.
 pub fn ambient(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+    crate::envvar::var(name)
 }
 
 /// Strip trailing whitespace, including any hiding behind trailing escapes.

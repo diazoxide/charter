@@ -375,7 +375,7 @@ pub fn stamp(now: Option<&str>) -> Result<chrono::NaiveDateTime, String> {
 }
 
 fn session() -> String {
-    charter_core::trace::bucket(&|name| std::env::var(name).ok())
+    charter_core::trace::bucket(&charter_core::envvar::var)
 }
 
 /// What happens after a memory is written, in charter's words — `commit_memory_reactive`.

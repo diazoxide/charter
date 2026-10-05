@@ -222,7 +222,7 @@ fn touched(
 fn chat_number() -> Option<u32> {
     [CHAT_ENV, charter_core::active::SESSION_ID_ENV]
         .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
+        .filter_map(charter_core::envvar::var)
         .find_map(|n| n.trim().parse::<u32>().ok().filter(|n| *n > 0))
 }
 
@@ -235,7 +235,7 @@ fn chat_number() -> Option<u32> {
 /// chat works (`Here::place` with no `-w`), which is where the sandbox lets it write and where
 /// the hook looks.
 fn tell_the_app(here: &Here, chat: Option<u32>, conversation: Option<String>, path: &Path) {
-    let socket = std::env::var_os(SOCKET_ENV).filter(|s| !s.is_empty());
+    let socket = charter_core::envvar::var_os(SOCKET_ENV).filter(|s| !s.is_empty());
     let (Some(socket), Some(chat)) = (socket, chat) else {
         voice::info(
             "This chat was not started by the app (no $CHARTER_HOOK_SOCKET and $CHARTER_CHAT), \

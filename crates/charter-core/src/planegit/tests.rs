@@ -265,7 +265,7 @@ fn an_unbounded_stage_from_a_linked_worktree_of_the_plane_is_refused() {
 
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("a linked worktree of it"), "{said}");
-    assert!(said.contains("CHARTER_ROOT="), "it names the override");
+    assert!(said.contains("PURLIS_ROOT="), "it names the override");
     // Nothing was staged: a refusal that has already run `git add -A` has done the damage and
     // merely declined to name it.
     assert_eq!(fixture.head_subject(), "one");

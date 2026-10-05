@@ -41,7 +41,7 @@ use tracing_subscriber::layer::SubscriberExt;
 /// The directory the log is kept in: `$CHARTER_LOG_DIR` when it is set, else the app's own log
 /// directory, where `panics.log` already is.
 pub(crate) fn dir() -> Option<PathBuf> {
-    dir_from(std::env::var_os("CHARTER_LOG_DIR"))
+    dir_from(crate::envvar::var_os("PURLIS_LOG_DIR"))
 }
 
 fn dir_from(named: Option<OsString>) -> Option<PathBuf> {
@@ -437,7 +437,7 @@ mod tests {
         let app = crate::report::panic_log().and_then(|file| file.parent().map(Path::to_path_buf));
         // Under `$CHARTER_PANIC_LOG` the panic log is wherever that says, so only compare
         // with the app's own directory when it is the one the panic log is in.
-        if std::env::var_os("CHARTER_PANIC_LOG").is_none() {
+        if crate::envvar::var_os("PURLIS_PANIC_LOG").is_none() {
             assert_eq!(
                 dir_from(None),
                 app,

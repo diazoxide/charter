@@ -670,7 +670,9 @@ fn spawn(launch: &Launch) -> Result<std::process::Child, NotStarted> {
         .envs(launch.env.iter().map(|(name, value)| (name, value)));
     // Never the host's relaunch marker, even where a caller set it: an app started from the
     // agent leaves its own terminal (V77).
-    command.env_remove(crate::noterminal::RELAUNCHED_ENV);
+    for name in crate::envvar::spellings(crate::noterminal::RELAUNCHED_ENV) {
+        command.env_remove(name);
+    }
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
     crate::forklock::spawn(&mut command).map_err(|err| NotStarted::Spawn {

@@ -203,3 +203,55 @@ fn the_harness_the_environment_names_is_the_one_doctor_answers_for() {
         other => panic!("no case {other:?}"),
     }
 }
+
+/// Set on the child of the test below; its value is the case the child runs.
+const RENAMED_CHILD: &str = "STEERING_UNDER_EITHER_NAME_CHILD";
+
+const RENAMED: &str = "a_purlis_variable_wins_and_a_charter_one_is_read_when_it_is_absent";
+
+/// The rename's window (V93k): `PURLIS_ROOT` pins the plane, and wins over a `CHARTER_ROOT`
+/// set beside it; a `CHARTER_ROOT` alone still pins it, as it did before the rename.
+#[test]
+fn a_purlis_variable_wins_and_a_charter_one_is_read_when_it_is_absent() {
+    charter_core::unsteered!();
+    let Some(case) = std::env::var_os(RENAMED_CHILD) else {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["purlis", "charter"] {
+            let plane = dir.path().join(name);
+            std::fs::create_dir_all(&plane).unwrap();
+            std::fs::write(plane.join("charter.toml"), "").unwrap();
+        }
+        let purlis = dir.path().join("purlis");
+        let charter = dir.path().join("charter");
+        for (case, env) in [
+            (
+                "both",
+                vec![
+                    ("PURLIS_ROOT", purlis.as_os_str()),
+                    ("CHARTER_ROOT", charter.as_os_str()),
+                ],
+            ),
+            ("old only", vec![("CHARTER_ROOT", charter.as_os_str())]),
+            ("new only", vec![("PURLIS_ROOT", purlis.as_os_str())]),
+        ] {
+            let mut vars = env;
+            vars.push((RENAMED_CHILD, case.as_ref()));
+            charter_core::testrun::rerun_steered(&[RENAMED], &vars);
+        }
+        return;
+    };
+
+    let here = tempfile::tempdir().unwrap();
+    std::fs::write(here.path().join("charter.toml"), "").unwrap();
+    let resolved = charter_core::plane::resolve(here.path()).unwrap();
+    let want = match case.to_str() {
+        Some("both" | "new only") => "purlis",
+        Some("old only") => "charter",
+        other => panic!("no case {other:?}"),
+    };
+    assert_eq!(
+        resolved.file_name().and_then(|n| n.to_str()),
+        Some(want),
+        "{case:?}: {resolved:?}"
+    );
+}

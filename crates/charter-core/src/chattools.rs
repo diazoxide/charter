@@ -56,8 +56,10 @@ pub const PRE_ALLOWED: [&str; 5] = [
 /// The variables the server reads to find the chat's place, as a `charter` command in the chat
 /// reads them. A harness that hands an MCP server only the variables it is told to (Codex) is
 /// told these, and nothing else of charter's: not the chat's token, not its hook socket.
+///
+/// Under their purlis names only: the server is this product's own binary, which reads either.
 pub const SCOPE_ENV: [&str; 5] = [
-    "CHARTER_ROOT",
+    "PURLIS_ROOT",
     crate::active::WORKSPACE_ENV,
     crate::active::PLANE_ROOT_ENV,
     crate::active::PERSONA_ENV,
@@ -134,7 +136,11 @@ pub fn acp_server(
             let value = chat_env
                 .iter()
                 .rev()
-                .find(|(name, _)| name == wanted)?
+                // Under either of its names (V93k); the server is handed the purlis one.
+                .find(|(name, _)| {
+                    name.to_str()
+                        .is_some_and(|name| crate::envvar::same(name, wanted))
+                })?
                 .1
                 .to_str()?;
             Some(EnvVariable::new(*wanted, value))

@@ -394,8 +394,8 @@ mod tests {
             .iter()
             .filter_map(toml::Value::as_str)
             .collect();
-        assert!(passed.contains(&"CHARTER_WORKSPACE"), "{passed:?}");
-        assert!(!passed.contains(&"CHARTER_CHAT_TOKEN"), "{passed:?}");
+        assert!(passed.contains(&"PURLIS_WORKSPACE"), "{passed:?}");
+        assert!(!passed.contains(&"PURLIS_CHAT_TOKEN"), "{passed:?}");
     }
 
     #[test]

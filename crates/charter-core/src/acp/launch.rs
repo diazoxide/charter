@@ -104,6 +104,7 @@ impl Launch {
                 .into_iter()
                 .map(|(name, value)| (name.into(), value.into())),
         );
+        let env = crate::envvar::twinned(env);
         Ok(Self {
             chat: host.chat,
             argv,

@@ -127,7 +127,7 @@ fn the_handshake_offers_no_file_system_and_no_terminal_and_hands_the_session_cha
             "name": "charter",
             "command": "/bin/charter",
             "args": ["mcp"],
-            "env": [{"name": "CHARTER_ROOT", "value": "/project"}],
+            "env": [{"name": "PURLIS_ROOT", "value": "/project"}],
         }])
     );
     assert!(sent(&record, "authenticate").is_none(), "{record:#?}");

@@ -109,10 +109,10 @@ impl Ambient {
     pub fn here() -> Self {
         Self {
             stdout_is_a_tty: std::io::stdout().is_terminal(),
-            socket: std::env::var_os(SOCKET_ENV).map(PathBuf::from),
-            chat: std::env::var(CHAT_ENV).ok(),
-            harness: std::env::var("CHARTER_HARNESS").ok(),
-            footer: std::env::var(FOOTER_ENV).ok(),
+            socket: charter_core::envvar::var_os(SOCKET_ENV).map(PathBuf::from),
+            chat: charter_core::envvar::var(CHAT_ENV),
+            harness: charter_core::envvar::var("PURLIS_HARNESS"),
+            footer: charter_core::envvar::var(FOOTER_ENV),
         }
     }
 }

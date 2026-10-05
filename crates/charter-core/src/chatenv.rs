@@ -10,7 +10,8 @@
 //! Three sources name one, and nothing else does:
 //!
 //! 1. [`PASSED`]: what any program needs to run as the operator on this machine — `PATH`,
-//!    `HOME`, the locale, the proxies, the XDG directories, charter's own `CHARTER_*`.
+//!    `HOME`, the locale, the proxies, the XDG directories, the product's own `PURLIS_*` and
+//!    `CHARTER_*`.
 //! 2. **The harness's own**, as that harness declares them ([`Harness::env_passed`]): data per
 //!    harness, never a list here.
 //! 3. **The operator**, per plane, in `charter.local.toml`'s `[chat_env] pass` ([`read`]).
@@ -75,6 +76,7 @@ pub const PASSED: &[&str] = &[
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "NODE_EXTRA_CA_CERTS",
+    "PURLIS_*",
     "CHARTER_*",
     // What a Windows program cannot start without, and where it keeps the operator's files.
     "SystemRoot",
@@ -107,7 +109,7 @@ pub const PASSED: &[&str] = &[
 /// silent, because GTK would otherwise wait 25 s on it. The bus itself is healthy, so a chat
 /// gets the address kept here instead of the dead one ([`inherited`]), and this name itself
 /// is never a chat's.
-pub const SESSION_BUS_KEPT: &str = "CHARTER_SESSION_BUS_KEPT";
+pub const SESSION_BUS_KEPT: &str = "PURLIS_SESSION_BUS_KEPT";
 
 /// The variable [`SESSION_BUS_KEPT`] stands in for: where a D-Bus client finds the session bus.
 pub const SESSION_BUS: &str = "DBUS_SESSION_BUS_ADDRESS";
@@ -226,11 +228,20 @@ pub fn inherited(
 ) -> Vec<(OsString, OsString)> {
     let inherited: Vec<(OsString, OsString)> = inherited.into_iter().collect();
     let value_of = |wanted: &str| {
-        inherited
-            .iter()
-            .find(|(name, _)| name == wanted)
-            .map(|(_, value)| value.clone())
+        crate::envvar::lookup(wanted, |wanted| {
+            inherited
+                .iter()
+                .find(|(name, _)| name == wanted)
+                .map(|(_, value)| value.clone())
+        })
     };
+    // An inherited `CHARTER_<X>` beside an inherited `PURLIS_<X>` is the old name of a variable
+    // the new one already gives: the purlis value is the chat's, under both names.
+    let outranked: Vec<OsString> = inherited
+        .iter()
+        .map(|(name, _)| name.clone())
+        .filter(|name| crate::envvar::outranked(&inherited)(name))
+        .collect();
     let kept = the_bus_kept(
         value_of(SESSION_BUS).as_deref(),
         value_of(SESSION_BUS_KEPT).as_deref(),
@@ -238,7 +249,12 @@ pub fn inherited(
     .map(OsStr::to_owned);
     let inherited = inherited
         .into_iter()
-        .filter(|(name, _)| name != SESSION_BUS_KEPT)
+        .filter(|(name, _)| {
+            !outranked.contains(name)
+                && !name
+                    .to_str()
+                    .is_some_and(|name| crate::envvar::same(name, SESSION_BUS_KEPT))
+        })
         .filter_map(|variable| on_the_kept_bus(variable, kept.as_deref()));
     inherited
         .filter(|(name, _)| {
@@ -247,7 +263,9 @@ pub fn inherited(
             };
             !strip(name)
                 && text != "TERM"
-                && !crate::hookwire::NOT_INHERITED.contains(&text)
+                && !crate::hookwire::NOT_INHERITED
+                    .iter()
+                    .any(|never| crate::envvar::same(never, text))
                 && passes(text, harness, operator)
         })
         .collect()
@@ -275,7 +293,11 @@ pub struct Starting<'a> {
 /// nothing else, at every level: in a terminal, or as a level-3 agent (ADR 0080 §1).
 ///
 /// A later pair wins over an earlier one of the same name, so a profile's value wins over the
-/// app's. What the host adds for the chat itself (its number, its token, its socket) goes after.
+/// app's. What the host adds for the chat itself (its number, its token, its socket) goes after,
+/// and the host passes the whole through [`crate::envvar::twinned`] again once it has.
+///
+/// Each of the product's variables is the chat's under both its names, `PURLIS_<X>` and
+/// `CHARTER_<X>`, while the rename's window is open (V93k, [`crate::envvar::twinned`]).
 pub fn compose(
     app: impl IntoIterator<Item = (OsString, OsString)>,
     chat: &Starting<'_>,
@@ -293,6 +315,8 @@ pub fn compose(
             .filter(|(name, _)| !strip(OsStr::new(name)))
             .map(|(name, value)| (name.into(), value.into())),
     );
+    // Every product variable under both its names while the rename's window is open (V93k).
+    let env = crate::envvar::twinned(env);
     match chat.git_hooks {
         Some(hooks) => hooks.arm(env),
         None => env,
@@ -320,7 +344,9 @@ pub fn onto_the_kept_bus(
     let Some(kept) = the_bus_kept(address, kept) else {
         return;
     };
-    command.env_remove(SESSION_BUS_KEPT);
+    for kept in crate::envvar::spellings(SESSION_BUS_KEPT) {
+        command.env_remove(kept);
+    }
     let named = command
         .get_envs()
         .find(|(name, _)| *name == SESSION_BUS)
@@ -730,7 +756,12 @@ mod tests {
     fn bus_of(command: &std::process::Command) -> Vec<(String, Option<String>)> {
         let mut said: Vec<(String, Option<String>)> = command
             .get_envs()
-            .filter(|(name, _)| *name == SESSION_BUS || *name == SESSION_BUS_KEPT)
+            .filter(|(name, _)| {
+                *name == SESSION_BUS
+                    || name
+                        .to_str()
+                        .is_some_and(|name| crate::envvar::same(name, SESSION_BUS_KEPT))
+            })
             .map(|(name, value)| {
                 (
                     name.to_string_lossy().into_owned(),
@@ -788,8 +819,9 @@ mod tests {
         assert_eq!(
             bus_of(&program),
             [
-                (SESSION_BUS_KEPT.to_owned(), None),
+                ("CHARTER_SESSION_BUS_KEPT".to_owned(), None),
                 (SESSION_BUS.to_owned(), Some(REAL_BUS.to_owned())),
+                (SESSION_BUS_KEPT.to_owned(), None),
             ]
         );
     }
@@ -808,8 +840,9 @@ mod tests {
         assert_eq!(
             bus_of(&program),
             [
+                ("CHARTER_SESSION_BUS_KEPT".to_owned(), None),
+                (SESSION_BUS.to_owned(), None),
                 (SESSION_BUS_KEPT.to_owned(), None),
-                (SESSION_BUS.to_owned(), None)
             ]
         );
     }
@@ -869,8 +902,9 @@ mod tests {
             assert_eq!(
                 bus_of(program),
                 [
+                    ("CHARTER_SESSION_BUS_KEPT".to_owned(), None),
+                    (SESSION_BUS.to_owned(), None),
                     (SESSION_BUS_KEPT.to_owned(), None),
-                    (SESSION_BUS.to_owned(), None)
                 ]
             );
         }
@@ -958,7 +992,7 @@ mod tests {
                 "OP_SERVICE_ACCOUNT_TOKEN".to_owned(),
                 "from-a-profile".to_owned(),
             ),
-            ("CHARTER_PERSONA".to_owned(), "steward".to_owned()),
+            (crate::active::PERSONA_ENV.to_owned(), "steward".to_owned()),
             ("HOME".to_owned(), "/profile-home".to_owned()),
         ];
         let hooks = crate::githooks::GitHooks::at("/app/git-hooks");
@@ -980,20 +1014,68 @@ mod tests {
             .collect();
         let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
         assert_eq!(
-            said[..4],
+            said[..5],
             [
                 pair("PATH", "v-PATH"),
                 pair("HOME", "v-HOME"),
+                pair("PURLIS_PERSONA", "steward"),
                 pair("CHARTER_PERSONA", "steward"),
                 pair("HOME", "/profile-home"),
             ]
         );
         assert!(
-            said[4..]
+            said[5..]
                 .iter()
                 .all(|(name, _)| name.starts_with("GIT_CONFIG_")),
             "{said:?}"
         );
         assert!(said.contains(&pair("GIT_CONFIG_COUNT", "1")), "{said:?}");
+    }
+
+    /// The rename's window (V93k): a chat is given each of the product's variables under both
+    /// names, whichever of them the app had and whichever the chat's own start set.
+    #[test]
+    fn a_chat_is_given_the_products_variables_under_both_names() {
+        let inherited = vec![
+            (OsString::from("PATH"), OsString::from("/bin")),
+            // Only the old name, as an app started from an older chat has it.
+            (OsString::from("CHARTER_HOME"), OsString::from("/state")),
+            // Both, and the purlis one wins whichever comes first.
+            (OsString::from("PURLIS_SKILLS_DIR"), OsString::from("/new")),
+            (OsString::from("CHARTER_SKILLS_DIR"), OsString::from("/old")),
+            // Never the chat's, under either name.
+            (OsString::from("CHARTER_CHAT_TOKEN"), OsString::from("t")),
+            (OsString::from("PURLIS_CHAT_TOKEN"), OsString::from("t")),
+        ];
+        let set = [("PURLIS_ROOT".to_owned(), "/plane".to_owned())];
+
+        let composed = compose(
+            inherited,
+            &Starting {
+                harness: None,
+                operator: &[],
+                strip: &[],
+                set: &set,
+                git_hooks: None,
+            },
+        );
+
+        let said: Vec<(String, String)> = composed
+            .into_iter()
+            .map(|(name, value)| (name.into_string().unwrap(), value.into_string().unwrap()))
+            .collect();
+        let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        assert_eq!(
+            said,
+            [
+                pair("PATH", "/bin"),
+                pair("PURLIS_HOME", "/state"),
+                pair("CHARTER_HOME", "/state"),
+                pair("PURLIS_SKILLS_DIR", "/new"),
+                pair("CHARTER_SKILLS_DIR", "/new"),
+                pair("PURLIS_ROOT", "/plane"),
+                pair("CHARTER_ROOT", "/plane"),
+            ]
+        );
     }
 }

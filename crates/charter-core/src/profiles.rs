@@ -54,8 +54,14 @@ pub fn named_like_a_credential(name: &str) -> bool {
     SECRET_WORDS.iter().any(|word| upper.contains(word))
 }
 
-/// The prefix of charter's own variables, which charter sets itself (ruling 14).
-pub(crate) const CHARTER_PREFIX: &str = "CHARTER_";
+/// Whether `name` is one of the product's own variables, which it sets itself (ruling 14):
+/// `PURLIS_<X>`, or its old name `CHARTER_<X>` (V93k), in any case.
+fn the_products_own(name: &str) -> bool {
+    let upper = name.to_uppercase();
+    crate::names::ENV_PREFIX
+        .spellings()
+        .any(|prefix| upper.starts_with(prefix))
+}
 
 /// The one key under `[harness]` that names the default rather than declaring a profile.
 const DEFAULT: &str = "default";
@@ -820,7 +826,7 @@ fn refusal(
         }
     };
     for var in &names {
-        if var.to_uppercase().starts_with(CHARTER_PREFIX) {
+        if the_products_own(var) {
             return Some(format!(
                 "profile '{shown_name}' sets {}, one of charter's own variables — charter \
                  sets those itself, and a profile's value would tell every hook the wrong \

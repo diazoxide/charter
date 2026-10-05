@@ -27,6 +27,7 @@ pub mod dispatch;
 pub mod docsrc;
 pub mod doctor;
 pub mod engine;
+pub mod envvar;
 pub mod eventlog;
 pub mod executor;
 pub mod extension;

@@ -102,7 +102,10 @@ fn a_resync_of_a_real_planes_personas_reproduces_its_committed_agents() {
         .current_dir(&plane)
         .env("CHARTER_ROOT", &plane);
     for name in ["CHARTER_HOME", "CHARTER_PERSONA", "CLAUDE_CODE_SESSION_ID"] {
-        command.env_remove(name);
+        // Under either name (V93k): a suite run in a chat inherits both.
+        for spelling in charter_core::envvar::spellings(name) {
+            command.env_remove(spelling);
+        }
     }
     let out = command.output().expect("the binary runs");
     assert!(

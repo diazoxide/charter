@@ -449,7 +449,7 @@ pub fn open_in_your_editor(
     editor: YourEditor,
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt as _;
-    let var = |name: &str| std::env::var(name).ok();
+    let var = charter_core::envvar::var;
     match launch_of(
         planes.held(&plane)?.root(),
         branch(&workspace, &repo, &piece),

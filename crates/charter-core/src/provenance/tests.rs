@@ -209,7 +209,7 @@ fn a_process_inside_a_chat_finds_its_chat_by_the_number_the_app_set() {
         pid: Some(std::process::id()),
         ..chat(3, Some("claude"), Some("steward"), Some(CHAT))
     }]);
-    let env = |n: &str| (n == "CHARTER_SESSION_ID").then(|| "3".to_owned());
+    let env = |n: &str| (n == "PURLIS_SESSION_ID").then(|| "3".to_owned());
     assert_eq!(
         Provenance::in_chat(plane.path(), &env).and_then(|p| p.chat),
         Some(CHAT.into())
@@ -220,7 +220,7 @@ fn a_process_inside_a_chat_finds_its_chat_by_the_number_the_app_set() {
         None,
         "a terminal of the operator's"
     );
-    let not_a_number = |n: &str| (n == "CHARTER_SESSION_ID").then(|| "abc".to_owned());
+    let not_a_number = |n: &str| (n == "PURLIS_SESSION_ID").then(|| "abc".to_owned());
     assert_eq!(Provenance::in_chat(plane.path(), &not_a_number), None);
 }
 
@@ -255,8 +255,8 @@ impl Commit {
 
     fn env(&self) -> impl Fn(&str) -> Option<String> + '_ {
         |name| match name {
-            "CHARTER_ROOT" => Some(self.plane.path().display().to_string()),
-            "CHARTER_SESSION_ID" => Some("3".into()),
+            "PURLIS_ROOT" => Some(self.plane.path().display().to_string()),
+            "PURLIS_SESSION_ID" => Some("3".into()),
             _ => None,
         }
     }
@@ -319,7 +319,7 @@ fn a_repo_that_follows_the_kernel_is_stamped_assisted_by_llm() {
 fn a_commit_outside_a_chat_is_left_as_it_was_written() {
     let commit = Commit::new("fix: one bill\n");
     let operator =
-        |name: &str| (name == "CHARTER_ROOT").then(|| commit.plane.path().display().to_string());
+        |name: &str| (name == "PURLIS_ROOT").then(|| commit.plane.path().display().to_string());
     stamp(&commit.message, &commit.clone, &operator);
     assert_eq!(commit.stamped(), "fix: one bill\n");
 }

@@ -106,7 +106,7 @@ pub fn on_the_apps_session_bus(command: &mut Command) -> &mut Command {
     crate::chatenv::onto_the_kept_bus(
         command,
         std::env::var_os(crate::chatenv::SESSION_BUS).as_deref(),
-        std::env::var_os(crate::chatenv::SESSION_BUS_KEPT).as_deref(),
+        crate::envvar::var_os(crate::chatenv::SESSION_BUS_KEPT).as_deref(),
     );
     command
 }

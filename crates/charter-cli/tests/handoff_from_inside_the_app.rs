@@ -131,7 +131,10 @@ fn charter_with(
         CHAT_ENV,
         TOKEN_ENV,
     ] {
-        command.env_remove(name);
+        // Under either name (V93k): a suite run in a chat inherits both.
+        for spelling in charter_core::envvar::spellings(name) {
+            command.env_remove(spelling);
+        }
     }
     if let Some(app) = app {
         command

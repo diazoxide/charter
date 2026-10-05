@@ -75,7 +75,7 @@ pub const STUCK_AFTER: Duration = Duration::from_secs(900);
 /// as "off" runs the forge client for somebody who asked charter not to. Blank is unset, as a
 /// blank `$CHARTER_WORKSPACE` is (charter#1055): `export CHARTER_NO_BACKGROUND_CHECKS=` is how
 /// a shell spells taking a value away.
-pub const NO_BACKGROUND_CHECKS: &str = "CHARTER_NO_BACKGROUND_CHECKS";
+pub const NO_BACKGROUND_CHECKS: &str = "PURLIS_NO_BACKGROUND_CHECKS";
 
 /// What the policy decided, and **why** — never a bare boolean.
 ///
@@ -267,7 +267,7 @@ pub fn maybe_spawn(plane: &Path, workspace: &str, trees: &[PathBuf], binary: &Pa
         plane,
         trees,
         now,
-        env: &|name| std::env::var(name).ok(),
+        env: &crate::envvar::var,
         alive: &crate::process::alive,
     });
     if decided != Decided::Due {
@@ -311,7 +311,7 @@ fn spawn(plane: &Path, workspace: &str, binary: &Path) -> Result<u32, String> {
         .arg("-w")
         .arg(workspace)
         .current_dir(plane)
-        .env("CHARTER_ROOT", plane)
+        .env("PURLIS_ROOT", plane)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

@@ -24,7 +24,7 @@ pub fn run(name: &str, args: &[String]) -> ExitCode {
     if name == COMMIT_MSG {
         if let (Ok(top), Some(message)) = (std::env::current_dir(), args.first()) {
             let message = top.join(message);
-            charter_core::provenance::stamp(&message, &top, &|n| std::env::var(n).ok());
+            charter_core::provenance::stamp(&message, &top, &charter_core::envvar::var);
         }
         return ExitCode::SUCCESS;
     }
@@ -116,7 +116,7 @@ fn refuse(stopped: Stopped, repo: &Path, scan: &diffscan::Scan) -> ExitCode {
 /// a chat outside the app has none. A line the app does not take is spooled for the next host
 /// to record (ADR 0068 §6, FD-30).
 fn tell_the_app(why: String) {
-    let env = |name: &str| std::env::var(name).ok();
+    let env = charter_core::envvar::var;
     let (Some(socket), Some(chat)) = (
         env(hookwire::SOCKET_ENV),
         env(hookwire::CHAT_ENV).and_then(|chat| chat.parse().ok()),

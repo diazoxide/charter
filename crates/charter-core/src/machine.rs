@@ -233,7 +233,7 @@ const LONGEST_WORKSPACE_NAME: usize = 255;
 /// `report.py:consent_path` reads it first for a reason worth keeping in one piece: `gh` keeps
 /// its own auth under `$XDG_CONFIG_HOME`, so isolating charter by redirecting that variable
 /// logs `gh` out and silently turns a publish into the no-`gh` fallback path.
-pub const HOME_VAR: &str = "CHARTER_CONFIG_HOME";
+pub const HOME_VAR: &str = "PURLIS_CONFIG_HOME";
 
 /// The human's config home: `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else
 /// `~/.config`. `None` when there is no home to put one in.
@@ -247,7 +247,7 @@ pub const HOME_VAR: &str = "CHARTER_CONFIG_HOME";
 /// knows the cases a hand-rolled `$HOME` does not.
 pub fn config_root() -> Option<PathBuf> {
     let found = rooted(
-        std::env::var_os(HOME_VAR),
+        crate::envvar::var_os(HOME_VAR),
         std::env::var_os("XDG_CONFIG_HOME"),
         dirs::home_dir(),
     );
@@ -268,7 +268,7 @@ pub fn config_root() -> Option<PathBuf> {
 /// does not exist holds no copy, and a doctor run in a fixture must still be able to say so.
 pub fn config_root_to_read_the_plugin_copy() -> Option<PathBuf> {
     let found = rooted(
-        std::env::var_os(HOME_VAR),
+        crate::envvar::var_os(HOME_VAR),
         std::env::var_os("XDG_CONFIG_HOME"),
         dirs::home_dir(),
     )?;
@@ -287,7 +287,7 @@ pub fn config_root_to_read_the_plugin_copy() -> Option<PathBuf> {
 /// fence is asked only about a store that exists. Nothing is read from one that does not.
 pub fn config_root_if_there() -> Option<PathBuf> {
     let found = rooted(
-        std::env::var_os(HOME_VAR),
+        crate::envvar::var_os(HOME_VAR),
         std::env::var_os("XDG_CONFIG_HOME"),
         dirs::home_dir(),
     )?;

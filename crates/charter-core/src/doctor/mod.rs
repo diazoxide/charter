@@ -368,13 +368,13 @@ impl Doctor {
     /// Where the two charters resolve differently — Python hops outward through an enclosing
     /// plane's `workspaces/`, this binary does not — the `nested plane` row says so.
     pub fn new(cwd: &Path, preflight: bool) -> Self {
-        let pinned = crate::steer::var_os("CHARTER_ROOT").is_some_and(|v| !v.is_empty());
+        let pinned = crate::steer::var_os("PURLIS_ROOT").is_some_and(|v| !v.is_empty());
         let root = crate::plane::resolve(cwd)
             .map(|p| canonical(&p))
             .unwrap_or_else(|_| canonical(cwd));
         let mut d = Self::at(&root, cwd, pinned, preflight);
         d.ids = crate::active::Ids::from_env();
-        d.persona_env = std::env::var(crate::active::PERSONA_ENV).ok();
+        d.persona_env = crate::envvar::var(crate::active::PERSONA_ENV);
         d.home = crate::profiles::home();
         d.budgets = crate::machine::config_root_if_there();
         d.forges = Some((

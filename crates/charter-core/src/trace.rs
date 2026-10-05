@@ -233,20 +233,20 @@ mod tests {
     #[test]
     fn the_bucket_is_charters_session_id_made_safe_for_a_filename() {
         assert_eq!(
-            bucket(&env(&[("CHARTER_SESSION_ID", "fixture-session-1")])),
+            bucket(&env(&[("PURLIS_SESSION_ID", "fixture-session-1")])),
             "fixture-session-1"
         );
-        assert_eq!(bucket(&env(&[("CHARTER_SESSION_ID", " a/b:c ")])), "abc");
+        assert_eq!(bucket(&env(&[("PURLIS_SESSION_ID", " a/b:c ")])), "abc");
         assert_eq!(
             bucket(&env(&[
-                ("CHARTER_SESSION_ID", ""),
+                ("PURLIS_SESSION_ID", ""),
                 ("CLAUDE_CODE_SESSION_ID", "x.y")
             ])),
             "x.y",
             "an empty id is no id, and the next rung answers"
         );
         assert_eq!(bucket(&env(&[])), NO_SESSION);
-        assert_eq!(bucket(&env(&[("CHARTER_SESSION_ID", "///")])), NO_SESSION);
+        assert_eq!(bucket(&env(&[("PURLIS_SESSION_ID", "///")])), NO_SESSION);
     }
 
     #[test]

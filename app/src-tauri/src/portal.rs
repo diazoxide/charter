@@ -351,12 +351,21 @@ fn launch_on(
     #[cfg(not(unix))]
     let _ = name;
     again.args(args);
+    // The kept bus under either of its names (V93k): an app started by an older one may
+    // have inherited it as `CHARTER_SESSION_BUS_KEPT`.
+    let forget_the_kept = |again: &mut std::process::Command| {
+        for kept in charter_core::envvar::spellings(SESSION_BUS_KEPT) {
+            again.env_remove(kept);
+        }
+    };
     match bus {
         Bus::At(address) => {
-            again.env(SESSION_BUS, address).env_remove(SESSION_BUS_KEPT);
+            again.env(SESSION_BUS, address);
+            forget_the_kept(&mut again);
         }
         Bus::Default => {
-            again.env_remove(SESSION_BUS).env_remove(SESSION_BUS_KEPT);
+            again.env_remove(SESSION_BUS);
+            forget_the_kept(&mut again);
         }
         Bus::Without { kept } => {
             again
@@ -727,8 +736,8 @@ mod tests {
         assert_eq!(
             bus_of(&without),
             [
-                (SESSION_BUS_KEPT.to_owned(), Some(RUN_USER_BUS.to_owned())),
                 (SESSION_BUS.to_owned(), Some(NO_SESSION_BUS.to_owned())),
+                (SESSION_BUS_KEPT.to_owned(), Some(RUN_USER_BUS.to_owned())),
             ]
         );
         assert_eq!(
@@ -743,15 +752,17 @@ mod tests {
         assert_eq!(
             bus_of(&again(&Bus::At(AUTOLAUNCHED.to_owned()))),
             [
-                (SESSION_BUS_KEPT.to_owned(), None),
+                ("CHARTER_SESSION_BUS_KEPT".to_owned(), None),
                 (SESSION_BUS.to_owned(), Some(AUTOLAUNCHED.to_owned())),
+                (SESSION_BUS_KEPT.to_owned(), None),
             ]
         );
         assert_eq!(
             bus_of(&again(&Bus::Default)),
             [
-                (SESSION_BUS_KEPT.to_owned(), None),
+                ("CHARTER_SESSION_BUS_KEPT".to_owned(), None),
                 (SESSION_BUS.to_owned(), None),
+                (SESSION_BUS_KEPT.to_owned(), None),
             ]
         );
     }

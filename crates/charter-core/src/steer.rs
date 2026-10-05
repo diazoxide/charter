@@ -30,21 +30,24 @@ use std::ffi::OsString;
 /// The variables the library reads straight from its own environment to decide what it acts
 /// on: the plane, its state directory, the workspace, the harness, and the worktree root —
 /// which, set in the operator's shell, turns every worktree verb into a refusal.
+///
+/// Each under its purlis name; the old `CHARTER_` spelling of one is the same variable
+/// ([`crate::envvar`]), hidden and read alike.
 pub(crate) const STEERING: [&str; 5] = [
-    "CHARTER_ROOT",
-    "CHARTER_HOME",
-    "CHARTER_WORKSPACE",
-    "CHARTER_HARNESS",
-    "CHARTER_WORKTREES",
+    "PURLIS_ROOT",
+    "PURLIS_HOME",
+    "PURLIS_WORKSPACE",
+    "PURLIS_HARNESS",
+    "PURLIS_WORKTREES",
 ];
 
-/// `name` from this process's environment — except a [`STEERING`] name under `cfg(test)`,
-/// which reads as unset.
+/// `name` from this process's environment, under either of its names ([`crate::envvar`]) —
+/// except a [`STEERING`] name under `cfg(test)`, which reads as unset.
 pub(crate) fn var_os(name: &str) -> Option<OsString> {
-    if cfg!(test) && STEERING.contains(&name) {
+    if cfg!(test) && STEERING.contains(&crate::envvar::canonical(name).as_str()) {
         return None;
     }
-    std::env::var_os(name)
+    crate::envvar::var_os(name)
 }
 
 /// [`var_os`], as a `String`; a value that is not UTF-8 reads as unset, as `std::env::var`'s
@@ -92,6 +95,11 @@ mod tests {
                 ("CHARTER_SESSION_ID", "3".as_ref()),
                 ("CHARTER_HARNESS", "codex".as_ref()),
                 ("CHARTER_HARNESS_PROFILE", "claude".as_ref()),
+                // And under the names the rename gives them (V93k).
+                ("PURLIS_ROOT", chats_plane.as_os_str()),
+                ("PURLIS_HOME", chats_state.as_os_str()),
+                ("PURLIS_WORKSPACE", "ide".as_ref()),
+                ("PURLIS_HARNESS", "codex".as_ref()),
             ],
         );
 

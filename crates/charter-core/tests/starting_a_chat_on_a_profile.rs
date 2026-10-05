@@ -192,8 +192,8 @@ fn the_persona_a_chat_adopts_rides_on_its_environment() {
     let ready = start::ready(&start, plane.root()).expect("it starts");
 
     assert_eq!(
-        ready.env.iter().find(|(n, _)| n == "CHARTER_PERSONA"),
-        Some(&("CHARTER_PERSONA".to_owned(), "steward".to_owned()))
+        ready.env.iter().find(|(n, _)| n == "PURLIS_PERSONA"),
+        Some(&("PURLIS_PERSONA".to_owned(), "steward".to_owned()))
     );
 }
 
@@ -281,9 +281,9 @@ fn the_profile_name_and_the_persona_ride_beside_the_kind_never_inside_charter_ha
             .map(|(_, v)| v.as_str())
     };
 
-    assert_eq!(of("CHARTER_HARNESS"), Some("claude-code"));
-    assert_eq!(of("CHARTER_HARNESS_PROFILE"), Some("work"));
-    assert_eq!(of("CHARTER_PERSONA"), Some("steward"));
+    assert_eq!(of("PURLIS_HARNESS"), Some("claude-code"));
+    assert_eq!(of("PURLIS_HARNESS_PROFILE"), Some("work"));
+    assert_eq!(of("PURLIS_PERSONA"), Some("steward"));
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn an_opencode_chat_starts_plain_and_resumes_by_its_session_flag() {
     assert!(
         ready
             .env
-            .contains(&("CHARTER_HARNESS".to_owned(), "opencode".to_owned())),
+            .contains(&("PURLIS_HARNESS".to_owned(), "opencode".to_owned())),
         "{:?}",
         ready.env
     );
@@ -513,8 +513,8 @@ fn a_persona_on_the_legacy_flat_layout_starts_because_the_picker_offers_it() {
     let ready = start::ready(&start, plane.root()).expect("a listed persona starts");
 
     assert_eq!(
-        ready.env.iter().find(|(n, _)| n == "CHARTER_PERSONA"),
-        Some(&("CHARTER_PERSONA".to_owned(), "devops".to_owned()))
+        ready.env.iter().find(|(n, _)| n == "PURLIS_PERSONA"),
+        Some(&("PURLIS_PERSONA".to_owned(), "devops".to_owned()))
     );
 }
 
@@ -902,8 +902,8 @@ fn a_chat_started_in_a_workspace_is_told_which_one() {
             ..plane.start("work")
         };
         let ready = start::ready(&start, plane.root()).expect("it starts");
-        assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), Some("alpha"), "{cwd}");
-        assert_eq!(env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"), None, "{cwd}");
+        assert_eq!(env_of(&ready, "PURLIS_WORKSPACE"), Some("alpha"), "{cwd}");
+        assert_eq!(env_of(&ready, "PURLIS_PLANE_ROOT_SESSION"), None, "{cwd}");
     }
 }
 
@@ -922,11 +922,11 @@ fn a_chat_started_at_the_plane_root_is_told_it_is_in_no_workspace() {
         };
         let ready = start::ready(&start, plane.root()).expect("it starts");
         assert_eq!(
-            env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"),
+            env_of(&ready, "PURLIS_PLANE_ROOT_SESSION"),
             Some("1"),
             "{cwd:?}"
         );
-        assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), None, "{cwd:?}");
+        assert_eq!(env_of(&ready, "PURLIS_WORKSPACE"), None, "{cwd:?}");
     }
 }
 
@@ -950,11 +950,11 @@ fn a_chat_started_anywhere_in_the_plane_outside_every_workspace_is_at_the_plane_
         };
         let ready = start::ready(&start, plane.root()).expect("it starts");
         assert_eq!(
-            env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"),
+            env_of(&ready, "PURLIS_PLANE_ROOT_SESSION"),
             Some("1"),
             "{cwd}"
         );
-        assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), None, "{cwd}");
+        assert_eq!(env_of(&ready, "PURLIS_WORKSPACE"), None, "{cwd}");
     }
 }
 
@@ -974,8 +974,8 @@ fn a_chat_started_outside_the_plane_is_pinned_to_nothing() {
 
     let ready = start::ready(&start, plane.root()).expect("it starts");
 
-    assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), None);
-    assert_eq!(env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"), None);
+    assert_eq!(env_of(&ready, "PURLIS_WORKSPACE"), None);
+    assert_eq!(env_of(&ready, "PURLIS_PLANE_ROOT_SESSION"), None);
 }
 
 // -------------------------------------------------------------------------------------

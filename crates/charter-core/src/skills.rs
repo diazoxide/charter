@@ -18,7 +18,7 @@ pub const DIR_IN_BUNDLE: &str = "skills";
 /// The variable a chat whose harness cannot load charter's skills is started with: the skills
 /// directory, which its `SessionStart` briefing then lists ([`listed_from`]). Set by the app for
 /// such a chat alone, so a harness that loads the skills itself is never briefed on them twice.
-pub const LISTED_ENV: &str = "CHARTER_SKILLS_DIR";
+pub const LISTED_ENV: &str = "PURLIS_SKILLS_DIR";
 
 /// One of charter's skills, as a chat is told about it.
 #[derive(Debug, Clone, PartialEq, Eq)]

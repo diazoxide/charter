@@ -246,7 +246,7 @@ pub fn only_ready(found: &[HarnessFound]) -> Option<Harness> {
 
 /// [`harnesses`] for this process: its environment, its home and its search path.
 pub fn harnesses_here() -> Vec<HarnessFound> {
-    let env = |name: &str| std::env::var(name).ok();
+    let env = crate::envvar::var;
     let home = crate::profiles::home();
     let dirs = crate::programs::search_dirs();
     harnesses(&Looking {

@@ -902,7 +902,7 @@ mod tests {
         // `place` answer about a plane that has nothing to do with this temp directory — so
         // the identity is asserted where it is the walk that answers, which is every ordinary
         // run, CI's included.
-        if std::env::var_os("CHARTER_ROOT").is_some_and(|it| !it.is_empty()) {
+        if charter_core::envvar::var_os("PURLIS_ROOT").is_some_and(|it| !it.is_empty()) {
             return;
         }
         let dir = tempfile::tempdir().expect("a directory");

@@ -12,14 +12,14 @@
 use std::path::{Path, PathBuf};
 
 /// The variable that moves `<data>`.
-pub const HOME_VAR: &str = "CHARTER_DATA_HOME";
+pub const HOME_VAR: &str = "PURLIS_DATA_HOME";
 
 /// `<data>`, from this process's environment.
 ///
 /// A fenced build is held here (charter-app#129): a test run that pins no data home of its own
 /// would append its throwaway chats' events to the operator's own log.
 pub fn root() -> Option<PathBuf> {
-    let found = root_in(&|name| std::env::var(name).ok())?;
+    let found = root_in(&crate::envvar::var)?;
     crate::fence::hold(crate::fence::Act::Store, &found);
     Some(found)
 }

@@ -49,7 +49,7 @@ pub fn instant(now: Option<&str>) -> chrono::DateTime<chrono::Utc> {
 }
 
 fn env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+    charter_core::envvar::var(name)
 }
 
 /// Run `handler` over the process's payload, plane and clock.

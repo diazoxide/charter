@@ -55,7 +55,7 @@ const DENY_EXIT: u8 = 2;
 
 /// `$CHARTER_HARNESS`: which harness this session is running under, as charter's own word for
 /// it. A7 reads it to decide whether an `agent_id` on the payload means a sub-agent.
-const HARNESS_ENV: &str = "CHARTER_HARNESS";
+const HARNESS_ENV: &str = "PURLIS_HARNESS";
 
 /// The plane's facts, owned, because [`Plane`] borrows them.
 struct Found {
@@ -88,7 +88,7 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
     let cwd = text(&data["cwd"]);
     let agent_id = data["agent_id"].as_str().map(str::to_owned);
     let permission_mode = data["permission_mode"].as_str().map(str::to_owned);
-    let harness = std::env::var(HARNESS_ENV).ok();
+    let harness = charter_core::envvar::var(HARNESS_ENV);
 
     // `config.ROOT`: `$CHARTER_ROOT`, then the marker walk up from the process's directory,
     // then — when nothing is found — the directory itself, which is what Python falls back to

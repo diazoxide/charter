@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use crate::worktree::git;
 
 /// Where a chat's environment names its project.
-const ROOT_ENV: &str = "CHARTER_ROOT";
+const ROOT_ENV: &str = "PURLIS_ROOT";
 
 /// The trailer naming who assisted: the harness and its model, or the kernel's bare `LLM`.
 pub const ASSISTED_BY: &str = "Assisted-by";

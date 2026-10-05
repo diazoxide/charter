@@ -20,7 +20,7 @@ impl Plane {
         std::fs::create_dir_all(root.join(".charter/vaults")).unwrap();
         std::fs::write(root.join(".charter/vaults/db.json"), "{\"k\": \"v\"}").unwrap();
         let mut env = HashMap::new();
-        env.insert("CHARTER_SESSION_ID".to_string(), "chat-1".to_string());
+        env.insert("PURLIS_SESSION_ID".to_string(), "chat-1".to_string());
         // The machine store a log's name is read from (FD-25): this fixture's own, holding no
         // device id until a test mints one, so a log is filed under the host `box`.
         let config = root.join("config-home");
@@ -305,7 +305,7 @@ fn a_message_to_a_persona_or_to_an_agent_dispatched_as_one_is_a_resume() {
 
 #[test]
 fn a_skill_use_is_logged_under_the_active_persona() {
-    let p = Plane::new().with_env("CHARTER_PERSONA", "ops");
+    let p = Plane::new().with_env("PURLIS_PERSONA", "ops");
     p.persona("ops", "role: Ops");
     p.ask(
         serde_json::json!({"tool_name": "Skill", "tool_input": {"skill": "charter:secrets"}}),
@@ -380,7 +380,7 @@ fn the_first_edit_in_a_live_workspaces_clone_is_told_the_flow_once() {
 
 #[test]
 fn every_twelfth_change_without_a_memory_re_surfaces_the_habit_and_a_memory_resets_it() {
-    let p = Plane::new().with_env("CHARTER_PERSONA", "ops");
+    let p = Plane::new().with_env("PURLIS_PERSONA", "ops");
     p.persona("ops", "role: Ops");
     let mut told = Vec::new();
     for i in 1..=24 {
@@ -459,7 +459,7 @@ fn approved_in(p: &Plane) -> PathBuf {
 
 #[test]
 fn the_active_personas_declared_tool_is_allowed_and_nothing_else_is() {
-    let p = Plane::new().with_env("CHARTER_PERSONA", "ops");
+    let p = Plane::new().with_env("PURLIS_PERSONA", "ops");
     p.persona("ops", "role: Ops\ntools: gh");
     let config = approved_in(&p);
     let p = p.with_env(crate::machine::HOME_VAR, &config.to_string_lossy());
@@ -474,14 +474,14 @@ fn the_active_personas_declared_tool_is_allowed_and_nothing_else_is() {
     assert_eq!(p.ask(bash("glab mr list"), persona_allow), None);
     // The ceiling was taken on the first ask, keyed on the payload's session.
     assert!(p.root.join(".charter/sessions/s-1.tools").is_file());
-    let outside = Plane::outside().with_env("CHARTER_PERSONA", "ops");
+    let outside = Plane::outside().with_env("PURLIS_PERSONA", "ops");
     outside.persona("ops", "tools: gh");
     assert_eq!(outside.ask(bash("gh pr list"), persona_allow), None);
 }
 
 #[test]
 fn a_declared_tool_in_a_plane_this_machine_never_approved_still_prompts() {
-    let p = Plane::new().with_env("CHARTER_PERSONA", "ops");
+    let p = Plane::new().with_env("PURLIS_PERSONA", "ops");
     p.persona("ops", "role: Ops\ntools: gh");
     let config = p.root.join(".config-home");
     std::fs::create_dir_all(&config).unwrap();
@@ -561,7 +561,7 @@ fn the_cadence_nudge_names_the_live_workspace_of_the_apps_chat_id_first() {
 fn a_plane_root_chat_is_never_nudged_toward_a_workspaces_memory() {
     // SI-1: a chat the app started at the plane root is in no workspace, and a `workspace
     // remember` there refuses. Its pointer would still name `alpha`; the root outranks it.
-    let p = Plane::new().with_env("CHARTER_PLANE_ROOT_SESSION", "1");
+    let p = Plane::new().with_env("PURLIS_PLANE_ROOT_SESSION", "1");
     live_alpha_for(&p, "chat-1");
     p.persona("ops", "role: ops");
     std::fs::write(
@@ -585,7 +585,7 @@ fn a_plane_root_chat_is_never_nudged_toward_a_workspaces_memory() {
 #[test]
 fn outside_the_app_the_cadence_nudge_keys_the_workspace_on_the_payloads_session() {
     let mut p = Plane::new();
-    p.env.remove("CHARTER_SESSION_ID");
+    p.env.remove("PURLIS_SESSION_ID");
     live_alpha_for(&p, "s-1");
     let said = twelfth(&p).unwrap();
     assert!(
@@ -593,7 +593,7 @@ fn outside_the_app_the_cadence_nudge_keys_the_workspace_on_the_payloads_session(
         "the nudge did not name workspace alpha"
     );
     // An empty `$CHARTER_SESSION_ID` is no id at all.
-    let p = p.with_env("CHARTER_SESSION_ID", "");
+    let p = p.with_env("PURLIS_SESSION_ID", "");
     std::fs::remove_file(p.root.join(".charter/sessions/s-1.memnudge")).unwrap();
     let said = twelfth(&p).unwrap();
     assert!(
