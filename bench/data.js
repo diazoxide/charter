@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791161025762,
+  "lastUpdate": 1791161883805,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1596,6 +1596,48 @@ window.BENCHMARK_DATA = {
             "value": 101.3306105,
             "unit": "ms",
             "extra": "median of 5 runs: 101.007, 101.093, 101.331, 101.633, 101.685 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "e6f44ed5e10f62fdb556131047567048a7aeed51",
+          "message": "KN-4 review: a verb on the archive's button, focus after Restore\n\n- The archive's catalogue row, and the heading button that draws it as a\n  glyph, now reads as a verb: \"Open alpha's archive\", \"Open steward's\n  archive\", \"Open the shared archive\". The tab it opens keeps its name\n  (`archiveTitle`).\n- After a Restore, focus moves to the status line that says what it did\n  (tabIndex -1), so a keyboard user is not left on a button that has gone.\n  A test asserts document.activeElement.\n- Hardening follow-up filed as #1194 (D-90c: fail closed) and added to #1191.\n\nRefs #716\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T04:46:13+04:00",
+          "tree_id": "8ac77cfc76762471c11cb2b0ddac55d14ab34320",
+          "url": "https://github.com/diazoxide/charter/commit/e6f44ed5e10f62fdb556131047567048a7aeed51"
+        },
+        "date": 1791161882708,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.46993150000000006,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.455, 0.463, 0.470, 0.472, 0.491 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.3554645,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.165, 16.307, 16.355, 16.399, 16.562 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.0739225,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.580, 101.041, 102.074, 102.101, 102.231 ms"
           }
         ]
       }
