@@ -102,8 +102,10 @@ pub fn real(ctx: &Ctx, asking: Asking) -> Option<Reach> {
         return Some(Reach::Every(store));
     }
     let store: Box<dyn Store> = match asking {
+        // Dialogs that cannot be turned off leave every item unread, and every vault waiting for
+        // the person to finish it, rather than let the system ask.
         Asking::Never => Box::new(Quiet {
-            off: keyring::DialogsOff::now().ok()?,
+            off: keyring::DialogsOff::now(),
             store,
         }),
         Asking::Allowed => store,
@@ -118,34 +120,46 @@ pub fn real(ctx: &Ctx, asking: Asking) -> Option<Reach> {
     })
 }
 
-/// A store whose dialogs are off while it lives.
+/// A store whose dialogs are off while it lives. When they could not be turned off it reads
+/// and writes nothing: every call answers [`Kind::WouldAsk`].
 struct Quiet {
     store: Box<dyn Store>,
-    #[allow(dead_code)]
-    off: keyring::DialogsOff,
+    off: Result<keyring::DialogsOff, VaultError>,
+}
+
+impl Quiet {
+    fn on(&self) -> Result<&dyn Store, VaultError> {
+        match &self.off {
+            Ok(_) => Ok(&*self.store),
+            Err(e) => Err(VaultError::would_ask(format!(
+                "{}; so that the system asks nothing, nothing was read",
+                e.message
+            ))),
+        }
+    }
 }
 
 impl Store for Quiet {
     fn get(&self, service: &str, account: &str) -> Result<Option<keyring::Secret>, VaultError> {
-        self.store.get(service, account)
+        self.on()?.get(service, account)
     }
     fn set(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
-        self.store.set(service, account, value)
+        self.on()?.set(service, account, value)
     }
     fn delete(&self, service: &str, account: &str) -> Result<bool, VaultError> {
-        self.store.delete(service, account)
+        self.on()?.delete(service, account)
     }
     fn holds(&self) -> bool {
         self.store.holds()
     }
     fn rehold(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
-        self.store.rehold(service, account, value)
+        self.on()?.rehold(service, account, value)
     }
     fn make_fresh(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
-        self.store.make_fresh(service, account, value)
+        self.on()?.make_fresh(service, account, value)
     }
     fn make_own(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
-        self.store.make_own(service, account, value)
+        self.on()?.make_own(service, account, value)
     }
 }
 
@@ -300,8 +314,9 @@ pub(super) fn copy_plane(
     }
     let Some(reach) = (seams.keyring)(&ctx, asking) else {
         moved.note(format!(
-            "{}: its keychain items stay under '{}…' for now: reading them here would make the \
-             system ask you for each, so the app copies them at its next launch",
+            "{}: its keychain items stay under '{}…' for now: the keychain could not be reached \
+             here without the system asking you for each, so the app copies them at its next \
+             launch",
             plane.display(),
             KEYCHAIN_PREFIX.reads[0]
         ));
@@ -362,12 +377,17 @@ struct Copy<'a> {
 }
 
 /// What a vault or record that waits is said with.
-fn waits(moved: &mut Moved, waiting: Waiting, what: &str, stays: &str) {
+fn waits(moved: &mut Moved, waiting: Waiting, what: &str, stays: &str, its_own: bool) {
+    let then = if its_own {
+        "the app offers to finish moving it"
+    } else {
+        "it waits for you to finish moving it from the window"
+    };
     moved.waits(
         waiting,
         format!(
-            "{what}: waits to move: reading its items would make the system ask you for each, \
-             so it was left for you to finish; {stays}"
+            "{what}: waits to move: reading its items here could make the system ask you for \
+             each, so {then}; {stays}"
         ),
     );
 }
@@ -397,7 +417,7 @@ impl Copy<'_> {
                         identity: false,
                         items: keys.len(),
                     };
-                    return waits(moved, waiting, &what, &stays);
+                    return waits(moved, waiting, &what, &stays, self.its_own);
                 }
                 Err(Miss::Failed(why)) => {
                     moved.failed(format!("{what}: {why}; {stays}"));
@@ -456,7 +476,7 @@ impl Copy<'_> {
                         identity: true,
                         items: ids.len(),
                     };
-                    return waits(moved, waiting, &what, &stays);
+                    return waits(moved, waiting, &what, &stays, self.its_own);
                 }
                 Err(Miss::Failed(why)) => {
                     moved.failed(format!("{what}: {why}; {stays}"));
@@ -692,5 +712,33 @@ pub(super) fn rebase_back(
         )),
         Ok(false) => {}
         Err(e) => moved.failed(format!("{what}: {}", e.message)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_store_whose_dialogs_could_not_be_turned_off_reads_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let under = keyring::FileStore::at(dir.path().join("stub.json"));
+        under.set("charter/ops/1", "K", "v").unwrap();
+        let quiet = Quiet {
+            store: Box::new(keyring::FileStore::at(dir.path().join("stub.json"))),
+            off: Err(VaultError::new("the dialogs could not be turned off")),
+        };
+
+        let read = quiet.get("charter/ops/1", "K").unwrap_err();
+        let wrote = quiet.make_fresh("purlis/ops/1", "K", "v").unwrap_err();
+
+        assert_eq!(read.kind, Kind::WouldAsk);
+        assert!(
+            read.message.contains("could not be turned off"),
+            "{}",
+            read.message
+        );
+        assert_eq!(wrote.kind, Kind::WouldAsk);
+        assert!(under.get("purlis/ops/1", "K").unwrap().is_none());
     }
 }

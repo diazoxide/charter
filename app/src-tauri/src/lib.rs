@@ -2300,14 +2300,20 @@ pub fn run() {
             };
             #[cfg(feature = "e2e")]
             let waiting = Vec::new();
-            app.manage(vaultswaiting::VaultsWaiting::of(waiting));
             // From here on this app holds the config home: no rename-local of a later launch,
             // or of a terminal, moves it while the app runs.
+            let mut holds_the_config_home = false;
             if let Some(root) = charter_core::machine::config_root()
                 && let Some(held) = charter_core::renamelocal::busy::hold_shared(&root)
             {
                 app.manage(HoldsTheConfigHome(held));
+                holds_the_config_home = true;
             }
+            // A finish leans on that lock, and is refused without it.
+            app.manage(vaultswaiting::VaultsWaiting::of(
+                waiting,
+                holds_the_config_home,
+            ));
             // How this launch stands with the session bus, for the window's notice
             // (`portal.rs`): nothing to say on one that has it.
             app.manage(portal::SessionBus::of(

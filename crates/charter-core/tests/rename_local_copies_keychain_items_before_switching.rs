@@ -596,6 +596,19 @@ impl Store for Holding {
         }
         self.set(service, account, value)
     }
+    /// A terminal's copy: made by this process, so never written into an item it did not make.
+    fn make_own(&self, service: &str, account: &str, value: &str) -> Result<Held, VaultError> {
+        if self
+            .foreign
+            .iter()
+            .any(|(s, a)| s == service && a == account)
+        {
+            return Err(VaultError::new("another program's item is there"));
+        }
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.under.set(service, account, value)?;
+        Ok(Held::NotYet)
+    }
 }
 
 fn holding(ctx: &Ctx, answer: fn(bool) -> Held) -> Box<dyn Store> {
@@ -1273,6 +1286,14 @@ fn a_terminal_leaves_a_vault_of_its_own_whose_items_would_ask_waiting() {
     assert_eq!(keychain.asked(), 0);
     assert_eq!(service(&m), old);
     assert_eq!(moved.waiting.len(), 1, "{:#?}", moved.said);
+    assert!(
+        moved
+            .said
+            .iter()
+            .any(|l| l.contains("waits") && l.contains("the app offers to finish moving it")),
+        "{:#?}",
+        moved.said
+    );
     reads_everything(&m);
 }
 
@@ -1299,4 +1320,105 @@ fn a_vault_the_person_does_not_allow_while_finishing_still_waits_and_keeps_worki
     assert_eq!(keychain.asked(), 1);
     assert_eq!(service(&m), old);
     reads_everything(&m);
+}
+
+#[test]
+fn from_a_terminal_another_programs_item_where_a_copy_was_journalled_is_never_written_into() {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    let new = old.replacen("charter/", "purlis/", 1);
+    journal(
+        &m,
+        &json!({"op": "copied", "service": new, "account": "API_TOKEN"}),
+    );
+    stub(&m.plane).set(&new, "API_TOKEN", "planted").unwrap();
+    let planted = vec![(new.clone(), "API_TOKEN".to_owned())];
+    let terminal = move |ctx: &Ctx, _: Asking| {
+        Some(Reach::ItsOwn(holding_with(
+            ctx,
+            |_| Held::NotYet,
+            planted.clone(),
+        )))
+    };
+    let seams = Seams {
+        keyring: &terminal,
+        ..nobody_running()
+    };
+
+    let moved = renamelocal::run(&m.local, &seams);
+
+    assert!(
+        failures(&moved)
+            .iter()
+            .any(|l| l.contains("vault 'ops'") && l.contains("another program's item")),
+        "{:#?}",
+        moved.said
+    );
+    assert_eq!(service(&m), old);
+    assert_eq!(item(&m, &new, "API_TOKEN").as_deref(), Some("planted"));
+    reads_everything(&m);
+
+    assert!(renamelocal::undo(&m.local, &seams).complete);
+    assert_eq!(item(&m, &new, "API_TOKEN").as_deref(), Some("planted"));
+    assert_eq!(service(&m), old);
+}
+
+#[test]
+fn from_a_terminal_another_programs_item_where_the_undo_copies_back_a_new_key_is_never_written_into()
+ {
+    charter_core::unsteered!();
+    let m = machine();
+    let old = service(&m);
+    let plain = Keychain::default().in_a_terminal();
+    let moved = renamelocal::run(
+        &m.local,
+        &Seams {
+            keyring: &plain,
+            ..nobody_running()
+        },
+    );
+    assert!(moved.complete, "{:#?}", moved.said);
+    let new = service(&m);
+    assert_ne!(new, old);
+    let (ctx, ops) = (ctx(&m.plane), vault(&m.plane, "ops"));
+    keyring::set_with(
+        &stub(&m.plane),
+        &ctx,
+        &ops,
+        "NEW_KEY",
+        "added-5",
+        "2026-10-06T09:00:00Z",
+    )
+    .unwrap();
+    stub(&m.plane).set(&old, "NEW_KEY", "planted").unwrap();
+    let planted = vec![(old.clone(), "NEW_KEY".to_owned())];
+    let terminal = move |ctx: &Ctx, _: Asking| {
+        Some(Reach::ItsOwn(holding_with(
+            ctx,
+            |_| Held::NotYet,
+            planted.clone(),
+        )))
+    };
+    let seams = Seams {
+        keyring: &terminal,
+        ..nobody_running()
+    };
+
+    let undone = renamelocal::undo(&m.local, &seams);
+
+    assert!(!undone.complete, "{:#?}", undone.said);
+    assert!(
+        failures(&undone)
+            .iter()
+            .any(|l| l.contains("another program's item")),
+        "{:#?}",
+        undone.said
+    );
+    assert_eq!(item(&m, &old, "NEW_KEY").as_deref(), Some("planted"));
+    assert_eq!(service(&m), new);
+    assert_eq!(
+        keyring::get(&self::ctx(&m.plane), &ops, "NEW_KEY").unwrap(),
+        "added-5"
+    );
 }

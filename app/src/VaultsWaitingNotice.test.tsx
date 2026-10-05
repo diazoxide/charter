@@ -34,7 +34,7 @@ afterEach(() => {
 
 describe("the notice about vaults that wait to move", () => {
   it("is not drawn when nothing waits", async () => {
-    const { asked } = core(null, { left: null, said: [] });
+    const { asked } = core(null, { left: null, failed: 0 });
 
     render(<VaultsWaitingNotice />);
 
@@ -43,7 +43,7 @@ describe("the notice about vaults that wait to move", () => {
   });
 
   it("says how many vaults wait and that macOS asks once per secret, and copies nothing by itself", async () => {
-    const { asked } = core(TWO, { left: null, said: [] });
+    const { asked } = core(TWO, { left: null, failed: 0 });
 
     render(<VaultsWaitingNotice />);
 
@@ -55,7 +55,7 @@ describe("the notice about vaults that wait to move", () => {
   });
 
   it("finishes moving them on the press, and goes once every one moved", async () => {
-    const { asked } = core(TWO, { left: null, said: ["✓ vault 'ops': moved"] });
+    const { asked } = core(TWO, { left: null, failed: 0 });
     render(<VaultsWaitingNotice />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Finish moving 2 vaults" }));
@@ -64,27 +64,37 @@ describe("the notice about vaults that wait to move", () => {
     expect(asked.filter((cmd) => cmd === "finish_moving_vaults")).toHaveLength(1);
   });
 
-  it("stays, says why, and offers the press again when a secret was not allowed", async () => {
-    core(TWO, {
-      left: { vaults: 1, items: 2 },
-      said: [
-        "✓ vault 'team': moved",
-        "✗ vault 'ops': the user did not allow it; it still reads its secrets under the old name",
-      ],
-    });
+  it("stays with a short line, and offers the press again, when one could not be moved", async () => {
+    core(TWO, { left: { vaults: 1, items: 2 }, failed: 1 });
     render(<VaultsWaitingNotice />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Finish moving 2 vaults" }));
 
     const again = await screen.findByRole("button", { name: "Finish moving 1 vault" });
     const notice = screen.getByRole("status");
-    expect(notice.textContent).toContain("did not allow");
-    expect(notice.textContent).not.toContain("✓");
+    expect(notice.textContent).toContain("One could not be moved");
+    expect(notice.textContent).toContain("log");
     expect(again).toBeTruthy();
   });
 
+  it("says a refused finish in one line", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "vaults_to_move") return TWO;
+      if (cmd === "finish_moving_vaults") throw "Nothing was moved; the app's log says why.";
+      return null;
+    });
+    render(<VaultsWaitingNotice />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Finish moving 2 vaults" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("Nothing was moved"),
+    );
+    expect(screen.getByRole("button", { name: "Finish moving 2 vaults" })).toBeTruthy();
+  });
+
   it("can be dismissed", async () => {
-    core(TWO, { left: null, said: [] });
+    core(TWO, { left: null, failed: 0 });
     render(<VaultsWaitingNotice />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
