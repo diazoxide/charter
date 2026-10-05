@@ -8,7 +8,7 @@ use crate::names;
 /// The OLD name of the file that marks a directory as a plane root, which the call sites not yet
 /// moved onto [`crate::names`] still join. A plane is recognised by either name ([`is_plane`]);
 /// [`manifest`] says which file a plane's manifest is.
-pub const MANIFEST: &str = "charter.toml";
+pub const MANIFEST: &str = names::PLANE_MANIFEST.reads[0];
 
 /// Whether `dir` is a plane root: it holds a `purlis.toml` or a `charter.toml` FILE.
 pub fn is_plane(dir: &Path) -> bool {

@@ -887,13 +887,18 @@ mod nofollow_tests {
 /// Where a plane keeps data charter writes. A path that resolves outside all of them is
 /// refused, however legal its name.
 /// The directories a control plane keeps data in, as `charter/contain.py:data_roots` lists
-/// them: `personas/`, `workspaces/` and `.charter/persona-state`.
+/// them: `personas/`, `workspaces/` and [`PERSONA_STATE`] in the plane's state folder
+/// (`.purlis/` or, before the rename reaches the plane, `.charter/`: [`crate::names::state`]).
 ///
-/// **`persona-state` and not `.charter`.** Ephemeral persona memory is data charter is
+/// **`persona-state` and not the state folder.** Ephemeral persona memory is data charter is
 /// supposed to read and it lives under the secrets home, which is the whole reason this is a
-/// list of data directories rather than "the plane, minus `.charter/`". Allowing `.charter`
-/// wholesale would put the vaults and every other piece of plane state inside the allowlist.
-const DATA_DIRS: [&str; 3] = ["personas", "workspaces", ".charter/persona-state"];
+/// list of data directories rather than "the plane, minus `.charter/`". Allowing the state
+/// folder wholesale would put the vaults and every other piece of plane state inside the
+/// allowlist.
+const DATA_DIRS: [&str; 2] = ["personas", "workspaces"];
+
+/// The data directory inside the plane's state folder.
+const PERSONA_STATE: &str = "persona-state";
 
 /// A write charter refused, with the reason the operator sees.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -962,6 +967,7 @@ fn contained(
     let inside = DATA_DIRS
         .iter()
         .map(|dir| base.join(dir))
+        .chain([crate::names::state(&base).join(PERSONA_STATE)])
         .any(|allowed| lands.starts_with(&allowed));
     if inside {
         Ok(())

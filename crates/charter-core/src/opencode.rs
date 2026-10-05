@@ -75,7 +75,7 @@ use std::path::{Path, PathBuf};
 pub const SHIM_IN_BUNDLE: &str = "opencode/charter.ts";
 
 /// The shim's file name, in the bundle and in opencode's plugin directory alike.
-pub const FILE_NAME: &str = "charter.ts";
+pub const FILE_NAME: &str = crate::names::OPENCODE_SHIM.reads[0];
 
 /// The variable opencode reads a whole config from, merged over every other config it reads.
 pub const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
@@ -102,7 +102,7 @@ pub fn is_own(text: &str) -> bool {
 /// The first line of the retired Python charter's shim (`charter/harness/opencode.py`), which
 /// `charter plugin install` replaces: it is charter's own artifact, and two shims would guard
 /// every tool call twice and brief every chat twice.
-pub const PYTHON_MARK: &str = "// charter-version: ";
+pub const PYTHON_MARK: &str = crate::names::OPENCODE_MARK.history[0];
 
 /// One opencode tool: its id, the name charter's guards match it by, and the words its calls
 /// are forwarded to before and after they run.
