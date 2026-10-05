@@ -53,18 +53,18 @@ pub enum FixId {
     /// git would commit `charter.local.toml`. It refuses a file git already tracks: an ignore
     /// line does not untrack it, and charter never runs `git rm` for you.
     LocalIgnore,
-    /// `charter persona optimize --all --apply` and `charter workspace optimize --all --apply`,
-    /// for each kind of memory that has a file its `MEMORY.md` does not list. It appends a link
-    /// line to `MEMORY.md` for each such file. It moves each extra copy of a memory that is an
-    /// exact duplicate of another into `memory/archive/`, where `unarchive` brings it back. It
-    /// deletes nothing and edits no memory's text; everything else stays a proposal. Offered
+    /// Repairs each memory index: appends one link line to `MEMORY.md` for each memory file it
+    /// does not list, the index repair `charter persona|workspace optimize --apply` makes. Every
+    /// line already in the index is kept, and no memory is moved, merged or edited. Collapsing
+    /// exact duplicates stays with `optimize --apply`, which you run when you mean it. Offered
     /// by the `memory indexes` row when a memory is unindexed.
     MemoryOptimize,
     /// `charter discover`: asks each forge `charter.toml` declares which repos it lists. It
     /// adds them to `inventory/repos.json`, keeping every repo already there. It rewrites
     /// charter's generated `docs/topology.md`, and the span between charter's markers in
     /// `README.md` when there is one. Offered by the `inventory` row when the inventory is
-    /// empty and the project declares a forge.
+    /// empty and the project declares a forge. Applied only by name ([`FixId::by_name_only`]):
+    /// it goes over the network, so bare `charter doctor --fix` never runs it.
     Discover,
 }
 
@@ -87,6 +87,14 @@ impl FixId {
             Self::MemoryOptimize => "memory-optimize",
             Self::Discover => "discover",
         }
+    }
+
+    /// Whether this fix runs only when it is named — `charter doctor --fix <id>`, or its Fix
+    /// button — and never from a bare `charter doctor --fix` (D-FX2-9). The fixes bare `--fix`
+    /// applies are local and additive; `discover` asks a forge over the network and writes the
+    /// inventory and the docs, so it waits to be asked.
+    pub const fn by_name_only(self) -> bool {
+        matches!(self, Self::Discover)
     }
 
     /// The fix an id names, or `None` for an id that names no fix.
@@ -135,7 +143,7 @@ impl Fixed {
 /// `charter plugin install` does. The window names its own `charter` with [`apply_for`].
 pub fn apply(root: &Path, id: FixId) -> Fixed {
     if id == FixId::PluginInstall {
-        return match this_machine() {
+        return match this_machine(None) {
             Ok(machine) => apply_for(root, id, &machine),
             Err(why) => Fixed::Refused(why),
         };
@@ -172,12 +180,20 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
 }
 
 /// This machine as `charter plugin install` finds it: this binary, by its resolved path, and
-/// the plugin shipped beside it.
-fn this_machine() -> Result<crate::plugin_install::Machine, String> {
+/// the plugin `plugin_from` names, else the one shipped beside this binary. The CLI's
+/// `plugin install` and this registry's `plugin-install` both build it here, so the two install
+/// the same copy.
+pub fn this_machine(plugin_from: Option<&Path>) -> Result<crate::plugin_install::Machine, String> {
     let binary = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|e| format!("cannot tell where this charter is, so no hook could name it: {e}"))?;
-    let bundle = crate::plugin_install::bundle_beside(&binary);
+    let bundle = match plugin_from {
+        Some(dir) => Some(
+            dir.canonicalize()
+                .map_err(|e| format!("--plugin-from {}: {e}", dir.display()))?,
+        ),
+        None => crate::plugin_install::bundle_beside(&binary),
+    };
     crate::plugin_install::Machine::from_env(binary, bundle)
 }
 
@@ -194,6 +210,14 @@ fn plugin_install(machine: &crate::plugin_install::Machine) -> Fixed {
 }
 
 fn local_ignore(root: &Path) -> Fixed {
+    if crate::scaffold::gitignore_is_a_link(root) {
+        return Fixed::Refused(
+            "this project's .gitignore is a symbolic link, which git does not read, so a line \
+             added to it would change nothing; nothing was written. Replace the link with a \
+             real .gitignore, then run the fix again."
+                .to_owned(),
+        );
+    }
     let check = crate::profiles::ignore_check(root);
     if check.passes() {
         return Fixed::Ran {
@@ -227,54 +251,36 @@ fn local_ignore(root: &Path) -> Fixed {
 }
 
 fn memory_optimize(root: &Path) -> Fixed {
-    let kinds = super::memory::unindexed_kinds(root);
-    if kinds.is_empty() {
+    let bases = super::memory::unindexed_bases(root);
+    if bases.is_empty() {
         return Fixed::Ran {
             said: vec!["✓ every memory is in its index — nothing to do.".to_owned()],
             complete: true,
         };
     }
-    let today = chrono::Local::now().date_naive();
     let mut said: Vec<String> = Vec::new();
-    let mut code = 0;
-    let mut sink = |line: crate::repocmd::Say| {
-        said.extend(line.to_string().lines().map(str::to_owned));
-    };
-    if kinds.contains("persona") {
-        let ask = crate::personaverbs::upkeep::Optimize {
-            name: None,
-            all: true,
-            apply: true,
-            stale_days: STALE_DAYS,
-            today,
-        };
-        code |= crate::personaverbs::upkeep::optimize(root, &ask, &mut || {}, &mut sink);
+    let mut read = true;
+    for (label, dir) in &bases {
+        match crate::curate::link_unindexed(root, dir) {
+            Ok(actions) => said.extend(actions.iter().map(|a| format!("✓ {label}: {a}"))),
+            Err(unread) => {
+                read = false;
+                for (path, code) in &unread {
+                    said.push(format!(
+                        "✗ {}",
+                        crate::memstore::cannot_check(root, path, *code)
+                    ));
+                }
+            }
+        }
     }
-    if kinds.contains("workspace") {
-        let names = crate::recall::read_workspaces(root)
-            .map(|(names, _)| names)
-            .unwrap_or_default();
-        code |= crate::curate::optimize_workspaces(
-            root,
-            &names,
-            true,
-            STALE_DAYS,
-            today,
-            &mut || {},
-            &mut sink,
-        );
-    }
-    // Complete only when nothing is left unindexed: a store whose index could not be written
-    // says so in `said` and still answers 0.
-    let left = super::memory::unindexed_kinds(root);
+    // Complete only when nothing is left unindexed: an index that could not be written says so
+    // in `said` without failing the call.
     Fixed::Ran {
-        said: said.into_iter().filter(|line| !line.is_empty()).collect(),
-        complete: code == 0 && left.is_empty(),
+        said,
+        complete: read && super::memory::unindexed_bases(root).is_empty(),
     }
 }
-
-/// The age past which `optimize` proposes a memory for review: the commands' default.
-const STALE_DAYS: i64 = 90;
 
 fn discover(root: &Path) -> Fixed {
     let mut said: Vec<String> = Vec::new();

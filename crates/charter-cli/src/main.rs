@@ -264,10 +264,11 @@ enum Command {
         preflight: bool,
         /// Repair first, then report. With no ID: install charter's plugin for chats started
         /// outside the app (the `plugin-install` fix, what `charter plugin install` does),
-        /// apply every other fix the doctor's rows offer, and add the plane's default ask rule
-        /// for `charter report --yes` when it is missing (what `charter guard ask` does). With
-        /// an ID (the `fix` a row carries in `--json`): apply that fix alone. What each
-        /// changed, or why it was refused, is printed on stderr.
+        /// apply the local fixes the doctor's rows offer (`reinit`, `local-ignore`,
+        /// `memory-optimize`), and add the plane's default ask rule for `charter report --yes`
+        /// when it is missing (what `charter guard ask` does). `discover` goes over the network,
+        /// so it runs only by name. With an ID (the `fix` a row carries in `--json`): apply that
+        /// fix alone. What each changed, or why it was refused, is printed on stderr.
         #[arg(
             long,
             value_name = "ID",
@@ -2989,18 +2990,9 @@ fn promote_todo(
 fn plugin_machine(
     from: Option<&std::path::Path>,
 ) -> Result<charter_core::plugin_install::Machine, String> {
-    use charter_core::plugin_install as install;
-    let binary = std::env::current_exe()
-        .and_then(|p| p.canonicalize())
-        .map_err(|e| format!("cannot tell where this charter is, so no hook could name it: {e}"))?;
-    let bundle = match from {
-        Some(dir) => Some(
-            dir.canonicalize()
-                .map_err(|e| format!("--plugin-from {}: {e}", dir.display()))?,
-        ),
-        None => install::bundle_beside(&binary),
-    };
-    install::Machine::from_env(binary, bundle)
+    // The core's, so `charter plugin install` and the doctor's `plugin-install` fix build one
+    // machine the one way.
+    charter_core::doctor::fix::this_machine(from)
 }
 
 /// `charter plugin install|uninstall`: needs no plane, and acts on this machine's harnesses.
@@ -3426,9 +3418,9 @@ fn with_here(f: impl FnOnce(&Here) -> u8) -> ExitCode {
 ///
 /// `--fix` repairs before it reports, so the report reads as the state after the repair, as
 /// Python's did when it installed the Claude Code plugin first. Bare `--fix` applies charter's
-/// plugin install (#373) and every fix the rows offer (the fix registry, FX-1 and FX-2), then
-/// the plane's ask rule for `charter report --yes` (ADR 0059); `--fix <id>` applies that one
-/// fix alone.
+/// plugin install (#373) and every fix the rows offer that is not `by_name_only` (the fix
+/// registry, FX-1 and FX-2), then the plane's ask rule for `charter report --yes` (ADR 0059);
+/// `--fix <id>` applies that one fix alone, `discover` included.
 ///
 /// `fix` is `None` without `--fix`, `Some(None)` for a bare `--fix`, and `Some(Some(id))` for
 /// one fix.
@@ -3454,9 +3446,12 @@ fn doctor(json: bool, preflight: bool, fix: Option<Option<&str>>) -> ExitCode {
         let ids = match asked {
             // clap took only an id the registry has.
             Some(id) => FixId::parse(id).into_iter().collect(),
+            // Bare: the local, additive fixes only. A fix that goes over the network runs
+            // only when it is named (`FixId::by_name_only`, D-FX2-9).
             None => {
                 let mut ids = doctor.fixes();
                 ids.push(FixId::PluginInstall);
+                ids.retain(|id| !id.by_name_only());
                 ids.sort();
                 ids.dedup();
                 ids

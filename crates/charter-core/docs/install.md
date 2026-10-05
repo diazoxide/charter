@@ -113,29 +113,31 @@ either one to one harness.
 whether the `charter` its hooks run still exists (`plugin files`), and names every settings
 file that still enables `charter@charter` (`superseded plugin`).
 
-`charter doctor --fix` repairs first, printing each change on stderr, and then reports. It
-makes these repairs:
+`charter doctor --fix` repairs first, printing each change on stderr, and then reports.
+Bare `--fix` makes the local repairs, which only add what is missing:
 
 - **Plugin install** (`plugin-install`). It runs `charter plugin install`, which writes this
   machine's harness configuration and no project file. Bare `--fix` always runs it, once, even
   when the `plugin install`, `plugin` and `plugin files` rows all offer it.
-- **Every other fix a row offers.** Each one adds what is missing and never removes or replaces
+- **Every local fix a row offers.** Each one adds what is missing and never removes or replaces
   your content:
   - `reinit`, offered when a baseline folder is missing.
   - `local-ignore`, offered when git would commit `charter.local.toml`. It appends the one
     line `/charter.local.toml` to `.gitignore`. When git already tracks the file, it refuses,
     because an ignore line does not untrack a file. Run `git rm --cached charter.local.toml`
-    and commit that removal yourself.
-  - `memory-optimize`, offered when a memory is missing from its `MEMORY.md`. It runs
-    `charter persona optimize --all --apply` and `charter workspace optimize --all --apply`
-    for the kinds of memory that need it. It adds a link line to `MEMORY.md` for each memory
-    that has none. It moves extra exact-duplicate copies into `memory/archive/`, where
-    `unarchive` restores them.
-  - `discover`, offered when the inventory is empty and `charter.toml` declares a forge. It
-    runs `charter discover`, which asks that forge, adds the repos it lists to
-    `inventory/repos.json`, and rewrites charter's generated `docs/topology.md`.
+    and commit that removal yourself. It is not offered when `.gitignore` is a symbolic link,
+    which git does not read.
+  - `memory-optimize`, offered when a memory is missing from its `MEMORY.md`. It appends a link
+    line to `MEMORY.md` for each memory that has none, and changes nothing else. Collapsing
+    exact duplicates stays with `charter persona optimize --apply` and
+    `charter workspace optimize --apply`.
 - **The report ask rule.** It adds the project's ask rule for `charter report --yes` when that
   rule is missing, as `charter guard ask` does.
+
+**`discover` runs only by name**, as `charter doctor --fix discover` or the inventory row's
+Fix button, because it goes over the network. It is offered when the inventory is empty and
+`charter.toml` declares a forge. It runs `charter discover`, which asks that forge, adds the
+repos it lists to `inventory/repos.json`, and rewrites charter's generated `docs/topology.md`.
 
 `charter doctor --fix <id>` applies only the fix a row names: `charter doctor --json` prints
 that id as the row's `fix`, and `charter doctor --help` lists the ids. Each fix says what it

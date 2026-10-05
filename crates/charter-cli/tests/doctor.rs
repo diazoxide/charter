@@ -442,3 +442,84 @@ fn fix_plugin_install_where_charter_cannot_tell_the_harnesses_is_refused() {
     assert!(said.contains("CLAUDE_CONFIG_DIR"), "{said}");
     assert!(!home.join(".codex/config.toml").exists(), "{said}");
 }
+
+/// A plane that declares a forge and has an empty inventory, a home with a git identity, and a
+/// stand-in `gh` first on `PATH` that writes down every call and answers one org of one repo.
+/// Returns the `PATH` to run with and the log the stand-in writes.
+fn forge_plane(root: &Path) -> (String, PathBuf) {
+    std::fs::write(
+        root.join("charter.toml"),
+        "schema = 1\n\n[[forge]]\nkind = \"github\"\nowner = \"acme\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("home/.gitconfig"),
+        "[user]\n\tname = Fixture User\n\temail = fixture@example.invalid\n",
+    )
+    .unwrap();
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = root.join("gh-calls.log");
+    let repos = r#"[{"id": 11, "name": "widget", "full_name": "acme/widget", "default_branch": "main", "description": "", "html_url": "https://github.com/acme/widget", "ssh_url": "git@github.com:acme/widget.git", "topics": []}]"#;
+    stand_in::program(
+        &bin,
+        "gh",
+        &format!(
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$*\" >> '{log}'\n\
+             case \"$*\" in\n\
+             \"auth status --hostname github.com\") exit 0;;\n\
+             \"api --hostname github.com orgs/acme/repos?per_page=100&page=1\") echo '{repos}'; exit 0;;\n\
+             esac\n\
+             exit 1\n",
+            log = log.display(),
+        ),
+    );
+    (format!("{}:/usr/bin:/bin", bin.display()), log)
+}
+
+#[test]
+fn bare_fix_never_runs_discover_and_exits_zero() {
+    // Discover goes over the network and writes the inventory and the docs: it runs only when
+    // it is named (D-FX2-9).
+    let (_d, root) = plane();
+    let (path, log) = forge_plane(&root);
+    let home = root.join("home");
+    let vars = [
+        ("PATH", path.as_str()),
+        ("CHARTER_CONFIG_HOME", root.to_str().unwrap()),
+    ];
+    let before = rows(&doctor_with(&root, &home, &["--json"], &vars));
+    assert_eq!(row(&before, "inventory")["fix"], "discover");
+
+    let out = doctor_with(&root, &home, &["--json", "--fix"], &vars);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(!said.contains("fix discover"), "{said}");
+    let asked = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(!asked.contains("repos"), "the forge was asked: {asked}");
+    assert!(!root.join("inventory/repos.json").exists(), "{said}");
+}
+
+#[test]
+fn fix_discover_by_name_asks_the_forge_and_builds_the_inventory() {
+    let (_d, root) = plane();
+    let (path, log) = forge_plane(&root);
+    let home = root.join("home");
+    let vars = [
+        ("PATH", path.as_str()),
+        ("CHARTER_CONFIG_HOME", root.to_str().unwrap()),
+    ];
+
+    let out = doctor_with(&root, &home, &["--json", "--fix", "discover"], &vars);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix discover:"), "{said}");
+    assert!(said.contains("Wrote 1 repos"), "{said}");
+    let asked = std::fs::read_to_string(&log).unwrap();
+    assert!(asked.contains("orgs/acme/repos"), "{asked}");
+    let inventory = std::fs::read_to_string(root.join("inventory/repos.json")).unwrap();
+    assert!(inventory.contains("\"widget\""), "{inventory}");
+    assert_eq!(row(&rows(&out), "inventory")["status"], "ok");
+}

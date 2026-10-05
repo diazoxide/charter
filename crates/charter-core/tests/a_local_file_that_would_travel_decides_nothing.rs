@@ -272,7 +272,7 @@ fn the_project_settings_tab_says_why_the_local_file_is_not_read_and_the_fix() {
     assert!(
         read.refusals.contains(
             &"git would commit charter.local.toml, so charter reads nothing in it until it \
-              is ignored — charter reinit adds /charter.local.toml to .gitignore."
+              is ignored — charter doctor --fix local-ignore adds /charter.local.toml to .gitignore."
                 .to_owned()
         ),
         "{:?}",
