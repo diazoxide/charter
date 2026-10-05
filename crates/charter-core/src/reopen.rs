@@ -303,7 +303,8 @@ pub struct View {
     pub from: Option<String>,
     /// Which view of theirs.
     pub view: String,
-    /// What it is about inside that: a persona's name, or empty for the whole plane.
+    /// What it is about inside that: a persona's name, or empty for the whole plane — or, for
+    /// one of charter's own views keyed by a path of names, that view's shape ([`own_key_ok`]).
     pub key: String,
     /// What its tab said, so a tab whose source has gone still comes back under its name.
     pub title: String,
@@ -323,10 +324,14 @@ pub struct View {
     pub split: Option<u8>,
 }
 
-/// The one view whose key is a path of names rather than one name: a branch's file tab
-/// (`app/src/pieceViews.ts`), keyed `workspace/repo/piece`, or `workspace/repo/` for the repo's
-/// own folder.
+/// A branch's file tab (`app/src/pieceViews.ts`), keyed `workspace/repo/piece`, or
+/// `workspace/repo/` for the repo's own folder: one of charter's views whose key is a path of
+/// names rather than one name ([`own_key_ok`]).
 const FILES_VIEW: &str = "piece-files";
+
+/// The longest key a view of charter's own is held to: a file's path inside a branch is the
+/// longest one the window writes, and no filesystem charter runs on takes a longer one.
+const MOST_KEY: usize = 4096;
 
 /// Every chat that was open, and the numbers this plane has already spent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1026,18 +1031,13 @@ impl ViewOnDisk {
             return None;
         };
         // A key is empty — the whole plane — or one word of the alphabet charter mints names
-        // in. A persona's name passes; a path does not. charter's own file tab is the one
-        // exception, and its key is still names only: a workspace, a repo and a piece (or no
-        // piece, for the repo's own folder), each one charter would mint, so nothing in it walks
-        // anywhere — and the core finds the folder from those names, as it does for the window.
-        let branch_key = |key: &str| {
-            let parts: Vec<&str> = key.split('/').collect();
-            matches!(parts.as_slice(), [ws, repo, piece]
-                if id_ok(ws) && id_ok(repo) && (piece.is_empty() || id_ok(piece)))
+        // in. A persona's name passes; a path does not. charter's own views keyed by a path of
+        // names are the exception, and each is held to the one shape its writer spells and
+        // nothing else ([`own_key_ok`], #1297).
+        let keyed = match from.is_none().then(|| own_key_ok(&self.view, &self.key)) {
+            Some(Some(shaped)) => shaped,
+            _ => self.key.is_empty() || id_ok(&self.key),
         };
-        let keyed = self.key.is_empty()
-            || id_ok(&self.key)
-            || (from.is_none() && self.view == FILES_VIEW && branch_key(&self.key));
         if !keyed {
             return None;
         }
@@ -1068,6 +1068,62 @@ impl ViewOnDisk {
                 .map(|share| share.round() as u8),
         })
     }
+}
+
+/// The slug of a new memory's tab, not written yet: the window's `memories.DRAFT`. A slug
+/// [`crate::memstore::slug_ok`] refuses, so it names no file in any store.
+const MEMORY_DRAFT: &str = "\\";
+
+/// Whether `key` is the one shape charter's own view `view` is keyed by, or `None` for a view
+/// whose key is not a path of names (#1297).
+///
+/// **A trust boundary**, for [`ViewOnDisk::held`]'s reason: each key reaches a command the
+/// window sends back to the core. So every view has an exact shape, each segment passes the
+/// rule its writer mints it by, and nothing else is held — no `..`, no `.`, no empty segment,
+/// no root, no backslash but a memory draft's own, no control character. Never repaired: a key
+/// that fails drops its tab.
+///
+/// - `todo`: `<ws>/<slug>` (`app/src/todos.ts`), the slug a todo's file stem.
+/// - `memory`: `workspace/<ws>/<slug>`, `persona/<name>/<slug>` or `shared/<slug>`
+///   (`app/src/memories.ts` `memoryKey`), the slug [`MEMORY_DRAFT`] for a memory not written yet.
+/// - `memory-archive`: `workspace/<ws>`, `persona/<name>` or `shared` (`scopeKey`).
+/// - `piece-files`: `<ws>/<repo>/<piece>`, or `<ws>/<repo>/` for the repo's own folder
+///   (`app/src/pieceViews.ts`).
+/// - `piece-file`, `piece-diff`: that branch, then a file's plain relative path in it.
+/// - `session`: a session record's plane-relative path, read only as
+///   [`crate::sessionrecord::locate`] reads it.
+fn own_key_ok(view: &str, key: &str) -> Option<bool> {
+    let name = |word: &str| word.chars().count() <= 64 && crate::contain::workspace_name_ok(word);
+    let repo = |word: &str| word.chars().count() <= 64 && crate::contain::repo_name_ok(word);
+    let persona = |word: &str| word.chars().count() <= 64 && crate::contain::persona_name_ok(word);
+    let slug = |word: &str| crate::memstore::slug_ok(word);
+    let memory_slug = |word: &str| word == MEMORY_DRAFT || slug(word);
+    let branch =
+        |ws: &str, r: &str, piece: &str| name(ws) && repo(r) && (piece.is_empty() || name(piece));
+    let parts: Vec<&str> = key.split('/').collect();
+    let shaped = match view {
+        FILES_VIEW => matches!(parts.as_slice(), [ws, r, piece] if branch(ws, r, piece)),
+        "piece-file" | "piece-diff" => matches!(parts.as_slice(),
+            [ws, r, piece, path @ ..] if branch(ws, r, piece)
+                && !path.is_empty()
+                && path.iter().all(|step| crate::contain::segment_ok(step))),
+        "todo" => matches!(parts.as_slice(), [ws, s] if name(ws) && slug(s)),
+        "memory" => match parts.as_slice() {
+            ["workspace", ws, s] => name(ws) && memory_slug(s),
+            ["persona", who, s] => persona(who) && memory_slug(s),
+            ["shared", s] => memory_slug(s),
+            _ => false,
+        },
+        "memory-archive" => match parts.as_slice() {
+            ["workspace", ws] => name(ws),
+            ["persona", who] => persona(who),
+            ["shared"] => true,
+            _ => false,
+        },
+        "session" => crate::sessionrecord::locate(key).is_ok(),
+        _ => return None,
+    };
+    Some(shaped && key.chars().count() <= MOST_KEY && !key.chars().any(char::is_control))
 }
 
 impl From<&View> for ViewOnDisk {
@@ -2588,6 +2644,228 @@ pub(crate) mod tests {
                 ("alpha/svc/", None)
             ]
         );
+    }
+
+    /// A view tab of charter's own, keyed `key`, as the window would have recorded it.
+    fn own_view(view: &str, key: &str) -> View {
+        View {
+            view: view.into(),
+            title: "A tab".into(),
+            active: false,
+            ..persona_view(key)
+        }
+    }
+
+    /// Every key shape the window writes for a view keyed by a path of names (#1297), one per
+    /// line, each as its writer spells it.
+    const HELD_SHAPES: &[(&str, &str)] = &[
+        ("todo", "alpha/20261006-091500-ship-the-fix"),
+        ("todo", "alpha/ship-the-fix.md"),
+        ("memory", "workspace/alpha/20261006-091500-a-lesson"),
+        ("memory", "persona/steward/a-lesson"),
+        ("memory", "persona/_shared/a-lesson"),
+        ("memory", "shared/a-lesson"),
+        ("memory", "workspace/alpha/\\"),
+        ("memory", "persona/steward/\\"),
+        ("memory", "shared/\\"),
+        ("memory-archive", "workspace/alpha"),
+        ("memory-archive", "persona/steward"),
+        ("memory-archive", "shared"),
+        ("piece-files", "alpha/svc/fix-login"),
+        ("piece-files", "alpha/svc/"),
+        ("piece-file", "alpha/svc/fix-login/src/main.rs"),
+        ("piece-file", "alpha/svc//README.md"),
+        ("piece-file", "alpha/svc/fix-login/.github/workflows/ci.yml"),
+        ("piece-diff", "alpha/svc/fix-login/src/main.rs"),
+        ("piece-diff", "alpha/svc//Cargo.toml"),
+        (
+            "session",
+            "workspaces/alpha/sessions/20260928-140312-ship-it.md",
+        ),
+        ("session", "sessions/20260928-140312-ship-it.md"),
+    ];
+
+    #[test]
+    fn todo_memory_session_and_file_tabs_come_back_after_a_relaunch() {
+        // #1297: each of these was dropped from the record at every launch.
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            views: HELD_SHAPES
+                .iter()
+                .map(|(view, key)| own_view(view, key))
+                .collect(),
+            ..Default::default()
+        };
+
+        write(plane.path(), &record).expect("the record is written");
+
+        let back: Vec<_> = read(plane.path())
+            .views
+            .iter()
+            .map(|v| (v.view.clone(), v.key.clone()))
+            .collect();
+        let wrote: Vec<_> = HELD_SHAPES
+            .iter()
+            .map(|(view, key)| (view.to_string(), key.to_string()))
+            .collect();
+        assert_eq!(back, wrote);
+    }
+
+    #[test]
+    fn a_path_shaped_key_that_is_not_its_view_s_own_shape_is_dropped() {
+        // #1297: `reopen.json` is writable by whoever can write the state folder, so each view
+        // holds its key to the one shape its writer spells, and nothing else comes back.
+        let refused: &[(&str, &str)] = &[
+            // todo: `<ws>/<slug>`
+            ("todo", ""),
+            ("todo", "alpha"),
+            ("todo", "alpha/"),
+            ("todo", "/ship"),
+            ("todo", "alpha/../ship"),
+            ("todo", "alpha/.."),
+            ("todo", "../alpha/ship"),
+            ("todo", "/etc/passwd"),
+            ("todo", "alpha/ship/more"),
+            ("todo", "alpha//ship"),
+            ("todo", ".hidden/ship"),
+            ("todo", "alpha/a\\b"),
+            ("todo", "alpha/\\"),
+            ("todo", "alpha/MEMORY"),
+            ("todo", "alpha/sh\nip"),
+            ("todo", "alpha/sh\0ip"),
+            ("todo", "C:/ship"),
+            // memory: `workspace|persona/<name>/<slug>`, `shared/<slug>`
+            ("memory", ""),
+            ("memory", "steward"),
+            ("memory", "workspace/alpha"),
+            ("memory", "workspace/alpha/"),
+            ("memory", "workspace//lesson"),
+            ("memory", "workspace/../lesson"),
+            ("memory", "workspace/alpha/.."),
+            ("memory", "workspace/alpha/lesson/more"),
+            ("memory", "persona/Steward/lesson"),
+            ("memory", "persona/../lesson"),
+            ("memory", "persona/steward/a\\b"),
+            ("memory", "persona/steward/\\\\"),
+            ("memory", "shared/.."),
+            ("memory", "shared/"),
+            ("memory", "shared/a/b"),
+            ("memory", "workspaces/alpha/lesson"),
+            ("memory", "/workspace/alpha/lesson"),
+            ("memory", "workspace/alpha/MEMORY.md"),
+            // memory-archive: `workspace|persona/<name>`, `shared`
+            ("memory-archive", ""),
+            ("memory-archive", "alpha"),
+            ("memory-archive", "workspace/"),
+            ("memory-archive", "workspace/.."),
+            ("memory-archive", "workspace/alpha/more"),
+            ("memory-archive", "persona/Steward"),
+            ("memory-archive", "shared/x"),
+            ("memory-archive", "/shared"),
+            // piece-files: `<ws>/<repo>/<piece>` or `<ws>/<repo>/`
+            ("piece-files", "alpha"),
+            ("piece-files", "alpha/../etc"),
+            ("piece-files", "alpha/svc/fix/extra"),
+            ("piece-files", "/svc/fix"),
+            // piece-file and piece-diff: a branch, then a plain relative path
+            ("piece-file", "alpha/svc/fix"),
+            ("piece-file", "alpha/svc/fix/"),
+            ("piece-file", "alpha/svc/fix/src//main.rs"),
+            ("piece-file", "alpha/svc/fix/../../../etc/passwd"),
+            ("piece-file", "alpha/svc/fix/src/../../x"),
+            ("piece-file", "alpha/svc/fix/./src"),
+            ("piece-file", "alpha/svc/fix//etc/passwd"),
+            ("piece-file", "alpha/svc/fix/src\\..\\x"),
+            ("piece-file", "alpha/svc/fix/C:x"),
+            ("piece-file", "alpha/svc/fix/a\nb"),
+            ("piece-file", "../svc/fix/src/main.rs"),
+            ("piece-file", "alpha/../fix/src/main.rs"),
+            ("piece-file", "alpha/svc/../src/main.rs"),
+            ("piece-file", "alpha"),
+            ("piece-diff", "alpha/svc/fix"),
+            ("piece-diff", "alpha/svc/fix/../../x"),
+            ("piece-diff", "/alpha/svc/fix/src/main.rs"),
+            ("piece-diff", "alpha/svc/fix/src/"),
+            // session: `workspaces/<ws>/sessions/<file>` or `sessions/<file>`
+            ("session", ""),
+            ("session", "20260928-140312-ship-it.md"),
+            ("session", "/etc/passwd"),
+            ("session", "sessions/index.md"),
+            ("session", "sessions/../charter.toml"),
+            (
+                "session",
+                "workspaces/../sessions/20260928-140312-ship-it.md",
+            ),
+            (
+                "session",
+                "workspaces/alpha/sessions/../../../20260928-140312-ship-it.md",
+            ),
+            (
+                "session",
+                "workspaces/alpha/sessions/sub/20260928-140312-ship-it.md",
+            ),
+            (
+                "session",
+                "workspaces/alpha/memory/20260928-140312-ship-it.md",
+            ),
+            (
+                "session",
+                "workspaces/.hidden/sessions/20260928-140312-ship-it.md",
+            ),
+            ("session", "sessions\\..\\20260928-140312-ship-it.md"),
+            ("session", "/sessions/20260928-140312-ship-it.md"),
+            ("session", "./sessions/20260928-140312-ship-it.md"),
+            ("session", "alpha"),
+        ];
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        for (view, key) in refused {
+            let line = serde_json::json!({
+                "version": 1, "at": 0, "chats": [],
+                "views": [{"view": view, "key": key}, {"view": "persona", "key": "steward"}],
+            });
+            std::fs::write(path(plane.path()), line.to_string()).unwrap();
+
+            let back = read(plane.path());
+
+            let kept: Vec<_> = back.views.iter().map(|v| v.view.as_str()).collect();
+            assert_eq!(kept, ["persona"], "{view} {key:?} was taken");
+        }
+    }
+
+    #[test]
+    fn a_key_longer_than_any_charter_writes_is_dropped() {
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        let deep = format!("alpha/svc/fix/{}", "d/".repeat(MOST_KEY / 2) + "f");
+        let line = serde_json::json!({
+            "version": 1, "at": 0, "chats": [],
+            "views": [{"view": "piece-file", "key": deep}],
+        });
+        std::fs::write(path(plane.path()), line.to_string()).unwrap();
+
+        assert!(read(plane.path()).views.is_empty());
+    }
+
+    #[test]
+    fn an_extension_s_view_is_not_held_to_charter_s_shape_for_a_view_of_the_same_name() {
+        // An extension's `todo` is its own view: its key is one word, as every extension's is,
+        // and a path is still not one.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        let line = serde_json::json!({
+            "version": 1, "at": 0, "chats": [],
+            "views": [
+                {"from": "acme", "view": "todo", "key": "steward"},
+                {"from": "acme", "view": "todo", "key": "alpha/ship"},
+            ],
+        });
+        std::fs::write(path(plane.path()), line.to_string()).unwrap();
+
+        let back = read(plane.path());
+
+        let kept: Vec<_> = back.views.iter().map(|v| v.key.as_str()).collect();
+        assert_eq!(kept, ["steward"]);
     }
 
     #[test]
