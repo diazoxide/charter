@@ -94,6 +94,7 @@ import {
   useStripSensors,
 } from "./sortable";
 import { NewWorkspace } from "./NewWorkspace";
+import { FORGE_LOGIN, type LoginAsk } from "./RepoPicker";
 import { NewBranch } from "./NewBranch";
 import { LinkWorkItem } from "./LinkWorkItem";
 import { RenameWorkspace } from "./RenameWorkspace";
@@ -276,9 +277,11 @@ type Where = { tab: true; in?: string; prefer?: string } | { split: Direction };
 
 /** What a new shell tab has typed into it: a line spelled out (FR-4's `gh auth login`), a
  *  harness whose compiled-in installer the core types itself (FR-29, V65), or the sandbox's
- *  install command, which the core types and leaves for the person to run (SD-30, V78 c). */
+ *  install command, which the core types and leaves for the person to run (SD-30, V78 c).
+ *  `held` is a line typed and left for the person to run: the repo picker's forge login,
+ *  whose host is the project's, read before Return (NO-8). */
 type Typed =
-  | { line: string; installer?: undefined; sandboxInstall?: undefined }
+  | { line: string; held?: boolean; installer?: undefined; sandboxInstall?: undefined }
   | { installer: string; line?: undefined; sandboxInstall?: undefined }
   | { sandboxInstall: true; line?: undefined; installer?: undefined };
 
@@ -451,6 +454,8 @@ export const PlaneView = memo(function PlaneView({
   }>();
   /** Why the last start did not happen, shown in the picker rather than behind it. */
   const [pickerTrouble, setPickerTrouble] = useState<string>();
+  /** Whether the picker's fix (NO-8: its `local-ignore`) is running. */
+  const [pickerFixing, setPickerFixing] = useState(false);
   /** The chat tab whose name is open for editing on the strip, if one is (charter-app#254). */
   const [renaming, setRenaming] = useState<number>();
   /** The work item each chat works on, by session, as the core answered (V60, ADR 0088). */
@@ -1629,6 +1634,33 @@ export const PlaneView = memo(function PlaneView({
     [plane, refusedBy, succeeded],
   );
 
+  /**
+   * **A fix the picker's refusal offers** (NO-8, #1233): the doctor's fix by its id, through the
+   * one entry point `charter doctor --fix` and the Doctor dialog use. Then the picker reads its
+   * options again, so what it draws is what is true after the fix; a refusal is said in it.
+   */
+  const fixInPicker = useCallback(
+    async (id: string) => {
+      setPickerFixing(true);
+      setPickerTrouble(undefined);
+      const fixed = await commands
+        .planeDoctorFix(plane, id)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      const refused =
+        fixed.status === "error"
+          ? fixed.error
+          : (fixed.data.refused ?? (fixed.data.complete ? undefined : fixed.data.said.join(" ")));
+      const options = await commands
+        .startOptions(plane)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      setPickerFixing(false);
+      if (options.status === "ok")
+        setPicking((was) => (was === undefined ? was : { ...was, options: options.data }));
+      setPickerTrouble(refused ?? (options.status === "error" ? options.error : undefined));
+    },
+    [plane],
+  );
+
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
   /** A new tab whose chat starts in that directory — this one, and not the next. */
   const newTabIn = useCallback((path: string) => void ask({ tab: true, in: path }), [ask]);
@@ -1663,7 +1695,8 @@ export const PlaneView = memo(function PlaneView({
           // A command typed in for the operator, run as if they had typed it: the shell reads
           // it once it is up, and the tab is theirs to leave. A harness's installer is named,
           // never spelled: the core types its own compiled-in line (FR-29, V65).
-          if (typed?.line !== undefined) void commands.sendInput(plane, session, `${typed.line}\n`);
+          if (typed?.line !== undefined)
+            void commands.sendInput(plane, session, typed.held ? typed.line : `${typed.line}\n`);
           else if (typed?.installer !== undefined)
             void commands
               .typeInstaller(plane, session, typed.installer)
@@ -1792,6 +1825,21 @@ export const PlaneView = memo(function PlaneView({
     },
     [focused, openShell, sidebar, startIn],
   );
+
+  /**
+   * **A forge login the repo picker asked for** (NO-8, #1233): the forge CLI's own login, typed
+   * in a shell tab at the project root and left for the operator to run — its host is the
+   * project's, so they read the line before Return.
+   */
+  useEffect(() => {
+    const login = (event: Event) => {
+      const asked = (event as CustomEvent<LoginAsk>).detail;
+      if (asked.plane !== plane || sidebar === undefined) return;
+      openShell(sidebar.root, OUTSIDE, { line: asked.line, held: true });
+    };
+    window.addEventListener(FORGE_LOGIN, login);
+    return () => window.removeEventListener(FORGE_LOGIN, login);
+  }, [openShell, plane, sidebar]);
 
   /**
    * **A blocked save's two ways out** (charter-app#295), asked by the Saving tab: a chat started
@@ -5178,6 +5226,15 @@ export const PlaneView = memo(function PlaneView({
                   openShell(root, OUTSIDE, { sandboxInstall: true });
                 }
           }
+          fixing={pickerFixing}
+          onFix={(id) => void fixInPicker(id)}
+          // A refused profile is mended in Settings › Harness (NO-8): the picker closes, as it
+          // does for the install, since the chat it was for starts after the mend.
+          onOpenSettings={(group) => {
+            setPicking(undefined);
+            setPickerTrouble(undefined);
+            openSettingsAt({ group });
+          }}
           onCancel={() => {
             setPicking(undefined);
             setPickerTrouble(undefined);

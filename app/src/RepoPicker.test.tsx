@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { PlaneId } from "./bindings";
-import { RepoPicker } from "./RepoPicker";
+import { FORGE_LOGIN, RepoPicker, type LoginAsk } from "./RepoPicker";
 
 afterEach(() => {
   cleanup();
@@ -45,5 +45,53 @@ describe("the repo picker", () => {
 
     await userEvent.click(boxes[1]);
     expect(picked).toEqual([new Set(["api"])]);
+  });
+
+  describe("a forge that did not answer (NO-8, #1233)", () => {
+    function answering(trouble: { said: string; login: string | null }[]) {
+      mockIPC((cmd) => (cmd === "reachable_repos" ? { repos: [], trouble } : null));
+    }
+    /** What the picker asked of its project's window. */
+    function asked(): LoginAsk[] {
+      const heard: LoginAsk[] = [];
+      const hear = (event: Event) => heard.push((event as CustomEvent<LoginAsk>).detail);
+      window.addEventListener(FORGE_LOGIN, hear);
+      onTestFinished(() => window.removeEventListener(FORGE_LOGIN, hear));
+      return heard;
+    }
+
+    it("asks its project's window to type the login its CLI names in a shell tab", async () => {
+      answering([
+        {
+          said: "gh is not authenticated for github.com. Run: gh auth login",
+          login: "gh auth login --hostname github.com",
+        },
+      ]);
+      const heard = asked();
+      const onLeave = vi.fn();
+      render(
+        <RepoPicker
+          plane={"p1" as PlaneId}
+          picked={new Set()}
+          onPicked={() => {}}
+          onLeave={onLeave}
+        />,
+      );
+
+      expect(await screen.findByRole("status")).toHaveTextContent("gh is not authenticated");
+      await userEvent.click(screen.getByRole("button", { name: "Type it in a shell tab" }));
+
+      expect(heard).toEqual([{ plane: "p1", line: "gh auth login --hostname github.com" }]);
+      // A dialog holding the picker closes, so the shell tab is not under it.
+      expect(onLeave).toHaveBeenCalledOnce();
+    });
+
+    it("offers no login where logging in would not help", async () => {
+      answering([{ said: "charter could not find gh on PATH", login: null }]);
+      render(<RepoPicker plane={"p1" as PlaneId} picked={new Set()} onPicked={() => {}} />);
+
+      expect(await screen.findByRole("status")).toHaveTextContent("could not find gh");
+      expect(screen.queryByRole("button", { name: /shell tab/ })).not.toBeInTheDocument();
+    });
   });
 });

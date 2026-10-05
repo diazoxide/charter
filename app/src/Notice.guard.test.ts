@@ -25,6 +25,36 @@ import { describe, expect, it } from "vitest";
  * jsdom computes no stylesheet, and a rendered window shows only the lines its test set up.
  */
 
+/*
+ * **Why a live region outside a Notice has no link or fix of its own: NO-8's checklist**
+ * (#1233, V91n). Each dialog or tab refusal was looked at for a cheap way out, and the entries
+ * below say what each got, or which of these reasons it has none for.
+ */
+/** The refusal of the action just pressed, in the core's sentence, beside the button that
+ *  pressed it: pressing again is the retry, with what was typed kept. */
+const ACTION =
+  "a dialog's or tab's refusal of the action just pressed: an inline error, not a Notice " +
+  "(V91n). No cheap link (NO-8): the core's sentence names the cause, and the button retries";
+/** A warning a dialog asks over: its own buttons are the way out. */
+const WARNING =
+  "a dialog's warning about what its button would do: its own Cancel and confirm are the way out";
+/** A read refusal in a tab that reads again when the project changes on disk. */
+const HEALS =
+  "a view tab's read refusal, inside the tab. No link needed (NO-8): the tab reads again " +
+  "whenever the project changes on disk, so mending the file clears it";
+/** A read refusal read once: Read again is a follow-up on NO-8's list. */
+const READ_ONCE =
+  "a read refusal, inside its tab or dialog. Read again is NO-8's follow-up: it is read once " +
+  "when it opens, and reopening it is the retry today";
+/** A vault's read, health and write refusals. */
+const VAULT =
+  "a vault tab's read, health and write refusals: the provider's own sentence names what to " +
+  "do (sign in, unlock). Read again is NO-8's follow-up; a write's refusal is ACTION's case";
+/** An extension view's refusals. */
+const VIEWS =
+  "an extension view's refusals: its Refresh reads again, and the view is the extension's, so " +
+  "charter has no fix of its own to offer (NO-8)";
+
 /**
  * **Every live region that is not a Notice, with why. Exact counts per file**: a new one in any
  * file fails until it is a Notice or is listed here with its reason, and a removed one is
@@ -34,7 +64,7 @@ import { describe, expect, it } from "vitest";
 const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "About.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: READ_ONCE,
   },
   "AlertsDrawer.tsx": {
     count: 2,
@@ -54,7 +84,7 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "ChangeActions.tsx": {
     count: 4,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "Cockpit.tsx": {
     count: 1,
@@ -62,15 +92,15 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "ChatAsk.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "DeleteVault.tsx": {
     count: 2,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "DeleteWorkspace.tsx": {
     count: 2,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "Doctor.tsx": {
     count: 2,
@@ -86,17 +116,17 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "ExtensionAction.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "FindBar.tsx": { count: 1, why: "the find bar's match count, a live value" },
   "FirstRun.tsx": { count: 2, why: "the first-run page's progress and refusal, inside its tab" },
   "FirstTaskTab.tsx": {
     count: 1,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: ACTION,
   },
   "HarnessSetupTab.tsx": {
     count: 1,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: ACTION,
   },
   "KillSwitch.tsx": {
     count: 1,
@@ -104,39 +134,39 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   },
   "LinkWorkItem.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "LiveDialog.tsx": {
     count: 2,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "MemoryArchiveTab.tsx": {
     count: 3,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: HEALS,
   },
   "MemoryTab.tsx": {
     count: 4,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: HEALS,
   },
   "NewBranch.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "NewPersona.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "NewProject.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "NewVault.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "NewWorkspace.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "NotCloned.tsx": {
     count: 1,
@@ -153,66 +183,71 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "Panels.tsx": { count: 3, why: "a panel's read refusal and its blocks' tone, inside the panel" },
   "ProfileApproval.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: WARNING,
   },
   "QuitWarning.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: WARNING,
   },
   "RemoveFromWorkspace.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "RemovePersona.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "RenameWorkspace.tsx": {
     count: 1,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "RepoInstructionsTab.tsx": {
     count: 2,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: ACTION,
   },
   "RepoPicker.tsx": {
     count: 2,
-    why: "the repo picker's refusals, inside the dialog that holds it",
+    why:
+      "the repo picker's refusals, inside the dialog that holds it. NO-8: a forge whose CLI " +
+      "is not logged in offers its login, typed in a shell tab; the rest are the forge's sentence",
   },
   "SandboxOffer.tsx": { count: 1, why: "the answer's refusal, inside the sandbox offer's Notice" },
   "SavingView.tsx": {
     count: 3,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: ACTION,
   },
   "SearchTab.tsx": { count: 1, why: "the search's progress, a live value" },
   "SessionRecordTab.tsx": {
     count: 1,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: READ_ONCE,
   },
   "StartChat.tsx": {
     count: 3,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why:
+      "a dialog's refusal: an inline error, not a Notice (V91n). NO-8: the local file git " +
+      "would carry offers the doctor's local-ignore fix, refused profiles link to Settings › " +
+      "Harness, a sandbox it cannot apply offers its install, and a start's refusal is ACTION's",
   },
   "TabRename.tsx": { count: 1, why: "a rename's refusal, beside the box being typed in" },
   "TodoTab.tsx": {
     count: 1,
-    why: "a view tab's own read refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: HEALS,
   },
   "Updates.tsx": {
     count: 4,
-    why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+    why: ACTION,
   },
   "VaultTab.tsx": {
     count: 7,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: VAULT,
   },
   "Vaults.tsx": {
     count: 1,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: READ_ONCE,
   },
   "Views.tsx": {
     count: 5,
-    why: "a view tab's own read or write refusal, inside the tab (cheap links: NO-8, #1233)",
+    why: VIEWS,
   },
   "editor/BranchTree.tsx": { count: 1, why: "the branch tree's read refusal, inside the editor" },
   "editor/PieceFiles.tsx": { count: 1, why: "the piece files' read refusal, inside the editor" },

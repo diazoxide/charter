@@ -213,6 +213,7 @@ function picker() {
         personas: ["steward"],
         persona: "steward",
         ignore_fix: null,
+        ignore_fix_id: null,
         declares_none: false,
       }}
       onStart={() => {}}
@@ -285,6 +286,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
           personas: [],
           persona: null,
           ignore_fix: null,
+          ignore_fix_id: null,
           declares_none: false,
         }}
         onStart={() => {}}
@@ -317,6 +319,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
           personas: [],
           persona: null,
           ignore_fix: null,
+          ignore_fix_id: null,
           declares_none: false,
         }}
         onStart={(profile, persona, footer) => started.push({ profile, persona, footer })}

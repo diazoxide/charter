@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { drawThemeFor, Extensions } from "./Extensions";
@@ -210,6 +210,26 @@ describe("the extension registry", () => {
     expect(
       await screen.findByText(/nothing an extension declares is in force/),
     ).toBeInTheDocument();
+  });
+
+  it("reads an unreadable record again on a press, once it was mended (NO-8, #1233)", async () => {
+    let unreadable: string | null = "'/home/o/.config/charter/extensions.json' is not JSON";
+    mockIPC((cmd) => {
+      if (cmd === "installed_extensions")
+        return { built_in_themes: [], extensions: [newRow], unreadable, dropped: [] };
+      if (cmd === "extension_themes") return [];
+      throw new Error(`the window asked for ${cmd}, which this test did not expect`);
+    });
+    render(<Extensions onClose={() => undefined} />);
+    await screen.findByText(/nothing an extension declares is in force/);
+
+    unreadable = null;
+    await userEvent.click(screen.getByRole("button", { name: "Read again" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/nothing an extension declares is in force/)).toBeNull(),
+    );
+    expect(screen.getByText("Solarized")).toBeInTheDocument();
   });
 });
 

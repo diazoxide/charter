@@ -25,7 +25,7 @@ pub(super) fn harness_profiles(d: &Doctor) -> Row {
         profiles::ignore_check(&d.root)
     };
     if !check.passes() {
-        let ignorable = check.ignorable && !crate::scaffold::gitignore_is_a_link(&d.root);
+        let ignorable = check.one_line_cures(&d.root);
         let row = Row::warn(NAME, check.reason, check.fix);
         // Offered only where one ignore line cures it: a file git already tracks needs the
         // operator's `git rm --cached` first, git does not read a `.gitignore` that is a link,

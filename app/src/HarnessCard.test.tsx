@@ -54,6 +54,7 @@ const OPTIONS: StartOptions = {
   personas: [],
   persona: null,
   ignore_fix: null,
+  ignore_fix_id: null,
   declares_none: true,
 };
 

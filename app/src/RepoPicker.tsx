@@ -19,15 +19,35 @@ import { Choice, Field } from "./settings/components";
  */
 const NOTHING: ReachableRepos = { repos: [], trouble: [] };
 
+/**
+ * The window event the picker sends to have a forge's login typed in a shell tab (NO-8, #1233):
+ * its project's window (`PlaneView`) hears it, as the Saving view's ways out are heard. An
+ * event and not a prop, because the picker is drawn by a dialog in the window and by Settings,
+ * and only the project's window opens shell tabs.
+ */
+export const FORGE_LOGIN = "forge-login-asked";
+
+/** What a login asks of a project's window: which project, and the line to type. */
+export type LoginAsk = { plane: string; line: string };
+
+/** Asks the window of the project `plane` to type `line` in a shell tab at its root. */
+export function askLogin(plane: string, line: string): void {
+  window.dispatchEvent(new CustomEvent<LoginAsk>(FORGE_LOGIN, { detail: { plane, line } }));
+}
+
 export function RepoPicker({
   plane,
   picked,
   onPicked,
+  onLeave,
 }: {
   plane: PlaneId;
   /** The names ticked. */
   picked: ReadonlySet<string>;
   onPicked: (next: Set<string>) => void;
+  /** Called after the picker sent the operator to a shell tab: a dialog holding it closes,
+   *  so the tab is not under it. */
+  onLeave?: () => void;
 }) {
   const [found, setFound] = useState<ReachableRepos | { refused: string }>();
   const [filter, setFilter] = useState("");
@@ -96,10 +116,29 @@ export function RepoPicker({
         </p>
       ) : (
         <>
-          {found.trouble.map((line) => (
-            <p key={line} className="trouble" role="status">
-              {line}
-            </p>
+          {found.trouble.map(({ said, login }) => (
+            <div key={said}>
+              <p className="trouble" role="status">
+                {said}
+              </p>
+              {/* The forge CLI's own login, typed in a shell tab and left for the operator to
+                  run (NO-8, #1233): the host is the project's, so they read it before Return. */}
+              {login !== null && (
+                <p className="honest">
+                  Log in with <code>{login}</code>.{" "}
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      askLogin(plane, login);
+                      onLeave?.();
+                    }}
+                  >
+                    Type it in a shell tab
+                  </button>
+                </p>
+              )}
+            </div>
           ))}
           {found.repos.length === 0 && found.trouble.length === 0 && (
             <p className="came-back">
