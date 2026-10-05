@@ -5,9 +5,9 @@
 use serde_json::Value;
 
 use super::backend::{
-    About, Asker, Caller, Capabilities, Capability, ForgeRef, Issues, NewWorkItem, Owner,
-    PushProtection, Reach, Reason, RepoRecord, Repos, Requests, Support, Unavailable, UnknownWhy,
-    Visibility, WorkItems,
+    About, Asker, Caller, Capabilities, Capability, Issues, NewWorkItem, Owner, PushProtection,
+    Reach, Reason, RepoRecord, Repos, Requests, Support, Unavailable, UnknownWhy, Visibility,
+    WorkItems,
 };
 use super::checks::{self, Checks};
 use super::pr::{
@@ -20,10 +20,13 @@ use super::{
     listed_description, listed_id, listed_str, listed_topics, mapped, parse, quote, word_of,
 };
 
-// FW-6a is the first caller of the work items; until it lands only their tests reach them, and
-// not every one of them, so the compiler would call them dead.
+// `WorkItems::read` (FW-6a) calls the reads; the writes, and the board queries, have only their
+// tests until the seam takes them, so the compiler would call them dead.
 #[allow(dead_code)]
 mod graphql;
+mod read;
+#[cfg(test)]
+mod read_tests;
 #[allow(dead_code)]
 pub(crate) mod work;
 
@@ -404,28 +407,16 @@ impl WorkItems for GitHub {
                 ..work::NewIssue::default()
             },
         )?;
-        let doing = format!("opening an issue in {path}");
-        let unnamed = || {
-            ForgeError::new(format!(
-                "{doing}: GitHub's answer names no page charter can key the issue by: {}",
-                issue.html_url
-            ))
-        };
-        let (host, parts) = crate::work::key::page_of(&issue.html_url).ok_or_else(unnamed)?;
-        let [owner, repo, ..] = parts.as_slice() else {
-            return Err(unnamed());
-        };
-        let key = crate::work::TrackerKey::github(&host, &format!("{owner}/{repo}"), issue.number)
-            .map_err(|why| ForgeError::new(format!("{doing}: {why}")))?;
-        let mut item = crate::work::WorkItem::new(key, crate::work::Kind::Issue, issue.title);
-        item.forge_ref = Some(ForgeRef(issue.node_id));
-        item.url = issue.html_url;
-        item.state = crate::work::State::of_forge(&issue.state);
-        item.labels = issue.labels.into_iter().map(|l| l.name).collect();
-        item.milestone = issue.milestone.map(|m| {
-            crate::work::Milestone::of_forge(m.node_id.map(ForgeRef), m.title, m.due_on.as_deref())
-        });
-        Ok(item)
+        read::item_of(issue, &format!("opening an issue in {path}"))
+    }
+
+    fn read(
+        &self,
+        caller: &Caller,
+        path: &str,
+        number: u64,
+    ) -> Result<crate::work::WorkItem, ForgeError> {
+        self.read_item(caller, path, number)
     }
 }
 
@@ -778,6 +769,7 @@ impl Capabilities for GitHub {
             | Capability::Dependencies
             | Capability::Boards
             | Capability::Iterations
+            | Capability::CloseReasons
                 if dotcom && *at == Reach::Instance =>
             {
                 Support::Available
@@ -793,7 +785,7 @@ mod capability_tests {
 
     use super::*;
     use crate::forge::Forge;
-    use crate::forge::backend::{Fixed, Taken};
+    use crate::forge::backend::{Fallback, Fixed, Taken};
     use crate::forge::recorded::Recorded;
 
     fn on(host: &str) -> GitHub {
@@ -825,6 +817,26 @@ mod capability_tests {
                 .taken(Capability::SubIssues),
             Taken::Fallback(Capability::SubIssues.fallback())
         );
+    }
+
+    #[test]
+    fn github_com_keeps_a_close_reason_and_has_no_epics_at_all() {
+        let github = on("github.com");
+        let me = Caller::window();
+        assert_eq!(
+            github.support(&me, &Reach::Instance, Capability::CloseReasons),
+            Support::Available
+        );
+        for at in [Reach::Instance, Reach::Repo("o/r".into())] {
+            assert_eq!(
+                github.support(&me, &at, Capability::Epics),
+                Support::Unavailable(Unavailable::because(
+                    Capability::Epics,
+                    Reason::NotOnThisForge
+                ))
+            );
+        }
+        assert_eq!(Capability::CloseReasons.fallback(), Fallback::Hidden);
     }
 
     #[test]

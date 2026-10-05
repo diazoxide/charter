@@ -1,0 +1,58 @@
+# What an issue's REST answer does not hold: its parent and sub-issues, the pull requests that
+# close it, and where its Projects v2 boards hold it (status and iteration). FW-6a.
+query WorkItem($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      parent {
+        url
+      }
+      subIssues(first: 100) {
+        pageInfo {
+          hasNextPage
+        }
+        nodes {
+          url
+        }
+      }
+      closedByPullRequestsReferences(first: 100, includeClosedPrs: true) {
+        pageInfo {
+          hasNextPage
+        }
+        nodes {
+          number
+          url
+          state
+        }
+      }
+      projectItems(first: 100) {
+        pageInfo {
+          hasNextPage
+        }
+        nodes {
+          project {
+            id
+            title
+            url
+          }
+          status: fieldValueByName(name: "Status") {
+            __typename
+            ... on ProjectV2ItemFieldSingleSelectValue {
+              name
+            }
+          }
+          fieldValues(first: 50) {
+            nodes {
+              __typename
+              ... on ProjectV2ItemFieldIterationValue {
+                iterationId
+                title
+                startDate
+                duration
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -89,6 +89,7 @@ owner, repo, branch, number or commit. The CLI transport's argv for each is pinn
 | `Repos::top_level` | `discover`'s stack probe | `GET repos/{o}/{r}/git/trees/{ref}` (ref, else default branch, else `HEAD`) | `GET projects/{id}/repository/tree` (ref, else the default branch) | strict | same |
 | `Repos::about` | `charter ws todo promote` (ADR 0088 §5), before it sends; `charter doctor`'s `project remote` row (SQ-8) | `GET repos/{o}/{r}`: `visibility` (else `private`), `archived`, `has_issues`, `permissions.pull`, `security_and_analysis.secret_scanning_push_protection.status` (admins only, else unknown) | `GET projects/{path}`: `visibility`, `archived`, `issues_access_level` (else `issues_enabled`), membership from `permissions`, `secret_push_protection_enabled` (else `pre_receive_secret_detection_enabled`; else unknown) | strict | same |
 | `WorkItems::create` | `charter ws todo promote` | `POST repos/{o}/{r}/issues` with `title`, `body` and `labels[]` (`ws:<name>`, private repos only); keyed by `html_url` and `number`, `node_id` beside, the answer's `title`, `state`, `labels` and `milestone` mapped to the work model; every todo value a literal `-f` | `POST projects/{path}/issues` with `title`, `description` and `labels` (`charter::ws::<name>`, private repos only); keyed by `web_url`'s host, `references.full` and `iid`, `id` beside, the answer's `title`, `state`, `labels` and `milestone` mapped to the work model; every todo value a literal `-f` | strict | same |
+| `WorkItems::read` | the item cache (FW-7) | `GET repos/{o}/{r}/issues/{n}`: `title`, `state` and `state_reason` (closed only), `type.name`, `labels`, `milestone`, `assignees`; one GraphQL `WorkItem` query for `parent`, `subIssues`, `closedByPullRequestsReferences` (open and merged ones) and `projectItems` (each board's `Status` and the first iteration value); `GET …/dependencies/blocked_by` and `…/blocking` only when `issue_dependencies_summary` counts any. More than one answer holds is an error, never a shorter list | `GET projects/{path}/issues/{iid}`: what `create` maps, and `assignees`; the rest is FW-6b's (#734) | strict | **GitLab maps a subset until FW-6b** |
 | `Requests::open_or_update` | a request-mode save (ADR 0051), `charter change push` | `GET pulls?state=open&head={o}:{b}&base=…`, then `PATCH` or `POST pulls` | `GET merge_requests?state=opened&source_branch=…&target_branch=…`, the repo's own only (never a fork's), then `PUT` or `POST` | strict | same |
 | `Requests::state` | a request-mode save | `GET pulls/{n}`: `closed` + `merged` is merged, at `merge_commit_sha` | `GET merge_requests/{iid}`: `merged`, at `squash_commit_sha` else `merge_commit_sha` | strict | same |
 | `Requests::by_head` | `charter change show` and `push` (ADR 0060) | `GET pulls?state=all&head={o}:{b}`, checked against `head.repo.full_name` | `GET merge_requests?source_branch=…&state=all`, the repo's own only | strict | same |
@@ -101,7 +102,7 @@ owner, repo, branch, number or commit. The CLI transport's argv for each is pinn
 | `Requests::checks_at` | `charter change show` and `land` | check runs **and** commit statuses at the sha, each read whole | the request's pipelines at the sha; the newest decides | strict, `UNKNOWN` on failure | same, by design |
 | `Requests::open_on_branch` | `gl-refresh` | `GET pulls?state=open&head={o}:{b}&per_page=1` | `GET merge_requests?state=opened&source_branch=…&per_page=100`, the repo's own only | permissive | same (fixed here) |
 | `Requests::ci_word` | `gl-refresh` | GraphQL `statusCheckRollup.state` (5 values) | `GET pipelines?ref=…&per_page=1`, its `status` (13 values) | permissive | same |
-| `Capabilities::support` | the fallbacks of ADR 0070 §2 | no request: epics are never there; sub-issues, dependencies, boards and iterations are there on github.com's instance; everything else is not asked yet | no request: epics, iterations, boards, child items and blocking links are there on gitlab.com's instance; a self-managed GitLab's are not asked yet | never yes unasked | same; the probes come with FG-2 (#802) |
+| `Capabilities::support` | the fallbacks of ADR 0070 §2 | no request: epics are never there; sub-issues, dependencies, boards, iterations and close reasons are there on github.com's instance; everything else is not asked yet | no request: epics, iterations, boards, child items and blocking links are there on gitlab.com's instance; a self-managed GitLab's are not asked yet | never yes unasked | same; the probes come with FG-2 (#802) |
 
 ### `charter change push`
 
@@ -225,10 +226,11 @@ again, it seeds only the members it has not seeded yet.
 | `gh auth status` / `glab auth status`, from the first run | the app's first run, through `Forge::check_auth` | The same check as the first row, asked of each forge whose CLI is installed |
 | `gh …` and `glab …` in a chat's own commands | the guard tables (`personagate`, `proseguard`, `floorguard`, `heredoc`, `leakguard`) | They decide whether a chat's command asks first or is refused. charter sends nothing through them. Their parity between the two CLIs is #1068 |
 
-**Work items beyond `create`.** Each forge's native client has its work items as that forge has
-them, crate-private, with recorded-request tests (`src/forge/github/work.rs`,
-`src/forge/gitlab/work_tests.rs`). Nothing outside the core calls them yet. They join the seam's
-`WorkItems` area when FW-6a (#733) and FW-6b (#734) map them onto the work model:
+**Work items beyond `create` and `read`.** Each forge's native client has its work items as that
+forge has them, crate-private, with recorded-request tests (`src/forge/github/work.rs`,
+`src/forge/gitlab/work_tests.rs`). GitHub's reads reach the seam through `WorkItems::read`
+(FW-6a, #733); its writes, and GitLab's reads beyond an issue's own answer, join the
+`WorkItems` area as FW-6b (#734) and the work view (FW-9) need them:
 
 | Concept | GitHub | GitLab |
 |---|---|---|
@@ -372,8 +374,10 @@ native transport (ADR 0070 §7, the live run). The cases ask about a scene (`tes
 scene.rs`), not literal names, and the live run reads the scene's numbers and commits from the
 fixture when it starts. It never gates a pull request; a red night keeps one issue open.
 
-Three cases do not run live, each listed with its reason in `NOT_LIVE`: `request_auto_merge`,
-`merge_at` and `enqueue_at` would land or queue the fixture's one open request. A forge with no
+Four cases do not run live, each listed with its reason in `NOT_LIVE`: `request_auto_merge`,
+`merge_at` and `enqueue_at` would land or queue the fixture's one open request, and `read` needs
+a fixture issue with a type, a parent, a child, a blocker, a closing request and a board, which
+FW-15 (#742) provisions. A forge with no
 token or owner set says so in the run's summary and stops, green, and a night that tested
 nothing leaves the nightly's issue as it is: only a night that tested both forges and passed
 closes it.

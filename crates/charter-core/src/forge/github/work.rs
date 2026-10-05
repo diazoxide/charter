@@ -2,8 +2,8 @@
 //! milestones, and Projects v2 boards with their items (FW-2a, FI4).
 //!
 //! **GitHub's own types, crate-private methods.** FW-5 defines the neutral work model, and
-//! FW-6a maps these onto it behind a `WorkItems` area trait (ADR 0070 §1). Until then nothing
-//! outside the core calls them, and every method still takes the [`Caller`] and sends its
+//! [`super::read`] maps an issue's reads onto it behind the `WorkItems` area trait (FW-6a, ADR
+//! 0070 §1). The writes are not on the seam yet. Every method takes the [`Caller`] and sends its
 //! requests as [`Call`]s, so either transport carries them and the routing rules hold.
 //!
 //! **Every field is a literal string unless charter wrote it** (charter #323): a title, a body,
@@ -38,6 +38,29 @@ pub struct Issue {
     pub milestone: Option<Milestone>,
     #[serde(default, rename = "type")]
     pub issue_type: Option<IssueType>,
+    /// Why it was closed: `completed`, `not_planned`, `duplicate`; `reopened` once reopened.
+    #[serde(default)]
+    pub state_reason: Option<String>,
+    #[serde(default)]
+    pub assignees: Vec<Login>,
+    /// How many issues block it and it blocks. A host without issue dependencies answers none.
+    #[serde(default)]
+    pub issue_dependencies_summary: Option<DependencySummary>,
+}
+
+/// An account, by its login.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Login {
+    pub login: String,
+}
+
+/// An issue's dependency counts, open and closed alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct DependencySummary {
+    #[serde(default)]
+    pub total_blocked_by: u64,
+    #[serde(default)]
+    pub total_blocking: u64,
 }
 
 impl Issue {
@@ -246,7 +269,7 @@ impl GitHub {
     }
 
     /// One GraphQL document from `queries/` and its variables, its `data` read as `T`.
-    fn graphql<T: serde::de::DeserializeOwned>(
+    pub(super) fn graphql<T: serde::de::DeserializeOwned>(
         &self,
         caller: &Caller,
         query: &str,
@@ -452,6 +475,21 @@ impl GitHub {
                 &format!("marking #{number} of {repo} blocked"),
             )
             .map(|_| ())
+    }
+
+    /// The issues that issue `number` blocks.
+    pub(crate) fn blocking(
+        &self,
+        caller: &Caller,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<Issue>, ForgeError> {
+        let issues = Self::issues_of(repo)?;
+        self.pages(
+            caller,
+            &format!("{issues}/{number}/dependencies/blocking"),
+            &format!("listing what #{number} of {repo} blocks"),
+        )
     }
 
     pub(crate) fn remove_blocked_by(

@@ -1,0 +1,89 @@
+{
+  "source": "GitHub REST API version 2022-11-28, docs.github.com/en/rest, issues: Get an issue, issue dependencies: List dependencies an issue is blocked by and List dependencies an issue is blocking; GitHub GraphQL API: Issue.parent, subIssues, closedByPullRequestsReferences and projectItems (schema.graphql)",
+  "exchanges": [
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api/issues/12"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"id\": 1012, \"node_id\": \"I_kwDOAcme12\", \"number\": 12, \"title\": \"Port the picker\", \"state\": \"closed\", \"state_reason\": \"completed\", \"html_url\": \"https://github.com/acme/api/issues/12\", \"labels\": [{\"name\": \"ws:alpha\"}], \"assignees\": [{\"login\": \"octocat\"}], \"milestone\": {\"number\": 1, \"node_id\": \"MI_kwDOAcme1\", \"title\": \"v1\", \"state\": \"open\", \"due_on\": \"2026-10-31T07:00:00Z\"}, \"type\": {\"id\": 7, \"node_id\": \"IT_kwDOAcme7\", \"name\": \"Bug\"}, \"sub_issues_summary\": {\"total\": 1, \"completed\": 1, \"percent_completed\": 100}, \"issue_dependencies_summary\": {\"blocked_by\": 0, \"blocking\": 1, \"total_blocked_by\": 1, \"total_blocking\": 1}}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": "graphql",
+        "fields": [
+          {
+            "text": [
+              "query",
+              "# What an issue's REST answer does not hold: its parent and sub-issues, the pull requests that\n# close it, and where its Projects v2 boards hold it (status and iteration). FW-6a.\nquery WorkItem($owner: String!, $name: String!, $number: Int!) {\n  repository(owner: $owner, name: $name) {\n    issue(number: $number) {\n      parent {\n        url\n      }\n      subIssues(first: 100) {\n        pageInfo {\n          hasNextPage\n        }\n        nodes {\n          url\n        }\n      }\n      closedByPullRequestsReferences(first: 100, includeClosedPrs: true) {\n        pageInfo {\n          hasNextPage\n        }\n        nodes {\n          number\n          url\n          state\n        }\n      }\n      projectItems(first: 100) {\n        pageInfo {\n          hasNextPage\n        }\n        nodes {\n          project {\n            id\n            title\n            url\n          }\n          status: fieldValueByName(name: \"Status\") {\n            __typename\n            ... on ProjectV2ItemFieldSingleSelectValue {\n              name\n            }\n          }\n          fieldValues(first: 50) {\n            nodes {\n              __typename\n              ... on ProjectV2ItemFieldIterationValue {\n                iterationId\n                title\n                startDate\n                duration\n              }\n            }\n          }\n        }\n      }\n    }\n  }\n}\n"
+            ]
+          },
+          {
+            "text": [
+              "owner",
+              "acme"
+            ]
+          },
+          {
+            "text": [
+              "name",
+              "api"
+            ]
+          },
+          {
+            "typed": [
+              "number",
+              "12"
+            ]
+          }
+        ]
+      },
+      "reply": {
+        "code": 0,
+        "out": "{\"data\": {\"repository\": {\"issue\": {\"parent\": {\"url\": \"https://github.com/acme/api/issues/3\"}, \"subIssues\": {\"pageInfo\": {\"hasNextPage\": false}, \"nodes\": [{\"url\": \"https://github.com/acme/api/issues/14\"}]}, \"closedByPullRequestsReferences\": {\"pageInfo\": {\"hasNextPage\": false}, \"nodes\": [{\"number\": 20, \"url\": \"https://github.com/acme/api/pull/20\", \"state\": \"MERGED\"}]}, \"projectItems\": {\"pageInfo\": {\"hasNextPage\": false}, \"nodes\": [{\"project\": {\"id\": \"PVT_kwDOAcme1\", \"title\": \"Roadmap\", \"url\": \"https://github.com/orgs/acme/projects/1\"}, \"status\": {\"__typename\": \"ProjectV2ItemFieldSingleSelectValue\", \"name\": \"Done\"}, \"fieldValues\": {\"nodes\": [{\"__typename\": \"ProjectV2ItemFieldSingleSelectValue\"}, {\"__typename\": \"ProjectV2ItemFieldIterationValue\", \"iterationId\": \"a1b2c3d4\", \"title\": \"Sprint 3\", \"startDate\": \"2026-10-05\", \"duration\": 14}]}}]}}}}}",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api/issues/12/dependencies/blocked_by?per_page=100&page=1"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": 1011, \"node_id\": \"I_kwDOAcme11\", \"number\": 11, \"title\": \"other\", \"state\": \"open\", \"html_url\": \"https://github.com/acme/api/issues/11\"}]",
+        "err": ""
+      }
+    },
+    {
+      "call": {
+        "endpoint": {
+          "rest": {
+            "method": null,
+            "path": "repos/acme/api/issues/12/dependencies/blocking?per_page=100&page=1"
+          }
+        },
+        "fields": []
+      },
+      "reply": {
+        "code": 0,
+        "out": "[{\"id\": 1015, \"node_id\": \"I_kwDOAcme15\", \"number\": 15, \"title\": \"other\", \"state\": \"open\", \"html_url\": \"https://github.com/acme/api/issues/15\"}]",
+        "err": ""
+      }
+    }
+  ]
+}

@@ -339,6 +339,16 @@ pub fn workspace_label(kind: Kind, ws: &str) -> String {
 /// Work items: issues, epics and the rest of FI4 (ADR 0070 §1, ADR 0088 §6). FW-5 brings the
 /// area with its first method; FW-6a and FW-6b map the rest of the neutral model onto it.
 pub trait WorkItems {
+    /// Issue `number` of the repo at `path` (GitLab's `iid`), as `caller`, in the neutral model:
+    /// its fields, how it stands to other items, and the tracker's own boards that hold it.
+    /// What a forge lacks is left empty, and its capability says so ([`Capability`]). Strict.
+    fn read(
+        &self,
+        caller: &Caller,
+        path: &str,
+        number: u64,
+    ) -> Result<crate::work::WorkItem, ForgeError>;
+
     /// Open an issue in the repo at `path`, as `caller`. The answer names it by its tracker key,
     /// with the forge's own id beside it. Strict.
     fn create(
@@ -526,11 +536,13 @@ pub enum Capability {
     Iterations,
     Boards,
     Dependencies,
+    /// Why a closed issue was closed: completed, not planned, a duplicate.
+    CloseReasons,
 }
 
 impl Capability {
     /// Every capability, for a test that walks them.
-    pub const ALL: [Capability; 8] = [
+    pub const ALL: [Capability; 9] = [
         Capability::AutoMerge,
         Capability::MergeQueue,
         Capability::SubIssues,
@@ -539,6 +551,7 @@ impl Capability {
         Capability::Iterations,
         Capability::Boards,
         Capability::Dependencies,
+        Capability::CloseReasons,
     ];
 
     /// What charter does instead when this capability is unavailable or unknown.
@@ -554,8 +567,8 @@ impl Capability {
             Capability::IssueTypes | Capability::Epics | Capability::Iterations => {
                 Fallback::LabelsAndMilestones
             }
-            // No boards: the control is not shown.
-            Capability::Boards => Fallback::Hidden,
+            // No boards, or no reason a closed item was closed: neither is shown.
+            Capability::Boards | Capability::CloseReasons => Fallback::Hidden,
         }
     }
 }
