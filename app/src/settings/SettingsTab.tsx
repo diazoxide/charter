@@ -700,9 +700,9 @@ const MAKE_ONE = "\u0000new";
 /**
  * **A picker over one of the project's collections** (ST-1, #1225; V91r): what the project has,
  * and New…, which opens the matching create flow and writes nothing until something is made —
- * then that is picked. A value the file holds that the project does not have is shown as held,
- * marked as naming nothing once the list is in; the row says the core's sentence about it, and
- * any pick replaces it.
+ * then that is picked. A value the file holds that is not listed is shown as held; where the core
+ * says it names nothing, it is marked so and the row says the core's sentence, until any pick
+ * replaces it.
  */
 function Picker({
   ids,
@@ -726,8 +726,15 @@ function Picker({
       kind="select"
       ids={ids}
       options={[
+        // Marked as naming nothing only where the core says so (V91l): a workspace declared
+        // before it is made, or an entry no list here shows, is the core's to judge.
         ...(held
-          ? [{ value, label: listed === undefined ? value : `${value} — names nothing here` }]
+          ? [
+              {
+                value,
+                label: setting.standing === undefined ? value : `${value} — names nothing here`,
+              },
+            ]
           : []),
         ...(listed ?? []).map((one) => ({ value: one, label: one })),
         ...(onNew ? [{ value: MAKE_ONE, label: NEW[names] }] : []),
