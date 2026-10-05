@@ -53,6 +53,7 @@ mod tests {
                 crate::todos::todo_add,
                 crate::todos::todo_done,
                 crate::todos::todo_forget,
+                crate::todos::todo_read,
                 crate::personas::persona_create,
                 crate::personas::persona_remove,
                 crate::resize_session,
@@ -228,6 +229,10 @@ mod tests {
             json!({ "plane": plane, "workspace": "alpha", "text": "Drop it" }),
         );
         let [drop, ship] = <[String; 2]>::try_from(slugs()).expect("two todos");
+        check(
+            "todo_read",
+            json!({ "plane": plane, "workspace": "alpha", "slug": ship }),
+        );
         check(
             "todo_done",
             json!({ "plane": plane, "workspace": "alpha", "slug": ship }),

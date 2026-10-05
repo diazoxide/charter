@@ -656,7 +656,7 @@ describe("the Todos panel's box", () => {
 });
 
 describe("a todo row's menu", () => {
-  it("offers to mark it done above the line and to forget it below", async () => {
+  it("offers to open it and mark it done above the line and to forget it below", async () => {
     const pressed: Offer[] = [];
     draw({ offers: crudOffers(), onPress: (offer) => pressed.push(offer) });
 
@@ -666,7 +666,11 @@ describe("a todo row's menu", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["Mark done: Review the rollout plan", "Forget todo Review the rollout plan"]);
+    ).toEqual([
+      "Open todo: Review the rollout plan",
+      "Mark done: Review the rollout plan",
+      "Forget todo Review the rollout plan",
+    ]);
 
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Mark done: Review the rollout plan" }),

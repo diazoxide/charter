@@ -164,7 +164,7 @@ describe("what a menu lists", () => {
     expect(shown.below).toEqual(["Delete vault ops…"]);
   });
 
-  it("offers to close a todo above the line and to forget it below (SI-3)", () => {
+  it("offers to open and close a todo above the line and to forget it below (SI-3, #1214)", () => {
     const shown = titles(
       { on: "todo", slug: "20260302-091400-review" },
       {
@@ -174,7 +174,7 @@ describe("what a menu lists", () => {
       },
     );
 
-    expect(shown.above).toEqual(["Mark done: Review the plan"]);
+    expect(shown.above).toEqual(["Open todo: Review the plan", "Mark done: Review the plan"]);
     expect(shown.below).toEqual(["Forget todo Review the plan"]);
   });
 
