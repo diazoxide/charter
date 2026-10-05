@@ -704,7 +704,7 @@ fn an_acp_session_is_handed_the_server_with_the_chat_s_place_and_nothing_else_of
     assert_eq!(
         server,
         json!({
-            "name": "charter",
+            "name": "purlis",
             "command": "/bin/charter",
             "args": ["mcp"],
             "env": [

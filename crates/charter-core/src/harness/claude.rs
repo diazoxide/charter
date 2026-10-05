@@ -423,7 +423,7 @@ mod tests {
             .expect("--mcp-config");
         let config: serde_json::Value = serde_json::from_str(&args[at + 1]).expect("JSON");
         assert_eq!(
-            config["mcpServers"]["charter"],
+            config["mcpServers"]["purlis"],
             serde_json::json!({"type": "stdio", "command": "/bin/charter", "args": ["mcp"]})
         );
         // `--mcp-config` takes every word up to the next flag, so a flag follows it and the
@@ -441,7 +441,7 @@ mod tests {
     fn doctor_says_a_claude_code_chat_is_armed_with_the_bundled_plugin() {
         assert_eq!(
             adapter().armed_with(),
-            "the app arms each chat with its own plugin, charter@inline"
+            "the app arms each chat with its own plugin, purlis@inline"
         );
     }
 

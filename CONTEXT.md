@@ -843,10 +843,11 @@ _Avoid_: wrap (for a stand-in, a shim or an adapter)
 **Harness plugin**:
 A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own always means
 this, never a charter extension. charter's own is one too: the Claude Code plugin the app
-bundles, named `charter` (`charter@inline`, skills `charter:<skill>`), always on in the chats
-the app starts. It is not the Python charter's `charter@charter`, which is always off there.
-`charter plugin install` puts a copy of it, `charter@charter-app`, in front of the chats the
-operator starts outside the app (ADR 0057). For opencode, charter's own is the **opencode
+bundles, named `purlis` (`purlis@inline`, skills `purlis:<skill>`, MCP tools
+`mcp__purlis__<tool>`), always on in the chats the app starts. Its ids from before the rename
+(`charter@inline`, `charter-app@inline`, `charter@charter-app`) are always off there, and so
+is the Python charter's `charter@charter`. `charter plugin install` puts a copy of it,
+`purlis@purlis-app`, in front of the chats the operator starts outside the app (ADR 0057). For opencode, charter's own is the **opencode
 shim**, a script the app loads into each opencode chat it starts, and whose guard-only variant
 `charter plugin install` writes into opencode's plugin directory (ADR 0058).
 _Avoid_: extension (for this); "charter plugin" for anything but charter's own

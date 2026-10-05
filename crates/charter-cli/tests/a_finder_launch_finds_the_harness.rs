@@ -123,7 +123,7 @@ fn a_harness_in_the_operators_own_bin_directory_is_found_with_no_path_to_find_it
     );
     let detail = profile["detail"].as_str().unwrap();
     assert!(
-        detail.contains("its own plugin, charter@inline"),
+        detail.contains("its own plugin, purlis@inline"),
         "{profile}"
     );
     assert!(

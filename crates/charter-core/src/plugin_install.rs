@@ -50,8 +50,8 @@
 //! # opencode
 //!
 //! opencode loads every script in its global plugin directory, so this adapter writes one: the
-//! opencode shim ([`crate::opencode`]) as `$XDG_CONFIG_HOME/opencode/plugin/charter.ts`, else
-//! `~/.config/opencode/plugin/charter.ts`, naming this binary by its absolute path. It carries
+//! opencode shim ([`crate::opencode`]) as `$XDG_CONFIG_HOME/opencode/plugin/purlis.ts`, else
+//! `~/.config/opencode/plugin/purlis.ts`, naming this binary by its absolute path. It carries
 //! only the guards before a tool runs, for Codex's reason: an app chat loads it beside the
 //! bundled shim, and a doubled guard only refuses twice where doubled state hooks would report
 //! and brief twice (ADR 0058). A file already at that name is replaced only when charter wrote
@@ -65,6 +65,15 @@
 //! `.claude/settings.json` turns it on: measured on 2.1.283, a project `true` beats the user
 //! `false`, and both plugins named `charter` then load, with both sets of hooks. The plane's
 //! file is the operator's, so `charter doctor` names it rather than this command rewriting it.
+//!
+//! # The rename (#1266, V93m)
+//!
+//! The copy is `purlis@purlis-app` now, the opencode shim `purlis.ts`. Installing under one set
+//! of names ([`Ids`]) takes the install out from under every other in the same write, so an old
+//! copy and a new one never both load: Claude Code loads one plugin per name, and `charter` and
+//! `purlis` are two names, and opencode loads every script in its folder. `rename-local` moves an
+//! install that is still under the old names ([`move_ids`]); the app's own refresh leaves it to
+//! that move.
 //!
 //! # Uninstall
 //!
@@ -80,18 +89,59 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-/// The marketplace name the copy is registered under, so its id is `charter@charter-app`: the
-/// `charter` plugin, from the charter app.
-pub const MARKETPLACE: &str = "charter-app";
+/// The marketplace name the copy is registered under, so its id is `purlis@purlis-app`: the
+/// `purlis` plugin, from the purlis app (D-RN1-9).
+pub const MARKETPLACE: &str = NOW.marketplace;
 
 /// The id Claude Code gives the installed copy.
-pub const INSTALLED_AS: &str = "charter@charter-app";
+pub const INSTALLED_AS: &str = NOW.installed_as;
+
+/// The names one install is made under: the plugin's, its marketplace's, the id the two make,
+/// and the opencode shim's file name. Every id comes from [`crate::names`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ids {
+    /// The plugin's name in the copy's manifest, and so its skill namespace.
+    pub name: &'static str,
+    pub marketplace: &'static str,
+    /// `<name>@<marketplace>`, what `enabledPlugins` names.
+    pub installed_as: &'static str,
+    /// The opencode shim's file name in opencode's plugin directory.
+    pub shim: &'static str,
+}
+
+/// The names an install is made under now (#1266, V93m).
+pub const NOW: Ids = Ids {
+    name: crate::names::PLUGIN_NAME.write,
+    marketplace: crate::names::PLUGIN_MARKETPLACE.write,
+    installed_as: crate::names::PLUGIN_INSTALLED_AS.write,
+    shim: crate::names::OPENCODE_SHIM.write,
+};
+
+/// The names an install was made under before the rename: what `rename-local` moves an install
+/// off ([`move_ids`]), and what its undo puts it back under.
+pub const BEFORE: Ids = Ids {
+    name: crate::names::PLUGIN_NAME.reads[0],
+    marketplace: crate::names::PLUGIN_MARKETPLACE.history[0],
+    installed_as: crate::names::PLUGIN_INSTALLED_AS.history[0],
+    shim: crate::names::OPENCODE_SHIM.reads[0],
+};
+
+/// Every set of names an install has been made under. **One at a time**: installing under one
+/// takes every other out of the same files, so an old copy and a new one never both load.
+pub const EVERY_IDS: [Ids; 2] = [NOW, BEFORE];
+
+impl Ids {
+    /// Every other set of names, which installing under this one retires.
+    fn others(&self) -> impl Iterator<Item = &'static Ids> + '_ {
+        EVERY_IDS.iter().filter(move |ids| *ids != self)
+    }
+}
 
 /// What a person names a harness on the command line — a profile's `kind`.
 pub const HARNESSES: [&str; 3] = ["claude", "codex", "opencode"];
 
 /// Where things are on this machine, handed in so a test never reaches the operator's own.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Machine {
     /// Claude Code's config folder: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
     pub claude_config: PathBuf,
@@ -200,7 +250,7 @@ pub fn bundle_beside(exe: &Path) -> Option<PathBuf> {
 pub struct Step {
     /// The file or folder it is about.
     pub path: PathBuf,
-    /// What changes, in words: "enable charter@charter-app".
+    /// What changes, in words: "enable purlis@purlis-app".
     pub what: String,
     /// `false` when it is already so, and nothing will be written for it.
     pub needed: bool,
@@ -267,11 +317,22 @@ pub trait Adapter {
     /// The folder whose absence means this harness was never set up on this machine.
     fn home(&self, m: &Machine) -> PathBuf;
     /// What installing would change.
-    fn install(&self, m: &Machine) -> Result<Plan, String>;
+    fn install(&self, m: &Machine) -> Result<Plan, String> {
+        self.install_as(m, &NOW)
+    }
+    /// What installing under `ids` would change: the install, and every other set of names
+    /// taken out ([`EVERY_IDS`]).
+    fn install_as(&self, m: &Machine, ids: &Ids) -> Result<Plan, String>;
     /// What uninstalling would change.
     fn uninstall(&self, m: &Machine) -> Result<Plan, String>;
-    /// Whether charter's plugin is installed for this harness, whatever charter it names.
+    /// Whether charter's plugin is installed for this harness, whatever charter it names and
+    /// under whichever names ([`EVERY_IDS`]).
     fn installed(&self, m: &Machine) -> Result<bool, String>;
+    /// Whether it is installed only under the names it had before the rename ([`BEFORE`]):
+    /// what `rename-local` moves, and what [`refresh`] leaves to it.
+    fn only_before(&self, _m: &Machine) -> bool {
+        false
+    }
     /// The `charter` the installed hooks run, when they name one.
     fn runs(&self, m: &Machine) -> Option<PathBuf>;
     /// The files of this harness's own configuration that enable the retired plugin.
@@ -407,7 +468,10 @@ pub fn run(m: &Machine, verb: Verb, named: &[String], dry_run: bool) -> Vec<Outc
 /// - the installed hooks run this charter, or a charter that is no longer there — a copy that
 ///   runs another charter still on disk (a release on `PATH`, a development build) is that
 ///   charter's to refresh, and pointing it at this one would be a choice nobody made;
-/// - what is installed is not what installing now would write.
+/// - what is installed is not what installing now would write;
+/// - it is installed under the purlis names: an install still under the names it had before the
+///   rename is `rename-local`'s to move ([`move_ids`]), journalled so its undo puts it back,
+///   and a refresh that moved it would undo that undo at the next launch.
 ///
 /// Only the harnesses it wrote for come back, so an empty answer means there was nothing to do.
 pub fn refresh(m: &Machine) -> Vec<Outcome> {
@@ -416,7 +480,7 @@ pub fn refresh(m: &Machine) -> Vec<Outcome> {
     };
     let mut out = Vec::new();
     for a in adapters() {
-        if !a.home(m).is_dir() || !matches!(a.installed(m), Ok(true)) {
+        if !a.home(m).is_dir() || !matches!(a.installed(m), Ok(true)) || a.only_before(m) {
             continue;
         }
         if a.runs(m)
@@ -441,6 +505,72 @@ pub fn refresh(m: &Machine) -> Vec<Outcome> {
         });
     }
     out
+}
+
+/// **`rename-local`'s part** (#1266, V93m): every harness charter's plugin is installed for,
+/// under whichever names, installed again under `ids` and taken out from under every other —
+/// the Claude Code copy and its registration, the opencode shim's file name, and the Codex guard
+/// pointed at this charter. `ids` is [`NOW`] for the move and [`BEFORE`] for its undo.
+///
+/// Unlike [`refresh`], it does not ask which charter the installed hooks run: the copy lives in
+/// the config home's folder, which `rename-local` has just moved, so the registration of an
+/// install it does not redo would name a folder that is gone. A harness that is not set up, or
+/// has nothing installed, is left alone; only the harnesses it wrote for come back.
+pub fn move_ids(m: &Machine, ids: &Ids) -> Vec<Outcome> {
+    let mut out = Vec::new();
+    for a in adapters() {
+        if !a.home(m).is_dir() || !matches!(a.installed(m), Ok(true)) {
+            continue;
+        }
+        let plan = a.install_as(m, ids);
+        if plan.as_ref().is_ok_and(|p| !p.changes()) {
+            continue;
+        }
+        let (applied, failed) = match &plan {
+            Ok(plan) => apply(plan),
+            Err(_) => (0, None),
+        };
+        out.push(Outcome {
+            harness: a.harness(),
+            plan,
+            skipped: None,
+            failed,
+            applied,
+        });
+    }
+    out
+}
+
+/// One line per harness [`move_ids`] (or [`refresh`]) wrote for, and whether each finished:
+/// what `rename-local` says of the plugin.
+pub fn said(outcomes: &[Outcome]) -> Vec<(bool, String)> {
+    outcomes
+        .iter()
+        .map(|o| {
+            let failed = match (&o.plan, &o.failed) {
+                (Err(why), _) | (Ok(_), Some(why)) => Some(why.clone()),
+                _ => None,
+            };
+            let done: Vec<&str> = o
+                .plan
+                .as_ref()
+                .map(|plan| {
+                    plan.steps
+                        .iter()
+                        .filter(|s| s.needed && s.by.is_some_and(|by| by < o.applied))
+                        .map(|s| s.what.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            match failed {
+                Some(why) => (false, format!("the {} plugin: {why}", o.harness)),
+                None => (
+                    true,
+                    format!("the {} plugin: {}", o.harness, done.join("; ")),
+                ),
+            }
+        })
+        .collect()
 }
 
 /// Whether a launch of the app runs [`refresh`] on its own.
@@ -657,8 +787,13 @@ impl ClaudeCode {
         m.claude_config.join("settings.json")
     }
 
-    /// The copy of the plugin this machine should hold.
-    fn copy(m: &Machine) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+    /// Claude Code's own record of the marketplaces it has seen.
+    fn known(m: &Machine) -> PathBuf {
+        m.claude_config.join("plugins/known_marketplaces.json")
+    }
+
+    /// The copy of the plugin this machine should hold, named `ids.name`.
+    fn copy(m: &Machine, ids: &Ids) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
         let bundle = m.bundle.as_ref().ok_or(
             "charter cannot find the plugin the app ships beside this binary, so there is \
              nothing to install from. Run the `charter` inside the app, or name the plugin's \
@@ -679,6 +814,7 @@ impl ClaudeCode {
                 crate::plugin::NAME
             ));
         }
+        plugin.insert("name".to_owned(), json!(ids.name));
         plugin.insert(
             "description".to_owned(),
             json!(
@@ -690,9 +826,9 @@ impl ClaudeCode {
         files.insert(
             PathBuf::from(".claude-plugin/marketplace.json"),
             pretty(&json!({
-                "name": MARKETPLACE,
-                "owner": {"name": "charter"},
-                "plugins": [{"name": crate::plugin::NAME, "source": "./"}],
+                "name": ids.marketplace,
+                "owner": {"name": ids.name},
+                "plugins": [{"name": ids.name, "source": "./"}],
             })),
         );
         let binary = m.binary.clone();
@@ -777,10 +913,10 @@ impl Adapter for ClaudeCode {
         m.claude_config.clone()
     }
 
-    fn install(&self, m: &Machine) -> Result<Plan, String> {
+    fn install_as(&self, m: &Machine, ids: &Ids) -> Result<Plan, String> {
         let mut plan = Plan::default();
         let dir = plugin_dir(m);
-        let want = Self::copy(m)?;
+        let want = Self::copy(m, ids)?;
         let have =
             read_tree(&dir).map_err(|e| format!("{} could not be read: {e}", dir.display()))?;
         let fresh = have.as_ref() == Some(&want);
@@ -798,17 +934,20 @@ impl Adapter for ClaudeCode {
         let (mut map, raw) = json_object(&path)?;
         let source = json!({"source": {"source": "directory", "path": dir.display().to_string()}});
         let markets = object_at(&mut map, "extraKnownMarketplaces", &path)?;
-        let registered = markets.get(MARKETPLACE) == Some(&source);
-        markets.insert(MARKETPLACE.to_owned(), source);
+        let registered = markets.get(ids.marketplace) == Some(&source);
+        markets.insert(ids.marketplace.to_owned(), source);
         plan.step(
             &path,
-            format!("register that copy as the `{MARKETPLACE}` marketplace"),
+            format!(
+                "register that copy as the `{}` marketplace",
+                ids.marketplace
+            ),
             !registered,
         );
         let enabled = object_at(&mut map, "enabledPlugins", &path)?;
-        let on = enabled.get(INSTALLED_AS) == Some(&Value::Bool(true));
-        enabled.insert(INSTALLED_AS.to_owned(), Value::Bool(true));
-        plan.step(&path, format!("enable {INSTALLED_AS}"), !on);
+        let on = enabled.get(ids.installed_as) == Some(&Value::Bool(true));
+        enabled.insert(ids.installed_as.to_owned(), Value::Bool(true));
+        plan.step(&path, format!("enable {}", ids.installed_as), !on);
         if enabled
             .get(crate::plugin::SUPERSEDED)
             .is_some_and(crate::scaffold::text::truthy)
@@ -823,8 +962,51 @@ impl Adapter for ClaudeCode {
                 true,
             );
         }
+        // The same copy under its other names (#1266): two names are two plugins to Claude
+        // Code, so the one not installed now goes, and with it the marketplace it came from.
+        for other in ids.others() {
+            for (key, id) in [
+                ("enabledPlugins", other.installed_as),
+                ("extraKnownMarketplaces", other.marketplace),
+            ] {
+                let had = match map.get_mut(key) {
+                    Some(Value::Object(inner)) => inner.remove(id).is_some(),
+                    _ => false,
+                };
+                if had {
+                    plan.step(
+                        &path,
+                        format!(
+                            "retire {id}, the name this copy had before; it is {} now",
+                            if key == "enabledPlugins" {
+                                ids.installed_as
+                            } else {
+                                ids.marketplace
+                            }
+                        ),
+                        true,
+                    );
+                }
+            }
+        }
         if plan.steps[from..].iter().any(|s| s.needed) {
             plan.settle(from, Write::File(path, render_json(map, &raw)));
+        }
+        let from = plan.steps.len();
+        let known = Self::known(m);
+        if let Ok((mut map, raw)) = json_object(&known) {
+            for other in ids.others() {
+                if map.remove(other.marketplace).is_some() {
+                    plan.step(
+                        &known,
+                        format!("drop Claude Code's record of `{}`", other.marketplace),
+                        true,
+                    );
+                }
+            }
+            if plan.steps[from..].iter().any(|s| s.needed) {
+                plan.settle(from, Write::File(known, render_json(map, &raw)));
+            }
         }
         plan.notes.push(
             "a `claude` started from now on loads it; one already running does not. A chat the \
@@ -837,7 +1019,12 @@ impl Adapter for ClaudeCode {
     fn installed(&self, m: &Machine) -> Result<bool, String> {
         let path = Self::settings(m);
         json_object(&path)?;
-        Ok(enables(&path, INSTALLED_AS))
+        Ok(EVERY_IDS.iter().any(|ids| enables(&path, ids.installed_as)))
+    }
+
+    fn only_before(&self, m: &Machine) -> bool {
+        let path = Self::settings(m);
+        enables(&path, BEFORE.installed_as) && !enables(&path, NOW.installed_as)
     }
 
     fn runs(&self, m: &Machine) -> Option<PathBuf> {
@@ -861,39 +1048,50 @@ impl Adapter for ClaudeCode {
         let path = Self::settings(m);
         let (mut map, raw) = json_object(&path)?;
         let mut changed = false;
-        for (key, id, what) in [
-            (
-                "enabledPlugins",
-                INSTALLED_AS,
-                format!("stop enabling {INSTALLED_AS}"),
-            ),
-            (
-                "extraKnownMarketplaces",
-                MARKETPLACE,
-                format!("forget the `{MARKETPLACE}` marketplace"),
-            ),
-        ] {
-            let had = match map.get_mut(key) {
-                Some(Value::Object(inner)) => inner.remove(id).is_some(),
-                _ => false,
-            };
-            changed |= had;
-            plan.step(&path, what, had);
+        for ids in &EVERY_IDS {
+            for (key, id, what) in [
+                (
+                    "enabledPlugins",
+                    ids.installed_as,
+                    format!("stop enabling {}", ids.installed_as),
+                ),
+                (
+                    "extraKnownMarketplaces",
+                    ids.marketplace,
+                    format!("forget the `{}` marketplace", ids.marketplace),
+                ),
+            ] {
+                let had = match map.get_mut(key) {
+                    Some(Value::Object(inner)) => inner.remove(id).is_some(),
+                    _ => false,
+                };
+                changed |= had;
+                // The names it is installed under now are always said; an older name only when
+                // it was there to take out.
+                if had || *ids == NOW {
+                    plan.step(&path, what, had);
+                }
+            }
         }
         if changed {
             plan.settle(0, Write::File(path, render_json(map, &raw)));
         }
-        // Claude Code records a marketplace it has seen in its own list; only that entry goes.
-        let known = m.claude_config.join("plugins/known_marketplaces.json");
-        if let Ok((mut map, raw)) = json_object(&known)
-            && map.remove(MARKETPLACE).is_some()
-        {
-            plan.step(
-                &known,
-                format!("drop Claude Code's record of `{MARKETPLACE}`"),
-                true,
-            );
-            plan.settle(0, Write::File(known, render_json(map, &raw)));
+        // Claude Code records a marketplace it has seen in its own list; only those entries go.
+        let known = Self::known(m);
+        if let Ok((mut map, raw)) = json_object(&known) {
+            let from = plan.steps.len();
+            for ids in &EVERY_IDS {
+                if map.remove(ids.marketplace).is_some() {
+                    plan.step(
+                        &known,
+                        format!("drop Claude Code's record of `{}`", ids.marketplace),
+                        true,
+                    );
+                }
+            }
+            if plan.steps.len() > from {
+                plan.settle(from, Write::File(known, render_json(map, &raw)));
+            }
         }
         let dir = plugin_dir(m);
         let there = dir.exists();
@@ -1130,7 +1328,9 @@ impl Adapter for Codex {
         m.codex_home.clone()
     }
 
-    fn install(&self, m: &Machine) -> Result<Plan, String> {
+    /// The guard names no plugin id, so every set of names installs the same guard: the one
+    /// that runs this charter.
+    fn install_as(&self, m: &Machine, _ids: &Ids) -> Result<Plan, String> {
         let mut plan = Plan::default();
         let path = Self::config(m);
         let mut doc = Self::read(&path)?;
@@ -1288,11 +1488,26 @@ enum Author {
 }
 
 impl Opencode {
-    /// `<opencode config>/plugin/charter.ts`.
+    /// `<opencode config>/plugin/<file>`: where the shim is under one of its names.
+    fn path_named(m: &Machine, file: &str) -> PathBuf {
+        m.opencode_config.join("plugin").join(file)
+    }
+
+    /// Where the shim is installed now ([`NOW`]'s name).
     fn installed_path(m: &Machine) -> PathBuf {
-        m.opencode_config
-            .join("plugin")
-            .join(crate::opencode::FILE_NAME)
+        Self::path_named(m, NOW.shim)
+    }
+
+    /// The shim's own file under each name it has had, newest first, with who wrote it.
+    fn every_name(m: &Machine) -> Vec<(PathBuf, Result<Author, String>)> {
+        EVERY_IDS
+            .iter()
+            .map(|ids| {
+                let path = Self::path_named(m, ids.shim);
+                let author = Self::author(&path);
+                (path, author)
+            })
+            .collect()
     }
 
     fn author(path: &Path) -> Result<Author, String> {
@@ -1323,9 +1538,9 @@ impl Adapter for Opencode {
         m.opencode_config.clone()
     }
 
-    fn install(&self, m: &Machine) -> Result<Plan, String> {
+    fn install_as(&self, m: &Machine, ids: &Ids) -> Result<Plan, String> {
         let mut plan = Plan::default();
-        let path = Self::installed_path(m);
+        let path = Self::path_named(m, ids.shim);
         let want = crate::opencode::shim(crate::opencode::Arming::GuardOnly(&m.binary));
         let what = "charter's guard as an opencode plugin that runs this charter";
         match Self::author(&path)? {
@@ -1347,6 +1562,23 @@ impl Adapter for Opencode {
         if plan.changes() {
             plan.settle(0, Write::File(path, want.into_bytes()));
         }
+        // opencode loads every script in the folder, so the shim under any other name it has had
+        // would guard every call a second time (#1266): charter's own goes, and so does the
+        // retired Python charter's, which sat at the old name. Anybody else's file stays.
+        for other in ids.others() {
+            let path = Self::path_named(m, other.shim);
+            let what = match Self::author(&path)? {
+                Author::Charter(_) => format!(
+                    "remove charter's guard under {}, the name it had before; it is {} now",
+                    other.shim, ids.shim
+                ),
+                Author::Python => "remove the retired Python charter's opencode shim".to_owned(),
+                Author::Nobody | Author::Other => continue,
+            };
+            let from = plan.steps.len();
+            plan.step(&path, what, true);
+            plan.settle(from, Write::RemoveFile(path));
+        }
         plan.notes.push(
             "Only the guard is installed for opencode: the state hooks and the briefing reach an \
              opencode chat only when the app starts it."
@@ -1356,37 +1588,56 @@ impl Adapter for Opencode {
     }
 
     fn installed(&self, m: &Machine) -> Result<bool, String> {
-        Ok(matches!(
-            Self::author(&Self::installed_path(m))?,
-            Author::Charter(_)
-        ))
+        let mut any = false;
+        for (_, author) in Self::every_name(m) {
+            any |= matches!(author?, Author::Charter(_));
+        }
+        Ok(any)
+    }
+
+    fn only_before(&self, m: &Machine) -> bool {
+        let own = |ids: &Ids| {
+            matches!(
+                Self::author(&Self::path_named(m, ids.shim)),
+                Ok(Author::Charter(_))
+            )
+        };
+        own(&BEFORE) && !own(&NOW)
     }
 
     fn runs(&self, m: &Machine) -> Option<PathBuf> {
-        match Self::author(&Self::installed_path(m)).ok()? {
-            Author::Charter(text) => crate::opencode::binary_in(&text),
-            _ => None,
-        }
+        Self::every_name(m)
+            .into_iter()
+            .find_map(|(_, author)| match author {
+                Ok(Author::Charter(text)) => Some(text),
+                _ => None,
+            })
+            .and_then(|text| crate::opencode::binary_in(&text))
     }
 
     /// The Python charter's shim, which guards and briefs every opencode chat by whichever
     /// `charter` is on `PATH`.
     fn superseded(&self, m: &Machine) -> Vec<PathBuf> {
-        let path = Self::installed_path(m);
-        if Self::author(&path) == Ok(Author::Python) {
-            vec![path]
-        } else {
-            Vec::new()
-        }
+        Self::every_name(m)
+            .into_iter()
+            .filter(|(_, author)| *author == Ok(Author::Python))
+            .map(|(path, _)| path)
+            .collect()
     }
 
     fn uninstall(&self, m: &Machine) -> Result<Plan, String> {
         let mut plan = Plan::default();
-        let path = Self::installed_path(m);
-        let ours = matches!(Self::author(&path)?, Author::Charter(_));
-        plan.step(&path, "remove charter's opencode guard", ours);
-        if ours {
-            plan.settle(0, Write::RemoveFile(path));
+        for (path, author) in Self::every_name(m) {
+            let ours = matches!(author?, Author::Charter(_));
+            // The name it is installed under now is always said; an older one only when there.
+            if !ours && path != Self::installed_path(m) {
+                continue;
+            }
+            let from = plan.steps.len();
+            plan.step(&path, "remove charter's opencode guard", ours);
+            if ours {
+                plan.settle(from, Write::RemoveFile(path));
+            }
         }
         Ok(plan)
     }

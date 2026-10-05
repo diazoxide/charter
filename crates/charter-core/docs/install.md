@@ -71,13 +71,14 @@ with `claude --plugin-dir`. There is nothing to install into Claude Code, no mar
 add and no per-project install to keep in step: the plugin and the binary its hooks call come
 from the same build, so they cannot drift apart.
 
-The plugin is called `charter`. It carries every hook charter answers — the ones that
+The plugin is called `purlis`. It carries every hook charter answers — the ones that
 report a chat's state and the Bash guard, described in [hooks.md](hooks.md) — and the
 `handoff`, `working-in-a-clone`, `update`, `persona`, `secrets`, `browser`, `safe-remove`,
 `compact` and `add-curation-action` skills, which
 reach the model as
-`charter:<skill>`. Up to 0.2.0 it was called `charter-app`, and its skills were
-`charter-app:<skill>`. It lives in `Contents/Resources/plugin` on macOS and
+`purlis:<skill>`. Until the rename to purlis it was called `charter`, with skills
+`charter:<skill>`, and up to 0.2.0 `charter-app`, with skills `charter-app:<skill>`; a chat the
+app starts turns every one of those ids off. It lives in `Contents/Resources/plugin` on macOS and
 `/usr/lib/charter/plugin` on Linux. A chat the app starts also turns a plugin named
 `charter@charter` off for itself, so a plane whose settings enable an older charter plugin for
 your own terminal sessions does not give an app chat two sets of hooks. A `claude` you run in
@@ -99,7 +100,11 @@ app starts, it brings an installed copy that runs its own `charter` up to date. 
 installs for a harness you did not install for, and it leaves alone a copy that runs another
 `charter` that is still there. For Claude Code it keeps a copy of the app's
 plugin in `~/.config/charter/plugin/` whose hooks name this `charter` by its path, and
-registers it in your user `settings.json` as `charter@charter-app`. A chat the app starts
+registers it in your user `settings.json` as `purlis@purlis-app`, taking out
+`charter@charter-app`, the id an install from before the rename used; the local migration
+(`purlis migrate`, and the app at its launch) does the same for an install it finds, for every
+harness, and `purlis migrate --undo` puts it back under the old ids. For opencode the guard is
+`plugin/purlis.ts`, and a `plugin/charter.ts` of charter's own goes. A chat the app starts
 still loads the app's own copy instead. For Codex it adds only charter's Bash guard to
 `~/.codex/config.toml`, because the app already gives its own Codex chats the rest and Codex
 would run both. Codex asks you to trust that hook the next time it starts. It never enables

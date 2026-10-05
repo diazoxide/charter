@@ -154,14 +154,17 @@ describe("a chat's context gauge", () => {
     const manifest = JSON.parse(
       readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"),
     ) as { name: string };
-    expect(manifest.name).toBe("charter");
+    expect(manifest.name).toBe("purlis");
     expect(existsSync(join(pluginDir, "hooks", "hooks.json"))).toBe(true);
     // RN-3: the app runs its hooks through the `purlis` beside it; `charter` is only the alias.
     expect(realpathSync(now[`hookbinary-${chat}`])).toBe(realpathSync(built("purlis")));
+    // #1266: the plugin is `purlis`, and every id it had before is turned off beside it.
     expect(settings.enabledPlugins).toEqual({
       "charter@charter": false,
-      "charter@inline": true,
+      "purlis@inline": true,
+      "charter@inline": false,
       "charter-app@inline": false,
+      "charter@charter-app": false,
     });
 
     // 1. The feed: charter armed its own statusline as this session's statusLine — which it

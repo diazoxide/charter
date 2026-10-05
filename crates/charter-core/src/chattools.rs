@@ -31,8 +31,9 @@ use serde_json::{Map, Value, json};
 use crate::active::Place;
 
 /// The server's name in every harness's config, and so the prefix a harness gives its tools
-/// (`mcp__charter__todo_add` in Claude Code).
-pub const SERVER: &str = "charter";
+/// (`mcp__purlis__todo_add` in Claude Code, [`crate::names::MCP_TOOL_PREFIX`]). It is the
+/// plugin's name ([`crate::names::PLUGIN_NAME`]), renamed with it (#1266).
+pub const SERVER: &str = crate::names::PLUGIN_NAME.write;
 
 /// The `charter` subcommand that serves the tools over stdio.
 pub const SUBCOMMAND: &str = "mcp";

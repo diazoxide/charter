@@ -52,6 +52,14 @@
 //!   and a Bash call reading `.charter/vaults/db.json` in a plane was refused by the guard
 //!   before it ran — the model got the refusal and never the file.
 //!
+//! # Renamed `purlis` (#1266, V93m)
+//!
+//! The measurements above name the plugin `charter`, its name until the product was renamed.
+//! It is `purlis` now: it loads as [`LOADED_AS`], its skills are `purlis:<skill>` and its MCP
+//! tools `mcp__purlis__<tool>`. The old plugins are named `charter`, a different name, so a
+//! `--plugin-dir` load no longer wins the name over them, and each old id is pinned off by its
+//! whole id instead ([`FORMERLY`]), beside the Python charter's ([`SUPERSEDED`]).
+//!
 //! # Why the hook command names `$CHARTER_HOOK_BINARY` and not a path
 //!
 //! The command has to reach the `charter` the app shipped, by an absolute path, and the
@@ -66,31 +74,48 @@
 //! the plugin is not loaded at all, because the app loads it only when it has a binary.
 
 use crate::hookreg::Handler;
+use crate::names::{PLUGIN_INSTALLED_AS, PLUGIN_LOADED_AS, PLUGIN_NAME};
 
-/// The plugin's name, which is also how its skills are namespaced (`charter:handoff`).
+/// The plugin's name, which is also how its skills are namespaced (`purlis:handoff`) and what
+/// its MCP server is called ([`crate::chattools::SERVER`]).
 ///
-/// The product is charter, so its plugin is (#406, ADR 0056). Until then it was `charter-app`
-/// ([`FORMERLY`]), to keep its skills apart from the Python charter's, whose plugin is named
-/// `charter` too. They are kept apart by the pins instead: see the module header.
-pub const NAME: &str = "charter";
+/// The product is purlis, so its plugin is (#1266, V93m). It was `charter` (#406, ADR 0056),
+/// and before that `charter-app`; every id it had is pinned off ([`FORMERLY`]).
+pub const NAME: &str = PLUGIN_NAME.write;
 
 /// The id Claude Code gives a plugin loaded with `--plugin-dir`, and the one `enabledPlugins`
 /// names it by.
-pub const LOADED_AS: &str = "charter@inline";
+pub const LOADED_AS: &str = PLUGIN_LOADED_AS.write;
 
 /// The plugin a chat the app starts turns off for itself — the Python charter's, installed
 /// from its marketplace. Only for that session: `--settings` is the whole of how.
 ///
-/// Its *name* is `charter`, the same as [`NAME`]; only the marketplace after the `@` tells it
-/// from [`LOADED_AS`], and every pin matches on the whole id.
+/// It is not one of this plugin's own names, so it is not in [`crate::names`]: it is another
+/// product's id, which only the marketplace after the `@` told apart from this plugin's while
+/// both were named `charter`. Every pin matches on the whole id.
 pub const SUPERSEDED: &str = "charter@charter";
 
-/// The id [`LOADED_AS`] had before the plugin was renamed `charter` (#406). No chat loads a
-/// plugin by it any more; a chat the app starts turns it off, so a file that still turns it on
-/// is told the new id rather than trusted to mean it.
-pub const FORMERLY: &str = "charter-app@inline";
+/// **Every id this plugin had before it was renamed `purlis`** (#1266, ADR 0056's FORMERLY), each
+/// with the id that replaced it. A chat the app starts turns each one off, so a file that still
+/// turns one on is told the new id rather than trusted to mean it.
+///
+/// Turning them off is not only tidiness: Claude Code loads one plugin per *name*, and the old
+/// ones are named `charter` while this one is named `purlis`, so `--plugin-dir` no longer wins
+/// the name over them. A machine whose user settings still enable the copy `plugin install`
+/// wrote before the rename would otherwise load both, with two sets of hooks.
+pub const FORMERLY: [(&str, &str); 3] = [
+    (PLUGIN_LOADED_AS.history[0], LOADED_AS),
+    (PLUGIN_LOADED_AS.history[1], LOADED_AS),
+    (PLUGIN_INSTALLED_AS.history[0], PLUGIN_INSTALLED_AS.write),
+];
 
 /// The variable a hook command reads the app's own `charter` from.
+///
+/// **It keeps its old name until 1.0** (D-RN8-1), as the hook commands in a project's settings
+/// keep `charter …` (D-RN7-11): the bundled `hooks.json` and the opencode shim ship in the same
+/// bundle as the binary that sets it, and a chat is handed it under both prefixes
+/// ([`crate::envvar::twinned`]), so nothing reads it under the old name alone. RN-14 renames it
+/// with the window's other old names.
 pub const BINARY_ENV: &str = "CHARTER_HOOK_BINARY";
 
 /// Where the plugin's hooks file sits inside the plugin directory.
@@ -293,22 +318,35 @@ mod tests {
     }
 
     #[test]
-    fn the_plugin_is_called_charter_and_loads_as_charter_at_inline() {
-        // #406: the product is charter, so its plugin is, and its skills are `charter:<skill>`.
-        assert_eq!(NAME, "charter");
-        assert_eq!(LOADED_AS, "charter@inline");
+    fn the_plugin_is_called_purlis_and_loads_as_purlis_at_inline() {
+        // #1266 (V93m): the product is purlis, so its plugin is, and its skills are
+        // `purlis:<skill>`.
+        assert_eq!(NAME, "purlis");
+        assert_eq!(LOADED_AS, "purlis@inline");
         assert_eq!(LOADED_AS, format!("{NAME}@inline"));
     }
 
     #[test]
-    fn the_three_ids_charter_names_are_three_different_ids() {
-        // The Python charter's plugin is also *named* `charter`; only the marketplace tells
-        // `charter@charter` from `charter@inline`. Every pin matches on the whole id.
-        assert_eq!(FORMERLY, "charter-app@inline");
+    fn every_id_the_plugin_had_is_pinned_off_and_names_the_id_that_replaced_it() {
+        // ADR 0056's FORMERLY, for every id the plugin has had: the `--plugin-dir` load under
+        // both earlier names, and the copy `plugin install` wrote before the rename.
+        let old: Vec<&str> = FORMERLY.iter().map(|(old, _)| *old).collect();
+        assert_eq!(
+            old,
+            [
+                "charter@inline",
+                "charter-app@inline",
+                "charter@charter-app"
+            ]
+        );
+        for (old, new) in FORMERLY {
+            assert_ne!(old, new);
+            assert!(new.starts_with(&format!("{NAME}@")), "{new}");
+            assert_ne!(old, SUPERSEDED);
+            assert_ne!(old, LOADED_AS);
+        }
+        assert_eq!(FORMERLY[2].1, "purlis@purlis-app");
         assert_eq!(SUPERSEDED, "charter@charter");
-        assert_ne!(LOADED_AS, SUPERSEDED);
-        assert_ne!(LOADED_AS, FORMERLY);
-        assert_ne!(SUPERSEDED, FORMERLY);
     }
 
     #[test]

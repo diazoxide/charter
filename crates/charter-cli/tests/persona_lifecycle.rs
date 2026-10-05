@@ -142,6 +142,23 @@ fn create_of_the_reserved_name_charter_is_refused_and_writes_nothing() {
 }
 
 #[test]
+fn create_of_the_reserved_name_purlis_is_refused_and_writes_nothing() {
+    // #1266: the harness plugin is `purlis`, its skills `purlis:<skill>`.
+    let tmp = daily();
+    let made = charter(
+        &tmp,
+        &["persona", "create", "purlis", "--delegate-when", "anything"],
+    );
+    assert_eq!(made.status.code(), Some(1));
+    assert!(
+        err(&made).contains("the persona name 'purlis' is reserved — `purlis:<skill>`"),
+        "{}",
+        err(&made)
+    );
+    assert!(!root(&tmp).join("personas/purlis").exists());
+}
+
+#[test]
 fn remove_of_a_persona_another_extends_is_refused_without_force() {
     let tmp = daily();
     let made = charter(&tmp, &["persona", "create", "kid", "--extends", "devops"]);

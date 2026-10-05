@@ -121,7 +121,7 @@ fn a_harness_lists_charter_s_tools() {
     let p = project();
     let mut server = Server::start(p.path(), "alpha");
     let hello = server.initialize(false);
-    assert_eq!(hello["result"]["serverInfo"]["name"], "charter", "{hello}");
+    assert_eq!(hello["result"]["serverInfo"]["name"], "purlis", "{hello}");
 
     let listed = server.request("tools/list", json!({}));
     let names: Vec<&str> = listed["result"]["tools"]

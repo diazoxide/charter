@@ -296,7 +296,7 @@ pub struct Kit<'a> {
     /// The `charter` every hook runs.
     pub binary: &'a std::path::Path,
     /// The bundled Claude Code plugin ([`crate::plugin`]), where the app found it. Its
-    /// [`crate::opencode::SHIM_IN_BUNDLE`] is the plugin an opencode chat loads.
+    /// [`crate::opencode::shim_in`] is the plugin an opencode chat loads.
     pub plugin: Option<&'a std::path::Path>,
 }
 
@@ -882,12 +882,16 @@ mod tests {
         let (args, _) = claude("/bin/charter", empty.path());
         let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
 
+        // #1266: and every id the plugin had before it was renamed `purlis` is turned off, so a
+        // file or a machine that still enables one never loads it beside the bundled one.
         assert_eq!(
             settings["enabledPlugins"],
             serde_json::json!({
                 "charter@charter": false,
-                "charter@inline": true,
+                "purlis@inline": true,
+                "charter@inline": false,
                 "charter-app@inline": false,
+                "charter@charter-app": false,
             })
         );
     }
@@ -901,9 +905,11 @@ mod tests {
         let chosen = BTreeMap::from([
             ("figma@claude-plugins-official".to_owned(), false),
             ("serena@claude-plugins-official".to_owned(), true),
-            ("charter@inline".to_owned(), false),
+            ("purlis@inline".to_owned(), false),
+            ("charter@inline".to_owned(), true),
             ("charter@charter".to_owned(), true),
             ("charter-app@inline".to_owned(), true),
+            ("charter@charter-app".to_owned(), true),
         ]);
         let (args, _) = claude_with("/bin/charter", empty.path(), &chosen);
         let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
@@ -911,9 +917,11 @@ mod tests {
         assert_eq!(
             settings["enabledPlugins"],
             serde_json::json!({
-                "charter@inline": true,
+                "purlis@inline": true,
                 "charter@charter": false,
+                "charter@inline": false,
                 "charter-app@inline": false,
+                "charter@charter-app": false,
                 "figma@claude-plugins-official": false,
                 "serena@claude-plugins-official": true,
             })
@@ -949,11 +957,11 @@ mod tests {
             settings["permissions"],
             serde_json::json!({"allow": [
                 "Bash(charter session record *)",
-                "mcp__charter__todo_list",
-                "mcp__charter__memory_search",
-                "mcp__charter__session_record_list",
-                "mcp__charter__session_record_read",
-                "mcp__charter__change_status",
+                "mcp__purlis__todo_list",
+                "mcp__purlis__memory_search",
+                "mcp__purlis__session_record_list",
+                "mcp__purlis__session_record_read",
+                "mcp__purlis__change_status",
             ]})
         );
     }
@@ -984,7 +992,7 @@ mod tests {
         assert!(others.contains(&"ask_operator"), "{others:?}");
         assert!(others.contains(&"todo_add"), "{others:?}");
         for name in others {
-            let rule = format!("mcp__charter__{name}");
+            let rule = format!("mcp__purlis__{name}");
             assert!(
                 !allowed
                     .iter()
@@ -996,7 +1004,7 @@ mod tests {
         for allow in &allowed {
             let allow = allow.as_str().expect("a rule");
             assert!(
-                allow != "mcp__charter" && !allow.starts_with("mcp__charter__*"),
+                allow != "mcp__charter" && !allow.starts_with("mcp__purlis__*"),
                 "{allow}"
             );
         }
@@ -1133,11 +1141,11 @@ mod tests {
             settings["permissions"]["allow"],
             serde_json::json!([
                 "Bash(charter session record *)",
-                "mcp__charter__todo_list",
-                "mcp__charter__memory_search",
-                "mcp__charter__session_record_list",
-                "mcp__charter__session_record_read",
-                "mcp__charter__change_status",
+                "mcp__purlis__todo_list",
+                "mcp__purlis__memory_search",
+                "mcp__purlis__session_record_list",
+                "mcp__purlis__session_record_read",
+                "mcp__purlis__change_status",
             ])
         );
         assert_eq!(
@@ -1539,10 +1547,10 @@ mod tests {
         );
     }
 
-    /// An opencode chat's arming, with the bundled shim at `<plugin>/opencode/charter.ts`.
+    /// An opencode chat's arming, with the bundled shim at `<plugin>/opencode/purlis.ts`.
     fn opencode_hooks(binary: &str) -> (tempfile::TempDir, StateHooks) {
         let plugin = tempfile::tempdir().expect("a plugin directory");
-        let shim = plugin.path().join(crate::opencode::SHIM_IN_BUNDLE);
+        let shim = crate::opencode::shim_in(plugin.path());
         std::fs::create_dir_all(shim.parent().expect("a parent")).expect("opencode/");
         std::fs::write(
             &shim,
@@ -1580,7 +1588,7 @@ mod tests {
         assert_eq!(env["OPENCODE_PURE"], "0", "`1` would load no plugin at all");
         let config: serde_json::Value =
             serde_json::from_str(&env["OPENCODE_CONFIG_CONTENT"]).expect("JSON");
-        let shim = plugin.path().join("opencode/charter.ts");
+        let shim = plugin.path().join("opencode/purlis.ts");
         assert_eq!(
             config["plugin"],
             serde_json::json!([format!("file://{}", shim.display())]),

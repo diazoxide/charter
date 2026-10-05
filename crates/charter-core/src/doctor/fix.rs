@@ -206,6 +206,11 @@ pub fn apply(root: &Path, id: FixId) -> Fixed {
             Err(why) => Fixed::Refused(why),
         };
     }
+    if id == FixId::RenameLocal {
+        // The harness plugin moves with the rest where this charter ships one (RN-8).
+        let machine = this_machine(None).ok().filter(|m| m.bundle.is_some());
+        return applied(root, id, machine.as_ref());
+    }
     applied(root, id, None)
 }
 
@@ -227,7 +232,7 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
         };
     }
     if id == FixId::RenameLocal {
-        return rename_local(root);
+        return rename_local(root, machine);
     }
     if let Some(why) = refusal(root, id) {
         return Fixed::Refused(why);
@@ -280,18 +285,21 @@ fn plugin_install(machine: &crate::plugin_install::Machine) -> Fixed {
 /// `rename-local`: this machine's local state, with the project at `root` among the projects
 /// moved when it is one. A project this charter may not write is left as it is by the move
 /// itself, which asks each project.
-fn rename_local(root: &Path) -> Fixed {
+fn rename_local(root: &Path, machine: Option<&crate::plugin_install::Machine>) -> Fixed {
     let here: Vec<std::path::PathBuf> = crate::names::has_manifest(root)
         .then(|| root.to_path_buf())
         .into_iter()
         .collect();
-    let Some(local) = crate::renamelocal::Local::of_this_machine(&here) else {
+    let Some(mut local) = crate::renamelocal::Local::of_this_machine(&here) else {
         return Fixed::Refused(
             "charter cannot tell where this machine's config home is, so there is nowhere to \
              journal a move; nothing was moved"
                 .to_owned(),
         );
     };
+    // The harness plugin moves with the rest (RN-8), installed from the charter the doctor
+    // was handed, as its `plugin-install` fix installs it.
+    local.plugin = machine.cloned();
     moved(crate::renamelocal::run(
         &local,
         &crate::renamelocal::Seams::real(),

@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn a_codex_chat_is_handed_charter_s_mcp_server_for_that_session_alone() {
-        // HP-7: `-c mcp_servers.charter=…` adds a server for one session beside the operator's.
+        // HP-7 (#1266: named purlis): `-c mcp_servers.purlis=…` adds a server for one session beside the operator's.
         let StateHooks::ThisSessionOnly { args, .. } =
             adapter().arm(kit(), None, &crate::harness_plugin::Chosen::new(), None)
         else {
@@ -373,7 +373,7 @@ mod tests {
         };
         let flag = args
             .iter()
-            .find_map(|arg| arg.strip_prefix("mcp_servers.charter="))
+            .find_map(|arg| arg.strip_prefix("mcp_servers.purlis="))
             .expect("the server's -c pair");
         let at = args
             .iter()

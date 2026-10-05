@@ -14,6 +14,14 @@
 //!   records, copied from `charter/…` to `purlis/…` and read back before anything reads them
 //!   there ([`keychain`], RN-6, V93h). The old items are kept.
 //!
+//! And **the harness plugin** (RN-8, #1266), where `local.plugin` says which charter and bundle
+//! to install it from: every harness charter's plugin is installed for is installed again under
+//! the purlis names and taken out from under the old ones (`plugin_install::move_ids`) — the
+//! Claude Code copy lives in the config home's folder, so its registration has to follow the
+//! move — the opencode shim becomes `purlis.ts`, and the Codex guard runs this charter. That
+//! step rewrites files rather than renaming them, so its journal entry says only that it was
+//! made, and the undo installs under the old names again, after every move is put back.
+//!
 //! Nothing else: committed project files are RN-7's.
 //!
 //! **A move is a rename, so it is whole or not at all.** Each is written to the journal before it
@@ -84,6 +92,10 @@ pub struct Local {
     /// The identifier of the app this runs in, at its launch: its own single-instance lock and
     /// socket are its own, not a second app's ([`busy::Instances::of`]). `None` in a terminal.
     pub own_app: Option<String>,
+    /// The harnesses' folders, the charter a hook runs and the bundled plugin, for the plugin's
+    /// step; `None` leaves the plugin alone. Its `charter_dir` is not read: the step asks
+    /// [`crate::machine::dir`] once the config home has moved.
+    pub plugin: Option<crate::plugin_install::Machine>,
 }
 
 /// The app's log folder under each identifier.
@@ -119,6 +131,7 @@ impl Local {
             logs,
             planes: planes.to_vec(),
             own_app: None,
+            plugin: None,
         })
     }
 
@@ -246,6 +259,9 @@ enum Entry {
         vault: String,
         ids: BTreeMap<String, String>,
     },
+    /// The harness plugin is about to be installed under the purlis names and taken out from
+    /// under the old ones; its undo installs it under the old names again.
+    Plugin,
     /// Every entry before this one was undone.
     Undone,
     /// An undo began and is not finished: the launch moves nothing while this is the last word.
@@ -400,6 +416,9 @@ pub fn run(local: &Local, seams: &Seams) -> Moved {
     for plane in &planes {
         keychain::copy_plane(local, seams, &mut moved, plane, &written);
     }
+    if let Some(m) = &local.plugin {
+        move_plugin(local, &mut moved, m);
+    }
     if moved.said.is_empty() {
         moved.note(
             "nothing to move: this machine's local state already has the purlis names".into(),
@@ -456,6 +475,58 @@ fn move_one(
                 from.display()
             ));
             false
+        }
+    }
+}
+
+/// The harness plugin under the purlis names (see the module), from `m` with charter's
+/// directory where it is now.
+fn move_plugin(local: &Local, moved: &mut Moved, m: &crate::plugin_install::Machine) {
+    use crate::plugin_install as install;
+    let mut m = m.clone();
+    m.charter_dir = local.home();
+    let wanted = install::adapters().any(|a| {
+        a.home(&m).is_dir()
+            && matches!(a.installed(&m), Ok(true))
+            && a.install(&m).is_ok_and(|plan| plan.changes())
+    });
+    if !wanted {
+        return;
+    }
+    if let Err(e) = write_entry(local, &Entry::Plugin) {
+        moved.failed(format!(
+            "the harness plugin: the journal could not be written ({e}), so it was left as it is"
+        ));
+        return;
+    }
+    for (ok, line) in install::said(&install::move_ids(&m, &install::NOW)) {
+        if ok {
+            moved.done(line);
+        } else {
+            moved.failed(line);
+        }
+    }
+}
+
+/// The plugin's step put back: installed under the names it had before, from `local.plugin`,
+/// once every move is undone and charter's directory is the old folder again.
+fn unmove_plugin(local: &Local, moved: &mut Moved) {
+    use crate::plugin_install as install;
+    let Some(m) = &local.plugin else {
+        moved.failed(
+            "the harness plugin: this charter cannot find the plugin it ships, so the plugin \
+             was not put back under its old names. Run the undo with the `purlis` inside the app"
+                .to_owned(),
+        );
+        return;
+    };
+    let mut m = m.clone();
+    m.charter_dir = local.home();
+    for (ok, line) in install::said(&install::move_ids(&m, &install::BEFORE)) {
+        if ok {
+            moved.done(line);
+        } else {
+            moved.failed(line);
         }
     }
 }
@@ -772,6 +843,11 @@ pub fn undo(local: &Local, seams: &Seams) -> Moved {
     for entry in pending.iter().rev() {
         undo_one(local, seams, &mut moved, entry);
     }
+    // Last, whatever its place in the journal: it is installed into charter's directory, which
+    // is only where it ends up once the config home is back.
+    if pending.iter().any(|entry| **entry == Entry::Plugin) {
+        unmove_plugin(local, &mut moved);
+    }
     if !moved.complete {
         moved.note(format!(
             "the steps not put back are still pending; `{UNDO_COMMAND}` finishes them, and until \
@@ -872,7 +948,7 @@ fn only_our_moves(local: &Local, planes: &[PathBuf], pending: &[&Entry]) -> Resu
             Entry::Copied { .. } | Entry::Switched { .. } | Entry::Rebased { .. } => {
                 keychain::ours(entry)
             }
-            Entry::Undone | Entry::Undoing => true,
+            Entry::Plugin | Entry::Undone | Entry::Undoing => true,
         };
         if !ours {
             return Err(serde_json::to_string(entry).unwrap_or_else(|_| format!("{entry:?}")));
@@ -950,7 +1026,7 @@ fn undo_one(local: &Local, seams: &Seams, moved: &mut Moved, entry: &Entry) {
             keys,
         } => keychain::switch_back(seams, moved, plane, vault, from, to, keys),
         Entry::Rebased { plane, vault, ids } => keychain::rebase_back(moved, plane, vault, ids),
-        Entry::Undone | Entry::Undoing => {}
+        Entry::Plugin | Entry::Undone | Entry::Undoing => {}
     }
 }
 
@@ -961,13 +1037,21 @@ fn undo_one(local: &Local, seams: &Seams, moved: &mut Moved, entry: &Entry) {
 /// **The log folder is left where it is** (D-RN5-12): the app has its own log file open in it
 /// by now, and a move under the open file would have the next day's file made under the old
 /// name again. `purlis migrate` and the `rename-local` fix move it, with the app closed.
-pub fn at_launch(identifier: &str) -> Option<Moved> {
+///
+/// `plugin` is what the plugin's step installs from (the app's own `charter` and bundled plugin),
+/// or `None` to leave the plugin alone — as a build that does not refresh it on its own
+/// (`plugin_install::refreshes_on_its_own`) does.
+pub fn at_launch(
+    identifier: &str,
+    plugin: Option<crate::plugin_install::Machine>,
+) -> Option<Moved> {
     if crate::envvar::disagreement().is_some() {
         return None;
     }
     let mut local = Local::of_this_machine(&[])?;
     local.logs = None;
     local.own_app = Some(identifier.to_owned());
+    local.plugin = plugin;
     if undone(&local) {
         return None;
     }

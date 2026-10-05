@@ -207,18 +207,21 @@ that folder**, so moving it moves nothing of charter's. The app arms every chat 
 the command line, for that session alone, and writes nothing into any config folder:
 
 - **Claude Code** gets `--plugin-dir <the bundled plugin>`: the app's own plugin,
-  `charter`, with every hook charter answers — the state hooks and the Bash guard — and
+  `purlis`, with every hook charter answers — the state hooks and the Bash guard — and
   the `handoff`, `working-in-a-clone`, `update`, `persona`, `secrets`, `browser`,
   `safe-remove`, `compact` and `add-curation-action` skills, which reach the model as
-  `charter:<skill>`. Beside it, `--settings` carries `enabledPlugins` with
-  `charter@inline` pinned on — a project file a chat can write could otherwise turn it
+  `purlis:<skill>`, and the app's MCP server, `purlis` (tools `mcp__purlis__<tool>`).
+  Beside it, `--settings` carries `enabledPlugins` with
+  `purlis@inline` pinned on — a project file a chat can write could otherwise turn it
   off — and a plugin named `charter@charter` turned off, so a plane whose settings enable an
   older charter plugin for your terminal sessions does not give an app chat two sets of hooks
   and two `handoff` skills. The Python charter's plugin is *named* `charter` too, and Claude
   Code loads one plugin per name: turned off, it cannot take the bundled one's place, and the
-  bundled one pinned on cannot be swapped for it (measured on claude 2.1.282). The plugin's
-  old id, `charter-app@inline`, is turned off as well, so a file that still names it is told
-  the new one. `--settings` merges with the settings in force and wins where it
+  bundled one pinned on cannot be swapped for it (measured on claude 2.1.282). Every id
+  the plugin had before it was renamed `purlis` — `charter@inline`, `charter-app@inline` and
+  the installed copy's `charter@charter-app` — is turned off as well: they are named
+  `charter`, a different name from `purlis`, so nothing else keeps them from loading beside
+  it, and a file that still names one is told the new one. `--settings` merges with the settings in force and wins where it
   names a key (measured on claude 2.1.276 and 2.1.280), and it is for that session only.
 - **Codex** gets `-c hooks.<Event>=[…]` for the four state events Codex fires
   (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) and the Bash guard on
@@ -276,7 +279,7 @@ profile is called), `$CHARTER_HARNESS_PROFILE` and `$CHARTER_ROOT` in its enviro
   `charter.local.toml` git would commit. Nothing is run and nothing is written.
 
 **`charter doctor` shows a row per profile and runs nothing to fill it.** A profile it may
-ask about reads OK — *the app arms each chat with its own plugin, charter@inline*, or for Codex
+ask about reads OK — *the app arms each chat with its own plugin, purlis@inline*, or for Codex
 *the app arms each Codex chat with charter's hooks; Codex asks once to trust them* — with the
 program it found. What can still be wrong is whether the harness can be found at all, and
 that is a warning naming the directories searched and the fix: an absolute command in

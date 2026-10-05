@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(w.state, State::Wired, "{w:?}");
         assert!(
             w.detail
-                .starts_with("the app arms each chat with its own plugin, charter@inline — "),
+                .starts_with("the app arms each chat with its own plugin, purlis@inline — "),
             "{}",
             w.detail
         );

@@ -201,9 +201,15 @@ fn the_entries_carry_the_names_on_disk_today() {
     assert_eq!(crate::provenance::PERSONA, TRAILER_PERSONA.write);
     assert_eq!(TRAILER_PERSONA.history[..], ["Charter-Persona"]);
     assert_eq!(BRANCH_PREFIX.history[..], ["charter/"]);
-    assert_eq!(crate::plugin::LOADED_AS, PLUGIN_LOADED_AS.history[0]);
+    // The harness plugin is renamed (RN-8, #1266): it writes the purlis ids, and every old id
+    // is pinned off by name (`plugin::FORMERLY`).
+    assert_eq!(crate::plugin::LOADED_AS, PLUGIN_LOADED_AS.write);
     assert_eq!(
         crate::plugin_install::INSTALLED_AS,
+        PLUGIN_INSTALLED_AS.write
+    );
+    assert_eq!(
+        crate::plugin_install::BEFORE.installed_as,
         PLUGIN_INSTALLED_AS.history[0]
     );
     assert_eq!(
@@ -276,7 +282,8 @@ fn the_entries_carry_the_names_on_disk_today() {
     // Every remaining entry, so no old name in this module is one the code never had.
     assert_eq!(crate::profiles::COMMITTED_FILE, PLANE_MANIFEST.reads[0]);
     assert_eq!(crate::extension::MANIFEST, EXTENSION_MANIFEST.reads[0]);
-    assert_eq!(crate::opencode::FILE_NAME, OPENCODE_SHIM.reads[0]);
+    assert_eq!(crate::opencode::FILE_NAME, OPENCODE_SHIM.write);
+    assert_eq!(crate::plugin_install::BEFORE.shim, OPENCODE_SHIM.reads[0]);
     assert_eq!(crate::machine::DIR, CONFIG_HOME.reads[0]);
     assert_eq!(crate::datahome::DIR, DATA_HOME.reads[0]);
     assert_eq!(crate::machine::DAEMON_DIR, DAEMON_DIR.reads[0]);
@@ -284,19 +291,33 @@ fn the_entries_carry_the_names_on_disk_today() {
     // The old prefix of every environment variable, which chats and shells an older build
     // started still carry (RN-2d, `crate::envvar`).
     assert_eq!("CHARTER_", ENV_PREFIX.reads[0]);
-    assert_eq!(crate::plugin::NAME, PLUGIN_NAME.reads[0]);
-    assert_eq!(crate::plugin::FORMERLY, PLUGIN_LOADED_AS.history[1]);
+    assert_eq!(crate::plugin::NAME, PLUGIN_NAME.write);
+    assert_eq!(crate::plugin_install::BEFORE.name, PLUGIN_NAME.reads[0]);
+    let formerly: Vec<&str> = crate::plugin::FORMERLY
+        .iter()
+        .map(|(old, _)| *old)
+        .collect();
     assert_eq!(
-        crate::plugin_install::MARKETPLACE,
+        formerly,
+        [
+            PLUGIN_LOADED_AS.history[0],
+            PLUGIN_LOADED_AS.history[1],
+            PLUGIN_INSTALLED_AS.history[0]
+        ]
+    );
+    assert_eq!(crate::plugin_install::MARKETPLACE, PLUGIN_MARKETPLACE.write);
+    assert_eq!(
+        crate::plugin_install::BEFORE.marketplace,
         PLUGIN_MARKETPLACE.history[0]
     );
+    assert_eq!(format!("{}:", crate::plugin::NAME), SKILL_NAMESPACE.write);
     assert_eq!(
-        format!("{}:", crate::plugin::NAME),
+        format!("{}:", crate::plugin_install::BEFORE.name),
         SKILL_NAMESPACE.reads[0]
     );
     assert_eq!(
         format!("mcp__{}__", crate::chattools::SERVER),
-        MCP_TOOL_PREFIX.reads[0]
+        MCP_TOOL_PREFIX.write
     );
     assert_eq!(crate::applog::APP, BUNDLE_ID.reads[0]);
     // RN-3 ships `purlis` with `charter` as its alias; the guards know every name it has had.
@@ -339,8 +360,8 @@ fn every_old_name_an_entry_holds_is_pinned_by_the_test_above() {
 #[test]
 fn every_variable_the_product_sets_is_written_under_the_purlis_prefix() {
     // RN-2d (V93k): the product writes `PURLIS_<X>` and reads `CHARTER_<X>` only as the
-    // fallback ([`crate::envvar`]). The plugin's hook text keeps its one old name until the
-    // plugin is renamed; a chat is given both names, so either reads.
+    // fallback ([`crate::envvar`]). The plugin's hook text keeps its one old name until 1.0
+    // (D-RN8-1, beside D-RN7-11's hook commands); a chat is given both names, so either reads.
     for written in [
         crate::hookwire::SOCKET_ENV,
         crate::hookwire::CHAT_ENV,
