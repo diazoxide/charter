@@ -435,19 +435,65 @@ impl Structured {
 
 /// [`secret_kind`] of `text` as the document reads, keys included: parsed as `form`, then
 /// written out again with every escape decoded — JSON the way charter writes a manifest
-/// ([`crate::pyjson::dumps_indent2_unicode`]), TOML by the `toml` writer. `None` for a
-/// document with no secret, and for text that does not parse as `form`, whose bytes are all
-/// a scan of the text has to go on.
+/// ([`crate::pyjson::dumps_indent2_unicode`]), TOML by the `toml` writer — and then each key
+/// and string value on its own. `None` for a document with no secret, and for text that does
+/// not parse as `form`, whose bytes are all a scan of the text has to go on.
 ///
-/// The settings editors ask the same of what is typed into them (Edit as JSON, Edit as
-/// TOML), and a plane save of each staged file of that form (#1295), so a document the
-/// editors refuse is one the save refuses.
+/// A project save asks it of each staged file of that form (#1295). The settings editors ask
+/// the whole-document half of it of what is typed into them, so a document the editors refuse
+/// is one the save refuses; the save refuses a little more, until the editors ask this too.
 pub fn parsed_kind(form: Structured, text: &str) -> Option<&'static str> {
-    let read = match form {
-        Structured::Json => crate::pyjson::dumps_indent2_unicode(&serde_json::from_str(text).ok()?),
-        Structured::Toml => toml::to_string(&text.parse::<toml::Table>().ok()?).ok()?,
-    };
-    secret_kind(&read)
+    let mut strings = Vec::new();
+    match form {
+        Structured::Json => {
+            let doc = serde_json::from_str(text).ok()?;
+            json_strings(&doc, &mut strings);
+            either(&crate::pyjson::dumps_indent2_unicode(&doc), &strings)
+        }
+        Structured::Toml => {
+            let table = text.parse::<toml::Table>().ok()?;
+            toml_strings(&table, &mut strings);
+            either(&toml::to_string(&table).ok()?, &strings)
+        }
+    }
+}
+
+/// [`secret_kind`] of the document as written out again, then of each of its strings on its
+/// own (D-1295-6). The whole document first, so a key and its value still read as an
+/// assignment; then each string, where an escaped control character is the character it
+/// spells — the writers keep `\n` and `\t` as two characters, and the letter after the
+/// backslash would otherwise hide the start of what follows it.
+fn either(read: &str, strings: &[&str]) -> Option<&'static str> {
+    secret_kind(read).or_else(|| strings.iter().find_map(|one| secret_kind(one)))
+}
+
+/// Every key and string value of a JSON document, in document order.
+fn json_strings<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s),
+        serde_json::Value::Array(items) => items.iter().for_each(|item| json_strings(item, out)),
+        serde_json::Value::Object(map) => map.iter().for_each(|(key, item)| {
+            out.push(key);
+            json_strings(item, out);
+        }),
+        _ => {}
+    }
+}
+
+/// Every key and string value of a TOML table, in document order.
+fn toml_strings<'a>(table: &'a toml::Table, out: &mut Vec<&'a str>) {
+    fn value<'a>(item: &'a toml::Value, out: &mut Vec<&'a str>) {
+        match item {
+            toml::Value::String(s) => out.push(s),
+            toml::Value::Array(items) => items.iter().for_each(|one| value(one, out)),
+            toml::Value::Table(table) => toml_strings(table, out),
+            _ => {}
+        }
+    }
+    for (key, item) in table {
+        out.push(key);
+        value(item, out);
+    }
 }
 
 /// A credential [`found`] in a text: its kind, and the 1-based line it starts on. Never the
@@ -1405,6 +1451,67 @@ mod parsed_tests {
             );
             assert_eq!(parsed_kind(form, text), Some(kind), "{text}");
         }
+    }
+
+    /// An escaped control character in front of a credential (D-1295-6): written out again,
+    /// the escape stays two characters (`\n`, `\t`), and the letter after its backslash hides
+    /// the token's start from the rules that need a boundary there. Each string is asked on
+    /// its own as well, where the control character is what it is.
+    #[test]
+    fn an_escaped_control_character_before_a_credential_does_not_hide_it() {
+        let token = ["ghp", "_0123456789abcdefABCDEFghij"].concat();
+        let aws = "AKIAIOSFODNN7EXAMPLE";
+        for escape in ["\\n", "\\t"] {
+            for (form, text, kind) in [
+                (
+                    Structured::Json,
+                    format!(r#"{{"note": "the deploy{escape}{token}"}}"#),
+                    "a token by its forge's prefix",
+                ),
+                (
+                    Structured::Json,
+                    format!(r#"{{"note": "the deploy{escape}{aws}"}}"#),
+                    "AWS access key",
+                ),
+                (
+                    Structured::Json,
+                    format!(r#"{{"the deploy{escape}{token}": 1}}"#),
+                    "a token by its forge's prefix",
+                ),
+                (
+                    Structured::Toml,
+                    format!("[deploy]\nnote = \"the deploy{escape}{token}\"\n"),
+                    "a token by its forge's prefix",
+                ),
+                (
+                    Structured::Toml,
+                    format!("[deploy]\nnote = \"the deploy{escape}{aws}\"\n"),
+                    "AWS access key",
+                ),
+                (
+                    Structured::Toml,
+                    format!("[deploy]\nnotes = [\"one\", \"the deploy{escape}{token}\"]\n"),
+                    "a token by its forge's prefix",
+                ),
+            ] {
+                assert_eq!(parsed_kind(form, &text), Some(kind), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_and_its_value_are_still_read_together() {
+        // The whole document is still asked: `"password": "…"` in JSON is no assignment, but
+        // TOML writes `password = "…"`, and neither string alone is a secret.
+        assert_eq!(
+            parsed_kind(
+                Structured::Toml,
+                "[x]\n\"pass\\u0077ord\" = \"hunter2hunter2\"\n"
+            ),
+            Some("credential assignment")
+        );
+        assert_eq!(secret_kind("password"), None);
+        assert_eq!(secret_kind("hunter2hunter2"), None);
     }
 
     #[test]

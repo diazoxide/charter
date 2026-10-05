@@ -606,6 +606,17 @@ fn a_secret_spelled_with_escapes_in_a_json_or_toml_file_stops_the_save() {
             "[extensions.stats.settings]\n\"pass\\u0077ord\" = \"hunter2hunter2\"\n",
             "credential assignment",
         ),
+        // An escaped tab in front of a token (D-1295-6).
+        (
+            manifest,
+            r#"{"name": "alpha", "description": "the deploy\tghp_0123456789abcdefABCDEFghij"}"#,
+            "a token by its forge's prefix",
+        ),
+        (
+            "charter.toml",
+            "[workspace]\ndefault = \"the deploy\\tghp_0123456789abcdefABCDEFghij\"\n",
+            "a token by its forge's prefix",
+        ),
     ] {
         let fixture = Fixture::plane();
         let (code, said) = fixture.save_with(path, text.as_bytes());
