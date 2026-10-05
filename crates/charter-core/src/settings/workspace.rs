@@ -292,8 +292,8 @@ pub fn save(
 /// - text that is not a JSON object is refused, so a half-mended manifest is never written;
 /// - what the settings reader would refuse in it is refused, except what the manifest already
 ///   held — an edit is not refused for a key it did not touch;
-/// - a secret-shaped value anywhere in it is refused, whatever it held before: a LIVE
-///   workspace's manifest is committed.
+/// - a secret-shaped value anywhere in it is refused, whatever it held before, as typed and as
+///   the parsed document holds it: a LIVE workspace's manifest is committed.
 ///
 /// **It stays whose it was**, as a form's save leaves it: a manifest a hand wrote (charter's
 /// digest does not match) is written as typed, byte for byte, and stays the operator's; one
@@ -335,7 +335,11 @@ pub fn save_text(
         .into_iter()
         .filter(|why| !standing.contains(why))
         .collect();
-    if let Some(kind) = crate::secretshape::secret_kind(text) {
+    // As typed, and as charter reads it: a string can spell a character as an escape, and the
+    // document — which is also what charter's own writer puts on disk — holds the character.
+    if let Some(kind) = crate::secretshape::secret_kind(text)
+        .or_else(|| crate::secretshape::secret_kind(&crate::pyjson::dumps_indent2_unicode(&doc)))
+    {
         refused.push(format!(
             "{file} looks like it holds a secret ({kind}), so nothing was saved — it is \
              committed with a LIVE workspace, so every clone of this plane would carry the \

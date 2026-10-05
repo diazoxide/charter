@@ -21,6 +21,16 @@ describe("the key a refusal names", () => {
     ['[persona] default = "ghost" names no persona in this project', ["persona", "default"]],
     ['theme in charter.toml is not a table — write [theme] with use = "<theme>"', ["theme"]],
     ["charter.toml is not valid TOML", undefined],
+    // The profiles loader's: `is` is a word of the sentence, never a key's name.
+    [
+      "[harness.default] is in charter.toml, which is committed — a profile is this machine's",
+      undefined,
+    ],
+    [
+      "[harness.work] is in charter.toml, which is committed — a profile is this machine's",
+      undefined,
+    ],
+    ["[plane] mode holds a value charter does not read", undefined],
     ["plane.mode in charter.local.toml is not a mode", undefined],
   ])("%s", (why, keys) => {
     expect(keyOfRefusal(why, "charter.toml")).toEqual(keys);
@@ -125,12 +135,13 @@ describe("where a refusal is fixed", () => {
         [
           "harness.default in charter.toml is not read",
           "frame.x in charter.toml is not read",
+          "[harness.default] is in charter.toml, which is committed — a profile is this machine's",
           "charter.toml is not valid TOML",
         ],
         "charter.toml",
         "shared",
         GROUPS,
       ).map((one) => one.to),
-    ).toEqual([undefined, undefined, undefined]);
+    ).toEqual([undefined, undefined, undefined, undefined]);
   });
 });
