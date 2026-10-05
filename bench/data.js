@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791175458065,
+  "lastUpdate": 1791176233874,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1890,6 +1890,48 @@ window.BENCHMARK_DATA = {
             "value": 101.69546,
             "unit": "ms",
             "extra": "median of 5 runs: 101.368, 101.582, 101.695, 101.865, 103.198 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "74f2399a8a44a21ec5577842de06973306bab015",
+          "message": "FW-6b fold-ins: every recording names a case, overrides are checked\n\nThe two optional points from the FW-6b review, in the contract harness.\n\nA. `every_recording_on_both_forges_names_a_case` walks each forge's\nrecordings and requires every file's stem, with or without the\n`.self_managed` suffix, to name a case in CASES. A self-managed override\nleft behind by a renamed case would otherwise go unread while the\nself-managed run fell back to the main recording. The override loader\n(`own_recording`) now tells \"not there\" from a read that failed: only\nNotFound means no override; any other error fails the case.\n\nB. The network-log check also reads every `{case}.self_managed.json`, so a\nREST path that only an override asks is checked for scene names too.\nGitLab's expected count goes from 22 to 24 (the read override's issue and\nboards calls).\n\nRefs #734\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T08:42:30+04:00",
+          "tree_id": "8c87a34dd20ab4c7b854cd5b83a9dbcf4a3be2e2",
+          "url": "https://github.com/diazoxide/charter/commit/74f2399a8a44a21ec5577842de06973306bab015"
+        },
+        "date": 1791176232550,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5357555,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.506, 0.525, 0.536, 0.551, 0.570 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.905222,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.468, 16.650, 16.905, 16.974, 17.154 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.10152099999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.869, 105.020, 105.102, 105.238, 106.275 ms"
           }
         ]
       }
