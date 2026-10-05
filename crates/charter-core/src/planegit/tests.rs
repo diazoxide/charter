@@ -565,6 +565,121 @@ fn a_bare_token_in_a_memory_files_prose_stops_the_save() {
 }
 
 #[test]
+fn a_secret_spelled_with_escapes_in_a_json_or_toml_file_stops_the_save() {
+    // Each shape the settings editors refuse as they read the document (#1295): JSON and TOML
+    // let a string spell any character as an escape, and what the file holds — what charter
+    // and everyone who reads it get — is the character.
+    let manifest = "workspaces/alpha/workspace.json";
+    for (path, text, kind) in [
+        (
+            manifest,
+            r#"{"name": "alpha", "description": "\u0041KIAIOSFODNN7EXAMPLE"}"#,
+            "AWS access key",
+        ),
+        (
+            manifest,
+            r#"{"name": "alpha", "description": "AKIAIOSF\u004fDNN7EXAMPLE"}"#,
+            "AWS access key",
+        ),
+        (
+            manifest,
+            r#"{"name": "alpha", "description": "\u0067hp_0123456789abcdefABCDEFghij"}"#,
+            "a token by its forge's prefix",
+        ),
+        (
+            manifest,
+            r#"{"name": "alpha", "\u0041KIAIOSFODNN7EXAMPLE": true}"#,
+            "AWS access key",
+        ),
+        (
+            "charter.toml",
+            "[workspace]\ndefault = \"\\u0041KIAIOSFODNN7EXAMPLE\"\n",
+            "AWS access key",
+        ),
+        (
+            "charter.toml",
+            "[workspace]\ndefault = \"AKIA\\U00000049OSFODNN7EXAMPLE\"\n",
+            "AWS access key",
+        ),
+        (
+            "charter.toml",
+            "[extensions.stats.settings]\n\"pass\\u0077ord\" = \"hunter2hunter2\"\n",
+            "credential assignment",
+        ),
+    ] {
+        let fixture = Fixture::plane();
+        let (code, said) = fixture.save_with(path, text.as_bytes());
+
+        assert_eq!(code, 1, "{text}: {said}");
+        assert!(
+            said.contains("Refusing to save — a secret-shaped value in a staged file:"),
+            "{text}: {said}"
+        );
+        assert!(
+            said.contains(&format!("{path}  ({kind})")),
+            "{text}: {said}"
+        );
+        for value in [
+            "KIAIOSFODNN7EXAMPLE",
+            "OSFODNN7EXAMPLE",
+            "0123456789abcdef",
+            "hunter2",
+        ] {
+            assert!(
+                !said.contains(value),
+                "{text}: the refusal repeated the secret"
+            );
+        }
+        assert_eq!(
+            fixture.head_subject(),
+            "one",
+            "{text}: nothing was committed"
+        );
+        assert_eq!(
+            standing(&fixture.root).blocked.as_deref(),
+            Some(SECRET_REFUSED),
+            "{text}: the standing says what the next save would refuse"
+        );
+    }
+}
+
+#[test]
+fn a_json_or_toml_file_that_does_not_parse_is_still_scanned_as_text() {
+    let token = ["ghp", "_0123456789abcdefABCDEFghij"].concat();
+    for (path, text) in [
+        (
+            "workspaces/alpha/workspace.json",
+            format!("{{\"name\": \"alpha\",\n\"note\": \"{token}\"\n"),
+        ),
+        ("charter.toml", format!("[plane\nnote = \"{token}\"\n")),
+    ] {
+        let fixture = Fixture::plane();
+        let (code, said) = fixture.save_with(path, text.as_bytes());
+
+        assert_eq!(code, 1, "{path}: {said}");
+        assert!(
+            said.contains(&format!("{path}:2  (a token by its forge's prefix)")),
+            "{path}: {said}"
+        );
+        assert!(
+            !said.contains(&token),
+            "{path}: the refusal repeated the secret"
+        );
+    }
+}
+
+#[test]
+fn a_json_or_toml_file_with_escapes_and_no_secret_is_saved() {
+    let fixture = Fixture::plane();
+    let (code, said) = fixture.save_with(
+        "workspaces/alpha/workspace.json",
+        br#"{"name": "\u0061lpha", "description": "caf\u00e9 \u2014 the deploy"}"#,
+    );
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(fixture.head_subject(), "a save");
+}
+
+#[test]
 fn an_ordinary_file_is_saved_and_one_deleted_is_never_asked_about() {
     let fixture = Fixture::plane();
     let (code, said) = fixture.save_with(
