@@ -632,3 +632,62 @@ fn a_name_and_an_email_with_bare_fix_and_a_complete_identity_say_they_wrote_noth
         );
     }
 }
+
+/// A plane under git, committed, with an identity and no signer in its home.
+fn committed_plane() -> (tempfile::TempDir, PathBuf) {
+    let (d, root) = plane();
+    std::fs::write(
+        root.join("home").join(".gitconfig"),
+        "[user]\n\tname = Fixture User\n\temail = fixture@example.invalid\n\
+         [commit]\n\tgpgsign = false\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".gitignore"), "/home/\n").unwrap();
+    git(&root, &["init", "-q"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "before"]);
+    (d, root)
+}
+
+/// `rename-plane` (RN-7) is applied by name, and makes its one commit.
+#[test]
+fn fix_rename_plane_by_name_renames_the_project_in_one_commit() {
+    let (_d, root) = committed_plane();
+    let out = doctor(&root, &root.join("home"), &["--fix", "rename-plane"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix rename-plane:"), "{said}");
+    assert!(
+        said.contains("✓ renamed charter.toml to purlis.toml"),
+        "{said}"
+    );
+    assert!(said.contains("✓ committed"), "{said}");
+    assert!(root.join("purlis.toml").is_file(), "{said}");
+    assert!(!root.join("charter.toml").exists(), "{said}");
+}
+
+/// From inside a chat it is refused (D-RN7-12): the product's chat variable is set.
+#[test]
+fn fix_rename_plane_is_refused_inside_a_chat() {
+    let (_d, root) = committed_plane();
+    let out = doctor_with(
+        &root,
+        &root.join("home"),
+        &["--fix", "rename-plane"],
+        &[("PURLIS_SESSION_ID", "chat-1")],
+    );
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("not run from inside a chat"), "{said}");
+    assert!(root.join("charter.toml").is_file(), "{said}");
+    assert!(!root.join("purlis.toml").exists(), "{said}");
+}
+
+/// Bare `--fix` never runs it: a commit every teammate pulls waits to be asked for (V93g).
+#[test]
+fn bare_fix_never_renames_the_project() {
+    let (_d, root) = committed_plane();
+    let out = doctor(&root, &root.join("home"), &["--fix"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!said.contains("rename-plane"), "{said}");
+    assert!(root.join("charter.toml").is_file(), "{said}");
+    assert!(!root.join("purlis.toml").exists(), "{said}");
+}

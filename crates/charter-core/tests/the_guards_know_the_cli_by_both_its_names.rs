@@ -18,6 +18,13 @@ fn leak(cmd: &str) -> Option<String> {
     leakguard::leak_reason(cmd, "", Path::new("/nonexistent-plane-state"))
 }
 
+/// The consent-spelling guard in a project that carries no rule under the new name: every one
+/// the plane in these tests has (none), so the purlis spelling is refused (RN-7 lifts it only
+/// where the project carries the twin).
+fn no_rules(cmd: &str) -> Option<String> {
+    consentspelling::refusal(cmd, Path::new("/nonexistent-plane"), Path::new(""))
+}
+
 fn vault() -> String {
     format!(".charter/{}/db.json", "vaults")
 }
@@ -184,7 +191,7 @@ fn a_consent_gated_command_spelt_purlis_is_refused_until_the_rules_name_it() {
         "cd /tmp && purlis ws todo promote 1",
         "purlis handoff beta",
     ] {
-        let why = consentspelling::refusal(cmd).unwrap_or_else(|| panic!("{cmd} was let through"));
+        let why = no_rules(cmd).unwrap_or_else(|| panic!("{cmd} was let through"));
         assert!(why.contains("`charter"), "{cmd}: {why}");
     }
 }
@@ -202,7 +209,7 @@ fn the_same_commands_spelt_charter_are_left_to_the_hosts_rule() {
         "purlis status",
         "echo purlis report --yes",
     ] {
-        assert_eq!(consentspelling::refusal(cmd), None, "{cmd}");
+        assert_eq!(no_rules(cmd), None, "{cmd}");
     }
 }
 
@@ -219,7 +226,7 @@ fn every_consent_rule_the_project_carries_is_refused_under_the_new_name() {
             .replace('*', "x");
         let cmd = format!("purlis {spelt}");
         assert!(
-            consentspelling::refusal(&cmd).is_some(),
+            no_rules(&cmd).is_some(),
             "{cmd} (from `{pattern}`) was let through"
         );
     }
@@ -234,16 +241,13 @@ fn a_consent_gated_command_in_a_data_heredoc_is_data_and_one_a_shell_runs_is_not
         "git commit -F - <<'EOF'\npurlis report bug --yes x\nEOF",
         "cat > notes.md <<'EOF'\npurlis ws todo promote 1\nEOF",
     ] {
-        assert_eq!(consentspelling::refusal(cmd), None, "{cmd}");
+        assert_eq!(no_rules(cmd), None, "{cmd}");
     }
     for cmd in [
         "bash <<'EOF'\npurlis report bug --yes x\nEOF",
         "bash <<'EOF'\npurlis ws todo promote 1\nEOF",
     ] {
-        assert!(
-            consentspelling::refusal(cmd).is_some(),
-            "{cmd} was let through"
-        );
+        assert!(no_rules(cmd).is_some(), "{cmd} was let through");
     }
 }
 
@@ -257,16 +261,13 @@ fn a_consent_gated_command_in_a_shell_string_is_refused() {
         "bash -lc 'cd /tmp && purlis report bug --yes x'",
         "eval purlis ws todo promote 1",
     ] {
-        assert!(
-            consentspelling::refusal(cmd).is_some(),
-            "{cmd} was let through"
-        );
+        assert!(no_rules(cmd).is_some(), "{cmd} was let through");
     }
     for cmd in [
         "sh -c 'charter report bug --yes x'",
         "sh -c 'purlis report bug'",
         "echo 'purlis report bug --yes x'",
     ] {
-        assert_eq!(consentspelling::refusal(cmd), None, "{cmd}");
+        assert_eq!(no_rules(cmd), None, "{cmd}");
     }
 }

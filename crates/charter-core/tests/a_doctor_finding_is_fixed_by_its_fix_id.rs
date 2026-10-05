@@ -228,7 +228,8 @@ fn a_fix_id_is_spelled_one_way_and_read_back_the_same() {
             "local-ignore",
             "memory-optimize",
             "discover",
-            "git-identity"
+            "git-identity",
+            "rename-plane"
         ]
     );
     for id in FixId::ALL {
@@ -259,6 +260,8 @@ fn every_fix_but_discover_is_applied_by_bare_fix() {
     // git-identity is chosen by bare --fix too, and refused there: it takes input
     // (D-FX3-1), and saying what to give is the honest answer.
     assert!(FixId::Discover.by_name_only());
+    // rename-plane makes a commit every teammate pulls: never automatic (V93g).
+    assert!(FixId::RenamePlane.by_name_only());
 }
 
 // ---- local-ignore -------------------------------------------------------------------------

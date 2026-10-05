@@ -56,12 +56,328 @@ pub const PROMOTE_RULE: &str = "Bash(charter *todo*promote*)";
 /// the patterns do not spell ([`crate::consentspelling`]), so the two cannot drift apart.
 pub const CONSENT_PATTERNS: [&str; 3] = [HANDOFF_PATTERN, REPORT_PATTERN, PROMOTE_PATTERN];
 
+/// [`HANDOFF_PATTERN`] under the command line's new name (RN-7). `init`, `reinit` and the
+/// `rename-plane` fix write each `PURLIS_*` consent rule beside its `charter` one, so either
+/// spelling of the command waits for the operator; the guard lets the `purlis` spelling through
+/// only in a project that carries the rule ([`carries_consent_rule`]).
+pub const PURLIS_HANDOFF_PATTERN: &str = "purlis handoff *";
+
+/// [`PURLIS_HANDOFF_PATTERN`] as Claude Code's rule.
+pub const PURLIS_HANDOFF_RULE: &str = "Bash(purlis handoff *)";
+
+/// [`REPORT_PATTERN`] under the new name.
+pub const PURLIS_REPORT_PATTERN: &str = "purlis report *--yes*";
+
+/// [`PURLIS_REPORT_PATTERN`] as Claude Code's rule.
+pub const PURLIS_REPORT_RULE: &str = "Bash(purlis report *--yes*)";
+
+/// [`PROMOTE_PATTERN`] under the new name.
+pub const PURLIS_PROMOTE_PATTERN: &str = "purlis *todo*promote*";
+
+/// [`PURLIS_PROMOTE_PATTERN`] as Claude Code's rule.
+pub const PURLIS_PROMOTE_RULE: &str = "Bash(purlis *todo*promote*)";
+
+/// [`CONSENT_PATTERNS`] under the new name, in the same order.
+pub const PURLIS_CONSENT_PATTERNS: [&str; 3] = [
+    PURLIS_HANDOFF_PATTERN,
+    PURLIS_REPORT_PATTERN,
+    PURLIS_PROMOTE_PATTERN,
+];
+
+/// The consent pattern `pattern` (spelt `charter …`, one of [`CONSENT_PATTERNS`]) spelt with the
+/// program name `name` instead, or `None` for a pattern that does not start with `charter `.
+pub fn consent_pattern_for(pattern: &str, name: &str) -> Option<String> {
+    let rest = pattern
+        .strip_prefix(crate::cliname::ALIAS)?
+        .strip_prefix(' ')?;
+    Some(format!("{name} {rest}"))
+}
+
+/// Whether the project at `root` makes the host ask before a command `pattern` names, in every
+/// harness `init` writes a consent rule for: an `ask` (or a `deny`, which stops it outright) for
+/// `Bash(<pattern>)` in Claude Code's `.claude/settings.json`, and the same for `<pattern>` in
+/// opencode's `permission.bash`.
+///
+/// **Fails closed.** A file that is missing, unreadable or not the shape the harness reads
+/// answers `false`, and so does a rule in one harness and not the other: a command the guard
+/// let through on the strength of a rule one harness lacks would run there with no prompt.
+pub fn carries_consent_rule(root: &Path, pattern: &str) -> bool {
+    let held = |decision: Option<String>| matches!(decision.as_deref(), Some("ask" | "deny"));
+    held(claude_decision(root, pattern)) && held(opencode_decision(root, pattern))
+}
+
+/// Whether both harnesses ASK before `pattern` — not deny it: the rule `init` and `reinit` write
+/// a `purlis` twin beside. A `charter` rule the operator turned into a deny gets no `ask` twin,
+/// which would let the same command through under the other spelling after one click.
+pub fn asks_in_every_harness(root: &Path, pattern: &str) -> bool {
+    claude_decision(root, pattern).as_deref() == Some("ask")
+        && opencode_decision(root, pattern).as_deref() == Some("ask")
+}
+
+/// What Claude Code's `.claude/settings.json` decides for `Bash(<pattern>)`: `deny` when it denies
+/// it (deny is weighed first, whatever the order), else `ask`, else `None` — `None` too for a
+/// file that is missing or that charter cannot read.
+fn claude_decision(root: &Path, pattern: &str) -> Option<String> {
+    claude_decision_in(&root.join(SETTINGS), pattern)
+}
+
+/// [`claude_decision`] of the settings file at `path`.
+fn claude_decision_in(path: &Path, pattern: &str) -> Option<String> {
+    if !path.exists() {
+        return None;
+    }
+    let rule = format!("Bash({pattern})");
+    let map = read(path).map?;
+    let perms = map.get("permissions")?.as_object()?;
+    ["deny", "ask"]
+        .into_iter()
+        .find(|bucket| {
+            perms
+                .get(*bucket)
+                .and_then(Value::as_array)
+                .is_some_and(|rules| rules.iter().any(|r| r.as_str() == Some(rule.as_str())))
+        })
+        .map(str::to_owned)
+}
+
+/// What opencode's `permission.bash` decides for `pattern`, or `None`.
+fn opencode_decision(root: &Path, pattern: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(root.join(OPENCODE)).ok()?;
+    let doc = pyjson::loads_strict(&raw)?;
+    doc.get("permission")?
+        .get("bash")?
+        .get(pattern)?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// How strictly a decision holds a command back: a deny over an ask over nothing.
+fn strictness(decision: Option<&str>) -> u8 {
+    match decision {
+        Some("deny") => 2,
+        Some("ask") => 1,
+        _ => 0,
+    }
+}
+
+/// Whether the consent rule `pattern` (spelt `charter …`) holds the command spelt with `name`
+/// at least as strictly as it holds the `charter` spelling, everywhere the host reads it for a
+/// call made in `cwd` of the project at `plane` (RN-7, D-RN7-4).
+///
+/// Asked of each file the host may read: the project's `.claude/settings.json`, the nearest
+/// `.claude/settings.json` at or above `cwd` inside the project (a workspace's or a clone's
+/// layer, which is what Claude Code applies to a chat there), and the project's
+/// `opencode.json`. In each, the twin must be there, and be a deny where the `charter` rule is
+/// one. **Fails closed**: a file missing or unreadable, a `cwd` this cannot place inside the
+/// project, or a twin weaker than its rule in any of them answers `false`.
+pub fn twin_in_force(plane: &Path, cwd: &Path, pattern: &str, name: &str) -> bool {
+    let Some(twin) = consent_pattern_for(pattern, name) else {
+        return false;
+    };
+    let held = |twin_says: Option<String>, rule_says: Option<String>| {
+        let twin = strictness(twin_says.as_deref());
+        twin > 0 && twin >= strictness(rule_says.as_deref())
+    };
+    let Some(layer) = layer_settings(plane, cwd) else {
+        return false;
+    };
+    let mut claude = vec![plane.join(SETTINGS)];
+    claude.extend(layer);
+    claude.iter().all(|file| {
+        held(
+            claude_decision_in(file, &twin),
+            claude_decision_in(file, pattern),
+        )
+    }) && held(
+        opencode_decision(plane, &twin),
+        opencode_decision(plane, pattern),
+    )
+}
+
+/// The settings file of the layer a call in `cwd` runs under: the nearest
+/// `.claude/settings.json` at or above `cwd` and below the project root. `Some(None)` when there
+/// is none (the root's own applies), `None` when `cwd` cannot be placed inside the project.
+fn layer_settings(plane: &Path, cwd: &Path) -> Option<Option<std::path::PathBuf>> {
+    if cwd.as_os_str().is_empty() {
+        return Some(None);
+    }
+    let plane = plane.canonicalize().ok()?;
+    let cwd = cwd.canonicalize().ok()?;
+    let below = cwd.strip_prefix(&plane).ok()?;
+    let mut dir = plane.join(below);
+    while dir != plane {
+        let file = dir.join(SETTINGS);
+        if file.exists() {
+            return Some(Some(file));
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    Some(None)
+}
+
 /// The one hook charter wires itself (`commands._GUARD_HOOK`).
+///
+/// Spelt `charter` in every project, migrated or not, for the rename's whole window
+/// (D-RN7-11): the alias resolves on every build, and a hook command that does not resolve
+/// fails open. Renamed at 1.0 with the alias itself.
 pub fn guard_hook() -> Value {
     json!({
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": "charter hook pretooluse", "timeout": 10}],
+        "hooks": [{"type": "command", "command": format!("{} hook pretooluse", crate::cliname::ALIAS), "timeout": 10}],
     })
+}
+
+/// The harness variable `init` sets in `.claude/settings.json`'s `env`, as the project at `plane`
+/// writes it: `CHARTER_HARNESS` until it is migrated, `PURLIS_HARNESS` after.
+pub fn harness_env_for(plane: &Path) -> String {
+    format!("{}HARNESS", crate::names::ENV_PREFIX.writes_for(plane))
+}
+
+/// [`ensure_env`] for the harness variable, under the plane's spelling ([`harness_env_for`]),
+/// and `Present` when ANY spelling of it is set already: a migrated project's
+/// `PURLIS_HARNESS` is never joined by a `CHARTER_HARNESS` again, nor the other way round.
+pub fn ensure_harness_env(root: &Path, value: &str) -> Wrote {
+    let doc = read(&root.join(SETTINGS));
+    if let Some(env) = doc
+        .map
+        .as_ref()
+        .and_then(|map| map.get("env"))
+        .and_then(Value::as_object)
+    {
+        let set = crate::names::ENV_PREFIX.spellings().any(|prefix| {
+            env.get(&format!("{prefix}HARNESS"))
+                .is_some_and(text::truthy)
+        });
+        if set {
+            return Wrote::Present;
+        }
+    }
+    ensure_env(root, &harness_env_for(root), value)
+}
+
+/// The project's `.claude/settings.json` with charter's own entries under purlis's names (RN-7,
+/// the `rename-plane` fix), or `Ok(None)` when it has nothing to rename or is not there.
+///
+/// - `env.CHARTER_HARNESS` becomes `env.PURLIS_HARNESS`, where it stood. Beside a
+///   `PURLIS_HARNESS` that says the same, it is dropped; beside one that says something else it
+///   is refused, because which of the two the operator meant is not charter's to choose.
+/// - Hook and `statusLine` commands are left as they are: they keep `charter` for the window
+///   (D-RN7-11).
+/// - Each `ask` and `deny` rule `Bash(charter …)` gets its `Bash(purlis …)` twin right after it,
+///   and keeps its own place: `charter` still runs the command line for the rename's window, so
+///   a rule removed would be a command that stopped asking. `allow` rules get no twin — a grant
+///   copied to a spelling nobody granted is a permission nobody clicked for.
+///
+/// Written in the file's own layout, as every writer here writes it. A file charter cannot
+/// read the way the harness reads it is refused, never repaired.
+pub fn renamed_to_purlis(root: &Path) -> Result<Option<String>, String> {
+    let path = root.join(SETTINGS);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let doc = read(&path);
+    let Some(mut map) = doc.map else {
+        return Err(format!(
+            "{} is not a JSON object charter can read, so its hooks and rules cannot be renamed",
+            SETTINGS
+        ));
+    };
+    let old_env = format!("{}HARNESS", crate::names::ENV_PREFIX.newest_old());
+    let new_env = format!("{}HARNESS", crate::names::ENV_PREFIX.write);
+    if let Some(Value::Object(env)) = map.get_mut("env")
+        && let Some(value) = env.get(&old_env).cloned()
+    {
+        match env.get(&new_env) {
+            Some(new) if *new == value => {
+                env.shift_remove(&old_env);
+            }
+            Some(_) => {
+                return Err(format!(
+                    "{SETTINGS} sets both {old_env} and {new_env}, to different values; keep \
+                     the one you mean and remove the other, then run the fix again"
+                ));
+            }
+            None => {
+                let renamed: Map<String, Value> = std::mem::take(env)
+                    .into_iter()
+                    .map(|(k, v)| {
+                        if k == old_env {
+                            (new_env.clone(), v)
+                        } else {
+                            (k, v)
+                        }
+                    })
+                    .collect();
+                *env = renamed;
+            }
+        }
+    }
+    if let Some(Value::Object(perms)) = map.get_mut("permissions") {
+        for bucket in ["ask", "deny"] {
+            if let Some(Value::Array(rules)) = perms.get_mut(bucket) {
+                // A twin already anywhere in the list stays where it is, and is not added twice.
+                let mut have: std::collections::HashSet<String> = rules
+                    .iter()
+                    .filter_map(|r| r.as_str().map(str::to_owned))
+                    .collect();
+                let mut out: Vec<Value> = Vec::with_capacity(rules.len());
+                for rule in std::mem::take(rules) {
+                    let twin = rule.as_str().and_then(purlis_rule_twin);
+                    out.push(rule);
+                    if let Some(twin) = twin
+                        && have.insert(twin.clone())
+                    {
+                        out.push(Value::String(twin));
+                    }
+                }
+                *rules = out;
+            }
+        }
+    }
+    let text = render(map, &doc.raw, None, false);
+    Ok((text != doc.raw).then_some(text))
+}
+
+/// `Bash(purlis …)` for a rule `Bash(charter …)`, else `None`.
+fn purlis_rule_twin(rule: &str) -> Option<String> {
+    let inner = rule.strip_prefix("Bash(")?.strip_suffix(')')?;
+    let pattern = consent_pattern_for(inner, crate::cliname::PRIMARY)?;
+    Some(format!("Bash({pattern})"))
+}
+
+/// The `ask` and `deny` globs in `opencode.json`'s `permission.bash` that spell `charter …`,
+/// each with its decision: what the `rename-plane` fix writes a `purlis …` twin of, through
+/// [`ensure_opencode_rule`]. `Err` for a file charter cannot read; empty for none.
+pub fn opencode_rules_to_twin(root: &Path) -> Result<Vec<(String, String)>, String> {
+    let path = root.join(OPENCODE);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let doc = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| pyjson::loads_strict(&raw));
+    let Some(Value::Object(map)) = doc else {
+        return Err(format!(
+            "{OPENCODE} is not a JSON object charter can read, so its rules cannot be renamed"
+        ));
+    };
+    let Some(bash) = map
+        .get("permission")
+        .and_then(|p| p.get("bash"))
+        .and_then(Value::as_object)
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(bash
+        .iter()
+        .filter_map(|(glob, decision)| {
+            let decision = decision.as_str().filter(|d| matches!(*d, "ask" | "deny"))?;
+            let twin = consent_pattern_for(glob, crate::cliname::PRIMARY)?;
+            Some((twin, decision.to_owned()))
+        })
+        .collect())
 }
 
 /// The exact JSON printed for a person whose settings file charter could not touch
@@ -758,6 +1074,51 @@ mod tests {
         )
         .unwrap();
         assert!(guard_runs_in(&wired));
+    }
+
+    /// Each purlis consent rule is its charter one with the program name swapped, so the two
+    /// tables cannot drift (RN-7).
+    #[test]
+    fn each_purlis_consent_rule_is_the_charter_one_under_the_new_name() {
+        for (charter, purlis) in CONSENT_PATTERNS.iter().zip(PURLIS_CONSENT_PATTERNS) {
+            assert_eq!(
+                consent_pattern_for(charter, crate::cliname::PRIMARY).as_deref(),
+                Some(purlis)
+            );
+        }
+        for (rule, pattern) in [
+            (PURLIS_HANDOFF_RULE, PURLIS_HANDOFF_PATTERN),
+            (PURLIS_REPORT_RULE, PURLIS_REPORT_PATTERN),
+            (PURLIS_PROMOTE_RULE, PURLIS_PROMOTE_PATTERN),
+        ] {
+            assert_eq!(rule, format!("Bash({pattern})"));
+        }
+        assert_eq!(consent_pattern_for("charterx y", "purlis"), None);
+        assert_eq!(consent_pattern_for("git push *", "purlis"), None);
+    }
+
+    /// A migrated project's harness variable is never joined by the old one, nor the other way.
+    #[test]
+    fn the_harness_variable_is_written_once_under_either_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(
+            root.join(SETTINGS),
+            r#"{"env": {"PURLIS_HARNESS": "claude-code"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            ensure_harness_env(root, "claude-code"),
+            Wrote::Present
+        ));
+        std::fs::write(root.join(SETTINGS), "{}").unwrap();
+        assert!(matches!(
+            ensure_harness_env(root, "claude-code"),
+            Wrote::Created
+        ));
+        let text = std::fs::read_to_string(root.join(SETTINGS)).unwrap();
+        assert!(text.contains("CHARTER_HARNESS"), "unmigrated: {text}");
     }
 
     #[test]

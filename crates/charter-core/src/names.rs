@@ -234,11 +234,15 @@ pub fn plane_migrated(plane: &Path) -> bool {
         .ok()
         .and_then(|text| text.parse::<toml::Table>().ok())
         .and_then(|doc| doc.get("requires")?.as_array().cloned())
-        .is_some_and(|features| {
-            features
-                .iter()
-                .any(|f| f.as_str() == Some(PURLIS_NAMES_FEATURE))
-        })
+        .is_some_and(|features| features.iter().any(is_purlis_names))
+}
+
+/// Whether one `requires` entry is [`PURLIS_NAMES_FEATURE`], in the one shape `compat` reads an
+/// entry in: a table whose `feature` names it (`{ feature = "purlis-names", since = "…" }`). A
+/// bare string is an entry no charter can read, which makes the project read-only to every
+/// build, so it migrates nothing (D-RN7-1).
+fn is_purlis_names(entry: &toml::Value) -> bool {
+    entry.get("feature").and_then(toml::Value::as_str) == Some(PURLIS_NAMES_FEATURE)
 }
 
 const fn name(

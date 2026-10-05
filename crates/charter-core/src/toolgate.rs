@@ -242,8 +242,13 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
     }
     // A7: a `charter handoff` the operator's permission prompt cannot stand in front of.
     // GATED, unlike A5 and A6 beside it.
-    if plane.is_some()
-        && let Some((reason, why)) = handoffguard::handoff_refusal(cmd, call.caller)
+    if let Some(plane) = plane
+        && let Some((reason, why)) = handoffguard::handoff_refusal_in(
+            cmd,
+            call.caller,
+            Path::new(plane.root),
+            Path::new(call.cwd),
+        )
     {
         // No `cmd` on this trace row, the one arm without it: a handoff's command line carries
         // its brief, and keeping every field of that line out of the tally is simpler to hold
@@ -251,10 +256,11 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
         return Some(Verdict::new(reason, None, why));
     }
     // A7b: any consent-gated command spelt under a name the project's consent rules do not
-    // spell, which the host would run with no prompt (RN-3, D-RN3-9). GATED, as A7 is: the
-    // rules it stands in for are a plane's.
-    if plane.is_some()
-        && let Some(why) = consentspelling::refusal(cmd)
+    // spell, which the host would run with no prompt (RN-3, D-RN3-9; lifted per rule where the
+    // project carries the purlis twin, RN-7). GATED, as A7 is: the rules it stands in for are a
+    // plane's.
+    if let Some(plane) = plane
+        && let Some(why) = consentspelling::refusal(cmd, Path::new(plane.root), Path::new(call.cwd))
     {
         return Some(Verdict::new(consentspelling::REASON, None, why));
     }

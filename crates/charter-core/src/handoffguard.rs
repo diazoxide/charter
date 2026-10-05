@@ -167,6 +167,12 @@ pub const REASON_BRIEF_SOURCE: &str = "handoff-brief-source";
 /// segment A7 judges. It is kept because the Python would do this if one ever arrived, and it is
 /// documented as unreached because defensive code that reads as though it matters is worse than
 /// none in a guard somebody has to re-derive.
+/// A token's source text, as [`py_slice`] reads it: what the consent-spelling guard checks a
+/// program word against (RN-7).
+pub(crate) fn source_of(chars: &[char], start: isize, end: isize) -> String {
+    py_slice(chars, start, end)
+}
+
 fn py_slice(chars: &[char], start: isize, end: isize) -> String {
     let n = chars.len() as isize;
     let fix = |i: isize| -> usize {
@@ -261,6 +267,13 @@ pub fn disguised_as(raw: &str, word: &str) -> bool {
 /// **The first two words of a segment and only those**, so `grep 'charter handoff' docs`,
 /// which charter's own repository runs all day, is a search rather than a spelling of one.
 pub fn disguised_handoff(line: &str) -> bool {
+    disguised_handoff_spelling(line, &[crate::cliname::ALIAS])
+}
+
+/// [`disguised_handoff`], where `spelt` holds every program name the project's handoff rule is
+/// spelt with: `charter`, and `purlis` too where the project carries that rule (RN-7). A bare
+/// `<name> handoff` under one of those names is the exact spelling, and is not a disguise.
+fn disguised_handoff_spelling(line: &str, spelt: &[&str]) -> bool {
     let Ok(toks) = shellseg::lex(line) else {
         return false;
     };
@@ -272,16 +285,14 @@ pub fn disguised_handoff(line: &str) -> bool {
         }
         let first = py_slice(&chars, seg[0].start, seg[0].end);
         let second = py_slice(&chars, seg[1].start, seg[1].end);
-        // Every name the command line has (RN-3). The one spelling the host's rule matches is
-        // still the `charter` one until the hooks written into a project name the new one
-        // (RN-7), so the new name, bare, is refused here for its spelling too.
+        // Every name the command line has (RN-3). The spellings the host's rule matches are
+        // `spelt`: `charter`, and `purlis` where the project carries that rule too (RN-7). Any
+        // other name, bare, is refused here for its spelling.
         let named = crate::cliname::INSTALLED
             .iter()
             .any(|name| first == *name || disguised_as(&first, name));
-        if (first.as_str(), second.as_str()) != ("charter", "handoff")
-            && named
-            && (second == "handoff" || disguised_as(&second, "handoff"))
-        {
+        let exact = spelt.contains(&first.as_str()) && second == "handoff";
+        if !exact && named && (second == "handoff" || disguised_as(&second, "handoff")) {
             return true;
         }
     }
@@ -577,6 +588,43 @@ impl Caller<'_> {
 /// — taken from the tokenizer that already found this `<<`. A search of the raw line for it
 /// would be misled by a quoted `"<<"` earlier on the line.
 pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, String)> {
+    handoff_refusal_spelt(cmd, caller, &[crate::cliname::ALIAS])
+}
+
+/// [`handoff_refusal`] for a call made in `cwd` of the project at `plane`: `purlis handoff`,
+/// spelt exactly, passes the spelling check where the `purlis handoff` twin holds it at least as
+/// strictly as the `charter handoff` rule in every settings file the host reads there — the
+/// project's and the layer's ([`crate::scaffold::settings::twin_in_force`], RN-7, closing
+/// D-RN3-4) — and is refused for its spelling where it does not. Every other refusal is the
+/// same.
+pub fn handoff_refusal_in(
+    cmd: &str,
+    caller: Caller<'_>,
+    plane: &std::path::Path,
+    cwd: &std::path::Path,
+) -> Option<(&'static str, String)> {
+    let purlis_ruled = crate::scaffold::settings::twin_in_force(
+        plane,
+        cwd,
+        crate::scaffold::settings::HANDOFF_PATTERN,
+        crate::cliname::PRIMARY,
+    );
+    if purlis_ruled {
+        handoff_refusal_spelt(
+            cmd,
+            caller,
+            &[crate::cliname::ALIAS, crate::cliname::PRIMARY],
+        )
+    } else {
+        handoff_refusal(cmd, caller)
+    }
+}
+
+fn handoff_refusal_spelt(
+    cmd: &str,
+    caller: Caller<'_>,
+    spelt: &[&str],
+) -> Option<(&'static str, String)> {
     let found = handoff_line(cmd);
     let in_a_string = shell_string_handoff(cmd);
     if found.is_none() && !in_a_string {
@@ -613,7 +661,7 @@ pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, S
     };
     let toks = shellseg::split_punctuation(lexed);
     let (seg, piped) = handoff_segment(&toks);
-    if !spelled_exactly(&line, seg.as_deref()) {
+    if !spelled_exactly(&line, seg.as_deref(), spelt) {
         return Some((REASON_SPELLING, HANDOFF_SPELLING.to_string()));
     }
     let seg = seg.expect("`spelled_exactly` answers false for no segment");
@@ -684,7 +732,7 @@ pub const HANDOFF_REPORT_PROCESS_SOURCE: &str = "`charter handoff report` sends 
 /// `'charter' handoff`, `\charter handoff` and `charter  handoff` all lex to the same two texts
 /// as the exact form. `bare` says no quote or escape touched either word; the offsets say what
 /// stood between them.
-fn spelled_exactly(line: &str, seg: Option<&[Tok]>) -> bool {
+fn spelled_exactly(line: &str, seg: Option<&[Tok]>, spelt: &[&str]) -> bool {
     let Some(seg) = seg else {
         return false;
     };
@@ -702,13 +750,16 @@ fn spelled_exactly(line: &str, seg: Option<&[Tok]>) -> bool {
         return false;
     };
     let chars: Vec<char> = line.chars().collect();
-    if !(first.bare && second.bare) || first.text != "charter" || second.text != "handoff" {
+    if !(first.bare && second.bare)
+        || !spelt.contains(&first.text.as_str())
+        || second.text != "handoff"
+    {
         return false;
     }
     // The SOURCE of each word, too: a backslash-newline inside one (`char\<newline>ter`) is not
     // quoting, so the word is bare and its text is `charter`, and it is still not the spelling
     // the host's rule matches.
-    if py_slice(&chars, first.start, first.end) != "charter"
+    if py_slice(&chars, first.start, first.end) != first.text
         || py_slice(&chars, second.start, second.end) != "handoff"
     {
         return false;
@@ -726,7 +777,7 @@ fn spelled_exactly(line: &str, seg: Option<&[Tok]>) -> bool {
             return false;
         }
     }
-    !disguised_handoff(line)
+    !disguised_handoff_spelling(line, spelt)
 }
 
 /// What this call feeds the brief, for [`handoff_source`] — or `None`, which is the one way a

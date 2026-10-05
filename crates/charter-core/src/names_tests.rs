@@ -430,6 +430,16 @@ fn a_plane_writes_charters_markers_until_it_is_migrated() {
         "schema = 2\nrequires = [\"purlis-names\"]\n",
     )
     .unwrap();
+    assert!(
+        !plane_migrated(dir),
+        "a bare string is an entry no build reads, so it migrates nothing (D-RN7-1)"
+    );
+
+    fs::write(
+        dir.join("charter.toml"),
+        "schema = 2\nrequires = [{ feature = \"purlis-names\", since = \"0.2.0\" }]\n",
+    )
+    .unwrap();
     assert!(plane_migrated(dir), "the feature migrates it");
     assert_eq!(LIVE_END.writes_for(dir), "# <<< purlis live workspaces <<<");
 
