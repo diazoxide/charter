@@ -81,6 +81,8 @@ function core(
     loggedOut?: boolean;
     /** Repos whose clone fails, with the core's sentence. */
     cloneFails?: Record<string, string>;
+    /** Repos whose clone answers ok while the workspace's panels still list them as absent. */
+    stillAbsent?: string[];
     /** The core's sentence `workspace_starts_fresh` answers with. */
     startsFresh?: string;
   } = {},
@@ -161,6 +163,20 @@ function core(
       throw {
         said: "Refusing to remove 'api' — this would discard work: api: uncommitted changes. Push or commit first.",
         at_risk: [{ what: "api", said: "api: uncommitted changes" }],
+      };
+    if (cmd === "workspace_panels" && over.stillAbsent)
+      return {
+        workspace: got.workspace,
+        repos: [],
+        paths: {},
+        absent: over.stillAbsent,
+        refused: [],
+        todos: [],
+        todos_refused: null,
+        personas: ["steward"],
+        persona: "steward",
+        sessions: [],
+        contributed: [],
       };
     if (cmd === "clone_repo") {
       const fails = over.cloneFails?.[String(got.repo)];
@@ -632,6 +648,18 @@ describe("picking a new workspace's repos (ADR 0055)", () => {
       "api: clone failed — no access.",
     );
     expect(calls("clone_repo").map((one) => one.args.repo)).toEqual(["api", "web"]);
+  });
+
+  it("says a clone charter cannot see in the workspace failed, rather than that it cloned (V91b)", async () => {
+    core({ stillAbsent: ["api"] });
+    render(<App />);
+    await settled();
+
+    await createWithRepos(["api"]);
+
+    expect(await screen.findByText(/Could not clone api into gamma/)).toHaveTextContent(
+      "api was cloned, but charter does not see it in gamma. charter said: ✓ api cloned",
+    );
   });
 
   it("clones nothing when nothing was picked", async () => {
