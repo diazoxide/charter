@@ -111,10 +111,21 @@ either one to one harness.
 `charter doctor` says whether it is installed for each harness set up on the machine
 (`plugin install`), whether the copy is what this charter would install now (`plugin`),
 whether the `charter` its hooks run still exists (`plugin files`), and names every settings
-file that still enables `charter@charter` (`superseded plugin`). `charter doctor --fix` runs
-`charter plugin install` first, printing each change, and then reports. That is its only
-repair: it writes this machine's harness settings and never a file in the plane, so a plane
-file that still enables `charter@charter` stays yours to edit.
+file that still enables `charter@charter` (`superseded plugin`). `charter doctor --fix` repairs first, printing each change on stderr, and then reports. It
+makes three repairs:
+
+- **Plugin install.** It runs `charter plugin install`, which writes this machine's harness
+  settings.
+- **The report ask rule.** It adds the project's ask rule for `charter report --yes` when that
+  rule is missing, as `charter guard ask` does.
+- **Reinit.** It applies every fix the doctor's rows offer. Today that is `reinit`, offered
+  when a baseline folder is missing. Reinit adds what the project is missing and never removes
+  or replaces your content.
+
+Both of the last two write files in the project. `charter doctor --fix <id>` applies only the
+fix a row names: `charter doctor --json` prints that id as the row's `fix`, and
+`charter doctor --help` lists the ids. Each fix says what it changed, or why it refused. On a
+project this charter can only read, `--fix` is refused and writes nothing.
 
 ### Rules that always ask, or stop asking
 

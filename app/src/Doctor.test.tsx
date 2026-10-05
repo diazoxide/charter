@@ -329,10 +329,13 @@ describe("the Fix button", () => {
     const warnings = await within(dialog).findByRole("region", { name: "Warnings" });
     const before = asked.filter(([cmd]) => cmd === "plane_doctor").length;
 
-    await userEvent.click(within(warnings).getByRole("button", { name: "Fix: reinit" }));
+    await userEvent.click(within(warnings).getByRole("button", { name: /^Fix schema$/ }));
 
     expect(asked).toContainEqual(["plane_doctor_fix", { plane: PLANE, fix: "reinit" }]);
     expect(await within(dialog).findByText("✓ Reinitialized: created personas/")).toBeVisible();
+    // The button it was pressed on goes once the row is clean, so the keyboard lands on what
+    // the fix said rather than on the page.
+    await waitFor(() => expect(within(dialog).getByRole("status", { name: "Fix" })).toHaveFocus());
     // Checked again, at the depth the open dialog shows, and the row has moved.
     await waitFor(() =>
       expect(
@@ -341,7 +344,87 @@ describe("the Fix button", () => {
     );
     const after = asked.filter(([cmd]) => cmd === "plane_doctor").slice(before);
     expect(after).toContainEqual(["plane_doctor", { plane: PLANE, full: true }]);
-    expect(within(dialog).queryByRole("button", { name: /^Fix/ })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /^Fix schema$/ })).toBeNull();
+  });
+
+  it("names the row it fixes, and keeps the id where a mouse can read it", async () => {
+    mockIPC((cmd) => (cmd === "plane_doctor" ? report([missing]) : null));
+    render(<Wired />);
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+
+    const fix = await within(dialog).findByRole("button", { name: /^Fix schema$/ });
+    expect(fix).toHaveAttribute("title", "charter doctor --fix reinit");
+  });
+
+  it("forgets what the last fix said once the dialog closes", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "plane_doctor") return report([missing]);
+      if (cmd === "plane_doctor_fix")
+        return { fix: "reinit", refused: null, said: ["✓ created personas/"], complete: true };
+      return null;
+    });
+    render(<Wired />);
+    await userEvent.click(button());
+    let dialog = await screen.findByRole("dialog");
+    await userEvent.click(await within(dialog).findByRole("button", { name: /^Fix schema$/ }));
+    expect(await within(dialog).findByText("✓ created personas/")).toBeVisible();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await userEvent.click(button());
+
+    dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByText("✓ created personas/")).toBeNull();
+  });
+
+  it("drops a fix that answers after the project changed", async () => {
+    // The plane a fix was asked of is not the one on screen any more: its answer is about
+    // another project and must not be drawn over this one.
+    let answer: ((value: unknown) => void) | undefined;
+    mockIPC((cmd) => {
+      if (cmd === "plane_doctor") return report([missing]);
+      if (cmd === "plane_doctor_fix")
+        return new Promise((resolve) => {
+          answer = resolve;
+        });
+      return null;
+    });
+    const { result, rerender } = renderHook(({ plane }) => useDoctor(plane), {
+      initialProps: { plane: PLANE },
+    });
+    await waitFor(() => expect(result.current.report).toBeDefined());
+    result.current.fix?.("reinit");
+    await waitFor(() => expect(answer).toBeDefined());
+    expect(result.current.fixing).toBe("reinit");
+
+    rerender({ plane: "/home/dev/other" });
+    answer?.({ fix: "reinit", refused: null, said: ["✓ created personas/"], complete: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(result.current.fixed).toBeUndefined();
+    expect(result.current.fixing).toBeUndefined();
+    // Nor is it waiting for the window to come back to the project it was about.
+    rerender({ plane: PLANE });
+    expect(result.current.fixed).toBeUndefined();
+  });
+
+  it("forgets the last fix when the project changes", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "plane_doctor") return report([missing]);
+      if (cmd === "plane_doctor_fix")
+        return { fix: "reinit", refused: null, said: ["✓ created personas/"], complete: true };
+      return null;
+    });
+    const { result, rerender } = renderHook(({ plane }) => useDoctor(plane), {
+      initialProps: { plane: PLANE },
+    });
+    await waitFor(() => expect(result.current.report).toBeDefined());
+    result.current.fix?.("reinit");
+    await waitFor(() => expect(result.current.fixed).toBeDefined());
+
+    rerender({ plane: "/home/dev/other" });
+
+    await waitFor(() => expect(result.current.fixed).toBeUndefined());
   });
 
   it("says why a fix was refused", async () => {
@@ -359,7 +442,7 @@ describe("the Fix button", () => {
     render(<Wired />);
     await userEvent.click(button());
     const dialog = await screen.findByRole("dialog");
-    await userEvent.click(await within(dialog).findByRole("button", { name: "Fix: reinit" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: /^Fix schema$/ }));
 
     expect(await within(dialog).findByText(/requires the feature memory-proposals/)).toBeVisible();
   });
@@ -369,6 +452,6 @@ describe("the Fix button", () => {
     await userEvent.click(button());
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).queryByRole("button", { name: /^Fix/ })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /^Fix index lock$/ })).toBeNull();
   });
 });

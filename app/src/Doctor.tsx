@@ -83,6 +83,9 @@ export type DoctorState = {
   fixing?: string;
   /** What the last fix came to: its lines, or why it was refused. */
   fixed?: DoctorFixed;
+  /** Forget what the last fix said, and drop the answer of one still on its way: the dialog
+   *  closed, and what it said belongs to the dialog that showed it. */
+  forget?: () => void;
 };
 
 /**
@@ -143,31 +146,62 @@ export function useDoctor(plane: PlaneId): DoctorState {
     ask(false);
   }, [ask]);
 
-  const [fixing, setFixing] = useState<string>();
-  const [fixed, setFixed] = useState<DoctorFixed>();
+  // **A fix is about the plane it was asked of.** Kept with that plane, so a window that
+  // moves to another project draws none of it, and numbered as `ask` numbers its asks, so an
+  // answer that lands after the project changed (or the dialog closed) is dropped, not drawn.
+  const [lastFix, setLastFix] = useState<{
+    plane: PlaneId;
+    fixing?: string;
+    fixed?: DoctorFixed;
+  }>();
+  const newestFix = useRef(0);
+  useEffect(
+    () => () => {
+      newestFix.current += 1;
+    },
+    [plane],
+  );
   const fix = useCallback(
     (id: string) => {
-      setFixing(id);
-      setFixed(undefined);
+      const mine = ++newestFix.current;
+      setLastFix({ plane, fixing: id });
+      const landed = (fixed: DoctorFixed) => {
+        if (mine !== newestFix.current) return;
+        setLastFix({ plane, fixed });
+        // Checked again whatever came of it: a fix that half-ran changed something too.
+        run(true);
+      };
       void commands
         .planeDoctorFix(plane, id)
-        .then((answer) => {
-          if (answer.status === "ok") setFixed(answer.data);
-          else setFixed({ fix: id, refused: answer.error, said: [], complete: false });
-        })
-        .catch((err: unknown) => {
-          setFixed({ fix: id, refused: String(err), said: [], complete: false });
-        })
-        .finally(() => {
-          setFixing(undefined);
-          // Checked again whatever came of it: a fix that half-ran changed something too.
-          run(true);
-        });
+        .then((answer) =>
+          landed(
+            answer.status === "ok"
+              ? answer.data
+              : { fix: id, refused: answer.error, said: [], complete: false },
+          ),
+        )
+        .catch((err: unknown) =>
+          landed({ fix: id, refused: String(err), said: [], complete: false }),
+        );
     },
     [plane, run],
   );
+  const forget = useCallback(() => {
+    newestFix.current += 1;
+    setLastFix(undefined);
+  }, []);
+  const ours = lastFix?.plane === plane ? lastFix : undefined;
 
-  return { report, running, trouble, run, fix, fixing, fixed };
+  return {
+    report,
+    running,
+    trouble,
+    run,
+    fix,
+    fixing: ours?.fixing,
+    fixed: ours?.fixed,
+    forget,
+  };
 }
 
 /** Every row the verdict counts: the table's, and the app's own beside it. */
@@ -262,7 +296,10 @@ function Rows({
               type="button"
               className="doctor-fix"
               tabIndex={0}
-              aria-label={`Fix: ${row.fix}`}
+              // Named by the row, as the operator reads it; the id is the CLI's word for the
+              // same fix, kept where a pointer can read it.
+              aria-label={`Fix ${row.name}`}
+              title={`charter doctor --fix ${row.fix}`}
               disabled={fixer.busy}
               onClick={() => fixer.apply(row.fix as string)}
             >
@@ -297,6 +334,12 @@ export function Health({
       setOpen(false);
       onOpenSettings(group);
     });
+  // Where the keyboard goes when a fix answers: the button it was pressed on is gone once the
+  // row is clean, and focus left on nothing falls back to the page.
+  const fixedAt = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (doctor.fixed !== undefined) fixedAt.current?.focus();
+  }, [doctor.fixed]);
   const { said, tone, label } = onTheLine(doctor);
   const { report, running, trouble, run, fixing, fixed } = doctor;
   const groups = report ? sorted(report.rows) : undefined;
@@ -313,6 +356,7 @@ export function Health({
         setOpen(now);
         // Opening it is the operator asking, which is the one thing that may probe a harness.
         if (now) run(true);
+        else doctor.forget?.();
       }}
     >
       <Dialog.Trigger asChild>
@@ -358,6 +402,8 @@ export function Health({
               aria-label="Fix"
               className={`doctor-fixed${fixed.complete ? "" : " doctor-trouble"}`}
               role="status"
+              ref={fixedAt}
+              tabIndex={-1}
             >
               {fixed.refused !== null ? (
                 <p className="honest">

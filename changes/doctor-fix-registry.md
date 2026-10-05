@@ -6,4 +6,5 @@
   the rows offer, on top of its plugin and ask-rule repairs. Each fix says what it changed or why
   it was refused. The Doctor dialog has a **Fix** button on those rows, which applies the fix and
   checks again. The first fix is `reinit`, offered when the project is missing a baseline folder.
-  It creates only what is missing. Removing a git index lock is never a fix (FX-1, #1224).
+  It adds what is missing and never removes or replaces your content. Removing a git index lock
+  is never a fix (FX-1, #1224).

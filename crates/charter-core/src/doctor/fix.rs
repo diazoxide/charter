@@ -25,8 +25,11 @@ use crate::scaffold::Say;
 /// A fix charter can make, by the id every surface names it with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FixId {
-    /// `charter reinit`: creates what the project's layout is missing and never touches what is
-    /// there. Offered by the `schema` row when a baseline folder is missing.
+    /// `charter reinit`: adds what the project is missing and never removes or replaces your
+    /// content. It creates missing baseline folders and appends missing `.gitignore` lines. It
+    /// also rewrites charter's own managed block in `.gitattributes` and merges charter's
+    /// entries into `.claude/settings.json`. Offered by the `schema` row when a baseline folder
+    /// is missing.
     Reinit,
 }
 
