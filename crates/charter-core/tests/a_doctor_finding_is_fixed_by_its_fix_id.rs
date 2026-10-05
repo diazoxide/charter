@@ -225,6 +225,28 @@ fn a_fix_id_is_spelled_one_way_and_read_back_the_same() {
     }
 }
 
+#[test]
+fn every_fix_but_discover_is_applied_by_bare_fix() {
+    charter_core::unsteered!();
+    // Discover asks a forge over the network and writes the inventory and the docs, so it runs
+    // only when it is named (D-FX2-9).
+    let bare: Vec<&str> = FixId::ALL
+        .into_iter()
+        .filter(|id| !id.by_name_only())
+        .map(FixId::id)
+        .collect();
+    assert_eq!(
+        bare,
+        [
+            "plugin-install",
+            "reinit",
+            "local-ignore",
+            "memory-optimize"
+        ]
+    );
+    assert!(FixId::Discover.by_name_only());
+}
+
 // ---- local-ignore -------------------------------------------------------------------------
 
 const PROFILE: &str = "[harness.claude-work]\nkind = \"claude\"\ncommand = [\"claude\"]\n";
@@ -314,6 +336,33 @@ fn a_local_file_git_already_tracks_is_refused_by_local_ignore_and_never_untracke
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_gitignore_that_is_a_link_is_not_offered_local_ignore_and_is_never_written_through() {
+    charter_core::unsteered!();
+    // git does not read a `.gitignore` that is a symbolic link, so a line appended through one
+    // would change nothing git does.
+    let (_d, root) = baseline("schema = 1\n");
+    git(&root, &["init", "-q"]);
+    std::fs::write(root.join("ignored-rules"), "node_modules/\n").unwrap();
+    std::os::unix::fs::symlink("ignored-rules", root.join(".gitignore")).unwrap();
+    std::fs::write(root.join("charter.local.toml"), PROFILE).unwrap();
+
+    let found = typed_row(typed(&root), "harness profiles");
+    assert_eq!(found.status, Status::Warn, "{found:?}");
+    assert_eq!(found.fix, None, "{found:?}");
+    let before = outside_git(&root);
+
+    let why = refused(&fix::apply(&root, FixId::LocalIgnore)).to_owned();
+
+    assert!(why.contains("symbolic link"), "it says why: {why}");
+    assert_eq!(
+        outside_git(&root),
+        before,
+        "the refused fix wrote to the project"
+    );
+}
+
 // ---- memory-optimize ----------------------------------------------------------------------
 
 fn memory(root: &Path, base: &str, index: &str, files: &[(&str, &str)]) {
@@ -376,6 +425,44 @@ fn an_unindexed_memory_is_linked_by_memory_optimize_and_the_indexes_then_check_c
     let after = row(&root, "memory indexes");
     assert_eq!(after.status, Status::Ok, "{after:?}");
     assert_eq!(after.fix, None, "{after:?}");
+}
+
+#[test]
+fn memory_optimize_repairs_the_index_and_leaves_an_exact_duplicate_in_place() {
+    charter_core::unsteered!();
+    // Collapsing duplicates is curation the operator asks for with `optimize --apply`; the
+    // doctor's fix only links what the index is missing (D-FX2-6, amended).
+    let (_d, root) = baseline("schema = 1\n");
+    std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+    let same = "# Same\nthe very same body\n";
+    memory(
+        &root,
+        "workspaces/alpha/memory",
+        "- [One](one.md)\n",
+        &[("one.md", same), ("two.md", same)],
+    );
+    assert_eq!(
+        row(&root, "memory indexes").fix,
+        Some(FixId::MemoryOptimize)
+    );
+
+    let said = ran(&fix::apply(&root, FixId::MemoryOptimize)).to_vec();
+
+    let mem = root.join("workspaces/alpha/memory");
+    assert_eq!(std::fs::read_to_string(mem.join("one.md")).unwrap(), same);
+    assert_eq!(
+        std::fs::read_to_string(mem.join("two.md")).unwrap(),
+        same,
+        "the duplicate stays where it was: {said:?}"
+    );
+    assert!(
+        !mem.join("archive").exists(),
+        "nothing was archived: {said:?}"
+    );
+    let index = std::fs::read_to_string(mem.join("MEMORY.md")).unwrap();
+    assert!(index.starts_with("- [One](one.md)\n"), "{index:?}");
+    assert!(index.contains("(two.md)"), "{index:?}");
+    assert_eq!(row(&root, "memory indexes").status, Status::Ok);
 }
 
 #[test]

@@ -193,9 +193,19 @@ pub fn apply_safe(
             }
         }
     }
+    actions.extend(link_unindexed(root, dir)?);
+    Ok(actions)
+}
+
+/// The index-repair half of [`apply_safe`]: link every file `MEMORY.md` does not list
+/// ([`memstore::index_drift`]), one appended line each, and say what was done. Nothing else is
+/// written: no memory is moved, merged or edited, and no line already in the index changes.
+/// The doctor's `memory-optimize` fix is this alone (FX-2).
+pub fn link_unindexed(root: &Path, dir: &Path) -> Result<Vec<String>, Unread> {
+    let mut actions = Vec::new();
     // Held from reading what the index lacks to the last append (SI-9e), as `write` holds it:
     // an append between an edit's read of the index and its replace went with the old file.
-    // Taken after the collapse above, whose `archive` takes it for each move.
+    // Taken after [`apply_safe`]'s collapse, whose `archive` takes it for each move.
     let _held = match memstore::lock_store(root, dir) {
         Ok(held) => held,
         Err(e) => {
@@ -203,7 +213,7 @@ pub fn apply_safe(
             return Ok(actions);
         }
     };
-    let missing = report(root, dir, 90, 0.5, today)?.missing;
+    let (_, missing) = memstore::index_drift(root, dir)?;
     if !missing.is_empty() {
         let index = dir.join(memstore::INDEX);
         let (ents, _) = memstore::read_entries(root, dir);

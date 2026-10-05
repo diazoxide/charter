@@ -59,7 +59,7 @@ const OLD_WHY =
 /** The ignore check's sentence for a `charter.local.toml` git would commit, as the core says it
  *  (charter-app#308): what every group that shows what is in force says. */
 const LEFT_OUT =
-  "git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter reinit adds /charter.local.toml to .gitignore.";
+  "git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter doctor --fix local-ignore adds /charter.local.toml to .gitignore.";
 
 const HARNESSES: HarnessPlugins[] = [
   {

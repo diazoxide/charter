@@ -438,8 +438,9 @@ impl Doctor {
         &self.root
     }
 
-    /// The fixes this doctor's findings offer, in the order [`fix::FixId::ALL`] lists them:
-    /// what `charter doctor --fix` with no id applies.
+    /// The fixes this doctor's findings offer, in the order [`fix::FixId::ALL`] lists them.
+    /// A bare `charter doctor --fix` applies those that are not
+    /// [`fix::FixId::by_name_only`].
     ///
     /// Asks only the checks that can carry a fix id, rather than [`Doctor::run`]'s every row:
     /// those ask git and a forge, and `--fix` runs the whole doctor again after it fixes.

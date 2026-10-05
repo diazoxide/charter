@@ -545,6 +545,13 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
     run.outcome(code)
 }
 
+/// Whether the project's `.gitignore` is a symbolic link. git does not read one, so a line
+/// written through it changes nothing git does: the `local-ignore` fix is neither offered nor
+/// applied there.
+pub fn gitignore_is_a_link(root: &Path) -> bool {
+    std::fs::symlink_metadata(root.join(".gitignore")).is_ok_and(|m| m.file_type().is_symlink())
+}
+
 /// The doctor's `local-ignore` fix (FX-2): append the one line `/charter.local.toml` to the
 /// project's `.gitignore`, creating the file when there is none, and nothing else. The part of
 /// [`reinit`] that keeps this machine's harness profiles out of a commit, without the rest of
@@ -560,7 +567,7 @@ pub fn ignore_local_profiles(root: &Path) -> Outcome {
         match append_gitignore(
             &path,
             &[LOCAL_PROFILES_IGNORE],
-            "added by `charter doctor --fix local-ignore` — harness profiles stay on this machine",
+            "added by charter's local-ignore fix — harness profiles stay on this machine",
         ) {
             Ok(written) if !written.is_empty() => run
                 .created

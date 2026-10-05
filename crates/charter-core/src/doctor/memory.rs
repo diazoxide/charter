@@ -268,20 +268,18 @@ pub(super) fn memory_indexes(d: &Doctor) -> Row {
     }
 }
 
-/// The kinds of memory base (`persona`, `workspace`) holding a file its `MEMORY.md` does not
-/// list, which `charter persona|workspace optimize --all --apply` links: what the
-/// `memory-optimize` fix curates. A base charter cannot read, or whose index it will not touch,
-/// is left out, as the row leaves it out of its count.
-pub(super) fn unindexed_kinds(root: &Path) -> BTreeSet<&'static str> {
+/// Every memory base holding a file its `MEMORY.md` does not list, as `(label, directory)`:
+/// what the `memory-optimize` fix links. A base charter cannot read, or whose index it will not
+/// touch, is left out, as the row leaves it out of its count.
+pub(super) fn unindexed_bases(root: &Path) -> Vec<Base> {
     let Ok((bases, _)) = memory_bases(root) else {
-        return BTreeSet::new();
+        return Vec::new();
     };
     bases
-        .iter()
+        .into_iter()
         .filter(|(_, dir)| dir.is_dir() && index_refusal(root, dir).is_none())
         .filter(|(_, dir)| {
             crate::memstore::index_drift(root, dir).is_ok_and(|(_, unlinked)| !unlinked.is_empty())
         })
-        .map(|(label, _)| kind(label))
         .collect()
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Health, onTheLine, useDoctor, type DoctorState } from "./Doctor";
@@ -419,12 +419,19 @@ describe("the Fix button", () => {
     });
     await waitFor(() => expect(result.current.report).toBeDefined());
     result.current.fix?.("reinit");
+    // Waited for, not assumed: the IPC call can be made before React has drawn the state
+    // that says a fix is on its way.
     await waitFor(() => expect(answer).toBeDefined());
-    expect(result.current.fixing).toBe("reinit");
+    await waitFor(() => expect(result.current.fixing).toBe("reinit"));
 
     rerender({ plane: "/home/dev/other" });
-    answer?.({ fix: "reinit", refused: null, said: ["✓ created personas/"], complete: true });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Answered inside `act`, which returns once the answer's promise chain has run and every
+    // state update it made has been drawn: a macrotask after the resolve runs only once all
+    // the microtasks the answer queued have.
+    await act(async () => {
+      answer?.({ fix: "reinit", refused: null, said: ["✓ created personas/"], complete: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
 
     expect(result.current.fixed).toBeUndefined();
     expect(result.current.fixing).toBeUndefined();

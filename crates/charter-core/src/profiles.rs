@@ -1072,8 +1072,8 @@ fn check_of(state: GitState) -> IgnoreCheck {
         },
         GitState::Committable => IgnoreCheck {
             reason: "git would commit charter.local.toml, so charter reads nothing in it \
-                     until it is ignored — charter reinit adds /charter.local.toml to \
-                     .gitignore."
+                     until it is ignored — charter doctor --fix local-ignore adds \
+                     /charter.local.toml to .gitignore."
                 .to_owned(),
             fix: "charter reinit".to_owned(),
             ignorable: true,
