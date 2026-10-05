@@ -418,10 +418,11 @@ how it is cited and nothing here is renumbered.
     command line has each operation too: `charter workspace edit|archive|unarchive` and
     `charter persona edit-memory|archive-memory|unarchive-memory [--shared]`. **A memory moves
     between scopes** (KN-3): a memory's tab has a Move to choice and a Move button, and the
-    command line has `charter workspace move` and `charter persona move-memory`, each with
-    `--to-workspace`, `--to-persona` or `--to-shared`. The file is renamed whole, its title and
-    stamp kept; a target that already holds a memory of that name is refused. Browsing the
-    archive is later work. **ADR 0065.**
+    command line has `charter workspace move-memory` and `charter persona move-memory`, each
+    with `--to-workspace`, `--to-persona` or `--to-shared`. The file is renamed whole, its title
+    and stamp kept (a journal name moved away and back comes back to the minute); a target that
+    already holds a memory of that name is refused. Browsing the archive is later work. **ADR
+    0065.**
 
 ### The light editor — added 2026-10-02
 

@@ -1,4 +1,4 @@
-//! `charter workspace move` and `charter persona move-memory` (KN-3): a memory moved from one
+//! `charter workspace move-memory` and `charter persona move-memory` (KN-3): a memory moved from one
 //! scope to another through the binary, on a copy of the committed `daily` fixture plane.
 
 use std::path::{Path, PathBuf};
@@ -84,7 +84,7 @@ const PROD: &str = "personas/devops/memory/cluster-prod-1-lives-in-eu-west-1.md"
 const SHARED: &str = "personas/_shared/memory/the-plane-is-the-unit-of-work.md";
 
 #[test]
-fn workspace_move_takes_a_journal_memory_to_a_persona_whole() {
+fn workspace_move_memory_takes_a_journal_memory_to_a_persona_whole() {
     let tmp = daily();
     let before = read(&tmp, API);
 
@@ -92,7 +92,7 @@ fn workspace_move_takes_a_journal_memory_to_a_persona_whole() {
         &tmp,
         &[
             "workspace",
-            "move",
+            "move-memory",
             "the-api-returns-418-on-mondays",
             "--to-persona",
             "devops",
@@ -117,10 +117,11 @@ fn workspace_move_takes_a_journal_memory_to_a_persona_whole() {
     let words = said(&out);
     assert!(words.contains("Moved"), "{words}");
     assert!(words.contains(moved), "{words}");
-    // The way back is printed, as an archive prints its Undo.
+    // The way back is printed — not called an Undo: a journal name comes back to the minute.
     assert!(
         words.contains(
-            "charter persona move-memory devops the-api-returns-418-on-mondays --to-workspace alpha"
+            "To move it back: `charter persona move-memory devops the-api-returns-418-on-mondays \
+             --to-workspace alpha`"
         ),
         "{words}"
     );
@@ -200,7 +201,7 @@ fn a_move_onto_a_name_the_target_holds_is_refused_and_changes_nothing() {
         &tmp,
         &[
             "workspace",
-            "move",
+            "move-memory",
             "the-api-returns-418-on-mondays",
             "--to-persona",
             "devops",
@@ -229,7 +230,7 @@ fn a_move_to_a_persona_the_project_does_not_have_is_refused() {
         &tmp,
         &[
             "workspace",
-            "move",
+            "move-memory",
             "the-api-returns-418-on-mondays",
             "--to-persona",
             "nobody",
@@ -251,7 +252,7 @@ fn a_move_names_exactly_one_target() {
         &tmp,
         &[
             "workspace",
-            "move",
+            "move-memory",
             "the-api-returns-418-on-mondays",
             "-w",
             "alpha",
@@ -261,7 +262,7 @@ fn a_move_names_exactly_one_target() {
         &tmp,
         &[
             "workspace",
-            "move",
+            "move-memory",
             "the-api-returns-418-on-mondays",
             "--to-shared",
             "--to-persona",

@@ -95,7 +95,7 @@ charter persona dedupe <name>                  # near-duplicate pairs, to forget
 charter persona edit-memory <name> <slug> [--title "<title>"] ["<body>" | -]   # rewrite in place
 charter persona archive-memory <name> <slug>   # out of every list, into memory/archive/
 charter persona unarchive-memory <name> <slug> [--as <slug>]   # back from the archive
-charter persona move-memory <name> <slug> --to-persona <other> | --to-workspace <ws> | --to-shared
+charter persona move-memory <name> <slug> --to-shared   # or --to-persona, --to-workspace
 charter persona forget <name> <slug>           # delete one memory
 charter persona optimize                       # read-only curation report; --apply the safe ops
 ```

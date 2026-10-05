@@ -303,7 +303,9 @@ function scopeLabel(scope: MemoryScope): string {
 /**
  * **Move a memory to another store** (KN-3): a workspace's journal, a persona's memory or shared
  * memory. The file moves whole — its title and stamp with it, nothing copied — and the tab
- * follows it there (`onMoved`, which a save calls too).
+ * follows it there (`onMoved`, which a save calls too). A journal name moved away and back
+ * comes back to the minute. Persona and shared memory are published with the project, which
+ * the help line says: a move out of a LOCAL journal publishes it with the next save.
  *
  * **The pick is held, and only the button moves** (`docs/ui-primitives.md`: a choice that writes
  * something with no Undo holds the pick and writes on a button). A move a store refuses — one
@@ -363,7 +365,7 @@ function MoveMemory({
     <div className="memory-move">
       <SettingRow
         label="Move to"
-        help="Moves the file whole, with its title and date. Nothing is copied."
+        help="Moves the file whole, with its title and date. Nothing is copied. Persona and shared memory are published with the project."
         control={(ids) => (
           <Choice
             ids={ids}

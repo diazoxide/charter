@@ -142,6 +142,7 @@ fn writers(store: &str) -> Vec<(Vec<&'static str>, &'static str)> {
             ]),
             w(&["workspace", "archive", "theirs"]),
             w(&["workspace", "unarchive", "gone"]),
+            w(&["workspace", "move-memory", "theirs", "--to-shared"]),
         ],
         "sessions" => vec![(
             vec![

@@ -189,7 +189,7 @@ fn a_memory_with_no_stamp_line_moved_to_a_workspace_is_prefixed_with_the_time_of
 }
 
 #[test]
-fn a_memory_moved_away_and_back_has_its_first_name_again() {
+fn a_memory_moved_away_and_back_on_the_minute_has_its_first_name_again() {
     charter_core::unsteered!();
     let tmp = tempfile::tempdir().unwrap();
     let plane = plane(&tmp);
@@ -436,4 +436,100 @@ fn a_target_whose_index_is_not_a_file_is_refused_before_anything_moves() {
             .join("personas/devops/memory/a-fact.md")
             .is_file()
     );
+}
+
+#[test]
+fn a_journal_memory_moved_away_and_back_has_its_first_name_again_to_the_minute() {
+    charter_core::unsteered!();
+    let tmp = tempfile::tempdir().unwrap();
+    let plane = plane(&tmp);
+    // Recorded at 09:14:37: the name has the seconds, the stamp line has only the minute.
+    let path = plane
+        .workspace("alpha")
+        .unwrap()
+        .remember("A fact", at())
+        .unwrap();
+    assert_eq!(stem(&path), "20260302-091437-a-fact");
+    let text = read(&path);
+
+    move_memory(&plane, &ws("alpha"), &stem(&path), &Scope::Shared, later()).unwrap();
+    let back = move_memory(&plane, &Scope::Shared, "a-fact", &ws("alpha"), later()).unwrap();
+
+    // The guarantee is to the minute: the seconds come back as `00`, the text byte for byte.
+    assert_eq!(stem(&back), "20260302-091400-a-fact");
+    assert_eq!(read(&back), text);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_persona_store_that_is_a_link_inside_the_project_is_refused_in_the_persona_stores_words() {
+    charter_core::unsteered!();
+    let tmp = tempfile::tempdir().unwrap();
+    let plane = plane(&tmp);
+    plane
+        .persona("devops")
+        .unwrap()
+        .remember("A fact", at())
+        .unwrap();
+    std::fs::create_dir_all(tmp.path().join("workspaces/beta/memory")).unwrap();
+    std::fs::remove_dir(tmp.path().join("personas/steward/memory")).unwrap();
+    std::os::unix::fs::symlink(
+        "../../workspaces/beta/memory",
+        tmp.path().join("personas/steward/memory"),
+    )
+    .unwrap();
+    let before = tree(tmp.path());
+
+    let refused = move_memory(
+        &plane,
+        &persona("devops"),
+        "a-fact",
+        &persona("steward"),
+        later(),
+    )
+    .unwrap_err();
+
+    assert_eq!(refused.kind(), ErrorKind::PermissionDenied, "{refused}");
+    let said = refused.to_string();
+    assert!(said.contains("persona store"), "{said}");
+    assert!(!said.contains("workspace"), "{said}");
+    assert_eq!(tree(tmp.path()), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_move_the_filesystem_refuses_makes_no_target_store() {
+    charter_core::unsteered!();
+    use std::os::unix::fs::PermissionsExt as _;
+    let tmp = tempfile::tempdir().unwrap();
+    let plane = plane(&tmp);
+    plane
+        .persona("devops")
+        .unwrap()
+        .remember("A fact", at())
+        .unwrap();
+    std::fs::remove_dir(tmp.path().join("personas/steward/memory")).unwrap();
+    // The source store will not let the file leave it.
+    let source = tmp.path().join("personas/devops/memory");
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(source.join("probe"), "").is_ok() {
+        return;
+    }
+
+    let refused = move_memory(
+        &plane,
+        &persona("devops"),
+        "a-fact",
+        &persona("steward"),
+        later(),
+    )
+    .unwrap_err();
+
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(refused.kind(), ErrorKind::PermissionDenied, "{refused}");
+    assert!(
+        !tmp.path().join("personas/steward/memory").exists(),
+        "a move that did not happen made no store"
+    );
+    assert!(source.join("a-fact.md").is_file());
 }

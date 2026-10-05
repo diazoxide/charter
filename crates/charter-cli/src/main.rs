@@ -897,8 +897,10 @@ enum WorkspaceCommand {
         common: Common,
     },
     /// Move one workspace memory to another scope: another workspace's journal, a persona,
-    /// or shared. Its title and stamp go with it, and nothing is copied.
-    Move {
+    /// or shared. Its title and stamp go with it, and nothing is copied. Persona and shared
+    /// memory are published with the project.
+    #[command(name = "move-memory")]
+    MoveMemory {
         /// Memory slug or filename (see `charter workspace recall`).
         slug: String,
         #[command(flatten)]
@@ -2640,7 +2642,7 @@ fn run(command: Command) -> Result<u8, String> {
                 &slug,
             );
         }
-        Command::Workspace(WorkspaceCommand::Move { slug, to, common }) => {
+        Command::Workspace(WorkspaceCommand::MoveMemory { slug, to, common }) => {
             let name = here.active_workspace(common.workspace.as_deref())?;
             return memory::move_memory(
                 &here.plane,

@@ -297,7 +297,8 @@ pub enum PersonaCommand {
         shared: bool,
     },
     /// Move one memory to another scope: a workspace's journal, another persona, or shared.
-    /// Its title and stamp go with it, and nothing is copied.
+    /// Its title and stamp go with it, and nothing is copied. Persona and shared memory are
+    /// published with the project.
     ///
     /// The work is [`charter_core::memscope::move_memory`].
     #[command(name = "move-memory")]
@@ -942,7 +943,7 @@ pub fn workspace_unarchive(
     }
 }
 
-/// Where `workspace move` and `persona move-memory` send a memory: exactly one scope.
+/// Where `workspace move-memory` and `persona move-memory` send a memory: exactly one scope.
 #[derive(Args)]
 #[group(required = true, multiple = false)]
 pub struct MoveTo {
@@ -989,7 +990,9 @@ fn way_back(
 ) -> Option<String> {
     let back = to_flag(home);
     match at {
-        Scope::Workspace(name) => Some(format!("charter workspace move {stem} -w {name} {back}")),
+        Scope::Workspace(name) => Some(format!(
+            "charter workspace move-memory {stem} -w {name} {back}"
+        )),
         Scope::Persona(name) => Some(format!("charter persona move-memory {name} {stem} {back}")),
         Scope::Shared => {
             let persona = persona
@@ -1002,7 +1005,7 @@ fn way_back(
     }
 }
 
-/// `workspace move` and `persona move-memory` — move one memory from `from` to `to` (KN-3):
+/// `workspace move-memory` and `persona move-memory` — move one memory from `from` to `to` (KN-3):
 /// renamed whole, its title and stamp kept, its index line moved with it. A slug typed is made
 /// exact as `edit` makes it.
 pub fn move_memory(
@@ -1051,7 +1054,9 @@ pub fn move_memory(
                 voice::rel(plane.root(), &path)
             );
             if let Some(back) = way_back(plane, to, &stem, from, persona) {
-                said.push_str(&format!(". Undo: `{back}`"));
+                // Not an Undo to the letter: a journal name comes back to the minute, as the
+                // stamp line the memory carries holds minutes.
+                said.push_str(&format!(". To move it back: `{back}`"));
             }
             voice::ok(&said);
             reactive(plane);
