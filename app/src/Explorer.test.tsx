@@ -101,6 +101,7 @@ function draw(on: {
         onShowChat={on.onShowChat ?? (() => {})}
         offers={on.offers ?? new Map()}
         onPress={on.onPress ?? (() => {})}
+        onReadAgain={() => {}}
       />
     </ChatsHere.Provider>,
   );
@@ -218,7 +219,10 @@ describe("the explorer", () => {
     });
 
     const svc = screen.getByTestId("clone-svc");
-    expect(within(svc).getByRole("alert")).toHaveTextContent("symlink");
+    const refused = within(svc).getByRole("status");
+    expect(refused).toHaveTextContent("symlink");
+    // Its way out (NO-4): the read asked again.
+    expect(within(refused).getByRole("button", { name: "Read again" })).toBeInTheDocument();
     expect(svc).not.toHaveTextContent("No branches cut here");
   });
 
@@ -394,7 +398,11 @@ describe("the explorer", () => {
       }),
     });
 
-    expect(screen.getByRole("alert")).toHaveTextContent("alias");
+    const refused = screen
+      .getByText(/'alias' is reached through a symlink/)
+      .closest("[data-cause]") as HTMLElement;
+    expect(refused.getAttribute("data-cause")).toBe("repo-refused:alpha/alias");
+    expect(within(refused).getByRole("button", { name: "Read again" })).toBeInTheDocument();
   });
 });
 

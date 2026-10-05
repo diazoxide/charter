@@ -132,6 +132,8 @@ macro_rules! app_commands {
                 worktrees::worktree_done,
                 piecefiles::piece_file,
                 piecefiles::open_in_your_editor,
+                piecefiles::open_their_agents_md,
+                piecefiles::move_their_agents_md_aside,
                 piecefiles::copy_branch_path,
                 piecefiles::reveal_branch_path,
                 piecefiles::branch_tree,

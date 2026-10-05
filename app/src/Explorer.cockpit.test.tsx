@@ -137,6 +137,7 @@ function draw({
         onShowChat={onShowChat}
         offers={offers}
         onPress={onPress}
+        onReadAgain={() => {}}
         onOpenFile={() => {}}
         focus={FOCUS}
         onFocus={onFocus}
@@ -257,6 +258,7 @@ describe("the branch cockpit", () => {
           onShowChat={() => {}}
           offers={new Map()}
           onPress={() => {}}
+          onReadAgain={() => {}}
           onOpenFile={() => {}}
           focus={FOCUS}
           onFocus={() => {}}
@@ -293,6 +295,7 @@ describe("the branch cockpit", () => {
           onShowChat={() => {}}
           offers={new Map()}
           onPress={() => {}}
+          onReadAgain={() => {}}
           onOpenFile={() => {}}
           focus={focus}
           onFocus={setFocus}
@@ -343,6 +346,7 @@ describe("the branch cockpit", () => {
             onShowChat={() => {}}
             offers={new Map()}
             onPress={() => {}}
+            onReadAgain={() => {}}
             focus={FOCUS}
             onFocus={() => {}}
           />

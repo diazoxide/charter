@@ -464,16 +464,16 @@ static FIRST_FRAME: AtomicBool = AtomicBool::new(false);
 
 /// The window says its first frame is on screen, which is where cold start ends.
 ///
-/// It answers with the one line to put on screen when that took longer than the limit, and
-/// with nothing when it did not. An operator who launched charter from an icon has no
-/// standard error to read, and a start that took half a minute with no window has to say why
-/// somewhere they can see it (charter-app#24). Only the first call is answered: a webview
-/// that reloads has not started the process again.
+/// It answers with the one line to put on screen when that took longer than the limit, with the
+/// relaunch it suggests for Copy command (NO-4), and with nothing when it did not. An operator
+/// who launched charter from an icon has no standard error to read, and a start that took half a
+/// minute with no window has to say why somewhere they can see it (charter-app#24). Only the
+/// first call is answered: a webview that reloads has not started the process again.
 ///
 /// `CHARTER_BENCH_LOG` — which only `tools/bench.mjs` sets — also prints the number here.
 #[tauri::command]
 #[specta::specta]
-fn first_frame() -> Option<String> {
+fn first_frame() -> Option<slowstart::SlowStart> {
     let took = STARTED.elapsed();
     if std::env::var_os("CHARTER_BENCH_LOG").is_some() {
         println!("charter-bench first-frame {}", took.as_millis());
@@ -1248,6 +1248,11 @@ fn start_chat_in(
         session,
         label,
         notices,
+        agents_md: ready
+            .agents_md
+            .into_iter()
+            .map(TheirAgentsMd::from)
+            .collect(),
     })
 }
 
@@ -1261,6 +1266,28 @@ struct Started {
     /// What the start found to say, one line each, for the chat's pane (ADR 0085): why its
     /// `AGENTS.md` was not written, and an `AGENTS.md` charter's exclude line hides.
     notices: Vec<String>,
+    /// The branches whose `AGENTS.md` a notice names as the operator's and hidden by charter's
+    /// line: what the notice's Open file and Move aside… act on (NO-4).
+    agents_md: Vec<TheirAgentsMd>,
+}
+
+/// A branch whose `AGENTS.md` is the operator's and hidden from `git status` by charter's line:
+/// the repo's own folder (no piece) or one of its pieces.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+struct TheirAgentsMd {
+    workspace: String,
+    repo: String,
+    piece: Option<String>,
+}
+
+impl From<charter_core::start::TheirAgentsMd> for TheirAgentsMd {
+    fn from(at: charter_core::start::TheirAgentsMd) -> Self {
+        Self {
+            workspace: at.workspace,
+            repo: at.repo,
+            piece: at.piece,
+        }
+    }
 }
 
 /// Starts a session, and remembers it as a chat so a quit can write it down. No program is

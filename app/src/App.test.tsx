@@ -26,6 +26,12 @@ afterEach(() => {
 /** What the core answers when the sidebar reads the plane. These tests are about the tabs,
  *  the splits and what they ask the core, so it is the smallest plane that draws: one
  *  workspace, nothing in it. `Sidebar.test.tsx` is where the sidebar itself is tested. */
+/** What the core answers about a launch that passed the limit, on a system with no known cause. */
+const SLOW = { said: "charter took 31 s to start, against a 2 s limit.", relaunch: null };
+/** The relaunch it suggests on Linux. */
+const RELAUNCH =
+  "DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null/charter-started-without-the-session-bus charter";
+
 const SIDEBAR = {
   root: "/home/dev/plane",
   workspaces: [
@@ -213,7 +219,7 @@ describe("App", () => {
     // line to standard error while it waits; an operator who clicked an icon never sees it,
     // so the first frame is where they are told.
     mockIPC((cmd) => {
-      if (cmd === "first_frame") return "charter took 31 s to start, against a 2 s limit.";
+      if (cmd === "first_frame") return SLOW;
       if (cmd === "plane_at_launch")
         return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
@@ -243,7 +249,7 @@ describe("App", () => {
   it("puts that notice away when it is dismissed", async () => {
     // The launch is over by the time it is read, and the news does not improve.
     mockIPC((cmd) => {
-      if (cmd === "first_frame") return "charter took 31 s to start, against a 2 s limit.";
+      if (cmd === "first_frame") return SLOW;
       if (cmd === "plane_at_launch")
         return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
@@ -256,6 +262,41 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
     expect(sayingSomething()).toEqual([]);
+  });
+
+  it("offers the relaunch it suggests as Copy command", async () => {
+    // NO-4: the window has no fix for a launch already made, so the relaunch is copied whole
+    // rather than retyped (V91q's last resort, listed as debt by `Notice.guard.test.ts`).
+    const user = userEvent.setup();
+    mockIPC((cmd) => {
+      if (cmd === "first_frame") return { ...SLOW, relaunch: RELAUNCH };
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
+      if (cmd === "plane_sidebar") return SIDEBAR;
+      if (cmd === "chats_that_would_not_start") return [];
+      return null;
+    });
+    render(<App />);
+    await waitFor(() => expect(sayingSomething()).toHaveLength(1));
+
+    await user.click(within(sayingSomething()[0]).getByRole("button", { name: "Copy command" }));
+
+    expect(await navigator.clipboard.readText()).toBe(RELAUNCH);
+  });
+
+  it("offers no Copy command where no relaunch is known", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "first_frame") return SLOW;
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
+      if (cmd === "plane_sidebar") return SIDEBAR;
+      if (cmd === "chats_that_would_not_start") return [];
+      return null;
+    });
+    render(<App />);
+    await waitFor(() => expect(sayingSomething()).toHaveLength(1));
+
+    expect(within(sayingSomething()[0]).queryByRole("button", { name: "Copy command" })).toBeNull();
   });
 
   it("does not send that marker once the window has gone", async () => {

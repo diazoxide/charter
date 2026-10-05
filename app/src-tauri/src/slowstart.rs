@@ -61,9 +61,20 @@ fn still_starting(limit: Duration, os: &str) -> String {
     said
 }
 
+/// What the window says about a slow launch: its line, and the relaunch that line suggests.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SlowStart {
+    /// The one line on screen.
+    pub said: String,
+    /// The command the line suggests, whole, for the Notice's Copy command (NO-4): the window
+    /// has no fix for a launch already made, so this is the last resort and listed as debt
+    /// (V91q). `None` where no cause is known.
+    pub relaunch: Option<String>,
+}
+
 /// The one line the window puts on screen about a launch that took `took`, or nothing when
 /// the launch was inside the limit and there is nothing to explain.
-pub fn why(took: Duration, os: &str) -> Option<String> {
+pub fn why(took: Duration, os: &str) -> Option<SlowStart> {
     if took <= LIMIT {
         return None;
     }
@@ -76,7 +87,18 @@ pub fn why(took: Duration, os: &str) -> Option<String> {
         said.push(' ');
         said.push_str(&cause);
     }
-    Some(said)
+    Some(SlowStart {
+        said,
+        relaunch: (os == "linux").then(relaunch),
+    })
+}
+
+/// Charter started again without the session bus: the way around the measured Linux wait.
+fn relaunch() -> String {
+    format!(
+        "DBUS_SESSION_BUS_ADDRESS={} charter",
+        crate::portal::NO_SESSION_BUS
+    )
 }
 
 /// The cause that has actually been measured, where it can apply — and nothing anywhere else.
@@ -93,8 +115,8 @@ fn the_known_cause(os: &str) -> Option<String> {
              25 s, then WebKitGTK asks it for the colour scheme and gives up after 5 more. \
              charter asks the bus first and starts without it when the portal is silent, but a \
              portal that answers and then stalls gets past that. To start without the session \
-             bus: DBUS_SESSION_BUS_ADDRESS={} charter — charter-app#24.",
-            crate::portal::NO_SESSION_BUS
+             bus: {} — charter-app#24.",
+            relaunch()
         )
     })
 }
@@ -173,6 +195,16 @@ mod tests {
 
         let linux = why(slow, "linux").expect("a slow launch is explained");
         let mac = why(slow, "macos").expect("a slow launch is explained");
+        // The relaunch the line suggests, whole, for Copy command (NO-4): only where it is said.
+        assert_eq!(
+            linux.relaunch,
+            Some(format!(
+                "DBUS_SESSION_BUS_ADDRESS={} charter",
+                crate::portal::NO_SESSION_BUS
+            ))
+        );
+        assert_eq!(mac.relaunch, None);
+        let (linux, mac) = (linux.said, mac.said);
 
         assert!(linux.contains("portal"), "{linux}");
         assert!(linux.contains("charter-app#24"), "{linux}");

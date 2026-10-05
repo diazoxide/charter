@@ -30,6 +30,7 @@ import {
   type PlaneId,
   type RelaunchChoice,
   type RelaunchQuestion,
+  type SlowStart,
   type TemplateChoice,
 } from "./bindings";
 import type { ForgeAsk } from "./ForgeQuestion";
@@ -275,7 +276,7 @@ function App() {
   const inFrontNow = useRef<PlaneId | undefined>(undefined);
   /** Why this launch took longer than the limit, when it did — and nothing when it did not
    *  (charter-app#24). The core decides that; the window only draws it. */
-  const [slowStart, setSlowStart] = useState<string>();
+  const [slowStart, setSlowStart] = useState<SlowStart>();
   /** Projects the last quit had open that charter would not take back, each with its line.
    *  Never an error dialog: a restore is a convenience (ADR 0033). */
   const [notRestored, setNotRestored] = useState<string[]>([]);
@@ -1831,10 +1832,18 @@ function App() {
           spec's limit, so on an ordinary launch there is nothing to draw and nothing to
           dismiss. It is the one place an operator who clicked an icon can be told — the
           line charter writes while it waits goes to standard error, which they do not have.
-          Dismissible, because the launch is over and the news does not improve. */}
+          Dismissible, because the launch is over and the news does not improve. Where the
+          core knows the relaunch that avoids the wait, it is offered as Copy command (NO-4):
+          the window has no fix for a launch already made, so this is V91q's last resort and
+          `Notice.guard.test.ts` lists it as debt. */}
       {slowStart && (
-        <Notice cause="slow-start" tone="trouble" onDismiss={() => setSlowStart(undefined)}>
-          {slowStart}
+        <Notice
+          cause="slow-start"
+          tone="trouble"
+          copy={slowStart.relaunch ?? undefined}
+          onDismiss={() => setSlowStart(undefined)}
+        >
+          {slowStart.said}
         </Notice>
       )}
 

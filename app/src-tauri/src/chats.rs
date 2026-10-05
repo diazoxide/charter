@@ -2506,6 +2506,7 @@ mod tests {
             sandbox: Some(sandbox),
             unsandboxed: None,
             notices: Vec::new(),
+            agents_md: Vec::new(),
         }
     }
 
@@ -3841,6 +3842,7 @@ mod tests {
             sandbox: None,
             unsandboxed: None,
             notices: Vec::new(),
+            agents_md: Vec::new(),
         }
     }
 
@@ -4343,6 +4345,7 @@ mod tests {
             sandbox: None,
             unsandboxed: None,
             notices: Vec::new(),
+            agents_md: Vec::new(),
         };
 
         let session = chats
@@ -4417,6 +4420,7 @@ mod tests {
             sandbox: None,
             unsandboxed: None,
             notices: Vec::new(),
+            agents_md: Vec::new(),
         };
 
         let session = chats.start_ready(&chat, &ready, SIZE).unwrap();

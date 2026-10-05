@@ -1024,6 +1024,121 @@ pub fn hidden_agents_md(tree: &Path) -> HiddenAgentsMd {
     out
 }
 
+/// What **Move aside…** renames the operator's `AGENTS.md` to, before a number is needed:
+/// a name charter's `/AGENTS.md` exclude line does not match, so the file shows in `git status`
+/// again (NO-4).
+const ASIDE: &str = "AGENTS.aside";
+
+/// The operator's `AGENTS.md` at the top of `branch` (V35): there, a plain file, untracked, and
+/// not one charter's record vouches for. Refused, in a sentence, otherwise. The branch is placed
+/// by name ([`crate::files::place`]): no link, nothing outside the branch, never git's own.
+fn their_agents_md(plane: &Path, branch: crate::files::Branch<'_>) -> Result<PathBuf, String> {
+    let file = crate::files::place(plane, branch, AGENTS_MD)
+        .map_err(|refused| refused.to_string())?
+        .absolute;
+    let shown = file.display();
+    if !file.is_file() {
+        return Err(format!("{shown} is not a file"));
+    }
+    let tree = file.parent().unwrap_or(plane);
+    if tracked(tree, AGENTS_MD) {
+        return Err(format!(
+            "the repository tracks {shown}: it is the repository's, and changing it is a commit"
+        ));
+    }
+    let on_disk =
+        std::fs::read_to_string(&file).map_err(|e| format!("charter cannot read {shown}: {e}"))?;
+    if layer::read_record(tree)
+        .recorded(AGENTS_MD)
+        .contains(&digest(&on_disk))
+    {
+        return Err(format!(
+            "charter wrote {shown}, and writes it again at a chat's next start there: it is not \
+             yours to move aside"
+        ));
+    }
+    Ok(file)
+}
+
+/// **Open file** for the operator's `AGENTS.md` at the top of `branch` (NO-4): what to launch to
+/// show it in their editor.
+///
+/// Charter's own exclude line hides this file, so the light editor's rule — only what git does
+/// not ignore opens ([`crate::files::in_your_editor`]) — would refuse it. That rule keeps an
+/// ignored secret out of a review; this file is hidden by charter, not by the operator, and
+/// only it opens here, only when it is theirs.
+pub fn their_agents_md_in_your_editor(
+    plane: &Path,
+    branch: crate::files::Branch<'_>,
+    editor: crate::youreditor::Editor,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> Result<crate::youreditor::Launch, String> {
+    let file = their_agents_md(plane, branch)?;
+    crate::youreditor::launch(editor, &file, 1, var).map_err(|refused| refused.to_string())
+}
+
+/// **Move aside…** (NO-4): the operator's `AGENTS.md` at the top of `branch` renamed to
+/// `AGENTS.aside.md`, or `AGENTS.aside-2.md` and on when that is taken, **never over anything**.
+/// Answers the name it now has. Only on the operator's press, after the window asked: charter
+/// never moves a file of theirs by itself (V91c). Refused, touching nothing, for a file that
+/// is not theirs ([`their_agents_md`]).
+pub fn move_agents_md_aside(
+    plane: &Path,
+    branch: crate::files::Branch<'_>,
+) -> Result<String, String> {
+    let file = their_agents_md(plane, branch)?;
+    let tree = file.parent().unwrap_or(plane);
+    for n in 1..=99 {
+        let name = if n == 1 {
+            format!("{ASIDE}.md")
+        } else {
+            format!("{ASIDE}-{n}.md")
+        };
+        match rename_new(&file, &tree.join(&name)) {
+            Ok(true) => return Ok(name),
+            Ok(false) => continue,
+            Err(e) => {
+                return Err(format!(
+                    "charter could not move {} aside: {e}",
+                    file.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "every name from {ASIDE}.md to {ASIDE}-99.md is taken beside {}, so nothing was moved",
+        file.display()
+    ))
+}
+
+/// `from` renamed to `to`, never over anything: `Ok(false)`, moving nothing, when something is
+/// at `to`. The kernel's no-replace rename where there is one, as `held.rs`'s is; a filesystem
+/// without it is renamed onto after a look.
+fn rename_new(from: &Path, to: &Path) -> std::io::Result<bool> {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    ))]
+    match rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        from,
+        rustix::fs::CWD,
+        to,
+        rustix::fs::RenameFlags::NOREPLACE,
+    ) {
+        Ok(()) => return Ok(true),
+        Err(rustix::io::Errno::EXIST) => return Ok(false),
+        Err(rustix::io::Errno::INVAL | rustix::io::Errno::NOSYS | rustix::io::Errno::NOTSUP) => {}
+        Err(e) => return Err(e.into()),
+    }
+    if std::fs::symlink_metadata(to).is_ok() {
+        return Ok(false);
+    }
+    std::fs::rename(from, to).map(|()| true)
+}
+
 /// [`hidden_agents_md`]'s question, asked of each of `trees`: whether its `AGENTS.md` is one
 /// charter's line hides and charter did not write, or one it cannot tell about.
 fn hidden_in(trees: Vec<PathBuf>, out: &mut HiddenAgentsMd) {

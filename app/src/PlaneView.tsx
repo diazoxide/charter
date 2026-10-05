@@ -45,6 +45,7 @@ import {
   type NotStarted,
   type OpenChat,
   type PlaneId,
+  type TheirAgentsMd,
   type Refused,
   type Sidebar as SidebarModel,
   type StartOptions,
@@ -398,7 +399,21 @@ export const PlaneView = memo(function PlaneView({
   const needsYou = useChatsSelect(chats, (states) => states.needsYou);
   const reports = useChatsSelect(chats, (states) => states.reports);
   const refusals = useChatsSelect(chats, (states) => states.refusals);
-  const [trouble, setTrouble] = useState<string>();
+  /**
+   * **What the last window action here refused, and which action** (NO-4): the picker's
+   * options, or a shell. A Notice with Dismiss, and it clears itself when that same action next
+   * succeeds — it used to stand until some other refusal replaced it.
+   */
+  const [trouble, setTrouble] = useState<{ from: "start-options" | "shell"; said: string }>();
+  const refusedBy = useCallback(
+    (from: "start-options" | "shell", said: string) => setTrouble({ from, said }),
+    [],
+  );
+  const succeeded = useCallback(
+    (from: "start-options" | "shell") =>
+      setTrouble((was) => (was?.from === from ? undefined : was)),
+    [],
+  );
   const [sidebar, setSidebar] = useState<SidebarModel>();
   /** This project's save standing (charter-app#302): every project reads its own, so the project
    *  strip can mark the ones with unsaved work and the title bar can show the one in front. */
@@ -629,7 +644,7 @@ export const PlaneView = memo(function PlaneView({
    */
   const [byHand, setByHand] = useState<Record<number, ByHandNote>>({});
   /** What each chat's start found to say, by session, until it is dismissed (ADR 0085). */
-  const [startNotes, setStartNotes] = useState<Record<number, readonly string[]>>({});
+  const [startNotes, setStartNotes] = useState<Record<number, StartNotes>>({});
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
@@ -1595,12 +1610,13 @@ export const PlaneView = memo(function PlaneView({
         .startOptions(plane)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (options.status === "error") {
-        setTrouble(options.error);
+        refusedBy("start-options", options.error);
         return;
       }
+      succeeded("start-options");
       setPicking({ options: options.data, where });
     },
-    [plane],
+    [plane, refusedBy, succeeded],
   );
 
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
@@ -1626,9 +1642,10 @@ export const PlaneView = memo(function PlaneView({
       void start(name)
         .then((opened) => {
           if (opened.status === "error") {
-            setTrouble(opened.error);
+            refusedBy("shell", opened.error);
             return;
           }
+          succeeded("shell");
           const session = opened.data;
           setShells((was) => new Set(was).add(session));
           setStartedIn((was) => ({ ...was, [session]: filed }));
@@ -1641,21 +1658,21 @@ export const PlaneView = memo(function PlaneView({
             void commands
               .typeInstaller(plane, session, typed.installer)
               .then((said) => {
-                if (said.status === "error") setTrouble(said.error);
+                if (said.status === "error") refusedBy("shell", said.error);
               })
-              .catch((err: unknown) => setTrouble(String(err)));
+              .catch((err: unknown) => refusedBy("shell", String(err)));
           // Typed and not run: installing needs sudo, so the person presses Return (V78 c).
           else if (typed?.sandboxInstall)
             void commands
               .typeSandboxInstall(plane, session)
               .then((said) => {
-                if (said.status === "error") setTrouble(said.error);
+                if (said.status === "error") refusedBy("shell", said.error);
               })
-              .catch((err: unknown) => setTrouble(String(err)));
+              .catch((err: unknown) => refusedBy("shell", String(err)));
         })
-        .catch((err: unknown) => setTrouble(String(err)));
+        .catch((err: unknown) => refusedBy("shell", String(err)));
     },
-    [change, plane],
+    [change, plane, refusedBy, succeeded],
   );
   const openShell = useCallback(
     (cwd: string | null, filed: string, typed?: Typed) =>
@@ -1910,7 +1927,8 @@ export const PlaneView = memo(function PlaneView({
       const session = started.data.session;
       // `?? []`, as the label's `?? null` below: an older core, or a stand-in, sends none.
       const notes = started.data.notices ?? [];
-      if (notes.length > 0) setStartNotes((was) => ({ ...was, [session]: notes }));
+      const agentsMd = started.data.agents_md ?? [];
+      if (notes.length > 0) setStartNotes((was) => ({ ...was, [session]: { notes, agentsMd } }));
       // Where charter put it, written down before the tab is drawn: the plane will say the
       // same thing a tick later, and until it does this is what keeps the tab on the strip
       // the operator is looking at.
@@ -2291,9 +2309,10 @@ export const PlaneView = memo(function PlaneView({
       .startOptions(plane)
       .then(async (options) => {
         if (options.status === "error") {
-          setTrouble(options.error);
+          refusedBy("start-options", options.error);
           return;
         }
+        succeeded("start-options");
         focusWorkspace(workspace);
         // **No harness on this machine** (FR-29): the picker would list harnesses none of
         // which can start, so the first chat is the setup tab — each one's official installer,
@@ -2336,8 +2355,8 @@ export const PlaneView = memo(function PlaneView({
         offerBeside();
         setPicking({ options: options.data, where });
       })
-      .catch((err: unknown) => setTrouble(String(err)));
-  }, [change, firstChatAsked, focusWorkspace, plane, sidebar, startOn]);
+      .catch((err: unknown) => refusedBy("start-options", String(err)));
+  }, [change, firstChatAsked, focusWorkspace, plane, refusedBy, sidebar, startOn, succeeded]);
 
   /** What a chat is called here: the tab holding it, or its session number. */
   const nameOf = useCallback(
@@ -4592,14 +4611,18 @@ export const PlaneView = memo(function PlaneView({
       </header>
 
       {/* **The window's standing lines are Notices** (`Notice.tsx`, V91a–d): each has a way
-          out, and `Notice.guard.test.ts` fails on one drawn any other way. Those with nothing
-          better to offer yet have Dismiss; NO-3 and NO-4 give them their own. */}
+          out, and `Notice.guard.test.ts` fails on one drawn any other way. A refused action's
+          line has Dismiss, and goes by itself when that action next succeeds (NO-4). */}
       {/* **Stacked** (V91i): at most two stand under the strip, the most important first, and
           the rest are behind "+N more" (`NoticeBand`). */}
       <NoticeBand>
         {trouble && (
-          <Notice cause="window-trouble" tone="trouble" onDismiss={() => setTrouble(undefined)}>
-            {trouble}
+          <Notice
+            cause={`window-trouble:${trouble.from}`}
+            tone="trouble"
+            onDismiss={() => setTrouble(undefined)}
+          >
+            {trouble.said}
           </Notice>
         )}
 
@@ -4753,6 +4776,7 @@ export const PlaneView = memo(function PlaneView({
               focus={cockpit}
               onFocus={setFocusedBranch}
               cloning={cloning}
+              onReadAgain={rereadPanels}
             />
           ),
           aside: (
@@ -5353,21 +5377,109 @@ function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: b
   );
 }
 
+/** What a chat's start found to say (ADR 0085, V35): its lines, and the branches whose
+ *  `AGENTS.md` they name as the operator's and hidden by charter's line (NO-4). */
+type StartNotes = { notes: readonly string[]; agentsMd: readonly TheirAgentsMd[] };
+
+/** A branch's own name in a sentence: its piece, or the repo's for the repo's own folder. */
+const branchName = (at: TheirAgentsMd) => at.piece ?? at.repo;
+
 /**
  * **What a chat's start found to say** (ADR 0085, V35): why its `AGENTS.md` was not written,
  * or an `AGENTS.md` of the operator's that charter's exclude line hides. One line each, in the
  * pane's corner beside the by-hand banner and drawn the same way: a `status`, because nothing is
  * waiting on the operator and the chat is already running.
+ *
+ * **The operator's hidden file has its way out here** (NO-4, V91o): **Open file** hands it to
+ * their editor, and **Move aside…** renames it to `AGENTS.aside.md` so `git status` shows it
+ * again. It is the operator's file, so Move aside… asks first, in this same line, and the core
+ * moves nothing until the second press (never over another file, and never charter's own).
  */
-function StartNotice({ notes, onDismiss }: { notes: readonly string[]; onDismiss: () => void }) {
+function StartNotice({
+  plane,
+  found,
+  onDismiss,
+}: {
+  plane: PlaneId;
+  found: StartNotes;
+  onDismiss: () => void;
+}) {
+  /** The branch whose file Move aside… is asking about. */
+  const [asking, setAsking] = useState<TheirAgentsMd>();
+  /** What the actions answered: where a file went, or the core's refusal. */
+  const [said, setSaid] = useState<string>();
+  /** The branches whose file has been moved aside, by name: nothing more to do there. */
+  const [moved, setMoved] = useState<readonly string[]>([]);
+  const left = found.agentsMd.filter((at) => !moved.includes(branchName(at)));
+  const one = left.length === 1;
+
+  const openFile = (at: TheirAgentsMd) => {
+    const editor = yourEditor();
+    if (editor === undefined) {
+      setSaid("Choose your editor in Settings first.");
+      return;
+    }
+    void commands
+      .openTheirAgentsMd(plane, at.workspace, at.repo, at.piece, editor)
+      .then((done) => setSaid(done.status === "error" ? done.error : undefined))
+      .catch((err: unknown) => setSaid(String(err)));
+  };
+  const moveAside = (at: TheirAgentsMd) => {
+    setAsking(undefined);
+    void commands
+      .moveTheirAgentsMdAside(plane, at.workspace, at.repo, at.piece)
+      .then((done) => {
+        if (done.status === "error") {
+          setSaid(done.error);
+          return;
+        }
+        setMoved((was) => [...was, branchName(at)]);
+        setSaid(
+          `The AGENTS.md of ${branchName(at)} was moved to ${done.data}: git status shows it again.`,
+        );
+      })
+      .catch((err: unknown) => setSaid(String(err)));
+  };
+
+  if (asking !== undefined)
+    return (
+      <Notice
+        cause="start-found"
+        at="pane"
+        label="What this chat's start found"
+        fixes={[
+          { label: "Move aside", onPress: () => moveAside(asking) },
+          { label: "Keep it", onPress: () => setAsking(undefined) },
+        ]}
+      >
+        Move the AGENTS.md of {branchName(asking)} aside? charter renames it to AGENTS.aside.md (or
+        the next free AGENTS.aside-N.md), never over a file, and git status shows it again.
+      </Notice>
+    );
+
+  const fixes = left.flatMap((at) => [
+    { label: one ? "Open file" : `Open ${branchName(at)}`, onPress: () => openFile(at) },
+    {
+      label: one ? "Move aside…" : `Move ${branchName(at)} aside…`,
+      onPress: () => {
+        setSaid(undefined);
+        setAsking(at);
+      },
+    },
+  ]);
+  const [first, ...rest] = fixes;
   return (
     <Notice
       cause="start-found"
       at="pane"
       label="What this chat's start found"
+      fixes={first === undefined ? undefined : [first, ...rest]}
       onDismiss={onDismiss}
     >
-      {notes.join(" ")}
+      {/* Once every named file is moved aside, the lines about it are no longer true. */}
+      {found.agentsMd.length > 0 && left.length === 0
+        ? said
+        : [found.notes.join(" "), said].filter(Boolean).join(" ")}
     </Notice>
   );
 }
@@ -5518,7 +5630,7 @@ function PaneFrame({
   byHand?: ByHandNote;
   onByHand: (open: boolean) => void;
   /** What this chat's start found to say, while it is up (ADR 0085). */
-  startNotes?: readonly string[];
+  startNotes?: StartNotes;
   onDismissStartNote: () => void;
   doing: ReactNode;
   children: ReactNode;
@@ -5553,7 +5665,9 @@ function PaneFrame({
         {from && <span className="pane-from">{from}</span>}
         {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
         {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
-        {startNotes && <StartNotice notes={startNotes} onDismiss={onDismissStartNote} />}
+        {startNotes && (
+          <StartNotice plane={plane} found={startNotes} onDismiss={onDismissStartNote} />
+        )}
       </div>
       <div className="pane-corner at-end">{doing}</div>
       {children}
@@ -5945,7 +6059,7 @@ function LayoutPanes({
   /** The banner answered: `open` asks for that harness as a chat, else it is put away. */
   onByHand: (session: number, open: boolean) => void;
   /** What each chat's start found to say, by session (ADR 0085). */
-  startNotes: Readonly<Record<number, readonly string[]>>;
+  startNotes: Readonly<Record<number, StartNotes>>;
   onDismissStartNote: (session: number) => void;
   /** The views approved extensions offer, for the buttons a view draws beside itself. */
   offered: readonly ExtensionView[];
