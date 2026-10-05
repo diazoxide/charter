@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::WORK_ITEM;
+use super::{WORK_ITEM, WORK_ITEM_WITHOUT_STATUS};
 use crate::forge::backend::{Caller, ForgeRef};
 use crate::forge::pr::Pr;
 use crate::forge::recorded::Recorded;
@@ -13,11 +13,18 @@ use crate::forge::{Forge, ForgeBackend, Kind};
 use crate::work::{ClosedAs, Iteration, Placement, Relation, State, TrackerKey};
 
 fn over(exchanges: Value) -> (Box<dyn ForgeBackend>, Arc<Recorded>) {
+    over_on("gitlab.com", exchanges)
+}
+
+/// GitLab on `host` over these recorded exchanges.
+fn over_on(host: &str, exchanges: Value) -> (Box<dyn ForgeBackend>, Arc<Recorded>) {
     let text = json!({"source": "GitLab 19.4 REST API docs (issues.md, boards.md) and its \
                                  GraphQL reference (Project.workItems, the work item widgets)",
                       "exchanges": exchanges});
     let recorded = Arc::new(Recorded::parse(&text.to_string()).unwrap());
-    let backend = Forge::default_of(Kind::GitLab).backend_over(recorded.clone());
+    let mut forge = Forge::default_of(Kind::GitLab);
+    forge.host = host.to_string();
+    let backend = forge.backend_over(recorded.clone());
     (backend, recorded)
 }
 
@@ -27,8 +34,12 @@ fn rest(path: &str, out: Value) -> Value {
 }
 
 fn gql(out: Value) -> Value {
+    gql_asking(WORK_ITEM, out)
+}
+
+fn gql_asking(query: &str, out: Value) -> Value {
     json!({"call": {"endpoint": "graphql",
-                    "fields": [{"text": ["query", WORK_ITEM]},
+                    "fields": [{"text": ["query", query]},
                                {"text": ["path", "acme/api"]},
                                {"text": ["iid", "12"]}]},
            "reply": {"code": 0, "out": out.to_string()}})
@@ -237,31 +248,23 @@ fn an_open_issue_sits_on_each_board_in_the_first_label_list_it_carries() {
     let item = read(json!([
         rest(
             "projects/acme%2Fapi/issues/12",
-            issue(
-                "opened",
-                json!(["bug", "workflow::review", "workflow::doing"])
-            )
+            issue("opened", json!(["bug", "review", "doing"]))
         ),
         gql(item("Issue", json!({}), json!([]))),
         boards(json!([
-            board(
-                1,
-                "Development",
-                json!({}),
-                &["workflow::doing", "workflow::review"]
-            ),
+            board(1, "Development", json!({}), &["doing", "review"]),
             board(2, "Triage", json!({}), &["needs-info"]),
             board(
                 3,
                 "Other milestone",
                 json!({"milestone": {"id": 777, "title": "v2"}}),
-                &["workflow::doing"]
+                &["doing"]
             ),
             board(
                 4,
                 "Frontend",
                 json!({"labels": [{"name": "frontend"}]}),
-                &["workflow::doing"]
+                &["doing"]
             ),
             board(
                 5,
@@ -283,7 +286,7 @@ fn an_open_issue_sits_on_each_board_in_the_first_label_list_it_carries() {
     assert_eq!(
         item.placements,
         [
-            on("1", "Development", Some("workflow::doing")),
+            on("1", "Development", Some("doing")),
             on("2", "Triage", None),
             on("5", "Mine", Some("bug")),
         ],
@@ -291,7 +294,7 @@ fn an_open_issue_sits_on_each_board_in_the_first_label_list_it_carries() {
     );
     assert_eq!(
         item.status.as_deref(),
-        Some("workflow::doing"),
+        Some("doing"),
         "with no status of its own, the item's is its first board's"
     );
 }
@@ -302,15 +305,10 @@ fn a_closed_issue_sits_in_no_label_list() {
     let item = read(json!([
         rest(
             "projects/acme%2Fapi/issues/12",
-            issue("closed", json!(["workflow::doing"]))
+            issue("closed", json!(["doing"]))
         ),
         gql(item("Issue", json!({}), json!([]))),
-        boards(json!([board(
-            1,
-            "Development",
-            json!({}),
-            &["workflow::doing"]
-        )])),
+        boards(json!([board(1, "Development", json!({}), &["doing"])])),
     ]))
     .unwrap();
     assert_eq!(item.placements.len(), 1);
@@ -377,4 +375,111 @@ fn an_answer_with_no_title_is_refused_as_malformed() {
     answer.as_object_mut().unwrap().remove("title");
     let refused = read(json!([rest("projects/acme%2Fapi/issues/12", answer)])).unwrap_err();
     assert!(refused.said().contains("no title"), "{}", refused.said());
+}
+
+#[test]
+fn a_board_scoped_to_no_milestone_holds_only_an_item_with_none() {
+    let read_with = |milestone: Value| {
+        let mut answer = issue("opened", json!(["doing"]));
+        answer["milestone"] = milestone;
+        read(json!([
+            rest("projects/acme%2Fapi/issues/12", answer),
+            gql(item("Issue", json!({}), json!([]))),
+            boards(json!([
+                board(
+                    1,
+                    "Unplanned",
+                    json!({"milestone": {"id": 0, "title": "No milestone"}}),
+                    &["doing"]
+                ),
+                board(
+                    2,
+                    "Upcoming",
+                    json!({"milestone": {"id": -2, "title": "Upcoming"}}),
+                    &["doing"]
+                ),
+            ])),
+        ]))
+        .unwrap()
+        .placements
+        .iter()
+        .map(|p| p.board_title.clone())
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(read_with(Value::Null), ["Unplanned", "Upcoming"]);
+    assert_eq!(
+        read_with(json!({"id": 501, "title": "v1", "due_date": null})),
+        ["Upcoming"],
+        "an item with a milestone is not on a board scoped to none; a dated scope (upcoming, \
+         started, any) is not one charter decides, so that board holds it"
+    );
+}
+
+#[test]
+fn a_self_managed_gitlab_is_not_asked_for_a_status_and_reads_its_boards_instead() {
+    // Whether a self-managed GitLab has work item status (Premium, `WorkItemStatus.category`
+    // since 18.1) is not probed yet, so the query leaves the fragment out: an older GitLab would
+    // refuse the whole query for it (ADR 0070 §2, an unknown capability takes its fallback).
+    let mut answer = issue("closed", json!(["doing"]));
+    answer["web_url"] = json!("https://git.example.com/acme/api/-/issues/12");
+    let (backend, recorded) = over_on(
+        "git.example.com",
+        json!([
+            rest("projects/acme%2Fapi/issues/12", answer),
+            gql_asking(
+                WORK_ITEM_WITHOUT_STATUS,
+                item("Issue", json!({}), json!([]))
+            ),
+            boards(json!([board(1, "Development", json!({}), &["doing"])])),
+        ]),
+    );
+    let got = backend.read(&Caller::command(), "acme/api", 12).unwrap();
+    assert_eq!(recorded.unspent(), Vec::new(), "recorded and never asked");
+    assert!(!WORK_ITEM_WITHOUT_STATUS.contains("WorkItemWidgetStatus"));
+    assert_eq!(
+        got.closed_as, None,
+        "with no status, only a duplicate marking says why"
+    );
+
+    let (backend, _) = over_on(
+        "git.example.com",
+        json!([
+            rest("projects/acme%2Fapi/issues/12", {
+                let mut open = issue("opened", json!(["doing"]));
+                open["web_url"] = json!("https://git.example.com/acme/api/-/issues/12");
+                open
+            }),
+            gql_asking(
+                WORK_ITEM_WITHOUT_STATUS,
+                item("Issue", json!({}), json!([]))
+            ),
+            boards(json!([board(1, "Development", json!({}), &["doing"])])),
+        ]),
+    );
+    let got = backend.read(&Caller::command(), "acme/api", 12).unwrap();
+    assert_eq!(got.status.as_deref(), Some("doing"), "the board's status");
+
+    let duplicate = item_of_duplicate();
+    let (backend, _) = over_on(
+        "git.example.com",
+        json!([
+            rest("projects/acme%2Fapi/issues/12", {
+                let mut closed = issue("closed", json!([]));
+                closed["web_url"] = json!("https://git.example.com/acme/api/-/issues/12");
+                closed
+            }),
+            gql_asking(WORK_ITEM_WITHOUT_STATUS, duplicate),
+            boards(json!([])),
+        ]),
+    );
+    let got = backend.read(&Caller::command(), "acme/api", 12).unwrap();
+    assert_eq!(got.closed_as, Some(ClosedAs::Duplicate));
+}
+
+fn item_of_duplicate() -> Value {
+    item(
+        "Issue",
+        json!({"duplicatedToWorkItemUrl": "https://git.example.com/acme/api/-/issues/2"}),
+        json!([]),
+    )
 }

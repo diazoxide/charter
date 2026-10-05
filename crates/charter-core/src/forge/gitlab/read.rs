@@ -16,9 +16,11 @@
 //! and the field stays empty; [`super::GitLab`]'s capabilities say which (W10).
 //!
 //! **Schema.** The query is checked against GitLab 19.4's GraphQL reference
-//! (`doc/api/graphql/reference/_index.md`). `WorkItemWidgetStatus.status` came in GitLab 17.11,
-//! so an older self-managed GitLab refuses the query; FG-2's version probe (#802) is where that
-//! is told apart.
+//! (`doc/api/graphql/reference/_index.md`). The status fragment needs GitLab 18.1
+//! (`WorkItemStatus.category`), and a GitLab older than that refuses a query naming it, so it
+//! is asked only where [`crate::forge::Capability::ItemStatus`] is there: gitlab.com's instance
+//! today, and a version FG-2's probe (#802) confirms later. Elsewhere the item's status is its
+//! boards', and `closed_as` comes from a duplicate marking alone.
 //!
 //! Every related item is keyed by the page GitLab gives for it, as the item itself is, so an item
 //! in another repo, or a group's epic, is named by where it lives.
@@ -27,17 +29,37 @@ use serde_json::Value;
 
 use super::GitLab;
 use super::work::Board;
-use crate::forge::backend::{Caller, ForgeRef};
+use crate::forge::backend::{Caller, Capabilities, Capability, ForgeRef, Reach, Support};
 use crate::forge::pr::Pr;
 use crate::forge::transport::{Call, Field};
 use crate::forge::{Failure, ForgeError, LIST_TIMEOUT};
 use crate::work::{ClosedAs, Iteration, Placement, Relation, State, TrackerKey, WorkItem};
 
+/// The work item query with `$status`, a fragment or nothing, between its iteration and its
+/// development widgets. The two queries below differ in that fragment alone.
+macro_rules! work_item_query {
+    ($status:literal) => {
+        concat!(
+            "query($path:ID!,$iid:String!){project(fullPath:$path){workItems(iid:$iid,first:1){nodes{workItemType{name} duplicatedToWorkItemUrl widgets{__typename ... on WorkItemWidgetHierarchy{parent{webUrl} children(first:100){pageInfo{hasNextPage} nodes{webUrl}}} ... on WorkItemWidgetLinkedItems{linkedItems(first:100){pageInfo{hasNextPage} nodes{linkType workItem{webUrl}}}} ... on WorkItemWidgetIteration{iteration{id title startDate dueDate}} ",
+            $status,
+            "... on WorkItemWidgetDevelopment{closingMergeRequests(first:100){pageInfo{hasNextPage} nodes{mergeRequest{iid webUrl state}}}}}}}}}"
+        )
+    };
+}
+
 /// An issue's work item and the widgets charter maps: `Project.workItems(iid:)` (GitLab 15.1),
 /// the hierarchy (parent, children), linked items (`blocks`, `is_blocked_by`; `relates_to` is
-/// no relation the model has), iteration, status (17.11) and development (closing merge
-/// requests) widgets. Each list is read whole in one answer, or the read fails.
-pub(crate) const WORK_ITEM: &str = "query($path:ID!,$iid:String!){project(fullPath:$path){workItems(iid:$iid,first:1){nodes{workItemType{name} duplicatedToWorkItemUrl widgets{__typename ... on WorkItemWidgetHierarchy{parent{webUrl} children(first:100){pageInfo{hasNextPage} nodes{webUrl}}} ... on WorkItemWidgetLinkedItems{linkedItems(first:100){pageInfo{hasNextPage} nodes{linkType workItem{webUrl}}}} ... on WorkItemWidgetIteration{iteration{id title startDate dueDate}} ... on WorkItemWidgetStatus{status{name category}} ... on WorkItemWidgetDevelopment{closingMergeRequests(first:100){pageInfo{hasNextPage} nodes{mergeRequest{iid webUrl state}}}}}}}}}";
+/// no relation the model has), iteration, status and development (closing merge requests)
+/// widgets. Each list is read whole in one answer, or the read fails. The status fragment asks
+/// `WorkItemStatus.category`, which came in GitLab 18.1 (GraphQL reference, `WorkItemStatus`),
+/// so it is asked only where [`crate::forge::Capability::ItemStatus`] is there.
+pub(crate) const WORK_ITEM: &str =
+    work_item_query!("... on WorkItemWidgetStatus{status{name category}} ");
+
+/// [`WORK_ITEM`] without the status fragment, for a GitLab whose work item status is not known
+/// to be there: a GitLab older than 18.1 refuses a query that names a field it lacks, and an
+/// unknown capability takes its fallback (ADR 0070 §2), the boards' status.
+pub(crate) const WORK_ITEM_WITHOUT_STATUS: &str = work_item_query!("");
 
 /// The tracker key of the GitLab item whose page is `url`: a repo's issue or task
 /// (`group/repo/-/issues/12`, `group/repo/-/work_items/12`), or a group's epic
@@ -102,10 +124,19 @@ impl GitLab {
             .filter_map(|a| a["username"].as_str().map(str::to_string))
             .collect();
 
+        // The status is asked only where it is known to be there; elsewhere a GitLab older than
+        // 18.1 would refuse the whole query, so the item takes its boards' status instead.
+        let own_status =
+            self.support(caller, &Reach::Instance, Capability::ItemStatus) == Support::Available;
+        let query = if own_status {
+            WORK_ITEM
+        } else {
+            WORK_ITEM_WITHOUT_STATUS
+        };
         let answer = self.0.ask(
             caller,
             &Call::graphql(
-                WORK_ITEM,
+                query,
                 vec![
                     Field::text("path", path),
                     Field::text("iid", &iid.to_string()),
@@ -238,15 +269,18 @@ impl GitLab {
 }
 
 /// Whether `board`'s scope (Premium: a milestone, labels, an assignee; `boards.md`) holds the
-/// item. A milestone scope GitLab names by a special id (none, any, upcoming, started: zero or
-/// less) is not one charter decides, so the board holds the item. A scope by iteration or weight
-/// is not in REST's answer, and is not read.
+/// item. A milestone scope of id 0, "No milestone", holds only an item with none. One GitLab
+/// names by a negative id (any, upcoming, started) turns on dates and is not one charter
+/// decides, so the board holds the item. A scope by iteration or weight is not in REST's answer
+/// and is not read, so such a board may be said to hold an item it leaves out (#1202).
 fn holds(board: &Board, item: &WorkItem) -> bool {
-    if let Some(milestone) = board.milestone_id.filter(|id| *id > 0) {
-        let mine = item.milestone.as_ref().and_then(|m| m.forge_ref.as_ref());
-        if mine.map(|r| r.0.as_str()) != Some(milestone.to_string().as_str()) {
+    let mine = item.milestone.as_ref().and_then(|m| m.forge_ref.as_ref());
+    match board.milestone_id {
+        Some(0) if item.milestone.is_some() => return false,
+        Some(id) if id > 0 && mine.map(|r| r.0.as_str()) != Some(id.to_string().as_str()) => {
             return false;
         }
+        _ => {}
     }
     if !board.scope_labels.iter().all(|l| item.labels.contains(l)) {
         return false;
