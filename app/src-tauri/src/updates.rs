@@ -485,7 +485,7 @@ mod tests {
     const A_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkgZm9yIGEgdGVzdApSV1FBQVFJREJBVUdCd2dKQ2dzTURRNFBFQkVTRXhRVkZoY1lHUm9iSEIwZUh5QWhJaU1rSlNZbgo=";
 
     /// A manifest server on loopback that answers each request with an older version than this
-    /// one, and says how many it answered.
+    /// one, and says how many requests it answered, each counted before its reply is written.
     fn manifest_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
@@ -497,13 +497,16 @@ mod tests {
                 let mut stream = stream;
                 let mut buf = [0u8; 4096];
                 let _ = stream.read(&mut buf);
+                // Counted before the reply is written: once the client has read the reply it
+                // can assert on the count, so a count bumped after the write could lose that
+                // race on a busy machine.
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let body = r#"{"version":"0.0.1","notes":"","pub_date":"2020-01-01T00:00:00Z","url":"http://127.0.0.1:1/x","signature":"x"}"#;
                 let _ = write!(
                     stream,
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
                 );
-                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
         });
         (url, served)
