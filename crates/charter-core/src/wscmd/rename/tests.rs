@@ -146,6 +146,9 @@ fn a_plane() -> Plane {
                     "alpha",
                     "Workspace settings · alpha",
                 ),
+                // Keyed by the workspace's name too (#1248): its changes, and a piece's files.
+                view("alpha", "changes", "alpha", "Changes · alpha"),
+                view("alpha", "piece-files", "alpha/svc/p1", "Files · p1"),
             ],
             dealt: 2,
             relaunch_after_update: false,
@@ -288,6 +291,10 @@ fn everything_follows(plane: &Plane) {
     assert_eq!(record.views[0].workspace.as_deref(), Some("beta"));
     assert_eq!(record.views[1].key, "beta");
     assert_eq!(record.views[1].title, "Workspace settings · beta");
+    assert_eq!(record.views[2].key, "beta");
+    assert_eq!(record.views[2].title, "Changes · beta");
+    assert_eq!(record.views[3].key, "beta/svc/p1");
+    assert_eq!(record.views[3].title, "Files · p1");
     // The branch the window focused (FM-5) follows its workspace.
     assert_eq!(
         record.focus.as_ref().map(|focus| focus.workspace.as_str()),
@@ -543,6 +550,85 @@ fn the_terminal_sees_the_apps_chats_only_while_an_app_is_listening() {
     assert_eq!(open_in_app(&plane.root, &["alpha"]), vec!["steward 1"]);
     assert_eq!(open_in_app(&plane.root, &["other"]), vec!["steward 2"]);
     assert_eq!(open_in_app(&plane.root, &["nope"]), Vec::<String>::new());
+}
+
+/// Every view keyed by the workspace's name is keyed by the new one, the rest of its key kept
+/// (#1248) — the same keys `app/src/tabs.test.ts` holds the window's `renamedView` to.
+#[test]
+fn a_move_rekeys_every_view_keyed_by_the_workspaces_name() {
+    let moved = Move::in_plane(Path::new("/p"), "alpha", "beta");
+    for (kind, before, after) in [
+        ("workspace-settings", "alpha", "beta"),
+        ("changes", "alpha", "beta"),
+        ("repo-instructions", "alpha", "beta"),
+        (
+            "todo",
+            "alpha/20260302-091400-review",
+            "beta/20260302-091400-review",
+        ),
+        (
+            "memory",
+            "workspace/alpha/deploys",
+            "workspace/beta/deploys",
+        ),
+        ("memory-archive", "workspace/alpha", "workspace/beta"),
+        ("piece-files", "alpha/api/fix-login", "beta/api/fix-login"),
+        ("piece-files", "alpha/api/", "beta/api/"),
+        (
+            "piece-file",
+            "alpha/api/fix-login/src/main.rs",
+            "beta/api/fix-login/src/main.rs",
+        ),
+        (
+            "piece-diff",
+            "alpha/api/fix-login/src/main.rs",
+            "beta/api/fix-login/src/main.rs",
+        ),
+        (
+            "session",
+            "workspaces/alpha/sessions/2026-10-05-review.md",
+            "workspaces/beta/sessions/2026-10-05-review.md",
+        ),
+    ] {
+        // On another workspace's strip, so it is the key alone that moves it.
+        let mut one = view("other", kind, before, "a title");
+        assert!(moved.view(&mut one), "{kind} {before}");
+        assert_eq!(one.key, after, "{kind}");
+        assert_eq!(one.workspace.as_deref(), Some("other"));
+        assert_eq!(one.title, "a title");
+    }
+    for (kind, key) in [
+        ("todo", "alphabet/20260302-091400-review"),
+        ("memory", "persona/alpha/deploys"),
+        ("memory", "workspace/alphabet/deploys"),
+        ("changes", "alphabet"),
+        ("persona", "alpha"),
+        ("vault", "alpha"),
+        ("session", "sessions/alpha.md"),
+    ] {
+        let mut one = view("other", kind, key, "a title");
+        assert!(!moved.view(&mut one), "{kind} {key}");
+        assert_eq!(one.key, key);
+    }
+    // An extension's view is the extension's to key: a rename does not read inside it.
+    let mut theirs = view("other", "todo", "alpha/one", "a title");
+    theirs.from = Some("acme".into());
+    assert!(!moved.view(&mut theirs));
+    // A title that says the old name says the new one; one the operator chose stays.
+    let mut changes = view("other", "changes", "alpha", "Changes · alpha");
+    moved.view(&mut changes);
+    assert_eq!(changes.title, "Changes · beta");
+    let mut archive = view(
+        "other",
+        "memory-archive",
+        "workspace/alpha",
+        "Archived memory · alpha",
+    );
+    moved.view(&mut archive);
+    assert_eq!(archive.title, "Archived memory · beta");
+    let mut named = view("other", "repo-instructions", "alpha", "Mine");
+    moved.view(&mut named);
+    assert_eq!(named.title, "Mine");
 }
 
 #[test]
