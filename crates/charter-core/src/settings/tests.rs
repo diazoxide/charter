@@ -1072,7 +1072,6 @@ fn a_failed_move_into_a_new_local_file_leaves_no_local_file() {
     assert!(!dir.path().join("charter.local.toml").exists());
 }
 
-
 #[test]
 fn a_local_harness_default_naming_nothing_is_refused_in_the_doctors_words() {
     // The Local file is asked about its `[harness] default` alone, and asked all the same.

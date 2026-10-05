@@ -120,6 +120,14 @@ fn a_pinned_plane_is_the_one_acted_on_and_an_empty_home_is_no_home() {
         charter_core::plane::resolve(here.path()).unwrap(),
         Path::new(&pinned)
     );
+    // And `place`, which `init` and `doctor` stand on, takes it the same way (#464).
+    let place = charter_core::plane::place(here.path());
+    assert_eq!(
+        place.root,
+        Path::new(&pinned).canonicalize().unwrap(),
+        "{place:?}"
+    );
+    assert!(place.is_plane, "{place:?}");
     assert_eq!(
         charter_core::plane::state_dir(here.path()),
         here.path().join(".charter"),
