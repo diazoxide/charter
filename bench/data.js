@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791164338390,
+  "lastUpdate": 1791167537850,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1680,6 +1680,48 @@ window.BENCHMARK_DATA = {
             "value": 101.63660949999999,
             "unit": "ms",
             "extra": "median of 5 runs: 100.433, 101.388, 101.637, 101.749, 103.041 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "86abd28970f2115e97f44f2b5365e7de431f4533",
+          "message": "HY-7 review: hangs are judged per shard; trust_gates is tested, not excluded\n\nThe review found two must-fixes and two fold-ins.\n\n- A TIMEOUT is now a hang only when its own shard's slowest whole suite fits in two thirds\n  of the timeout. A shard with no MISSED mutant has no measurement, so its TIMEOUTs stay\n  survivors. The first version took the largest suite time over all shards. Replaying\n  2026-09-25 (run 36115292771), that rule made 373 suites cut short on slow runners into\n  \"hangs\" and took survivors from 481 to 128, which could have closed #480 on a red night.\n  The per-shard rule gives 480 survivors and 1 hang there. 2026-10-02 and 10-03 are\n  unchanged: 7 and 13 hangs.\n- `trust_gates([claude, claude])` must name \"hooks\" once. That test kills the `&&`→`||`\n  mutant, so `.cargo/mutants.toml` no longer excludes it as equivalent, and the site no\n  longer claims it is.\n- The notice job's checkout sets `persist-credentials: false`.\n- AGENTS.md and the script say \"the same shard\", and that the per-shard rule is what keeps\n  a night like 2026-09-25 red.\n\nAmended:\n- D-HY7c: a TIMEOUT is a hang only when `--timeout` is at least 1.5x the slowest whole\n  suite on its own shard. With no MISSED mutant on that shard, it stays red. Rejected: one\n  suite time for the whole run, because shards run on different runners.\n- D-HY7g: equivalent mutants are excluded with the proof at their site, for `probe` `-`,\n  `default_branch` `&&` and `git_dir_of` `||`. `trust_gates` is a plain function, so a\n  test can give it a gate twice, and its `&&` is killed rather than excluded.\n\nRefs #480\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T06:30:20+04:00",
+          "tree_id": "04385952b8624de51f2a20bd18a13486e960f758",
+          "url": "https://github.com/diazoxide/charter/commit/86abd28970f2115e97f44f2b5365e7de431f4533"
+        },
+        "date": 1791167536878,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4634115,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.448, 0.459, 0.463, 0.473, 0.486 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.271413,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.230, 16.238, 16.271, 16.362, 16.418 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.47392450000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.764, 100.931, 101.474, 101.858, 101.874 ms"
           }
         ]
       }
