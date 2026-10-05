@@ -3089,3 +3089,42 @@ fn a_state_folder_under_both_names_is_left_to_rename_local() {
     assert!(r.hint.contains("rename-local"), "{}", r.hint);
     assert!(!r.hint.contains("rename-plane"), "{}", r.hint);
 }
+
+#[test]
+fn a_user_rule_on_charters_tools_by_the_old_server_name_is_named_with_its_twin() {
+    // D-RN8-12: the operator's own user settings are not charter's to rewrite, so the doctor
+    // names an ask or deny there that the server's rename left matching nothing.
+    let (d, root) = plane("schema = 1\n");
+    let m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
+    let names = |m: &crate::plugin_install::Machine| -> Vec<String> {
+        Doctor::at(&root, &root, true, false)
+            .with_machine(m.clone())
+            .run()
+            .iter()
+            .map(|r| r.name.clone())
+            .collect()
+    };
+    assert!(!names(&m).contains(&"renamed tool rules".to_owned()));
+
+    std::fs::write(
+        m.claude_config.join("settings.json"),
+        r#"{"permissions": {"deny": ["mcp__charter__ask_operator"],
+            "allow": ["mcp__charter__todo_list"]}}"#,
+    )
+    .unwrap();
+    let r = plugin_row(&root, &m, "renamed tool rules");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(r.hint.contains("mcp__purlis__ask_operator"), "{r:?}");
+    assert!(
+        !r.hint.contains("todo_list"),
+        "an allow is not named: {r:?}"
+    );
+
+    // With the twin beside it, there is nothing to say.
+    std::fs::write(
+        m.claude_config.join("settings.json"),
+        r#"{"permissions": {"deny": ["mcp__charter__ask_operator", "mcp__purlis__ask_operator"]}}"#,
+    )
+    .unwrap();
+    assert!(!names(&m).contains(&"renamed tool rules".to_owned()));
+}
