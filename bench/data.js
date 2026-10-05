@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791224661870,
+  "lastUpdate": 1791226270166,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2226,6 +2226,48 @@ window.BENCHMARK_DATA = {
             "value": 105.00195550000001,
             "unit": "ms",
             "extra": "median of 5 runs: 102.795, 103.146, 105.002, 105.835, 107.490 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d32a38be70791e7522daa5377dfd0fe3500a24fa",
+          "message": "Bump the web group in /app with 3 updates\n\nBumps the web group in /app with 3 updates: [@types/node](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node), [globals](https://github.com/sindresorhus/globals) and [vite](https://github.com/vitejs/vite/tree/HEAD/packages/vite).\n\n\nUpdates `@types/node` from 22.20.4 to 22.20.5\n- [Release notes](https://github.com/DefinitelyTyped/DefinitelyTyped/releases)\n- [Commits](https://github.com/DefinitelyTyped/DefinitelyTyped/commits/HEAD/types/node)\n\nUpdates `globals` from 17.12.0 to 17.13.0\n- [Release notes](https://github.com/sindresorhus/globals/releases)\n- [Commits](https://github.com/sindresorhus/globals/compare/v17.12.0...v17.13.0)\n\nUpdates `vite` from 8.3.1 to 8.3.2\n- [Release notes](https://github.com/vitejs/vite/releases)\n- [Changelog](https://github.com/vitejs/vite/blob/main/packages/vite/CHANGELOG.md)\n- [Commits](https://github.com/vitejs/vite/commits/v8.3.2/packages/vite)\n\n---\nupdated-dependencies:\n- dependency-name: \"@types/node\"\n  dependency-version: 22.20.5\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: web\n- dependency-name: globals\n  dependency-version: 17.13.0\n  dependency-type: direct:development\n  update-type: version-update:semver-minor\n  dependency-group: web\n- dependency-name: vite\n  dependency-version: 8.3.2\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: web\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-10-05T22:49:35+04:00",
+          "tree_id": "1f4ff64121679ad74df52f359e692bfeed6f8a0e",
+          "url": "https://github.com/purlis/purlis/commit/d32a38be70791e7522daa5377dfd0fe3500a24fa"
+        },
+        "date": 1791226269116,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.46841900000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.449, 0.463, 0.468, 0.473, 0.476 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.3165385,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.142, 16.273, 16.317, 16.779, 16.960 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.196714,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.090, 101.095, 101.197, 101.802, 101.938 ms"
           }
         ]
       }
