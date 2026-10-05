@@ -56,7 +56,7 @@ impl From<Status> for DoctorStatus {
     }
 }
 
-/// One doctor row: the four fields `charter doctor --json` prints, and one it does not.
+/// One doctor row: the four fields `charter doctor --json` prints, and two it does not.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct DoctorRow {
     pub name: String,
@@ -71,6 +71,10 @@ pub struct DoctorRow {
     /// summary that COUNTED them would draw a warning count that never moves, and the one real
     /// warning among them would be invisible on its first day.
     pub checked: bool,
+    /// The Settings group its fix is made in, by the group's stable address (`project.forges`),
+    /// when the fix is a setting ([`Row::settings`], SE-22): the window links the row there.
+    /// `charter doctor --json` does not print it.
+    pub settings: Option<String>,
 }
 
 impl From<Row> for DoctorRow {
@@ -81,6 +85,7 @@ impl From<Row> for DoctorRow {
             name: row.name,
             detail: row.detail,
             hint: row.hint,
+            settings: row.settings.map(|group| group.id().to_owned()),
         }
     }
 }
@@ -199,6 +204,7 @@ fn chat_footer(root: &std::path::Path) -> DoctorRow {
         hint,
         // This build runs this check: it is not one of the ported table's deferred rows.
         checked: true,
+        settings: None,
     };
     let where_it_looked = format!(
         "This is the answer for {}; a chat started somewhere else reads that directory's \
@@ -285,6 +291,7 @@ fn event_log(opened: Option<&Result<std::path::PathBuf, crate::EventLogRefused>>
         detail,
         hint,
         checked: true,
+        settings: None,
     };
     match opened {
         Some(Ok(dir)) => row(

@@ -103,6 +103,34 @@ pub struct Row {
     pub detail: String,
     /// The remedy. A green row's hint is carried in `--json` and never drawn in the table.
     pub hint: String,
+    /// **The Settings group the remedy is made in** (SE-22, V89c), when the fix is a setting
+    /// the window can change. The app's doctor links the row to that group; the table and
+    /// `--json` leave it out, so what `charter doctor` prints is unchanged.
+    pub settings: Option<SettingsGroup>,
+}
+
+/// **A Settings group a doctor row can link to** (SE-22): one of the Project level's groups,
+/// which the window declares in `app/src/settings/project.ts`. A closed set, so a row cannot
+/// name an address the window does not have — `settings/linkedGroups.test.ts` holds
+/// [`SettingsGroup::id`] to that file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsGroup {
+    General,
+    Saving,
+    Harness,
+    Forges,
+}
+
+impl SettingsGroup {
+    /// The group's stable address, as the window names it.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::General => "project.general",
+            Self::Saving => "project.saving",
+            Self::Harness => "project.harness",
+            Self::Forges => "project.forges",
+        }
+    }
 }
 
 impl Row {
@@ -146,6 +174,15 @@ impl Row {
             status,
             detail: detail.into(),
             hint: hint.into(),
+            settings: None,
+        }
+    }
+
+    /// This row, naming the Settings group its fix is made in ([`Row::settings`]).
+    pub(crate) fn in_settings(self, group: SettingsGroup) -> Self {
+        Self {
+            settings: Some(group),
+            ..self
         }
     }
 }

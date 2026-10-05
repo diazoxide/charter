@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsTab } from "./SettingsTab";
+import { forgetGroups } from "./links";
 import type { Level } from "./groups";
 import { ViewPane } from "../Views";
 import { settingsView, workspaceSettingsTitle, workspaceSettingsView } from "../tabs";
@@ -36,6 +37,8 @@ const HELD = BUILT_IN["charter-dark"].values["accent.base"];
 afterEach(() => {
   cleanup();
   clearMocks();
+  // Which group each level shows is the window's, for as long as it runs (SE-22).
+  forgetGroups();
 });
 
 const PLANE = "/home/dev/plane";

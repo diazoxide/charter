@@ -1506,6 +1506,8 @@ fn git_auth_names_a_drifted_clone_and_the_command_that_fixes_it() {
         r.hint,
         "Apply the single-credential policy to every clone: charter git-policy --apply"
     );
+    // Every repo is on a forge charter knows: the fix is a command, not a setting.
+    assert_eq!(r.settings, None);
 }
 
 #[test]
@@ -1536,6 +1538,8 @@ fn git_auth_does_not_send_an_unmanaged_forge_to_an_apply_that_skips_it() {
         r.hint.starts_with("1 repo(s) have an unrecognised forge"),
         "{r:?}"
     );
+    // The fix is a [[forge]] block, so the row links to Forges (SE-22).
+    assert_eq!(r.settings, Some(SettingsGroup::Forges));
 }
 
 #[test]
@@ -1555,6 +1559,7 @@ fn git_auth_splits_its_hint_between_fixable_and_unmanaged_repos_and_names_at_mos
         ),
         "{r:?}"
     );
+    assert_eq!(r.settings, Some(SettingsGroup::Forges));
 }
 
 #[cfg(unix)]
@@ -2935,4 +2940,42 @@ fn git_auth_names_the_workspaces_folder_itself_when_it_cannot_be_listed() {
         r.detail,
         "token-only across 0 repo(s); workspaces/ cannot be checked"
     );
+}
+
+// ---- the Settings group a row's fix is made in (SE-22) ---------------------------------------
+
+/// A row whose remedy is a setting names the Settings group it is changed in, by that group's
+/// stable address — what the app's doctor links to. A row about anything else names none.
+#[test]
+fn a_row_whose_fix_is_a_setting_names_its_settings_group() {
+    let group = |toml: &str| one(&plane(toml).1, "charter.toml").settings;
+    assert_eq!(
+        group("[[forge]]\nkind = \"bitbucket\"\n"),
+        Some(SettingsGroup::Forges)
+    );
+    assert_eq!(
+        group("[harness]\ndefault = \"clyde\"\n"),
+        Some(SettingsGroup::Harness)
+    );
+    assert_eq!(
+        group("[plane]\nworktrees = \"../../far/away\"\n"),
+        Some(SettingsGroup::General)
+    );
+    assert_eq!(
+        group("[plane]\nmod = \"push\"\n"),
+        Some(SettingsGroup::Saving)
+    );
+    assert_eq!(group("schema = 1\n"), None);
+    assert_eq!(group("[harness\n"), None);
+
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::write(
+        root.join("charter.local.toml"),
+        "[harness]\ndefault = \"nobody\"\n",
+    )
+    .unwrap();
+    let r = one(&root, "harness profiles");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(r.settings, Some(SettingsGroup::Harness));
+    assert_eq!(one(&root, "git identity").settings, None);
 }

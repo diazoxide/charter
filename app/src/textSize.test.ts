@@ -94,6 +94,8 @@ describe("the text sizes kept in the layout file", () => {
     expect(row.subject).toBe("text");
     expect(row.detail).toContain(PATH);
     expect(row.detail).toContain("2.5");
+    // Linked to where it is fixed (SE-22).
+    expect(row.settings).toBe("you.text");
   });
 });
 

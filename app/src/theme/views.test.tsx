@@ -64,6 +64,7 @@ import type { ViewRef } from "../tabs";
 import { literalsIn } from "./literal";
 import { MOTION_TOKENS, motionProperty } from "./motion";
 import { BUILT_IN, DEFAULT_THEME, TOKENS, drawIn, property } from "./theme";
+import { forgetGroups } from "../settings/links";
 
 afterEach(() => {
   cleanup();
@@ -1029,6 +1030,8 @@ describe.each(Object.keys(BUILT_IN))("every view in %s", (theme) => {
   afterEach(() => {
     drawIn(DEFAULT_THEME);
     forgetDrafts();
+    // Which group each Settings level shows is the window's, for as long as it runs (SE-22).
+    forgetGroups();
   });
 
   it.each(STATES)("draws $name with tokens only", async (state) => {

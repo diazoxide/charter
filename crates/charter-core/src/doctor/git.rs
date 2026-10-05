@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{CHECK_TIMEOUT, Doctor, NOT_CHECKED_HINT, Row, first_line};
+use super::{CHECK_TIMEOUT, Doctor, NOT_CHECKED_HINT, Row, SettingsGroup, first_line};
 use crate::memstore::py_strip;
 use crate::worktree::git::{self as runner, Run};
 
@@ -194,7 +194,7 @@ pub(super) fn git_auth(d: &Doctor) -> Row {
              --apply alone won't touch those."
         )
     };
-    Row::warn(
+    let row = Row::warn(
         NAME,
         format!(
             "{}/{} repo(s) not token-only: {}{more}",
@@ -203,7 +203,13 @@ pub(super) fn git_auth(d: &Doctor) -> Row {
             names.join(", ")
         ),
         hint + &cannot,
-    )
+    );
+    // A repo on a forge charter cannot name is fixed by a `[[forge]]` block (SE-22).
+    if unmanaged > 0 {
+        row.in_settings(SettingsGroup::Forges)
+    } else {
+        row
+    }
 }
 
 /// What `plane root` found, before it is worded.

@@ -56,6 +56,7 @@ import { ApprovePlane } from "./ApprovePlane";
 import { drawThemeFor, Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { SettingsTab } from "./settings/SettingsTab";
+import { levelOf, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
 import { useExtensionsOn } from "./extensionsOn";
 import { useProjectTheme } from "./projectTheme";
 import { drawTint } from "./theme/theme";
@@ -222,6 +223,16 @@ function App() {
    * any project's strip will do, and the one the operator is looking at is it.
    */
   const [settingsTabAsk, setSettingsTabAsk] = useState<{ plane: PlaneId; at: number }>();
+  /**
+   * The last link into a Settings group the window followed (SE-22): the project in front, the
+   * link, and a count. Its own ask and not `settingsTabAsk`, because a link names its level and
+   * Settings… opens at whatever level ⌘, decides.
+   */
+  const [settingsLinkAsk, setSettingsLinkAsk] = useState<{
+    plane: PlaneId;
+    link: SettingsLink;
+    at: number;
+  }>();
   /**
    * The first chat a repo opened into the local project asks for (FR-4): the workspace named
    * after the repo, the clone the chat starts in, and a count, the shape `settingsAsk` has.
@@ -796,6 +807,22 @@ function App() {
     }),
     [closeProject, moveProject, pinProject],
   );
+
+  /**
+   * **Follows a link into a You group** (SE-22, `settings/links.ts`) — the only level the
+   * window's own notices name. The project in front opens Settings at You on its strip
+   * (`PlaneView`'s `settingsLinkAsked`); with none, the group is shown at You's place and
+   * Settings is drawn where the opener is. Never through Settings… (⌘,), which opens at the
+   * level that is focused rather than the one the link names.
+   */
+  const openSettingsAt = useCallback((group: string) => {
+    if (levelOf(group) !== "you") return;
+    const plane = inFrontNow.current;
+    if (plane === undefined) {
+      linkToGroup(settingsPlace("you"), group);
+      setSettingsAlone(true);
+    } else setSettingsLinkAsk((was) => ({ plane, link: { group }, at: (was?.at ?? 0) + 1 }));
+  }, []);
 
   // Which plane this launch opened — asked once, and the answer the first tab is built from.
   // The core resolved the working directory once to get it; nothing asks again.
@@ -1826,6 +1853,7 @@ function App() {
           settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
           savingAsked={savingAsk?.plane === plane ? savingAsk.at : undefined}
           settingsTabAsked={settingsTabAsk?.plane === plane ? settingsTabAsk.at : undefined}
+          settingsLinkAsked={settingsLinkAsk?.plane === plane ? settingsLinkAsk : undefined}
           firstChatAsked={firstChat?.plane === plane ? firstChat : undefined}
           shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
           fileAsked={fileAsk?.plane === plane ? fileAsk : undefined}
@@ -1841,6 +1869,7 @@ function App() {
         aboutThisMachine={aboutThisMachine}
         planes={planes}
         nameOf={calledOn}
+        onOpenSettings={openSettingsAt}
       />
 
       {/* No project in front: the opener, and nothing else. "No sessions" would be true and

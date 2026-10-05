@@ -48,6 +48,8 @@ describe("which editor is yours (RC-20)", () => {
 
     expect(yourEditor()).toBeUndefined();
     expect(JSON.stringify(aboutThisMachine())).toContain(PATH);
+    // Linked to where it is fixed (SE-22).
+    expect(aboutThisMachine()[0].settings).toBe("you.editor");
   });
 
   it("is the one the launch started from, until it is changed", () => {

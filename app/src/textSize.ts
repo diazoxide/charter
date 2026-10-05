@@ -111,6 +111,7 @@ function startingText(layout: Reading = atCreation().layout): TextSizes {
       severity: "warn",
       detail: `${where}: ${said.join("; ")}`,
       remedy: `fix ${where}, or set the size in Settings, which rewrites it`,
+      settings: "you.text",
     });
   }
   started = sizes;

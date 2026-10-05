@@ -74,6 +74,7 @@ function startingEditor(layout: Reading = atCreation().layout): YourEditor | und
       severity: "warn",
       detail: `${where}: ${said.join("; ")}`,
       remedy: `fix ${where}, or choose your editor in Settings, which rewrites it`,
+      settings: "you.editor",
     });
   }
   started = { editor };
