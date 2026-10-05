@@ -1516,6 +1516,12 @@ export const commands = {
 	 *  yet**. Answers whether it did, so the window knows the old key can go.
 	 */
 	adoptLayout: (text: string) => typedError<boolean, string>(__TAURI_INVOKE("adopt_layout", { text })),
+	/**
+	 *  Keeps the Notices dismissed in one project until their cause changes (NO-2, V91j):
+	 *  `causes` replaces that project's list in the layout file and nothing else, so two windows
+	 *  dismissing in different projects both keep theirs. An empty list takes the project out.
+	 */
+	setDismissed: (plane: PlaneId, causes: string[]) => typedError<null, string>(__TAURI_INVOKE("set_dismissed", { plane, causes })),
 	/**  One secret's value, to show in the window for a while ([`reveal`]). */
 	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
 	/**
@@ -3310,6 +3316,16 @@ export type Pins = {
 	 *  `missing` are each in order, but not in order with each other.
 	 */
 	order: string[],
+	/**
+	 *  **Whether `missing` is the whole answer**: every pin the listing lacks was found gone.
+	 * 
+	 *  False when charter could not be sure of any of them — no root or `workspaces/`, a
+	 *  listing it could not read whole, a rename between its steps, a link whose target is
+	 *  away. `missing` then names only what is gone for certain, and may leave some out, so
+	 *  the window must not take a pin it lacks as one that came back: a dismissed Notice is
+	 *  let go only on a certain answer (NO-2, D-NO2-10).
+	 */
+	certain: boolean,
 };
 
 /**  One open project's alerts. */

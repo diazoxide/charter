@@ -1621,10 +1621,18 @@ const LOCK: &str = "machine.json.lock";
 /// It is taken **blocking**. `flock` is released by the kernel when the descriptor closes,
 /// including on a process that was killed, so there is no holder that outlives a couple of
 /// syscalls and nothing here can wedge on a stale lock.
-struct Lock(Option<std::fs::File>);
+///
+/// [`Lock::named`] takes the same kind of lock on another file beside the store, for another
+/// read-modify-write of a file in this directory (`windowprefs`' layout, NO-2).
+pub(crate) struct Lock(Option<std::fs::File>);
 
 impl Lock {
     fn on(config_root: &Path) -> Self {
+        Self::named(config_root, LOCK)
+    }
+
+    /// Takes the lock whose file is `name`, beside the store.
+    pub(crate) fn named(config_root: &Path, name: &str) -> Self {
         // A platform charter keeps no store on gets no directory made for one either.
         if supported().is_err() {
             return Self(None);
@@ -1634,7 +1642,7 @@ impl Lock {
         };
         // `create` and not `create_new`: the lock file is the *name* two processes agree on,
         // it holds nothing, and one left behind by a previous run is the ordinary case.
-        let Ok(file) = std::fs::File::create(dir.join(LOCK)) else {
+        let Ok(file) = std::fs::File::create(dir.join(name)) else {
             return Self(None);
         };
         #[cfg(unix)]

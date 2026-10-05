@@ -1,4 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
+import { commands } from "./bindings";
+import { familyOf } from "./Notice";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
@@ -13,6 +15,12 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
  * window on this machine, the same tier, so it adds no store. Never in the project: a dismissal
  * is one operator's, and a project carries what it holds to every clone. It is read before the
  * window exists, so a dismissed Notice is never drawn for a frame at a relaunch and taken away.
+ *
+ * **Written one project at a time, by the core** (`set_dismissed`, D-NO2-1 as amended): the
+ * window sends its project's list and the core replaces only that key, under the file's lock.
+ * The window's layout writes never carry them, and the core keeps the file's own over anything
+ * one sends — two windows each hold only what they read at launch, and the whole map written
+ * back by one would take away what the other dismissed since.
  *
  * **It clears itself once the cause is gone, so a return shows again.** "Gone" is the core's
  * answer and never the window's emptiness: a source that reads a family of causes from the core
@@ -42,12 +50,6 @@ export const KEPT: ReadonlySet<string> = new Set([
 /** The most causes kept per project. A bound on what a hand-edited file can make the window
  *  hold; settling keeps the real number to what is standing now. */
 export const MOST_PER_PROJECT = 200;
-
-/** A cause's family: what it is up to the first `:`. */
-export const familyOf = (cause: string): string => {
-  const colon = cause.indexOf(":");
-  return colon < 0 ? cause : cause.slice(0, colon);
-};
 
 const kept = (cause: unknown): cause is string =>
   typeof cause === "string" && cause.length <= 1024 && KEPT.has(familyOf(cause));
@@ -103,21 +105,35 @@ function held(layout: Reading = atCreation().layout): Map<string, ReadonlySet<st
   return now;
 }
 
+/** Every write, in the order the window made it, so an older list never lands last. */
+let writing: Promise<void> = Promise.resolve();
+
 function change(project: string, next: ReadonlySet<string>) {
   const all = held();
   if (next.size === 0) all.delete(project);
   else all.set(project, next);
   for (const listener of listeners) listener();
+  const causes = [...next];
+  writing = writing.then(async () => {
+    const kept = await commands
+      .setDismissed(project, causes)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    sayAboutThisMachine(
+      "dismissed",
+      kept.status === "error"
+        ? {
+            severity: "warn",
+            detail: `charter could not keep what you dismissed: ${kept.error}`,
+            remedy: "it stays hidden until you quit; after a relaunch those Notices show again",
+          }
+        : undefined,
+    );
+  });
 }
 
 /** The causes dismissed in `project`. The same object until they change. */
 export function dismissedIn(project: string): ReadonlySet<string> {
   return held().get(project) ?? NONE;
-}
-
-/** Every project's kept causes, for the layout file. */
-export function dismissedEverywhere(): Dismissed {
-  return Object.fromEntries([...held()].map(([project, causes]) => [project, [...causes]]));
 }
 
 /**
@@ -156,7 +172,7 @@ export function showAgain(project: string, cause: string): void {
 }
 
 /** Calls `listener` whenever a dismissal is kept or let go. Answers the way to stop. */
-export function onDismissals(listener: () => void): () => void {
+function onDismissals(listener: () => void): () => void {
   listeners.add(listener);
   return () => void listeners.delete(listener);
 }
@@ -182,4 +198,5 @@ export function useDismissals(project: string): {
 /** Forgets what this launch read and changed, as a new launch would. For tests. */
 export function forgetDismissals(): void {
   now = undefined;
+  writing = Promise.resolve();
 }

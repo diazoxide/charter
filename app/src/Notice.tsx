@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
@@ -157,8 +158,8 @@ export const IMPORTANCE: readonly string[] = [
 /** How many Notices stand under the strip; the rest are behind "+N more" (V91i). */
 export const SHOWN = 2;
 
-/** A cause's family: what it is up to the first `:`. */
-const familyOf = (cause: string) => cause.split(":", 1)[0];
+/** A cause's family: what it is up to the first `:` (`pin-dormant:ide` is a `pin-dormant`). */
+export const familyOf = (cause: string): string => cause.split(":", 1)[0];
 
 const rank = (cause: string) => {
   const at = IMPORTANCE.indexOf(familyOf(cause));
@@ -235,26 +236,58 @@ export function NoticeBand({ children }: { children: ReactNode }) {
 
   // Before the frame is painted, so a Notice is never seen out of its place.
   useLayoutEffect(() => {
+    // **Only what is out of its place moves** (F2): moving an element out of the document and
+    // back takes the focus off whatever was focused in it, so a Notice already where it belongs
+    // is left alone, and a button the operator is on keeps the focus as another arrives.
     const place = (at: HTMLElement | null, hosts: HTMLElement[]) => {
       if (at === null) return;
       for (const child of [...at.children])
         if (!hosts.includes(child as HTMLElement)) child.remove();
-      for (const host of hosts) at.appendChild(host);
+      hosts.forEach((host, index) => {
+        const there = at.children.item(index);
+        if (there !== host) at.insertBefore(host, there);
+      });
     };
     const hosts = ordered.map((one) => one.host);
     place(shownAt.current, hosts.slice(0, SHOWN));
     place(listAt.current, open ? hosts.slice(SHOWN) : []);
   }, [open, ordered]);
 
+  // **The list closes on Escape and on a press outside it** (F3). Listened for on the elements
+  // themselves, because the Notices in the list are portals: their events reach the band's
+  // React parents only by way of the Notices', never by way of the list.
+  const stackAt = useRef<HTMLDivElement>(null);
+  const moreAt = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const stack = stackAt.current;
+    if (!open || stack === null) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+      moreAt.current?.focus();
+    };
+    const outside = (event: PointerEvent) => {
+      if (!stack.contains(event.target as Node)) setOpen(false);
+    };
+    stack.addEventListener("keydown", escape);
+    document.addEventListener("pointerdown", outside);
+    return () => {
+      stack.removeEventListener("keydown", escape);
+      document.removeEventListener("pointerdown", outside);
+    };
+  }, [open]);
+
   return (
     <Band.Provider value={band}>
       {children}
-      <div className="notice-band-stack">
+      <div className="notice-band-stack" ref={stackAt}>
         <div className="notice-band-shown" ref={shownAt} />
         {behind > 0 && (
           <button
             type="button"
             className="notice-more"
+            ref={moreAt}
             tabIndex={0}
             aria-expanded={open}
             onClick={() => setOpen((was) => !was)}

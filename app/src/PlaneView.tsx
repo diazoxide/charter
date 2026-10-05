@@ -724,10 +724,9 @@ export const PlaneView = memo(function PlaneView({
   const settleChatNotes = useCallback(
     (open: readonly OpenChat[]) => {
       for (const family of CHAT_NOTES) {
-        const field = family.slice("chat-".length) as "resumed" | "guessed" | "fresh";
         settleNotices(
           family,
-          open.filter((one) => one[field]).map((one) => `${family}:${one.session}`),
+          open.flatMap((one) => chatNote(family, one) ?? []),
         );
       }
     },
@@ -1009,7 +1008,10 @@ export const PlaneView = memo(function PlaneView({
         setDormantPins(Array.isArray(said?.missing) ? said.missing : []);
         // The store's answer is what says a gone pin came back, never a list not read yet
         // (`dismissals.ts`): a dismissal is let go only when the core answers without it.
-        if (Array.isArray(said?.missing))
+        // **Only a certain answer**: with a rename between its steps, `workspaces/` not there or
+        // a listing it could not read whole, the store names nothing gone and says it is not
+        // sure, and a pin it leaves out has not come back (D-NO2-10).
+        if (said?.certain === true && Array.isArray(said.missing))
           settleNotices(
             "pin-dormant",
             said.missing.map((name) => `pin-dormant:${name}`),
@@ -3188,7 +3190,10 @@ export const PlaneView = memo(function PlaneView({
       if (said.status === "error") return { ok: false, refused: said.error };
       const chat = said.data;
       // A new occurrence: whatever was dismissed about this chat was about the one before.
-      for (const family of CHAT_NOTES) showAgain(`${family}:${chat.session}`);
+      for (const family of CHAT_NOTES) {
+        const cause = chatNote(family, chat);
+        if (cause !== undefined) showAgain(cause);
+      }
       resuming.current.set(chat.session, { path, afterFailure, heard: false });
       setStartedIn((was) => ({ ...was, [chat.session]: filedFor(chat.cwd, focused) }));
       setReopened((was) => [...was.filter((one) => one.session !== chat.session), chat]);
@@ -4468,11 +4473,8 @@ export const PlaneView = memo(function PlaneView({
         {/* Both notes name the chat by what its tab says — `frontTab.name`, the one field the
           strip prints — and not by its recorded number, which the operator never reads
           ("5 came back" beside a tab that says "steward 5"). */}
-        {frontTab && frontChat?.resumed && !dismissed.has(`chat-resumed:${frontChat.session}`) && (
-          <Notice
-            cause={`chat-resumed:${frontChat.session}`}
-            onDismiss={() => dismiss(`chat-resumed:${frontChat.session}`)}
-          >
+        {frontTab && frontChat?.resumed && !dismissed.has(resumedNote(frontChat)) && (
+          <Notice cause={resumedNote(frontChat)} onDismiss={() => dismiss(resumedNote(frontChat))}>
             <strong>{frontTab.name}</strong> was resumed — conversation{" "}
             <code>{frontChat.resumed}</code>
           </Notice>
@@ -5133,6 +5135,24 @@ type ByHandNote = { harness: string; cwd: string | null };
 
 /** The notes a relaunch or a Resume says about a chat, by the family of their cause. */
 const CHAT_NOTES = ["chat-resumed", "chat-guessed", "chat-fresh"] as const;
+
+/**
+ * **The cause of one note about a chat**, or none when the chat has nothing to say of that kind.
+ *
+ * A resumed chat's names the conversation it was resumed by (D-NO2-9), so a dismissal of one
+ * conversation's note never hides another's. A new chat's and a guessed one's name the chat
+ * alone: the core says why a conversation was lost and what was guessed in words, and exposes no
+ * id of the conversation that was lost to name the occurrence by.
+ */
+/** A resumed chat's note, for a chat that was resumed. */
+const resumedNote = (chat: OpenChat) => chatNote("chat-resumed", chat) ?? "chat-resumed";
+
+function chatNote(family: (typeof CHAT_NOTES)[number], chat: OpenChat): string | undefined {
+  if (family === "chat-resumed")
+    return chat.resumed ? `chat-resumed:${chat.session}:${chat.resumed}` : undefined;
+  if (family === "chat-guessed") return chat.guessed ? `chat-guessed:${chat.session}` : undefined;
+  return chat.fresh ? `chat-fresh:${chat.session}` : undefined;
+}
 
 /**
  * The strip a chat started in `cwd` is filed on until the plane says: the focused workspace's,

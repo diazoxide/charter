@@ -250,8 +250,13 @@ has it; nothing reads the key after that.
   cause go once the project answers without it, so the Notice shows again if the cause comes
   back. Only causes the core answers for are kept: `pin-dormant`, `chat-resumed`,
   `chat-guessed` and `chat-fresh`; any other is left out, as is anything past 200 per project
-  (`app/src/dismissals.ts`). It is here and not in a project because what you have already
-  seen is yours on this machine. Delete it to see every Notice again.
+  (`app/src/dismissals.ts`). A resumed chat's cause names the conversation it was resumed by
+  (`chat-resumed:3:<conversation>`), so another conversation's note shows. The core writes
+  this field one project at a time, under the file's lock, and a layout write from a window
+  never changes it, so two windows keep each other's. It takes at most half the file: past
+  that, the projects opened longest ago lose theirs first. It is here and not in a project
+  because what you have already seen is yours on this machine. Delete it to see every Notice
+  again.
 - **The file is read once, as the window is created.** Edit it while charter is not running,
   or expect the next change made in the window to replace your edit.
 - **Nothing in it can stop the window.** A file that is not JSON, is not a layout, is a link or
