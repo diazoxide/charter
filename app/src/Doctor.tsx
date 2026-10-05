@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoaderCircle, Stethoscope } from "lucide-react";
-import { FIXES_WITH_A_FORM, GitIdentityForm, type IdentityRefused } from "./GitIdentityForm";
+import {
+  FIXES_WITH_A_FORM,
+  GitIdentityForm,
+  type IdentityNow,
+  type IdentityRefused,
+} from "./GitIdentityForm";
 import {
   commands,
   type DoctorFixed,
@@ -86,6 +91,8 @@ export type DoctorState = {
   /** Apply `git-identity` with the form's name and email, then check again. Resolves with
    *  each field's refusal, or `undefined` once the fix ran or was refused as a whole. */
   fixIdentity?: (name: string, email: string) => Promise<IdentityRefused | undefined>;
+  /** git's global identity as it stands, for the form to lock what is set. */
+  identityNow?: () => Promise<IdentityNow>;
   /** The fix on its way, by its id. */
   fixing?: string;
   /** What the last fix came to: its lines, or why it was refused. */
@@ -223,6 +230,16 @@ export function useDoctor(plane: PlaneId): DoctorState {
     },
     [plane, run],
   );
+  const identityNow = useCallback(async (): Promise<IdentityNow> => {
+    // Nothing read is nothing locked: the core reads it again before it writes anyway.
+    const none = { name: "", email: "" };
+    try {
+      const answer = await commands.planeDoctorIdentity(plane);
+      return answer.status === "ok" && answer.data ? answer.data : none;
+    } catch {
+      return none;
+    }
+  }, [plane]);
   const forget = useCallback(() => {
     newestFix.current += 1;
     setLastFix(undefined);
@@ -236,6 +253,7 @@ export function useDoctor(plane: PlaneId): DoctorState {
     run,
     fix,
     fixIdentity,
+    identityNow,
     fixing: ours?.fixing,
     fixed: ours?.fixed,
     forget,
@@ -293,13 +311,22 @@ type Fixer = {
   busy: boolean;
   /** The git identity form's submit; absent where no form can be sent. */
   identity?: (name: string, email: string) => Promise<IdentityRefused | undefined>;
+  /** What the identity is now, read when its form opens. */
+  identityNow?: () => Promise<IdentityNow>;
 };
 
 /** A row's Fix button, and the form under it for a fix that takes input (FX-3). */
 function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fixer }) {
-  const [form, setForm] = useState(false);
+  // The form is open once what is set has been read: `current` is what it locks.
+  const [current, setCurrent] = useState<IdentityNow>();
+  const form = current !== undefined;
+  const formId = useId();
   const withForm = FIXES_WITH_A_FORM.has(row.fix);
   if (withForm && !fixer.identity) return null;
+  const toggle = () => {
+    if (form) setCurrent(undefined);
+    else void (fixer.identityNow?.() ?? Promise.resolve({ name: "", email: "" })).then(setCurrent);
+  };
   return (
     <>
       <button
@@ -310,19 +337,22 @@ function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fi
         // same fix, kept where a pointer can read it.
         aria-label={`Fix ${row.name}`}
         aria-expanded={withForm ? form : undefined}
+        aria-controls={withForm && form ? formId : undefined}
         title={`charter doctor --fix ${row.fix}`}
         disabled={fixer.busy}
-        onClick={() => (withForm ? setForm((open) => !open) : fixer.apply(row.fix))}
+        onClick={() => (withForm ? toggle() : fixer.apply(row.fix))}
       >
         Fix
       </button>
-      {withForm && form && fixer.identity && (
+      {withForm && current !== undefined && fixer.identity && (
         <GitIdentityForm
+          id={formId}
+          current={current}
           busy={fixer.busy}
-          onCancel={() => setForm(false)}
+          onCancel={() => setCurrent(undefined)}
           submit={async (name, email) => {
             const refused = await fixer.identity?.(name, email);
-            if (refused === undefined) setForm(false);
+            if (refused === undefined) setCurrent(undefined);
             return refused;
           }}
         />
@@ -414,6 +444,7 @@ export function Health({
     apply: doctor.fix,
     busy: running || fixing !== undefined,
     identity: doctor.fixIdentity,
+    identityNow: doctor.identityNow,
   };
   const ours = report?.app_rows ?? [];
 

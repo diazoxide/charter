@@ -600,3 +600,35 @@ fn a_name_and_an_email_for_another_fix_are_refused_rather_than_dropped() {
     assert!(said.contains("--fix git-identity"), "{said}");
     assert!(!root.join("personas").exists(), "nothing was fixed");
 }
+
+#[test]
+fn a_name_and_an_email_with_bare_fix_and_a_complete_identity_say_they_wrote_nothing() {
+    let (_d, root) = plane();
+    let home = root.join("home");
+    let before = "[user]\n\tname = Bea Terminal\n\temail = bea@example.invalid\n";
+    std::fs::write(home.join(".gitconfig"), before).unwrap();
+    let vars = [("CHARTER_CONFIG_HOME", root.to_str().unwrap())];
+    for args in [
+        &["--fix", "--name", "Ann", "--email", "ann@example.invalid"][..],
+        &[
+            "--fix",
+            "git-identity",
+            "--name",
+            "Ann",
+            "--email",
+            "ann@example.invalid",
+        ][..],
+    ] {
+        let out = doctor_with(&root, &home, args, &vars);
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            said.contains("git identity is already set (Bea Terminal <bea@example.invalid>)"),
+            "{args:?}: {said}"
+        );
+        assert!(!out.status.success(), "{args:?}: {said}");
+        assert_eq!(
+            std::fs::read_to_string(home.join(".gitconfig")).unwrap(),
+            before
+        );
+    }
+}

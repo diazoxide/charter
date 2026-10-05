@@ -571,6 +571,8 @@ describe("the git identity form (FX-3)", () => {
 
     const email = within(form).getByLabelText("Email");
     await waitFor(() => expect(email).toHaveAccessibleDescription(/does not look like an email/));
+    // The keyboard goes back to the field the core refused.
+    expect(email).toHaveFocus();
     expect(within(form).getByRole("alert")).toHaveTextContent("That does not look like an email.");
     expect(within(form).getByLabelText("Name")).not.toHaveAccessibleDescription(/email/);
     expect(email).toHaveValue("nope");
@@ -591,5 +593,75 @@ describe("the git identity form (FX-3)", () => {
 
     expect(within(dialog).queryByRole("form", { name: "Git identity" })).toBeNull();
     expect(asked).not.toContain("plane_doctor_fix_identity");
+  });
+});
+
+describe("the git identity form fills in, never replaces (FX-3, D-FX3-8)", () => {
+  function Wired() {
+    return <Health doctor={useDoctor(PLANE)} />;
+  }
+  const noEmail = row("git identity", "fail", {
+    detail: "not set: user.email",
+    fix: "git-identity",
+  });
+
+  it("opens on the first field to fill, from a Fix button that names it", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "plane_doctor") return report([noEmail]);
+      if (cmd === "plane_doctor_identity") return { name: "", email: "" };
+      return null;
+    });
+    render(<Wired />);
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    const fix = await within(dialog).findByRole("button", { name: /^Fix git identity$/ });
+    await userEvent.click(fix);
+    const form = await within(dialog).findByRole("form", { name: "Git identity" });
+
+    expect(fix).toHaveAttribute("aria-controls", form.id);
+    expect(fix).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(within(form).getByLabelText("Name")).toHaveFocus());
+  });
+
+  it("shows a key that is set locked, starts on the other, and sends only what is missing", async () => {
+    const asked: Array<[string, unknown]> = [];
+    mockIPC((cmd, args) => {
+      asked.push([cmd, args]);
+      if (cmd === "plane_doctor") return report([noEmail]);
+      if (cmd === "plane_doctor_identity") return { name: "Bea Terminal", email: "" };
+      if (cmd === "plane_doctor_fix_identity")
+        return {
+          kind: "fixed",
+          fixed: {
+            fix: "git-identity",
+            refused: null,
+            said: ["✓ set user.email = bea@example.invalid (global git config)"],
+            complete: true,
+          },
+        };
+      return null;
+    });
+    render(<Wired />);
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      await within(dialog).findByRole("button", { name: /^Fix git identity$/ }),
+    );
+    const form = await within(dialog).findByRole("form", { name: "Git identity" });
+
+    const name = within(form).getByLabelText("Name");
+    expect(name).toHaveValue("Bea Terminal");
+    expect(name).toBeDisabled();
+    expect(name).toHaveAccessibleDescription(/Already set/);
+    const email = within(form).getByLabelText("Email");
+    await waitFor(() => expect(email).toHaveFocus());
+
+    await userEvent.type(email, "bea@example.invalid");
+    await userEvent.click(within(form).getByRole("button", { name: "Set identity" }));
+
+    expect(asked).toContainEqual([
+      "plane_doctor_fix_identity",
+      { plane: PLANE, name: "", email: "bea@example.invalid" },
+    ]);
   });
 });

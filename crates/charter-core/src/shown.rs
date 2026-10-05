@@ -124,7 +124,7 @@ pub fn short(value: &str) -> String {
 /// Unicode version (named at the top of `tables.rs`). A codepoint whose category changes after
 /// it escapes in charter and not here until the table moves — one line the two implementations
 /// would render differently, named rather than left to be found.
-fn invisible(c: char) -> bool {
+pub(crate) fn invisible(c: char) -> bool {
     crate::tui::in_table(c, &crate::tui::tables::INVISIBLE)
 }
 

@@ -3482,7 +3482,7 @@ fn doctor(
     if let Some(asked) = fix {
         use charter_core::doctor::fix::{self as registry, FixId};
         let doctor = charter_core::doctor::Doctor::new(&cwd, preflight);
-        let ids = match asked {
+        let mut ids: Vec<FixId> = match asked {
             // clap took only an id the registry has.
             Some(id) => FixId::parse(id).into_iter().collect(),
             // Bare: the local, additive fixes only. A fix that goes over the network runs
@@ -3496,6 +3496,13 @@ fn doctor(
                 ids
             }
         };
+        // `--name`/`--email` with a bare `--fix` are the identity's input even when the row
+        // offers no fix: the core then says the identity is already set, and the flags are
+        // never dropped without a word (FX-3).
+        if identity.is_some() && !ids.contains(&FixId::GitIdentity) {
+            ids.push(FixId::GitIdentity);
+            ids.sort();
+        }
         for id in ids {
             let lines = match (id, identity) {
                 (FixId::GitIdentity, Some((name, email))) => {

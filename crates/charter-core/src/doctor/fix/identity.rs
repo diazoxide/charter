@@ -14,6 +14,12 @@
 //! its git keeps only `HOME` from the environment, so the file written is the one the row
 //! reads, and a test that hands its child a temporary `HOME` never reaches the real one.
 //!
+//! # Only what is missing (D-FX3-8)
+//!
+//! The fix fills in an identity; it never replaces one. [`apply`] reads the global identity
+//! again just before it writes, refuses when both keys are set, and otherwise writes only the
+//! unset key(s). The window's form shows a key that is set, locked, from [`current`].
+//!
 //! # Checked in the core
 //!
 //! The input is checked here, field by field, before anything is written ([`Invalid`]), so the
@@ -46,26 +52,100 @@ impl Invalid {
     }
 }
 
-/// Check `name` and `email`, then write them as git's global `user.name` and `user.email`.
+/// The global identity as git holds it now: each value as git answers it, empty when unset.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Current {
+    pub name: String,
+    pub email: String,
+}
+
+impl Current {
+    /// Both keys set: there is nothing for this fix to write.
+    pub fn complete(&self) -> bool {
+        !self.name.is_empty() && !self.email.is_empty()
+    }
+}
+
+/// The global `user.name` and `user.email`, read through the runner the write goes through.
+/// What the window's form shows locked, and what [`apply`] re-reads before it writes.
+pub fn current() -> Result<Current, String> {
+    Ok(Current {
+        name: get_global("user.name")?,
+        email: get_global("user.email")?,
+    })
+}
+
+/// The longest name or email this fix writes, in characters.
+pub const LIMIT: usize = 256;
+
+/// Write what is MISSING of git's global identity from `name` and `email` (D-FX3-8).
 ///
-/// Each is trimmed first. `Err` is the input refused, with nothing written; `Ok` is what the
-/// write came to: [`Fixed::Ran`], incomplete when git refused part of it, with git's words.
+/// **Never over what is there.** The global identity is read again immediately before the
+/// write, so a dialog opened before the identity was set from a terminal cannot replace it:
+/// - both keys set: [`Fixed::Refused`], and nothing is written;
+/// - otherwise only the unset key(s) are checked and written. What was given for a key that
+///   is set is left out, and said when it differs.
+///
+/// Each value is trimmed first. `Err` is the input for an unset key refused, field by field,
+/// with nothing written. `Ok(Fixed::Ran)` is incomplete when git refused part of the write.
 pub fn apply(name: &str, email: &str) -> Result<Fixed, Invalid> {
     let (name, email) = (name.trim(), email.trim());
+    let now = match current() {
+        Ok(now) => now,
+        Err(why) => {
+            return Ok(Fixed::Refused(format!(
+                "git's global identity could not be read, so nothing was written: {why}"
+            )));
+        }
+    };
+    if now.complete() {
+        return Ok(Fixed::Refused(format!(
+            "git identity is already set ({} <{}>), so nothing was written",
+            crate::shown::line(&now.name),
+            crate::shown::line(&now.email)
+        )));
+    }
+    let (write_name, write_email) = (now.name.is_empty(), now.email.is_empty());
     let invalid = Invalid {
-        name: name_refused(name).into_iter().collect(),
-        email: email_refused(email).into_iter().collect(),
+        name: write_name
+            .then(|| name_refused(name))
+            .flatten()
+            .into_iter()
+            .collect(),
+        email: write_email
+            .then(|| email_refused(email))
+            .flatten()
+            .into_iter()
+            .collect(),
     };
     if invalid != Invalid::default() {
         return Err(invalid);
     }
     let mut said = Vec::new();
+    for (key, given, kept) in [
+        ("user.name", name, &now.name),
+        ("user.email", email, &now.email),
+    ] {
+        if !kept.is_empty() && !given.is_empty() && given != kept {
+            said.push(format!(
+                "• {key} is already set ({}); left as it is",
+                crate::shown::line(kept)
+            ));
+        }
+    }
     let mut complete = true;
-    for (key, value) in [("user.name", name), ("user.email", email)] {
+    let writes = [
+        ("user.name", name, write_name),
+        ("user.email", email, write_email),
+    ];
+    for (key, value, _) in writes.into_iter().filter(|(_, _, write)| *write) {
         match set_global(key, value) {
-            Ok(()) => said.push(format!("✓ set {key} = {value} (global git config)")),
+            Ok(()) => said.push(format!(
+                "✓ set {key} = {} (global git config)",
+                crate::shown::line(value)
+            )),
             Err(why) => {
-                said.push(format!("✗ {key} was not set: {why}"));
+                said.push(format!("✗ {key} was not set: {}", crate::shown::line(&why)));
                 complete = false;
                 // An email without its name is half an identity: the name failed, so stop.
                 break;
@@ -73,6 +153,25 @@ pub fn apply(name: &str, email: &str) -> Result<Fixed, Invalid> {
         }
     }
     Ok(Fixed::Ran { said, complete })
+}
+
+/// `git config --global --get <key>`: its value, empty when it is unset (git's exit 1).
+fn get_global(key: &str) -> Result<String, String> {
+    let run = crate::worktree::git::run(
+        Path::new("/"),
+        &["config", "--global", "--get", key],
+        crate::doctor::CHECK_TIMEOUT,
+    )
+    .map_err(|e| e.to_string())?;
+    match run.code {
+        Some(0) => Ok(run.line().to_owned()),
+        Some(1) => Ok(String::new()),
+        None => Err(format!(
+            "git did not answer within {}s",
+            crate::doctor::CHECK_TIMEOUT.as_secs()
+        )),
+        Some(_) => Err(crate::doctor::first_line(&run.err)),
+    }
 }
 
 /// `git config --global <key> <value>`, through the hardened runner. Asked from `/`, as the
@@ -99,8 +198,15 @@ fn name_refused(name: &str) -> Option<String> {
     if name.is_empty() {
         return Some("Give the name your commits are made under.".into());
     }
-    if name.chars().any(char::is_control) {
-        return Some("A name is one line, with no control characters.".into());
+    if name.chars().any(crate::shown::invisible) {
+        return Some(
+            "A name is one line of visible characters: no control, zero-width or \
+             direction-changing characters."
+                .into(),
+        );
+    }
+    if name.chars().count() > LIMIT {
+        return Some(format!("A name is at most {LIMIT} characters."));
     }
     if name.contains(['<', '>']) {
         return Some("A name cannot contain < or >: git keeps those for the email.".into());
@@ -116,9 +222,16 @@ fn email_refused(email: &str) -> Option<String> {
     }
     if email
         .chars()
-        .any(|c| c.is_whitespace() || c.is_control() || c == '<' || c == '>')
+        .any(|c| c.is_whitespace() || crate::shown::invisible(c) || c == '<' || c == '>')
     {
-        return Some("An email has no spaces, control characters, < or >.".into());
+        return Some(
+            "An email has no spaces, < or >, and no control, zero-width or direction-changing \
+             characters."
+                .into(),
+        );
+    }
+    if email.chars().count() > LIMIT {
+        return Some(format!("An email is at most {LIMIT} characters."));
     }
     match email.split_once('@') {
         Some((local, domain))

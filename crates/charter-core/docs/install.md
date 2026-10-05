@@ -150,7 +150,10 @@ One fix takes input. When `user.name` or `user.email` is unset, the `git identit
 to git's global config, the scope the row's hint names, because charter commits in the project
 and in every clone. Each value is checked first, and a refused one writes nothing. A bare
 `--fix` without `--name` and `--email` says what to give. In the window, its Fix button opens a
-small form for the two values.
+small form for the two values. The fix fills in only what is missing: a key that is already set
+is shown locked and never replaced, and with both set the fix writes nothing. The doctor reads
+git's identity with only `HOME` kept, so an identity kept under a non-default
+`XDG_CONFIG_HOME` reads as missing there, and the fix writes `~/.gitconfig`.
 
 ### Rules that always ask, or stop asking
 
