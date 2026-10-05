@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791167537850,
+  "lastUpdate": 1791168320282,
   "repoUrl": "https://github.com/diazoxide/charter",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -1722,6 +1722,48 @@ window.BENCHMARK_DATA = {
             "value": 101.47392450000001,
             "unit": "ms",
             "extra": "median of 5 runs: 100.764, 100.931, 101.474, 101.858, 101.874 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "89ee5972ba7549349fce4382f87ef4acb5c5f07d",
+          "message": "FW-6a review: per-board iterations, archived items left out, every page checked\n\nFold-ins from the FW-6a review:\n\n- F1: `Iteration.title` is now an `Option<String>`, and `of_forge` and `lasting` take one,\n  because a GitLab cadence's iterations have no title.\n- F2: the `WorkItem` query asks `projectItems(includeArchived: false)`, since GitHub's default is\n  to include them. It also reads `isArchived` and drops an archived item it is given anyway, so an\n  archived board item is never a placement.\n- F3: `fieldValues(first: 50)` reads its `pageInfo`. A second page of board fields is an error,\n  as D-FW6a-5 says for every other connection.\n- F4: `Placement` keeps its own `iteration`. The item-level `iteration` is the first board's.\n- F5: the `Placement` doc says its status is per board, and that FW-6b (#734) adds an item-level\n  status for GitLab, Jira and Linear.\n- F6: GitLab's `read` refuses an answer with no title as malformed, as GitHub does; `create`\n  still falls back to the title it sent. A GitHub `read` of a pull request's number says\n  \"#n is a pull request\". The overflow test now covers sub-issues, closing pull requests, boards\n  and board fields.\n- F7: ADR 0070 §2's `Capability` sketch lists `CloseReasons`, with a note that the enum grows by\n  ticket.\n\nAmends D-FW6a-3: each board keeps its own iteration in `Placement::iteration`, and the\nitem-level `iteration` is the first board's in GitHub's order. FW-9 no longer has to choose an\niteration across boards: it reads the board it groups by.\n\nRefs #733\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T06:30:29+04:00",
+          "tree_id": "c912cef8cf1622c3c8418fe4fe179088584db729",
+          "url": "https://github.com/diazoxide/charter/commit/89ee5972ba7549349fce4382f87ef4acb5c5f07d"
+        },
+        "date": 1791168319871,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.473178,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.465, 0.467, 0.473, 0.474, 0.482 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.7056295,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.442, 16.482, 16.706, 16.715, 16.912 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.560234,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.850, 101.499, 101.560, 102.030, 102.610 ms"
           }
         ]
       }
