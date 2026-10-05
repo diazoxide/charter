@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791212863390,
+  "lastUpdate": 1791224661870,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2184,6 +2184,48 @@ window.BENCHMARK_DATA = {
             "value": 101.487864,
             "unit": "ms",
             "extra": "median of 5 runs: 100.552, 100.905, 101.488, 101.562, 101.838 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "76c36affc058bc70df299afda43cc188475da39c",
+          "message": "rename train 2: the gauge e2e expects hooks and the statusline through purlis\n\nRN-3 makes the app run its hooks through the purlis binary beside it, so the bundled plugin's hook binary and the armed statusLine command are target/debug/purlis, not the charter alias.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-05T22:22:35+04:00",
+          "tree_id": "37bacf0f4d21c743af33fcb0d7d09d220f8783ae",
+          "url": "https://github.com/purlis/purlis/commit/76c36affc058bc70df299afda43cc188475da39c"
+        },
+        "date": 1791224660997,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5167824999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.488, 0.508, 0.517, 0.524, 0.531 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.9201925,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.458, 16.763, 16.920, 17.222, 17.480 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.00195550000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.795, 103.146, 105.002, 105.835, 107.490 ms"
           }
         ]
       }
