@@ -218,9 +218,19 @@ fn the_entries_carry_the_names_on_disk_today() {
         SYNC_AGENTS_MARKER.reads[0]
     );
     assert_eq!(crate::roster::BEGIN, PERSONAS_BEGIN.reads[0]);
+    // The keychain and 1Password names RN-4 moved to their purlis spelling are still read
+    // under the old one, through these constants.
     assert_eq!(
-        crate::secrets::identity::SERVICE_BASE,
+        crate::secrets::keyring::OWN_PREFIXES[1],
+        KEYCHAIN_PREFIX.reads[0]
+    );
+    assert_eq!(
+        crate::secrets::identity::READ_BASES[1].1,
         KEYCHAIN_IDENTITY_PREFIX.reads[0]
+    );
+    assert_eq!(
+        crate::secrets::onepassword::OLD_TAG,
+        ONEPASSWORD_TAG.reads[0]
     );
     // No constant names the state folder alone; the paths under it are spelled whole.
     assert!(crate::cistate::CACHE.starts_with(&format!("{}/", STATE_DIR.reads[0])));

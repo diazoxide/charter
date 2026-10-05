@@ -37,7 +37,7 @@ pub(crate) const TAG: &str = ONEPASSWORD_TAG.write;
 
 /// The tag items written before the rename carry. The one-item-per-key layout the legacy check
 /// looks for was only ever written under it.
-const OLD_TAG: &str = ONEPASSWORD_TAG.reads[0];
+pub(crate) const OLD_TAG: &str = ONEPASSWORD_TAG.reads[0];
 
 /// A vault's item is `charter-<vault>` unless the registry names another. Unchanged by the
 /// rename: the title is how an existing item is FOUND, so renaming it would lose every vault's
