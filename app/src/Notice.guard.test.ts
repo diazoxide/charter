@@ -65,8 +65,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
   },
   "Doctor.tsx": {
-    count: 1,
-    why: "the Doctor dialog's own refusal; its rows get fix ids in the fix registry ticket",
+    count: 2,
+    why:
+      "the Doctor dialog's own refusal, and what its last Fix changed or why it was refused " +
+      "(FX-1): inside the dialog, over the rows it changed",
   },
   "Explorer.tsx": {
     count: 1,
@@ -125,6 +127,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "NewWorkspace.tsx": {
     count: 1,
     why: "a dialog's refusal or warning: an inline error, not a Notice (V91n)",
+  },
+  "NotCloned.tsx": {
+    count: 1,
+    why: "a clone that failed, said on its own row beside that row's Retry (#1215): inline, per repo",
   },
   "Opener.tsx": {
     count: 4,
@@ -196,6 +202,12 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "the reference picker saying it found no chat, inside its menu",
   },
+  "settings/Collection.tsx": {
+    count: 3,
+    why:
+      "a collection's Undo answer, a refused Remove with its users and a refused Add (ST-3): " +
+      "inline, inside Settings, beside the entry or form they are about",
+  },
   "settings/RawToml.tsx": {
     count: 2,
     why: "Edit as TOML's own answer and refusal, inside Settings (NO-7, #1232)",
@@ -207,6 +219,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
   "settings/components.tsx": {
     count: 3,
     why: "the settings set's filter count, a row's refusal and a range's value: inline, per field",
+  },
+  "settings/thisMachine.tsx": {
+    count: 1,
+    why: "This machine's read refusal, standing in for its list inside Settings (ST-2; NO-7, #1232)",
   },
 };
 
