@@ -1913,16 +1913,22 @@ fn environment(found: &Extension) -> Vec<(String, String)> {
                 .map(|value| ((*name).to_owned(), value))
         })
         .collect();
-    env.push(("CHARTER_EXTENSION".into(), found.id().to_owned()));
-    env.push((
-        "CHARTER_PROTOCOL".into(),
-        found.manifest.protocol.to_string(),
-    ));
+    let mut own = vec![
+        ("PURLIS_EXTENSION", found.id().to_owned()),
+        ("PURLIS_PROTOCOL", found.manifest.protocol.to_string()),
+    ];
     if let Some(state) = &found.manifest.state {
-        env.push((
-            "CHARTER_EXTENSION_STATE".into(),
+        own.push((
+            "PURLIS_EXTENSION_STATE",
             found.path.join(state).display().to_string(),
         ));
+    }
+    // The extension API under both names while the rename's window is open (V93k): an
+    // extension written against `CHARTER_EXTENSION` keeps working.
+    for (name, value) in own {
+        for spelling in crate::envvar::spellings(name) {
+            env.push((spelling, value.clone()));
+        }
     }
     env
 }

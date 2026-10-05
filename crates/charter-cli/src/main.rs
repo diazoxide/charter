@@ -1185,9 +1185,9 @@ impl Here {
             plane: plane()?,
             cwd,
             ids: charter_core::active::Ids::from_env(),
-            workspace_env: std::env::var(charter_core::active::WORKSPACE_ENV).ok(),
-            plane_root_env: std::env::var(charter_core::active::PLANE_ROOT_ENV).ok(),
-            persona_env: std::env::var(charter_core::active::PERSONA_ENV).ok(),
+            workspace_env: charter_core::envvar::var(charter_core::active::WORKSPACE_ENV),
+            plane_root_env: charter_core::envvar::var(charter_core::active::PLANE_ROOT_ENV),
+            persona_env: charter_core::envvar::var(charter_core::active::PERSONA_ENV),
         })
     }
 
@@ -1387,12 +1387,11 @@ fn tell_the_host_about_the_tool_call(
     took: std::time::Duration,
 ) {
     use std::io::Write as _;
-    let Some(socket) = std::env::var_os(SOCKET_ENV) else {
+    let Some(socket) = charter_core::envvar::var_os(SOCKET_ENV) else {
         return;
     };
-    let Some(chat) = std::env::var(hookwire::CHAT_ENV)
-        .ok()
-        .and_then(|chat| chat.parse().ok())
+    let Some(chat) =
+        charter_core::envvar::var(hookwire::CHAT_ENV).and_then(|chat| chat.parse().ok())
     else {
         // Never `eprintln!` here: this runs from a crashed guard's panic hook too, and a
         // print to a closed stderr panics there, which aborts instead of refusing (exit 2).
@@ -1417,7 +1416,7 @@ fn tell_the_host_about_the_tool_call(
         decision: answered.decision,
         rule: answered.rule.clone(),
         hook_ms: u64::try_from(took.as_millis()).unwrap_or(u64::MAX),
-        agent: hookwire::sub_agent(data["agent_id"].as_str(), &|name| std::env::var(name).ok()),
+        agent: hookwire::sub_agent(data["agent_id"].as_str(), &charter_core::envvar::var),
         at_ms: std::time::SystemTime::now()
             .checked_sub(took)
             .and_then(|began| began.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1504,7 +1503,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         // Answered with nothing, as ever, and still one call the host hears. The payload is
         // read only when a host is listening, so a terminal's own harness pays nothing for it.
         let began = std::time::Instant::now();
-        if std::env::var_os(SOCKET_ENV).is_some() {
+        if charter_core::envvar::var_os(SOCKET_ENV).is_some() {
             let text = payload();
             let answered = hooks::Answered::exit(ExitCode::SUCCESS, hookwire::Decision::None, None);
             tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
@@ -1533,7 +1532,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
             return ExitCode::FAILURE;
         }
         // A refused tool call is still one the host hears.
-        if std::env::var_os(SOCKET_ENV).is_some() {
+        if charter_core::envvar::var_os(SOCKET_ENV).is_some() {
             let answered = hooks::Answered::exit(
                 ExitCode::from(BLOCK),
                 hookwire::Decision::Deny,
@@ -1543,7 +1542,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         }
         return ExitCode::from(BLOCK);
     };
-    let socket = std::env::var_os(SOCKET_ENV);
+    let socket = charter_core::envvar::var_os(SOCKET_ENV);
     // The payload is read once, and only when something reads it: `sessionstart` always does,
     // `userpromptsubmit` for the heartbeat, and every event when the app is listening.
     let wanted = socket.is_some() || matches!(event, Event::SessionStart | Event::UserPromptSubmit);
@@ -1564,7 +1563,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
         }
         return ExitCode::SUCCESS;
     };
-    let report = Report::read(event, &text, &|name| std::env::var(name).ok());
+    let report = Report::read(event, &text, &charter_core::envvar::var);
     if report.is_none() {
         // A host is listening and this hook names no chat it started: `$CHARTER_CHAT` is
         // missing or not a number. There is no chat to put the event under, so none is sent,
@@ -1921,9 +1920,10 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
                 1
             } else {
                 // A chat's `charter save` is an agent run's, and carries its trailers (GL-8).
-                let provenance = charter_core::provenance::Provenance::in_chat(&root, &|name| {
-                    std::env::var(name).ok()
-                });
+                let provenance = charter_core::provenance::Provenance::in_chat(
+                    &root,
+                    &charter_core::envvar::var,
+                );
                 charter_core::planegit::save(
                     &charter_core::planegit::Request {
                         root: &root,

@@ -86,7 +86,7 @@ pub struct Start {
 /// value inherited from somewhere else, or a stale one, reads as "blank" rather than as a
 /// surprise. Both the name and the value are constants here, so nothing a chat or a record
 /// can write ever reaches the environment charter builds.
-pub const FOOTER_ENV: &str = "CHARTER_FOOTER";
+pub const FOOTER_ENV: &str = "PURLIS_FOOTER";
 
 /// The one value of [`FOOTER_ENV`] that means "draw it".
 pub const FOOTER_SHOW: &str = "show";
@@ -745,11 +745,14 @@ fn environment(
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
     let mut env: Vec<(String, String)> =
         profiles::expanded_env(profile, &home).into_iter().collect();
-    env.push(("CHARTER_ROOT".to_owned(), root.display().to_string()));
-    env.push(("CHARTER_HARNESS".to_owned(), profile.harness.clone()));
-    env.push(("CHARTER_HARNESS_PROFILE".to_owned(), profile.name.clone()));
+    env.push(("PURLIS_ROOT".to_owned(), root.display().to_string()));
+    env.push((
+        crate::hookwire::HARNESS_ENV.to_owned(),
+        profile.harness.clone(),
+    ));
+    env.push(("PURLIS_HARNESS_PROFILE".to_owned(), profile.name.clone()));
     if let Some(who) = persona {
-        env.push(("CHARTER_PERSONA".to_owned(), who.to_owned()));
+        env.push((crate::active::PERSONA_ENV.to_owned(), who.to_owned()));
     }
     if show_footer {
         env.push((FOOTER_ENV.to_owned(), FOOTER_SHOW.to_owned()));

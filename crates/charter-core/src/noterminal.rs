@@ -37,14 +37,13 @@ pub enum Left {
 /// never starts another and knows its standard input is that process's pipe. Never passed on:
 /// chats, shells and ACP agents are started without it, so an app started from one of them
 /// leaves its own terminal.
-pub const RELAUNCHED_ENV: &str = "CHARTER_HOST_LEFT_ITS_TERMINAL";
+pub const RELAUNCHED_ENV: &str = "PURLIS_HOST_LEFT_ITS_TERMINAL";
 
 /// Whether this process is the child [`relaunch`] started: the marker names its parent.
 #[cfg(unix)]
 fn relaunched_by_parent() -> bool {
     let parent = rustix::process::getppid().map(|pid| pid.as_raw_nonzero().get());
-    std::env::var(RELAUNCHED_ENV)
-        .ok()
+    crate::envvar::var(RELAUNCHED_ENV)
         .and_then(|value| value.parse::<i32>().ok())
         .is_some_and(|marked| Some(marked) == parent)
 }

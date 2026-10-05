@@ -62,7 +62,10 @@ fn run_in(root: &Path, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Ran {
         charter_core::hookwire::SOCKET_ENV,
         charter_core::hookwire::CHAT_ENV,
     ] {
-        command.env_remove(name);
+        // Under either name (V93k): a suite run in a chat inherits both.
+        for spelling in charter_core::envvar::spellings(name) {
+            command.env_remove(spelling);
+        }
     }
     for (name, value) in env {
         command.env(name, value);

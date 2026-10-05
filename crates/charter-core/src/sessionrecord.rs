@@ -182,7 +182,7 @@ impl Opened {
 /// path of the record it resumes from, which its session-start briefing quotes (SI-8d). Set by
 /// charter alone — a profile may not set a `CHARTER_` name — and read through [`open`], so a
 /// value that is not a record's path reads nothing.
-pub const RESUMING_ENV: &str = "CHARTER_RESUMING_RECORD";
+pub const RESUMING_ENV: &str = "PURLIS_RESUMING_RECORD";
 
 // ---- the shape ------------------------------------------------------------------------------
 

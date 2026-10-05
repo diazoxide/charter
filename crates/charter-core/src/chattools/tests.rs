@@ -694,9 +694,9 @@ fn an_acp_session_is_handed_the_server_with_the_chat_s_place_and_nothing_else_of
     // ADR 0080 §1 and HP-7's note on #669: a stdio server, charter's own binary, `mcp`, and
     // the scope variables alone: never the chat's token or its hook socket.
     let env = vec![
-        ("CHARTER_ROOT".into(), "/p".into()),
+        ("PURLIS_ROOT".into(), "/p".into()),
         (crate::active::WORKSPACE_ENV.into(), "ws".into()),
-        ("CHARTER_CHAT_TOKEN".into(), "secret".into()),
+        ("PURLIS_CHAT_TOKEN".into(), "secret".into()),
         ("PATH".into(), "/bin".into()),
     ];
     let server =
@@ -708,7 +708,7 @@ fn an_acp_session_is_handed_the_server_with_the_chat_s_place_and_nothing_else_of
             "command": "/bin/charter",
             "args": ["mcp"],
             "env": [
-                {"name": "CHARTER_ROOT", "value": "/p"},
+                {"name": "PURLIS_ROOT", "value": "/p"},
                 {"name": crate::active::WORKSPACE_ENV, "value": "ws"},
             ],
         })
@@ -721,10 +721,10 @@ fn an_acp_session_s_server_is_handed_each_scope_variable_once_with_the_chat_s_va
     // inherited comes first and the chat's after it. The agent is handed one value per name,
     // the one the chat starts with, whatever order an agent would read a repeated name in.
     let env = vec![
-        ("CHARTER_ROOT".into(), "/the-app-s".into()),
+        ("PURLIS_ROOT".into(), "/the-app-s".into()),
         (crate::active::SESSION_ID_ENV.into(), "1".into()),
-        ("CHARTER_CHAT_TOKEN".into(), "secret".into()),
-        ("CHARTER_ROOT".into(), "/the-chat-s".into()),
+        ("PURLIS_CHAT_TOKEN".into(), "secret".into()),
+        ("PURLIS_ROOT".into(), "/the-chat-s".into()),
         (crate::active::SESSION_ID_ENV.into(), "7".into()),
     ];
     let server =
@@ -732,7 +732,7 @@ fn an_acp_session_s_server_is_handed_each_scope_variable_once_with_the_chat_s_va
     assert_eq!(
         server["env"],
         json!([
-            {"name": "CHARTER_ROOT", "value": "/the-chat-s"},
+            {"name": "PURLIS_ROOT", "value": "/the-chat-s"},
             {"name": crate::active::SESSION_ID_ENV, "value": "7"},
         ])
     );

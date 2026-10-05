@@ -167,7 +167,7 @@ export const CharterPlugin = async (plugin, options) => {
     try {
       child = spawn([BINARY, "hook", word], {
         cwd: directory,
-        env: { ...env, CHARTER_SESSION_ID: rootOf(sid) },
+        env: { ...env, PURLIS_SESSION_ID: rootOf(sid), CHARTER_SESSION_ID: rootOf(sid) },
         stdin: new Blob([stringify(payload)]),
         stdout: "pipe",
         stderr: "pipe",
@@ -230,11 +230,11 @@ export const CharterPlugin = async (plugin, options) => {
       if (!paths.includes(skills)) cfg.skills.paths = [...paths, skills]
     },
 
-    // `$CHARTER_SESSION_ID` in every shell a tool opens, so a `charter` command run there
+    // `$PURLIS_SESSION_ID` (and its old name) in every shell a tool opens, so a `charter` command run there
     // knows its conversation, as `$CLAUDE_CODE_SESSION_ID` tells it in a Claude Code chat.
     "shell.env": async (input, output) => {
       const sid = rootOf(input?.sessionID)
-      if (sid && output?.env) output.env.CHARTER_SESSION_ID = sid
+      if (sid && output?.env) output.env.PURLIS_SESSION_ID = output.env.CHARTER_SESSION_ID = sid
     },
 
     "tool.execute.before": before,

@@ -16,7 +16,7 @@ pub fn run(shims: &Path, word: &str, args: &[OsString]) -> ExitCode {
     let plan = shellguard::plan(
         word,
         shims,
-        &|name| std::env::var_os(name),
+        &charter_core::envvar::var_os,
         std::env::current_dir().ok(),
     );
     if let Some(warning) = &plan.warning {

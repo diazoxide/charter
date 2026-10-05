@@ -2052,7 +2052,7 @@ fn commit_push(
                 root.display()
             )));
             say(Say::Info(format!(
-                "  you really do mean this tree: CHARTER_ROOT={tree} charter save"
+                "  you really do mean this tree: PURLIS_ROOT={tree} charter save"
             )));
             return 1;
         }
@@ -2078,7 +2078,7 @@ fn commit_push(
                 root.display()
             )));
             say(Say::Info(format!(
-                "  you really do mean this plane: CHARTER_ROOT={nested} charter save"
+                "  you really do mean this plane: PURLIS_ROOT={nested} charter save"
             )));
             return 1;
         }

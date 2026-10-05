@@ -34,7 +34,7 @@ static LOG: OnceLock<PathBuf> = OnceLock::new();
 /// a failed CI run keeps. Otherwise panics go to standard error alone until [`keep_in`] names
 /// the app's own log directory, which the app learns only once Tauri has started.
 pub fn record() {
-    if let Some(file) = std::env::var_os("CHARTER_PANIC_LOG") {
+    if let Some(file) = charter_core::envvar::var_os("PURLIS_PANIC_LOG") {
         let _ = LOG.set(PathBuf::from(file));
     }
     install(|| LOG.get());

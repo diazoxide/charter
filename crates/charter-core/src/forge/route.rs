@@ -82,12 +82,12 @@ pub struct HostScope(());
 
 /// The variables the app sets in every chat's environment (`hookwire::CHAT_ENV`, and the
 /// session id `reopen` names).
-const CHAT_MARKS: [&str; 2] = [crate::hookwire::CHAT_ENV, "CHARTER_SESSION_ID"];
+const CHAT_MARKS: [&str; 2] = [crate::hookwire::CHAT_ENV, crate::active::SESSION_ID_ENV];
 
 impl HostScope {
     /// The host's scope, or `None` inside a chat's process tree.
     pub fn claim() -> Option<HostScope> {
-        HostScope::claim_in(&|name| std::env::var(name).ok())
+        HostScope::claim_in(&crate::envvar::var)
     }
 
     /// The host's scope, unconditionally, for a test build's recorded runs. Only a build with
@@ -432,13 +432,12 @@ mod tests {
     #[test]
     fn the_host_scope_is_refused_inside_a_chats_process_tree() {
         assert!(HostScope::claim_in(&|_| None).is_some());
-        assert!(HostScope::claim_in(&|n| (n == "CHARTER_CHAT").then(|| "7".to_string())).is_none());
+        assert!(HostScope::claim_in(&|n| (n == "PURLIS_CHAT").then(|| "7".to_string())).is_none());
         assert!(
-            HostScope::claim_in(&|n| (n == "CHARTER_SESSION_ID").then(|| "s".to_string()))
-                .is_none()
+            HostScope::claim_in(&|n| (n == "PURLIS_SESSION_ID").then(|| "s".to_string())).is_none()
         );
         assert!(
-            HostScope::claim_in(&|n| (n == "CHARTER_CHAT").then(String::new)).is_some(),
+            HostScope::claim_in(&|n| (n == "PURLIS_CHAT").then(String::new)).is_some(),
             "an exported-but-blank variable is unset"
         );
     }

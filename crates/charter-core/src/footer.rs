@@ -342,7 +342,7 @@ fn active_workspace(plane: &Path, payload: &Value, ambient: &Ambient) -> Session
     // $CLAUDE_CODE_SESSION_ID`, then sanitised — so handing the payload's id in as the first
     // variable IS that ladder, rather than a second spelling of it beside it.
     let env = |name: &str| match name {
-        "CHARTER_SESSION_ID" => sid.clone().or_else(|| (ambient.env)(name)),
+        crate::active::SESSION_ID_ENV => sid.clone().or_else(|| (ambient.env)(name)),
         _ => (ambient.env)(name),
     };
     let ids = Ids::of(&env);

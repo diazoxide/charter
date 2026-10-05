@@ -235,6 +235,32 @@ fn a_profile_may_not_set_one_of_charters_own_variables() {
 }
 
 #[test]
+fn a_profile_may_set_neither_name_of_the_products_own_variables() {
+    charter_core::unsteered!();
+    // The rename's window (V93k): `PURLIS_<X>` is the variable, `CHARTER_<X>` its old name,
+    // and a profile may set neither — in any case, since Windows has none.
+    for name in ["PURLIS_ROOT", "CHARTER_ROOT", "purlis_harness"] {
+        let dir = plane(
+            "",
+            &format!(
+                "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+                 env = {{ {name} = \"/elsewhere\" }}\n"
+            ),
+        );
+
+        let set = profiles::derive(dir.path());
+
+        assert!(
+            why(&set, "x").starts_with(&format!(
+                "profile 'x' sets {name}, one of charter's own variables"
+            )),
+            "{name}: {}",
+            why(&set, "x")
+        );
+    }
+}
+
+#[test]
 fn a_name_with_a_dot_is_refused_because_the_plane_format_fixes_the_alphabet() {
     charter_core::unsteered!();
     let dir = plane(

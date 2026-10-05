@@ -91,7 +91,7 @@ use crate::contain;
 ///
 /// The app sets it on every chat it starts in a workspace (SI-1), so that chat never has to
 /// be asked which workspace it is in.
-pub const WORKSPACE_ENV: &str = "CHARTER_WORKSPACE";
+pub const WORKSPACE_ENV: &str = "PURLIS_WORKSPACE";
 
 /// `$CHARTER_PLANE_ROOT_SESSION` — the pin a launcher hands a chat it started at the **plane
 /// root**: in no workspace, on purpose (SI-1).
@@ -104,7 +104,7 @@ pub const WORKSPACE_ENV: &str = "CHARTER_WORKSPACE";
 ///
 /// **Only [`PLANE_ROOT_ON`] turns it on** ([`at_plane_root`]). Any other value is a chat the
 /// ladder answers as it always has — the failure that changes nothing.
-pub const PLANE_ROOT_ENV: &str = "CHARTER_PLANE_ROOT_SESSION";
+pub const PLANE_ROOT_ENV: &str = "PURLIS_PLANE_ROOT_SESSION";
 
 /// The one value of [`PLANE_ROOT_ENV`] that means "this chat is at the plane root".
 pub const PLANE_ROOT_ON: &str = "1";
@@ -117,7 +117,7 @@ pub const PLANE_ROOT_ON: &str = "1";
 /// CHARTER_SESSION_ID=<chat id>`), and `app/src-tauri/src/sessions.rs` here. Two string
 /// literals in two crates is how the app came to set `CHARTER_CHAT` and nothing charter reads
 /// (charter-app#63).
-pub const SESSION_ID_ENV: &str = "CHARTER_SESSION_ID";
+pub const SESSION_ID_ENV: &str = "PURLIS_SESSION_ID";
 
 /// `$CLAUDE_CODE_SESSION_ID` — the harness's own id for the CONVERSATION, one rung under
 /// [`SESSION_ID_ENV`].
@@ -128,7 +128,7 @@ pub const SESSION_ID_ENV: &str = "CHARTER_SESSION_ID";
 pub const CONVERSATION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
 
 /// `$CHARTER_PERSONA` — the same, for the identity a chat adopts.
-pub const PERSONA_ENV: &str = "CHARTER_PERSONA";
+pub const PERSONA_ENV: &str = "PURLIS_PERSONA";
 
 /// The workspace every plane falls back to, whether or not its directory is there.
 pub const BUILT_IN_WORKSPACE: &str = "default";
@@ -179,7 +179,7 @@ impl Ids {
 }
 
 fn from_env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+    crate::envvar::var(name)
 }
 
 /// `charter/session.py:current` — `$CHARTER_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`.
@@ -1754,7 +1754,7 @@ mod tests {
     #[test]
     fn a_frames_session_id_shadows_the_harnesss_own() {
         let map = env_of(&[
-            ("CHARTER_SESSION_ID", "alpha.1"),
+            ("PURLIS_SESSION_ID", "alpha.1"),
             ("CLAUDE_CODE_SESSION_ID", "9f2c"),
         ]);
         assert_eq!(Ids::of(&reader(&map)).session.as_deref(), Some("alpha.1"));
@@ -1772,7 +1772,7 @@ mod tests {
         // the first variable is TAKEN and becomes nothing. Stripping before the choice would
         // silently key this session on a different conversation's id.
         let map = env_of(&[
-            ("CHARTER_SESSION_ID", "  "),
+            ("PURLIS_SESSION_ID", "  "),
             ("CLAUDE_CODE_SESSION_ID", "9f2c"),
         ]);
         assert_eq!(Ids::of(&reader(&map)).session, None);
@@ -1780,7 +1780,7 @@ mod tests {
 
     #[test]
     fn a_session_id_becomes_a_filename_so_what_cannot_be_one_is_deleted() {
-        let map = env_of(&[("CHARTER_SESSION_ID", "a/../b c")]);
+        let map = env_of(&[("PURLIS_SESSION_ID", "a/../b c")]);
         assert_eq!(Ids::of(&reader(&map)).session.as_deref(), Some("a..bc"));
     }
 
@@ -1945,7 +1945,9 @@ mod tests {
             .env(IDS_CHILD, "1")
             .stdin(std::process::Stdio::null());
         for name in IDS_VARS {
-            child.env_remove(name);
+            for spelling in crate::envvar::spellings(name) {
+                child.env_remove(spelling);
+            }
         }
         let out = crate::forklock::output(
             child
@@ -1978,7 +1980,11 @@ mod tests {
             "--test-threads=1",
         ]);
         spec.env.push((IDS_CHILD.into(), "1".into()));
-        spec.env_without = IDS_VARS.iter().map(Into::into).collect();
+        spec.env_without = IDS_VARS
+            .iter()
+            .flat_map(|name| crate::envvar::spellings(name))
+            .map(Into::into)
+            .collect();
         let session =
             Session::spawn(spec, Box::new(AlacrittyEngine::new(SIZE, 1000))).expect("a pty");
 

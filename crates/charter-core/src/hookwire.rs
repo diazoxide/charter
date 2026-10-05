@@ -27,7 +27,7 @@ use crate::state::{Detail, Ending, Event, Started};
 // the same volume and lets the rest of the build be measured (M4).
 
 /// The socket a hook writes to, in the environment of every session the app starts.
-pub const SOCKET_ENV: &str = "CHARTER_HOOK_SOCKET";
+pub const SOCKET_ENV: &str = "PURLIS_HOOK_SOCKET";
 
 /// How a hook's stderr begins when the app did not take its line: the hook says so there, and
 /// the opencode shim shows that sentence in the chat's window (ruling V73c).
@@ -38,14 +38,14 @@ pub const NOT_TAKEN: &str = "charter: the app did not take this";
 /// The app's own number for the chat, set at the `exec`, exactly as the Python charter sets
 /// `$CHARTER_SESSION_ID` (`charter/hooks.py:_chat_id`). A hook already knows which chat it is
 /// in; nothing has to be worked out from a payload.
-pub const CHAT_ENV: &str = "CHARTER_CHAT";
+pub const CHAT_ENV: &str = "PURLIS_CHAT";
 
 /// The chat's own token, in the same environment: what the hook channel checks every line
 /// against before it believes the chat number the line names ([`ChatTokens`]).
 ///
 /// The app mints one per chat at the `exec` and keeps it in memory only. It is never passed on
 /// to a chat another chat starts ([`NOT_INHERITED`]): a chat the app starts gets its own.
-pub const TOKEN_ENV: &str = "CHARTER_CHAT_TOKEN";
+pub const TOKEN_ENV: &str = "PURLIS_CHAT_TOKEN";
 
 /// Where Claude Code puts the conversation a hook is running in.
 ///
@@ -212,7 +212,7 @@ pub fn sub_agent(agent_id: Option<&str>, env: &dyn Fn(&str) -> Option<String>) -
 }
 
 /// The harness a chat runs, as charter put it into the chat's environment.
-pub const HARNESS_ENV: &str = "CHARTER_HARNESS";
+pub const HARNESS_ENV: &str = "PURLIS_HARNESS";
 
 /// Which conversation this report is of, and how well that is known.
 ///
@@ -276,7 +276,7 @@ impl ChatToken {
 
     /// The token in this process's own environment, where there is one.
     pub fn from_env() -> Option<Self> {
-        Self::read(&|name| std::env::var(name).ok())
+        Self::read(&crate::envvar::var)
     }
 
     /// The value, for the one caller that must write it down: the chat's environment.

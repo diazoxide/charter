@@ -73,7 +73,10 @@ fn handoff(root: &Path, brief: &str) -> Output {
         "STY",
         "SSH_TTY",
     ] {
-        command.env_remove(name);
+        // Under either name (V93k): a suite run in a chat inherits both.
+        for spelling in charter_core::envvar::spellings(name) {
+            command.env_remove(spelling);
+        }
     }
     let mut child = command.spawn().expect("the binary runs");
     // A refusal can come before charter reads the brief; `feed` leaves that to the caller,

@@ -55,7 +55,10 @@ fn charter_with(tmp: &tempfile::TempDir, args: &[&str], stdin: &str) -> Output {
         "SSH_TTY",
         "CLAUDE_CONFIG_DIR",
     ] {
-        command.env_remove(name);
+        // Under either name (V93k): a suite run in a chat inherits both.
+        for spelling in charter_core::envvar::spellings(name) {
+            command.env_remove(spelling);
+        }
     }
     let mut child = command.spawn().expect("the binary runs");
     child

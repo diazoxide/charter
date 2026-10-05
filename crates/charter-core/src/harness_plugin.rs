@@ -107,13 +107,15 @@ impl<'a> Env<'a> {
     }
 
     fn var(&self, name: &str) -> Option<String> {
-        self.chat
-            .iter()
-            .rev()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.clone())
-            .or_else(|| self.process.then(|| std::env::var(name).ok()).flatten())
-            .filter(|value| !value.is_empty())
+        crate::envvar::lookup(name, |name| {
+            self.chat
+                .iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+                .or_else(|| self.process.then(|| std::env::var(name).ok()).flatten())
+        })
+        .filter(|value| !value.is_empty())
     }
 
     /// `name`'s directory, or `fallback` under the home directory.

@@ -73,11 +73,7 @@ fn told_at(root: &Path, cwd: &Path, env: &[(&str, &str)], payload: Value) -> Vec
 #[test]
 fn an_unlocked_session_is_asked_for_a_workspace_first_and_told_who_it_is() {
     let (_d, root) = plane();
-    let got = told(
-        &root,
-        &[("CHARTER_SESSION_ID", "s1")],
-        serde_json::json!({}),
-    );
+    let got = told(&root, &[("PURLIS_SESSION_ID", "s1")], serde_json::json!({}));
     assert!(got[0].starts_with("⬢ **Confirm the workspace before any repo work.**"));
     assert!(got[0].contains("(existing: `alpha`, `beta`)"), "{}", got[0]);
     assert!(got[0].contains("That **locks** the workspace"));
@@ -101,15 +97,11 @@ fn a_locked_or_pinned_session_is_not_asked() {
     let sessions = root.join(".charter/sessions");
     std::fs::create_dir_all(&sessions).unwrap();
     std::fs::write(sessions.join("s1.lock"), "alpha\n").unwrap();
-    let locked = told(
-        &root,
-        &[("CHARTER_SESSION_ID", "s1")],
-        serde_json::json!({}),
-    );
+    let locked = told(&root, &[("PURLIS_SESSION_ID", "s1")], serde_json::json!({}));
     assert!(!locked.iter().any(|p| p.contains("Confirm the workspace")));
     let pinned = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s2"), ("CHARTER_WORKSPACE", "beta")],
+        &[("PURLIS_SESSION_ID", "s2"), ("PURLIS_WORKSPACE", "beta")],
         serde_json::json!({}),
     );
     assert!(!pinned.iter().any(|p| p.contains("Confirm the workspace")));
@@ -120,7 +112,7 @@ fn an_unattended_run_is_told_to_stop_rather_than_guess() {
     let (_d, root) = plane();
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1")],
+        &[("PURLIS_SESSION_ID", "s1")],
         serde_json::json!({"permission_mode": "bypassPermissions"}),
     );
     assert!(got[0].starts_with("⬢ **STOP — this run has no workspace and nobody to ask.**"));
@@ -135,18 +127,14 @@ fn a_chat_started_with_charters_skills_to_list_is_briefed_on_them_last() {
     let dir = skills.display().to_string();
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_SKILLS_DIR", &dir)],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_SKILLS_DIR", &dir)],
         serde_json::json!({}),
     );
     let last = got.last().expect("a briefing");
     assert!(last.starts_with("⬢ **charter's skills**"), "{last}");
     assert!(last.contains("`safe-remove`"), "{last}");
 
-    let without = told(
-        &root,
-        &[("CHARTER_SESSION_ID", "s1")],
-        serde_json::json!({}),
-    );
+    let without = told(&root, &[("PURLIS_SESSION_ID", "s1")], serde_json::json!({}));
     assert!(!without.iter().any(|p| p.contains("charter's skills")));
 }
 
@@ -161,7 +149,7 @@ fn the_persona_the_app_pins_is_the_one_adopted() {
     .unwrap();
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_PERSONA", "web")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_PERSONA", "web")],
         serde_json::json!({}),
     );
     let who = got
@@ -178,7 +166,7 @@ fn a_selection_naming_a_persona_that_is_gone_says_so_and_adopts_nothing() {
     let (_d, root) = plane();
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_PERSONA", "ghost")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_PERSONA", "ghost")],
         serde_json::json!({}),
     );
     let note = got
@@ -204,7 +192,7 @@ fn the_workspace_todos_and_its_neighbours_follow_the_persona() {
     }
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")],
         serde_json::json!({}),
     );
     let todo = got.iter().position(|p| p.contains("open todos")).unwrap();
@@ -290,7 +278,7 @@ fn outside_the_app_the_payloads_session_id_keys_the_workspace_lock() {
     // An empty `$CHARTER_SESSION_ID` is no id, so the payload's still keys it.
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "")],
+        &[("PURLIS_SESSION_ID", "")],
         serde_json::json!({"session_id": "from-payload"}),
     );
     assert!(
@@ -312,7 +300,7 @@ fn a_persona_whose_definition_is_there_but_does_not_load_is_neither_adopted_nor_
     .unwrap();
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_PERSONA", "kid")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_PERSONA", "kid")],
         serde_json::json!({}),
     );
     assert!(
@@ -328,11 +316,7 @@ fn a_persona_whose_definition_is_there_but_does_not_load_is_neither_adopted_nor_
 #[test]
 fn a_harness_that_cannot_lock_a_session_is_asked_to_confirm_and_never_told_it_locks() {
     let (_d, root) = plane();
-    let codex = told(
-        &root,
-        &[("CHARTER_HARNESS", "codex")],
-        serde_json::json!({}),
-    );
+    let codex = told(&root, &[("PURLIS_HARNESS", "codex")], serde_json::json!({}));
     assert!(
         codex[0].contains("No workspace is confirmed for this session (it would"),
         "{}",
@@ -341,7 +325,7 @@ fn a_harness_that_cannot_lock_a_session_is_asked_to_confirm_and_never_told_it_lo
     assert!(!codex[0].contains("**locks**"), "{}", codex[0]);
     let unattended = told(
         &root,
-        &[("CHARTER_HARNESS", "codex")],
+        &[("PURLIS_HARNESS", "codex")],
         serde_json::json!({"permission_mode": "bypassPermissions"}),
     );
     assert!(
@@ -357,14 +341,14 @@ fn a_harness_that_cannot_lock_a_session_is_asked_to_confirm_and_never_told_it_lo
     // Codex with a session id to key the lock on locks like any other harness.
     let keyed = told(
         &root,
-        &[("CHARTER_HARNESS", "codex"), ("CHARTER_SESSION_ID", "s1")],
+        &[("PURLIS_HARNESS", "codex"), ("PURLIS_SESSION_ID", "s1")],
         serde_json::json!({}),
     );
     assert!(keyed[0].contains("No workspace is locked for this session yet"));
     // And any other harness locks, id or none.
     let other = told(
         &root,
-        &[("CHARTER_HARNESS", "opencode")],
+        &[("PURLIS_HARNESS", "opencode")],
         serde_json::json!({}),
     );
     assert!(
@@ -393,7 +377,7 @@ fn the_workspace_the_briefing_reads_is_the_sessions_pointer_or_the_pin() {
         })
     };
     assert_eq!(of(&[]), "default");
-    assert_eq!(of(&[("CHARTER_WORKSPACE", "beta")]), "beta");
+    assert_eq!(of(&[("PURLIS_WORKSPACE", "beta")]), "beta");
     std::fs::create_dir_all(root.join(".charter/sessions")).unwrap();
     std::fs::write(root.join(".charter/sessions/s9.workspace"), "alpha\n").unwrap();
     assert_eq!(of(&[]), "alpha");
@@ -615,7 +599,7 @@ fn exactly_as_many_todos_as_are_shown_are_listed_oldest_first_and_one_is_singula
     let (_d, root) = plane();
     todos(&root, "alpha", 3);
     let ask = |env: &[(&str, &str)]| told(&root, env, serde_json::json!({}));
-    let got = ask(&[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")]);
+    let got = ask(&[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")]);
     let todo = got.iter().find(|p| p.contains("open todo")).unwrap();
     assert!(
         todo.starts_with(
@@ -625,7 +609,7 @@ fn exactly_as_many_todos_as_are_shown_are_listed_oldest_first_and_one_is_singula
         "{todo}"
     );
     todos(&root, "beta", 1);
-    let got = ask(&[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "beta")]);
+    let got = ask(&[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "beta")]);
     let todo = got.iter().find(|p| p.contains("open todo")).unwrap();
     assert!(
         todo.starts_with("⬢ **1 open todo — workspace `beta`.** Oldest first:\n   • t1 (3d)\n"),
@@ -661,7 +645,7 @@ fn more_than_five_neighbours_are_the_five_most_recent_and_a_count_of_the_rest() 
     }
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")],
         serde_json::json!({}),
     );
     let others = got.iter().find(|p| p.contains("other workspace")).unwrap();
@@ -681,7 +665,7 @@ fn five_neighbours_or_fewer_have_no_count_of_the_rest() {
     let (_d, root) = plane();
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")],
         serde_json::json!({}),
     );
     let others = got.iter().find(|p| p.contains("other workspace")).unwrap();
@@ -758,7 +742,7 @@ fn a_chat_the_app_started_in_a_workspace_is_not_asked_which_one() {
     let (_d, root) = plane();
     let pinned = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")],
         serde_json::json!({}),
     );
     assert!(!pinned.iter().any(|p| p.contains("Confirm the workspace")));
@@ -771,8 +755,8 @@ fn a_plane_root_chat_is_not_asked_and_is_told_it_is_at_the_root() {
     let got = told(
         &root,
         &[
-            ("CHARTER_SESSION_ID", "s1"),
-            ("CHARTER_PLANE_ROOT_SESSION", "1"),
+            ("PURLIS_SESSION_ID", "s1"),
+            ("PURLIS_PLANE_ROOT_SESSION", "1"),
         ],
         serde_json::json!({}),
     );
@@ -798,8 +782,8 @@ fn a_plane_root_chat_is_shown_every_workspace_as_one_it_may_manage() {
     let got = told(
         &root,
         &[
-            ("CHARTER_SESSION_ID", "s1"),
-            ("CHARTER_PLANE_ROOT_SESSION", "1"),
+            ("PURLIS_SESSION_ID", "s1"),
+            ("PURLIS_PLANE_ROOT_SESSION", "1"),
         ],
         serde_json::json!({}),
     );
@@ -833,8 +817,8 @@ fn a_chat_with_no_pin_and_no_tree_is_asked_as_it_always_was() {
         let got = told(
             &root,
             &[
-                ("CHARTER_SESSION_ID", "s1"),
-                ("CHARTER_PLANE_ROOT_SESSION", value),
+                ("PURLIS_SESSION_ID", "s1"),
+                ("PURLIS_PLANE_ROOT_SESSION", value),
             ],
             serde_json::json!({}),
         );
@@ -857,7 +841,7 @@ fn a_session_standing_in_the_plane_outside_every_workspace_is_told_it_is_at_the_
         let got = told_at(
             &root,
             &cwd,
-            &[("CHARTER_SESSION_ID", "s1")],
+            &[("PURLIS_SESSION_ID", "s1")],
             serde_json::json!({}),
         );
         assert!(
@@ -891,7 +875,7 @@ fn a_session_in_the_plane_that_chose_a_workspace_is_in_it() {
     let got = told_at(
         &root,
         &root,
-        &[("CHARTER_SESSION_ID", "s1")],
+        &[("PURLIS_SESSION_ID", "s1")],
         serde_json::json!({}),
     );
     assert!(!got.iter().any(|p| p.contains("plane root")), "{got:?}");
@@ -944,7 +928,7 @@ fn a_workspace_chat_is_told_its_workspaces_last_session_record_in_one_quoted_lin
     );
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")],
         serde_json::json!({}),
     );
     let last: Vec<&String> = got.iter().filter(|p| p.contains("Last session")).collect();
@@ -973,7 +957,7 @@ fn a_chat_is_not_told_another_places_last_session() {
     recorded(&root, active::Place::PlaneRoot, "Root work", (9, 0, 0));
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")],
         serde_json::json!({}),
     );
     assert!(!got.iter().any(|p| p.contains("Last session")), "{got:#?}");
@@ -986,8 +970,8 @@ fn a_plane_root_chat_is_told_the_plane_roots_last_session_record() {
     let got = told(
         &root,
         &[
-            ("CHARTER_SESSION_ID", "s1"),
-            ("CHARTER_PLANE_ROOT_SESSION", "1"),
+            ("PURLIS_SESSION_ID", "s1"),
+            ("PURLIS_PLANE_ROOT_SESSION", "1"),
         ],
         serde_json::json!({}),
     );
@@ -1041,8 +1025,8 @@ fn a_chat_resuming_a_session_record_is_told_the_record_quoted_as_data() {
     let got = told(
         &root,
         &[
-            ("CHARTER_SESSION_ID", "s1"),
-            ("CHARTER_WORKSPACE", "alpha"),
+            ("PURLIS_SESSION_ID", "s1"),
+            ("PURLIS_WORKSPACE", "alpha"),
             (crate::sessionrecord::RESUMING_ENV, shown.as_str()),
         ],
         serde_json::json!({}),
@@ -1089,8 +1073,8 @@ fn a_resuming_path_that_is_not_a_record_is_said_and_nothing_of_it_is_read() {
     let got = told(
         &root,
         &[
-            ("CHARTER_SESSION_ID", "s1"),
-            ("CHARTER_WORKSPACE", "alpha"),
+            ("PURLIS_SESSION_ID", "s1"),
+            ("PURLIS_WORKSPACE", "alpha"),
             (crate::sessionrecord::RESUMING_ENV, "sessions/../secret.md"),
         ],
         serde_json::json!({}),
@@ -1114,8 +1098,8 @@ fn a_long_record_is_quoted_up_to_a_bound_and_names_where_the_rest_is() {
     let got = told(
         &root,
         &[
-            ("CHARTER_SESSION_ID", "s1"),
-            ("CHARTER_PLANE_ROOT_SESSION", "1"),
+            ("PURLIS_SESSION_ID", "s1"),
+            ("PURLIS_PLANE_ROOT_SESSION", "1"),
             (crate::sessionrecord::RESUMING_ENV, shown.as_str()),
         ],
         serde_json::json!({}),
@@ -1137,7 +1121,7 @@ fn a_chat_that_is_not_resuming_is_told_nothing_of_it() {
     let (_d, root) = plane();
     let got = told(
         &root,
-        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")],
         serde_json::json!({}),
     );
     assert!(
@@ -1187,7 +1171,7 @@ fn briefed_but_never_filed(root: &Path, cwd: &Path, env: &[(&str, &str)], needle
     );
 }
 
-const IN_ALPHA: [(&str, &str); 2] = [("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")];
+const IN_ALPHA: [(&str, &str); 2] = [("PURLIS_SESSION_ID", "s1"), ("PURLIS_WORKSPACE", "alpha")];
 
 #[test]
 fn a_chats_briefing_renders_as_an_agents_md_under_one_heading() {
@@ -1227,9 +1211,9 @@ fn each_chat_gets_the_agents_md_of_its_own_persona_and_piece() {
         &root,
         root.parent().unwrap(),
         &[
-            ("CHARTER_SESSION_ID", "s2"),
-            ("CHARTER_WORKSPACE", "beta"),
-            ("CHARTER_PERSONA", "qa"),
+            ("PURLIS_SESSION_ID", "s2"),
+            ("PURLIS_WORKSPACE", "beta"),
+            ("PURLIS_PERSONA", "qa"),
         ],
         Some("⬢ You hold piece **p** of `r`"),
     )
@@ -1261,7 +1245,7 @@ fn an_agents_md_never_carries_the_workspace_gate_which_lists_every_workspace() {
     briefed_but_never_filed(
         &root,
         root.parent().unwrap(),
-        &[("CHARTER_SESSION_ID", "s1")],
+        &[("PURLIS_SESSION_ID", "s1")],
         "Confirm the workspace",
     );
 }
@@ -1270,8 +1254,8 @@ fn an_agents_md_never_carries_the_workspace_gate_which_lists_every_workspace() {
 fn an_agents_md_never_carries_the_plane_roots_list_of_workspaces() {
     let (_d, root) = plane();
     let env = [
-        ("CHARTER_SESSION_ID", "s1"),
-        ("CHARTER_PLANE_ROOT_SESSION", "1"),
+        ("PURLIS_SESSION_ID", "s1"),
+        ("PURLIS_PLANE_ROOT_SESSION", "1"),
     ];
     briefed_but_never_filed(&root, root.parent().unwrap(), &env, "plane root");
     briefed_but_never_filed(&root, root.parent().unwrap(), &env, "`beta`");
@@ -1368,7 +1352,7 @@ fn an_agents_md_never_carries_the_skills_listing_and_its_paths() {
     let env = [
         IN_ALPHA[0],
         IN_ALPHA[1],
-        ("CHARTER_SKILLS_DIR", dir.as_str()),
+        ("PURLIS_SKILLS_DIR", dir.as_str()),
     ];
     briefed_but_never_filed(&root, root.parent().unwrap(), &env, "charter's skills");
 }
@@ -1376,7 +1360,7 @@ fn an_agents_md_never_carries_the_skills_listing_and_its_paths() {
 #[test]
 fn an_agents_md_never_carries_the_note_about_a_persona_that_is_gone() {
     let (_d, root) = plane();
-    let env = [IN_ALPHA[0], IN_ALPHA[1], ("CHARTER_PERSONA", "ghost")];
+    let env = [IN_ALPHA[0], IN_ALPHA[1], ("PURLIS_PERSONA", "ghost")];
     briefed_but_never_filed(&root, root.parent().unwrap(), &env, "No persona is active");
 }
 

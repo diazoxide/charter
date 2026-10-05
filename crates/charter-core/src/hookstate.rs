@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn the_payloads_id_outranks_the_environments() {
-        let env = |name: &str| (name == "CHARTER_SESSION_ID").then(|| "chat-7".to_string());
+        let env = |name: &str| (name == "PURLIS_SESSION_ID").then(|| "chat-7".to_string());
         assert_eq!(session(Some("abc"), &env).as_deref(), Some("abc"));
         assert_eq!(session(None, &env).as_deref(), Some("chat-7"));
         assert_eq!(session(Some(""), &env).as_deref(), Some("chat-7"));

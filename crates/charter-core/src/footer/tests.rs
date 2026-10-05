@@ -102,7 +102,7 @@ fn a_session_standing_in_the_plane_outside_every_workspace_shows_the_plane_root(
 fn the_row_names_the_workspace_and_how_many_others_there_are() {
     let (_held, root) = a_plane("alpha");
     std::fs::create_dir_all(root.join("workspaces").join("beta")).unwrap();
-    let env = |name: &str| (name == "CHARTER_WORKSPACE").then(|| "alpha".to_string());
+    let env = |name: &str| (name == "PURLIS_WORKSPACE").then(|| "alpha".to_string());
     assert_eq!(
         row(&root, &serde_json::Value::Null, &env),
         // The pin is there because `$CHARTER_WORKSPACE` decided, which is the only rung that
@@ -131,7 +131,7 @@ fn a_workspace_chosen_by_anything_but_the_environment_carries_no_pin() {
 #[test]
 fn zero_renders_nothing_and_a_count_renders_beside_what_it_counts() {
     let (_held, root) = a_plane("alpha");
-    let env = |name: &str| (name == "CHARTER_WORKSPACE").then(|| "alpha".to_string());
+    let env = |name: &str| (name == "PURLIS_WORKSPACE").then(|| "alpha".to_string());
     // Nothing open: no `todo` at all, not `todo 0`.
     assert!(!row(&root, &serde_json::Value::Null, &env).contains("todo"));
 
@@ -149,7 +149,7 @@ fn a_stale_structure_is_named_before_anything_informational() {
     let wd = root.join("workspaces").join("alpha");
     std::fs::write(wd.join("todos").join("20260302-090000-one.md"), "# one\n").unwrap();
     std::fs::write(wd.join(STRUCTURE_MARKER), "4\n").unwrap();
-    let env = |name: &str| (name == "CHARTER_WORKSPACE").then(|| "alpha".to_string());
+    let env = |name: &str| (name == "PURLIS_WORKSPACE").then(|| "alpha".to_string());
     let line = row(&root, &serde_json::Value::Null, &env);
     let tip = line.find("reinit").expect("the tip is on the row");
     let todo = line.find("todo").expect("the count is on the row");
@@ -268,7 +268,7 @@ fn the_body_says_what_it_does_not_draw_rather_than_leaving_it_out() {
     // that exists would be this test asserting something it had not arranged.
     let env = |name: &str| match name {
         "COLUMNS" => Some("80".to_string()),
-        "CHARTER_WORKSPACE" => Some("alpha".to_string()),
+        "PURLIS_WORKSPACE" => Some("alpha".to_string()),
         _ => None,
     };
     let out = render(&root, &serde_json::Value::Null, &ambient(&env, &root));
@@ -310,7 +310,7 @@ fn a_name_wider_than_the_pane_is_cut_inside_the_frame_and_the_border_still_lines
     let (_held, root) = a_plane("日本語の作業スペース");
     let env = |name: &str| match name {
         "COLUMNS" => Some("40".to_string()),
-        "CHARTER_WORKSPACE" => Some("日本語の作業スペース".to_string()),
+        "PURLIS_WORKSPACE" => Some("日本語の作業スペース".to_string()),
         _ => None,
     };
     let out = render(&root, &serde_json::Value::Null, &ambient(&env, &root));
@@ -332,7 +332,7 @@ fn an_alert_row_follows_the_declaration_inside_the_frame_and_the_active_workspac
     std::fs::write(root.join("workspaces/beta").join(STRUCTURE_MARKER), "4\n").unwrap();
     let env = |name: &str| match name {
         "COLUMNS" => Some("80".to_string()),
-        "CHARTER_WORKSPACE" => Some("alpha".to_string()),
+        "PURLIS_WORKSPACE" => Some("alpha".to_string()),
         _ => None,
     };
     let out = render(&root, &serde_json::Value::Null, &ambient(&env, &root));
@@ -384,7 +384,7 @@ fn a_footer_badge(dir: &Path, value: &str, now: chrono::DateTime<chrono::Utc>) -
 fn body_with_config(root: &Path, config: &Path) -> Vec<String> {
     let env = |name: &str| match name {
         "COLUMNS" => Some("80".to_string()),
-        "CHARTER_WORKSPACE" => Some("alpha".to_string()),
+        "PURLIS_WORKSPACE" => Some("alpha".to_string()),
         _ => None,
     };
     let mut at = ambient(&env, root);

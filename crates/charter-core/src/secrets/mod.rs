@@ -167,11 +167,13 @@ impl Env {
     /// `os.environ.get(name)`, as text. A value that is not UTF-8 reads as unset: charter
     /// only ever asks for names it declared, and those carry tokens and paths.
     pub fn get(&self, name: &str) -> Option<String> {
-        self.vars
-            .iter()
-            .rev()
-            .find(|(k, _)| k == name)
-            .and_then(|(_, v)| v.to_str().map(str::to_owned))
+        crate::envvar::lookup(name, |name| {
+            self.vars
+                .iter()
+                .rev()
+                .find(|(k, _)| k == name)
+                .and_then(|(_, v)| v.to_str().map(str::to_owned))
+        })
     }
 
     /// Every variable, in the order the process received them.
@@ -193,7 +195,7 @@ pub struct Ctx {
 impl Ctx {
     /// The plane at `root`, with its state directory where `$CHARTER_HOME` puts it.
     pub fn new(root: &Path, env: Env) -> Self {
-        let state = match env.get("CHARTER_HOME") {
+        let state = match env.get("PURLIS_HOME") {
             Some(home) if !home.is_empty() => PathBuf::from(home),
             _ => root.join(".charter"),
         };

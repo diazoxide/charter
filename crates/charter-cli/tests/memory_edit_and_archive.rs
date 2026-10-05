@@ -52,7 +52,10 @@ fn command(tmp: &tempfile::TempDir, args: &[&str]) -> Command {
         "SSH_TTY",
         "CLAUDE_CONFIG_DIR",
     ] {
-        command.env_remove(name);
+        // Under either name (V93k): a suite run in a chat inherits both.
+        for spelling in charter_core::envvar::spellings(name) {
+            command.env_remove(spelling);
+        }
     }
     command
 }

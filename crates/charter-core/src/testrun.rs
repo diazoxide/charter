@@ -7,7 +7,7 @@
 //! it) and would leak into every test running beside this one. A child gets exactly the
 //! environment it is handed.
 //!
-//! **What the child never inherits.** Every `CHARTER_*` variable of the process running the
+//! **What the child never inherits.** Every `PURLIS_*` and `CHARTER_*` variable of the process running the
 //! suite is removed first — the chat the suite may be running in is not the environment under
 //! test — except [`crate::fence::VAR`], the fence that keeps a test off planes it did not make.
 //!
@@ -49,7 +49,7 @@ fn rerun_with(tests: &[&str], env: &[(&str, &OsStr)], steered: bool) -> String {
     child.args(tests);
     for (name, _) in std::env::vars_os() {
         let name = name.to_string_lossy();
-        if name.starts_with("CHARTER_") && name != crate::fence::VAR {
+        if crate::envvar::rest(&name).is_some() && name != crate::fence::VAR {
             child.env_remove(&*name);
         }
     }
@@ -88,6 +88,7 @@ pub fn rerun_if_steered() -> bool {
     }
     if !crate::steer::STEERING
         .iter()
+        .flat_map(|name| crate::envvar::spellings(name))
         .any(|name| std::env::var_os(name).is_some())
     {
         return false;

@@ -196,8 +196,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let source_chat = std::env::var("CHARTER_SESSION_ID")
-        .ok()
+    let source_chat = charter_core::envvar::var("PURLIS_SESSION_ID")
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| handoff::NO_CHAT.to_string());
     // Where this chat works, which is what the stamp and the todo say it left from: a chat
@@ -456,12 +455,10 @@ enum Ticketed {
 fn ticketed() -> Ticketed {
     use charter_core::hookwire::{Answer, Ask, Asking, CHAT_ENV, ChatToken, SOCKET_ENV};
 
-    let Some(socket) = std::env::var_os(SOCKET_ENV).filter(|s| !s.is_empty()) else {
+    let Some(socket) = charter_core::envvar::var_os(SOCKET_ENV).filter(|s| !s.is_empty()) else {
         return Ticketed::NoApp;
     };
-    let Some(chat) = std::env::var(CHAT_ENV)
-        .ok()
-        .and_then(|chat| chat.parse::<u32>().ok())
+    let Some(chat) = charter_core::envvar::var(CHAT_ENV).and_then(|chat| chat.parse::<u32>().ok())
     else {
         return Ticketed::NoApp;
     };

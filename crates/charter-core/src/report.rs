@@ -626,7 +626,7 @@ pub struct Panic {
 /// The file the app appends its panics to: `$CHARTER_PANIC_LOG` when set, as the app itself
 /// reads it, else `panics.log` in the app's log directory (Tauri's `app_log_dir`).
 pub fn panic_log() -> Option<PathBuf> {
-    if let Some(file) = std::env::var_os("CHARTER_PANIC_LOG").filter(|f| !f.is_empty()) {
+    if let Some(file) = crate::envvar::var_os("PURLIS_PANIC_LOG").filter(|f| !f.is_empty()) {
         return Some(PathBuf::from(file));
     }
     Some(crate::applog::app_log_dir()?.join("panics.log"))

@@ -54,7 +54,7 @@ pub const SHIMMED: [Harness; 3] = [Harness::ClaudeCode, Harness::Codex, Harness:
 
 /// Where the operator's own `ZDOTDIR` is kept while zsh reads charter's, for charter's files
 /// to hand it back. Unset when the operator had none, which means `$HOME`.
-pub const USER_ZDOTDIR_ENV: &str = "CHARTER_USER_ZDOTDIR";
+pub const USER_ZDOTDIR_ENV: &str = "PURLIS_USER_ZDOTDIR";
 
 /// The line a harness started by hand says, on standard error, before it starts.
 pub fn warning(harness: Harness) -> String {

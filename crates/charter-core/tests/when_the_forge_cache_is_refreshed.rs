@@ -400,7 +400,7 @@ fn stand_in(at: &Path) -> PathBuf {
     let binary = at.join("charter-stand-in");
     std::fs::write(
         &binary,
-        "#!/bin/sh\nprintf '%s %s|%s\\n' \"$1\" \"$3\" \"$CHARTER_ROOT\" \
+        "#!/bin/sh\nprintf '%s %s|%s\\n' \"$1\" \"$3\" \"$PURLIS_ROOT\" \
          >> \"$(dirname \"$0\")/ran\"\nexec sleep 30\n",
     )
     .expect("the stand-in is written");

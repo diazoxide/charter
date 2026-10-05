@@ -105,7 +105,7 @@ use planes::{Launch, PlaneId, Planes, Restoring, Showing};
 /// It must EXIST: arming a hook at a path that is not there would put an error in the
 /// harness's log on every single event, which is worse than the chats reading `unknown`.
 pub(crate) fn charter_binary() -> Option<PathBuf> {
-    let named = std::env::var_os("CHARTER_BINARY").map(PathBuf::from);
+    let named = charter_core::envvar::var_os("PURLIS_BINARY").map(PathBuf::from);
     let beside = std::env::current_exe()
         .ok()
         .and_then(|exe| Some(exe.parent()?.join("charter")));
@@ -397,7 +397,7 @@ static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
 /// can report anything. This is the thread to pull: each step, with the time it was
 /// reached. Silent unless the variable is set, which nothing but a person debugging does.
 fn reached(step: &str) {
-    if std::env::var_os("CHARTER_LAUNCH_LOG").is_some() {
+    if charter_core::envvar::var_os("PURLIS_LAUNCH_LOG").is_some() {
         tracing::info!(
             "charter-launch {:>5} ms  {step}",
             STARTED.elapsed().as_millis()
@@ -475,7 +475,7 @@ static FIRST_FRAME: AtomicBool = AtomicBool::new(false);
 #[specta::specta]
 fn first_frame() -> Option<slowstart::SlowStart> {
     let took = STARTED.elapsed();
-    if std::env::var_os("CHARTER_BENCH_LOG").is_some() {
+    if charter_core::envvar::var_os("PURLIS_BENCH_LOG").is_some() {
         println!("charter-bench first-frame {}", took.as_millis());
     }
     if FIRST_FRAME.swap(true, Ordering::SeqCst) {
@@ -2218,7 +2218,7 @@ pub fn run() {
             // (`portal.rs`): nothing to say on one that has it.
             app.manage(portal::SessionBus::of(
                 std::env::var(portal::SESSION_BUS).ok().as_deref(),
-                std::env::var(portal::SESSION_BUS_KEPT).ok().as_deref(),
+                charter_core::envvar::var(portal::SESSION_BUS_KEPT).as_deref(),
                 std::env::var_os("XDG_RUNTIME_DIR")
                     .map(PathBuf::from)
                     .as_deref(),

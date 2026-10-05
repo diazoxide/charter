@@ -288,7 +288,7 @@ fn workspace_confirm_nudge(ask: &Ask, ids: &Ids) -> Option<String> {
     // for charter to key the lock on — `registry.deficits`' `session-lock`, which only Codex
     // declares.
     let locks = crate::hookstate::session(None, ask.env).is_some()
-        || (ask.env)("CHARTER_HARNESS").as_deref() != Some("codex");
+        || (ask.env)(crate::hookwire::HARNESS_ENV).as_deref() != Some("codex");
     let current = ask.workspace(ids);
     let names = Plane::open(ask.root).workspaces().unwrap_or_default();
     let existing = if names.is_empty() {

@@ -168,7 +168,7 @@ fn an_approved_declaration_starts_its_program_at_level_one_under_the_id_charter_
     assert!(
         ready
             .env
-            .contains(&("CHARTER_HARNESS".to_owned(), "shelly".to_owned())),
+            .contains(&("PURLIS_HARNESS".to_owned(), "shelly".to_owned())),
         "{:?}",
         ready.env
     );

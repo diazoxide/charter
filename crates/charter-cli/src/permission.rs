@@ -23,12 +23,11 @@ const WAITS_AT_MOST: Duration = hooked::HOOK_TIMEOUT.saturating_sub(Duration::fr
 
 /// Asks the app, and prints Claude Code's decision for what the operator chose.
 pub fn permissionrequest(payload: &str) -> ExitCode {
-    let Some(socket) = std::env::var_os(hookwire::SOCKET_ENV) else {
+    let Some(socket) = charter_core::envvar::var_os(hookwire::SOCKET_ENV) else {
         return ExitCode::SUCCESS;
     };
-    let Some(chat) = std::env::var(hookwire::CHAT_ENV)
-        .ok()
-        .and_then(|chat| chat.parse().ok())
+    let Some(chat) =
+        charter_core::envvar::var(hookwire::CHAT_ENV).and_then(|chat| chat.parse().ok())
     else {
         return ExitCode::SUCCESS;
     };
