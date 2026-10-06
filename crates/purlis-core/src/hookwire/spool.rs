@@ -36,6 +36,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use super::{ChatToken, CommitRefused, Line, Report, ToolCall};
 
@@ -50,6 +51,17 @@ const LABEL: &[u8] = b"charter hook spool v1";
 
 /// The version of `keys.json` and of a spool line.
 const VERSION: u32 = 1;
+
+/// How long [`append`] waits for a chat's spool while another process holds it.
+///
+/// A hook spools only after the host did not take its line in time, and the harness is waiting
+/// for the hook's answer meanwhile: a guard's decided verdict must reach it before the harness's
+/// own timeout runs out, or the harness runs the tool. So the wait is bounded, and a line that
+/// cannot be spooled in it is lost and said to be lost, never waited on.
+const A_LOCK_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_millis(250);
+
+/// How long [`lock_within`] sleeps between tries.
+const A_TRY_EVERY: Duration = Duration::from_millis(5);
 
 /// The spool directory for the hook socket at `socket`: `spool/` beside it.
 pub fn dir_for(socket: &Path) -> PathBuf {
@@ -196,6 +208,12 @@ fn open_spool(path: &Path) -> io::Result<File> {
 /// power loss there can still lose it. The file is locked while the number is chosen and the
 /// line written, so two hooks of one chat running at once never take the same number.
 ///
+/// **The wait for that lock is bounded** ([`A_LOCK_IS_WAITED_FOR_AT_MOST`]): a hook answers its
+/// harness after this returns (ADR 0075 §7), so a lock nobody lets go of must not hold a decided
+/// verdict past the harness's timeout. Once the wait runs out this answers
+/// [`io::ErrorKind::TimedOut`], nothing is written and no number is taken, and the hook says on
+/// stderr that the line is lost.
+///
 /// Refused where the sandbox's integrity denial does not reach ([`covered`]).
 pub fn append(
     dir: &Path,
@@ -214,7 +232,7 @@ pub fn append(
     if new {
         rustix::fs::fsync(File::open(dir)?)?;
     }
-    file.lock()?;
+    lock_within(&file, A_LOCK_IS_WAITED_FOR_AT_MOST)?;
     let mut file = crate::filelock::Held::locked(file);
     let mut text = Vec::new();
     file.read_to_end(&mut text)?;
@@ -245,6 +263,28 @@ pub fn append(
     file.write_all(&bytes)?;
     rustix::fs::fsync(&file)?;
     Ok(seq)
+}
+
+/// Takes `file`'s exclusive lock, or answers [`io::ErrorKind::TimedOut`] once `wait` has passed
+/// with another holder still on it.
+fn lock_within(file: &File, wait: Duration) -> io::Result<()> {
+    let started = Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(std::fs::TryLockError::Error(why)) => return Err(why),
+            Err(std::fs::TryLockError::WouldBlock) if started.elapsed() >= wait => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "another process held this chat's spool for {} ms",
+                        wait.as_millis()
+                    ),
+                ));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(A_TRY_EVERY),
+        }
+    }
 }
 
 /// Records, in `dir`'s `keys.json`, the key chat `chat`'s spool lines under `token` check with.

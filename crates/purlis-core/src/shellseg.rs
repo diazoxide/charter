@@ -1058,6 +1058,13 @@ pub fn too_deep_within<T>(read: impl FnOnce() -> T) -> (T, bool) {
     (answer, met)
 }
 
+/// Reports to the innermost [`too_deep_within`] that a reader met a string nested past what it
+/// reads, as [`walk_segments`] does: the leak guard's reading of substitutions, one inside
+/// another, past [`MAX_NESTING`] (#1412).
+pub fn met_a_string_too_deep() {
+    TOO_DEEP.with(|flag| flag.set(true));
+}
+
 /// [`joined_segments`], and how many substitutions were open at once at the deepest.
 ///
 /// **Linear in the tokens, however deep they nest** (#1355). Each token goes to every segment

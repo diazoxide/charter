@@ -175,6 +175,15 @@ may move HEAD. Sixteen rows run `d1` where the root is reached, so their `bra` m
 refused a later `git checkout feature`; it now refuses at `d1` first, with the new sentence.
 `bra` is the only key that moved. `rga` still records where the four hops end.
 
+**And where the leak guard reads a substitution however it is quoted (#1412).** The frozen
+Python read a command substitution inside double quotes as part of one quoted word, so the
+command inside was never asked about, and its docstring listed that as a limit. The leak guard
+now reads every substitution a shell runs as a command of its own. Curated row 29 (a vault read
+inside `"$( … )"`) moved from allowed to the read refusal. Generated rows 802 and 2302 moved the
+same way: inside `"$( … )"` each runs a reader moved into the vault folder (`env -C`), which the
+guard refuses there as it refuses the same command unquoted. `lr` is the only key that moved. `tests/a_substitution_is_read_wherever_the_shell_runs_it.rs` checks the new
+reading against bash and zsh.
+
 ## The session recording
 
 Re-record with:
