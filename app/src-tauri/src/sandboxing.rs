@@ -116,6 +116,19 @@ pub struct SandboxState {
     /// each with why (`sandbox::never_on`): Codex and opencode off macOS. The offer
     /// says them, so "every new chat runs sandboxed" is never read as covering them.
     pub never: Vec<String>,
+    /// How the project's own hosts changed since this machine last told the person (#1341):
+    /// the one-time Notice each teammate sees. `null` when nothing did.
+    pub hosts_changed: Option<HostsChanged>,
+}
+
+/// The project's hosts as they changed (`sandbox::local::HostsChange`): each spelled as the
+/// sandbox writes it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct HostsChanged {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    /// The whole list now: what the Notice sends back once it is read.
+    pub now: Vec<String>,
 }
 
 fn state_of(root: &std::path::Path) -> SandboxState {
@@ -130,6 +143,11 @@ fn state_on(root: &std::path::Path, os: sandbox::Os) -> SandboxState {
         offer: sandbox::local::offer_due(root),
         said: on.then(|| sandbox::local::tally(root).said()),
         never: never_here(os),
+        hosts_changed: sandbox::local::hosts_changed(root).map(|change| HostsChanged {
+            added: change.added,
+            removed: change.removed,
+            now: change.now,
+        }),
     }
 }
 
@@ -173,6 +191,24 @@ fn answer(root: &std::path::Path, turn_on: bool) -> Result<SandboxState, String>
         sandbox::local::Answer::KeepItOff
     };
     sandbox::local::answer(root, answer).map_err(|err| err.to_string())?;
+    Ok(state_of(root))
+}
+
+/// The person read the Notice of the project's hosts as it showed them, `shown` (#1341): it is
+/// not shown again until they change from that.
+#[tauri::command]
+#[specta::specta]
+pub fn acknowledge_project_hosts(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    shown: Vec<String>,
+) -> Result<SandboxState, String> {
+    let held = planes.held(&plane)?;
+    acknowledge(held.root(), &shown)
+}
+
+fn acknowledge(root: &std::path::Path, shown: &[String]) -> Result<SandboxState, String> {
+    sandbox::local::acknowledge_hosts(root, shown).map_err(|err| err.to_string())?;
     Ok(state_of(root))
 }
 
@@ -435,6 +471,7 @@ mod tests {
                 offer: true,
                 said: None,
                 never: never_here(sandbox::Os::this()),
+                hosts_changed: None,
             }
         );
 
@@ -450,6 +487,7 @@ mod tests {
                         .to_owned()
                 ),
                 never: never_here(sandbox::Os::this()),
+                hosts_changed: None,
             }
         );
     }
@@ -468,6 +506,7 @@ mod tests {
                 offer: false,
                 said: None,
                 never: never_here(sandbox::Os::this()),
+                hosts_changed: None,
             }
         );
         assert_eq!(
@@ -530,6 +569,24 @@ mod tests {
                 "{approved:?}"
             );
         }
+    }
+
+    /// #1341: a teammate is told once of the project's hosts, and not again once it was read.
+    #[test]
+    fn the_project_s_hosts_are_told_once_and_not_again_once_read() {
+        let project = tempfile::tempdir().expect("a project");
+        std::fs::write(
+            project.path().join("charter.toml"),
+            "[sandbox]\nmode = \"on\"\nhosts = [\"10.100.39.145:6443\"]\n",
+        )
+        .expect("toml");
+        let told = state_of(project.path()).hosts_changed.expect("told");
+        assert_eq!(told.added, ["10.100.39.145:6443"]);
+        assert_eq!(told.removed, Vec::<String>::new());
+
+        let after = acknowledge(project.path(), &told.now).expect("read");
+
+        assert_eq!(after.hosts_changed, None);
     }
 
     /// Fold-in (round 11): the offer never reads as covering a harness that is never sandboxed

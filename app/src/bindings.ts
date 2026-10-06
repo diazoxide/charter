@@ -326,6 +326,11 @@ export const commands = {
 	 */
 	answerSandboxOffer: (plane: PlaneId, turnOn: boolean) => typedError<SandboxState, string>(__TAURI_INVOKE("answer_sandbox_offer", { plane, turnOn })),
 	/**
+	 *  The person read the Notice of the project's hosts as it showed them, `shown` (#1341): it is
+	 *  not shown again until they change from that.
+	 */
+	acknowledgeProjectHosts: (plane: PlaneId, shown: string[]) => typedError<SandboxState, string>(__TAURI_INVOKE("acknowledge_project_hosts", { plane, shown })),
+	/**
 	 *  Types SD-30's install command into shell session `session` at the project root, and does
 	 *  not run it (ruling V78 c): installing needs `sudo`, so the person reads it and presses
 	 *  Return. The window sends no text; the line is built here, and it is typed only into a shell
@@ -1573,6 +1578,27 @@ export const commands = {
 	 */
 	renameProjectProfile: (plane: PlaneId, base: string | null, id: string, to: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("rename_project_profile", { plane, base, id, to })),
 	/**
+	 *  Add a host to the sandbox's Internet access (#1341): `shared` is the project's, in
+	 *  `charter.toml`, which every teammate follows; `local` is yours, in `charter.local.toml`, on
+	 *  this machine only. The core checks it and says why it refuses one
+	 *  (`purlis_core::settings::hosts::add`).
+	 * 
+	 *  `base` is the text the window read (`null`: not there), so a file changed on disk since is
+	 *  refused rather than overwritten.
+	 */
+	addSandboxHost: (plane: PlaneId, which: SettingsWhich, base: string | null, host: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("add_sandbox_host", { plane, which, base, host })),
+	/**
+	 *  Remove the host called `id` (as the file's `entries` list it) from the sandbox's Internet
+	 *  access at `which`'s level (`purlis_core::settings::hosts::remove`).
+	 */
+	removeSandboxHost: (plane: PlaneId, which: SettingsWhich, base: string | null, id: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_sandbox_host", { plane, which, base, id })),
+	/**
+	 *  Confirm your own host called `id` in `charter.local.toml` (#1341): one Settings did not add
+	 *  on this machine (a chat's edit, or a file from elsewhere) reaches nothing until it is
+	 *  confirmed here (`purlis_core::settings::hosts::confirm`).
+	 */
+	confirmSandboxHost: (plane: PlaneId, base: string | null, id: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("confirm_sandbox_host", { plane, base, id })),
+	/**
 	 *  The plane's and each repo's save settings in force — `planesave::Settings`, the one
 	 *  resolver every save asks, shaped for the wire.
 	 * 
@@ -2757,6 +2783,17 @@ export type HarnessRow = {
 export type HarnessSetupFound = {
 	harnesses: HarnessRow[],
 	local_models: LocalModelRow[],
+};
+
+/**
+ *  The project's hosts as they changed (`sandbox::local::HostsChange`): each spelled as the
+ *  sandbox writes it.
+ */
+export type HostsChanged = {
+	added: string[],
+	removed: string[],
+	/**  The whole list now: what the Notice sends back once it is read. */
+	now: string[],
 };
 
 /**  Where one of a vault's identity variables is read from now (#237). */
@@ -4299,6 +4336,11 @@ export type SandboxState = {
 	 *  says them, so "every new chat runs sandboxed" is never read as covering them.
 	 */
 	never: string[],
+	/**
+	 *  How the project's own hosts changed since this machine last told the person (#1341):
+	 *  the one-time Notice each teammate sees. `null` when nothing did.
+	 */
+	hosts_changed: HostsChanged | null,
 };
 
 /**  One save attempt, as the journal holds it. */
@@ -4436,7 +4478,10 @@ export type SettingsEdit = {
 
 /**  One entry of a collection, as the core lists it (`purlis_core::settings::collection::Listed`). */
 export type SettingsEntry = {
-	/**  Which collection: `forges` or `profiles`. */
+	/**
+	 *  Which collection: `forges` or `hosts` (the project's sandbox hosts) in the Shared file,
+	 *  `profiles` or `myHosts` (yours) in the Local one.
+	 */
 	collection: string,
 	/**  Opaque: what a remove is sent by. A different one once the entry moved or changed. */
 	id: string,

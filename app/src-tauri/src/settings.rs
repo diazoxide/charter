@@ -86,7 +86,8 @@ pub struct SettingsFile {
 /// One entry of a collection, as the core lists it (`purlis_core::settings::collection::Listed`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct SettingsEntry {
-    /// Which collection: `forges` or `profiles`.
+    /// Which collection: `forges` or `hosts` (the project's sandbox hosts) in the Shared file,
+    /// `profiles` or `myHosts` (yours) in the Local one.
     pub collection: String,
     /// Opaque: what a remove is sent by. A different one once the entry moved or changed.
     pub id: String,
@@ -520,6 +521,112 @@ pub(crate) fn rename_profile(
     }
 }
 
+/// Add a host to the sandbox's Internet access (#1341): `shared` is the project's, in
+/// `charter.toml`, which every teammate follows; `local` is yours, in `charter.local.toml`, on
+/// this machine only. The core checks it and says why it refuses one
+/// (`purlis_core::settings::hosts::add`).
+///
+/// `base` is the text the window read (`null`: not there), so a file changed on disk since is
+/// refused rather than overwritten.
+#[tauri::command]
+#[specta::specta]
+pub async fn add_sandbox_host(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    which: SettingsWhich,
+    base: Option<String>,
+    host: String,
+) -> Result<EntryWritten, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || add_host(&root, which, base.as_deref(), &host))
+        .await
+        .map_err(|err| format!("adding the host did not finish: {err}"))?
+}
+
+/// [`add_sandbox_host`], without a runtime.
+pub(crate) fn add_host(
+    root: &std::path::Path,
+    which: SettingsWhich,
+    base: Option<&str>,
+    host: &str,
+) -> Result<EntryWritten, String> {
+    match settings::hosts::add(root, which.into(), base, host) {
+        Ok(id) => Ok(EntryWritten::Saved {
+            file: file_of(root, which)?,
+            added: Some(id),
+            removed: None,
+        }),
+        Err(refusal) => Ok(refused(refusal)),
+    }
+}
+
+/// Remove the host called `id` (as the file's `entries` list it) from the sandbox's Internet
+/// access at `which`'s level (`purlis_core::settings::hosts::remove`).
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_sandbox_host(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    which: SettingsWhich,
+    base: Option<String>,
+    id: String,
+) -> Result<EntryWritten, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || remove_host(&root, which, base.as_deref(), &id))
+        .await
+        .map_err(|err| format!("removing the host did not finish: {err}"))?
+}
+
+/// [`remove_sandbox_host`], without a runtime.
+pub(crate) fn remove_host(
+    root: &std::path::Path,
+    which: SettingsWhich,
+    base: Option<&str>,
+    id: &str,
+) -> Result<EntryWritten, String> {
+    match settings::hosts::remove(root, which.into(), base, id) {
+        Ok(took) => Ok(EntryWritten::Saved {
+            file: file_of(root, which)?,
+            added: None,
+            removed: Some(values_on_the_wire(vec![("host", took)])),
+        }),
+        Err(refusal) => Ok(refused(refusal)),
+    }
+}
+
+/// Confirm your own host called `id` in `charter.local.toml` (#1341): one Settings did not add
+/// on this machine (a chat's edit, or a file from elsewhere) reaches nothing until it is
+/// confirmed here (`purlis_core::settings::hosts::confirm`).
+#[tauri::command]
+#[specta::specta]
+pub async fn confirm_sandbox_host(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    base: Option<String>,
+    id: String,
+) -> Result<EntryWritten, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || confirm_host(&root, base.as_deref(), &id))
+        .await
+        .map_err(|err| format!("confirming the host did not finish: {err}"))?
+}
+
+/// [`confirm_sandbox_host`], without a runtime.
+pub(crate) fn confirm_host(
+    root: &std::path::Path,
+    base: Option<&str>,
+    id: &str,
+) -> Result<EntryWritten, String> {
+    match settings::hosts::confirm(root, base, id) {
+        Ok(id) => Ok(EntryWritten::Saved {
+            file: file_of(root, SettingsWhich::Local)?,
+            added: Some(id),
+            removed: None,
+        }),
+        Err(refusal) => Ok(refused(refusal)),
+    }
+}
+
 /// A collection write's refusal, for the wire.
 fn refused(refusal: settings::collection::Refusal) -> EntryWritten {
     EntryWritten::Refused {
@@ -556,30 +663,41 @@ pub(crate) fn file_of(
         refusals: read.refusals,
         parsed: fields.is_some(),
         fields: fields_on_the_wire(fields.unwrap_or_default()),
-        entries: entries_of(which, &read.text),
+        entries: entries_of(root, which, &read.text),
         text: read.text,
     })
 }
 
-/// The collections `which` is the home of, listed by the core: the Shared file's forges, and
-/// the Local file's harness profiles (ST-4).
-fn entries_of(which: SettingsWhich, text: &str) -> Option<Vec<SettingsEntry>> {
-    let (collection, listed) = match which {
+/// The collections `which` is the home of, listed by the core: the Shared file's forges and
+/// the project's sandbox hosts, and the Local file's harness profiles (ST-4) and your own
+/// sandbox hosts (#1341).
+fn entries_of(
+    root: &std::path::Path,
+    which: SettingsWhich,
+    text: &str,
+) -> Option<Vec<SettingsEntry>> {
+    let core: Which = which.into();
+    let own = match which {
         SettingsWhich::Shared => ("forges", settings::forges::listed(text)),
         SettingsWhich::Local => ("profiles", settings::harness_profiles::listed(text)),
     };
-    (!listed.is_empty()).then(|| {
-        listed
-            .into_iter()
-            .map(|one| SettingsEntry {
+    let hosts = (
+        settings::hosts::collection(core),
+        settings::hosts::listed_at(root, core, text),
+    );
+    let entries: Vec<SettingsEntry> = [own, hosts]
+        .into_iter()
+        .flat_map(|(collection, listed)| {
+            listed.into_iter().map(move |one| SettingsEntry {
                 collection: collection.to_owned(),
                 id: one.id,
                 label: one.label,
                 keys: one.keys.into_iter().map(step_of).collect(),
                 values: values_on_the_wire(one.values),
             })
-            .collect()
-    })
+        })
+        .collect();
+    (!entries.is_empty()).then_some(entries)
 }
 
 fn values_on_the_wire(values: Vec<(&'static str, String)>) -> Vec<EntryValue> {

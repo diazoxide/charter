@@ -151,7 +151,7 @@ function core({
         case "project_harness_plugins":
           return [];
         case "sandbox_state":
-          return { on: false, offer: false, said: null, never: [] };
+          return { on: false, offer: false, said: null, never: [], hosts_changed: null };
         case "start_options":
           return {
             profiles: [

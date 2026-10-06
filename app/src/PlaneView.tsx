@@ -228,6 +228,7 @@ import { opensAShell } from "./shellKey";
 import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import { SandboxOffer } from "./SandboxOffer";
+import { ProjectHostsNotice } from "./ProjectHostsNotice";
 import type {
   ExtensionCommand,
   ExtensionView,
@@ -4882,6 +4883,11 @@ export const PlaneView = memo(function PlaneView({
         {/* **The sandbox's one-time offer** to a project made before it (ADR 0067 §1, V21 1):
           a notice like the one below, answered once, never a dialog. */}
         <SandboxOffer plane={plane} />
+        {/* **The project's own hosts changed** (#1341): told once to each teammate. */}
+        <ProjectHostsNotice
+          plane={plane}
+          onReview={() => openSettingsAt({ group: "project.sandbox" })}
+        />
         {/* The doctor's findings that stand as Notices, each with its fix (#1250). */}
         <DoctorNotices
           doctor={doctor}

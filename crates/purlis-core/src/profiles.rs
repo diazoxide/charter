@@ -480,6 +480,10 @@ pub fn derive_declared(
         // `[plane]` and `[repos]` are how far this machine's saves go (charter-app#292, ADR
         // 0051), read by `planesave`; every surface that shows one names this file.
         //
+        // `[sandbox]` holds this machine's own hosts (#1341, ADR 0067 §1 as amended): the
+        // person's level, read by `sandbox::hosts::personal` and refused key by key by
+        // `sandbox::refusals`. Nothing in it reaches a teammate, so it is this file's.
+        //
         // `[chat_env]` is which more of this machine's own environment a chat is started with
         // (`chatenv`). It can only be this machine's: a committed list would let a teammate's
         // push decide which of this machine's variables every chat is handed.
@@ -501,13 +505,14 @@ pub fn derive_declared(
             && key != crate::harness_plugin::TABLE
             && key != "plane"
             && key != "repos"
+            && key != crate::sandbox::TABLE
         {
             let name = shown::short(key);
             set.refused.push(Refused {
                 reason: format!(
                     "[{name}] in charter.local.toml is not read — that file carries \
-                     [harness], [extensions], [theme], [harness_plugins], [plane], [repos] and \
-                     [chat_env] and nothing else, because an ignored file must not change plane policy \
+                     [harness], [extensions], [theme], [harness_plugins], [plane], [repos], \
+                     [chat_env] and [sandbox] hosts, and nothing else, because an ignored file must not change plane policy \
                      with no trace in git. Put [{name}] in charter.toml."
                 ),
                 name,
