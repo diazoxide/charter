@@ -328,6 +328,7 @@ describe("the Project level", () => {
         "work",
         "Sandbox",
         "Your hosts",
+        "Granted",
         "Forges",
         "Extensions",
         "Appearance",

@@ -3423,7 +3423,9 @@ export const PlaneView = memo(function PlaneView({
     void commands
       .owedRestarts(plane)
       .then((owed) => {
-        if (!gone && owed.status === "ok") setOwedRestarts(owed.data);
+        // A list or nothing, as the view's other reads take one (#1342).
+        if (!gone && owed.status === "ok")
+          setOwedRestarts(Array.isArray(owed.data) ? owed.data : []);
       })
       .catch(() => undefined);
     return () => {
