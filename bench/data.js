@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791253181456,
+  "lastUpdate": 1791256405827,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2688,6 +2688,48 @@ window.BENCHMARK_DATA = {
             "value": 103.6045575,
             "unit": "ms",
             "extra": "median of 5 runs: 102.701, 103.057, 103.605, 104.224, 104.956 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "4599019abf222bd61d3a23fbcaf66184d3dc9e2a",
+          "message": "recorded: the two news scenarios print the renamed CHANGELOG (RN-11b)\n\n`purlis news` prints CHANGELOG.md, and the docs sweep renamed the product in its prose, so the\ntwo news scenarios are re-recorded. nameonly.py still finds only the name and the two\naccepted statusline crops: 539 scenarios, 254 re-recorded in all.\n\nRefs #1270\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T07:12:00+04:00",
+          "tree_id": "3e0f11ce42325fb2e491f4310a515145004ac26b",
+          "url": "https://github.com/purlis/purlis/commit/4599019abf222bd61d3a23fbcaf66184d3dc9e2a"
+        },
+        "date": 1791256404612,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4648855,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.443, 0.452, 0.465, 0.469, 0.475 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.300114999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.227, 16.290, 16.300, 16.488, 16.839 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.37131600000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.910, 100.961, 101.371, 102.214, 102.695 ms"
           }
         ]
       }
