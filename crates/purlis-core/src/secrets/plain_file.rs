@@ -38,9 +38,9 @@ pub fn file_path(ctx: &Ctx, vault: &Vault) -> Result<PathBuf, VaultError> {
 /// `secret set` would start a second vault where the first one was.
 pub fn load(ctx: &Ctx, vault: &Vault, what: &str) -> Result<Map<String, Value>, VaultError> {
     let p = file_path(ctx, vault)?;
-    // Gated from the vault's own directory — the file alone — as its writer is (#429): a
-    // vault that is a link is refused, never read (#440).
-    let text = match crate::contain::read_text_no_link(beside(&p), &p) {
+    // Gated as its writer is ([`gate`]): a vault that is a link is refused, never read (#440),
+    // and so is one in a state folder that is a link (#1321).
+    let text = match crate::contain::read_text_no_link(gate(ctx, &p), &p) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return match gone(ctx, vault, &p) {
@@ -107,8 +107,14 @@ pub fn tighten(p: &Path) {
 
 /// `get`: tighten the file BEFORE reading it — the plaintext must not sit in a group-readable
 /// file while charter hands it out — then the value, as Python's `str()` of it.
+///
+/// Gated first ([`linked_on_the_way`]): the mode change follows links, so a vault reached
+/// through one is refused before anything is changed where it points (#1321).
 pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
     if let Ok(p) = file_path(ctx, vault) {
+        if let Some(refused) = linked_on_the_way(ctx, &p) {
+            return Err(refused);
+        }
         tighten(&p);
     }
     let data = load(ctx, vault, "secret")?;
@@ -134,6 +140,14 @@ pub fn write_private(p: &Path, payload: &Value) -> Result<(), VaultError> {
     write_private_text(p, &crate::pyjson::dumps_indent2_unicode(payload))
 }
 
+/// A vault's file, written whole: [`write_private_text`], gated from [`gate`] rather than from
+/// the file's own directory. A vault in the state folder is refused before anything is made
+/// when a folder on the way from the trust root is a link (#1321): not even its directory is
+/// created where the link points.
+pub fn write_vault(ctx: &Ctx, p: &Path, text: &str) -> Result<(), VaultError> {
+    write_private_from(gate(ctx, p), p, text)
+}
+
 /// [`write_private`] for text the caller has already encoded — the reference provider's,
 /// which sorts its keys and escapes to ASCII where this provider does neither (#356).
 ///
@@ -143,15 +157,26 @@ pub fn write_private(p: &Path, payload: &Value) -> Result<(), VaultError> {
 /// the old vault whole rather than truncated. A vault path that is a symlink is refused: it
 /// used to be written through, to wherever the link pointed.
 pub fn write_private_text(p: &Path, text: &str) -> Result<(), VaultError> {
-    let parent = p.parent().unwrap_or(Path::new("."));
+    write_private_from(beside(p), p, text)
+}
+
+/// [`write_private_text`], gated from `trust`: the file's own directory, or the trust root for
+/// a file in the state folder ([`gate`]).
+fn write_private_from(trust: &Path, p: &Path, text: &str) -> Result<(), VaultError> {
+    let parent = beside(p);
+    if trust != parent {
+        crate::contain::no_link_on_the_way(trust, parent)
+            .map_err(|e| VaultError::new(format!("refusing to write {}: {e}", p.display())))?;
+    }
     super::make_private_dir(parent)
         .map_err(|e| VaultError::new(format!("cannot create {}: {e}", parent.display())))?;
     if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(linked(p));
     }
-    // Gated from the vault's own directory: the file alone. The directories above it are the
-    // operator's choice of where the vault lives, and may be links honestly.
-    crate::rewrite::replace(parent, p, text.as_bytes(), crate::rewrite::Mode::Secret).map_err(|e| {
+    // Gated from `trust`: for a vault the operator placed, its own directory, the file alone.
+    // The directories above it are the operator's choice of where the vault lives, and may be
+    // links honestly.
+    crate::rewrite::replace(trust, p, text.as_bytes(), crate::rewrite::Mode::Secret).map_err(|e| {
         match e
             .get_ref()
             .and_then(|e| e.downcast_ref::<crate::rewrite::NotPrivate>())
@@ -191,16 +216,39 @@ fn meta_path(p: &Path) -> PathBuf {
     p.with_file_name(format!("{stem}.meta.json"))
 }
 
-/// The directory `p` is in, which a vault file is gated from: the operator chose where the
-/// vault lives, and the directories above it may be links honestly.
+/// The directory `p` is in, which a vault file the operator placed is gated from: they chose
+/// where the vault lives, and the directories above it may be links honestly.
 fn beside(p: &Path) -> &Path {
     p.parent().unwrap_or(Path::new("."))
 }
 
-fn load_meta(p: &Path) -> Map<String, Value> {
+/// The directory the vault file (or rotation record) at `p` is read and written gated from.
+///
+/// **Inside the state folder, the trust root** (#1321), as the registry halves and a keyring
+/// vault's index are ([`Ctx::trust`]): that folder is charter's own, so a link anywhere on the
+/// way from the project — a `.charter/` that is itself one included — has no honest use, and
+/// following it would read or write secrets wherever it points. That holds under either
+/// spelling of the folder, whichever the project has now. **Anywhere else, the file's own
+/// directory** ([`beside`]): the operator chose where the vault lives.
+fn gate<'a>(ctx: &'a Ctx, p: &'a Path) -> &'a Path {
+    if p.starts_with(&ctx.state) {
+        return ctx.trust();
+    }
+    match p
+        .strip_prefix(&ctx.root)
+        .map(|below| below.components().next())
+    {
+        Ok(Some(std::path::Component::Normal(first))) if crate::names::STATE_DIR.is(first) => {
+            &ctx.root
+        }
+        _ => beside(p),
+    }
+}
+
+fn load_meta(ctx: &Ctx, p: &Path) -> Map<String, Value> {
     let mp = meta_path(p);
     // A rotation record that is a link reads as no record (#440).
-    crate::contain::read_text_no_link(beside(&mp), &mp)
+    crate::contain::read_text_no_link(gate(ctx, &mp), &mp)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(if t.is_empty() { "{}" } else { &t }).ok())
         .and_then(|v| v.as_object().cloned())
@@ -218,21 +266,26 @@ pub fn set(
     let p = file_path(ctx, vault)?;
     let mut data = load(ctx, vault, "secret")?;
     data.insert(key.to_string(), Value::String(value.to_string()));
-    write_private(&p, &Value::Object(data))?;
-    stamp(&p, key, today)
+    write_vault(ctx, &p, &json_text(data))?;
+    stamp(ctx, &p, key, today)
+}
+
+/// A plain-file vault's text, as [`write_private`] encodes it.
+fn json_text(data: Map<String, Value>) -> String {
+    crate::pyjson::dumps_indent2_unicode(&Value::Object(data))
 }
 
 /// The date `key` was set, in the rotation record beside the vault file at `p` — which is also
 /// what tells a vault that was written to from one never created ([`gone`]).
-pub fn stamp(p: &Path, key: &str, today: chrono::NaiveDate) -> Result<(), VaultError> {
-    let mut meta = load_meta(p);
+pub fn stamp(ctx: &Ctx, p: &Path, key: &str, today: chrono::NaiveDate) -> Result<(), VaultError> {
+    let mut meta = load_meta(ctx, p);
     let mut stamp = Map::new();
     stamp.insert(
         "set_at".into(),
         Value::String(today.format("%Y-%m-%d").to_string()),
     );
     meta.insert(key.to_string(), Value::Object(stamp));
-    write_private(&meta_path(p), &Value::Object(meta))
+    write_vault(ctx, &meta_path(p), &json_text(meta))
 }
 
 /// `delete`: the key, and its date if it had one.
@@ -245,18 +298,28 @@ pub fn delete(ctx: &Ctx, vault: &Vault, key: &str) -> Result<(), VaultError> {
             vault.name
         )));
     }
-    write_private(&p, &Value::Object(data))?;
-    unstamp(&p, key)
+    write_vault(ctx, &p, &json_text(data))?;
+    unstamp(ctx, &p, key)
 }
 
 /// Drop `key`'s date from the rotation record beside `p`. The record itself stays, emptied:
 /// the vault was written to.
-pub fn unstamp(p: &Path, key: &str) -> Result<(), VaultError> {
-    let mut meta = load_meta(p);
+pub fn unstamp(ctx: &Ctx, p: &Path, key: &str) -> Result<(), VaultError> {
+    let mut meta = load_meta(ctx, p);
     if meta.shift_remove(key).is_some_and(|v| !v.is_null()) {
-        write_private(&meta_path(p), &Value::Object(meta))?;
+        write_vault(ctx, &meta_path(p), &json_text(meta))?;
     }
     Ok(())
+}
+
+/// Why the vault file at `p` may not be reached, when a link is on the way to it from its
+/// [`gate`] — the file itself, or a state folder that is a link (#1321). For the paths that
+/// look at the file before [`load`] gates it: a mode change, or a health check's existence
+/// test, which would otherwise follow the link.
+pub fn linked_on_the_way(ctx: &Ctx, p: &Path) -> Option<VaultError> {
+    crate::contain::no_link_on_the_way(gate(ctx, p), p)
+        .err()
+        .map(|e| VaultError::new(format!("vault file {} cannot be read: {e}", p.display())))
 }
 
 /// `ages`: key → days since it was last set, `None` when it predates tracking.
@@ -266,7 +329,7 @@ pub fn ages(
     today: chrono::NaiveDate,
 ) -> Result<Vec<(String, Option<i64>)>, VaultError> {
     let p = file_path(ctx, vault)?;
-    let meta = load_meta(&p);
+    let meta = load_meta(ctx, &p);
     let mut out = Vec::new();
     for k in keys(ctx, vault)? {
         let set_at = meta
@@ -291,6 +354,9 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
     let Ok(pp) = file_path(ctx, vault) else {
         return (false, "no 'file' configured".into());
     };
+    if let Some(refused) = linked_on_the_way(ctx, &pp) {
+        return (false, refused.message);
+    }
     let note = super::loose_dir_note(&ctx.root, &loose_dirs(ctx, vault));
     if !pp.exists() {
         if let Some(gone) = gone(ctx, vault, &pp) {
