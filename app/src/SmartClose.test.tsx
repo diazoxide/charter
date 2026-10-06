@@ -327,6 +327,49 @@ describe("a chat wrapping up", () => {
     ).toBeInTheDocument();
   });
 
+  /** The Notice a Smart close with no pass leaves on chat `session`'s tab (#1361). */
+  const keptOpenNotice = (session: number) =>
+    document.querySelector<HTMLElement>(`[data-cause="smart-close-kept-open:${session}"]`);
+
+  it("stays open after a Smart close it held no pass for, says so, and Close tab closes it plainly", async () => {
+    const { asked: log } = core();
+    render(<App />);
+    await openAChat();
+
+    await step(1, "kept_open", PLANE, { path: "sessions/a.md", title: "A" });
+
+    await waitFor(() => expect(keptOpenNotice(1)).not.toBeNull());
+    const notice = keptOpenNotice(1) as HTMLElement;
+    expect(notice).toHaveTextContent(
+      "steward 1 saved its session record. purlis did not see " +
+        "/smart-close typed in it, so its tab stayed open.",
+    );
+    expect(tabOf("steward 1")).toBeDefined();
+    expect(asked(log, "close_session")).toEqual([]);
+
+    await userEvent.click(within(notice).getByRole("button", { name: "Close tab" }));
+
+    await waitFor(() => expect(tabOf("steward 1")).toBeUndefined());
+    expect(asked(log, "close_session")).toEqual([{ plane: PLANE, session: 1 }]);
+    expect(keptOpenNotice(1)).toBeNull();
+  });
+
+  it("puts that Notice away on Dismiss and closes nothing", async () => {
+    const { asked: log } = core();
+    render(<App />);
+    await openAChat();
+    await step(1, "kept_open", PLANE, { path: "sessions/a.md", title: "A" });
+    await waitFor(() => expect(keptOpenNotice(1)).not.toBeNull());
+
+    await userEvent.click(
+      within(keptOpenNotice(1) as HTMLElement).getByRole("button", { name: /Dismiss/ }),
+    );
+
+    await waitFor(() => expect(keptOpenNotice(1)).toBeNull());
+    expect(tabOf("steward 1")).toBeDefined();
+    expect(asked(log, "close_session")).toEqual([]);
+  });
+
   it("hears nothing about another project's chat of the same number", async () => {
     core();
     render(<App />);

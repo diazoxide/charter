@@ -3502,7 +3502,13 @@ export type Phase =
  *  The prompt, queued for the chat's turn to end, could not be written to it then; the chat
  *  was left open.
  */
-"not_sent";
+"not_sent" | 
+/**
+ *  The chat finished a Smart close and saved its record with no pass: its harness said
+ *  `/smart-close`, and no typed one of the person's was behind it. The tab stayed open, and
+ *  the window offers Close tab, a plain close that grants nothing (D-1361-7).
+ */
+"kept_open";
 
 /**  One piece, as the window shows it. */
 export type Piece = {
@@ -4589,8 +4595,9 @@ export type SmartClosing = {
 	session: number,
 	phase: Phase,
 	/**
-	 *  On [`Phase::Closed`], the record that closed it, for the window's "Session saved" notice
-	 *  and its **Open record** — where the line named one of this plane's records.
+	 *  On [`Phase::Closed`] and [`Phase::KeptOpen`], the record it saved, for the window's
+	 *  "Session saved" notice and its **Open record** — where the line named one of this
+	 *  plane's records.
 	 */
 	record: SavedRecord | null,
 };

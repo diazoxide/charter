@@ -401,6 +401,17 @@ impl Held {
         });
     }
 
+    /// Tells the window chat `session` saved its record, `record`, in a Smart close it held no
+    /// pass for: its tab stayed open (`smartclose::Phase::KeptOpen`, #1361).
+    pub fn tell_smart_kept_open(&self, session: u32, record: crate::smartclose::SavedRecord) {
+        (self.smart)(crate::smartclose::SmartClosing {
+            plane: self.id.clone(),
+            session,
+            phase: crate::smartclose::Phase::KeptOpen,
+            record: Some(record),
+        });
+    }
+
     /// Tells the window chat `session`'s smart close ended on its record: it was closed.
     pub fn tell_smart_closed(&self, session: u32, record: Option<crate::smartclose::SavedRecord>) {
         (self.smart)(crate::smartclose::SmartClosing {
@@ -434,16 +445,15 @@ impl Held {
         {
             self.tell_smart_close(session, crate::smartclose::Phase::Cancelled);
         }
-        // **And an Enter into a chat that waits for the person is the person submitting a
-        // prompt**, which is what a typed `/smart-close` is believed beside (#1332). Marked
-        // before the bytes are sent, so it is there before the hook the prompt fires can be.
-        if bytes.contains(&b'\r') && crate::smartclose::typed_by_the_operator(bytes) {
-            let glance = self.board().glance(session);
-            if glance.state == purlis_core::state::State::Waiting && !glance.asking {
-                self.closing
-                    .person_submitted(session, std::time::Instant::now());
-            }
-        }
+        // **And the person submitting `/smart-close` into a chat that waits for them is what a
+        // smart-close pass is issued on** (#1332): the line read from their own keys, never
+        // what the chat reports (#1361). Marked before the bytes are sent, so it is there
+        // before the hook the prompt fires can be.
+        self.closing
+            .person_typed(session, bytes, std::time::Instant::now(), || {
+                let glance = self.board().glance(session);
+                glance.state == purlis_core::state::State::Waiting && !glance.asking
+            });
         self.chats.sessions().input(session, bytes)
     }
 
@@ -5829,7 +5839,163 @@ mod tests {
             is_open(&held, session),
             "a record with no pass closed the tab"
         );
+        // Never a silent miss (D-1361-7): the window is told, and offers Close tab. That is the
+        // most a report from inside the chat can do.
+        assert_eq!(phases(&told, session), [crate::smartclose::Phase::KeptOpen]);
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_picker_s_enter_on_sm_is_a_pass_when_the_harness_ran_smart_close() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let session = a_waiting_closable_chat(&held, dir.path(), "picker-stand-in");
+
+        for key in [&b"/"[..], b"s", b"m", b"\r"] {
+            held.operator_input(session, key).expect("sent");
+        }
+        a_prompt_from(&held, session, true);
+
+        assert!(
+            becomes(|| held.closing().holds_pass(session)),
+            "the person's picked /smart-close issued no pass"
+        );
+        assert_eq!(phases(&told, session), [crate::smartclose::Phase::Sent]);
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_smart_close_with_no_typed_command_behind_it_saves_and_offers_close_tab() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let session = a_waiting_closable_chat(&held, dir.path(), "kept-open-stand-in");
+
+        // An arrow in the picker: the keys cannot say what was chosen, so no pass.
+        for key in [&b"/s"[..], b"\x1b[B", b"\r"] {
+            held.operator_input(session, key).expect("sent");
+        }
+        a_prompt_from(&held, session, true);
+        let answer = a_record_asked(&held, session, session);
+
+        assert!(!closes(&answer), "{answer:?}");
+        assert!(becomes(|| !phases(&told, session).is_empty()));
+        assert_eq!(phases(&told, session), [crate::smartclose::Phase::KeptOpen]);
+        assert!(
+            is_open(&held, session),
+            "a record with no pass closed the tab"
+        );
+        // Its own: a second record in the same turn tells the window nothing more.
+        a_record_asked(&held, session, session);
+        assert_eq!(phases(&told, session).len(), 1);
+        held.close_chat(session).unwrap();
+    }
+
+    /// Sends chat `session` the person's `keys`, one write each as a pane sends them, then a
+    /// report from inside the chat that says `/smart-close` was typed, and answers whether
+    /// that issued a pass (#1361).
+    fn a_forged_report_after(held: &Held, session: u32, keys: &[&[u8]]) -> bool {
+        for key in keys {
+            held.operator_input(session, key).expect("sent");
+        }
+        a_prompt_from(held, session, true);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        held.closing().holds_pass(session)
+    }
+
+    /// A smart-closable chat that has had two turns and is waiting for the person.
+    fn a_waiting_closable_chat(held: &Held, dir: &Path, name: &str) -> u32 {
+        let (session, _) = a_smart_closable_chat(held, dir, name);
+        has_had_two_turns(held, session);
+        session
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_report_that_races_ahead_of_the_person_s_own_prompt_gets_no_pass() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let session = a_waiting_closable_chat(&held, dir.path(), "raced-stand-in");
+
+        // The person submits a prompt of their own words. Something inside the chat watching
+        // for the prompt hook to start sends its own `/smart-close` report before the hook's.
+        assert!(
+            !a_forged_report_after(&held, session, &[b"go on", b"\r"]),
+            "a report that won the race to the person's Enter was given a pass"
+        );
         assert!(phases(&told, session).is_empty());
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_enter_that_submitted_nothing_gives_a_forged_report_no_pass() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let session = a_waiting_closable_chat(&held, dir.path(), "empty-enter-stand-in");
+
+        // An Enter on an empty prompt, or one choosing in a picker the board did not flag.
+        assert!(
+            !a_forged_report_after(&held, session, &[b"\r"]),
+            "an empty Enter stood behind a forged /smart-close"
+        );
+        assert!(phases(&told, session).is_empty());
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_shift_enter_after_smart_close_adds_a_line_and_gives_no_pass() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let session = a_waiting_closable_chat(&held, dir.path(), "shift-enter-stand-in");
+
+        // Shift+Enter (and Option+Enter) is the harness's newline, `ESC CR`: it adds a line to
+        // the prompt and submits nothing.
+        let newline = purlis_core::harness::Harness::ClaudeCode
+            .newline()
+            .as_bytes();
+        assert!(
+            !a_forged_report_after(&held, session, &[b"/smart-close", newline]),
+            "a modified Enter stood behind a forged /smart-close"
+        );
+        assert!(phases(&told, session).is_empty());
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_person_typing_smart_close_key_by_key_is_given_a_pass() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let session = a_waiting_closable_chat(&held, dir.path(), "key-by-key-stand-in");
+
+        // One key a write, a slip taken back with Backspace, and the plugin's prefix.
+        let mut keys: Vec<&[u8]> = "/purlis:smart-clsoe".as_bytes().chunks(1).collect();
+        keys.extend([&b"\x7f"[..], b"\x7f", b"\x7f", b"o", b"s", b"e", b"\r"]);
+        for key in keys {
+            held.operator_input(session, key).expect("sent");
+        }
+        a_prompt_from(&held, session, true);
+
+        assert!(
+            becomes(|| held.closing().holds_pass(session)),
+            "the person's /smart-close issued no pass"
+        );
+        assert_eq!(phases(&told, session), [crate::smartclose::Phase::Sent]);
         held.close_chat(session).unwrap();
     }
 
