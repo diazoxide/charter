@@ -44,6 +44,27 @@ shows it for as long as the chat lives. Every opt-out is audited.**
   inside the refusal itself, so a first run still gets to a working chat within FR-1's five
   minutes (X18).
 
+*Amended 2026-10-06 (the operator's grilling of 2026-10-06, Q11; spec #1330):* **the project
+configures the sandbox once, and for hosts that is a grant.** The project's committed settings
+choose the Internet access presets (section 3) and the project's own hosts, and everyone who
+opens the project follows them, with no per-person approval. This departs from ADR 0035's
+*"a plane can restrict, never grant"* for hosts only: `off` still never travels, and no
+committed value removes a denial class (section 5). Three safeguards stand in for the approval:
+
+- **A chat never writes sandbox settings.** The manifest denial at the project root (section 5,
+  as amended below) keeps a chat from editing them, and a brokered write (section 2) refuses any
+  change to a sandbox key.
+- **Each teammate sees a one-time Notice** when the project's sandbox changes, naming what
+  changed, so nothing widens unseen.
+- **Policy locks values.** An admin's policy, kept on the machine or for the organisation (C9,
+  section 4), can lock any value, and the strictest value wins. A locked value shows "locked by
+  policy" in Settings.
+
+The levels are **Policy**, **Project** (committed, the team's baseline) and **You** (personal
+hosts on this machine, unless policy forbids them). Workspaces have no sandbox settings. A host
+allowed from a block's Notice for one chat stays section 3's audited exception; allowing it in
+the project is a change to the project's committed settings and follows this rule.
+
 ### 2. One schema, compiled per harness
 
 The policy is neutral data. Each harness gets an adapter that compiles it, in the same shape as
@@ -124,6 +145,36 @@ this machine fails closed, as in section 1.
 its denials. Anything that needs to reach past them (resolving a secret, writing the audit,
 recording a session outcome) is asked of `purlisd` over its socket and is never done from
 inside the chat. Each compiled profile allows the chat to connect to that socket and nothing more.
+
+*Amended 2026-10-06 (the operator's grilling of 2026-10-06, Q1 to Q4; spec #1330):* **a write to
+the project's own files is a brokered write.** The chat asks `purlisd` to make it, `purlisd`
+makes it with the same core code the terminal's `purlis` uses, credited to the chat's run, and
+the chat's sandbox does not widen. The brokered writes are named, and these are all of them:
+
+- session records;
+- memory: the workspace's own, a persona's and shared;
+- todos;
+- the workspace vision and the sections of `workspace.md`;
+- persona files;
+- creating and removing a workspace;
+- creating a handoff;
+- the git plumbing a sandbox forbids: clone, checkout and worktree creation, so a repo's
+  `.git/config`, hooks and protected checkout files are written outside the sandbox. A chat's
+  own edits to those files stay denied (section 5).
+
+A write that is not on this list is not brokered until an amendment here adds it.
+
+- **Two entrances, one operation.** purlis's MCP tools for the chat (a session record, a
+  workspace note by section, the workspace vision, a persona's memory) and the `purlis` command
+  run inside a sandboxed chat both reach the same operation in `purlisd`. The command does not
+  write: it forwards the request over the chat's own hook socket, which each compiled profile
+  allows and nothing past it (#1328), and prints the same output it would have.
+- **Instruction files raise a Notice.** A brokered change to `workspace.md` or a persona charter
+  is written with no approval. It raises a Notice with Review and Revert, and the chat's tab gets
+  a quiet mark. Session records, memory and todos raise nothing.
+- **Direct edits are refused, with the way round.** A chat's own edit or write to one of these
+  files is refused, and the refusal names the tool to use instead.
+- **No brokered write changes a sandbox key** (section 1, as amended).
 
 ### 3. Egress is named presets, and anything unlisted is a visible exception
 
@@ -317,6 +368,15 @@ not a path, so a sandboxed project with a keyring vault started no chat at all.
 - **Existing items (V90d)** are written again, held, the next time purlis reads them; one the
   `purlis` command made is moved by the command, since only an item's maker can delete it.
   Until then an item keeps the access it had.
+
+*Amended 2026-10-06 (the operator's grilling of 2026-10-06, Q4; spec #1330; amends class 5 and
+ruling V73b):* **the manifest denial is scoped to where a manifest can change a chat's
+sandbox.** `charter.toml`, `purlis.toml` and their `.local.toml` variants are denied at the
+project root and in each folder above the chat, its own folder included: those are the files
+purlis reads when it starts a chat there. Everywhere else, in a clone's test fixtures for
+example, they are ordinary files a chat may write and a checkout may carry. V87d's rule still
+holds on every path a chat starts by: a manifest there that cannot be read starts no chat. The
+rest of class 5, and every other class, is unchanged.
 
 ### 6. External enforcement backends are an option, and never the default (SD-33)
 
