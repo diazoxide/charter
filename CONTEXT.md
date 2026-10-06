@@ -753,6 +753,31 @@ Whose setting it is: **You** (this machine, for every project), **Project**, **W
 which file it came from.
 _Avoid_: scope (that word is kept off settings), layer, tier (tiers are where stores live)
 
+### The sandbox
+
+**Brokered write**:
+A write to the project's own files that a sandboxed chat asks purlis to make for it: a session
+record, memory, todos, `workspace.md`, persona files, a workspace or handoff made, and the
+clone, checkout or worktree a sandbox would refuse. purlis makes it as the terminal would, and
+the chat's sandbox does not widen. A chat writing one of those files itself is refused and told
+which tool to use. A change to `workspace.md` or a persona charter shows a **Notice** with Review
+and Revert (ADR 0067 §2).
+_Avoid_: escalation, unsandboxed write, proxy write
+
+**Internet access**:
+Which hosts a sandboxed chat can reach: readable presets ("AI providers", "Code hosting",
+"Package registries"), each listing its hosts, plus the project's own hosts and your personal
+ones. The project's choice is committed and every teammate follows it; a host nothing allows is
+blocked and shown (ADR 0067 §1, §3).
+_Avoid_: hosts it may reach, egress (in UI text), allowlist (that is the commit scan's), network
+policy
+
+**Policy**:
+An admin's locks on settings, kept on this machine or for the organisation. A locked value
+cannot be changed at any **level**, the strictest value wins, and Settings shows it as "locked
+by policy". It never loosens what a project or a person sets (ADR 0067 §1, §4).
+_Avoid_: supervisor, managed tier (in UI text; that is a harness vendor's), org settings
+
 ### Core and extensions
 
 **Core**:

@@ -58,6 +58,13 @@ over-state what this decision is for.
    why: copying a grant sideways *"puts a permission in force where no one clicked for it"*. So a
    stranger's plane can add prompts and refusals to your harness; it cannot pre-approve anything.
 
+   *Amended 2026-10-06 (spec #1330):* one grant now travels, by decision. The hosts a sandboxed
+   chat may reach are chosen by the project's committed settings, and everyone who opens the
+   project follows them with no per-person approval. A one-time Notice, a chat never writing
+   sandbox settings, and policy locks stand in for the approval. The sandbox's `off` and its
+   denial classes still never travel ([ADR 0067](0067-a-chat-runs-in-a-sandbox-charter-compiles-for-its-harness.md)
+   §1, as amended).
+
 2. **A committed file cannot decide how a chat launches.** ADR 0022 puts harness profiles in
    `charter.local.toml`, which `purlis init` gitignores and `doctor` warns about while git would
    commit it, and a `[harness.<name>]` table in the committed `charter.toml` is refused by name.
