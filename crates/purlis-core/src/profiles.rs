@@ -890,7 +890,16 @@ pub(crate) fn refusals_of(
             Vec::new()
         }
     };
-    if let Some(var) = names.iter().find(|var| the_products_own(var)) {
+    if let Some(var) = names.iter().find(|var| !env_name_ok(var)) {
+        out.push((
+            "env",
+            format!(
+                "profile '{shown_name}' sets {}, which is not an environment variable name — \
+                 letters, digits and '_', not starting with a digit. Rename it.",
+                shown::readable(var, usize::MAX)
+            ),
+        ));
+    } else if let Some(var) = names.iter().find(|var| the_products_own(var)) {
         out.push((
             "env",
             format!(
@@ -926,6 +935,17 @@ pub(crate) fn refusals_of(
         ));
     }
     out
+}
+
+/// `^[A-Za-z_][A-Za-z0-9_]*$`: a name a shell can set, so a profile's `NAME=value` piece
+/// has one reading. A TOML quoted key can hold a space or `=`, and such a name would let two
+/// different profiles show the same approval line (#1014).
+pub(crate) fn env_name_ok(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// `^[A-Za-z0-9][A-Za-z0-9_-]*$`. No dot: a dot in a name broke tmux targets in charter
@@ -995,15 +1015,35 @@ fn expand_tilde(value: &str, home: &Path) -> String {
     }
 }
 
-/// `p` as one line a person reads: `NAME=value` for each variable, then the command.
+/// `p` as one line a person reads: `NAME=value` for each variable, then the command, each
+/// piece clipped at [`shown::DISPLAY_LIMIT`]. For a listing (`charter harness list`), never
+/// for a question: what the operator approves is [`display_whole`].
+///
+/// Every value and word is quoted as a shell would need it typed, so where one piece ends and
+/// the next begins reads one way only (#1014). An env value keeps a leading `~/` bare, as the
+/// program does ([`program_word`]), because charter expands it in both ([`expanded_env`]).
 ///
 /// Each piece through [`shown::readable`], so a control byte is shown escaped and never
 /// interpreted (ruling 35) — the file is one a chat can write, and the selector draws this.
 pub fn display(p: &Profile) -> String {
+    line(p, shown::DISPLAY_LIMIT)
+}
+
+/// [`display`] with no piece clipped: every word that will run, escaped (#1014).
+///
+/// **The line an approval is asked and checked with** ([`crate::profiletrust::shown`]). A
+/// clipped line would ask the operator to say yes to a command whose end they were never
+/// shown, while the whole command is what runs and what the approval records.
+pub fn display_whole(p: &Profile) -> String {
+    line(p, usize::MAX)
+}
+
+/// [`display`]'s line, with each piece clipped at `limit` characters of escape.
+fn line(p: &Profile, limit: usize) -> String {
     let mut pieces: Vec<String> = p
         .env
         .iter()
-        .map(|(name, value)| shown::short(&format!("{name}={value}")))
+        .map(|(name, value)| shown::readable(&format!("{name}={}", program_word(value)), limit))
         .collect();
     // A profile that passed validation has a non-empty command, but this is `pub` and the
     // listing runs it over whatever it is handed — and indexing `command[0]` was an
@@ -1020,7 +1060,7 @@ pub fn display(p: &Profile) -> String {
     // characters, and a profile with no command at all is one validation already refused —
     // this path exists so showing one answers instead of ending the process.
     if !words.is_empty() {
-        pieces.push(shown::short(&words.join(" ")));
+        pieces.push(shown::readable(&words.join(" "), limit));
     }
     pieces.join(" ")
 }
@@ -1032,7 +1072,15 @@ pub fn display(p: &Profile) -> String {
 /// called `~` (charter #1004's proof run). The `~` and its slash stay bare and the rest is
 /// quoted. `~other/…` is another user's home and stays quoted whole: the line shows what
 /// charter was given rather than guessing which home a shell would pick.
+///
+/// **A first word shaped like `NAME=…` is always quoted** (#1014). A shell reads a bare
+/// `A=/x claude` as a variable and a program, and purlis runs `A=/x` as the program — so,
+/// bare, it would read the same as a profile setting `A` and running `claude`. Quoted, a shell
+/// reads it as the command name, which is how purlis runs it.
 fn program_word(word: &str) -> String {
+    if assignment_shaped(word) {
+        return quoted(word);
+    }
     if word == "~" {
         return word.to_owned();
     }
@@ -1045,7 +1093,7 @@ fn program_word(word: &str) -> String {
 
 /// `shlex.quote`: the word as a shell would need it typed. Its safe set is Python's own,
 /// which is ASCII — so a non-ASCII word is quoted, as it is there.
-fn quote(word: &str) -> String {
+pub(crate) fn quote(word: &str) -> String {
     const SAFE: &str = "%+,-./:=@_";
     if word.is_empty() {
         return "''".to_owned();
@@ -1056,7 +1104,20 @@ fn quote(word: &str) -> String {
     {
         return word.to_owned();
     }
+    quoted(word)
+}
+
+/// `word` in single quotes, each `'` in it closed, escaped and reopened — what [`quote`] does
+/// to a word outside its safe set, and does here to any word.
+fn quoted(word: &str) -> String {
     format!("'{}'", word.replace('\'', "'\"'\"'"))
+}
+
+/// Does `word` begin `NAME=`, with a NAME a shell would take as a variable
+/// ([`env_name_ok`])? A shell reads such a first word as an assignment, not a command.
+fn assignment_shaped(word: &str) -> bool {
+    word.split_once('=')
+        .is_some_and(|(name, _)| env_name_ok(name))
 }
 
 /// How long [`ignore_check`] waits for its one `git status`. A constant rather than a knob:
@@ -1312,4 +1373,44 @@ fn git_answer(
     child
         .wait_with_output()
         .map_err(|e| GitState::Unknown(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The refusals of a profile `x` setting one variable named `name`.
+    fn env_refusals(name: &str) -> Vec<(&'static str, String)> {
+        let mut env = toml::Table::new();
+        env.insert(name.to_owned(), toml::Value::String("v".into()));
+        let mut table = toml::Table::new();
+        table.insert("kind".into(), toml::Value::String("claude".into()));
+        table.insert(
+            "command".into(),
+            toml::Value::Array(vec![toml::Value::String("claude".into())]),
+        );
+        table.insert("env".into(), toml::Value::Table(env));
+        refusals_of(
+            "x",
+            &toml::Value::Table(table),
+            &crate::harness_declaration::Declarations::default(),
+        )
+    }
+
+    #[test]
+    fn an_environment_name_a_shell_could_not_set_is_refused_with_its_reason() {
+        // #1014: a quoted TOML key holds a space or `=`, which would move where a profile's
+        // `NAME=value` piece seems to end on the approval line.
+        for name in ["A B", "A=1", "1A", "", "A-B", "\u{c4}"] {
+            let refusals = env_refusals(name);
+            assert!(
+                refusals.iter().any(|(field, why)| *field == "env"
+                    && why.contains("which is not an environment variable name")),
+                "{name:?}: {refusals:?}"
+            );
+        }
+        for name in ["A", "_A", "a_1"] {
+            assert_eq!(env_refusals(name), Vec::new(), "{name}");
+        }
+    }
 }

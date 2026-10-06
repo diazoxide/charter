@@ -2805,6 +2805,36 @@ mod tests {
         assert_eq!(options.ignore_fix_id, None);
     }
 
+    #[test]
+    fn the_picker_shows_a_profile_command_longer_than_the_display_limit_whole() {
+        // #1014: the picker's row is the line its approval sentence asks with, and the line
+        // `approve_profile` checks the click against, so it carries every word that runs.
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::write(plane.path().join(purlis_core::plane::MANIFEST), "").expect("written");
+        let filler = "x".repeat(purlis_core::shown::DISPLAY_LIMIT);
+        std::fs::write(
+            plane.path().join(purlis_core::profiles::LOCAL_FILE),
+            format!(
+                "[harness.work]\nkind = \"claude\"\n\
+                 command = [\"claude\", \"{filler}\", \"the-last-word\"]\n"
+            ),
+        )
+        .expect("written");
+
+        let options = start_options_in(plane.path()).expect("read");
+
+        let work = options
+            .profiles
+            .iter()
+            .find(|row| row.name == "work")
+            .expect("work is listed");
+        assert_eq!(
+            work.shown,
+            format!("claude {filler} the-last-word (kind claude)")
+        );
+        assert_eq!(work.approval.as_deref(), Some("new"));
+    }
+
     /// A store that remembers the plane at `root` with `pins`, in that order.
     fn store_pinning(root: &std::path::Path, pins: &[&str]) -> purlis_core::machine::Store {
         let mut store = purlis_core::machine::Store::default();

@@ -3479,6 +3479,29 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_chats_approval_shows_a_command_longer_than_the_display_limit_whole() {
+        // #1014: Review and approve… asks with this line, so its last word reaches the
+        // question however long the command is.
+        let dir = tempfile::tempdir().expect("a directory");
+        let filler = "x".repeat(purlis_core::shown::DISPLAY_LIMIT);
+        let root = a_plane_with_work(dir.path(), &format!(", \"{filler}\", \"the-last-word\""));
+        let (chats, _) = recorded();
+
+        chats.put_back(&one_on_work(&root), &root, SIZE);
+
+        let waiting = chats.would_not_start();
+        let asked = waiting[0].approval.clone().expect("it asks");
+        assert!(
+            asked
+                .shown
+                .ends_with(&format!("{filler} the-last-word (kind claude)")),
+            "{asked:?}"
+        );
+        assert!(!asked.shown.contains("..."), "clipped: {asked:?}");
+        chats.end_all();
+    }
+
+    #[test]
     fn a_waiting_chat_whose_profile_is_approved_then_starts_on_retry_and_asks_nothing() {
         // The approval is recorded by `approve` against the line shown, and Retry now runs the
         // whole start again: nothing about the approval starts a chat on its own.
