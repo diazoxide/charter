@@ -493,7 +493,9 @@ fn a_tilde_is_expanded_at_the_launch_and_never_in_the_file() {
 #[test]
 fn a_profile_is_shown_as_its_environment_then_a_command_a_person_could_paste() {
     purlis_core::unsteered!();
-    // `charter/profiles.py:486`, and every piece of it taken from the oracle.
+    // `charter/profiles.py:486`, taken from the oracle — except the environment value, which
+    // is quoted as the command's words are (#1014): unquoted, `A=b c` reads as `A=b` and a
+    // program `c`, so two different profiles could show one line.
     let dir = plane(
         "",
         "[harness.x]\nkind = \"claude\"\n\
@@ -504,7 +506,7 @@ fn a_profile_is_shown_as_its_environment_then_a_command_a_person_could_paste() {
 
     assert_eq!(
         profiles::display(set.get("x").unwrap()),
-        "A=b c ~/.local/bin/claude --model 'opus 4'"
+        "A='b c' ~/.local/bin/claude --model 'opus 4'"
     );
 }
 
@@ -684,7 +686,7 @@ fn a_control_byte_in_an_environment_value_is_shown_escaped_too() {
 
     assert_eq!(
         profiles::display(set.get("x").unwrap()),
-        "A=\\u001b[2K\\u000dEVIL claude"
+        "A='\\u001b[2K\\u000dEVIL' claude"
     );
 }
 
@@ -923,5 +925,256 @@ fn the_launch_read_is_the_one_that_has_already_asked_git() {
     assert!(
         profiles::current(dir.path()).get("work").is_some(),
         "the unchecked read is still the unchecked read"
+    );
+}
+
+/// A local profile whose every piece — an environment value and the command — runs past
+/// [`purlis_core::shown::DISPLAY_LIMIT`], with a last word a clip would cut off.
+fn a_long_profile() -> profiles::Profile {
+    let filler = "x".repeat(purlis_core::shown::DISPLAY_LIMIT);
+    profiles::Profile {
+        name: "x".into(),
+        kind: "claude".into(),
+        harness: "claude-code".into(),
+        command: vec![
+            "claude".into(),
+            "--note".into(),
+            filler.clone(),
+            "--and-then".into(),
+            "the-last-word".into(),
+        ],
+        env: vec![("A".into(), format!("{filler}-env-tail"))],
+        source: Source::Local,
+    }
+}
+
+#[test]
+fn approving_a_profile_shows_every_word_of_a_command_longer_than_the_display_limit() {
+    purlis_core::unsteered!();
+    // #1014: the approval line is what the operator says yes to, and the whole command is
+    // what then runs, so the line is never clipped at the display limit — not the command
+    // and not an environment value.
+    let dir = tempfile::tempdir().unwrap();
+    let p = a_long_profile();
+    let filler = "x".repeat(purlis_core::shown::DISPLAY_LIMIT);
+
+    let shown = purlis_core::profiletrust::shown(dir.path(), &p);
+
+    assert_eq!(
+        shown,
+        format!(
+            "A={filler}-env-tail claude --note {filler} --and-then the-last-word (kind claude)"
+        )
+    );
+    assert_eq!(
+        shown,
+        format!("{} (kind claude)", profiles::display_whole(&p))
+    );
+}
+
+#[test]
+fn an_approval_of_the_clipped_line_is_refused_and_the_whole_line_is_approved() {
+    purlis_core::unsteered!();
+    // The click is checked against the whole line, so a yes to a line that stopped short of
+    // the command records nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let p = a_long_profile();
+
+    let clipped = profiles::display(&p);
+    assert!(
+        clipped.contains("..."),
+        "the listing still clips: {clipped}"
+    );
+    let refused = purlis_core::profiletrust::approve(dir.path(), &p, &clipped)
+        .expect_err("a yes to a clipped line was recorded");
+    assert!(refused.contains("the-last-word"), "{refused}");
+    assert!(
+        purlis_core::profiletrust::approval_needed(dir.path(), &p).is_some(),
+        "the refused yes recorded an approval"
+    );
+
+    purlis_core::profiletrust::approve(
+        dir.path(),
+        &p,
+        &purlis_core::profiletrust::shown(dir.path(), &p),
+    )
+    .expect("the whole line is approved");
+    assert_eq!(
+        purlis_core::profiletrust::approval_needed(dir.path(), &p),
+        None
+    );
+}
+
+/// A local profile `x` of kind `claude` with `env` and `command`, as the loader builds one.
+fn local(env: &[(&str, &str)], command: &[&str]) -> profiles::Profile {
+    profiles::Profile {
+        name: "x".into(),
+        kind: "claude".into(),
+        harness: "claude-code".into(),
+        command: command.iter().map(|w| (*w).to_owned()).collect(),
+        env: env
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+            .collect(),
+        source: Source::Local,
+    }
+}
+
+#[test]
+fn where_an_environment_value_ends_and_the_command_begins_reads_one_way() {
+    purlis_core::unsteered!();
+    // #1014: two profiles that run different programs never show the same approval line.
+    let dir = tempfile::tempdir().unwrap();
+    let shown_one = local(&[("A", "1")], &["claude", "x"]);
+    let on_disk = local(&[("A", "1 claude")], &["x"]);
+
+    let line = purlis_core::profiletrust::shown(dir.path(), &shown_one);
+
+    assert_eq!(line, "A=1 claude x (kind claude)");
+    assert_eq!(
+        purlis_core::profiletrust::shown(dir.path(), &on_disk),
+        "A='1 claude' x (kind claude)"
+    );
+    // A yes to the first line does not approve the second profile.
+    let refused = purlis_core::profiletrust::approve(dir.path(), &on_disk, &line)
+        .expect_err("a yes to one profile's line approved another");
+    assert!(
+        refused.contains("changed while you were reading it"),
+        "{refused}"
+    );
+    assert!(
+        purlis_core::profiletrust::approval_needed(dir.path(), &on_disk).is_some(),
+        "the refused yes recorded an approval"
+    );
+}
+
+#[test]
+fn an_environment_value_keeps_a_leading_home_bare_because_purlis_expands_it() {
+    purlis_core::unsteered!();
+    assert_eq!(
+        profiles::display_whole(&local(&[("D", "~/a b")], &["claude"])),
+        "D=~/'a b' claude"
+    );
+}
+
+#[test]
+fn an_environment_name_a_shell_could_not_set_is_refused() {
+    purlis_core::unsteered!();
+    // A quoted TOML key holds anything; a name with a space or `=` would move where the
+    // approval line's `NAME=value` piece seems to end.
+    for name in ["A B", "A=1", "1A", "", "A-B", "Ä"] {
+        let dir = plane(
+            "",
+            &format!(
+                "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+                 env = {{ {name:?} = \"v\" }}\n"
+            ),
+        );
+
+        let set = profiles::derive(dir.path());
+
+        assert!(set.get("x").is_none(), "{name:?} was accepted");
+        assert!(
+            why(&set, "x").contains("which is not an environment variable name"),
+            "{name:?}: {}",
+            why(&set, "x")
+        );
+    }
+    for name in ["A", "_A", "a_1"] {
+        let dir = plane(
+            "",
+            &format!(
+                "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+                 env = {{ {name} = \"v\" }}\n"
+            ),
+        );
+
+        assert!(
+            profiles::derive(dir.path()).get("x").is_some(),
+            "{name} was refused"
+        );
+    }
+}
+
+#[test]
+fn a_first_word_shaped_like_an_assignment_never_reads_as_an_environment_variable() {
+    purlis_core::unsteered!();
+    // #1014: purlis runs a first word `A=/x` as the program, and a shell reads it bare as a
+    // variable, so it is drawn quoted — and the profiles below never share a line.
+    let dir = tempfile::tempdir().unwrap();
+    let groups = [
+        vec![
+            local(&[("A", "/x")], &["claude"]),
+            local(&[], &["A=/x", "claude"]),
+        ],
+        vec![
+            local(&[("A", "x"), ("B", "y")], &["c"]),
+            local(&[("A", "x")], &["B=y", "c"]),
+            local(&[], &["A=x", "B=y", "c"]),
+        ],
+    ];
+    for group in &groups {
+        let lines: Vec<String> = group
+            .iter()
+            .map(|p| purlis_core::profiletrust::shown(dir.path(), p))
+            .collect();
+        for (i, one) in lines.iter().enumerate() {
+            for (j, other) in lines.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                assert_ne!(one, other, "two profiles share a line");
+                // A yes to one profile's line does not approve another.
+                purlis_core::profiletrust::approve(dir.path(), &group[j], one)
+                    .expect_err("a yes to one profile's line approved another");
+            }
+        }
+        assert!(
+            group
+                .iter()
+                .all(|p| { purlis_core::profiletrust::approval_needed(dir.path(), p).is_some() })
+        );
+    }
+    assert_eq!(
+        profiles::display_whole(&local(&[], &["A=/x", "claude"])),
+        "'A=/x' claude"
+    );
+    assert_eq!(
+        profiles::display_whole(&local(&[("A", "x")], &["B=y", "c"])),
+        "A=x 'B=y' c"
+    );
+    // A word that only holds `=` past a name a shell could not set stays as it was.
+    assert_eq!(
+        profiles::display_whole(&local(&[], &["/opt/a=b/claude", "--x=y"])),
+        "/opt/a=b/claude --x=y"
+    );
+}
+
+#[test]
+fn two_profiles_that_differ_only_in_kind_never_share_an_approval_line() {
+    purlis_core::unsteered!();
+    // #1014: the approval records the kind, and the kind chooses the harness — the words
+    // purlis adds, the sandbox, the guard — so the line the operator approves says it.
+    let dir = tempfile::tempdir().unwrap();
+    let claude = local(&[("A", "1")], &["run"]);
+    let codex = profiles::Profile {
+        kind: "codex".into(),
+        harness: "codex".into(),
+        ..claude.clone()
+    };
+
+    let claude_line = purlis_core::profiletrust::shown(dir.path(), &claude);
+    let codex_line = purlis_core::profiletrust::shown(dir.path(), &codex);
+
+    assert_eq!(claude_line, "A=1 run (kind claude)");
+    assert_eq!(codex_line, "A=1 run (kind codex)");
+    purlis_core::profiletrust::approve(dir.path(), &codex, &claude_line)
+        .expect_err("a yes to the claude line approved the codex profile");
+    assert!(purlis_core::profiletrust::approval_needed(dir.path(), &codex).is_some());
+    purlis_core::profiletrust::approve(dir.path(), &codex, &codex_line)
+        .expect("its own line is approved");
+    assert_eq!(
+        purlis_core::profiletrust::approval_needed(dir.path(), &codex),
+        None
     );
 }

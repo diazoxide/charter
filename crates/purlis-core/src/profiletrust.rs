@@ -362,10 +362,27 @@ pub fn approve(root: &Path, p: &crate::profiles::Profile, shown: &str) -> Result
     Ok(())
 }
 
+/// What the approval line says for a declaration template with no words: in parentheses, which
+/// [`crate::profiles::quote`] always quotes, so a template whose one word is `nothing` (drawn
+/// `nothing`) never reads as an empty one (#1014).
+pub const NOTHING: &str = "(nothing)";
+
+/// What the approval line says for a declaration with no resume template, in the same form as
+/// [`NOTHING`] and for the same reason.
+pub const CANNOT_RESUME: &str = "(nothing; it cannot resume)";
+
 /// What the approval dialog shows for `p`, and what [`approve`] checks the click against: the
-/// profile's line, and for a profile on a project's harness declaration **every word that
-/// will run** (ruling V66) — the declaration's file and whole digest, its program, and each
-/// session template's words — each escaped.
+/// profile's whole line, never clipped at the display limit
+/// ([`crate::profiles::display_whole`], #1014), and for a profile on a project's harness
+/// declaration **every word that will run** (ruling V66) — the declaration's file and whole
+/// digest, its program, and each session template's words — each quoted as a shell would need
+/// it typed, so one word with a space never reads as two, and escaped.
+///
+/// **The kind is on the line too**, as `(kind claude)` after the command and first inside the
+/// declaration's parentheses. The approval records it ([`fingerprint`]) and it chooses the
+/// harness — the words purlis adds, the sandbox, the guard — so two profiles that differ only
+/// in kind never share a line. Parenthesised, a form [`crate::profiles::quote`] always wraps,
+/// so no word of the command can read as it.
 pub fn shown(root: &Path, p: &crate::profiles::Profile) -> String {
     shown_in(root, p, &crate::harness_declaration::read(root))
 }
@@ -379,30 +396,32 @@ pub fn shown_in(
     p: &crate::profiles::Profile,
     declared: &crate::harness_declaration::Declarations,
 ) -> String {
-    let line = crate::profiles::display(p);
+    let line = crate::profiles::display_whole(p);
+    let kind = crate::shown::readable(&crate::profiles::quote(&p.kind), usize::MAX);
     let Some(d) = declaration_of(p, declared) else {
-        return line;
+        return format!("{line} (kind {kind})");
     };
     let words = |words: &[String]| -> String {
         if words.is_empty() {
-            return "nothing".to_owned();
+            return NOTHING.to_owned();
         }
         words
             .iter()
-            .map(|word| crate::shown::readable(word, usize::MAX))
+            .map(|word| crate::shown::readable(&crate::profiles::quote(word), usize::MAX))
             .collect::<Vec<_>>()
             .join(" ")
     };
     let mut said = format!(
-        "{line} (declared in {}, {}; program {}; a new chat adds {}; a resumed chat adds {}",
+        "{line} (kind {kind}, declared in {}, {}; program {}; a new chat adds {}; a resumed \
+         chat adds {}",
         d.file,
         d.digest,
-        crate::shown::readable(&d.program, usize::MAX),
+        crate::shown::readable(&crate::profiles::quote(&d.program), usize::MAX),
         words(&d.session.new),
         d.session
             .resume
             .as_deref()
-            .map_or_else(|| "nothing, it cannot resume".to_owned(), words),
+            .map_or_else(|| CANNOT_RESUME.to_owned(), words),
     );
     if let Some(acp) = &d.levels.acp {
         said.push_str(&format!("; its ACP agent runs {}", words(acp)));

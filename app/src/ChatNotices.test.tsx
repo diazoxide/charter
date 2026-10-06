@@ -267,7 +267,7 @@ describe("a chat waiting on its profile's approval (#1246)", () => {
     kind: "claude",
     source: "charter.local.toml",
     approval: "changed",
-    shown: "ANTHROPIC_PROFILE=work ccs work --verbose",
+    shown: "ANTHROPIC_PROFILE=work ccs work --verbose (kind claude)",
   };
   const REVIEW = "Review and approve…";
 
@@ -313,6 +313,25 @@ describe("a chat waiting on its profile's approval (#1246)", () => {
     expect(question.querySelector(".needs-approval")?.textContent).toBe("changed");
     expect(sent(asked, "approve_profile")).toEqual([]);
     expect(sent(asked, "retry_chat_that_did_not_start")).toEqual([]);
+  });
+
+  it("shows a command longer than the display limit whole, and approves that line (#1014)", async () => {
+    // The core sends every word (`profiletrust::shown`); the question draws and sends it as
+    // it came, so the last word of a long command is on screen when the yes is given.
+    const long = `ccs work --note ${"x".repeat(200)} --and-then the-last-word (kind claude)`;
+    waiting = [{ ...waiting[0], approval: { ...WORK, shown: long } }];
+    const asked = core();
+    render(<App />);
+
+    await userEvent.click(within(await said()).getByRole("button", { name: REVIEW }));
+    const question = await screen.findByRole("alertdialog");
+
+    expect(question.querySelector(".honest.approve code")?.textContent).toBe(long);
+    expect(question.querySelector(".meta .where")?.textContent).toBe(long);
+    await userEvent.click(within(question).getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(sent(asked, "approve_profile")).toEqual([{ plane: PLANE, name: "work", shown: long }]),
+    );
   });
 
   it("changes nothing on Cancel", async () => {

@@ -305,8 +305,8 @@ fn the_approval_dialog_shows_every_word_that_will_run_and_the_whole_digest() {
     assert_eq!(
         shown,
         format!(
-            "true (declared in harnesses/shelly.toml, {digest}; program true; a new chat adds \
-             --session={{id}}; a resumed chat adds --resume={{id}})"
+            "true (kind shelly, declared in harnesses/shelly.toml, {digest}; program true; a new chat adds \
+             '--session={{id}}'; a resumed chat adds '--resume={{id}}')"
         )
     );
     assert_eq!(digest.len(), "sha256:".len() + 64);
@@ -389,4 +389,89 @@ fn the_dialog_warns_beside_a_word_that_names_a_file_or_folder_in_the_project() {
         "{shown}"
     );
     assert!(!shown.contains("fast names"), "{shown}");
+}
+
+#[test]
+fn a_declared_word_holding_a_space_never_reads_as_two_words() {
+    purlis_core::unsteered!();
+    // #1014: `["--a b"]` and `["--a", "b"]` run differently, so the approval says them
+    // differently. A project's declaration refuses a word with a space today; the line
+    // quotes anyway, so it never depends on that rule to read one way.
+    let dir = tempfile::tempdir().unwrap();
+    let harnesses = dir.path().join(harness_declaration::DIR);
+    fs::create_dir_all(&harnesses).unwrap();
+    fs::write(harnesses.join("shelly.toml"), SHELLY).unwrap();
+    let declared = harness_declaration::read(dir.path());
+    assert_eq!(declared.refused, Vec::new());
+    let shelly = profiles::Profile {
+        name: "shelly".into(),
+        kind: "shelly".into(),
+        harness: "shelly".into(),
+        command: vec!["true".into()],
+        env: Vec::new(),
+        source: Source::Declared,
+    };
+    let shown = |new: &[&str]| {
+        let mut declared = declared.clone();
+        let d = declared
+            .declared
+            .iter_mut()
+            .find(|d| d.name == "shelly")
+            .expect("shelly is declared");
+        d.session.new = new.iter().map(|w| (*w).to_owned()).collect();
+        profiletrust::shown_in(dir.path(), &shelly, &declared)
+    };
+
+    let one = shown(&["--a b"]);
+    let two = shown(&["--a", "b"]);
+
+    assert!(one.contains("; a new chat adds '--a b';"), "{one}");
+    assert!(two.contains("; a new chat adds --a b;"), "{two}");
+}
+
+#[test]
+fn a_declared_template_of_the_word_nothing_never_reads_as_an_empty_one() {
+    purlis_core::unsteered!();
+    // #1014: the empty case is drawn in a form quoting never produces.
+    let dir = tempfile::tempdir().unwrap();
+    let harnesses = dir.path().join(harness_declaration::DIR);
+    fs::create_dir_all(&harnesses).unwrap();
+    fs::write(harnesses.join("shelly.toml"), SHELLY).unwrap();
+    let declared = harness_declaration::read(dir.path());
+    let shelly = profiles::Profile {
+        name: "shelly".into(),
+        kind: "shelly".into(),
+        harness: "shelly".into(),
+        command: vec!["true".into()],
+        env: Vec::new(),
+        source: Source::Declared,
+    };
+    let shown = |new: &[&str], resume: Option<&[&str]>| {
+        let mut declared = declared.clone();
+        let d = declared
+            .declared
+            .iter_mut()
+            .find(|d| d.name == "shelly")
+            .expect("shelly is declared");
+        d.session.new = new.iter().map(|w| (*w).to_owned()).collect();
+        d.session.resume = resume.map(|r| r.iter().map(|w| (*w).to_owned()).collect());
+        profiletrust::shown_in(dir.path(), &shelly, &declared)
+    };
+
+    let empty = shown(&[], None);
+    let words = shown(&["nothing"], Some(&["nothing,", "it", "cannot", "resume"]));
+
+    assert_ne!(empty, words);
+    assert!(
+        empty.contains(&format!(
+            "a new chat adds {}; a resumed chat adds {}",
+            profiletrust::NOTHING,
+            profiletrust::CANNOT_RESUME
+        )),
+        "{empty}"
+    );
+    assert!(
+        words.contains("a new chat adds nothing; a resumed chat adds nothing, it cannot resume"),
+        "{words}"
+    );
 }
