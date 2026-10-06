@@ -690,3 +690,66 @@ fn destroying_a_vault_that_is_not_registered_is_refused() {
     let refused = destroy(&plane.ctx, "nope").unwrap_err();
     assert!(refused.message.contains("nope"), "{}", refused.message);
 }
+
+#[test]
+fn a_vault_file_outside_the_project_or_gone_from_it_is_misplaced_and_one_inside_is_not() {
+    // #1345: leftover test vaults registered at temp paths each cost every sandboxed chat a
+    // read-deny rule, and nothing said they were there.
+    let plane = Plane::new(&[]);
+    let elsewhere = tempfile::tempdir().unwrap();
+    plane.plain("home", json!({"K": "never-printed-77c1"}));
+    plane.register(
+        "fresh",
+        "plain-file",
+        json!({"file": ".charter/vaults/fresh.json"}),
+        None,
+    );
+    let away = elsewhere.path().join("devops.json");
+    std::fs::write(&away, r#"{"K": "never-printed-77c1"}"#).unwrap();
+    plane.register(
+        "away",
+        "plain-file",
+        json!({"file": away.to_string_lossy()}),
+        None,
+    );
+    plane.register("x", "plain-file", json!({"file": "/x-1345-nowhere"}), None);
+    plane.register(
+        "climb",
+        "plain-file",
+        json!({"file": "../../climb.json"}),
+        None,
+    );
+    // Written to once, then lost: its rotation record is still beside where it was.
+    let lost = plane.ctx.vaults_dir().join("lost.json");
+    plane.register(
+        "lost",
+        "plain-file",
+        json!({"file": lost.to_string_lossy()}),
+        None,
+    );
+    std::fs::write(plane.ctx.vaults_dir().join("lost.meta.json"), "{}").unwrap();
+    plane.register("kr", "keyring", json!({}), None);
+
+    let found = misplaced(&plane.ctx).unwrap();
+    let by = |name: &str| found.iter().find(|m| m.name == name);
+
+    assert!(by("home").is_none(), "{found:?}");
+    assert!(
+        by("fresh").is_none(),
+        "registered and never written is not lost: {found:?}"
+    );
+    assert!(by("kr").is_none(), "{found:?}");
+    let away_row = by("away").expect("a file outside the project");
+    assert!(away_row.outside && !away_row.missing, "{away_row:?}");
+    // `tempfile` puts it in the system's temp directory: a test's leftover, to act on.
+    assert!(away_row.temp && away_row.to_act_on(), "{away_row:?}");
+    let x = by("x").expect("a file that is outside and missing");
+    assert!(x.outside && x.missing && !x.temp && x.to_act_on(), "{x:?}");
+    assert!(by("climb").is_some_and(|m| m.outside), "{found:?}");
+    let lost_row = by("lost").expect("a file that is gone");
+    assert!(!lost_row.outside && lost_row.missing, "{lost_row:?}");
+    assert!(
+        !format!("{found:?}").contains("never-printed-77c1"),
+        "a path and a name, never a value"
+    );
+}

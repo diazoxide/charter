@@ -263,9 +263,9 @@ fn replace_through(
         hook::before_rename(path, temp)?;
         std::fs::rename(temp, path)
     })();
-    if result.is_err() {
+    if let Err(e) = result {
         let _ = std::fs::remove_file(temp);
-        return result;
+        return Err(refused_write(e, path, crate::sandbox::chat_is_sandboxed()));
     }
     // Best effort: a directory that cannot be opened or flushed does not undo the rename.
     #[cfg(unix)]
@@ -273,6 +273,77 @@ fn replace_through(
         let _ = d.sync_all();
     }
     Ok(())
+}
+
+/// `EPERM`, the errno a sandbox answers a write it refuses with. A file's own mode answers
+/// `EACCES` instead, so this one is not read as "the file is read-only".
+const EPERM: i32 = 1;
+
+/// A write to `path` that failed with `e`, said so it can be acted on (#1345).
+///
+/// **The one place a refused write gets its words.** Every committed file purlis writes goes
+/// through [`replace`], so a write a chat's sandbox refuses lands here, whichever command made
+/// it. The OS error alone ("Operation not permitted (os error 1)") named neither the file nor
+/// the reason, and an agent reading it could not tell a sandbox from a broken disk.
+///
+/// Only `EPERM` is reworded, and it always names the file. **The sandbox is blamed only where
+/// `sandboxed` says the app gave this chat one** ([`crate::sandbox::chat_is_sandboxed`]):
+/// `EPERM` is also what macOS's privacy controls, its system integrity protection and an
+/// immutable flag answer, and none of those is a sandbox's refusal. Every other failure is
+/// returned as it was.
+///
+/// **The errno is kept.** The kind stays [`io::ErrorKind::PermissionDenied`], and the OS error
+/// is the source, which [`os_cause`] hands back to a caller that records the errno itself.
+pub fn refused_write(e: io::Error, path: &Path, sandboxed: bool) -> io::Error {
+    if e.raw_os_error() != Some(EPERM) {
+        return e;
+    }
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        WriteRefused {
+            path: path.to_path_buf(),
+            sandboxed,
+            source: e,
+        },
+    )
+}
+
+/// The OS error under `e`: the one a [`refused_write`] rewording carries, or `e` itself. What a
+/// caller reads an errno or the OS's own sentence from.
+pub fn os_cause(e: &io::Error) -> &io::Error {
+    e.get_ref()
+        .and_then(|inner| inner.downcast_ref::<WriteRefused>())
+        .map_or(e, |refused| &refused.source)
+}
+
+/// A write refused with `EPERM`; see [`refused_write`].
+#[derive(Debug)]
+pub struct WriteRefused {
+    path: PathBuf,
+    sandboxed: bool,
+    source: io::Error,
+}
+
+impl std::fmt::Display for WriteRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let path = crate::shown::readable(&self.path.display().to_string(), usize::MAX);
+        if self.sandboxed {
+            write!(
+                f,
+                "this chat's sandbox refused writing {path} (Operation not permitted). A \
+                 sandboxed chat writes only inside its own folder, so ask the operator to run \
+                 this outside the chat."
+            )
+        } else {
+            write!(f, "could not write {path}: Operation not permitted")
+        }
+    }
+}
+
+impl std::error::Error for WriteRefused {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
 }
 
 /// 0600, where there is a mode to set.
@@ -461,6 +532,67 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "old\n");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// EPERM, which is what a sandbox answers a write it refuses — not EACCES, a file's mode.
+    fn eperm() -> io::Error {
+        io::Error::from_raw_os_error(1)
+    }
+
+    #[test]
+    fn a_write_a_sandbox_refuses_names_the_file_it_was_writing() {
+        // #1345: `purlis persona remember` from a chat printed only "Operation not permitted
+        // (os error 1)", with no path and no next step.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("memory.md");
+        let _hook = hook::set(|_, _| Err(eperm()));
+
+        let err = replace(dir.path(), &target, b"new\n", Mode::Kept).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains(&target.display().to_string()),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn only_a_chat_given_a_sandbox_is_told_its_sandbox_refused_the_write() {
+        let path = Path::new("/plane/personas/steward/memory/fact.md");
+        let said = refused_write(eperm(), path, true).to_string();
+        assert!(said.contains("this chat's sandbox refused"), "{said}");
+        assert!(
+            said.contains("/plane/personas/steward/memory/fact.md"),
+            "{said}"
+        );
+        assert!(said.contains("operator"), "the next step: {said}");
+
+        // EPERM is also privacy controls, system integrity protection and an immutable flag.
+        let unsandboxed = refused_write(eperm(), path, false).to_string();
+        assert_eq!(
+            unsandboxed,
+            "could not write /plane/personas/steward/memory/fact.md: Operation not permitted"
+        );
+    }
+
+    #[test]
+    fn a_reworded_refusal_still_carries_its_errno() {
+        let refused = refused_write(eperm(), Path::new("/plane/x.md"), true);
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(os_cause(&refused).raw_os_error(), Some(1));
+        let plain = io::Error::from_raw_os_error(13);
+        assert_eq!(os_cause(&plain).raw_os_error(), Some(13));
+    }
+
+    #[test]
+    fn a_failure_that_is_not_a_refusal_is_passed_on_as_it_was() {
+        let path = Path::new("/plane/x.md");
+        let full = refused_write(io::Error::from_raw_os_error(28), path, true);
+        assert_eq!(
+            full.raw_os_error(),
+            Some(28),
+            "a full disk stays a full disk"
+        );
     }
 
     #[test]

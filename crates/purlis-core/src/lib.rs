@@ -105,6 +105,7 @@ pub mod process;
 pub mod profiles;
 pub mod profiletrust;
 pub mod programs;
+pub mod projectgit;
 pub mod proseguard;
 pub mod provenance;
 pub mod pyjson;

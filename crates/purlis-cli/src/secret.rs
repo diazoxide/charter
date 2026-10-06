@@ -27,8 +27,8 @@ pub enum SecretCommand {
         #[command(flatten)]
         set: SetArgs,
     },
-    /// List secret keys in a vault (never the values).
-    List { vault: String },
+    /// List secret keys in a vault (never the values); with no vault, list the vaults.
+    List { vault: Option<String> },
     /// Flag secrets older than --days for rotation.
     Audit {
         vault: String,
@@ -340,7 +340,7 @@ pub fn secret(here: &crate::Here, command: SecretCommand, graft: Option<Vec<Stri
     let io = &mut Console;
     let code = match command {
         SecretCommand::Set { vault, set } => cmd::set(&ctx, &vault, &set.key, &set_from(&set), io),
-        SecretCommand::List { vault } => cmd::list(&ctx, &vault, io),
+        SecretCommand::List { vault } => cmd::list_or_vaults(&ctx, vault.as_deref(), io),
         SecretCommand::Audit { vault, days } => cmd::audit(&ctx, &vault, days, io),
         SecretCommand::Get { vault, get } => {
             cmd::get(&ctx, &vault, &get.key, get.reveal, get.force, io)

@@ -208,6 +208,29 @@ pub fn list(ctx: &Ctx, vault: &str, io: &mut dyn Io) -> i32 {
     }
 }
 
+/// `purlis secret list [<vault>]`: a vault's keys, or with no vault the vaults themselves.
+///
+/// With no vault it answers what `purlis vault list` answers, after one line saying how to list
+/// a vault's keys (#1345). That is the convention of `purlis workspace remember`, which with no
+/// text lists what it would add to, and better than a usage error for the one question the
+/// caller could not answer without a second command: which vaults there are.
+pub fn list_or_vaults(ctx: &Ctx, vault: Option<&str>, io: &mut dyn Io) -> i32 {
+    match vault {
+        Some(vault) => list(ctx, vault, io),
+        None => {
+            // With no vault there is nothing to name, and `vault list` says so in one sentence.
+            let any =
+                registry::load_registry(ctx).map_or(true, |doc| !registry::vaults(&doc).is_empty());
+            if any {
+                io.say(Say::Info(
+                    "Name a vault to list its keys: purlis secret list <vault>. The vaults:".into(),
+                ));
+            }
+            super::vaultcmd::list(ctx, io)
+        }
+    }
+}
+
 /// The one note a keyring vault gets when charter moved its items under its access rule
 /// (ruling V90d), said by the next command that read one of its values.
 pub fn say_held_note(ctx: &Ctx, v: &Vault, io: &mut dyn Io) {

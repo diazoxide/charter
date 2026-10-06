@@ -46,7 +46,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use purlis_core::handoffguard::Caller;
-use purlis_core::toolgate::{self, Call, Plane};
+use purlis_core::toolgate::{self, Call, Launched, Plane};
 use purlis_core::toolhooks::Answer;
 
 /// What a harness reads as "block" — and, here, only as the fallback for an undelivered
@@ -108,10 +108,18 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
     // Where Claude Code loaded its settings: the session's start folder, which a `cd` in the
     // shell does not move (RN-7).
     let session_dir = std::env::var("CLAUDE_PROJECT_DIR").unwrap_or_default();
+    // What the app told this chat at its start: whether it was given a sandbox, and the folder
+    // it was started in (#1345). A harness the app did not start has neither.
+    let chat_dir = std::env::var(purlis_core::sandboxblock::CHAT_DIR_ENV).ok();
+    let launched = Launched {
+        sandboxed: purlis_core::sandbox::chat_is_sandboxed(),
+        chat_dir: chat_dir.as_deref(),
+    };
     let plane = found.as_ref().map(|found| Plane {
         root: &found.root,
         forges: &found.forges,
         session_dir: &session_dir,
+        launched,
     });
     let call = Call {
         command: &command,
