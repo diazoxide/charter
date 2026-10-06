@@ -1156,6 +1156,9 @@ export const PlaneView = memo(function PlaneView({
   const [stopped, setStopped] = useState<Readonly<Record<number, string>>>({});
   /** The record the last smart close ended on, for the quiet "Session saved" notice. */
   const [savedNotice, setSavedNotice] = useState<{ record: SavedRecord | null }>();
+  /** The chats that finished a Smart close with no pass, by session: their record is saved and
+   *  their tab stayed open, so each has a Notice with Close tab (#1361, D-1361-7). */
+  const [keptOpen, setKeptOpen] = useState<readonly { session: number; name: string }[]>([]);
   const settle = useCallback((session: number) => {
     setLeaving((was) => {
       if (!was.has(session)) return was;
@@ -1197,6 +1200,13 @@ export const PlaneView = memo(function PlaneView({
         panesOf(now.current, id).some((one) => one.session === step.session),
       );
       const name = tab === undefined ? `chat ${step.session}` : now.current.byId[tab].name;
+      if (step.phase === "kept_open") {
+        setKeptOpen((was) => [
+          ...was.filter((one) => one.session !== step.session),
+          { session: step.session, name },
+        ]);
+        return;
+      }
       const said = saidWhenItEnds(step.phase, name);
       if (said !== undefined)
         setReport({ from: `smartclose:${step.session}`, refused: true, words: said });
@@ -1206,6 +1216,21 @@ export const PlaneView = memo(function PlaneView({
   );
   /** The chats wrapping up, as the core tells it. */
   const told = useSmartClosing(plane, smartCloseEnded);
+  /** A kept-open chat's Notice put away, by Dismiss or by its Close tab. */
+  const forgetKeptOpen = useCallback(
+    (session: number) => setKeptOpen((was) => was.filter((one) => one.session !== session)),
+    [],
+  );
+  /** **Close tab** on a kept-open chat's Notice: the plain Close, the person's own press. It
+   *  ends the chat and grants nothing, as the close dialog's Close does. */
+  const closeKeptOpen = useCallback(
+    (session: number) => {
+      forgetKeptOpen(session);
+      change((tabs) => closeChat(tabs, session, filedIn, isPinned, inTheBackground.current));
+      void commands.closeSession(plane, session);
+    },
+    [change, filedIn, forgetKeptOpen, isPinned, plane],
+  );
   /** …and the ones just pressed: their tabs, their explorer rows and their menus say so. */
   const wrapping = useMemo<ReadonlySet<number>>(
     () => (leaving.size === 0 ? told : new Set([...told, ...leaving])),
@@ -4937,6 +4962,24 @@ export const PlaneView = memo(function PlaneView({
             Session saved{savedNotice.record ? ` — ${savedNotice.record.title}` : "."}
           </Notice>
         )}
+        {/* **A Smart close that saved its record with no pass** (#1361): the chat ran it, and
+          purlis did not see /smart-close typed in its pane, so its tab stayed open. Never a
+          silent miss: one press closes it, as Close would. Only while its tab is there. */}
+        {keptOpen
+          .filter(({ session }) =>
+            tabs.order.some((id) => panesOf(tabs, id).some((pane) => pane.session === session)),
+          )
+          .map(({ session, name }) => (
+            <Notice
+              key={session}
+              cause={`smart-close-kept-open:${session}`}
+              fixes={[{ label: "Close tab", onPress: () => closeKeptOpen(session) }]}
+              onDismiss={() => forgetKeptOpen(session)}
+            >
+              {name} saved its session record. purlis did not see <code>/smart-close</code> typed in
+              it, so its tab stayed open.
+            </Notice>
+          ))}
 
         {/* **A pin whose workspace is gone is kept dormant** (V91c as amended): never drawn, since
           a strip that showed it would offer a workspace the project does not have (ADR 0034's
