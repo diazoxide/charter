@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791316145011,
+  "lastUpdate": 1791329385802,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3066,6 +3066,48 @@ window.BENCHMARK_DATA = {
             "value": 104.3217695,
             "unit": "ms",
             "extra": "median of 5 runs: 101.817, 103.494, 104.322, 105.027, 105.753 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "a8b6350e1872f04d6c9d805a9d55550bbe483e8b",
+          "message": "settings: Sandbox says what a chat here can do\n\nSettings > Project > Sandbox opens on one sentence that follows the\nfiles as they change: what a chat can write (its folder, the project's\npackage caches with Package registries on, and the folders you allowed\nevery chat on this machine) and what it can reach (each preset on, the\nproject's hosts and yours that are actually granted, and on a Mac the\nsystem's certificate service once certificate checks are on). Until\nthe core has answered it says \"Reading this project's sandbox…\".\n\n- A note says a chat can read any file you can, except vaults and\n  purlis's own keys, so keep secrets in a vault.\n- Internet access is a box per preset, named and listed by the core:\n  Preset::title and Preset::own_hosts, handed to the window in\n  SandboxState.presets with each preset's hosts as sandbox::hosts\n  answers them, the project's forges among code hosting's.\n- sandbox::besides counts what every chat is granted besides its\n  presets: the project's hosts and yours (locks, this machine's\n  addresses and the ignore check applied) and the folders you allowed\n  on this machine that still judge as grantable. It and\n  Compiled::granted read the same two helpers, granted_hosts and\n  granted_folders, and a fixture test holds the two equal for a chat on\n  no persona. SandboxState.besides carries it.\n- The mode is a status line, \"On for everyone in this project. To run\n  one chat without it, use that chat's tab\", with the machine's\n  opt-out count capitalised; where it is off, Turn the sandbox on\n  writes mode = \"on\" with no Undo, as before.\n- Certificate checks can be set here. Each persona's own hosts are\n  named, with who else holds them: a chat naming no persona gets the\n  default persona's, a handoff may hold the asking chat's, and a Resume\n  the default persona's. Harnesses never sandboxed on this machine are said.\n- Two read-only lists, What chats can change (with the harness's own\n  state) and Always protected (Your approvals in purlis, not your\n  logins), each item with one line of why, drawn after the project's\n  hosts and found by the Settings filter.\n- Settings names the project's files as the project names them\n  (charter.toml or purlis.toml): every Project group's text, the file\n  choice, the override badge, and the core's refusals the tab shows\n  (settings::refusals and the hosts collection's, via\n  settings::named_at). Only a whole file name is renamed: a host or a\n  path that holds one (charter.toml.example.com) is quoted as written,\n  and the Sandbox's own pages, which quote hosts a person wrote, are\n  not rewritten at all.\n\nDecided in implementation:\n- D-1340-1: readable preset names live in core beside the word and the\n  host table, so every surface names a preset alike.\n- D-1340-2: presets in force are read from the committed file, so the\n  sentence follows a box before the core is asked again; a file with no\n  egress reads as every preset, as core reads it. Hosts and folders are\n  the core's counts.\n- D-1340-3: the two lists are app copy over ADR 0067's classes; the\n  runner-internals class is left out, since no project chat runs on a\n  runner, and workspace.md editing is left out until #1334 lands.\n- D-1340-4: a group may carry rows drawn after its collection (after),\n  so the explanations never read as entries of the hosts list.\n- D-1340-5: FileSetting gains checks and status kinds rather than\n  hand-written rows, so the driver's write, refusal and Undo rules hold.\n- D-1340-6: \"Your approvals in purlis\" replaces \"approvals and\n  sign-ins\", and the page says reads are not confined, so no login of\n  the person's reads as hidden from a chat.\n- D-1340-7: the files' names are resolved where text reaches the window\n  (core: settings::named_at; app: projectGroups), rather than threading\n  a name through every reader's message; only whole names, never part\n  of a host or a path.\n- D-1340-8: the certificate service is named only where the window runs\n  on a Mac (onAMac), the one system where the setting widens anything.\n- D-1340-9: Settings' counts and a chat's start share one helper for\n  hosts and one for folders, so they cannot drift apart.\n\nFollow-ups: issue 1422.\n\nCloses #1340\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-07T03:20:36+04:00",
+          "tree_id": "42daaa49ed085915f55d0ea834685a60441a8df4",
+          "url": "https://github.com/purlis/purlis/commit/a8b6350e1872f04d6c9d805a9d55550bbe483e8b"
+        },
+        "date": 1791329385209,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.272841,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.264, 0.267, 0.273, 0.274, 0.291 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.5258645,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.417, 16.506, 16.526, 16.567, 16.575 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.1325025,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.330, 100.845, 101.133, 101.372, 101.375 ms"
           }
         ]
       }
