@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 
 import { commands, type VaultsToMove } from "./bindings";
+import { listen } from "./here";
 import { Notice } from "./Notice";
+
+/** What the core tells every window when a finish completes: what still waits (#1311). */
+export const MOVED = "vaults-to-move";
 
 /**
  * **The vaults the launch left under the old name, and the press that finishes moving them**
@@ -18,6 +22,9 @@ import { Notice } from "./Notice";
  * An item the person does not allow keeps its vault waiting, and the Notice stays with the press
  * to try again. What went wrong is one short line here; what each vault said is in the app's
  * log. Dismissible: nothing is lost by leaving them, and the next launch says so again.
+ *
+ * The press is made in one window, and every window hears when a finish completes (#1311): each
+ * Notice then says what still waits, and goes when nothing does.
  */
 export function VaultsWaitingNotice() {
   const [waiting, setWaiting] = useState<VaultsToMove | null>(null);
@@ -28,14 +35,33 @@ export function VaultsWaitingNotice() {
 
   useEffect(() => {
     let gone = false;
+    /** Whether a finish was heard: it is newer than the first read, which may answer later. */
+    let heard = false;
+    let stop: (() => void) | undefined;
+    void (async () => {
+      try {
+        const unlisten = await listen<VaultsToMove | null>(MOVED, (event) => {
+          heard = true;
+          if (gone) return;
+          setWaiting(event.payload);
+          // A line about an earlier press is about a count that no longer stands.
+          setTrouble(null);
+        });
+        if (gone) unlisten();
+        else stop = unlisten;
+      } catch {
+        // No window to listen in: a unit test, or a webview being torn down.
+      }
+    })();
     void commands
       .vaultsToMove()
       .then((now) => {
-        if (!gone) setWaiting(now);
+        if (!gone && !heard) setWaiting(now);
       })
       .catch(() => undefined);
     return () => {
       gone = true;
+      stop?.();
     };
   }, []);
 
