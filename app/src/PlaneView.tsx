@@ -207,7 +207,7 @@ import {
 } from "./tabs";
 import { chipSays, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
 import { EndingChat, type SmartAsk } from "./EndingChat";
-import { ChatAsk, focusAfterNoticeGone, midTurnWarning } from "./ChatAsk";
+import { ChatAsk, focusAfterNoticeGone } from "./ChatAsk";
 import { DID_NOT_START, saidWhenItEnds, stoppedWhy, useSmartClosing } from "./smartClose";
 import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
@@ -242,7 +242,6 @@ import { HarnessChip } from "./HarnessCard";
 import {
   ChatsHere,
   isShell,
-  markOf,
   movedAt,
   quietOnes,
   sameList,
@@ -256,7 +255,7 @@ import {
 import { TabMarks } from "./ChatRows";
 import { fitting, LEAST, LEAST_CHIP, LEAST_ROOT, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
-import type { Ending } from "./QuitWarning";
+import { oneChatMidTurn, type Ending } from "./QuitWarning";
 import { useTextSizes } from "./textSize";
 import { focusStands } from "./Cockpit";
 import {
@@ -498,7 +497,7 @@ export const PlaneView = memo(function PlaneView({
     name: string;
     files: readonly string[];
     /** What the chat was doing when it was asked about, as the board said (#1246). */
-    doing?: State;
+    doing: State;
     busy: boolean;
     trouble?: string;
   }>();
@@ -3380,25 +3379,36 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
-   * **Forget this chat…** asked from a waiting chat's Notice: the band that Notice stands in,
-   * and whether the answer was carried out — so the keyboard goes on to the next Notice, or the
-   * strip, once the Notice it came from has gone (#1246). A Cancel leaves Radix's own return.
+   * **Forget this chat…** asked from a waiting chat's Notice: the Notice and the band it stands
+   * in, found when the question opens (WebKit does not focus a pressed button, so the focus
+   * cannot say where it was), and whether the answer was carried out (#1246).
+   *
+   * - **Forgotten:** the Notice has gone, so the keyboard goes on to the next Notice, or the strip.
+   * - **Cancelled**, after a refusal too: back to the Notice's own Forget this chat….
    */
-  const forgetAsked = useRef<{ band: Element | null; forgot: boolean }>({
+  const forgetAsked = useRef<{ notice?: Element; band: Element | null; forgot: boolean }>({
     band: null,
     forgot: false,
   });
   const askForget = useCallback((id: string, name: string) => {
-    const from = [...document.querySelectorAll("[data-cause]")].find(
+    const notice = [...document.querySelectorAll("[data-cause]")].find(
       (one) => one.getAttribute("data-cause") === `chat-did-not-start:${id}`,
     );
-    forgetAsked.current = { band: from?.closest(".notice-band-stack") ?? null, forgot: false };
+    forgetAsked.current = {
+      notice,
+      band: notice?.closest(".notice-band-stack") ?? null,
+      forgot: false,
+    };
     setForgetting({ id, name, busy: false });
   }, []);
   const afterForgetAsk = useCallback((event: Event) => {
-    if (!forgetAsked.current.forgot) return;
     event.preventDefault();
-    focusAfterNoticeGone(forgetAsked.current.band, chatStrip.current);
+    const { notice, band, forgot } = forgetAsked.current;
+    const back = [...(notice?.querySelectorAll<HTMLElement>("button") ?? [])].find(
+      (button) => button.textContent === FORGET_THIS_CHAT,
+    );
+    if (!forgot && back?.isConnected) back.focus();
+    else focusAfterNoticeGone(band, chatStrip.current);
   }, []);
 
   const forgetChat = useCallback(
@@ -3429,11 +3439,13 @@ export const PlaneView = memo(function PlaneView({
         files: planeUpdates[session] ?? [],
         // Asked now, as a close asks `smart_close_offer`: the program ends either way, and
         // the question says so when that interrupts a turn (#1246).
-        doing: markOf(chats.store.statesFor(chats.plane), session, shells.has(session)),
+        // `stateOf`, as the quit warning reads it: a shell nothing has reported on is `unknown`
+        // too, since a harness started by hand in it could be mid-turn.
+        doing: stateOf(chats.store.statesFor(chats.plane), session),
         busy: false,
       });
     },
-    [chats.plane, chats.store, planeUpdates, shells],
+    [chats.plane, chats.store, planeUpdates],
   );
   /**
    * The core starts the same chat again, fresh (`start_chat_fresh`), and ends the old one itself
@@ -4862,7 +4874,7 @@ export const PlaneView = memo(function PlaneView({
             fixes={[
               { label: "Retry now", onPress: () => void retryChat(id) },
               {
-                label: "Forget this chat…",
+                label: FORGET_THIS_CHAT,
                 onPress: () => askForget(id, name),
               },
             ]}
@@ -5243,7 +5255,7 @@ export const PlaneView = memo(function PlaneView({
           title={`Start ${freshening.name} fresh?`}
           says={`The project's instructions changed since it started (${freshening.files.join(", ")}). Its program ends, and it starts again on what is there now, as a new conversation.`}
           answer="Start fresh"
-          warns={midTurnWarning(freshening.name, freshening.doing)}
+          warns={oneChatMidTurn(freshening.name, freshening.doing)}
           trouble={freshening.trouble}
           busy={freshening.busy}
           onAnswer={() => void startFresh()}
@@ -6429,3 +6441,6 @@ function PaneDoing({
     </div>
   );
 }
+
+/** The waiting chat's Notice's way out that asks first (NO-3), and where a Cancel goes back to. */
+const FORGET_THIS_CHAT = "Forget this chat…";
