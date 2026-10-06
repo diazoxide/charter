@@ -149,6 +149,16 @@ fn a_plane() -> Plane {
                 // Keyed by the workspace's name too (#1248): its changes, and a piece's files.
                 view("alpha", "changes", "alpha", "Changes · alpha"),
                 view("alpha", "piece-files", "alpha/svc/p1", "Files · p1"),
+                // A todo, a memory and a session record: held by the record since #1297, and
+                // keyed by the workspace's name, so they come back after a rename only rekeyed.
+                view("alpha", "todo", "alpha/20260302-091400-review", "review"),
+                view("alpha", "memory", "workspace/alpha/deploys", "deploys"),
+                view(
+                    "alpha",
+                    "session",
+                    "workspaces/alpha/sessions/20261005-091400-review.md",
+                    "2026-10-05 09:14 review",
+                ),
             ],
             dealt: 2,
             relaunch_after_update: false,
@@ -295,6 +305,27 @@ fn everything_follows(plane: &Plane) {
     assert_eq!(record.views[2].title, "Changes · beta");
     assert_eq!(record.views[3].key, "beta/svc/p1");
     assert_eq!(record.views[3].title, "Files · p1");
+    // Read back through what the next launch reads (#1297): each held, keyed by the new name.
+    let held: Vec<(&str, &str)> = record.views[4..]
+        .iter()
+        .map(|one| (one.view.as_str(), one.key.as_str()))
+        .collect();
+    assert_eq!(
+        held,
+        [
+            ("todo", "beta/20260302-091400-review"),
+            ("memory", "workspace/beta/deploys"),
+            (
+                "session",
+                "workspaces/beta/sessions/20261005-091400-review.md"
+            ),
+        ]
+    );
+    assert!(
+        record.views[4..]
+            .iter()
+            .all(|one| one.workspace.as_deref() == Some("beta"))
+    );
     // The branch the window focused (FM-5) follows its workspace.
     assert_eq!(
         record.focus.as_ref().map(|focus| focus.workspace.as_str()),
