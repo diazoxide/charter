@@ -335,11 +335,15 @@ fn record_opened(opened: &Opened<'_>) {
         opened.now.with_timezone(&chrono::Utc),
         &purlis_core::dispatch::this_log_name(),
     );
-    if recorded.is_none() {
+    if let Err(why) = recorded {
+        // The chat is open and its todo recorded: only the count of handoffs misses one. The
+        // OS's words, not the rewording, which would name the log's path a second time and
+        // ask for a rerun that would open a second chat (#1359).
         voice::warn(&format!(
-            "charter handoff: chat {chat} is open in '{ws}', but its row could not be added \
-             to the dispatch log (personas/{}).",
-            purlis_core::dispatch::DIR_NAME
+            "charter handoff: chat {chat} is open in '{ws}'. Only its row in the dispatch log \
+             (personas/{}) is missing ({}); there is nothing to run again.",
+            purlis_core::dispatch::DIR_NAME,
+            purlis_core::personas::one_line(&purlis_core::rewrite::os_words(&why))
         ));
     }
 }

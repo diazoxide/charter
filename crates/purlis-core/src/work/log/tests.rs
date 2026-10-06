@@ -678,3 +678,31 @@ fn a_log_that_resolves_out_of_the_project_is_neither_read_nor_written() {
     assert!(check_writable(root, "alpha", DEVICE).is_err());
     assert!(append(root, "alpha", DEVICE, at(2), &Op::link(todo())).is_err());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_line_the_filesystem_refuses_names_the_log_it_was_appending_to() {
+    // #1359: an EPERM here printed only "Operation not permitted (os error 1)".
+    let p = project();
+    let root = p.path();
+    let dir = dir_for(root, "alpha");
+    std::fs::create_dir_all(&dir).unwrap();
+    let _frozen = crate::rewrite::frozen::Frozen::at(&dir);
+
+    let refused = append(root, "alpha", DEVICE, at(1), &Op::link(todo())).unwrap_err();
+
+    crate::rewrite::frozen::names(&refused, &dir.join(format!("{DEVICE}.jsonl")));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_log_directory_the_filesystem_refuses_to_make_is_named() {
+    let p = project();
+    let root = p.path();
+    let ws = root.join("workspaces").join("alpha");
+    let _frozen = crate::rewrite::frozen::Frozen::at(&ws);
+
+    let refused = append(root, "alpha", DEVICE, at(1), &Op::link(todo())).unwrap_err();
+
+    crate::rewrite::frozen::names(&refused, &dir_for(root, "alpha"));
+}

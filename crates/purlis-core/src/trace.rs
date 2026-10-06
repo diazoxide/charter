@@ -106,13 +106,15 @@ pub fn append_private(root: &Path, path: &Path, bytes: &[u8]) -> std::io::Result
         options.mode(0o600);
     }
     // `O_NOFOLLOW`: a link swapped in after the containment answer is refused, not followed.
-    let mut out = crate::contain::nofollow(&mut options).open(path)?;
+    let mut out = crate::contain::nofollow(&mut options)
+        .open(path)
+        .map_err(crate::rewrite::refused_at(path))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = out.set_permissions(std::fs::Permissions::from_mode(0o600));
     }
-    std::io::Write::write_all(&mut out, bytes)
+    std::io::Write::write_all(&mut out, bytes).map_err(crate::rewrite::refused_at(path))
 }
 
 /// Create `dir` and every missing level above it at 0700 — `config.private_mkdir`. A
@@ -151,7 +153,8 @@ pub fn private_mkdir(dir: &Path) -> std::io::Result<()> {
         match builder.create(&level) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
+            // The level that could not be made, named (#1359).
+            Err(e) => return Err(crate::rewrite::refused_at(&level)(e)),
         }
         #[cfg(unix)]
         {
@@ -354,6 +357,34 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(refused.is_err());
         assert!(!locked.join("a").exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_append_the_filesystem_refuses_names_the_file_it_was_appending_to() {
+        // #1359: an EPERM here printed only "Operation not permitted (os error 1)".
+        let dir = tempfile::tempdir().unwrap();
+        let path = file(dir.path(), "s1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(path.parent().unwrap());
+
+        let refused = append_private(dir.path(), &path, b"row\n").unwrap_err();
+
+        crate::rewrite::frozen::names(&refused, &path);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_directory_the_filesystem_refuses_to_make_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let frozen = dir.path().join("frozen");
+        std::fs::create_dir(&frozen).unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(&frozen);
+
+        let refused = private_mkdir(&frozen.join("a/b")).unwrap_err();
+
+        // The level that could not be made, which is the one to act on.
+        crate::rewrite::frozen::names(&refused, &frozen.join("a"));
     }
 
     #[cfg(unix)]

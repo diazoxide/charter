@@ -314,16 +314,17 @@ impl Workspace {
         if path.exists() {
             return Ok(());
         }
-        std::fs::create_dir_all(&self.dir)?;
+        crate::rewrite::create_dir_all(&self.dir)?;
         let body = self.fresh_charter();
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
         {
-            Ok(mut f) => std::io::Write::write_all(&mut f, body.as_bytes()),
+            Ok(mut f) => std::io::Write::write_all(&mut f, body.as_bytes())
+                .map_err(crate::rewrite::refused_at(&path)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
-            Err(e) => Err(e),
+            Err(e) => Err(crate::rewrite::refused_at(&path)(e)),
         }
     }
 
@@ -377,6 +378,7 @@ impl Workspace {
         let path = self.dir.join("workspace.md");
         let current = std::fs::read_to_string(&path)?;
         std::fs::write(&path, mdsection::replace(&current, "Vision", text))
+            .map_err(crate::rewrite::refused_at(&path))
     }
 
     /// Record one todo as its own timestamp-prefixed file, and index it.
@@ -534,7 +536,7 @@ impl Workspace {
         self.writable(&self.dir.join("workspace.json"))?;
         let mut doc = doc.clone();
         manifest::stamp(&mut doc, stamped, manifest::key_for(&self.plane_root));
-        std::fs::create_dir_all(&self.dir)?;
+        crate::rewrite::create_dir_all(&self.dir)?;
         // Whole or not at all: one of this file's readers is `git add`, so half a manifest is
         // not a glitch somebody re-runs past — it is half a manifest a teammate pulls. Gated
         // from the workspace's own directory, which `writable` has just answered for: a link
@@ -552,7 +554,7 @@ impl Workspace {
     /// (NO-7, #1232). The caller has checked the text; nothing here stamps it.
     pub fn write_manifest_text(&self, text: &str) -> io::Result<()> {
         self.writable(&self.dir.join("workspace.json"))?;
-        std::fs::create_dir_all(&self.dir)?;
+        crate::rewrite::create_dir_all(&self.dir)?;
         crate::rewrite::replace(
             &self.dir,
             &self.dir.join("workspace.json"),

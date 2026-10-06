@@ -308,7 +308,7 @@ fn private_dirs(dir: &Path) -> io::Result<()> {
     builder.recursive(true);
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder.create(dir)
+    builder.create(dir).map_err(crate::rewrite::refused_at(dir))
 }
 
 fn write_entry(local: &Local, entry: &Entry) -> io::Result<()> {
@@ -320,11 +320,12 @@ fn write_entry(local: &Local, entry: &Entry) -> io::Result<()> {
     options.create(true).append(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options.open(&journal)?;
+    let refused = || crate::rewrite::refused_at(&journal);
+    let mut file = options.open(&journal).map_err(refused())?;
     let mut line = serde_json::to_string(entry).map_err(io::Error::other)?;
     line.push('\n');
-    file.write_all(line.as_bytes())?;
-    file.sync_all()
+    file.write_all(line.as_bytes()).map_err(refused())?;
+    file.sync_all().map_err(refused())
 }
 
 fn read_journal(local: &Local) -> Vec<Entry> {
@@ -812,10 +813,11 @@ fn write_record(file: &Path, lines: &[String]) -> io::Result<()> {
     }
     let mut text = lines.join("\n");
     text.push('\n');
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.write_all(text.as_bytes())?;
-    temp.as_file().sync_all()?;
-    temp.persist(file).map_err(|e| e.error)?;
+    let refused = || crate::rewrite::refused_at(file);
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(refused())?;
+    temp.write_all(text.as_bytes()).map_err(refused())?;
+    temp.as_file().sync_all().map_err(refused())?;
+    temp.persist(file).map_err(|e| refused()(e.error))?;
     Ok(())
 }
 
@@ -885,7 +887,7 @@ fn ignore(local: &Local, plane: &Path, names: &[String]) -> io::Result<()> {
                 path: info.to_path_buf(),
             },
         )?;
-        std::fs::create_dir(info)?;
+        std::fs::create_dir(info).map_err(crate::rewrite::refused_at(info))?;
     }
     write_entry(
         local,
@@ -895,12 +897,14 @@ fn ignore(local: &Local, plane: &Path, names: &[String]) -> io::Result<()> {
             text: text.clone(),
         },
     )?;
+    let refused = || crate::rewrite::refused_at(&exclude);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&exclude)?;
-    file.write_all(text.as_bytes())?;
-    file.sync_all()
+        .open(&exclude)
+        .map_err(refused())?;
+    file.write_all(text.as_bytes()).map_err(refused())?;
+    file.sync_all().map_err(refused())
 }
 
 /// Put back every move since the last finished undo, newest first (see the module).
