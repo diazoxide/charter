@@ -581,11 +581,23 @@ impl Held {
     }
 
     /// **Start fresh** (NO-3): chat `session` started again on the plane as it is now
-    /// ([`crate::chats::Chats::start_fresh`]), and then the old one ended here, as a close ends
+    /// ([`crate::chats::Chats::start_again`]), and then the old one ended here, as a close ends
     /// it — off the board, its program gone — so nothing the window does or fails to do can leave
     /// it running. A refused start ends nothing. The new one takes the old one's place in front.
     pub fn start_chat_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
-        let started = self.chats.start_fresh(session, &self.root, size)?;
+        self.start_chat_again(session, size, false)
+    }
+
+    /// **Restart now** (#1362): [`Self::start_chat_fresh`], resuming the chat's conversation,
+    /// so a change made for it at its start (persona grants the person allowed) applies.
+    pub fn restart_chat(&self, session: u32, size: Size) -> Result<u32, String> {
+        self.start_chat_again(session, size, true)
+    }
+
+    fn start_chat_again(&self, session: u32, size: Size, resuming: bool) -> Result<u32, String> {
+        let started = self
+            .chats
+            .start_again(session, &self.root, size, resuming)?;
         let in_front = self.chats.front() == Some(session);
         // The new one has started, so it is the answer whatever the old one's end says: a
         // program that had already ended answers its close with an error, and the new chat

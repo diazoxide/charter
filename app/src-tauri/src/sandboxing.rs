@@ -194,6 +194,46 @@ fn answer(root: &std::path::Path, turn_on: bool) -> Result<SandboxState, String>
     Ok(state_of(root))
 }
 
+/// A handed-off chat that holds the asking chat's persona grants instead of its own (#1362,
+/// D-1362-5), as its tab's Notice says it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct GrantsHeld {
+    /// The chat that opened it by a handoff, by the name the person saw; `null` for a chat a
+    /// Resume of a session record started.
+    pub from: Option<String>,
+    /// The persona it was opened as, whose hosts it cannot reach yet.
+    pub persona: Option<String>,
+}
+
+/// Whether chat `session` holds the asking chat's persona grants instead of its own, and whose
+/// (#1362): `null` for a chat that holds its own.
+#[tauri::command]
+#[specta::specta]
+pub fn persona_grants_held(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<Option<GrantsHeld>, String> {
+    let held = planes.held(&plane)?;
+    Ok(held
+        .chats()
+        .grants_held(session)
+        .map(|(from, persona)| GrantsHeld { from, persona }))
+}
+
+/// The person allowed chat `session` its own persona's grants from its tab's Notice (#1362):
+/// they apply from its next start, since a chat's sandbox is compiled as it starts.
+#[tauri::command]
+#[specta::specta]
+pub fn allow_persona_grants(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<bool, String> {
+    let held = planes.held(&plane)?;
+    Ok(held.chats().allow_own_grants(session))
+}
+
 /// The person read the Notice of the project's hosts as it showed them, `shown` (#1341): it is
 /// not shown again until they change from that.
 #[tauri::command]

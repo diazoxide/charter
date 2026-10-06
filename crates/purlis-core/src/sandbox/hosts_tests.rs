@@ -169,6 +169,7 @@ fn the_project_s_hosts_come_first_and_a_personal_one_already_there_is_not_repeat
     let granted = in_force(
         &hosts(&["a.example", "10.0.0.5:6443"]),
         &hosts(&["10.0.0.5:6443", "b.example"]),
+        &[],
         &Locks::none(),
     );
     assert_eq!(
@@ -273,6 +274,7 @@ fn a_host_that_is_one_of_this_machine_s_addresses_is_dropped() {
     let kept = super::hosts::off_this_machine(
         in_force(
             &hosts(&["10.0.0.5:22", "10.0.0.6", "a.example"]),
+            &[],
             &[],
             &Locks::none(),
         ),

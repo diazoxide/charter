@@ -12,6 +12,7 @@ fn default_policy() -> Option<Policy> {
         egress: vec![Preset::ModelProviders, Preset::Forge, Preset::Toolchains],
         hosts: vec![],
         certificate_checks: false,
+        personas: Default::default(),
     })
 }
 
@@ -70,6 +71,7 @@ fn a_plane_names_its_egress_by_preset_and_an_unknown_preset_is_refused() {
             egress: vec![Preset::Forge],
             hosts: vec![],
             certificate_checks: false,
+            personas: Default::default(),
         })
     );
     assert_eq!(
@@ -93,6 +95,7 @@ fn an_empty_egress_list_is_the_strictest_answer_and_is_kept() {
             egress: vec![],
             hosts: vec![],
             certificate_checks: false,
+            personas: Default::default(),
         })
     );
 }
@@ -1468,6 +1471,7 @@ fn a_person_can_start_one_chat_without_the_sandbox_and_every_class_is_lifted_for
         &machine(Os::MacOs),
         &|_| true,
         Some(&off(Some("the build needs the network"))),
+        None,
     );
     assert_eq!(
         decided,
@@ -1488,6 +1492,7 @@ fn the_opt_out_is_what_lets_a_chat_start_where_the_sandbox_cannot_be_applied() {
         &machine(Os::Linux),
         &|_| false,
         None,
+        None,
     );
     assert!(
         matches!(refused, Err(NotStarted::NoBackend(_))),
@@ -1499,6 +1504,7 @@ fn the_opt_out_is_what_lets_a_chat_start_where_the_sandbox_cannot_be_applied() {
         &machine(Os::Linux),
         &|_| false,
         Some(&off(None)),
+        None,
     );
     assert_eq!(
         started,
@@ -1518,6 +1524,7 @@ fn a_project_that_has_not_turned_the_sandbox_on_has_nothing_to_opt_out_of() {
         &machine(Os::MacOs),
         &|_| true,
         Some(&off(Some("why not"))),
+        None,
     );
     assert_eq!(decided, Ok(None), "no lift, so nothing to audit");
 }
@@ -1530,6 +1537,7 @@ fn without_an_opt_out_a_sandboxed_project_still_sandboxes_or_refuses() {
         plane.path(),
         &machine(Os::MacOs),
         &|_| true,
+        None,
         None,
     );
     assert!(
@@ -1546,6 +1554,7 @@ fn on_windows_a_chat_in_a_sandboxed_project_starts_at_the_opt_out_and_charter_is
         plane.path(),
         &machine(Os::Windows),
         &|_| true,
+        None,
         None,
     );
     assert_eq!(
@@ -1566,6 +1575,7 @@ fn a_system_with_no_backend_that_is_not_windows_still_fails_closed() {
         &machine(Os::Other),
         &|_| true,
         None,
+        None,
     );
     assert_eq!(
         decided,
@@ -1585,6 +1595,7 @@ fn a_typed_reason_is_kept_to_one_short_line() {
         &machine(Os::MacOs),
         &|_| true,
         Some(&off(Some(&long))),
+        None,
     ) else {
         panic!("unsandboxed");
     };
@@ -1600,6 +1611,7 @@ fn a_typed_reason_is_kept_to_one_short_line() {
         &machine(Os::MacOs),
         &|_| true,
         Some(&off(Some("   "))),
+        None,
     );
     assert_eq!(
         blank,
@@ -1850,6 +1862,7 @@ fn an_unreadable_charter_toml_still_refuses_rather_than_reading_as_off() {
             &machine(Os::MacOs),
             &|_| true,
             None,
+            None,
         ),
         Err(NotStarted::PlaneUnreadable)
     );
@@ -1875,6 +1888,7 @@ fn an_unreadable_charter_toml_still_refuses_rather_than_reading_as_off() {
             &machine(Os::MacOs),
             &|_| true,
             Some(&off(None)),
+            None,
         ),
         Ok(Some(Decided::Unsandboxed(Lifted {
             by: By::Person,
@@ -1919,6 +1933,7 @@ fn the_picker_shows_codex_sandboxed_where_charter_wraps_it_and_the_opt_out_elsew
             &machine(Os::Linux),
             &|_| true,
             Some(&off(None)),
+            None,
         ),
         Ok(Some(Decided::Unsandboxed(Lifted {
             by: By::Person,
@@ -2514,6 +2529,7 @@ fn policy_of(presets: &[Preset], certificate_checks: bool) -> Policy {
         egress: presets.to_vec(),
         hosts: vec![],
         certificate_checks,
+        personas: Default::default(),
     }
 }
 
