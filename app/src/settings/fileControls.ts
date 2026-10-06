@@ -1,5 +1,6 @@
 import { BUILT_IN, SYSTEM } from "../theme/theme";
 import { hueOf, PALETTE } from "../theme/tint";
+import type { Option } from "./components";
 import type {
   HarnessPlugin,
   HarnessPlugins,
@@ -37,9 +38,16 @@ export type Control = {
   label: string;
   hint?: string;
   /** `text` is one line, `choice` a closed set, `lines` one entry per line, and `colour` a
-   *  closed set whose `custom` pick is a `#rrggbb` of the operator's own (charter-app#281). */
-  kind: "text" | "choice" | "lines" | "colour";
+   *  closed set whose `custom` pick is a `#rrggbb` of the operator's own (charter-app#281);
+   *  `checks` any of a few, one entry per line, and `status` a line of text (#1340). */
+  kind: "text" | "choice" | "lines" | "colour" | "checks" | "status";
   choices?: readonly string[];
+  /** A `checks`' boxes, each with what it says beside it. */
+  options?: readonly Option[];
+  /** What a `status` says while the value is `value` (empty: not set). */
+  status?: (value: string) => string;
+  /** A `status`'s one button while no file sets it: its label, and the value it writes. */
+  turnOn?: { label: string; value: string };
   /** What a `choice`'s empty option says. */
   unset?: string;
   /** What a `choice` shows for each of its values, when that is not the value itself. */

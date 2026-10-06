@@ -85,7 +85,16 @@ function core({
         case "project_harness_plugins":
           return [];
         case "sandbox_state":
-          return { on: false, offer: false, said: null, never: [], hosts_changed: null };
+          return {
+            on: false,
+            offer: false,
+            said: null,
+            never: [],
+            hosts_changed: null,
+            presets: [],
+            persona_hosts: [],
+            besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+          };
         case "start_options":
           return {
             profiles: [profile("claude"), profile("codex"), profile("work", "charter.local.toml")],

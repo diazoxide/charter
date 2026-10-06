@@ -34,6 +34,9 @@ const DUE: SandboxState = {
   said: null,
   never: ["Codex: purlis can wrap it on macOS only, so far"],
   hosts_changed: null,
+  presets: [],
+  persona_hosts: [],
+  besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
 };
 
 describe("the sandbox offer", () => {
@@ -52,6 +55,9 @@ describe("the sandbox offer", () => {
       said: "no chat yet",
       never: [],
       hosts_changed: null,
+      presets: [],
+      persona_hosts: [],
+      besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
     });
     render(<SandboxOffer plane={PLANE} />);
 
@@ -66,6 +72,9 @@ describe("the sandbox offer", () => {
       said: "no chat yet",
       never: [],
       hosts_changed: null,
+      presets: [],
+      persona_hosts: [],
+      besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
     });
     render(<SandboxOffer plane={PLANE} />);
 
@@ -89,6 +98,9 @@ describe("the sandbox offer", () => {
       said: null,
       never: [],
       hosts_changed: null,
+      presets: [],
+      persona_hosts: [],
+      besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
     });
     render(<SandboxOffer plane={PLANE} />);
 

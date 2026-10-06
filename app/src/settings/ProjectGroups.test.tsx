@@ -122,6 +122,9 @@ const SANDBOX_OFF: SandboxState = {
   said: null,
   never: [],
   hosts_changed: null,
+  presets: [],
+  persona_hosts: [],
+  besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
 };
 
 /** A file as the core would answer it after `edits`: each edited key set or gone. */
@@ -899,14 +902,17 @@ describe("the sandbox, in Sandbox (ADR 0067 §7, ruling V78 d)", () => {
         offer: false,
         never: [],
         hosts_changed: null,
+        presets: [],
+        persona_hosts: [],
+        besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
         said: "1 of 4 chats started without the sandbox on this machine (25%); the bar is under 10%",
       },
     });
     await at("Sandbox");
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Sandbox mode")).toHaveAccessibleDescription(
-        /1 of 4 chats started without the sandbox on this machine \(25%\); the bar is under 10%\. Counted on this machine only, and never sent\./,
+      expect(screen.getByRole("group", { name: "Sandbox" })).toHaveTextContent(
+        "1 of 4 chats started without the sandbox on this machine (25%); the bar is under 10%. Counted on this machine only, and never sent.",
       ),
     );
   });
@@ -916,9 +922,10 @@ describe("the sandbox, in Sandbox (ADR 0067 §7, ruling V78 d)", () => {
     await at("Sandbox");
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Sandbox mode")).toHaveAccessibleDescription(
-        /Not set: chats here run without a sandbox\. On runs every chat sandboxed\./,
+      expect(screen.getByRole("group", { name: "Sandbox" })).toHaveTextContent(
+        "Off in this project.",
       ),
     );
+    expect(screen.getByRole("button", { name: "Turn the sandbox on" })).toBeInTheDocument();
   });
 });

@@ -51,7 +51,7 @@ function Trouble({ said, onDismiss }: { said: string; onDismiss: () => void }) {
  * which audits it; a project host's revoke is a change to the committed file, which teammates
  * follow. One a policy locks out says so, and is drawn locked.
  */
-function GrantedRows({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
+function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: RowIds }) {
   const [grants, setGrants] = useState<readonly SandboxGrant[]>();
   const [said, setSaid] = useState<string>();
 
@@ -89,7 +89,7 @@ function GrantedRows({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
             <li key={one.id}>
               <span>{grantSaid(one)}</span>
               {one.level === "project" && one.locked === null && (
-                <span className="granted-note">Revoking it edits the committed charter.toml.</span>
+                <span className="granted-note">Revoking it edits the committed {file}.</span>
               )}
               {one.locked !== null ? (
                 <span className="granted-locked"> Locked by policy: {one.locked}</span>
@@ -234,8 +234,8 @@ function GrantableFolders({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
   );
 }
 
-/** The Granted list's group, for the project at `plane`. */
-export function grantedGroup(plane: PlaneId): SettingsGroup {
+/** The Granted list's group, for the project at `plane`, whose committed file is `file`. */
+export function grantedGroup(plane: PlaneId, file: string): SettingsGroup {
   return {
     id: GRANTED,
     label: "Granted",
@@ -245,9 +245,9 @@ export function grantedGroup(plane: PlaneId): SettingsGroup {
       {
         id: `${GRANTED}.list`,
         label: "Granted",
-        help: "One chat lasts until that chat closes. Me on this machine is kept on this machine only. Everyone in this project is kept in charter.toml, which your team follows.",
+        help: `One chat lasts until that chat closes. Me on this machine is kept on this machine only. Everyone in this project is kept in ${file}, which your team follows.`,
         useControl: function useGranted() {
-          return { control: (ids) => <GrantedRows plane={plane} ids={ids} /> };
+          return { control: (ids) => <GrantedRows plane={plane} file={file} ids={ids} /> };
         },
       },
       {

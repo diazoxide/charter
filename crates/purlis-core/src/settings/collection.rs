@@ -85,6 +85,24 @@ pub struct Refusal {
 }
 
 impl Refusal {
+    /// This refusal, naming the project's files as the project at `root` has them (#1340):
+    /// `purlis.toml` once it is renamed, `charter.toml` until then.
+    pub fn named_at(self, root: &std::path::Path) -> Self {
+        let named = |said: String| super::named_at(root, &said);
+        Self {
+            fields: self
+                .fields
+                .into_iter()
+                .map(|one| FieldRefusal {
+                    why: named(one.why),
+                    ..one
+                })
+                .collect(),
+            referrers: self.referrers,
+            file: self.file.into_iter().map(named).collect(),
+        }
+    }
+
     /// A refusal of the whole write.
     pub fn file(reasons: Vec<String>) -> Self {
         Self {

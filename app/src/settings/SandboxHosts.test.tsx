@@ -110,7 +110,16 @@ function core({
         case "extensions_on":
           return [];
         case "sandbox_state":
-          return { on: true, offer: false, said: null, never: [], hosts_changed: null };
+          return {
+            on: true,
+            offer: false,
+            said: null,
+            never: [],
+            hosts_changed: null,
+            presets: [],
+            persona_hosts: [],
+            besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+          };
         case "add_sandbox_host": {
           const host = given.host as string;
           asked.push({ cmd, which, base: given.base as string | null, arg: host });

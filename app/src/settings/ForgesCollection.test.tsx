@@ -159,7 +159,16 @@ function core({
         case "extensions_on":
           return [];
         case "sandbox_state":
-          return { on: false, offer: false, said: null, never: [], hosts_changed: null };
+          return {
+            on: false,
+            offer: false,
+            said: null,
+            never: [],
+            hosts_changed: null,
+            presets: [],
+            persona_hosts: [],
+            besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+          };
         case "add_project_forge": {
           const entry = given.entry as ForgeEntry;
           const base = given.base as string | null;

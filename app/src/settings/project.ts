@@ -27,10 +27,8 @@ import {
   planeGroup,
   reposGroup,
   SHARED,
-  shown,
   textAt,
   themeGroup,
-  valueAt,
   type Control,
   type Entries,
   type Saving,
@@ -47,7 +45,15 @@ import {
 } from "./driver";
 import type { Collection, FileSetting, SettingsFileId, SettingsGroup } from "./groups";
 import { settled } from "../PlaneEdits";
-import { grantedGroup } from "./GrantedList";
+import { GRANTED, grantedGroup } from "./GrantedList";
+import { onAMac } from "../tabKeys";
+import {
+  SANDBOX_MODE,
+  sandboxControls,
+  sandboxNotes,
+  sandboxReasons,
+  sandboxSentence,
+} from "./sandbox";
 
 /**
  * **The Project level** (SE-17, #1167; V89b, V89e, V89h): a project's settings in the Settings
@@ -83,11 +89,15 @@ export type ProjectRead = {
   plane?: PlaneId;
 };
 
-/** The sentence a setting's help ends on: where it is kept, and who sees it. */
-export const KEPT: Record<SettingsWhich, string> = {
-  shared: "Kept in charter.toml, which your team sees.",
-  local: "Kept in charter.local.toml, on this machine only.",
-};
+/**
+ * The sentence a setting's help ends on: where it is kept, and who sees it — named as the file
+ * the project uses, `charter.toml` or `purlis.toml` (#1340).
+ */
+export function kept(file: Pick<SettingsFile, "which" | "file">): string {
+  return file.which === "shared"
+    ? `Kept in ${file.file}, which your team sees.`
+    : `Kept in ${file.file}, on this machine only.`;
+}
 
 /**
  * The tables both files' readers read (`profiles`' rule for `charter.local.toml`): a key in one
@@ -106,12 +116,22 @@ function eitherFile(path: readonly SettingsStep[]): boolean {
   );
 }
 
+/** The names of the project's two files, as the core read them: `charter.toml` or `purlis.toml`. */
+function namesOf(read: ProjectRead): Record<SettingsWhich, string> {
+  return { shared: read.shared.file, local: read.local.file };
+}
+
 /**
  * One of the old page's controls as a setting of `group`, kept in `file`. A key either file may
  * hold is `movable` (SE-18): its row's file choice says where it is kept, so its help does not.
  */
-function setting(group: string, file: SettingsWhich, control: Control): FileSetting {
-  const one = fileSetting(group, file, control, KEPT[file]);
+function setting(
+  group: string,
+  file: SettingsWhich,
+  control: Control,
+  names: Readonly<Record<SettingsWhich, string>>,
+): FileSetting {
+  const one = fileSetting(group, file, control, kept({ which: file, file: names[file] }));
   return file === "shared" && eitherFile(one.key)
     ? { ...fileSetting(group, file, control, ""), movable: true }
     : one;
@@ -312,7 +332,7 @@ function profilePages(read: ProjectRead): SettingsGroup[] {
           "One argument per line, program first. No shell runs it.",
         ),
         { ...envAt(name), label: `${name}: environment` },
-      ].map((control) => setting(profilePage(name), "local", control));
+      ].map((control) => setting(profilePage(name), "local", control, namesOf(read)));
       return {
         id: profilePage(name),
         label: one.label,
@@ -323,9 +343,6 @@ function profilePages(read: ProjectRead): SettingsGroup[] {
       };
     });
 }
-
-/** `[sandbox] mode`, which this tab turns on and never back off (D-SE17g). */
-const SANDBOX_MODE = key("sandbox", "mode");
 
 /** Whether two keys are the same key. */
 function same(a: readonly SettingsStep[], b: readonly SettingsStep[]): boolean {
@@ -344,52 +361,6 @@ function loosensTheSandbox(back: readonly SettingsEdit[]): boolean {
   );
 }
 
-/** What `[sandbox] egress` is when no file sets it: every preset (ADR 0067 §3). */
-const ALL_EGRESS = ["model-providers", "forge", "toolchains"];
-
-/**
- * **The sandbox** (ADR 0067): `mode` may only be turned on here. A committed file may turn it on
- * and never off, and taking `mode` out — the only way back to "not set" — is left to the file
- * itself, so this tab adds no way to loosen what a chat is confined to. `egress` shows the
- * presets in force, and an empty box writes `[]`, which reaches no host, rather than taking the
- * key out, which would reach all three.
- */
-function sandboxSettings(shared: Shown, sandbox: SandboxState | undefined): Control[] {
-  const set = valueAt(shared, SANDBOX_MODE) !== undefined;
-  // The opt-out count is this machine's, and is never sent (ADR 0067 §7, V78 d).
-  const said = sandbox?.on
-    ? `On: every chat purlis starts here runs in a sandbox.${sandbox.said ? ` ${sandbox.said}. Counted on this machine only, and never sent.` : ""}`
-    : "Not set: chats here run without a sandbox. On runs every chat sandboxed.";
-  const egress = key("sandbox", "egress");
-  return [
-    {
-      ...textAt(SANDBOX_MODE, "Sandbox mode", {
-        kind: "choice",
-        choices: ["on"],
-        hint: said,
-      }),
-      unset: set ? undefined : "not set",
-    },
-    {
-      ...listAt(
-        egress,
-        "Hosts it may reach",
-        "One preset per line: model-providers, forge, toolchains. Empty reaches no host.",
-      ),
-      read: (file) => {
-        const value = valueAt(file, egress);
-        return value === undefined ? ALL_EGRESS.join("\n") : shown(value);
-      },
-      edits: (draft) => [
-        {
-          path: egress,
-          value: { kind: "list", value: entries(draft) },
-        },
-      ],
-    },
-  ];
-}
-
 /**
  * **The eight groups**, in V89h's order, each with its stable id. Everything a project's two
  * files hold that charter reads is here: what the old page's forms covered, and the keys only its
@@ -401,6 +372,81 @@ function sandboxSettings(shared: Shown, sandbox: SandboxState | undefined): Cont
  * why, above the groups.
  */
 export function projectGroups(read: ProjectRead): SettingsGroup[] {
+  const names = namesOf(read);
+  // The Sandbox's pages are written with the names in use, and quote hosts a person wrote:
+  // nothing in them is renamed (#1340).
+  return declaredGroups(read).map((group) =>
+    WRITTEN_NAMED.has(group.id) ? group : inFiles(group, names),
+  );
+}
+
+/** The groups whose text already names the files in use. */
+const WRITTEN_NAMED = new Set(["project.sandbox", MY_HOSTS, GRANTED]);
+
+/**
+ * `text`, naming the project's two files as the project names them (#1340): the level's
+ * sentences are written with `charter.toml` and `charter.local.toml`, and a project renamed to
+ * purlis's names reads `purlis.toml` and `purlis.local.toml` in each of them.
+ */
+export function namedIn(text: string, names: Readonly<Record<SettingsWhich, string>>): string {
+  // The local name first: the committed name is not part of it.
+  return wholeName(
+    wholeName(text, "charter.local.toml", names.local),
+    "charter.toml",
+    names.shared,
+  );
+}
+
+/**
+ * `text` with each `old` that stands as a whole file name replaced by `now`: one no name
+ * character runs into on either side, so a host or a path that only holds it
+ * (`charter.toml.example.com`, `mycharter.toml`) is quoted as written. A sentence's full stop
+ * after it still ends the name, and a folder before it is the file's own. As the core's
+ * `settings::named_as` does.
+ */
+function wholeName(text: string, old: string, now: string): string {
+  const part = /[A-Za-z0-9_-]/;
+  return text.split(old).reduce((out, piece, at, pieces) => {
+    if (at === 0) return piece;
+    const before = pieces[at - 1];
+    const led = before.length > 0 && /[A-Za-z0-9_.-]/.test(before[before.length - 1]);
+    const runsOn =
+      piece.length > 0 &&
+      (piece[0] === "." ? piece.length > 1 && part.test(piece[1]) : part.test(piece[0]));
+    return `${out}${led || runsOn ? old : now}${piece}`;
+  }, "");
+}
+
+/** `group`, with every sentence it shows naming the files as the project names them. */
+function inFiles(
+  group: SettingsGroup,
+  names: Readonly<Record<SettingsWhich, string>>,
+): SettingsGroup {
+  const said = (text: string) => namedIn(text, names);
+  return {
+    ...group,
+    help: said(group.help),
+    notes: group.notes?.map(said),
+    settings: group.settings.map((one) => ({
+      ...one,
+      label: said(one.label),
+      help: said(one.help),
+      ...("unset" in one && one.unset !== undefined ? { unset: said(one.unset) } : {}),
+    })),
+    after: group.after?.map((one) => ({ ...one, help: said(one.help) })),
+    ...(group.collection
+      ? {
+          collection: {
+            ...group.collection,
+            fields: group.collection.fields.map((one) => ({ ...one, help: said(one.help) })),
+          },
+        }
+      : {}),
+  };
+}
+
+/** The level's groups, as declared: {@link projectGroups} names the files in them. */
+function declaredGroups(read: ProjectRead): SettingsGroup[] {
   const shared: Shown = read.shared;
   const local: Shown = read.local;
   const sharedOk = shared.parsed;
@@ -409,11 +455,15 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
   const [harness] = LOCAL;
   const fromShared = (group: string, controls: Control[]) =>
     sharedOk
-      ? controls.map((one) => picking(setting(group, "shared", one), shared, read.entries))
+      ? controls.map((one) =>
+          picking(setting(group, "shared", one, namesOf(read)), shared, read.entries),
+        )
       : [];
   const fromLocal = (group: string, controls: Control[]) =>
     localOk
-      ? controls.map((one) => picking(setting(group, "local", one), local, read.entries))
+      ? controls.map((one) =>
+          picking(setting(group, "local", one, namesOf(read)), local, read.entries),
+        )
       : [];
 
   const sharedGeneral = asked(general, shared, read).controls;
@@ -476,25 +526,28 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
     {
       id: "project.sandbox",
       label: "Sandbox",
-      help: "Whether the chats purlis starts here run in a sandbox, and which hosts it lets them reach. The project's own hosts below are kept in charter.toml, and every chat of everyone who opens the project reaches them.",
-      settings: fromShared("project.sandbox", sandboxSettings(shared, read.sandbox)).map((one) =>
+      // The sentence at the top (#1340): what a chat here can do, as the files stand now.
+      help: sandboxSentence(read.shared, read.sandbox, onAMac()),
+      notes: sandboxNotes(read.shared, read.sandbox),
+      settings: fromShared("project.sandbox", sandboxControls(read.sandbox)).map((one) =>
         same(one.key, SANDBOX_MODE) ? { ...one, oneWay: true } : one,
       ),
       ...(sharedOk ? { collection: hostsCollection(read.shared, "hosts") } : {}),
+      after: sharedOk ? sandboxReasons(read.shared, read.local, read.sandbox) : [],
     },
     ...(localOk
       ? [
           {
             id: MY_HOSTS,
             label: "Your hosts",
-            help: "Hosts your chats here reach besides the project's, on this machine only. Kept in charter.local.toml.",
+            help: `Hosts your chats here reach besides the project's, on this machine only. Kept in ${read.local.file}.`,
             settings: [],
             collection: hostsCollection(read.local, "myHosts"),
             sub: true,
           },
         ]
       : []),
-    ...(read.plane !== undefined ? [grantedGroup(read.plane)] : []),
+    ...(read.plane !== undefined ? [grantedGroup(read.plane, read.shared.file)] : []),
     {
       id: "project.forges",
       label: "Forges",

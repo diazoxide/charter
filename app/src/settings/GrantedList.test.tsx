@@ -50,7 +50,7 @@ afterEach(() => {
 });
 
 function Setting({ at }: { at: number }) {
-  const setting = grantedGroup(PLANE).settings[at] as LiveSetting;
+  const setting = grantedGroup(PLANE, "charter.toml").settings[at] as LiveSetting;
   const { control } = setting.useControl();
   return <>{control({ id: `g${at}`, labelledBy: `g${at}-label` })}</>;
 }

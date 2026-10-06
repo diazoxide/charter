@@ -9,7 +9,7 @@ import { DEFAULT_THEME, inForce } from "../theme/theme";
 import { atCreation } from "../windowprefs";
 import { Choice, Field, SettingGroup, SettingRow, SettingsLayout, type RowIds } from "./components";
 import { heldIn, keysOf, type Driven, type Files } from "./driver";
-import type { Entry } from "./fileControls";
+import { entries, type Entry } from "./fileControls";
 import {
   inAFile,
   LEVELS,
@@ -28,7 +28,7 @@ import {
   settingsPlace,
   useShownGroup,
 } from "./links";
-import { KEPT, projectGroups, useProjectLevel } from "./project";
+import { kept, projectGroups, useProjectLevel } from "./project";
 import { named, RawEditor, RawLinks, type RawDraft, type RawFile } from "./RawToml";
 import { useWorkspaceLevel, workspaceGroups } from "./workspace";
 import { youGroups } from "./you";
@@ -158,7 +158,7 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
           id: which,
           as: "TOML",
           file: project.read[which],
-          kept: KEPT[which],
+          kept: kept(project.read[which]),
           save: (base, text) => project.writeRaw(which, base, text),
         }))
       : [];
@@ -526,7 +526,9 @@ function narrowed(groups: readonly SettingsGroup[], filter: string): readonly Se
   return groups.flatMap((one) => {
     if (holds(one.label, one.help)) return [one];
     const settings = one.settings.filter((setting) => holds(setting.label, setting.help));
-    return settings.length > 0 ? [{ ...one, settings }] : [];
+    const after = one.after?.filter((setting) => holds(setting.label, setting.help));
+    // A group a filter finds only by what it explains is found too (#1340).
+    return settings.length > 0 || (after?.length ?? 0) > 0 ? [{ ...one, settings, after }] : [];
   });
 }
 
@@ -577,6 +579,7 @@ function ShownGroup({
       ) : (
         group.settings.map(row)
       )}
+      {group.after?.map(row)}
     </SettingGroup>
   );
 }
@@ -610,7 +613,8 @@ function originOf(setting: FileSetting, files: Files, from: SettingsFileId | und
   if (from === "workspace") return `From ${file}, at the Workspace level.`;
   if (from === "shared") return `From ${file}, at the Project level: shared with your team.`;
   const shared = sharedUnder(setting, files);
-  const under = shared === undefined ? "" : ` charter.toml has ${shared}, which this overrides.`;
+  const committed = files.shared?.file ?? "charter.toml";
+  const under = shared === undefined ? "" : ` ${committed} has ${shared}, which this overrides.`;
   return `From ${file}, at the Project level: this machine only.${under}`;
 }
 
@@ -625,11 +629,22 @@ function sharedUnder(setting: FileSetting, files: Files): string | undefined {
   return setting.read(shared) || "a value";
 }
 
-/** The two files a movable value may be kept in, as the file choice offers them. */
-const PLACES = [
-  { value: "shared", label: "Shared", says: "charter.toml, which your team sees" },
-  { value: "local", label: "Only on this machine", says: "charter.local.toml" },
-] as const;
+/** The two files a movable value may be kept in, as the file choice offers them: named as the
+ *  project names them (#1340). */
+function placesOf(names: Readonly<Record<SettingsWhich, string>>) {
+  return [
+    { value: "shared", label: "Shared", says: `${names.shared}, which your team sees` },
+    { value: "local", label: "Only on this machine", says: names.local },
+  ] as const;
+}
+
+/** The project's two files' names, as read; the old names before they are read. */
+function namesIn(files: Files): Record<SettingsWhich, string> {
+  return {
+    shared: files.shared?.file ?? "charter.toml",
+    local: files.local?.file ?? "charter.local.toml",
+  };
+}
 
 /** Every key the setting has in `file`, taken out. */
 function removals(setting: FileSetting, files: Files, from: SettingsFileId | undefined) {
@@ -686,6 +701,8 @@ function FileRow({
       setting={setting.id}
       label={setting.label}
       help={setting.help}
+      // A row of boxes or a status line is named by its label, as a group (#1340).
+      grouped={setting.kind === "checks" || setting.kind === "status"}
       error={
         project.refused[setting.id] ??
         // The core's word on a value that names nothing, until a write replaces it (ST-1).
@@ -693,7 +710,7 @@ function FileRow({
       }
       undo={project.undoable === setting.id && !writing ? project.undo : undefined}
       origin={originOf(setting, project.files, from)}
-      badge={overridden !== undefined ? "Overrides charter.toml" : undefined}
+      badge={overridden !== undefined ? `Overrides ${namesIn(project.files).shared}` : undefined}
       reset={
         mayTakeOut
           ? { label: "Reset", disabled: writing, onReset: () => project.reset(setting) }
@@ -702,6 +719,7 @@ function FileRow({
       place={
         setting.movable && (
           <Place
+            names={namesIn(project.files)}
             held={from === "shared" || from === "local" ? from : undefined}
             pick={pick ?? (from === "shared" || from === "local" ? from : "shared")}
             onPick={setPick}
@@ -716,7 +734,28 @@ function FileRow({
         )
       }
       control={(ids) =>
-        setting.kind === "colour" ? (
+        setting.kind === "status" ? (
+          <Status ids={ids} setting={setting} value={value} writing={writing} onWrite={write} />
+        ) : setting.kind === "checks" ? (
+          <Choice
+            kind="checks"
+            ids={ids}
+            options={setting.options ?? []}
+            checked={new Set(entries(value))}
+            onCheckedChange={(one, on) => {
+              const ticked = new Set(entries(value));
+              if (on) ticked.add(one);
+              else ticked.delete(one);
+              // In the boxes' order, whatever order they were ticked in.
+              write(
+                (setting.options ?? [])
+                  .map((option) => option.value)
+                  .filter((option) => ticked.has(option))
+                  .join("\n"),
+              );
+            }}
+          />
+        ) : setting.kind === "colour" ? (
           <Colour ids={ids} setting={setting} value={value} onValueChange={write} />
         ) : setting.names !== undefined ? (
           <Picker
@@ -760,11 +799,55 @@ function FileRow({
 }
 
 /**
+ * **A setting shown as a status line** (#1340): what the value means, in a sentence, and at most
+ * one button, offered while no file sets the value — the Sandbox's Turn the sandbox on, which has
+ * no way back here (D-SE17g). A group the row's label names, so the line is read with its name.
+ */
+function Status({
+  ids,
+  setting,
+  value,
+  writing,
+  onWrite,
+}: {
+  ids: RowIds;
+  setting: FileSetting;
+  value: string;
+  writing: boolean;
+  onWrite: (to: string) => void;
+}) {
+  const { turnOn } = setting;
+  return (
+    <div
+      id={ids.id}
+      role="group"
+      className="ui-setting-status"
+      aria-labelledby={ids.labelledBy}
+      aria-describedby={ids.describedBy}
+    >
+      <p>{setting.status?.(value) ?? value}</p>
+      {turnOn !== undefined && value === "" && (
+        <button
+          type="button"
+          // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+          tabIndex={0}
+          disabled={writing}
+          onClick={() => onWrite(turnOn.value)}
+        >
+          {turnOn.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
  * **The file choice** (SE-18, V89d): Shared or Only on this machine, a radio group. Where a file
  * holds the value, a pick of the other is held until its button moves it; where none does, the
  * pick is where the next value goes.
  */
 function Place({
+  names,
   held,
   pick,
   onPick,
@@ -773,6 +856,8 @@ function Place({
   disabled,
   onMove,
 }: {
+  /** The project's two files, as it names them. */
+  names: Readonly<Record<SettingsWhich, string>>;
   /** The file that holds the value, if one does. */
   held: SettingsWhich | undefined;
   pick: SettingsWhich;
@@ -785,13 +870,14 @@ function Place({
 }) {
   const id = useId();
   const name = useId();
+  const places = placesOf(names);
   return (
     <div className="ui-setting-place">
       <span id={name}>Where it is kept</span>
       <Choice
         kind="radio"
         ids={{ id, labelledBy: name }}
-        options={PLACES}
+        options={places}
         value={pick}
         // Not while a write is pending: the focus comes back here once Move is pressed.
         disabled={held !== undefined && !mayMove}
@@ -808,13 +894,13 @@ function Place({
             onMove(pick);
             // The button goes once it is pressed; the focus goes to the file the value went to.
             // A Choice names its options by place (D-DS3e-10).
-            const at = PLACES.findIndex((one) => one.value === pick);
+            const at = places.findIndex((one) => one.value === pick);
             document.getElementById(`${id}-${at}`)?.focus();
           }}
         >
           {pick === "local"
-            ? "Move to charter.local.toml"
-            : `Move to charter.toml${replacing === undefined ? "" : `, replacing ${replacing}`}`}
+            ? `Move to ${names.local}`
+            : `Move to ${names.shared}${replacing === undefined ? "" : `, replacing ${replacing}`}`}
         </button>
       )}
     </div>
