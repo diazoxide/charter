@@ -138,6 +138,7 @@ pub fn create(request: &Request, say: Sink) -> u8 {
                 repos: request.repos,
                 now: request.now,
                 author: &author,
+                hosts: None,
             },
             say,
         );

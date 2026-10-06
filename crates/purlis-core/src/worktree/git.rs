@@ -435,6 +435,109 @@ fn verb<'a>(args: &[&'a str]) -> Option<&'a str> {
     None
 }
 
+/// The configuration a **brokered** git call reads (#1335, D-1335-7): no global and no system
+/// file at all, and only the keys named here on top of the repository's own.
+///
+/// A git action the app takes for a sandboxed chat runs outside the chat's sandbox, so nothing
+/// the chat could have shaped may name a program for it to run. The operator's global and
+/// system files are not the chat's, but they routinely define the very drivers a committed
+/// `.gitattributes` turns on (an LFS or a custom `filter`, a `diff` textconv), and a repository
+/// the chat wrote could ask for one by name. So a brokered call reads neither file
+/// (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), and gets back only the identity
+/// the operator's global file gives ([`Isolated::operators`]). What the repository's own
+/// config defines is checked before the call runs (`gitbroker`).
+///
+/// Held per thread for the length of [`isolated`], so every git call the brokered command makes
+/// on that thread reads it without each of them being told; a command that hands work to other
+/// threads carries it there itself ([`isolation`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Isolated {
+    /// `key=value`, each passed as `-c`.
+    config: Vec<String>,
+    /// A work tree and the git directory a check resolved for it: a call run in that tree is
+    /// given both, so git uses the repository that was checked and no other (D-1335-9).
+    pin: Option<(PathBuf, PathBuf)>,
+}
+
+impl Isolated {
+    /// `user.name` and `user.email` as given, and nothing else.
+    pub fn identity(name: Option<&str>, email: Option<&str>) -> Self {
+        let mut config = Vec::new();
+        for (key, value) in [("user.name", name), ("user.email", email)] {
+            if let Some(value) = value.filter(|v| !v.is_empty() && !v.contains(['\n', '\0'])) {
+                config.push(format!("{key}={value}"));
+            }
+        }
+        Self { config, pin: None }
+    }
+
+    /// The identity the operator's global git config gives, read through this module's
+    /// hardened runner, outside any repository.
+    pub fn operators() -> Self {
+        let read = |key: &str| {
+            run(Path::new("/"), &["config", "--global", "--get", key], READ)
+                .ok()
+                .filter(Run::ok)
+                .map(|run| run.line().to_owned())
+        };
+        Self::identity(read("user.name").as_deref(), read("user.email").as_deref())
+    }
+
+    /// The same, with every call run in `work_tree` given `--git-dir=<git_dir>` and
+    /// `--work-tree=<work_tree>`, so it uses the repository a check resolved and discovers none.
+    #[must_use]
+    pub fn pinned(&self, work_tree: &Path, git_dir: &Path) -> Self {
+        Self {
+            pin: Some((real(work_tree), git_dir.to_path_buf())),
+            ..self.clone()
+        }
+    }
+
+    /// One more key. **For a test's stand-in forge only** (a `url.<base>.insteadOf` that points
+    /// a clone at a local directory): the app passes the identity and nothing else.
+    #[must_use]
+    pub fn also(mut self, key: &str, value: &str) -> Self {
+        self.config.push(format!("{key}={value}"));
+        self
+    }
+}
+
+/// `path` with its links resolved, or as it is where it cannot be.
+fn real(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+thread_local! {
+    static ISOLATED: std::cell::RefCell<Option<Isolated>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `then` with every git call this thread makes reading only `isolated`'s configuration.
+pub fn isolated<T>(isolated: &Isolated, then: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Isolated>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let before = self.0.take();
+            ISOLATED.with(|held| *held.borrow_mut() = before);
+        }
+    }
+    let before = ISOLATED.with(|held| held.borrow_mut().replace(isolated.clone()));
+    let _restore = Restore(before);
+    then()
+}
+
+/// The isolation this thread runs under, for a command that carries it to threads of its own.
+pub fn isolation() -> Option<Isolated> {
+    ISOLATED.with(|held| held.borrow().clone())
+}
+
+/// [`isolated`] when `isolation` is one, else `then` as it is.
+pub fn within<T>(isolation: Option<&Isolated>, then: impl FnOnce() -> T) -> T {
+    match isolation {
+        Some(held) => isolated(held, then),
+        None => then(),
+    }
+}
+
 fn spawn(dir: &Path, args: &[&str]) -> Result<Child, GitUnavailable> {
     spawn_with(dir, args, &Extra::default())
 }
@@ -447,6 +550,21 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
     }
     for setting in &extra.config {
         cmd.arg("-c").arg(setting);
+    }
+    let isolated = isolation();
+    if let Some(held) = &isolated {
+        // A bare repository is used only when named (D-1335-8): one a chat made, which no
+        // `.git` path covers, is never found by discovery.
+        cmd.arg("-c").arg("safe.bareRepository=explicit");
+        for setting in &held.config {
+            cmd.arg("-c").arg(setting);
+        }
+        if let Some((tree, git_dir)) = &held.pin
+            && real(dir) == *tree
+        {
+            cmd.arg(format!("--git-dir={}", git_dir.display()))
+                .arg(format!("--work-tree={}", tree.display()));
+        }
     }
     cmd.arg("-C").arg(dir).args(args);
     cmd.env_clear();
@@ -469,6 +587,24 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
     }
     for (name, value) in &extra.pass {
         cmd.env(name, value);
+    }
+    if isolated.is_some() {
+        // After everything passed through, so no relocated config file or entry comes back
+        // in. `XDG_CONFIG_HOME` stays for a forge CLI's own config: with the global file
+        // named, git reads no other.
+        for name in CONFIG_LOCATION_ENV
+            .into_iter()
+            .filter(|name| name.starts_with("GIT_"))
+        {
+            cmd.env_remove(name);
+        }
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        // Discovery looks at `dir` itself and never climbs to the workspace or the project
+        // above it (D-1335-8): every brokered call runs at the top of the tree it means.
+        if let Some(parent) = real(dir).parent() {
+            cmd.env("GIT_CEILING_DIRECTORIES", parent);
+        }
     }
     cmd.stdin(if extra.stdin {
         Stdio::piped()
@@ -827,6 +963,38 @@ fn wait_raw(mut child: Child, timeout: Duration) -> std::io::Result<RawRun> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_brokered_call_reads_no_global_or_system_config_and_only_the_identity_it_is_given() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let listed = |dir: &Path| {
+            run(dir, &["config", "--list", "--show-scope"], READ)
+                .expect("git runs")
+                .out
+        };
+        let held = Isolated::identity(Some("Op Erator"), Some("op@e.invalid"));
+        let seen = isolated(&held, || listed(dir.path()));
+        assert!(
+            seen.lines()
+                .all(|line| !line.starts_with("global") && !line.starts_with("system")),
+            "{seen}"
+        );
+        assert!(seen.contains("command\tuser.name=Op Erator"), "{seen}");
+        assert!(seen.contains("command\tuser.email=op@e.invalid"), "{seen}");
+        assert_eq!(isolation(), None, "the isolation outlived its call");
+        assert!(
+            !listed(dir.path()).contains("user.name=Op Erator"),
+            "an ordinary call read the brokered identity"
+        );
+    }
+
+    #[test]
+    fn an_identity_that_would_break_a_line_is_left_out() {
+        assert_eq!(
+            Isolated::identity(Some("a\nb"), Some("")),
+            Isolated::default()
+        );
+    }
 
     fn lookup_in<'a>(
         vars: &'a [(&'a str, &'a str)],

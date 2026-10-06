@@ -526,6 +526,7 @@ fn clone_into(root: &Path, workspace: &str, repo: &str) -> Result<Vec<String>, S
             repos: &[repo.to_string()],
             now: chrono::Utc::now(),
             author: &author,
+            hosts: None,
         },
         &mut |line: Say| said.push(line),
     );

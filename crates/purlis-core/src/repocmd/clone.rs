@@ -49,6 +49,10 @@ pub struct Request<'a> {
     pub now: chrono::DateTime<chrono::Utc>,
     /// Who it says touched it: `updated_by`, `$USER` in Python.
     pub author: &'a str,
+    /// The hosts a clone may reach, where it runs for a sandboxed chat (#1335): the chat's
+    /// sandbox egress ([`crate::sandbox::hosts`]). A record whose URL names another host is
+    /// refused before git runs. `None` is no such limit: the terminal's own command.
+    pub hosts: Option<&'a [String]>,
 }
 
 /// What happened to one repo.
@@ -132,7 +136,7 @@ pub fn clone(request: &Request, say: Sink) -> u8 {
             WORKERS.min(targets.len())
         )));
     }
-    let outcomes = clone_all(root, ws, &ws_dir, &targets);
+    let outcomes = clone_all(root, ws, &ws_dir, &targets, request.hosts);
 
     // Printed here, from one thread, in the order the repos were asked for: eight workers
     // printing as they finish interleave into something nobody can scan for which failed.
@@ -219,22 +223,32 @@ fn workspace_dir(root: &Path, ws: &str) -> Result<PathBuf, String> {
 }
 
 /// Clone every target, [`WORKERS`] at a time, answering in the order asked.
-fn clone_all(root: &Path, ws: &str, ws_dir: &Path, targets: &[Value]) -> Vec<Outcome> {
+fn clone_all(
+    root: &Path,
+    ws: &str,
+    ws_dir: &Path,
+    targets: &[Value],
+    hosts: Option<&[String]>,
+) -> Vec<Outcome> {
     let slots: Mutex<Vec<Option<Outcome>>> = Mutex::new((0..targets.len()).map(|_| None).collect());
     let next = AtomicUsize::new(0);
+    // A brokered clone's isolation is held per thread, so each worker takes it on (#1335).
+    let isolation = git::isolation();
     std::thread::scope(|scope| {
         for _ in 0..WORKERS.min(targets.len()) {
             scope.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, Ordering::SeqCst);
-                    let Some(record) = targets.get(i) else {
-                        break;
-                    };
-                    let outcome = clone_one(root, ws, ws_dir, record);
-                    if let Ok(mut slots) = slots.lock() {
-                        slots[i] = Some(outcome);
+                git::within(isolation.as_ref(), || {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::SeqCst);
+                        let Some(record) = targets.get(i) else {
+                            break;
+                        };
+                        let outcome = clone_one(root, ws, ws_dir, record, hosts);
+                        if let Ok(mut slots) = slots.lock() {
+                            slots[i] = Some(outcome);
+                        }
                     }
-                }
+                });
             });
         }
     });
@@ -342,7 +356,13 @@ pub fn https_url(record: &Value, root: &Path) -> Result<String, String> {
 }
 
 /// Clone ONE repo. Prints nothing: [`clone`] renders every outcome afterwards, in order.
-fn clone_one(root: &Path, ws: &str, ws_dir: &Path, record: &Value) -> Outcome {
+fn clone_one(
+    root: &Path,
+    ws: &str,
+    ws_dir: &Path,
+    record: &Value,
+    hosts: Option<&[String]>,
+) -> Outcome {
     let name = record
         .get("name")
         .and_then(Value::as_str)
@@ -365,6 +385,9 @@ fn clone_one(root: &Path, ws: &str, ws_dir: &Path, record: &Value) -> Outcome {
         Ok(url) => url,
         Err(why) => return Outcome::Refused(why),
     };
+    if let Some(why) = hosts.and_then(|hosts| unreachable_host(hosts, &url)) {
+        return Outcome::Refused(why);
+    }
     let dest_arg = dest.display().to_string();
     // No `--branch`: the remote's HEAD is its real default branch, where the inventory's
     // field may be one `discover` assumed, or one the forge has since moved off.
@@ -403,6 +426,21 @@ fn clone_one(root: &Path, ws: &str, ws_dir: &Path, record: &Value) -> Outcome {
         forge,
         branch,
     }
+}
+
+/// Why `url`'s host is not one `hosts` lets a sandboxed chat reach, or `None` when it is
+/// (#1335, D-5). Checked by the app before git runs, so a clone it makes for a chat reaches no
+/// host the chat itself could not.
+fn unreachable_host(hosts: &[String], url: &str) -> Option<String> {
+    let host = forge::host_of(url);
+    (!crate::sandbox::egress::allows(hosts, &host)).then(|| {
+        format!(
+            "its host '{}' is not one this chat's sandbox may reach, so the app did not clone \
+             it for the chat. The project's `[sandbox] egress` in charter.toml says which hosts \
+             a chat reaches (the `forge` preset holds the forges')",
+            crate::shown::escaped(&host)
+        )
+    })
 }
 
 /// What a failed clone says: git's own words, and why when the why is charter's rule.
@@ -568,6 +606,58 @@ mod tests {
         .unwrap();
         std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
         (dir, root)
+    }
+
+    #[test]
+    fn a_host_outside_a_sandboxed_chats_egress_is_named_and_one_inside_is_let_through() {
+        let url = "https://github.com/acme/widget.git";
+        let refused = unreachable_host(&["gitlab.com".to_owned()], url).expect("refused");
+        assert!(refused.contains("'github.com'"), "{refused}");
+        assert!(refused.contains("[sandbox] egress"), "{refused}");
+        assert_eq!(unreachable_host(&["github.com".to_owned()], url), None);
+        assert!(
+            unreachable_host(&[], url).is_some(),
+            "no host listed reaches nothing"
+        );
+    }
+
+    #[test]
+    fn a_clone_for_a_sandboxed_chat_never_runs_git_against_a_host_it_may_not_reach() {
+        let (_dir, root) = plane();
+        std::fs::create_dir_all(root.join("inventory")).unwrap();
+        std::fs::write(
+            root.join("inventory/repos.json"),
+            json!({"group": "acme", "count": 1, "repos": [{
+                "name": "widget",
+                "path_with_namespace": "acme/widget",
+                "web_url": "https://github.com/acme/widget",
+                "forge": "github",
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let mut said = Vec::new();
+        let code = clone(
+            &Request {
+                root: &root,
+                ws: "alpha",
+                repos: &["widget".to_owned()],
+                now: chrono::Utc::now(),
+                author: "tester",
+                hosts: Some(&["gitlab.com".to_owned()]),
+            },
+            &mut |line| said.push(line),
+        );
+        assert_eq!(code, 1, "{said:?}");
+        assert!(
+            said.iter()
+                .any(|line| matches!(line, Say::Fail(text) if text.contains("'github.com'"))),
+            "{said:?}"
+        );
+        assert!(
+            !root.join("workspaces/alpha/widget").exists(),
+            "git ran against a host the chat may not reach"
+        );
     }
 
     #[test]

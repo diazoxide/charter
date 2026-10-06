@@ -5739,6 +5739,159 @@ mod tests {
             .unwrap_or_else(|e| purlis_core::hookwire::Answer::No { why: e.to_string() })
     }
 
+    /// A git action asked of the app for chat `session`, on its own token (#1335).
+    fn a_git_action_asked(
+        held: &Held,
+        session: u32,
+        work: purlis_core::hookwire::GitWork,
+    ) -> purlis_core::hookwire::Answer {
+        purlis_core::hookwire::Asking::on(
+            held.hooks().socket().expect("the plane is listening"),
+            Some(held.hooks().token_for(session)),
+        )
+        .expect("the socket")
+        .ask(
+            &purlis_core::hookwire::Ask::Git(Box::new(purlis_core::hookwire::GitAsk {
+                chat: session,
+                workspace: "alpha".to_owned(),
+                work,
+            })),
+            std::time::Duration::from_secs(120),
+        )
+        .unwrap_or_else(|e| purlis_core::hookwire::Answer::No { why: e.to_string() })
+    }
+
+    /// git, for the test's own setup, with `home`'s config.
+    fn git_in(home: &Path, dir: &Path, args: &[&str]) {
+        let mut git = std::process::Command::new("git");
+        git.args(args)
+            .current_dir(dir)
+            .env("HOME", home)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "Tester")
+            .env("GIT_AUTHOR_EMAIL", "t@e.invalid")
+            .env("GIT_COMMITTER_NAME", "Tester")
+            .env("GIT_COMMITTER_EMAIL", "t@e.invalid");
+        let out = purlis_core::forklock::output(&mut git).expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sandboxed_chats_worktree_is_cut_by_the_app_and_a_host_outside_its_egress_is_refused() {
+        use purlis_core::hookwire::{Answer, GitWork};
+        let dir = tempfile::tempdir().expect("a directory");
+        let base = std::fs::canonicalize(dir.path()).expect("real");
+        let home = base.join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        // acme/widget, carrying the editor settings a sandboxed chat may not write, cloned into
+        // the workspace by the operator.
+        let src = base.join("widget-src");
+        std::fs::create_dir_all(src.join(".vscode")).expect("src");
+        std::fs::create_dir_all(src.join(".claude")).expect("src");
+        git_in(&home, &src, &["init", "-q", "-b", "main", "."]);
+        std::fs::write(src.join(".vscode/settings.json"), "{}\n").expect("fixture");
+        std::fs::write(src.join(".claude/settings.json"), "{}\n").expect("fixture");
+        git_in(&home, &src, &["add", "-A"]);
+        git_in(&home, &src, &["commit", "-q", "-m", "one"]);
+        let root = a_plane(&base.join("plane"));
+        std::fs::create_dir_all(root.join("workspaces/alpha")).expect("alpha");
+        let clone = root.join("workspaces/alpha/widget");
+        git_in(
+            &home,
+            &base,
+            &[
+                "clone",
+                "-q",
+                &src.display().to_string(),
+                &clone.display().to_string(),
+            ],
+        );
+        std::fs::create_dir_all(root.join("inventory")).expect("inventory");
+        std::fs::write(
+            root.join("inventory/repos.json"),
+            serde_json::json!({"group": "acme", "count": 1, "repos": [{
+                "name": "gadget",
+                "path_with_namespace": "acme/gadget",
+                "web_url": "https://github.com/acme/gadget",
+                "forge": "github",
+            }]})
+            .to_string(),
+        )
+        .expect("inventory");
+        let (planes, _told) = planes_telling();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        // A chat whose program is a harness, standing at the project's top.
+        let ready = base.join("claude.ready");
+        let program = stand_in::program(
+            &base,
+            "claude",
+            &format!("#!/bin/sh\n: > '{}'\nexec sleep 600\n", ready.display()),
+        );
+        let mut chat = one_chat_on(&program.display().to_string()).chats.remove(0);
+        chat.cwd = Some(root.clone());
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+        assert!(becomes(|| ready.exists()), "the stand-in never started");
+
+        // The project turns the sandbox on with no host reachable: the chat is a sandboxed one.
+        std::fs::write(
+            root.join(purlis_core::plane::MANIFEST),
+            "[[forge]]\nkind = \"github\"\nowner = \"acme\"\n\n\
+             [sandbox]\nmode = \"on\"\negress = []\n",
+        )
+        .expect("charter.toml");
+
+        let cut = a_git_action_asked(
+            &held,
+            session,
+            GitWork::WorktreeAdd {
+                repo: "widget".to_owned(),
+                piece: "p1".to_owned(),
+                branch: None,
+            },
+        );
+        assert!(matches!(cut, Answer::Said { code: 0, .. }), "{cut:?}");
+        let piece = root.join("workspaces/alpha/.worktrees/widget/p1");
+        assert!(piece.join(".vscode/settings.json").is_file(), "no piece");
+        assert!(piece.join(".claude/settings.json").is_file(), "no piece");
+        let log: String = std::fs::read_dir(root.join("workspaces/alpha/pieces"))
+            .expect("a piece log")
+            .filter_map(Result::ok)
+            .map(|entry| std::fs::read_to_string(entry.path()).expect("the log"))
+            .collect();
+        let claimed: serde_json::Value =
+            serde_json::from_str(log.lines().last().expect("a line")).expect("json");
+        assert_eq!(claimed["session"], session.to_string(), "{claimed}");
+
+        // The forge's host is outside what the chat reaches: refused, and git never runs.
+        let refused = a_git_action_asked(
+            &held,
+            session,
+            GitWork::Clone {
+                repos: vec!["gadget".to_owned()],
+            },
+        );
+        let Answer::Said { lines, code } = refused else {
+            panic!("{refused:?}");
+        };
+        assert_eq!(code, 1);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_string().contains("'github.com'")),
+            "{lines:?}"
+        );
+        assert!(!root.join("workspaces/alpha/gadget").exists());
+        held.close_chat(session).expect("closed");
+    }
+
     fn closes(answer: &purlis_core::hookwire::Answer) -> bool {
         match answer {
             purlis_core::hookwire::Answer::Recorded { closes, .. } => *closes,

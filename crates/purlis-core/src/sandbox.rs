@@ -398,19 +398,29 @@ impl Planted {
 /// files; the project config of every harness and editor; and `charter.toml`, which turns the
 /// sandbox on. A chat writing one of these could have code run outside its sandbox the next
 /// time a person, an editor or another chat opens the directory.
-pub const PLANTED: [Planted; 40] = [
+pub const PLANTED: [Planted; 46] = [
     // A `.git` moved into place brings its own config and hooks.
     Planted::itself(".git"),
     Planted::and_below(".git/config"),
     Planted::and_below(".git/config.worktree"),
     Planted::and_below(".git/hooks"),
     Planted::and_below(".git/worktrees"),
+    // What moves git's config, objects or attributes somewhere else, so a chat cannot point a
+    // repository the app runs git in at a config of its own (#1335, D-1335-7). A linked
+    // worktree's pointer files live under `.git/worktrees`, above, and its `.git` file is
+    // `.git` itself.
+    Planted::and_below(".git/commondir"),
+    Planted::and_below(".git/objects/info/alternates"),
+    Planted::and_below(".git/info/attributes"),
     // Each submodule's git directory, nested at any depth; and the directory that holds them,
     // so it is never moved into place whole.
     Planted::itself(".git/modules"),
     Planted::and_below(".git/modules/**/config"),
     Planted::and_below(".git/modules/**/config.worktree"),
     Planted::and_below(".git/modules/**/hooks"),
+    Planted::and_below(".git/modules/**/commondir"),
+    Planted::and_below(".git/modules/**/objects/info/alternates"),
+    Planted::and_below(".git/modules/**/info/attributes"),
     // Hook managers' directories, which a `core.hooksPath` commonly names (ruling V73d).
     Planted::and_below(".husky"),
     Planted::and_below(".githooks"),

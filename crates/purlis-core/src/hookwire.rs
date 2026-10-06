@@ -439,6 +439,42 @@ pub enum Ask {
     /// answers [`Answer::Recorded`], or [`Answer::No`] with the refusal. Boxed: it carries the
     /// record's whole body.
     SessionRecord(Box<RecordAsk>),
+    /// Clone a repo, or cut a worktree, for this chat: a brokered git action (ADR 0067 §2,
+    /// #1335). The app answers [`Answer::Said`], or [`Answer::No`] with the refusal. Boxed for
+    /// `Open`'s reason.
+    Git(Box<GitAsk>),
+}
+
+/// A git action a chat asks the app to take for it, as `purlis clone` and `purlis worktree add`
+/// hand it over: **a brokered write** (ADR 0067 §2, #1335). A sandboxed chat may not write a
+/// clone's `.git/config`, its hooks or the editor settings a checkout carries; the app writes
+/// them, with the same core code the terminal's commands run ([`crate::gitbroker`]).
+///
+/// **What it names is checked, never trusted.** The workspace must be one the chat already
+/// writes its ordinary files in, the clone's host one the chat's sandbox may reach, and who
+/// the piece log credits is the app's record of the chat whose token the line carries.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GitAsk {
+    /// The chat that asks, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The workspace, as the command resolved it.
+    pub workspace: String,
+    pub work: GitWork,
+}
+
+/// What a [`GitAsk`] asks for: one of the two commands, with its arguments.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitWork {
+    /// `purlis clone <repo>…`.
+    Clone { repos: Vec<String> },
+    /// `purlis worktree add <repo> <piece> [--branch]`.
+    WorktreeAdd {
+        repo: String,
+        piece: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
 }
 
 /// A session record a chat asks the app to write for it, as `purlis session record` and the
@@ -583,6 +619,12 @@ pub enum Answer {
         closes: bool,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
+    },
+    /// A brokered git action ran (#1335): every line the command said, in order, and its exit
+    /// status. The asker prints them as its own run would have.
+    Said {
+        lines: Vec<crate::repocmd::Say>,
+        code: u8,
     },
 }
 
@@ -732,6 +774,7 @@ impl Line {
             Self::Ask(Ask::Open(open)) => open.chat,
             Self::Ask(Ask::Report(back)) => back.chat,
             Self::Ask(Ask::SessionRecord(record)) => record.chat,
+            Self::Ask(Ask::Git(git)) => git.chat,
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
@@ -1953,6 +1996,113 @@ mod tests {
     }
 
     #[test]
+    fn a_git_ask_is_read_back_whole_and_names_the_chat_its_token_must_be() {
+        // #1335: an ask for a clone and one for a worktree, through the reading every line gets.
+        for work in [
+            GitWork::Clone {
+                repos: vec!["widget".to_owned(), "gadget".to_owned()],
+            },
+            GitWork::WorktreeAdd {
+                repo: "widget".to_owned(),
+                piece: "p1".to_owned(),
+                branch: Some("feature/p1".to_owned()),
+            },
+        ] {
+            let ask = Ask::Git(Box::new(GitAsk {
+                chat: 7,
+                workspace: "alpha".to_owned(),
+                work,
+            }));
+            let token = ChatToken("t".repeat(64));
+            let line = line_with(Some(&token), &ask).expect("a line");
+            let (read, carried) =
+                read_line(std::str::from_utf8(&line).expect("text")).expect("it reads");
+            assert_eq!(carried.as_deref(), Some(token.expose()));
+            assert_eq!(read.chat(), 7);
+            let Line::Ask(back) = read else {
+                panic!("a git ask read as another kind of line");
+            };
+            assert_eq!(back, ask);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_answer_that_takes_longer_than_a_report_may_still_reaches_the_asker() {
+        // A brokered clone runs for as long as git's network limit (#1335): the listener's own
+        // deadline on the connection is for reading a line, and must not cut the answer off.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(3).expect("a token");
+        let slow = A_REPORT_TAKES_AT_MOST + std::time::Duration::from_secs(1);
+        let _reading = listener.each_answering(
+            Box::new(|_| {}),
+            Box::new(move |_, _| {
+                std::thread::sleep(slow);
+                Answer::Said {
+                    lines: vec![crate::repocmd::Say::Done("cloned".to_owned())],
+                    code: 0,
+                }
+            }),
+        );
+        let answer = Asking::on(&path, Some(token))
+            .expect("connected")
+            .ask(
+                &Ask::Git(Box::new(GitAsk {
+                    chat: 3,
+                    workspace: "alpha".to_owned(),
+                    work: GitWork::Clone {
+                        repos: vec!["widget".to_owned()],
+                    },
+                })),
+                slow * 4,
+            )
+            .expect("answered");
+        assert!(matches!(answer, Answer::Said { code: 0, .. }), "{answer:?}");
+    }
+
+    #[test]
+    fn the_largest_git_ask_a_command_line_makes_fits_on_one_line_of_the_socket() {
+        // A clone of 256 repos with long names, every byte one JSON doubles: what a person
+        // would type at its worst still reaches the app whole (#1335).
+        let ask = Ask::Git(Box::new(GitAsk {
+            chat: u32::MAX,
+            workspace: "w".repeat(100),
+            work: GitWork::Clone {
+                repos: vec!["\"".repeat(100); 256],
+            },
+        }));
+        let line = line_with(Some(&ChatToken("t".repeat(64))), &ask).expect("a line");
+        assert!(
+            (line.len() as u64) < A_LINE_IS_AT_MOST,
+            "{} bytes does not fit in {A_LINE_IS_AT_MOST}",
+            line.len()
+        );
+    }
+
+    #[test]
+    fn what_a_brokered_git_action_said_is_read_back_line_for_line() {
+        use crate::repocmd::Say;
+        let said = Answer::Said {
+            lines: vec![
+                Say::Info("workspace: alpha  (via --workspace)".to_owned()),
+                Say::Done("widget → workspaces/alpha/widget".to_owned()),
+                Say::Warn("w".to_owned()),
+                Say::Fail("f".to_owned()),
+                Say::Plain("p".to_owned()),
+                Say::Out("o".to_owned()),
+            ],
+            code: 2,
+        };
+        let line = serde_json::to_string(&said).expect("a line");
+        assert_eq!(
+            serde_json::from_str::<Answer>(&line).expect("it reads"),
+            said
+        );
+    }
+
+    #[test]
     fn a_hook_reports_the_chat_its_environment_names() {
         // Measured on claude 2.1.276: the payload carries `session_id`, and it is the same
         // value as `$CLAUDE_CODE_SESSION_ID` (ADR 0024, C7).
@@ -3032,7 +3182,7 @@ mod tests {
                             Err(why) => Answer::No { why },
                         }
                     }
-                    Ask::Report(_) | Ask::SessionRecord(_) => Answer::No {
+                    Ask::Report(_) | Ask::SessionRecord(_) | Ask::Git(_) => Answer::No {
                         why: "not here".to_owned(),
                     },
                 }

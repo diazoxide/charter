@@ -44,7 +44,11 @@ mod submodules;
 pub mod sync;
 
 /// One line of what a command says, in charter's four voices.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable because a brokered command (#1335) runs in the app and its lines travel back
+/// over the hook socket, to be printed by the command that asked as its own run prints them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Say {
     /// `• …` — information.
     Info(String),

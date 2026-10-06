@@ -249,6 +249,7 @@ pub fn restore(request: &Request, say: Sink) -> u8 {
                 repos: &missing,
                 now,
                 author: &author,
+                hosts: None,
             },
             say,
         );

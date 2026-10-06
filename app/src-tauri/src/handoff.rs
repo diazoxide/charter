@@ -136,6 +136,10 @@ pub fn answer(
         // A brokered write, not a handoff: no ticket, because a record is the chat's own to
         // write and the line can only name the chat whose token it carries (#1332).
         Ask::SessionRecord(record) => crate::smartclose::record(held, &record),
+        // A brokered git action (#1335): no ticket, for the record's reason — the line names
+        // only the chat whose token it carries, and what it asks is checked against the app's
+        // record of that chat.
+        Ask::Git(git) => crate::gitbroker::answer(held, &git),
     }
 }
 

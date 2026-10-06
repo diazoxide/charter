@@ -956,6 +956,34 @@ fn claude_code_is_denied_submodule_git_config_and_hook_managers_at_any_depth() {
 }
 
 #[test]
+fn a_clone_the_app_made_for_a_chat_keeps_its_git_config_hooks_and_editor_settings_denied_to_it() {
+    // #1335: the app writes a sandboxed chat's clone and worktree for it, and the chat's own
+    // writes to what they carry stay refused — `git config` included, at any depth.
+    let settings = claude::settings(&compiled(Denied::default(), Os::MacOs)).expect("compiles");
+    let write = settings.sandbox["filesystem"]["denyWrite"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    for glob in [
+        "**/.git/config",
+        "**/.git/hooks",
+        "**/.git/worktrees",
+        "**/.vscode",
+        "**/.claude/settings.json",
+        // What would point git at a config, objects or attributes of the chat's own (D-1335-7).
+        "**/.git/commondir",
+        "**/.git/objects/info/alternates",
+        "**/.git/info/attributes",
+        "**/.git/modules/**/commondir",
+        "**/.git/modules/**/objects/info/alternates",
+        "**/.git/modules/**/info/attributes",
+    ] {
+        assert!(write.iter().any(|it| it == glob), "{glob} in {write:?}");
+        assert!(settings.deny.contains(&format!("Edit({glob})")), "{glob}");
+    }
+}
+
+#[test]
 fn what_a_hooks_path_or_a_project_config_names_is_denied_to_every_harness_from_the_start() {
     // Ruling V73d: resolved when the chat starts, as path denials of the later-code class.
     let plane = plane_saying(ON);

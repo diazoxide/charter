@@ -31,6 +31,7 @@ mod filewatch;
 mod findfiles;
 mod firstrun;
 mod firsttask;
+mod gitbroker;
 mod handoff;
 mod harness_plugins;
 mod heard;

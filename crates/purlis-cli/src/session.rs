@@ -310,7 +310,7 @@ fn answered(answer: std::io::Result<hookwire::Answer>) -> Forwarded {
 /// The app's number for the chat this runs in: `$CHARTER_CHAT` where hooks report, else
 /// `$CHARTER_SESSION_ID`, which the app sets in every chat it starts to the same number. A value
 /// that is not a number (a session id from outside the app) is no chat.
-fn chat_number() -> Option<u32> {
+pub(crate) fn chat_number() -> Option<u32> {
     [CHAT_ENV, purlis_core::active::SESSION_ID_ENV]
         .into_iter()
         .filter_map(purlis_core::envvar::var)

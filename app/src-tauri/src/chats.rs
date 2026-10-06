@@ -1134,6 +1134,15 @@ impl Chats {
         lock(&self.open).get(&session)?.harness
     }
 
+    /// Whether a person started this run of chat `session` without the sandbox (ruling V78 a),
+    /// as its record says: what a git action the app makes for it is held to (#1335, D-5).
+    /// `false` for a chat that is not open.
+    pub fn unsandboxed(&self, session: u32) -> bool {
+        lock(&self.open)
+            .get(&session)
+            .is_some_and(|one| one.chat.unsandboxed)
+    }
+
     /// The handoff `session` was opened by, where one opened it.
     pub fn handed_from(&self, session: u32) -> Option<purlis_core::reopen::HandedFrom> {
         lock(&self.open).get(&session)?.chat.from.clone()
