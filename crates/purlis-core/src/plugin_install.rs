@@ -746,8 +746,9 @@ fn apply(plan: &Plan) -> (usize, Option<String>) {
             return (
                 done,
                 Some(format!(
-                    "{} could not be written: {e}",
-                    crate::shown::one_line(&path_of(w).display().to_string(), 1024)
+                    "{} could not be written: {}",
+                    crate::shown::one_line(&path_of(w).display().to_string(), 1024),
+                    crate::rewrite::os_words(&e)
                 )),
             );
         }

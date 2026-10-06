@@ -810,3 +810,46 @@ fn a_refused_write_or_host_carries_what_a_grant_would_name_and_nothing_else_does
         [block(Operation::Write, Kind::System, false)]
     );
 }
+
+#[test]
+fn purlis_s_own_refusal_wording_is_purlis_s_own_block_with_nothing_to_grant() {
+    // #1421: on Codex and opencode no violation block is appended, and neither of purlis's own
+    // sentences ends the way a program's refusal does, so neither showed any notice. Each is
+    // purlis's own write: a Report, never an Allow.
+    let refused = crate::rewrite::refused_write(
+        std::io::Error::from_raw_os_error(1),
+        Path::new("/Users/dev/plane/personas/_dispatch/2026-10.host.jsonl"),
+        true,
+    );
+    let stderr = format!("✗ {refused}\n");
+    let found = detect_with_targets(
+        &came_back("purlis persona remember x", "", &stderr),
+        &place(),
+    );
+    assert_eq!(
+        found,
+        [(block(Operation::Write, Kind::ProjectFiles, true), None)]
+    );
+
+    let clause = crate::rewrite::os_words(&refused);
+    let stderr = format!(
+        "! purlis handoff: chat 9 is open in 'alpha'. Only its row in the dispatch log \
+         (personas/_dispatch) is missing ({clause}); there is nothing to run again.\n\
+         ✗ could not write /Users/dev/plane/.gitignore ({clause}) — left untouched.\n"
+    );
+    let found = detect_with_targets(&came_back("purlis init", "", &stderr), &place());
+    assert_eq!(
+        found,
+        [(block(Operation::Write, Kind::ProjectFiles, true), None)],
+        "both lines are purlis's own write to the project's files, counted once"
+    );
+
+    // A program's own words beside them are still the chat's.
+    let stderr = format!("{}\ntouch: /opt/x: Operation not permitted\n", refused);
+    let found = detect(&came_back("purlis x; touch /opt/x", "", &stderr), &place());
+    assert!(
+        found.contains(&block(Operation::Write, Kind::ProjectFiles, true)),
+        "{found:?}"
+    );
+    assert!(found.iter().any(|b| !b.ours), "{found:?}");
+}

@@ -120,6 +120,12 @@ impl HarnessAdapter for ClaudeCode {
         Some(|compiled| crate::sandbox::claude::settings(compiled).map(Form::ClaudeCode))
     }
 
+    /// No: Claude Code's sandbox confines the commands its Bash tool runs, and its hooks and
+    /// MCP servers run in its own process's reach, outside it ([`crate::sandbox::claude`]).
+    fn sandbox_holds_what_it_starts(&self) -> bool {
+        false
+    }
+
     /// The line as it is: Claude Code's sandbox rides in the `--settings` charter hands it (in
     /// `armed`), which a project's settings cannot loosen (ADR 0067 §2), and there it is
     /// allowed the chat's hook socket, which only the place the chat opens knows (`at`).

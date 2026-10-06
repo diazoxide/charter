@@ -566,8 +566,9 @@ pub fn default_command(root: &Path, name: Option<&str>, clear: bool, say: Sink) 
         .and_then(|()| std::fs::write(&path, format!("{name}\n")))
     {
         say(Say::Fail(format!(
-            "could not write {} ({why}) — the declared default is left as it was.",
-            path.display()
+            "could not write {} ({}) — the declared default is left as it was.",
+            path.display(),
+            crate::rewrite::os_words(&why)
         )));
         return 1;
     }

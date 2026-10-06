@@ -265,7 +265,11 @@ fn replace_through(
     })();
     if let Err(e) = result {
         let _ = std::fs::remove_file(temp);
-        return Err(refused_write(e, path, crate::sandbox::chat_is_sandboxed()));
+        return Err(refused_write(
+            e,
+            path,
+            crate::sandbox::writes_are_sandboxed(),
+        ));
     }
     // Best effort: a directory that cannot be opened or flushed does not undo the rename.
     #[cfg(unix)]
@@ -287,10 +291,11 @@ const EPERM: i32 = 1;
 /// the reason, and an agent reading it could not tell a sandbox from a broken disk.
 ///
 /// Only `EPERM` is reworded, and it always names the file. **The sandbox is blamed only where
-/// `sandboxed` says the app gave this chat one** ([`crate::sandbox::chat_is_sandboxed`]):
-/// `EPERM` is also what macOS's privacy controls, its system integrity protection and an
-/// immutable flag answer, and none of those is a sandbox's refusal. Every other failure is
-/// returned as it was.
+/// `sandboxed` says this write was held to one** ([`crate::sandbox::writes_are_sandboxed`]: the
+/// app gave the chat a sandbox, and it holds what made the write, which a Claude Code hook it is
+/// not, #1421): `EPERM` is also what macOS's privacy controls, its system integrity protection
+/// and an immutable flag answer, and none of those is a sandbox's refusal. Every other failure
+/// is returned as it was.
 ///
 /// **The errno is kept.** The kind stays [`io::ErrorKind::PermissionDenied`], and the OS error
 /// is the source, which [`os_cause`] hands back to a caller that records the errno itself.
@@ -309,10 +314,10 @@ pub fn refused_write(e: io::Error, path: &Path, sandboxed: bool) -> io::Error {
 }
 
 /// [`refused_write`] for a write to `path` by this process, which asks
-/// [`crate::sandbox::chat_is_sandboxed`] itself: the `map_err` of every write that does not go
-/// through [`replace`] — an append to a log, a directory made ahead of a write (#1359).
+/// [`crate::sandbox::writes_are_sandboxed`] itself: the `map_err` of every write that does not
+/// go through [`replace`] — an append to a log, a directory made ahead of a write (#1359).
 pub fn refused_at(path: &Path) -> impl FnOnce(io::Error) -> io::Error + '_ {
-    move |e| refused_write(e, path, crate::sandbox::chat_is_sandboxed())
+    move |e| refused_write(e, path, crate::sandbox::writes_are_sandboxed())
 }
 
 /// [`std::fs::create_dir_all`], with a refusal naming `dir` ([`refused_at`]).
@@ -330,13 +335,47 @@ pub fn os_cause(e: &io::Error) -> &io::Error {
 
 /// The OS's own words for `e`, without Rust's `(os error N)`: for a sentence that names the
 /// path itself, which the [`refused_write`] rewording would name a second time.
+///
+/// **A sandbox's refusal keeps its clause** (#1421): "Operation not permitted: this chat's
+/// sandbox refused it", where the rewording blamed the sandbox, or, for an `EPERM` no write
+/// site reworded, where this process's writes are held to one
+/// ([`crate::sandbox::writes_are_sandboxed`]).
 pub fn os_words(e: &io::Error) -> String {
-    let text = os_cause(e).to_string();
-    match text.rfind(" (os error ") {
+    let sandboxed = match e
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<WriteRefused>())
+    {
+        Some(refused) => refused.sandboxed,
+        None => e.raw_os_error() == Some(EPERM) && crate::sandbox::writes_are_sandboxed(),
+    };
+    words_of(os_cause(e), sandboxed)
+}
+
+/// The OS's words for the OS error `e`, with the sandbox's clause on an `EPERM` where
+/// `sandboxed`.
+fn words_of(e: &io::Error, sandboxed: bool) -> String {
+    let text = e.to_string();
+    let words = match text.rfind(" (os error ") {
         Some(at) => text[..at].to_owned(),
         None => text,
+    };
+    if sandboxed && e.raw_os_error() == Some(EPERM) {
+        format!("{words}: {SANDBOX_REFUSED_IT}")
+    } else {
+        words
     }
 }
+
+/// The clause [`os_words`] adds to a sandbox's refusal, after "Operation not permitted: ".
+/// [`crate::sandboxblock`] reads it as purlis's own refusal.
+pub const SANDBOX_REFUSED_IT: &str = "this chat's sandbox refused it";
+
+/// How a sandboxed [`refused_write`] starts, its path straight after, then
+/// [`NOT_PERMITTED`]. [`crate::sandboxblock`] reads it as purlis's own refusal.
+pub const SANDBOX_REFUSED_WRITING: &str = "this chat's sandbox refused writing ";
+
+/// What follows the path in a sandboxed [`refused_write`].
+pub const NOT_PERMITTED: &str = " (Operation not permitted)";
 
 /// A write refused with `EPERM`; see [`refused_write`].
 #[derive(Debug)]
@@ -350,11 +389,13 @@ impl std::fmt::Display for WriteRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let path = crate::shown::readable(&self.path.display().to_string(), usize::MAX);
         if self.sandboxed {
+            // A write purlis itself makes is never granted to a chat: its block is purlis's
+            // own, which the notice offers a Report for and no Allow (#1421). So the one way
+            // on is the operator's own run.
             write!(
                 f,
-                "this chat's sandbox refused writing {path} (Operation not permitted). A \
-                 sandboxed chat writes only inside its own folder, so ask the operator to run \
-                 this outside the chat."
+                "{SANDBOX_REFUSED_WRITING}{path}{NOT_PERMITTED}. purlis does not grant its own \
+                 writes to a chat; ask the operator to run this command outside the chat."
             )
         } else {
             write!(f, "could not write {path}: Operation not permitted")
@@ -638,6 +679,51 @@ mod tests {
         assert_eq!(
             unsandboxed,
             "could not write /plane/personas/steward/memory/fact.md: Operation not permitted"
+        );
+    }
+
+    #[test]
+    fn a_sandbox_s_refusal_says_what_it_refused_and_the_one_way_on() {
+        // #1421: "a sandboxed chat writes only inside its own folder" stopped being true when
+        // the cache and host grants came (#1337, #1341); and a write of purlis's own is never
+        // granted, so no Allow is promised.
+        let path = Path::new("/plane/personas/_dispatch/2026-10.host.jsonl");
+        let said = refused_write(eperm(), path, true).to_string();
+        assert_eq!(
+            said,
+            "this chat's sandbox refused writing /plane/personas/_dispatch/2026-10.host.jsonl \
+             (Operation not permitted). purlis does not grant its own writes to a chat; ask the \
+             operator to run this command outside the chat."
+        );
+        assert!(!said.contains("only inside its own folder"), "{said}");
+    }
+
+    #[test]
+    fn the_os_s_words_keep_the_sandbox_s_clause_in_a_sandboxed_chat() {
+        // #1421: `init`, `browser install` and the handoff's warning name the path themselves,
+        // and said only "(Operation not permitted)" in a sandboxed chat.
+        let path = Path::new("/plane/.gitignore");
+        let sandboxed = refused_write(eperm(), path, true);
+        assert_eq!(
+            os_words(&sandboxed),
+            "Operation not permitted: this chat's sandbox refused it"
+        );
+        let not = refused_write(eperm(), path, false);
+        assert_eq!(os_words(&not), "Operation not permitted");
+        // A refusal no site reworded is judged as this process stands.
+        assert_eq!(
+            words_of(&eperm(), true),
+            "Operation not permitted: this chat's sandbox refused it"
+        );
+        assert_eq!(words_of(&eperm(), false), "Operation not permitted");
+        // Anything else is the OS's words alone, sandboxed or not.
+        assert_eq!(
+            words_of(&io::Error::from_raw_os_error(28), true),
+            "No space left on device"
+        );
+        assert!(
+            !os_words(&sandboxed).contains("/plane"),
+            "named once, by the caller"
         );
     }
 

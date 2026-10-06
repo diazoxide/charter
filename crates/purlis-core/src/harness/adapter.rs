@@ -71,6 +71,13 @@ pub trait HarnessAdapter: Sync {
         None
     }
 
+    /// Whether what the harness itself starts, its hooks and its MCP servers, runs inside the
+    /// chat's sandbox, as the commands the chat runs do (#1421). `false` where the sandbox
+    /// confines only the harness's own tool, so a refusal one of those meets is not the
+    /// sandbox's and is never worded as one ([`crate::sandbox::writes_are_sandboxed`]). No
+    /// default: each adapter says how its sandbox is applied.
+    fn sandbox_holds_what_it_starts(&self) -> bool;
+
     /// The chat's whole line under `form`, the sandbox [`Self::sandbox_compiler`] compiled,
     /// from `words`: the program, the profile's `command`, then `armed` (what [`Self::arm`]
     /// gave), then `charters`, charter's own words — where the chat opens, `at`; or the one

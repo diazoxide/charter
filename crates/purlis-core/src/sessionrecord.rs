@@ -479,7 +479,7 @@ pub fn record(root: &Path, new: &New) -> Result<Recorded, Refused> {
         };
         return Ok(finish(root, place, dir.join(file)));
     }
-    std::fs::create_dir_all(&dir)?;
+    crate::rewrite::create_dir_all(&dir)?;
     let path = {
         let _held = crate::rewrite::Lock::on(&dir);
         let mut n = 1;

@@ -414,7 +414,9 @@ impl Log {
         file.sync_data()?;
         // Every event so far is in this segment and durable now.
         self.durable.durable_through(self.next.saturating_sub(1));
-        std::fs::rename(self.dir.join(FILE), self.dir.join(sealed_name(first)))?;
+        let sealed = self.dir.join(sealed_name(first));
+        std::fs::rename(self.dir.join(FILE), &sealed)
+            .map_err(crate::rewrite::refused_at(&sealed))?;
         self.file = None;
         sync_dir(&self.dir)?;
         let next = self.open_next()?;
@@ -502,7 +504,7 @@ fn private_file(path: &Path) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path)
+    options.open(path).map_err(crate::rewrite::refused_at(path))
 }
 
 /// The name of the sealed segment whose first event is `first`: zero-padded, so the names

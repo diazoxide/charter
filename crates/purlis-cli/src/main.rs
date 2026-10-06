@@ -1564,6 +1564,9 @@ fn hook_on_disagreement(name: &str, disagree: &purlis_core::envvar::Disagreement
 /// binary does not answer at all ([`is_a_tool_hook`]), and a `PreToolUse` hook that crashed
 /// ([`guard::refuse_on_a_crash`]).
 fn hook(name: &str, now: Option<&str>) -> ExitCode {
+    // The harness started this process, not the chat: a refusal it meets is the chat's
+    // sandbox's only where the harness's sandbox holds its hooks (#1421).
+    purlis_core::sandbox::started_by_the_harness();
     // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
     // events: a tool call carries no chat state worth a `Report`.
     //
@@ -3382,6 +3385,8 @@ fn main() -> ExitCode {
     }
     // After the gate: on a project this charter cannot write, the server is refused whole.
     if let Command::Mcp = &cli.command {
+        // Started by the harness, as a hook is (#1421).
+        purlis_core::sandbox::started_by_the_harness();
         // A chat holds this server for its whole life: the config home stays where it is until
         // it ends (`renamelocal::busy::LOCK`, D-RN5-11).
         let _holds = purlis_core::machine::config_root_if_there()

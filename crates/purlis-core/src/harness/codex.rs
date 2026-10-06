@@ -128,6 +128,11 @@ impl HarnessAdapter for Codex {
         Some(|compiled| crate::sandbox::codex::wrap(compiled).map(Form::Codex))
     }
 
+    /// Yes: the wrap is around the whole harness, so its hooks and MCP servers run inside it.
+    fn sandbox_holds_what_it_starts(&self) -> bool {
+        true
+    }
+
     /// The wrap's program first, with the profile written for where the chat opens, then the
     /// chat's whole line, with the flags that turn Codex's own sandbox off last among its flags
     /// and in front of the subcommand, session id and first message that end the line. Its

@@ -159,11 +159,14 @@ impl GitHooks {
     pub fn write(&self, charter: &Path) -> io::Result<()> {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
+        let refused = || crate::rewrite::refused_at(&self.root);
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(&self.root)?;
-        std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))?;
+            .create(&self.root)
+            .map_err(refused())?;
+        std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))
+            .map_err(refused())?;
         for name in NAMES {
             put(&self.root.join(name), &shim(charter, &self.root, name))?;
         }
@@ -194,11 +197,15 @@ fn put(path: &Path, text: &str) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let beside = path.with_extension(format!("charter-{}", std::process::id()));
-    std::fs::write(&beside, text)?;
-    std::fs::set_permissions(&beside, std::fs::Permissions::from_mode(0o755))?;
-    std::fs::rename(&beside, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&beside);
-    })
+    // Named as the shim it is for (#1421): the file beside it is this write's own.
+    let refused = || crate::rewrite::refused_at(path);
+    std::fs::write(&beside, text).map_err(refused())?;
+    std::fs::set_permissions(&beside, std::fs::Permissions::from_mode(0o755)).map_err(refused())?;
+    std::fs::rename(&beside, path)
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&beside);
+        })
+        .map_err(refused())
 }
 
 /// `text` as one POSIX shell word, whatever is in it.
@@ -299,6 +306,19 @@ mod tests {
     use super::*;
     use crate::testgit;
     use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_shim_the_filesystem_refuses_names_the_shim() {
+        // #1421: an EPERM here printed only "Operation not permitted (os error 1)".
+        let dir = tempfile::tempdir().unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(dir.path());
+        let shim = dir.path().join("pre-commit");
+
+        let refused = put(&shim, "#!/bin/sh\n").unwrap_err();
+
+        crate::rewrite::frozen::names(&refused, &shim);
+    }
 
     fn pairs(env: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         env.iter()

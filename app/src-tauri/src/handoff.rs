@@ -34,7 +34,7 @@ use std::time::Instant;
 
 use purlis_core::active::Place;
 use purlis_core::engine::Size;
-use purlis_core::hookwire::{Answer, Ask, OpenChat, Tickets};
+use purlis_core::hookwire::{Answer, Ask, OpenChat, Row, Tickets};
 use purlis_core::reopen::{Chat, HandedFrom, Owed};
 
 use crate::planes::{Held, PlaneId};
@@ -118,10 +118,13 @@ pub fn answer(
                 return no(why);
             }
             match open_it(held, plane, &open, STARTING) {
-                Ok(it) => {
+                Ok((it, row)) => {
                     let chat = it.session;
                     arrived(it);
-                    Answer::Opened { chat }
+                    Answer::Opened {
+                        chat,
+                        row: Some(row),
+                    }
                 }
                 Err(why) => no(why),
             }
@@ -283,7 +286,12 @@ const STARTING: Size = Size {
 /// then the workspace (when this call creates it), then the chat. A refusal that comes after
 /// the workspace was created says so, the way Python's `NOTHING_ELSE` does, because a
 /// handoff that half-happened and says nothing about the half is worse than one that failed.
-fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<Arrived, String> {
+fn open_it(
+    held: &Held,
+    plane: &PlaneId,
+    open: &OpenChat,
+    size: Size,
+) -> Result<(Arrived, Row), String> {
     use purlis_core::{handoff, start, wscmd};
 
     let root = held.root();
@@ -386,6 +394,17 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         .chats()
         .recorded_chat(from)
         .ok_or_else(|| format!("chat {from} is not one this app has open"))?;
+    // Into the workspace the asking chat is in, or another: the dispatch row's one fact about
+    // where the work went, from this app's record of that chat and never from the stamp, which
+    // the chat wrote (#1421, D-1421-11).
+    let placement = match asking_chat
+        .cwd
+        .as_deref()
+        .and_then(|cwd| workspace_of(root, cwd))
+    {
+        Some(asking_ws) if asking_ws == ws => purlis_core::dispatch::Placement::Here,
+        _ => purlis_core::dispatch::Placement::Elsewhere,
+    };
     let held_grants = holds_after_handoff(
         purlis_core::sandbox::Plane::read(root)
             .said()
@@ -464,7 +483,8 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         .chats()
         .start_ready(&chat, &ready, size)
         .map_err(stays)?;
-    Ok(Arrived {
+    let row = handoff_row(root, placement, created);
+    let arrived = Arrived {
         plane: plane.clone(),
         session,
         name,
@@ -473,7 +493,32 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         workspace: ws.to_owned(),
         persona,
         harness: ready.harness.map(|harness| harness.name().to_owned()),
-    })
+    };
+    Ok((arrived, row))
+}
+
+/// The handoff's row in the project's dispatch log (`purlis_core::dispatch::record_handoff`),
+/// written here, by the app that opened the chat (#1421): a sandboxed chat may not write the
+/// project's `personas/_dispatch/`, and the app is not sandboxed. Its four fields name no
+/// workspace and nothing of the brief. A row that could not be written is said back to the
+/// command, which tells the chat; the chat is open either way.
+fn handoff_row(
+    root: &std::path::Path,
+    placement: purlis_core::dispatch::Placement,
+    created: bool,
+) -> Row {
+    match purlis_core::dispatch::record_handoff(
+        root,
+        placement,
+        created,
+        chrono::Utc::now(),
+        &purlis_core::dispatch::this_log_name(),
+    ) {
+        Ok(_) => Row::Written,
+        Err(why) => Row::Unwritten {
+            why: purlis_core::rewrite::os_words(&why),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -749,6 +794,46 @@ mod tests {
     }
 
     #[test]
+    fn an_opened_handoff_s_row_is_written_by_the_app_and_says_so() {
+        // #1421: a sandboxed chat may not write the project's dispatch log, so the app writes
+        // the handoff's row where it opens the chat, and tells the command it did.
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let ticket = ticket(&held, &id, &tickets, asking);
+        // The stamp is the chat's own words, and it claims the work stays in `alpha`.
+        let claims_here = format!(
+            "⟨handoff from chat {asking} · workspace alpha · 2026-05-04 11:32⟩\n\n# Ship it\nnow"
+        );
+
+        let said = answer(
+            &held,
+            &id,
+            &tickets,
+            1,
+            an_open(asking, &ticket, claims_here),
+            &|_| {},
+        );
+
+        let Answer::Opened { row, .. } = said else {
+            panic!("opened, not {said:?}")
+        };
+        assert_eq!(row, Some(Row::Written));
+        let rows: Vec<_> = purlis_core::dispatch::rows(&plane.root)
+            .into_iter()
+            .filter(|row| row["event"] == "handoff")
+            .collect();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        // The app's record has the asking chat at the project's root, and the work goes to
+        // `alpha`: elsewhere, whatever the stamp claimed (D-1421-11).
+        assert_eq!(rows[0]["placement"], "elsewhere");
+        assert_eq!(rows[0]["created"], false);
+    }
+
+    #[test]
     fn a_handoff_opens_a_chat_on_the_asking_chats_profile_with_the_brief_as_its_first_message() {
         let plane = Plane::new();
         let planes = planes();
@@ -768,7 +853,7 @@ mod tests {
             &|arrived| told.lock().unwrap().push(arrived),
         );
 
-        let Answer::Opened { chat } = said else {
+        let Answer::Opened { chat, .. } = said else {
             panic!("opened, not {said:?}")
         };
         assert_eq!(
@@ -876,7 +961,7 @@ mod tests {
             a_named_open(asking, &ticket, message, name, report),
             &|arrived| *told.lock().unwrap() = Some(arrived),
         ) {
-            Answer::Opened { chat } => Ok((chat, told.into_inner().unwrap().expect("told"))),
+            Answer::Opened { chat, .. } => Ok((chat, told.into_inner().unwrap().expect("told"))),
             Answer::No { why } => Err(why),
             other => panic!("opened or refused, not {other:?}"),
         }

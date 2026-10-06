@@ -473,3 +473,8 @@ fn a_plane_writes_charters_markers_until_it_is_migrated() {
     assert!(plane_migrated(dir), "so does the purlis manifest");
     assert_eq!(LIVE_END.writes_for(dir), LIVE_END.write);
 }
+
+#[test]
+fn the_handoff_s_lines_start_with_the_program_s_name() {
+    assert_eq!(HANDOFF_SAYS, format!("{} handoff:", BINARY.write));
+}

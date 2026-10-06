@@ -3736,3 +3736,72 @@ fn the_firmlinks_are_the_system_s_list_and_the_known_one_together() {
     assert!(read.contains(&std::path::PathBuf::from("/Extra")));
     assert_eq!(read.len(), 19);
 }
+
+/// A chat's environment as the app sets it: sandboxed or not, on `harness`.
+fn chat_env(sandboxed: bool, harness: Option<&str>) -> impl Fn(&str) -> Option<String> {
+    let harness = harness.map(str::to_owned);
+    move |name: &str| match name {
+        crate::hookwire::SANDBOXED_ENV if sandboxed => Some("1".to_owned()),
+        crate::hookwire::HARNESS_ENV => harness.clone(),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_command_a_sandboxed_chat_runs_is_held_to_its_sandbox_on_every_harness() {
+    for harness in [Some("claude-code"), Some("codex"), Some("opencode"), None] {
+        assert!(
+            writes_are_sandboxed_in(&chat_env(true, harness), Started::ByTheChat),
+            "{harness:?}"
+        );
+        assert!(
+            !writes_are_sandboxed_in(&chat_env(false, harness), Started::ByTheChat),
+            "{harness:?}"
+        );
+    }
+}
+
+#[test]
+fn a_hook_is_held_to_the_chat_s_sandbox_only_where_the_harness_s_sandbox_holds_its_hooks() {
+    // #1421: Claude Code's sandbox confines its Bash tool, and its hooks run outside it, so a
+    // refusal one meets there is not the sandbox's. Codex and opencode run whole inside the wrap.
+    // The variable holds the profile's registry name, as a chat's start writes it.
+    let hook = |harness| writes_are_sandboxed_in(&chat_env(true, harness), Started::ByTheHarness);
+    assert!(!hook(Some("claude-code")));
+    assert!(hook(Some("codex")));
+    assert!(hook(Some("opencode")));
+    // A harness this binary does not know, or none named: never blamed on a sandbox.
+    assert!(!hook(Some("aider")));
+    assert!(
+        !hook(Some("claude")),
+        "a kind word is not what the variable holds"
+    );
+    assert!(!hook(None));
+    assert!(!writes_are_sandboxed_in(
+        &chat_env(false, Some("codex")),
+        Started::ByTheHarness
+    ));
+}
+
+#[test]
+fn every_harness_says_whether_its_sandbox_holds_what_it_starts() {
+    for harness in crate::harness::Harness::ALL {
+        let holds = harness.adapter().sandbox_holds_what_it_starts();
+        // A wrap charter applies is around the whole harness; Claude Code's own is not.
+        let wrapped = !matches!(harness, crate::harness::Harness::ClaudeCode);
+        assert_eq!(holds, wrapped, "{harness:?}");
+    }
+}
+
+#[test]
+fn every_registry_name_a_chat_start_writes_names_its_harness() {
+    // #1421 review: `PURLIS_HARNESS` holds the registry name, so the adapter must be found by it.
+    for kind in crate::profiles::KINDS {
+        let harness = harness_of_registry(kind.registry).expect(kind.registry);
+        assert_eq!(harness.name(), kind.word);
+    }
+    assert_eq!(
+        harness_of_registry("claude-code"),
+        Some(crate::harness::Harness::ClaudeCode)
+    );
+}
