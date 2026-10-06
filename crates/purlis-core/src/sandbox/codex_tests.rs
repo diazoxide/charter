@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-const ON: &str = "[sandbox]\nmode = \"on\"\n";
+/// The sandbox on, without the `toolchains` preset: that preset gives a chat the project's own
+/// package caches (#1337), made under the machine's data home when the chat starts, which these
+/// tests' machines do not have. What the caches add to a wrap is `sandbox::tests`' to show.
+const ON: &str = "[sandbox]\nmode = \"on\"\negress = [\"model-providers\", \"forge\"]\n";
 
 fn plane_saying(toml: &str) -> tempfile::TempDir {
     let plane = tempfile::tempdir().expect("a plane");
