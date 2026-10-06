@@ -106,6 +106,7 @@ pub fn keychains(home: Option<&Path>) -> Option<Denial> {
         class: super::Class::Vaults,
         path: home.join("Library/Keychains"),
         access: Access::ReadWrite,
+        named: None,
     })
 }
 
