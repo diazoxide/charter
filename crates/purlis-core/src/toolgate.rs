@@ -1,4 +1,4 @@
-//! The Bash guard, assembled: eight arms, one verdict, in the order `pretooluse` runs them.
+//! The Bash guard, assembled: its arms, one verdict, in the order `pretooluse` runs them.
 //!
 //! A port of `charter/hooks.py:pretooluse`'s REFUSALS — the arms and the order alone, with
 //! nothing that writes. Each arm already stands on its own: [`crate::leakguard`] (A),
@@ -56,7 +56,8 @@ use std::path::Path;
 use crate::forge::Forge;
 use crate::handoffguard::{self, Caller};
 use crate::{
-    commitguard, consentspelling, credguard, floorguard, leakguard, planeroot, proseguard, pyjson,
+    commitguard, consentspelling, credguard, floorguard, leakguard, planeroot, projectgit,
+    proseguard, pyjson,
 };
 
 /// What to do when a guard is WRONG about your case (charter#370) — `_OVERRIDE_NOTE`.
@@ -122,6 +123,34 @@ pub struct Plane<'a> {
     /// (`$CLAUDE_PROJECT_DIR`), or `""` when the hook was not told. The consent-spelling arms
     /// ask its layer as well as the call's `cwd` (RN-7).
     pub session_dir: &'a str,
+    /// What the app said about the chat when it started it, from the chat's own environment.
+    pub launched: Launched<'a>,
+}
+
+/// What the app told a chat about itself at its start, in its environment: whether it was
+/// given a sandbox, and the folder it was started in. Read once by the hook; empty for a
+/// harness the app did not start, such as one launched from a terminal.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Launched<'a> {
+    /// [`crate::hookwire::SANDBOXED_ENV`]: the app applied a sandbox to this chat
+    /// ([`crate::sandbox::chat_is_sandboxed`]).
+    pub sandboxed: bool,
+    /// [`crate::sandboxblock::CHAT_DIR_ENV`]: the folder the app started the chat in.
+    pub chat_dir: Option<&'a str>,
+}
+
+impl Plane<'_> {
+    /// The folder the chat was started in: the one the app names
+    /// ([`crate::sandboxblock::CHAT_DIR_ENV`]), else where the host loaded its settings
+    /// (`$CLAUDE_PROJECT_DIR`). `None` where neither says, which is never guessed from where the
+    /// command runs.
+    pub fn chat_dir(&self) -> Option<std::path::PathBuf> {
+        self.launched
+            .chat_dir
+            .filter(|dir| !dir.is_empty())
+            .or(Some(self.session_dir).filter(|dir| !dir.is_empty()))
+            .map(std::path::PathBuf::from)
+    }
 }
 
 /// A refused tool call: what the chat is told, and what a tally would record.
@@ -282,6 +311,17 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
             why,
         ));
     }
+    // A9: git on the project that would stop on one of git's lock files, from a chat the app
+    // gave a sandbox, outside the project's root folder (#1345). GATED: the sandbox it explains
+    // is a project's chat's. Last, so every arm that refuses one of these lines for a reason of
+    // its own says it first.
+    if let Some(plane) = plane
+        && plane.launched.sandboxed
+        && let Some(chat_dir) = plane.chat_dir()
+        && let Some((sub, why)) = projectgit::refusal(cmd, call.cwd, plane.root, &chat_dir)
+    {
+        return Some(Verdict::new(projectgit::REASON, Some(sub), why));
+    }
     // Everything below this line in the Python is a WRITE or the persona tool-gate's ALLOW,
     // and neither is ported. See the module header.
     None
@@ -341,6 +381,7 @@ mod tests {
             root: &root,
             forges: &forges,
             session_dir: "",
+            launched: Launched::default(),
         };
         let call = Call {
             command: cmd,
@@ -349,6 +390,60 @@ mod tests {
             caller: attended(),
         };
         verdict(&call, in_a_plane.then_some(&plane))
+    }
+
+    /// A9 speaks only to a chat the app says it gave a sandbox, and only where that chat's
+    /// folder is not the project's root folder (#1345).
+    #[test]
+    fn git_that_would_stop_on_a_project_lock_is_explained_only_to_a_sandboxed_chat() {
+        let fix = Fixture::new();
+        let root = fix.root();
+        std::fs::create_dir_all(fix.dir.path().join("workspaces/ide")).unwrap();
+        std::fs::create_dir_all(fix.dir.path().join(".git")).unwrap();
+        let workspace = fix.dir.path().join("workspaces/ide").display().to_string();
+        let forges = forges();
+        let state = fix.state();
+        let ask = |cmd: &str, session_dir: &str, launched: Launched<'_>| {
+            let plane = Plane {
+                root: &root,
+                forges: &forges,
+                session_dir,
+                launched,
+            };
+            let call = Call {
+                command: cmd,
+                cwd: &workspace,
+                state_dir: &state,
+                caller: attended(),
+            };
+            verdict(&call, Some(&plane)).map(|v| v.reason)
+        };
+        let ws = workspace.as_str();
+        let launched =
+            |sandboxed: bool, chat_dir: Option<&str>| (sandboxed, chat_dir.map(str::to_owned));
+        let ask_as =
+            |cmd: &str, session_dir: &str, (sandboxed, chat_dir): (bool, Option<String>)| {
+                ask(
+                    cmd,
+                    session_dir,
+                    Launched {
+                        sandboxed,
+                        chat_dir: chat_dir.as_deref(),
+                    },
+                )
+            };
+        let refused = Some(projectgit::REASON.to_string());
+        assert_eq!(ask_as("git fetch", ws, launched(true, None)), refused);
+        // No `$CLAUDE_PROJECT_DIR`: the folder is the one the app says it started the chat in.
+        assert_eq!(ask_as("git fetch", "", launched(true, Some(ws))), refused);
+        assert_eq!(ask_as("git status", ws, launched(true, Some(ws))), None);
+        // A chat started without a sandbox, or by no app at all, is never told it has one.
+        assert_eq!(ask_as("git fetch", ws, launched(false, Some(ws))), None);
+        assert_eq!(ask("git fetch", ws, Launched::default()), None);
+        // Started at the root folder, which its sandbox lets it write.
+        assert_eq!(ask_as("git fetch", "", launched(true, Some(&root))), None);
+        // Nothing says where the chat was started: never guessed from the command's folder.
+        assert_eq!(ask_as("git fetch", "", launched(true, None)), None);
     }
 
     #[test]
@@ -429,6 +524,7 @@ mod tests {
             root: &root,
             forges: &forges,
             session_dir: "",
+            launched: Launched::default(),
         };
         let state = fix.state();
         let mut c = Call {

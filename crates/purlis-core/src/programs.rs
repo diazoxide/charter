@@ -63,6 +63,21 @@ use std::path::{Path, PathBuf};
 ///   knows where it lands.
 /// - `.bun/bin`, `.volta/bin`, `.npm-global/bin` — the three JavaScript installers that make
 ///   one stable directory. All three harnesses are installable through them.
+/// - `.cargo/bin` — rustup's own installer, which adds it to a login shell's `PATH`, and
+///   `cargo install`. No harness lives there, but this list is also a chat's `PATH`
+///   ([`chat_path_from`]), and a chat without it answered `cargo: command not found` (#1345).
+///
+/// **Every entry widens three lookups at once**, so an entry is added for all three: a chat's
+/// `PATH`, the harness a profile names by a bare word, and the forge CLI charter hands a
+/// token to ([`crate::forge::find_cli`]). Each is searched AFTER the inherited `PATH`, so a
+/// terminal launch finds what it found before; a Finder launch, whose `PATH` is the system's
+/// four, now finds a `gh` or a `claude` in `~/.cargo/bin` before Homebrew's, because the user
+/// directories come before [`SYSTEM_BIN`]. That is the order a shell with rustup's `env` line
+/// has too. **What keeps it safe is that no chat can write any of them**: a sandboxed chat
+/// writes its own folder and its harness's homes and temp directories, none of which holds
+/// these (`no_directory_a_chat_searches_is_one_its_sandbox_lets_it_write`). A grant that let a
+/// chat write `~/.cargo` would let it plant the next chat's, the app's and the operator's
+/// programs; a cache grant must stop at `~/.cargo/registry` and `~/.cargo/git`.
 ///
 /// **What is deliberately NOT here**: `nvm`, `asdf`, `mise` and Nix. Their directories are
 /// version- or shim-scoped (`~/.nvm/versions/node/v22.11.0/bin`, `~/.asdf/shims`,
@@ -70,13 +85,14 @@ use std::path::{Path, PathBuf};
 /// reading the tool's own state — which is the login-shell question again, wearing a hat. A
 /// machine like that declares the profile with an absolute path, which is what the refusal
 /// from [`NotFound::said`] asks for and what this plane's `codex` profile already does.
-pub const USER_BIN: [&str; 6] = [
+pub const USER_BIN: [&str; 7] = [
     ".local/bin",
     "bin",
     ".opencode/bin",
     ".bun/bin",
     ".volta/bin",
     ".npm-global/bin",
+    ".cargo/bin",
 ];
 
 /// The machine-wide directories, in the order an operator's `PATH` usually carries them.
@@ -86,7 +102,19 @@ pub const USER_BIN: [&str; 6] = [
 /// right answer for the binary charter hands credentials to and the wrong one here. No
 /// harness ships in `/usr/bin`; every one of them arrives through Homebrew or an npm prefix,
 /// so those come first and a shell's own order is reproduced.
-pub const SYSTEM_BIN: [&str; 4] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+///
+/// **Homebrew's rustup is keg-only**: it links nothing into `<prefix>/bin`, and its caveat asks
+/// the shell to add `<prefix>/opt/rustup/bin`, where `cargo` and `rustc` are. Those two follow
+/// the Homebrew directories, for both prefixes, so a chat finds the toolchain the operator's
+/// terminal finds (#1345). Stable paths: the `opt` link survives every upgrade.
+pub const SYSTEM_BIN: [&str; 6] = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/opt/homebrew/opt/rustup/bin",
+    "/usr/local/opt/rustup/bin",
+    "/usr/bin",
+    "/bin",
+];
 
 /// A program charter was asked to run and could not find, carrying every directory it looked
 /// in — which is the one fact charter-app#134's refusal was missing.
@@ -481,6 +509,8 @@ mod tests {
                 PathBuf::from("/abs"),
                 PathBuf::from("/opt/homebrew/bin"),
                 PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/opt/homebrew/opt/rustup/bin"),
+                PathBuf::from("/usr/local/opt/rustup/bin"),
                 PathBuf::from("/usr/bin"),
                 PathBuf::from("/bin")
             ]
@@ -503,8 +533,9 @@ mod tests {
                 "/Applications/charter.app/Contents/MacOS",
                 FINDER,
                 "/home/op/.local/bin:/home/op/bin:/home/op/.opencode/bin:/home/op/.bun/bin",
-                "/home/op/.volta/bin:/home/op/.npm-global/bin",
+                "/home/op/.volta/bin:/home/op/.npm-global/bin:/home/op/.cargo/bin",
                 "/opt/homebrew/bin:/usr/local/bin",
+                "/opt/homebrew/opt/rustup/bin:/usr/local/opt/rustup/bin",
             ]
             .join(":"),
             "the app's charter, then the inherited four, then the list that found the harness"
@@ -531,6 +562,67 @@ mod tests {
             1,
             "named twice: {path}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_finder_launched_chat_finds_cargo_where_rustup_puts_it() {
+        // #1345: a sandboxed chat answered `cargo: command not found` on a machine whose
+        // rustup came from Homebrew. rustup's own installer puts the proxies in `~/.cargo/bin`;
+        // Homebrew's rustup is keg-only and puts them in `<prefix>/opt/rustup/bin`.
+        let path = chat_path_from(Some(OsStr::new(FINDER)), Some(Path::new("/home/op")), None)
+            .expect("a PATH");
+        let dirs: Vec<&str> = path.split(':').collect();
+        for dir in [
+            "/home/op/.cargo/bin",
+            "/opt/homebrew/opt/rustup/bin",
+            "/usr/local/opt/rustup/bin",
+        ] {
+            assert!(dirs.contains(&dir), "{dir} is not on {path}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_directory_a_chat_searches_is_one_its_sandbox_lets_it_write() {
+        // A directory on a chat's PATH that a chat can write is a program the next chat, the
+        // app's own forge calls and the operator's terminal run without a sandbox.
+        let home = PathBuf::from("/Users/op");
+        let machine = crate::sandbox::Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: Some(home.clone()),
+            os: crate::sandbox::Os::MacOs,
+        };
+        let homes = crate::sandbox::Homes::of(&machine);
+        let mut writable: Vec<PathBuf> = crate::sandbox::program::temp_roots(&[]);
+        writable.extend(
+            [
+                homes.data,
+                homes.state,
+                homes.config,
+                homes.cache,
+                homes.codex,
+                crate::sandbox::Homes::codex_project(&machine, Path::new("/Users/op/project")),
+            ]
+            .into_iter()
+            .flatten(),
+        );
+        // The chat's own folder: a project's, or a workspace's inside it.
+        writable.push(PathBuf::from("/Users/op/project"));
+
+        let path = chat_path_from(Some(OsStr::new(FINDER)), Some(&home), None).expect("a PATH");
+        let mut searched: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        searched.extend(search_dirs_from(Some(OsStr::new(FINDER)), Some(&home)));
+        for dir in &searched {
+            for grant in &writable {
+                assert!(
+                    !dir.starts_with(grant),
+                    "{} is searched, and a chat may write {}",
+                    dir.display(),
+                    grant.display()
+                );
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -568,7 +660,8 @@ mod tests {
         .expect("a PATH");
         assert_eq!(
             path,
-            "/opt/charter:/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin"
+            "/opt/charter:/usr/bin:/opt/homebrew/bin:/usr/local/bin:\
+             /opt/homebrew/opt/rustup/bin:/usr/local/opt/rustup/bin:/bin"
         );
     }
 
@@ -577,7 +670,11 @@ mod tests {
     fn a_relative_or_empty_entry_is_not_handed_to_a_chat() {
         // Resolved against the chat's working directory — a checkout a chat can write.
         let path = chat_path_from(Some(OsStr::new(".::bin:/abs")), None, None).expect("a PATH");
-        assert_eq!(path, "/abs:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
+        assert_eq!(
+            path,
+            "/abs:/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/opt/rustup/bin:\
+             /usr/local/opt/rustup/bin:/usr/bin:/bin"
+        );
     }
 
     #[cfg(unix)]
@@ -599,7 +696,11 @@ mod tests {
             Some(Path::new("/weird:dir/charter")),
         )
         .expect("a PATH");
-        assert_eq!(path, "/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin");
+        assert_eq!(
+            path,
+            "/usr/bin:/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/opt/rustup/bin:\
+             /usr/local/opt/rustup/bin:/bin"
+        );
     }
 
     #[test]

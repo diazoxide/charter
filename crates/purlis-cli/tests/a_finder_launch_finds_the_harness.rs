@@ -145,6 +145,7 @@ fn every_directory_the_search_promises_is_one_a_finder_launch_actually_reaches()
         ".bun/bin",
         ".volta/bin",
         ".npm-global/bin",
+        ".cargo/bin",
     ] {
         let machine = Machine::new();
         machine.harness_in(dir);

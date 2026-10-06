@@ -512,6 +512,113 @@ pub fn verify(ctx: &Ctx, name: Option<&str>, io: &mut dyn Io) -> i32 {
     0
 }
 
+/// A plain-file vault whose registered file `purlis doctor` flags (#1345).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Misplaced {
+    /// The vault's name.
+    pub name: String,
+    /// Its file, as the registry resolves it.
+    pub file: PathBuf,
+    /// The file is outside the project.
+    pub outside: bool,
+    /// Nothing is at the file's path: the filesystem answered `NotFound`. A look it refused
+    /// (a sandbox, a permission) is not taken for an absence.
+    pub missing: bool,
+    /// The file is in a temp directory ([`crate::sandbox::program::temp_roots`]): a test's or a
+    /// script's, almost always, and gone with the next clean-up.
+    pub temp: bool,
+}
+
+impl Misplaced {
+    /// Whether this is a finding to act on — missing, gone or in a temp directory — rather than
+    /// a vault kept outside the project on purpose, which is only worth knowing.
+    pub fn to_act_on(&self) -> bool {
+        self.missing || self.temp
+    }
+}
+
+/// Every plain-file vault whose file is outside the project, or has gone from it, by name.
+///
+/// **Why it is asked.** Each vault file the registry names is denied to every sandboxed chat
+/// ([`crate::sandbox::Denied::of`]), wherever it is. A vault a test registered at a temp path,
+/// or one whose file was moved away, keeps costing a rule nobody needs, and nothing said so.
+///
+/// **What counts.** A file outside the project, whether it is there or not ([`Misplaced::temp`]
+/// says when it is in a temp directory); and a file inside it that is gone — missing with its rotation record still beside it
+/// ([`super::plain_file::gone`]). A vault registered and never written has no file yet, which is
+/// how a new vault starts, and is not flagged. A path is compared after its links and `..` are
+/// resolved as far as the disk has them, so a link inside the project to a file elsewhere is
+/// outside.
+///
+/// Reads the registry and stats paths. **Never opens a vault file**, so no value is read.
+pub fn misplaced(ctx: &Ctx) -> Result<Vec<Misplaced>, super::VaultError> {
+    let doc = registry::load_registry(ctx)?;
+    let root = std::fs::canonicalize(&ctx.root).unwrap_or_else(|_| ctx.root.clone());
+    let temps: Vec<PathBuf> = crate::sandbox::program::temp_roots(&[])
+        .iter()
+        .map(|dir| resolved(dir))
+        .collect();
+    let mut out = Vec::new();
+    let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let Ok(vault) = registry::vault_in(&doc, &name) else {
+            continue;
+        };
+        if vault.provider != "plain-file" {
+            continue;
+        }
+        let Ok(file) = super::plain_file::file_path(ctx, &vault) else {
+            continue;
+        };
+        let real = resolved(&file);
+        let outside = !real.starts_with(&root);
+        let missing = std::fs::symlink_metadata(&file)
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound);
+        let gone = missing && super::plain_file::gone(ctx, &vault, &file).is_some();
+        let temp = outside && temps.iter().any(|dir| real.starts_with(dir));
+        if outside || gone {
+            out.push(Misplaced {
+                name,
+                file,
+                outside,
+                missing,
+                temp,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// `path` with `..` folded and its links resolved as far as the disk has them: the deepest
+/// ancestor that exists is canonicalized and the rest is joined back on.
+fn resolved(path: &Path) -> PathBuf {
+    let mut lexical = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                lexical.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => lexical.push(other),
+        }
+    }
+    let mut rest = Vec::new();
+    let mut at = lexical.as_path();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(at) {
+            return rest.iter().rev().fold(real, |acc, part| acc.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                at = parent;
+            }
+            _ => return lexical,
+        }
+    }
+}
+
 /// `cmd_vault_remove`: unregister; the file it pointed at stays on disk.
 pub fn remove(ctx: &Ctx, name: &str, io: &mut dyn Io) -> i32 {
     // Read before it goes: a keyring vault's items outlive its registration, and registering

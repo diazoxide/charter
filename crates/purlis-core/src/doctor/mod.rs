@@ -42,6 +42,7 @@ mod remote;
 mod rules;
 mod sandbox;
 pub(crate) mod session;
+mod vaults;
 mod work;
 
 /// Python's truthiness of a TOML value, for `crate::alerts`, which reads the same manifest
@@ -496,6 +497,7 @@ impl Doctor {
         rows.push(inventory::inventory(self));
         rows.push(deferred::row("vaults", deferred::VAULTS));
         rows.push(deferred::row("vault registry", deferred::VAULTS));
+        rows.extend(vaults::vault_files(self));
         rows.push(config::version_lock(self));
         rows.extend(sandbox::sandbox(self));
         rows.extend(sandbox::blocks(self));
