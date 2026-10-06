@@ -190,6 +190,7 @@ fn every_shipped_skill_names_only_purlis() {
 
 #[test]
 fn the_old_command_is_found_in_a_code_block_and_a_code_span() {
+    purlis_core::unsteered!();
     let text = "\
 Run it:
 
@@ -205,6 +206,7 @@ Or `charter handoff billing`, or `x | charter todo add`.
 
 #[test]
 fn the_bare_word_and_the_purlis_names_are_not_found() {
+    purlis_core::unsteered!();
     for text in [
         "Read its charter with `purlis persona show <name>`.",
         "A persona's charter, its own memory and its vault.",
@@ -219,6 +221,7 @@ fn the_bare_word_and_the_purlis_names_are_not_found() {
 
 #[test]
 fn an_old_file_or_variable_name_is_found_anywhere() {
+    purlis_core::unsteered!();
     for text in [
         "6. `charter.toml` `[persona] default`",
         "2. `$CHARTER_PERSONA` (empty counts as unset)",
@@ -230,6 +233,7 @@ fn an_old_file_or_variable_name_is_found_anywhere() {
 
 #[test]
 fn the_old_command_is_found_however_a_shell_would_still_run_it() {
+    purlis_core::unsteered!();
     for text in [
         "Run `charter --plane p handoff z`.",
         "Run `/usr/local/bin/charter handoff w`.",
@@ -244,6 +248,7 @@ fn the_old_command_is_found_however_a_shell_would_still_run_it() {
 
 #[test]
 fn a_fence_closes_only_on_its_own_mark() {
+    purlis_core::unsteered!();
     // A `~~~` block holding a line of backticks is still open after it.
     let text = "~~~\n```\ncharter handoff w\n~~~\ncharter handoff w\n";
     let lines: Vec<usize> = hits(text).into_iter().map(|(n, ..)| n).collect();
