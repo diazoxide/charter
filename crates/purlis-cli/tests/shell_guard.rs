@@ -7,7 +7,7 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
@@ -61,13 +61,6 @@ impl Tab {
     }
 
     fn guard(&self, word: &str, args: &[&str], env: &[(&str, &str)]) -> Output {
-        self.guard_started(word, args, env)
-            .wait_with_output()
-            .expect("charter runs")
-    }
-
-    /// [`Self::guard`], started and not waited for.
-    fn guard_started(&self, word: &str, args: &[&str], env: &[(&str, &str)]) -> Child {
         Command::new(CHARTER)
             .args(["shell-guard", "--shims"])
             .arg(&self.shims)
@@ -79,9 +72,7 @@ impl Tab {
             .env("PATH", self.path())
             .envs(env.iter().copied())
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .output()
             .expect("charter runs")
     }
 
@@ -154,25 +145,7 @@ fn a_harness_started_in_a_chats_shell_tells_the_app_where_it_was_started() {
         Box::new(move |notice| tx.lock().unwrap().send(notice).unwrap()),
     );
 
-    // The app admits a line only from a process still running inside the chat's program, as
-    // it asks after the line arrives. A real harness is still running then; a stand-in that
-    // exits at once can be gone first, and its line is dropped (D-T56-3). So this one stays
-    // until the notice is heard.
-    let heard = tab.dir.path().join("heard");
-    let real = tab.dir.path().join("real").join("claude");
-    std::fs::write(
-        &real,
-        format!(
-            "#!/bin/sh
-i=0
-while [ ! -e '{}' ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i+1)); done
-",
-            heard.display()
-        ),
-    )
-    .unwrap();
-
-    let started = tab.guard_started(
+    let ran = tab.guard(
         "claude",
         &[],
         &[
@@ -181,13 +154,10 @@ while [ ! -e '{}' ] && [ $i -lt 300 ]; do sleep 0.05; i=$((i+1)); done
             (TOKEN_ENV, token.expose()),
         ],
     );
-    let notice = rx.recv_timeout(Duration::from_secs(10));
-    std::fs::write(&heard, "").unwrap();
-    let ran = started.wait_with_output().expect("charter runs");
 
     assert!(ran.status.success(), "{ran:?}");
     assert_eq!(
-        notice,
+        rx.recv_timeout(Duration::from_secs(5)),
         Ok(StartedByHand {
             chat: 12,
             started_by_hand: "claude".to_owned(),

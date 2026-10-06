@@ -34,11 +34,17 @@ pub enum Parents {
 }
 
 /// The command that lists every process, its parent and when it started: `/bin/ps` by its full
-/// path, with no environment.
+/// path, with no environment but `TZ=UTC0`.
+///
+/// **In UTC, always.** `lstart` is printed in the local time zone, and a start time is only
+/// ever compared with one read earlier: a machine whose zone changes while the app runs
+/// (travel, or the person changing it) would otherwise read every running process as another
+/// one, and refuse every chat's lines.
 pub fn ps_command() -> Command {
     let mut ps = Command::new("/bin/ps");
     ps.args(["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="])
         .env_clear()
+        .env("TZ", "UTC0")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     ps
@@ -510,6 +516,20 @@ mod tests {
         assert_eq!(
             ps_lines("  1     0\n 4242   17\nnot a line\n"),
             [(1, 0), (4242, 17)].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn the_process_table_is_read_in_utc_and_nothing_else_of_the_environment() {
+        let ps = ps_command();
+        let env: Vec<_> = ps.get_envs().collect();
+        assert_eq!(
+            env,
+            [(
+                std::ffi::OsStr::new("TZ"),
+                Some(std::ffi::OsStr::new("UTC0"))
+            )],
+            "a start time must not move with the machine's time zone"
         );
     }
 
