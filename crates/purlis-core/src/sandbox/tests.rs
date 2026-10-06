@@ -11,6 +11,7 @@ fn default_policy() -> Option<Policy> {
     Some(Policy {
         egress: vec![Preset::ModelProviders, Preset::Forge, Preset::Toolchains],
         hosts: vec![],
+        certificate_checks: false,
     })
 }
 
@@ -68,6 +69,7 @@ fn a_plane_names_its_egress_by_preset_and_an_unknown_preset_is_refused() {
         Some(Policy {
             egress: vec![Preset::Forge],
             hosts: vec![],
+            certificate_checks: false,
         })
     );
     assert_eq!(
@@ -89,7 +91,8 @@ fn an_empty_egress_list_is_the_strictest_answer_and_is_kept() {
         said.policy,
         Some(Policy {
             egress: vec![],
-            hosts: vec![]
+            hosts: vec![],
+            certificate_checks: false,
         })
     );
 }
@@ -571,6 +574,7 @@ fn compiled(denied: Denied, os: Os) -> Compiled {
         hosts: vec!["github.com".to_owned()],
         os,
         homes: Homes::default(),
+        widened: Widened::default(),
     }
 }
 
@@ -2478,4 +2482,597 @@ fn this_machine_s_hosts_through_a_link_grant_nothing() {
     std::fs::write(&target, "[sandbox]\nhosts = [\"10.0.0.6\"]\n").expect("target");
     std::os::unix::fs::symlink(&target, plane.path().join("charter.local.toml")).expect("link");
     assert_eq!(hosts::personal(plane.path()), Vec::<hosts::Host>::new());
+}
+
+// -------------------------------------------------------------------------------------
+// What a project's sandbox widens past its hosts (spec #1330, #1337): the project's own
+// package caches with the toolchains preset, the certificate check only where the project
+// turns it on
+// -------------------------------------------------------------------------------------
+
+use std::path::{Path as StdPath, PathBuf as StdPathBuf};
+
+/// A Mac whose home is `/Users/op`, with `env`, and a terminal's `PATH` unless `env` says one.
+fn mac_with(env: &[(&str, &str)]) -> Machine {
+    let mut vars = vec![(
+        "PATH",
+        "/Users/op/.cargo/bin:/Users/op/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+    )];
+    vars.retain(|(key, _)| !env.iter().any(|(set, _)| set == key));
+    vars.extend_from_slice(env);
+    Machine {
+        env: crate::secrets::Env::of(&vars),
+        home: Some(StdPathBuf::from("/Users/op")),
+        os: Os::MacOs,
+    }
+}
+
+const PROJECT: &str = "/Users/op/project";
+
+fn policy_of(presets: &[Preset], certificate_checks: bool) -> Policy {
+    Policy {
+        egress: presets.to_vec(),
+        hosts: vec![],
+        certificate_checks,
+    }
+}
+
+/// What `harness` starts under in the project at `root` with `policy`, on `machine`: compiled
+/// as a start compiles it, with no `charter.toml` written.
+fn compiled_for(harness: Harness, policy: &Policy, root: &StdPath, machine: &Machine) -> Applied {
+    applied_for(harness, policy, &Plane::of(None), root, machine).expect("compiles")
+}
+
+fn under_presets(harness: Harness, presets: &[Preset], machine: &Machine) -> Applied {
+    compiled_for(
+        harness,
+        &policy_of(presets, false),
+        StdPath::new(PROJECT),
+        machine,
+    )
+}
+
+/// The project at `root`'s cache home on `machine`, where its sandboxed chats' caches live.
+fn cache_home(machine: &Machine, root: &StdPath) -> StdPathBuf {
+    Homes::charter_data(machine)
+        .expect("a data home")
+        .join("cache-homes")
+        .join(Homes::project_key(root))
+}
+
+fn claude_sandbox(applied: &Applied) -> &serde_json::Value {
+    match applied.form() {
+        Form::ClaudeCode(settings) => &settings.sandbox,
+        other => panic!("not Claude Code's: {other:?}"),
+    }
+}
+
+/// The Seatbelt profile `applied` wraps a chat in, for a wrapped harness.
+fn wrap_profile(applied: &Applied) -> String {
+    let cwd = StdPath::new(PROJECT);
+    let tmp = StdPath::new("/Users/op/project-tmp");
+    match applied.form() {
+        Form::Opencode(wrap) => opencode::profile(wrap, cwd, tmp, 4040, None),
+        Form::Codex(wrap) => codex::profile(wrap, cwd, tmp, 4040, None),
+        Form::ClaudeCode(_) => panic!("Claude Code is not wrapped"),
+    }
+    .expect("a profile")
+}
+
+/// Every folder a chat writes whole in a cache home, in the order they are granted.
+const TREES: [&str; 11] = [
+    "cargo/registry",
+    "cargo/git/checkouts",
+    "npm",
+    "pip",
+    "go-mod",
+    "go-build",
+    "gradle",
+    "yarn",
+    "yarn-berry",
+    "pnpm-store",
+    "pnpm-cache",
+];
+
+/// The files a chat writes at the top of the project's cargo home.
+const CARGO_FILES: [&str; 6] = [
+    ".package-cache",
+    ".package-cache-mutate",
+    ".global-cache",
+    ".global-cache-wal",
+    ".global-cache-shm",
+    ".global-cache-journal",
+];
+
+#[test]
+fn the_toolchains_preset_gives_a_chat_its_projects_own_caches_and_only_with_it() {
+    let machine = mac_with(&[]);
+    let home = cache_home(&machine, StdPath::new(PROJECT));
+    let on = under_presets(Harness::ClaudeCode, &[Preset::Toolchains], &machine);
+    let mut expected: Vec<String> = TREES
+        .iter()
+        .map(|tree| home.join(tree).display().to_string())
+        .collect();
+    expected.extend(
+        CARGO_FILES
+            .iter()
+            .map(|file| home.join("cargo").join(file).display().to_string()),
+    );
+    expected.push(format!("{}/cargo/git/db/*/**", home.display()));
+    assert_eq!(
+        claude_sandbox(&on)["filesystem"]["allowWrite"],
+        serde_json::json!(expected)
+    );
+    // Every folder a chat may write is the project's own; none of the person's caches is.
+    let writable = on.writable();
+    assert_eq!(writable.len(), TREES.len() + 1 + CARGO_FILES.len());
+    for path in &writable {
+        assert!(
+            path.starts_with(&home),
+            "{} is not the project's",
+            path.display()
+        );
+    }
+    for person in [
+        "/Users/op/.cargo",
+        "/Users/op/.npm",
+        "/Users/op/Library/Caches",
+        "/Users/op/.cache",
+        "/Users/op/go",
+        "/Users/op/.gradle",
+        "/Users/op/.yarn",
+        "/Users/op/Library/pnpm",
+    ] {
+        assert!(
+            !writable.iter().any(|path| path.starts_with(person)),
+            "{person} is written"
+        );
+    }
+
+    let off = under_presets(
+        Harness::ClaudeCode,
+        &[Preset::ModelProviders, Preset::Forge],
+        &machine,
+    );
+    assert_eq!(claude_sandbox(&off)["filesystem"].get("allowWrite"), None);
+    assert_eq!(off.writable(), Vec::<StdPathBuf>::new());
+
+    for harness in [Harness::Opencode, Harness::Codex] {
+        let on = wrap_profile(&under_presets(harness, &[Preset::Toolchains], &machine));
+        let off = wrap_profile(&under_presets(harness, &[Preset::Forge], &machine));
+        for tree in TREES {
+            let tree = home.join(tree);
+            let grant = format!("  (subpath \"{}\")\n", tree.display());
+            assert!(
+                on.contains(&grant),
+                "{harness:?} does not grant {tree:?}:\n{on}"
+            );
+            // Pinned, so it is never removed, renamed or swapped for a link.
+            let pin = format!("(deny file-write* (literal \"{}\"))\n", tree.display());
+            assert!(on.contains(&pin), "{harness:?} does not pin {tree:?}");
+            assert!(
+                on.find(&pin) > on.find(&grant),
+                "{harness:?}: pinned before granted"
+            );
+            // The later-code names stay denied at any depth inside each.
+            let regex = format!(
+                "^{}/(.*/)?\\.git/config(/.*)?$",
+                seatbelt::escaped(&tree.display().to_string())
+            );
+            let planted = format!(
+                "(deny file-write* (regex {}))",
+                seatbelt::string(&regex).expect("a string")
+            );
+            assert!(on.contains(&planted), "{harness:?}, {tree:?}:\n{on}");
+        }
+        for file in CARGO_FILES {
+            let grant = format!(
+                "  (literal \"{}\")\n",
+                home.join("cargo").join(file).display()
+            );
+            assert!(on.contains(&grant), "{harness:?} does not grant {file}");
+        }
+        assert!(!off.contains("cache-homes"), "{harness:?}:\n{off}");
+    }
+}
+
+#[test]
+fn a_cargo_bare_repository_is_written_inside_and_never_made_moved_or_run() {
+    let machine = mac_with(&[]);
+    let db = cache_home(&machine, StdPath::new(PROJECT)).join("cargo/git/db");
+    let on = under_presets(Harness::ClaudeCode, &[Preset::Toolchains], &machine);
+    let sandbox = claude_sandbox(&on);
+    let allowed = sandbox["filesystem"]["allowWrite"]
+        .as_array()
+        .expect("a list");
+    assert!(!allowed.contains(&serde_json::json!(db.display().to_string())));
+    let denied = sandbox["filesystem"]["denyWrite"]
+        .as_array()
+        .expect("a list");
+    for glob in [
+        format!("{}/*/config", db.display()),
+        format!("{}/*/hooks", db.display()),
+    ] {
+        assert!(
+            denied.contains(&serde_json::json!(glob)),
+            "{glob} is not denied"
+        );
+    }
+    // A `.git` at each folder's top, which pins the folder in Claude Code's profile.
+    for tree in TREES {
+        let pin = format!(
+            "{}/.git",
+            db.parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join(tree)
+                .display()
+        );
+        assert!(
+            denied.contains(&serde_json::json!(pin)),
+            "{pin} is not denied"
+        );
+    }
+    for harness in [Harness::Opencode, Harness::Codex] {
+        let profile = wrap_profile(&under_presets(harness, &[Preset::Toolchains], &machine));
+        let escaped = seatbelt::escaped(&db.display().to_string());
+        let inside = format!(
+            "  (regex {})\n",
+            seatbelt::string(&format!("^{escaped}/[^/]+/.+$")).expect("a string")
+        );
+        assert!(profile.contains(&inside), "{harness:?}:\n{profile}");
+        let pin = format!("(deny file-write* (literal \"{}\"))", db.display());
+        let run = format!(
+            "(deny file-write* (regex {}))",
+            seatbelt::string(&format!("^{escaped}/[^/]+/(config|hooks)(/.*)?$")).expect("a string")
+        );
+        for rule in [&pin, &run] {
+            assert!(
+                profile.find(rule.as_str()) > profile.find(&inside),
+                "{harness:?}: {rule}"
+            );
+        }
+    }
+}
+
+#[test]
+fn each_tool_is_pointed_at_its_projects_cache_and_the_folders_are_made_before_the_chat() {
+    let base = tempfile::tempdir().expect("a base");
+    let project = base.path().join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let project = project.canonicalize().expect("the project");
+    let data = base.path().join("data");
+    let data_text = data.display().to_string();
+    let machine = mac_with(&[(crate::datahome::HOME_VAR, data_text.as_str())]);
+    let applied = compiled_for(
+        Harness::ClaudeCode,
+        &policy_of(&[Preset::Toolchains], false),
+        &project,
+        &machine,
+    );
+    let line = applied
+        .line(
+            Words {
+                program: "claude".to_owned(),
+                command: Vec::new(),
+                armed: Vec::new(),
+                charters: Vec::new(),
+            },
+            &At {
+                cwd: Some(&project),
+                ..At::default()
+            },
+        )
+        .expect("starts");
+    let home = cache_home(&machine, &project);
+    for (var, dir) in [
+        ("CARGO_HOME", "cargo"),
+        ("npm_config_cache", "npm"),
+        ("NPM_CONFIG_CACHE", "npm"),
+        ("PIP_CACHE_DIR", "pip"),
+        ("GOMODCACHE", "go-mod"),
+        ("GOCACHE", "go-build"),
+        ("GRADLE_USER_HOME", "gradle"),
+        ("YARN_CACHE_FOLDER", "yarn"),
+        ("YARN_GLOBAL_FOLDER", "yarn-berry"),
+        ("pnpm_config_store_dir", "pnpm-store"),
+        ("pnpm_config_cache_dir", "pnpm-cache"),
+        (concat!("npm", "_config_store_dir"), "pnpm-store"),
+        (concat!("npm", "_config_cache_dir"), "pnpm-cache"),
+    ] {
+        let value = home.join(dir).display().to_string();
+        assert!(
+            line.env.contains(&(var.to_owned(), value.clone())),
+            "{var}={value} is not in {:?}",
+            line.env
+        );
+        assert!(home.join(dir).is_dir(), "{dir} was not made");
+    }
+    assert!(home.join("cargo/git/db").is_dir());
+    let config = std::fs::read_to_string(home.join("cargo/config.toml")).expect("a config");
+    assert!(config.starts_with("# Written by purlis"), "{config}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_planted_in_the_cache_home_is_taken_out_unfollowed_and_the_chat_starts() {
+    let base = tempfile::tempdir().expect("a base");
+    let project = base.path().join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let project = project.canonicalize().expect("the project");
+    let elsewhere = base.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("elsewhere");
+    std::fs::write(elsewhere.join("config.toml"), "kept").expect("a file elsewhere");
+    let data = base.path().join("data");
+    let data_text = data.display().to_string();
+    let machine = mac_with(&[(crate::datahome::HOME_VAR, data_text.as_str())]);
+    let home = cache_home(&machine, &project);
+    let policy = policy_of(&[Preset::Toolchains], false);
+    let words = || Words {
+        program: "claude".to_owned(),
+        command: Vec::new(),
+        armed: Vec::new(),
+        charters: Vec::new(),
+    };
+    let at = At {
+        cwd: Some(&project),
+        ..At::default()
+    };
+
+    // A link planted where a cache folder goes, before the sandbox is compiled: taken out, and
+    // the grant names the folder purlis makes, never where the link pointed.
+    std::fs::create_dir_all(&home).expect("a cache home");
+    std::os::unix::fs::symlink(&elsewhere, home.join("npm")).expect("a link");
+    let applied = compiled_for(Harness::ClaudeCode, &policy, &project, &machine);
+    assert!(
+        std::fs::symlink_metadata(home.join("npm")).is_err(),
+        "the link stayed"
+    );
+    let writable = applied.writable();
+    assert!(writable.contains(&home.join("npm")), "{writable:?}");
+    assert!(
+        !writable.iter().any(|path| path.starts_with(&elsewhere)),
+        "{writable:?}"
+    );
+
+    // Links planted after it was compiled, at a folder and at cargo's config: taken out at the
+    // start, nothing written through them, and the chat starts.
+    std::fs::create_dir_all(home.join("cargo/git")).expect("cargo's git");
+    std::os::unix::fs::symlink(&elsewhere, home.join("cargo/git/db")).expect("a link");
+    std::os::unix::fs::symlink(
+        elsewhere.join("config.toml"),
+        home.join("cargo/config.toml"),
+    )
+    .expect("a link");
+    applied.line(words(), &at).expect("starts");
+    for folder in ["npm", "cargo/git/db"] {
+        let meta = std::fs::symlink_metadata(home.join(folder)).expect("made");
+        assert!(meta.is_dir() && !meta.file_type().is_symlink(), "{folder}");
+    }
+    let config = std::fs::symlink_metadata(home.join("cargo/config.toml")).expect("written");
+    assert!(config.is_file() && !config.file_type().is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.join("config.toml")).expect("read"),
+        "kept"
+    );
+    assert_eq!(std::fs::read_dir(&elsewhere).expect("read").count(), 1);
+}
+
+#[test]
+fn a_cache_link_purlis_cannot_take_out_is_named_in_the_refusal() {
+    let path = std::path::Path::new("/data/cache-homes/k/npm");
+    assert_eq!(
+        caches_linked(path, "after"),
+        "this plane runs every chat sandboxed, and /data/cache-homes/k/npm of the project's \
+         package caches is a link purlis could not take out (after making them), so nothing \
+         was started. Remove that link and start the chat again."
+    );
+}
+
+#[test]
+fn a_projects_cargo_home_keeps_where_crates_come_from_and_nothing_else() {
+    let person = r#"
+[registries.corp]
+index = "sparse+https://crates.corp.example/index/"
+token = "a-secret"
+credential-provider = "cargo:token-from-stdout /usr/local/bin/creds"
+
+[registry]
+default = "corp"
+token = "another-secret"
+global-credential-providers = ["/usr/local/bin/creds"]
+
+[source.crates-io]
+replace-with = "vendored"
+
+[source.vendored]
+directory = "vendor"
+
+[build]
+rustc-wrapper = "/usr/local/bin/sccache"
+
+[target.x86_64-apple-darwin]
+runner = "/usr/local/bin/run"
+
+[alias]
+b = "build"
+"#;
+    let seeded = cargo_config_text(person);
+    let parsed: toml::Table = seeded.parse().expect("TOML");
+    let expected: toml::Table = r#"
+[registries.corp]
+index = "sparse+https://crates.corp.example/index/"
+
+[registry]
+default = "corp"
+
+[source.crates-io]
+replace-with = "vendored"
+
+[source.vendored]
+directory = "vendor"
+"#
+    .parse()
+    .expect("TOML");
+    assert_eq!(parsed, expected);
+    for word in ["secret", "creds", "sccache", "runner", "alias"] {
+        assert!(!seeded.contains(word), "{word} is in:\n{seeded}");
+    }
+    // Nothing purlis can read is nothing.
+    assert_eq!(
+        cargo_config_text("not toml [")
+            .parse::<toml::Table>()
+            .expect("TOML"),
+        toml::Table::new()
+    );
+}
+
+fn cargo_config_text(person: &str) -> String {
+    caches::cargo_config(person)
+}
+
+#[test]
+fn certificate_checks_are_off_unless_the_project_turns_them_on() {
+    assert_eq!(
+        said("[sandbox]\nmode = \"on\"\n")
+            .policy
+            .map(|policy| policy.certificate_checks),
+        Some(false)
+    );
+    let on = said("[sandbox]\nmode = \"on\"\ncertificate-checks = true\n");
+    assert_eq!(
+        on.policy.map(|policy| policy.certificate_checks),
+        Some(true)
+    );
+    assert!(on.refused.is_empty(), "{:?}", on.refused);
+    let typo = said("[sandbox]\nmode = \"on\"\ncertificate-checks = \"yes\"\n");
+    assert_eq!(
+        typo.policy.map(|policy| policy.certificate_checks),
+        Some(false)
+    );
+    assert_eq!(typo.refused, [Refusal::CertificateChecksNotABool]);
+    assert_eq!(
+        typo.refused[0].to_string(),
+        "sandbox.certificate-checks in charter.toml is not true or false; certificate checks \
+         stay off"
+    );
+
+    let machine = mac_with(&[]);
+    for (policy, on) in [
+        // The forge preset alone no longer turns it on.
+        (policy_of(&Preset::ALL, false), false),
+        (policy_of(&[Preset::ModelProviders], true), true),
+    ] {
+        let applied = compiled_for(
+            Harness::ClaudeCode,
+            &policy,
+            StdPath::new(PROJECT),
+            &machine,
+        );
+        // Never left out: a user's `true` would merge in.
+        assert_eq!(
+            claude_sandbox(&applied)["enableWeakerNetworkIsolation"],
+            serde_json::json!(on),
+            "{policy:?}"
+        );
+        for harness in [Harness::Opencode, Harness::Codex] {
+            let profile = wrap_profile(&compiled_for(
+                harness,
+                &policy,
+                StdPath::new(PROJECT),
+                &machine,
+            ));
+            assert_eq!(
+                profile.contains("(allow mach-lookup (global-name \"com.apple.trustd.agent\"))\n"),
+                on,
+                "{harness:?}, {policy:?}:\n{profile}"
+            );
+            for service in ["SecurityServer", "securityd", "com.apple.security"] {
+                assert!(!profile.contains(service), "{service}:\n{profile}");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn no_directory_a_chat_searches_is_one_its_sandbox_lets_it_write() {
+    // A directory on a chat's PATH that a chat can write is a program the next chat, the app's
+    // own forge calls and the operator's terminal run without a sandbox. What a chat may write
+    // is read from the compiled sandbox itself, for every harness with a compiler and every
+    // preset on, so a grant added later is checked here without anyone listing it.
+    const FINDER: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+    let home = StdPathBuf::from("/Users/op");
+    for (machine, grants) in [
+        (mac_with(&[]), true),
+        (mac_with(&[("PATH", FINDER)]), true),
+        (
+            mac_with(&[
+                ("CARGO_HOME", "/Users/op/tools/cargo"),
+                ("GOBIN", "/Users/op/gobin"),
+            ]),
+            true,
+        ),
+        // A data home on the chat's PATH, or holding cargo's home: no cache home there.
+        (
+            mac_with(&[(crate::datahome::HOME_VAR, "/Users/op/.local/bin")]),
+            false,
+        ),
+        // A data home that is the home itself still keeps the caches in a folder of their own.
+        (mac_with(&[(crate::datahome::HOME_VAR, "/Users/op")]), true),
+        (
+            mac_with(&[(crate::datahome::HOME_VAR, "/Users/op/.cargo")]),
+            false,
+        ),
+        (
+            mac_with(&[(crate::datahome::HOME_VAR, "/Users/op/project/.data")]),
+            false,
+        ),
+    ] {
+        let path = machine.env.get("PATH").expect("a PATH");
+        let mut searched: Vec<StdPathBuf> = std::env::split_paths(
+            &crate::programs::chat_path_from(Some(std::ffi::OsStr::new(&path)), Some(&home), None)
+                .expect("a chat's PATH"),
+        )
+        .collect();
+        searched.extend(crate::programs::search_dirs_from(
+            Some(std::ffi::OsStr::new(&path)),
+            Some(&home),
+        ));
+        // And where a later program is run from whether or not this PATH names it: cargo's
+        // home and its `bin` (its config names programs cargo runs), Go's `bin`, pnpm's home.
+        searched.extend(caches::never_covered(&machine));
+        searched.extend(
+            [
+                "/Users/op/.cargo",
+                "/Users/op/.cargo/bin",
+                "/Users/op/.cargo/config.toml",
+                "/Users/op/.cargo/credentials.toml",
+                "/Users/op/go/bin",
+                "/Users/op/Library/pnpm",
+            ]
+            .map(StdPathBuf::from),
+        );
+        for harness in [Harness::ClaudeCode, Harness::Opencode, Harness::Codex] {
+            let applied = under_presets(harness, &Preset::ALL, &machine);
+            let caches = applied.caches.as_ref().map(|caches| caches.writable());
+            assert_eq!(caches.is_some(), grants, "{harness:?}: {caches:?}");
+            let mut writable = applied.writable();
+            writable.extend(program::temp_roots(&[]));
+            writable.push(StdPathBuf::from(PROJECT));
+            for dir in &searched {
+                for grant in &writable {
+                    assert!(
+                        !dir.starts_with(grant),
+                        "{harness:?}: {} is searched, and a chat may write {}",
+                        dir.display(),
+                        grant.display()
+                    );
+                }
+            }
+        }
+    }
 }
