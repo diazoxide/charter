@@ -358,16 +358,19 @@ fn every_event_a_secret_hand_out_is_traced_under_is_one_the_sweep_keeps() {
         "app/src-tauri/src/vaults.rs",
     ] {
         let text = std::fs::read_to_string(root.join(file)).unwrap();
-        for (at, _) in text.match_indices("trace_secret_use(\n") {
-            let event = text[at..]
-                .lines()
-                .nth(2)
-                .unwrap()
-                .trim()
-                .trim_end_matches(',')
-                .trim_matches('"')
-                .to_string();
-            named.push(event);
+        // A call written on one line or over several: its event is the first string literal
+        // after the open parenthesis. The function's own definition names none.
+        for (at, found) in text.match_indices("trace_secret_use(") {
+            if text[..at].ends_with("fn ") {
+                continue;
+            }
+            let call = &text[at + found.len()..];
+            let call = &call[..call.find(')').unwrap_or(call.len())];
+            let Some(open) = call.find('"') else {
+                continue;
+            };
+            let event = &call[open + 1..];
+            named.push(event[..event.find('"').unwrap_or(event.len())].to_string());
         }
     }
     assert!(named.len() >= 5, "found only {named:?}");
