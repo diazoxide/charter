@@ -1581,7 +1581,17 @@ impl Chats {
             number: None,
             ..was
         };
-        self.start_recorded(&again, root, size, Why::Again)
+        let started = self.start_recorded(&again, root, size, Why::Again)?;
+        // **It keeps its place** (#1246): the window puts the new session in the old one's pane,
+        // so the record puts it where the old one was in the strip's order. Unplaced, it would
+        // go last, and the next launch would draw it at the end of the strip.
+        for placed in lock(&self.order).iter_mut() {
+            if *placed == session {
+                *placed = started;
+            }
+        }
+        self.write_it_down();
+        Ok(started)
     }
 
     /// How many chats are remembered, which is not the same as how many are running: this
@@ -3474,6 +3484,33 @@ mod tests {
             .map(|c| c.name.clone())
             .collect();
         assert_eq!(names, vec!["ide.7"], "still recorded");
+        chats.end_all();
+    }
+
+    #[test]
+    fn a_chat_started_fresh_keeps_its_place_in_the_record_s_order() {
+        // #1246: the window keeps the tab where it was, so the record must too. The new
+        // session is not one the window has placed yet, and without this it went last.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        chats.hold_order(vec![a, b]);
+
+        let again = chats
+            .start_fresh(a, std::path::Path::new(HERE), SIZE)
+            .expect("it starts again");
+        chats.close(a).unwrap();
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(names_in(&last), ["a", "b"], "the next launch's strip");
+        let open: Vec<u32> = chats
+            .open_now()
+            .into_iter()
+            .map(|one| one.session)
+            .collect();
+        assert_eq!(open, vec![again, b], "a reloaded window's strip");
         chats.end_all();
     }
 

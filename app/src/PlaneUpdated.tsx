@@ -67,20 +67,26 @@ export function PlaneUpdatedMark({ files }: { files?: readonly string[] }) {
  * name is the row's words, and the question it asks is the row's (`PlaneView`'s `ChatAsk`).
  *
  * **Not a Tab stop**, for `Closer`'s reason (charter-app#189): the strip is one stop, and a
- * keyboard reaches the same row from the palette or the tab's menu.
+ * keyboard reaches the same row from the palette or the tab's menu. So the tab is **described
+ * by** it (`id`, #1246): a screen reader on the tab hears that the plane was updated, which a
+ * mark outside the tab would otherwise never tell it.
  */
 export function FreshMark({
+  id,
   offer,
   files,
   onPress,
 }: {
+  /** What the tab's `aria-describedby` names. */
+  id: string;
   offer?: Offer;
   files?: readonly string[];
   onPress: (offer: Offer) => void;
 }) {
-  if (!offer || !files || files.length === 0) return null;
+  if (!offer || !files || !freshMarkShown(offer, files)) return null;
   return (
     <button
+      id={id}
       type="button"
       className="plane-updated fresh-mark"
       tabIndex={-1}
@@ -91,4 +97,13 @@ export function FreshMark({
       <RefreshCw />
     </button>
   );
+}
+
+/** Whether a {@link FreshMark} is drawn: there is a Start fresh row, and files that moved. The
+ *  tab asks the same, so it is never described by a mark that is not there. */
+export function freshMarkShown(
+  offer: Offer | undefined,
+  files: readonly string[] | undefined,
+): boolean {
+  return offer !== undefined && files !== undefined && files.length > 0;
 }
