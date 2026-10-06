@@ -56,8 +56,8 @@ use std::path::Path;
 use crate::forge::Forge;
 use crate::handoffguard::{self, Caller};
 use crate::{
-    commitguard, consentspelling, credguard, floorguard, leakguard, planeroot, projectgit,
-    proseguard, pyjson, rulespelling,
+    commitguard, consentspelling, credguard, floorguard, guardcaps, leakguard, planeroot,
+    projectgit, proseguard, pyjson, rulespelling, shellseg,
 };
 
 /// What to do when a guard is WRONG about your case (charter#370) — `_OVERRIDE_NOTE`.
@@ -212,6 +212,29 @@ pub fn said(reason: &str) -> String {
 /// `plane` absent is `_in_a_plane()` answering no: A2, A3, A3b, A4 and A7 are skipped and A, A5
 /// and A6 still run. The module header argues that division at length.
 pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
+    // First of all, in front of every arm: a command too big to read in time is refused before
+    // any of them parses it (#1355). Refusing is the safe direction for every arm at once.
+    if let Some(why) = guardcaps::refusal(call.command) {
+        return Some(Verdict::new(guardcaps::REASON, None, why));
+    }
+    // And a string an arm derives from the command and reads in turn is held to the same cap:
+    // an arm that met one nested too deep to read whole decided nothing, so the call is refused
+    // as too big to check, whatever the arms said (#1355).
+    match shellseg::too_deep_within(|| arms(call, plane)) {
+        (_, true) => Some(too_deep()),
+        (verdict, false) => verdict,
+    }
+}
+
+/// The refusal of a call some guard could not read whole: a string it read nests past
+/// [`guardcaps::MAX_NESTING`] (#1355). For a caller that runs a reader of its own after
+/// [`verdict`], inside [`shellseg::too_deep_within`], as the persona gate is.
+pub fn too_deep() -> Verdict {
+    Verdict::new(guardcaps::REASON, None, guardcaps::too_deep_refusal())
+}
+
+/// [`verdict`]'s arms, in order, on a command inside every cap.
+fn arms(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
     let cmd = call.command;
 
     // A: a secret would leak into the conversation → hard DENY (a real safety invariant).

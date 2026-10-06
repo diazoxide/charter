@@ -78,9 +78,8 @@ const PASS_QUIET: &[&str] = &[
 /// The refusal for a command that reads a secret from the operating system's or a password
 /// manager's store: the macOS keychain asked for a password or dumped, the freedesktop secret
 /// service looked up, or a `pass`/`gopass` entry shown (#866).
-pub(super) fn keychain_read_reason(toks: &[String]) -> Option<&'static str> {
-    let (prog, _env, argv) = crate::shellwrap::split_env(toks);
-    let base = crate::shellwrap::base_lower(&prog);
+pub(super) fn keychain_read_reason(prog: &str, argv: &[String]) -> Option<&'static str> {
+    let base = crate::shellwrap::base_lower(prog);
     let args = argv.get(1..).unwrap_or(&[]);
     let first = args
         .iter()
