@@ -1,0 +1,263 @@
+import { useCallback, useEffect, useState } from "react";
+import { commands, type PlaneId, type SandboxGrant } from "../bindings";
+import { Notice } from "../Notice";
+import type { RowIds } from "./components";
+import type { SettingsGroup } from "./groups";
+
+/** The address of the Granted list (#1348): a sub-page of Sandbox. */
+export const GRANTED = "project.sandbox.granted";
+
+/** What each level is called on the list. */
+const LEVELS: Readonly<Record<SandboxGrant["level"], string>> = {
+  chat: "One chat",
+  you: "Me on this machine",
+  project: "Everyone in this project",
+};
+
+/** When, as the list says it: the day and time, or nothing where it is not known. */
+function when(at: number | null): string {
+  if (at === null) return "";
+  return new Date(at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** One grant, as a sentence: what it allows, for whom, who granted it and when. */
+export function grantSaid(one: SandboxGrant): string {
+  const allows =
+    one.what === "host" ? `Reach ${one.target}` : `Write ${one.target} and everything in it`;
+  const by =
+    one.level !== "project"
+      ? "granted by you"
+      : one.by === null
+        ? "not committed yet"
+        : `committed by ${one.by}`;
+  const from = one.chat === null ? "" : `, from ${one.chat}`;
+  const at = when(one.at);
+  return `${allows} · ${LEVELS[one.level]} · ${by}${at === "" ? "" : `, ${at}`}${from}`;
+}
+
+/** What the core said went wrong, through the Notice every surface says it with. */
+function Trouble({ said, onDismiss }: { said: string; onDismiss: () => void }) {
+  return (
+    <Notice cause={`granted:${said}`} at="pane" tone="trouble" onDismiss={onDismiss}>
+      {said}
+    </Notice>
+  );
+}
+
+/**
+ * **Every grant, each revocable** (#1348): what a person allowed past this project's sandbox,
+ * at every level — this chat, every chat here on this machine, and the project's own hosts —
+ * with who granted it and when. **Revoke** takes it out of every later start, through the core,
+ * which audits it; a project host's revoke is a change to the committed file, which teammates
+ * follow. One a policy locks out says so, and is drawn locked.
+ */
+function GrantedRows({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
+  const [grants, setGrants] = useState<readonly SandboxGrant[]>();
+  const [said, setSaid] = useState<string>();
+
+  const read = useCallback(() => {
+    void commands
+      .sandboxGrants(plane)
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else setGrants(done.data);
+      })
+      .catch((err: unknown) => setSaid(`purlis could not list what was granted: ${String(err)}`));
+  }, [plane]);
+  useEffect(read, [read]);
+
+  const revoke = (one: SandboxGrant) => {
+    setSaid(undefined);
+    void commands
+      .revokeSandboxGrant(plane, one.id)
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else setGrants(done.data);
+      })
+      .catch((err: unknown) => setSaid(`purlis could not revoke it: ${String(err)}`));
+  };
+
+  return (
+    <div id={ids.id} aria-labelledby={ids.labelledBy}>
+      {grants === undefined ? (
+        said === undefined && <p>Reading what was granted…</p>
+      ) : grants.length === 0 ? (
+        <p>Nothing is granted past this project&apos;s sandbox.</p>
+      ) : (
+        <ul className="granted-list" aria-label="Granted">
+          {grants.map((one) => (
+            <li key={one.id}>
+              <span>{grantSaid(one)}</span>
+              {one.level === "project" && one.locked === null && (
+                <span className="granted-note">Revoking it edits the committed charter.toml.</span>
+              )}
+              {one.locked !== null ? (
+                <span className="granted-locked"> Locked by policy: {one.locked}</span>
+              ) : (
+                <button
+                  type="button"
+                  tabIndex={0}
+                  aria-label={`Revoke ${one.what === "host" ? "reaching" : "writing"} ${one.target}`}
+                  onClick={() => revoke(one)}
+                >
+                  Revoke
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {said !== undefined && <Trouble said={said} onDismiss={() => setSaid(undefined)} />}
+    </div>
+  );
+}
+
+/**
+ * **The folders chats may be granted** (D-1342-10), this machine only: what a block's Allow may
+ * name besides the project. The core refuses one a denial class, `PATH` or a harness's home
+ * holds, warns of one that holds what later code loads, and drops one that has come to resolve
+ * elsewhere since it was listed, which is said here.
+ */
+function GrantableFolders({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
+  const [folders, setFolders] = useState<readonly string[]>();
+  const [typed, setTyped] = useState("");
+  const [said, setSaid] = useState<string>();
+  /** What the folder last listed holds that later code loads: said once it is listed. */
+  const [holds, setHolds] = useState<readonly string[]>([]);
+  /** The listed folders the core dropped because they resolve elsewhere now (R8). */
+  const [dropped, setDropped] = useState<readonly string[]>([]);
+
+  useEffect(() => {
+    void commands
+      .grantableFolders(plane)
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else {
+          setFolders(done.data.folders);
+          setDropped(done.data.dropped);
+        }
+      })
+      .catch((err: unknown) => setSaid(`purlis could not list the folders: ${String(err)}`));
+  }, [plane]);
+
+  const add = () => {
+    setSaid(undefined);
+    setHolds([]);
+    void commands
+      .listGrantableFolder(plane, typed.trim())
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else {
+          setFolders(done.data.folders);
+          setHolds(done.data.holds);
+          setTyped("");
+        }
+      })
+      .catch((err: unknown) => setSaid(`purlis could not add the folder: ${String(err)}`));
+  };
+  const remove = (folder: string) => {
+    setSaid(undefined);
+    void commands
+      .unlistGrantableFolder(plane, folder)
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else setFolders(done.data);
+      })
+      .catch((err: unknown) => setSaid(`purlis could not remove the folder: ${String(err)}`));
+  };
+
+  return (
+    <div aria-labelledby={ids.labelledBy}>
+      <ul className="granted-list" aria-label="Folders chats may be granted">
+        {(folders ?? []).map((folder) => (
+          <li key={folder}>
+            <code>{folder}</code>
+            <button
+              type="button"
+              tabIndex={0}
+              aria-label={`Remove ${folder}`}
+              onClick={() => remove(folder)}
+            >
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      <input
+        id={ids.id}
+        value={typed}
+        onChange={(event) => setTyped(event.target.value)}
+        placeholder="/Users/you/tools/cache"
+        aria-describedby={ids.describedBy}
+      />
+      <button type="button" tabIndex={0} disabled={typed.trim() === ""} onClick={add}>
+        Add folder
+      </button>
+      {dropped.length > 0 && (
+        <Notice
+          cause={`grantable-dropped:${dropped.join(",")}`}
+          at="pane"
+          tone="trouble"
+          onDismiss={() => setDropped([])}
+        >
+          purlis took{" "}
+          {dropped.map((one, at) => (
+            <span key={one}>
+              {at > 0 && ", "}
+              <code>{one}</code>
+            </span>
+          ))}{" "}
+          off this list: it now leads somewhere else, through a link, so it no longer names the
+          folder you listed. List it again if you still mean it.
+        </Notice>
+      )}
+      {holds.length > 0 && (
+        <Notice
+          cause={`grantable-holds:${holds.join(",")}`}
+          at="pane"
+          tone="trouble"
+          onDismiss={() => setHolds([])}
+        >
+          That folder holds folders other programs load code from, outside any sandbox:{" "}
+          {holds.map((one, at) => (
+            <span key={one}>
+              {at > 0 && ", "}
+              <code>{one}</code>
+            </span>
+          ))}
+          . A chat granted a folder inside it may change what they run. Remove it unless you meant
+          that.
+        </Notice>
+      )}
+      {said !== undefined && <Trouble said={said} onDismiss={() => setSaid(undefined)} />}
+    </div>
+  );
+}
+
+/** The Granted list's group, for the project at `plane`. */
+export function grantedGroup(plane: PlaneId): SettingsGroup {
+  return {
+    id: GRANTED,
+    label: "Granted",
+    help: "What chats here may reach or write beyond the project's sandbox, and who allowed it. Revoke takes it away from each chat when it next starts.",
+    sub: true,
+    settings: [
+      {
+        id: `${GRANTED}.list`,
+        label: "Granted",
+        help: "One chat lasts until that chat closes. Me on this machine is kept on this machine only. Everyone in this project is kept in charter.toml, which your team follows.",
+        useControl: function useGranted() {
+          return { control: (ids) => <GrantedRows plane={plane} ids={ids} /> };
+        },
+      },
+      {
+        id: `${GRANTED}.folders`,
+        label: "Folders chats may be granted",
+        help: "Folders outside this project that a block's Allow may name, such as a tool's cache. Kept on this machine only, never committed.",
+        useControl: function useGrantableFolders() {
+          return { control: (ids) => <GrantableFolders plane={plane} ids={ids} /> };
+        },
+      },
+    ],
+  };
+}

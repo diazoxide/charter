@@ -47,6 +47,7 @@ import {
 } from "./driver";
 import type { Collection, FileSetting, SettingsFileId, SettingsGroup } from "./groups";
 import { settled } from "../PlaneEdits";
+import { grantedGroup } from "./GrantedList";
 
 /**
  * **The Project level** (SE-17, #1167; V89b, V89e, V89h): a project's settings in the Settings
@@ -78,6 +79,8 @@ export type ProjectRead = {
   sandbox: SandboxState | undefined;
   /** What the project has for a picker to name (ST-1): each list once the core has answered. */
   entries: Partial<Entries>;
+  /** The project itself, for the Granted list (#1348), which reads the core on its own. */
+  plane?: PlaneId;
 };
 
 /** The sentence a setting's help ends on: where it is kept, and who sees it. */
@@ -491,6 +494,7 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
           },
         ]
       : []),
+    ...(read.plane !== undefined ? [grantedGroup(read.plane)] : []),
     {
       id: "project.forges",
       label: "Forges",
@@ -787,7 +791,7 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
   if (driver.state !== "read") return driver;
   return {
     ...driver,
-    read: { ...driver.now, extensions, harnesses, theme, saving, sandbox, entries: picked },
+    read: { ...driver.now, extensions, harnesses, theme, saving, sandbox, entries: picked, plane },
     readEntries,
   };
 }
