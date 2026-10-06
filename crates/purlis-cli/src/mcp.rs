@@ -128,7 +128,10 @@ async fn blocking(
 fn session_record(args: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
     let (title, body, pieces) = chattools::record_args(args)?;
     let here = crate::Here::read()?;
-    match crate::session::write(&here, &title, &body, &pieces, None, None) {
+    // Outside the sandbox: in a chat the app started, never written here (#1408).
+    purlis_core::sessionrecord::check(&title, &body)
+        .map_err(|why| format!("nothing was written: {why}"))?;
+    match crate::session::write(&here, &title, &body, &pieces, None, None, true) {
         Ok(saved) => {
             let mut said = vec![format!("Session record → {}", saved.shown)];
             said.extend(saved.warnings);
@@ -170,9 +173,10 @@ fn persona_remember(args: &serde_json::Map<String, serde_json::Value>) -> Result
         Forwarded::Refused(why) | Forwarded::Unsure(why) => {
             Err(format!("nothing was written: {why}"))
         }
-        Forwarded::NotTaken(not) if !not.may_write_outside() => {
-            Err(format!("nothing was written: {}", not.refusal()))
-        }
+        Forwarded::NotTaken(not) if !not.may_write_outside() => Err(format!(
+            "nothing was written: {}",
+            not.refusal("purlis persona remember")
+        )),
         Forwarded::NotTaken(_) => {
             let here = crate::Here::read()?;
             let root = here.plane.root();
