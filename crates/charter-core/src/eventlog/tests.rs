@@ -75,27 +75,36 @@ fn a_second_writer_on_the_same_log_is_refused() {
     assert!(second.is_err(), "one writer per device (ADR 0068)");
 }
 
-/// #972: a process forked while the log is open shares its lock until it execs, so a log
-/// closed and opened again in that moment, as when another thread is spawning a program or the
-/// app is relaunched, waits the child out instead of being refused as a second writer. The
-/// child here inherits the lock across its exec, so it holds it for as long as it sleeps.
+/// #972: a host that exits never unlocks the log's lock, so it is let go of only when the last
+/// copy of its descriptor closes — and a child the host forked holds one until it execs. A log
+/// opened again in that moment, as when the app is relaunched, waits the child out instead of
+/// being refused as a second writer. The host here is a plain locked file dropped without an
+/// unlock, and the child keeps a copy as its stdin for as long as it sleeps.
 #[cfg(unix)]
 #[test]
-fn a_log_opened_again_while_a_child_still_holds_its_lock_waits_the_child_out() {
+fn a_log_opened_again_while_a_child_of_an_exited_host_still_holds_its_lock_waits_the_child_out() {
     let dir = tempfile::tempdir().unwrap();
-    let log = Log::open(dir.path(), DEVICE).unwrap();
-    use std::os::fd::AsFd;
-    rustix::io::fcntl_setfd(log._lock.as_fd(), rustix::io::FdFlags::empty()).unwrap();
-    let mut child = crate::forklock::spawn(std::process::Command::new("sleep").arg("0.2")).unwrap();
+    crate::secrets::make_private_dir(dir.path()).unwrap();
+    let host = private_file(&dir.path().join(LOCK)).unwrap();
+    host.lock().unwrap();
+    let copy = std::process::Stdio::from(host.try_clone().unwrap());
+    let mut child =
+        crate::forklock::spawn(std::process::Command::new("sleep").arg("0.4").stdin(copy)).unwrap();
 
-    drop(log);
+    drop(host);
+    let asked = Instant::now();
     let again = Log::open(dir.path(), DEVICE);
+    let waited = asked.elapsed();
     child.wait().unwrap();
 
     assert!(
         again.is_ok(),
         "a child holding the lock a moment is not a second writer: {:?}",
         again.err()
+    );
+    assert!(
+        waited >= std::time::Duration::from_millis(100),
+        "the lock was free at once ({waited:?}), so nothing here was waited out"
     );
 }
 

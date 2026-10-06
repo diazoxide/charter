@@ -179,9 +179,6 @@ impl Durable {
 
 /// The log of one device, open for appending. Holding it is being the device's one writer.
 pub struct Log {
-    /// Held locked for as long as the `Log` lives, and unlocked when it is dropped, so a
-    /// program forked meanwhile does not keep the next writer out (#1316).
-    _lock: crate::filelock::Held,
     dir: PathBuf,
     /// The segment being written, `events.jsonl`. `None` once a seal renamed it and the next
     /// one could not be opened yet: nothing is written until it is, so no line ever goes into
@@ -208,6 +205,10 @@ pub struct Log {
     /// A test's way to make the next opens of a new segment fail.
     #[cfg(test)]
     fail_opens: u32,
+    /// Held locked for as long as the `Log` lives, and unlocked when it is dropped, so a
+    /// program forked meanwhile does not keep the next writer out (#1316). Declared last, so
+    /// it is dropped last: the log's own files close before another writer can start.
+    _lock: crate::filelock::Held,
 }
 
 impl Log {
@@ -253,7 +254,6 @@ impl Log {
             state: std::sync::Mutex::new((next - 1, Some(file.try_clone()?))),
         });
         let mut log = Log {
-            _lock: crate::filelock::Held::locked(lock),
             dir: dir.to_owned(),
             file: Some(file),
             durable,
@@ -268,6 +268,7 @@ impl Log {
             fail_after: None,
             #[cfg(test)]
             fail_opens: 0,
+            _lock: crate::filelock::Held::locked(lock),
         };
         if log.good >= log.seal_at {
             log.seal_or_warn();
