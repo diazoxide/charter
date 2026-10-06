@@ -119,6 +119,86 @@ pub struct SandboxState {
     /// How the project's own hosts changed since this machine last told the person (#1341):
     /// the one-time Notice each teammate sees. `null` when nothing did.
     pub hosts_changed: Option<HostsChanged>,
+    /// Every preset a project may turn on, in the core's order, each with the hosts it lets a
+    /// chat reach here (#1340): Settings › Sandbox draws them, and lists no host of its own.
+    pub presets: Vec<SandboxPreset>,
+    /// Each persona's own hosts, where the project has the sandbox on (#1362).
+    pub persona_hosts: Vec<PersonaHosts>,
+    /// What every chat here reaches and writes on this machine besides its presets (#1340), as
+    /// the core grants it (`sandbox::besides`): none where the sandbox is off.
+    pub besides: SandboxBesides,
+}
+
+/// `sandbox::Besides`, counted for the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, specta::Type)]
+pub struct SandboxBesides {
+    /// The project's own hosts every chat here is granted.
+    pub project_hosts: u32,
+    /// Your own hosts every chat here is granted on this machine.
+    pub your_hosts: u32,
+    /// The folders you let every chat here write on this machine.
+    pub folders: u32,
+}
+
+impl From<sandbox::Besides> for SandboxBesides {
+    fn from(said: sandbox::Besides) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            project_hosts: count(said.project_hosts),
+            your_hosts: count(said.your_hosts),
+            folders: count(said.folders),
+        }
+    }
+}
+
+/// One Internet access preset (`sandbox::Preset`), as Settings shows it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SandboxPreset {
+    /// The word the committed file names it by: `model-providers`.
+    pub word: String,
+    /// Its name in the window: `AI providers`.
+    pub title: String,
+    /// The hosts it lets a chat in this project reach: its own, and for code hosting the
+    /// project's forges' too.
+    pub hosts: Vec<String>,
+}
+
+/// The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct PersonaHosts {
+    pub persona: String,
+    pub hosts: Vec<String>,
+}
+
+/// Every preset as the project at `plane` would have it reach.
+fn presets_of(plane: &sandbox::Plane) -> Vec<SandboxPreset> {
+    sandbox::Preset::ALL
+        .into_iter()
+        .map(|preset| SandboxPreset {
+            word: preset.word().to_owned(),
+            title: preset.title().to_owned(),
+            hosts: sandbox::hosts(&[preset], plane),
+        })
+        .collect()
+}
+
+/// Each persona's own hosts in `plane`'s policy, where it has one.
+fn persona_hosts_of(plane: &sandbox::Plane) -> Vec<PersonaHosts> {
+    plane
+        .said()
+        .policy
+        .map(|policy| {
+            policy
+                .personas
+                .into_iter()
+                .filter(|(_, grants)| !grants.hosts.is_empty())
+                .map(|(persona, grants)| PersonaHosts {
+                    persona,
+                    hosts: grants.hosts.iter().map(ToString::to_string).collect(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The project's hosts as they changed (`sandbox::local::HostsChange`): each spelled as the
@@ -137,7 +217,8 @@ fn state_of(root: &std::path::Path) -> SandboxState {
 
 /// [`state_of`] on `os`.
 fn state_on(root: &std::path::Path, os: sandbox::Os) -> SandboxState {
-    let on = sandbox::Plane::read(root).said().policy.is_some();
+    let plane = sandbox::Plane::read(root);
+    let on = plane.said().policy.is_some();
     SandboxState {
         on,
         offer: sandbox::local::offer_due(root),
@@ -148,6 +229,9 @@ fn state_on(root: &std::path::Path, os: sandbox::Os) -> SandboxState {
             removed: change.removed,
             now: change.now,
         }),
+        presets: presets_of(&plane),
+        persona_hosts: persona_hosts_of(&plane),
+        besides: sandbox::besides(root, &plane, &sandbox::Machine::this()).into(),
     }
 }
 
@@ -1170,6 +1254,48 @@ mod tests {
         );
     }
 
+    /// #1340: Settings › Sandbox draws the core's presets, each with the hosts the core lets a
+    /// chat in this project reach, the project's forges among code hosting's.
+    #[test]
+    fn settings_is_handed_every_preset_with_the_hosts_the_core_lists() {
+        let plane = sandbox::Plane::of(Some(
+            "[sandbox]\nmode = \"on\"\n\n[[forge]]\nkind = \"gitlab\"\nhost = \"git.example.org\"\n",
+        ));
+        let shown = presets_of(&plane);
+        assert_eq!(
+            shown
+                .iter()
+                .map(|one| (one.word.as_str(), one.title.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("model-providers", "AI providers"),
+                ("forge", "Code hosting"),
+                ("toolchains", "Package registries"),
+            ]
+        );
+        for (one, preset) in shown.iter().zip(sandbox::Preset::ALL) {
+            assert_eq!(one.hosts, sandbox::hosts(&[preset], &plane));
+        }
+        assert!(shown[1].hosts.contains(&"git.example.org".to_owned()));
+        assert!(!shown[0].hosts.contains(&"git.example.org".to_owned()));
+    }
+
+    /// #1340, #1362: a persona's own hosts, as the core read them.
+    #[test]
+    fn settings_is_handed_each_personas_own_hosts() {
+        let plane = sandbox::Plane::of(Some(
+            "[sandbox]\nmode = \"on\"\n\n[sandbox.personas.devops]\nhosts = [\"10.0.0.5:6443\"]\n",
+        ));
+        assert_eq!(
+            persona_hosts_of(&plane),
+            [PersonaHosts {
+                persona: "devops".to_owned(),
+                hosts: vec!["10.0.0.5:6443".to_owned()],
+            }]
+        );
+        assert!(persona_hosts_of(&sandbox::Plane::of(None)).is_empty());
+    }
+
     #[test]
     fn taking_the_offer_turns_the_project_on_and_it_is_not_offered_again() {
         let project = tempfile::tempdir().expect("a project");
@@ -1182,6 +1308,9 @@ mod tests {
                 said: None,
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
+                presets: presets_of(&sandbox::Plane::read(project.path())),
+                persona_hosts: Vec::new(),
+                besides: SandboxBesides::default(),
             }
         );
 
@@ -1198,6 +1327,9 @@ mod tests {
                 ),
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
+                presets: presets_of(&sandbox::Plane::read(project.path())),
+                persona_hosts: Vec::new(),
+                besides: SandboxBesides::default(),
             }
         );
     }
@@ -1217,6 +1349,9 @@ mod tests {
                 said: None,
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
+                presets: presets_of(&sandbox::Plane::read(project.path())),
+                persona_hosts: Vec::new(),
+                besides: SandboxBesides::default(),
             }
         );
         assert_eq!(

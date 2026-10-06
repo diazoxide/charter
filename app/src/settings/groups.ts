@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { SettingsEdit, SettingsStep, SettingsWhich } from "../bindings";
 import type { Entry, Shown } from "./fileControls";
-import type { Reset, RowIds } from "./components";
+import type { Option, Reset, RowIds } from "./components";
 
 /**
  * **Settings groups are data** (V89b, the spec on #558): each group is declared once, with a
@@ -28,6 +28,9 @@ export type SettingsGroup = {
   settings: readonly Setting[];
   /** Sentences about what is in force in this group, the core's: drawn under its help. */
   notes?: readonly string[];
+  /** Rows drawn after the group's collection: what the group explains rather than sets, such as
+   *  the Sandbox page's "What chats can change" (#1340). */
+  after?: readonly LiveSetting[];
   /** The collection the group holds, when it holds one (ST-3): its entries, each with Remove,
    *  and an Add form. A group with a collection is offered even while it has no entry. */
   collection?: Collection;
@@ -137,9 +140,18 @@ export type FileSetting = Named & {
   movable?: boolean;
   key: SettingsStep[];
   /** `text` is one line, `choice` a closed set, `lines` one entry per line, and `colour` a
-   *  closed set whose `custom` pick is a `#rrggbb` of the operator's own (a workspace's). */
-  kind: "text" | "choice" | "lines" | "colour";
+   *  closed set whose `custom` pick is a `#rrggbb` of the operator's own (a workspace's);
+   *  `checks` any of a few boxes, held as one entry per line, and `status` a line of text with
+   *  at most one button (#1340). */
+  kind: "text" | "choice" | "lines" | "colour" | "checks" | "status";
   choices?: readonly string[];
+  /** A `checks`' boxes, in the order they are drawn and written. */
+  options?: readonly Option[];
+  /** What a `status` says while the value is `value` (empty: no file sets it). */
+  status?: (value: string) => string;
+  /** A `status`'s one button, offered while no file sets the value: its label, and the value
+   *  it writes. */
+  turnOn?: { label: string; value: string };
   /** What a `choice`'s empty option says; none is offered without it. */
   unset?: string;
   /** What a `choice` shows for each of its values, when that is not the value itself. */

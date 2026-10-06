@@ -5871,6 +5871,41 @@ h2.sidebar-title .node-icon {
   color: var(--text-secondary);
 }
 
+/* Settings › Sandbox (#1340): the mode as a status line with its one button; each preset's hosts
+   behind a disclosure; and what chats can change and what is always protected, each with why. */
+.ui-setting-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.ui-setting-status p {
+  margin: 0;
+}
+
+.sandbox-hosts ul,
+.sandbox-reasons {
+  margin: 0.2rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sandbox-hosts li {
+  overflow-wrap: anywhere;
+}
+
+.sandbox-reasons li {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0.35rem;
+}
+
+.sandbox-why {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 /* A collection (ST-3): each entry a heading with its Remove over its rows, then Add, whose form
    is setting rows with SettingActions' Add and Cancel under them. */
 .ui-collection-entry {
