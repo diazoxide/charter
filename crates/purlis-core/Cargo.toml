@@ -15,6 +15,9 @@ publish = false
 # lockfile through the SDK, which brings no runtime of its own.
 agent-client-protocol = "2.2"
 blocking = "1"
+# A brokered `secret exec`'s output crosses the hook socket as base64 (#1407): a child's bytes
+# need not be UTF-8. The version the CLI and the app already use, so no crate is added.
+base64 = "0.23"
 futures = "0.3"
 # `charter news` prints the app's own CHANGELOG.md sections through the same parser the release
 # workflow and About Charter use (#352), so the three cannot disagree about a version.

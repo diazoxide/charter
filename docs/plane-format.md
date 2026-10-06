@@ -212,6 +212,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`.charter/vaults/<name>.meta.json` — rotation sidecar](#chartervaultsnamemetajson--rotation-sidecar)
   - [`.charter/vaults/<name>.keys.json` — keyring vault's keys index](#chartervaultsnamekeysjson--keyring-vaults-keys-index)
   - [`.charter/keyring-stub.json` — a test build's keyring](#charterkeyring-stubjson--a-test-builds-keyring)
+  - [`.charter/vaults/exec/` — a brokered run's credential files](#chartervaultsexec--a-brokered-runs-credential-files)
   - [`.charter/vaults/<name>.json` — reference vault (same path, different content)](#chartervaultsnamejson--reference-vault-same-path-different-content)
   - [Secret reference syntax](#secret-reference-syntax)
   - [`.charter/fingerprint.key`](#charterfingerprintkey)
@@ -3491,6 +3492,19 @@ which keeps a keyring vault's values here instead of in the
 operating system's store, so no test can reach the operator's keychain. JSON object
 `"<service>\n<account>" → value`, 0600. **It holds values in plaintext**; a build anyone is
 given never writes it.
+
+### `.charter/vaults/exec/` — a brokered run's credential files
+
+**Tier:** Clone state, transient — one file per `--file` or `--dotenv` credential of a running brokered `secret exec`; it lives for that run.
+
+A folder made `0700` by the app the first time a sandboxed chat's `purlis secret exec` asks it
+for a `--file` or `--dotenv` credential (#1407, `crates/purlis-core/src/secrets/brokered.rs`).
+Each file is `charter-secret-<12 random characters>`, `0600`, holding one value or one dotenv
+body: **it holds values in plaintext** while the run lasts. It is inside the vaults folder,
+which every sandboxed chat is denied, and only the run's own sandbox is given back a read of
+its file. The run removes the file when the command ends. The app removes any it finds when it
+opens the project, so one left by a crash or a kill does not outlive the next launch. The app
+refuses to use the folder when the vaults folder or `exec/` is a link. FR-10 never copies it.
 
 ### `.charter/vaults/<name>.json` — reference vault (same path, different content)
 

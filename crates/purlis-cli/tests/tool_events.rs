@@ -27,10 +27,11 @@ fn hook_with(
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(7).expect("a token");
+    let token = listener.tokens().issue_to_this_process(7).expect("a token");
     let (tx, heard) = mpsc::channel();
     let tx = Mutex::new(tx);
     let _reading = listener.hear(Hearing {
+        secret_exec: Box::new(|_, _, writer| purlis_core::secrets::brokered::not_answered(writer)),
         blocked: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
@@ -234,7 +235,7 @@ fn hook_with_no_host(word: &str, payload: &serde_json::Value) -> (i32, String, V
     let path = dir.path().join(".charter/app/hooks.sock");
     let token = {
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        listener.tokens().issue(7).expect("a token")
+        listener.tokens().issue_to_this_process(7).expect("a token")
     };
     let mut child = Command::new(CHARTER)
         .args(["hook", word])
@@ -300,9 +301,10 @@ fn a_tool_hook_answers_only_once_the_host_has_recorded_its_call() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(7).expect("a token");
+    let token = listener.tokens().issue_to_this_process(7).expect("a token");
     let recorded_at = std::sync::Arc::new(Mutex::new(None::<Instant>));
     let _reading = listener.hear(Hearing {
+        secret_exec: Box::new(|_, _, writer| purlis_core::secrets::brokered::not_answered(writer)),
         blocked: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),

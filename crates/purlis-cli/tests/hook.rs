@@ -41,7 +41,7 @@ fn a_hook_tells_the_app_what_the_harness_fired() {
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(7).expect("a token");
+    let token = listener.tokens().issue_to_this_process(7).expect("a token");
     let _reading = listener.each(Box::new(move |report| {
         let _ = tx.send(report);
     }));
@@ -83,8 +83,8 @@ fn a_hook_without_its_chats_token_is_not_heard_and_the_turn_goes_on() {
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let _seven = listener.tokens().issue(7).expect("a token");
-    let eight = listener.tokens().issue(8).expect("a token");
+    let _seven = listener.tokens().issue_to_this_process(7).expect("a token");
+    let eight = listener.tokens().issue_to_this_process(8).expect("a token");
     let _reading = listener.each(Box::new(move |report| {
         let _ = tx.send(report);
     }));
@@ -121,7 +121,7 @@ fn every_state_event_reaches_the_app_under_the_word_the_plugin_uses() {
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(1).expect("a token");
+    let token = listener.tokens().issue_to_this_process(1).expect("a token");
     let _reading = listener.each(Box::new(move |report| {
         let _ = tx.send(report.event);
     }));
@@ -905,7 +905,7 @@ fn the_command_line_the_charter_plugin_actually_writes_is_answered() {
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(7).expect("a token");
+    let token = listener.tokens().issue_to_this_process(7).expect("a token");
     let _reading = listener.each(Box::new(move |report| {
         let _ = tx.send(report.event);
     }));
@@ -1033,7 +1033,7 @@ fn a_hook_reading_a_payload_that_never_ends_still_gets_out_of_the_way() {
     let path = dir.path().join("hooks.sock");
     let (tx, rx) = mpsc::channel();
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(7).expect("a token");
+    let token = listener.tokens().issue_to_this_process(7).expect("a token");
     let _reading = listener.each(Box::new(move |report| {
         let _ = tx.send(report);
     }));

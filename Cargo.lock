@@ -5259,6 +5259,7 @@ version = "0.4.2"
 dependencies = [
  "agent-client-protocol",
  "alacritty_terminal",
+ "base64 0.23.1",
  "blocking",
  "changelog",
  "chrono",

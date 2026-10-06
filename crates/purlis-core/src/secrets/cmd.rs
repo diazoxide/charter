@@ -43,6 +43,11 @@ pub trait Io {
     fn read_stdin(&mut self) -> String;
     /// One line typed at the terminal with echo off, after `prompt` — `getpass.getpass`.
     fn read_hidden(&mut self, prompt: &str) -> String;
+    /// Stdin as a stream, for a brokered `secret exec` to hand its child as it comes (#1407).
+    /// Asked only when stdin is not a terminal; `None` gives the child an empty stdin.
+    fn stdin_stream(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------------------

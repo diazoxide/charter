@@ -1013,6 +1013,13 @@ impl Planes {
         if let Some(already) = open.get(&id) {
             return already.id.clone();
         }
+        // The credential files a brokered `secret exec` of this project left when the app was
+        // stopped before it could remove them (#1407). Here, where no run of the project's can
+        // be live: it is not open in this app.
+        purlis_core::secrets::brokered::sweep(&purlis_core::secrets::Ctx::new(
+            &root,
+            purlis_core::secrets::Env::from_process(),
+        ));
         // The per-session files no chat has written for a month (SC-7). Below the line above,
         // so it runs only when no chat of this plane is running in this app — the chats its
         // reopen record will bring back are what it keeps.
@@ -1034,6 +1041,16 @@ impl Planes {
                 None => purlis_core::hookwire::Answer::No {
                     why: "this project has been closed".to_owned(),
                 },
+            })
+        });
+        // A brokered `secret exec` from one of this plane's chats is run by this plane, which
+        // holds the chat's record: its persona and its folder (#1407). Weak for the handoff's
+        // reason.
+        held.hooks.exec_secrets_with({
+            let held = Arc::downgrade(&held);
+            Arc::new(move |ask, reader, writer| match held.upgrade() {
+                Some(held) => crate::vaults::run_brokered(&held, ask, reader, writer),
+                None => purlis_core::secrets::brokered::not_answered(writer),
             })
         });
         // A curation chat's prompt is typed when its harness reports its start (ADR 0061), and
@@ -1976,6 +1993,9 @@ impl Planes {
     /// Empties the registry, then lets go of each plane it held. See [`Self::let_go_of_all`].
     fn let_go_of_every_plane(&self, to_update: bool) {
         let all: Vec<_> = self.map().drain().map(|(_, held)| held).collect();
+        // Every command purlis is running with a vault for a chat ends here, with everything it
+        // started that stayed in its process group (#1407).
+        purlis_core::secrets::brokered::stop_every_run();
         // Before the chats are ended: a turn this quit cuts off leaves its repo half-written,
         // and that repo is not saved (charter-app#299).
         let roots: Vec<_> = all

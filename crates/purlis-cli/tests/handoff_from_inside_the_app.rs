@@ -225,7 +225,10 @@ fn an_app(
     std::fs::create_dir_all(&within).expect("a directory");
     let socket = within.join("s").join("hooks.sock");
     let listener = Listener::bind(&within, &socket).expect("a socket");
-    let token = listener.tokens().issue(ASKING).expect("a token");
+    let token = listener
+        .tokens()
+        .issue_to_this_process(ASKING)
+        .expect("a token");
     let asked = Arc::new(Mutex::new(Vec::new()));
     let tickets = Tickets::default();
     let reading = listener.each_answering(Box::new(|_| {}), {

@@ -210,7 +210,7 @@ pub fn ask_permission(
 /// and writes the hook what was chosen.
 #[cfg(unix)]
 pub(super) fn hold(
-    reader: &mut std::io::BufReader<std::os::unix::net::UnixStream>,
+    reader: &mut std::io::BufReader<super::Deadlined>,
     writer: &mut std::os::unix::net::UnixStream,
     waiting: Option<Waiting>,
 ) {
@@ -227,7 +227,10 @@ pub(super) fn hold(
         return;
     };
     let began = std::time::Instant::now();
-    let _ = reader.get_ref().set_read_timeout(Some(LOOKED_AT_EVERY));
+    let _ = reader
+        .get_ref()
+        .socket()
+        .set_read_timeout(Some(LOOKED_AT_EVERY));
     let ended = loop {
         match waiting.answered.recv_timeout(LOOKED_AT_EVERY) {
             Ok(chosen) => {
@@ -286,6 +289,7 @@ mod tests {
     fn hearing(hooks: Arc<HookAsks>, until: Duration) -> Hearing {
         let held = held_in(hooks, Arc::new(|| {}));
         Hearing {
+            secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
             each: Box::new(|_| Ok(())),
             answer: Box::new(|_, _| super::super::Answer::No { why: String::new() }),
             noticed: Box::new(|_| {}),
@@ -319,7 +323,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(3).expect("a token");
+        let token = listener.tokens().issue_to_this_process(3).expect("a token");
         let hooks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
         let _reading = listener.hear(hearing(Arc::clone(&hooks), Duration::from_secs(30)));
 
@@ -353,7 +357,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(3).expect("a token");
+        let token = listener.tokens().issue_to_this_process(3).expect("a token");
         let hooks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
         let _reading = listener.hear(hearing(Arc::clone(&hooks), Duration::from_secs(30)));
 
@@ -372,7 +376,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(3).expect("a token");
+        let token = listener.tokens().issue_to_this_process(3).expect("a token");
         let hooks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
         let _reading = listener.hear(hearing(Arc::clone(&hooks), Duration::from_millis(300)));
 
@@ -392,7 +396,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let _token = listener.tokens().issue(3).expect("a token");
+        let _token = listener.tokens().issue_to_this_process(3).expect("a token");
         let hooks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
         let _reading = listener.hear(hearing(Arc::clone(&hooks), Duration::from_secs(30)));
 
@@ -412,7 +416,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(3).expect("a token");
+        let token = listener.tokens().issue_to_this_process(3).expect("a token");
         let _reading = listener.each(Box::new(|_| {}));
 
         let chosen = ask_permission_of_an_admitted_host(

@@ -50,12 +50,13 @@ fn host() -> Host {
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
     let token = listener
         .tokens()
-        .issue(7)
+        .issue_to_this_process(7)
         .expect("a token")
         .expose()
         .to_owned();
     let hooks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
     let reading = listener.hear(Hearing {
+        secret_exec: Box::new(|_, _, writer| purlis_core::secrets::brokered::not_answered(writer)),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask for a ticket")),
         noticed: Box::new(|_| {}),

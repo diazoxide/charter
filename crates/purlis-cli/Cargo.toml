@@ -38,7 +38,7 @@ tokio = { version = "1", default-features = false, features = ["rt"] }
 # Fenced, so the `charter` binary these tests spawn cannot act on a plane the run did not
 # make (charter-app#129). Cargo unifies a dependency's features across the unit graph a test
 # build needs, so naming it here fences the binary as well as the tests that run it.
-purlis-core = { workspace = true, features = ["fenced"] }
+purlis-core = { workspace = true, features = ["fenced", "test-support"] }
 # The changelog parser, so `charter news --for` is checked against the section it should print.
 changelog.workspace = true
 stand-in.workspace = true

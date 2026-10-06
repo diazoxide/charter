@@ -30,12 +30,13 @@ fn hook(word: &str, payload: &serde_json::Value) -> Heard {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(7).expect("a token");
+    let token = listener.tokens().issue_to_this_process(7).expect("a token");
     let (tools, heard_tool) = mpsc::channel();
     let tools = Mutex::new(tools);
     let (touches, heard_touch) = mpsc::channel();
     let touches = Mutex::new(touches);
     let _reading = listener.hear(Hearing {
+        secret_exec: Box::new(|_, _, writer| purlis_core::secrets::brokered::not_answered(writer)),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
         noticed: Box::new(|_| {}),
@@ -192,7 +193,7 @@ fn a_file_tool_no_app_takes_leaves_its_path_in_no_file() {
     let path = dir.path().join(".charter/app/hooks.sock");
     let token = {
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        listener.tokens().issue(7).expect("a token")
+        listener.tokens().issue_to_this_process(7).expect("a token")
     };
     let mut child = Command::new(CHARTER)
         .args(["hook", "pretooluse-read"])

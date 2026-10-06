@@ -19,7 +19,7 @@ fn call(chat: u32, id: &str) -> ToolCall {
 /// A host's spool directory with chat `chat` issued a token, as a listener issues one.
 fn issued(dir: &Path, chat: u32) -> crate::hookwire::ChatToken {
     ChatTokens::spooling_into(dir.to_path_buf())
-        .issue(chat)
+        .issue_to_this_process(chat)
         .expect("a token")
 }
 
@@ -112,8 +112,8 @@ fn a_line_written_into_another_chats_spool_is_rejected_and_never_read_as_that_ch
     let dir = tempfile::tempdir().expect("a directory");
     let spool = dir.path().join(".charter/app").join(DIR);
     let tokens = ChatTokens::spooling_into(spool.clone());
-    let mine = tokens.issue(5).expect("a token");
-    let _theirs = tokens.issue(6).expect("a token");
+    let mine = tokens.issue_to_this_process(5).expect("a token");
+    let _theirs = tokens.issue_to_this_process(6).expect("a token");
 
     // Chat 5 holds its own token only. Whatever it writes into chat 6's spool, under its own
     // key or none, names chat 6 and is not chat 6's.
@@ -184,7 +184,9 @@ fn nothing_is_spooled_and_no_key_written_where_the_sandbox_does_not_deny_the_dir
     let dir = tempfile::tempdir().expect("a directory");
     // A fallback hook channel's directory, outside any project's `.charter/app/`.
     let elsewhere = dir.path().join("charter-op-0123456789abcdef").join(DIR);
-    let token = ChatTokens::default().issue(1).expect("a token");
+    let token = ChatTokens::default()
+        .issue_to_this_process(1)
+        .expect("a token");
 
     let remembered = remember(&elsewhere, 1, &token);
     let spooled = append(&elsewhere, 1, &token, &call(1, "a"));

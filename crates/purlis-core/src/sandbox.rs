@@ -985,6 +985,9 @@ pub struct Applied {
     root: PathBuf,
     /// The paths it denies, which must not cover the chat's folder ([`covering`]).
     denied: Vec<Denial>,
+    /// What a command run on the chat's behalf is held to. Boxed: it is a list of paths, and
+    /// [`Decided`] carries this beside a variant of a few words.
+    confines: Box<Confines>,
 }
 
 impl Applied {
@@ -996,6 +999,11 @@ impl Applied {
     /// The plane it was compiled for.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// What a command purlis runs for this chat is held to ([`Confines`]).
+    pub fn confines(&self) -> &Confines {
+        &self.confines
     }
 
     /// The folders this sandbox lets a chat write besides its own and the temp directories:
@@ -1563,13 +1571,50 @@ pub fn for_start(
         return Err(NotStarted::NoBackend(missing));
     }
     let compiled = Compiled::of(&policy, &plane, root, machine);
-    let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
-    Ok(Some(Applied {
+    applied_of(harness, compile, &compiled, root, machine).map(Some)
+}
+
+/// `compiled`, compiled by `compile` for a chat of `harness` in the plane at `root` on
+/// `machine`, with what a command run for that chat is held to ([`Confines`]).
+pub(crate) fn applied_of(
+    harness: Harness,
+    compile: Compiler,
+    compiled: &Compiled,
+    root: &Path,
+    machine: &Machine,
+) -> Result<Applied, NotStarted> {
+    let (form, denied) = compile_checked(compile, compiled, root, machine)?;
+    let mut held = denied.clone();
+    if let Some(keychains) = seatbelt::keychains(machine.home.as_deref())
+        && !held.contains(&keychains)
+    {
+        held.push(keychains);
+    }
+    Ok(Applied {
         harness,
         form,
         root: root.to_path_buf(),
         denied,
-    }))
+        confines: Box::new(Confines {
+            denied: held,
+            hosts: compiled.hosts.clone(),
+        }),
+    })
+}
+
+/// What a command purlis runs on a sandboxed chat's behalf is held to (#1407): exactly what the
+/// chat's own sandbox was compiled to deny, as its harness's compiler listed it (a Codex chat's
+/// own Codex home among them, D-88q) with the credential store's files, and the hosts it may
+/// reach. Recorded when the chat starts, so a change to the project's policy afterwards does
+/// not change what a run for that chat may do.
+///
+/// Train note (#1337): when `Compiled::widened` lands, it is recorded here too and handed to
+/// `seatbelt::widen` in `secrets::brokered::profile_on`, so the run gets the chat's certificate
+/// check and cache grants.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Confines {
+    pub denied: Vec<Denial>,
+    pub hosts: Vec<String>,
 }
 
 /// [`for_start`] without asking this machine for a backend, for a test of a compiler alone.
@@ -1586,13 +1631,7 @@ pub(crate) fn compiled_anyway(
         .expect("a plane that turned the sandbox on");
     let compile = compiler(harness).ok_or(NotStarted::NoCompiler(harness))?;
     let compiled = Compiled::of(&policy, &plane, root, machine);
-    let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
-    Ok(Applied {
-        harness,
-        form,
-        root: root.to_path_buf(),
-        denied,
-    })
+    applied_of(harness, compile, &compiled, root, machine)
 }
 
 /// A person's choice, in the window, to start one chat without the sandbox (ADR 0067 §7,
