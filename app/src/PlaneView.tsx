@@ -3,6 +3,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -139,7 +140,7 @@ import {
   SIDEBAR,
   usePlaneChanged,
 } from "./planeChanged";
-import { FreshMark, usePlaneUpdated } from "./PlaneUpdated";
+import { FreshMark, freshMarkShown, usePlaneUpdated } from "./PlaneUpdated";
 import { Notice, NoticeBand } from "./Notice";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
@@ -206,7 +207,7 @@ import {
 } from "./tabs";
 import { chipSays, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
 import { EndingChat, type SmartAsk } from "./EndingChat";
-import { ChatAsk } from "./ChatAsk";
+import { ChatAsk, focusAfterNoticeGone, midTurnWarning } from "./ChatAsk";
 import { DID_NOT_START, saidWhenItEnds, stoppedWhy, useSmartClosing } from "./smartClose";
 import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
@@ -241,6 +242,7 @@ import { HarnessChip } from "./HarnessCard";
 import {
   ChatsHere,
   isShell,
+  markOf,
   movedAt,
   quietOnes,
   sameList,
@@ -495,6 +497,8 @@ export const PlaneView = memo(function PlaneView({
     session: number;
     name: string;
     files: readonly string[];
+    /** What the chat was doing when it was asked about, as the board said (#1246). */
+    doing?: State;
     busy: boolean;
     trouble?: string;
   }>();
@@ -1536,6 +1540,9 @@ export const PlaneView = memo(function PlaneView({
   const { strip: measured, width: room } = useRoom(onStrip.length);
   /** The chat strip itself, for handing the keyboard back to a tab after a rename. */
   const chatStrip = useRef<HTMLElement | null>(null);
+  /** Unique to this view, so two projects' tabs never name each other's fresh marks. */
+  const freshMarks = useId();
+  const freshMarkOf = (tab: number) => `${freshMarks}-fresh-${tab}`;
   const strip = useCallback(
     (element: HTMLElement | null) => {
       chatStrip.current = element;
@@ -3372,6 +3379,28 @@ export const PlaneView = memo(function PlaneView({
     [change, noteStarted, plane],
   );
 
+  /**
+   * **Forget this chat…** asked from a waiting chat's Notice: the band that Notice stands in,
+   * and whether the answer was carried out — so the keyboard goes on to the next Notice, or the
+   * strip, once the Notice it came from has gone (#1246). A Cancel leaves Radix's own return.
+   */
+  const forgetAsked = useRef<{ band: Element | null; forgot: boolean }>({
+    band: null,
+    forgot: false,
+  });
+  const askForget = useCallback((id: string, name: string) => {
+    const from = [...document.querySelectorAll("[data-cause]")].find(
+      (one) => one.getAttribute("data-cause") === `chat-did-not-start:${id}`,
+    );
+    forgetAsked.current = { band: from?.closest(".notice-band-stack") ?? null, forgot: false };
+    setForgetting({ id, name, busy: false });
+  }, []);
+  const afterForgetAsk = useCallback((event: Event) => {
+    if (!forgetAsked.current.forgot) return;
+    event.preventDefault();
+    focusAfterNoticeGone(forgetAsked.current.band, chatStrip.current);
+  }, []);
+
   const forgetChat = useCallback(
     async (id: string, name: string) => {
       setForgetting({ id, name, busy: true });
@@ -3382,6 +3411,7 @@ export const PlaneView = memo(function PlaneView({
         setForgetting({ id, name, busy: false, trouble: said.error });
         return;
       }
+      forgetAsked.current.forgot = true;
       setForgetting(undefined);
       setWouldNotStart((was) => was.filter((one) => one.id !== id));
     },
@@ -3397,10 +3427,13 @@ export const PlaneView = memo(function PlaneView({
         session,
         name: now.current.byId[tab].name,
         files: planeUpdates[session] ?? [],
+        // Asked now, as a close asks `smart_close_offer`: the program ends either way, and
+        // the question says so when that interrupts a turn (#1246).
+        doing: markOf(chats.store.statesFor(chats.plane), session, shells.has(session)),
         busy: false,
       });
     },
-    [planeUpdates],
+    [chats.plane, chats.store, planeUpdates, shells],
   );
   /**
    * The core starts the same chat again, fresh (`start_chat_fresh`), and ends the old one itself
@@ -4550,7 +4583,20 @@ export const PlaneView = memo(function PlaneView({
                                 <button
                                   role="tab"
                                   aria-selected={id === tabs.inFront}
-                                  aria-describedby={sortable.attributes["aria-describedby"]}
+                                  // The fresh mark beside it as well (#1246): it is outside the tab.
+                                  aria-describedby={
+                                    [
+                                      sortable.attributes["aria-describedby"],
+                                      freshMarkShown(
+                                        by(`tab.fresh:${id}`),
+                                        planeUpdates[chatOf(tabs, id) ?? -1],
+                                      )
+                                        ? freshMarkOf(id)
+                                        : undefined,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" ") || undefined
+                                  }
                                   // Where a handed-off chat came from, by its parent's name (charter-app#258).
                                   title={
                                     panesOf(tabs, id).some((one) => wrapping.has(one.session))
@@ -4604,6 +4650,7 @@ export const PlaneView = memo(function PlaneView({
                               </RovingFocusGroup.Item>
                             )}
                             <FreshMark
+                              id={freshMarkOf(id)}
                               offer={by(`tab.fresh:${id}`)}
                               files={planeUpdates[chatOf(tabs, id) ?? -1]}
                               onPress={press}
@@ -4816,7 +4863,7 @@ export const PlaneView = memo(function PlaneView({
               { label: "Retry now", onPress: () => void retryChat(id) },
               {
                 label: "Forget this chat…",
-                onPress: () => setForgetting({ id, name, busy: false }),
+                onPress: () => askForget(id, name),
               },
             ]}
             onDismiss={() => setWouldNotStart((was) => was.filter((one) => one.id !== id))}
@@ -5188,6 +5235,7 @@ export const PlaneView = memo(function PlaneView({
           busy={forgetting.busy}
           onAnswer={() => void forgetChat(forgetting.id, forgetting.name)}
           onCancel={() => setForgetting(undefined)}
+          onCloseAutoFocus={afterForgetAsk}
         />
       )}
       {freshening && (
@@ -5195,6 +5243,7 @@ export const PlaneView = memo(function PlaneView({
           title={`Start ${freshening.name} fresh?`}
           says={`The project's instructions changed since it started (${freshening.files.join(", ")}). Its program ends, and it starts again on what is there now, as a new conversation.`}
           answer="Start fresh"
+          warns={midTurnWarning(freshening.name, freshening.doing)}
           trouble={freshening.trouble}
           busy={freshening.busy}
           onAnswer={() => void startFresh()}

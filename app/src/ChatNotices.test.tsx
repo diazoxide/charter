@@ -59,6 +59,8 @@ let open: ReturnType<typeof chat>[];
 let waiting: { id: string; name: string; why: string }[];
 let updated: { session: number; files: string[] }[];
 let refuse: Partial<Record<string, string>>;
+/** What the core says each chat is doing (`chat_states`). */
+let states: { session: number; state: string }[];
 
 function core(): Asked[] {
   const asked: Asked[] = [];
@@ -77,7 +79,18 @@ function core(): Asked[] {
         unfiled: [],
       };
     if (cmd === "opened_chats") return open;
-    if (cmd === "chat_states") return [];
+    if (cmd === "chat_states")
+      return states.map((one, at) => ({
+        plane: PLANE,
+        ...one,
+        needs_you: false,
+        queue: [],
+        sequence: at + 1,
+        moved_at: at + 1,
+        reports: [],
+        refusals: [],
+        children: [],
+      }));
     if (cmd === "running_sessions") return [];
     if (cmd === "chats_that_would_not_start") return waiting;
     if (cmd === "chats_plane_updated") return updated;
@@ -146,6 +159,7 @@ beforeEach(() => {
   waiting = [];
   updated = [];
   refuse = {};
+  states = [];
 });
 
 afterEach(() => {
@@ -280,6 +294,49 @@ describe("two waiting chats with one name (NO-3 review)", () => {
   });
 });
 
+describe("the keyboard after a Forget (#1246)", () => {
+  it("lands on the next Notice, and on the strip once there is none", async () => {
+    // The dialog closes and the Notice it was asked from goes with it, so handing the focus
+    // back to where it was would drop it on the page.
+    waiting = [
+      { id: "id-a", name: "3", why: "no such directory: /a" },
+      { id: "id-b", name: "4", why: "no such directory: /b" },
+    ];
+    core();
+    render(<App />);
+    await screen.findAllByText(/did not start/);
+    const forget = async (id: string) => {
+      await userEvent.click(
+        within(notice(`chat-did-not-start:${id}`) as HTMLElement).getByRole("button", {
+          name: "Forget this chat…",
+        }),
+      );
+      await userEvent.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", {
+          name: "Forget chat",
+        }),
+      );
+      await waitFor(() => expect(notice(`chat-did-not-start:${id}`)).toBeNull());
+    };
+
+    await forget("id-a");
+    await waitFor(() =>
+      expect(document.activeElement?.closest("[data-cause]")?.getAttribute("data-cause")).toBe(
+        "chat-did-not-start:id-b",
+      ),
+    );
+
+    await forget("id-b");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(screen.getByRole("tablist", { name: "Tabs" }))
+          .getAllByRole("tab")
+          .find((tab) => tab.getAttribute("aria-selected") === "true"),
+      ),
+    );
+  });
+});
+
 describe("how a chat came back", () => {
   it("is news that can be dismissed: resumed, or back as a new chat", async () => {
     open = [chat(1, "one", { harness: "claude-code", fresh: "no conversation was recorded" })];
@@ -387,6 +444,41 @@ describe("a chat the project's instructions changed under", () => {
     ]);
     expect(sent(asked, "close_session")).toEqual([]);
     expect(tabNames()).toEqual(["one"]);
+  });
+
+  it("is a mark its tab is described by, so a screen reader on the tab hears it (#1246)", async () => {
+    core();
+    render(<App />);
+    const mark = await screen.findByRole("button", { name: /Start chat one fresh/ });
+    const tab = within(screen.getByRole("tablist", { name: "Tabs" }))
+      .getAllByRole("tab")
+      .find((one) => one.querySelector(".tab-name")?.textContent === "one") as HTMLElement;
+
+    const describedBy = (tab.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(mark.id).not.toBe("");
+    expect(describedBy).toContain(mark.id);
+  });
+
+  it("asks, saying the turn will be interrupted, on a chat that is mid-turn (#1246)", async () => {
+    states = [{ session: 1, state: "running" }];
+    core();
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Start chat one fresh/ }));
+
+    expect((await screen.findByRole("alertdialog")).textContent).toContain(
+      "one is mid-turn, and the turn will be interrupted.",
+    );
+  });
+
+  it("asks without a word about a turn on a chat that is waiting for you (#1246)", async () => {
+    states = [{ session: 1, state: "waiting" }];
+    core();
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Start chat one fresh/ }));
+
+    expect((await screen.findByRole("alertdialog")).textContent).not.toContain("mid-turn");
   });
 
   it("is not offered for a chat the instructions did not change under", async () => {
