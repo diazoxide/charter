@@ -52,10 +52,15 @@ impl World {
             home.join(".gitconfig"),
             // And a content filter of the operator's, which `widget`'s `.gitattributes` asks
             // for: it runs on a terminal's clone, and never on one the app makes for a chat.
+            // The value is double-quoted: unquoted, git reads the `;` as the start of a
+            // comment, the command is cut to `sh -c 'touch …`, and a filter that is not
+            // `required` fails silently. It marks one absolute path, so whichever checkout
+            // ran it, the test sees it.
             format!(
                 "[url \"file://{}/acme/\"]\n\tinsteadOf = https://github.com/acme/\n\
-                 [filter \"mark\"]\n\tsmudge = sh -c 'touch smudged; cat'\n\tclean = cat\n",
-                forge.display()
+                 [filter \"mark\"]\n\tsmudge = \"sh -c 'touch {}; cat'\"\n\tclean = cat\n",
+                forge.display(),
+                base.join(SMUDGED).display()
             ),
         )
         .unwrap();
@@ -213,6 +218,14 @@ fn the_broker(root: PathBuf, forge: &Path) -> impl Fn(Ask) -> Answer + Send + Sy
     }
 }
 
+/// What the operator's global `mark` filter leaves in a world's base directory when it runs.
+const SMUDGED: &str = "smudged";
+
+/// Whether the operator's filter has run since this was last asked, forgetting that it had.
+fn the_filter_ran(world: &World) -> bool {
+    std::fs::remove_file(world.base.join(SMUDGED)).is_ok()
+}
+
 fn err(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
@@ -249,10 +262,23 @@ fn a_sandboxed_chats_clone_and_worktree_are_made_by_the_app_and_say_what_the_ter
         an_app(&world.base, the_broker(brokered.clone(), &world.forge));
     let chat = chat_3(&socket, &token);
 
-    // The clone: in a chat, the app makes it.
+    // The clone: in a chat, the app makes it. The operator's global filter runs on the
+    // terminal's clone, and not on the app's.
     let here = world.purlis(&terminal, &["clone", "widget", "-w", "alpha"], &[]);
+    assert!(here.status.success(), "{}", err(&here));
+    assert!(
+        the_filter_ran(&world),
+        "the operator's filter did not run on the terminal's clone, so this test checks \
+         nothing: {}",
+        err(&here)
+    );
     let there = world.purlis(&brokered, &["clone", "widget", "-w", "alpha"], &chat);
     assert!(there.status.success(), "{}", err(&there));
+    assert!(
+        !the_filter_ran(&world),
+        "a global-config filter ran on a clone made for a chat: {}",
+        err(&there)
+    );
     assert_eq!(there.status.code(), here.status.code());
     assert_eq!(said(&there, &brokered), said(&here, &terminal));
     let Ok(Ask::Git(git)) = asked.recv_timeout(Duration::from_secs(5)) else {
@@ -277,18 +303,19 @@ fn a_sandboxed_chats_clone_and_worktree_are_made_by_the_app_and_say_what_the_ter
             "{written} is not in the clone"
         );
     }
-    // The operator's global filter ran on the terminal's clone, and not on the app's.
-    assert!(terminal.join("workspaces/alpha/widget/smudged").exists());
-    assert!(
-        !clone.join("smudged").exists(),
-        "a global-config filter ran on a clone made for a chat"
-    );
 
     // The worktree: the same.
     let args = ["worktree", "add", "widget", "p1", "-w", "alpha"];
     let here = world.purlis(&terminal, &args, &[]);
+    assert!(here.status.success(), "{}", err(&here));
+    the_filter_ran(&world);
     let there = world.purlis(&brokered, &args, &chat);
     assert!(there.status.success(), "{}", err(&there));
+    assert!(
+        !the_filter_ran(&world),
+        "a global-config filter ran on a worktree cut for a chat: {}",
+        err(&there)
+    );
     assert_eq!(said(&there, &brokered), said(&here, &terminal));
     let Ok(Ask::Git(git)) = asked.recv_timeout(Duration::from_secs(5)) else {
         panic!("the app was not asked to cut a worktree");

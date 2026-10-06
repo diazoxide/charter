@@ -177,11 +177,12 @@ fn commit_asking_for_a_filter(repo: &Path) {
     crate::testgit::run(repo, &["commit", "-q", "-m", "one"]);
 }
 
-/// `config` with content filter `evil` defined to leave `ran` behind when it runs.
+/// `config` with content filter `evil` defined to leave `ran` behind when it runs. Quoted, so
+/// git does not read the `;` as the start of a comment and cut the command short.
 fn with_the_filter(config: &Path, ran: &Path) {
     let mut text = std::fs::read_to_string(config).unwrap_or_default();
     text.push_str(&format!(
-        "[filter \"evil\"]\n\tsmudge = sh -c 'touch {}; cat'\n\tclean = cat\n",
+        "[filter \"evil\"]\n\tsmudge = \"sh -c 'touch {}; cat'\"\n\tclean = cat\n",
         ran.display()
     ));
     std::fs::write(config, text).unwrap();
@@ -284,7 +285,7 @@ fn a_commondir_pointed_at_a_config_the_chat_wrote_is_refused_and_its_filter_neve
     );
     let mut config = std::fs::read_to_string(theirs.join("config")).unwrap();
     config.push_str(&format!(
-        "[filter \"evil\"]\n\tsmudge = sh -c 'touch {}; cat'\n\tclean = cat\n",
+        "[filter \"evil\"]\n\tsmudge = \"sh -c 'touch {}; cat'\"\n\tclean = cat\n",
         ran.display()
     ));
     std::fs::write(theirs.join("config"), config).unwrap();
