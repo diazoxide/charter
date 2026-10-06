@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791266171933,
+  "lastUpdate": 1791280677205,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2898,6 +2898,48 @@ window.BENCHMARK_DATA = {
             "value": 101.713942,
             "unit": "ms",
             "extra": "median of 5 runs: 100.820, 101.597, 101.714, 101.862, 102.450 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "60b73fb0ddc749a676edba292ea3cd53bf58cd60",
+          "message": "diffscan: a line-ending backslash with blanks after it, and blank lines, still join\n\nThe commit and push scan now joins the way the lexical decode does. A\nbackslash followed only by blanks to the end of its line joins, and the\njoin carries on through blank and whitespace-only added lines up to the\nnext line that is not blank. Each line is still read into one run at most.\n\nRefs #1315\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T13:56:42+04:00",
+          "tree_id": "30043fe124c0cd9087fc6979806e9a9ab0e840ae",
+          "url": "https://github.com/purlis/purlis/commit/60b73fb0ddc749a676edba292ea3cd53bf58cd60"
+        },
+        "date": 1791280675866,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5281399999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.509, 0.517, 0.528, 0.533, 0.556 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.0965445,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.749, 16.768, 17.097, 17.151, 17.290 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.736081,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.591, 104.126, 105.736, 106.055, 106.078 ms"
           }
         ]
       }
