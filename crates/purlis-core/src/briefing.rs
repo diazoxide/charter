@@ -195,12 +195,39 @@ pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
     if let Some(hidden) = hidden_agents_md_note(ask) {
         parts.push(hidden);
     }
+    // How a sandboxed chat gets unblocked here (#1342): only for a chat the app started under
+    // a sandbox, which is the one place the variable is set.
+    if let Some(note) = sandboxed_note(ask.env) {
+        parts.push(note.to_owned());
+    }
     // Last: charter's skills, for a chat whose harness cannot load them (ADR 0063). Only such a
     // chat is started with the variable, so a harness that loads them is not told twice.
     if let Some(skills) = crate::skills::listed_from(ask.env) {
         parts.push(skills);
     }
     parts
+}
+
+/// **What a sandboxed chat is told about its sandbox** (#1342, the 2026-10-06 comment): how a
+/// blocked command gets unblocked under purlis, and that Claude Code's own `/sandbox` remedies
+/// do not apply. purlis hands the sandbox in `--settings`, which outranks every setting a
+/// `/sandbox exclude` writes, so a model that recommends one sends the person to a refusal.
+pub const SANDBOXED_NOTE: &str = "⬢ **This chat runs in purlis's sandbox.** When it blocks a \
+     command (a host it may not reach, or a folder it may not write), the person sees a Notice \
+     on this chat's tab and chooses **Allow for this chat**, **Always allow** (for every chat of \
+     this project on their machine, or, for a host only, for everyone in the project) or **Keep \
+     blocked**. If they allow it, this chat restarts on the same conversation and is told to \
+     retry, so say what was blocked and wait for them. Where purlis grants nothing, the person \
+     alone may choose **Start without the sandbox** for this chat; never suggest it as something \
+     you can do. Claude Code's `/sandbox`, `/sandbox exclude` and `excludedCommands` do not \
+     apply here: purlis's own settings outrank them, so never suggest them. A credential is \
+     never granted to a chat: run the command through `purlis secret exec <vault> -- <command>` \
+     instead.";
+
+/// [`SANDBOXED_NOTE`] for a chat the app started under a sandbox, read through `env`; none for
+/// any other.
+fn sandboxed_note(env: &dyn Fn(&str) -> Option<String>) -> Option<&'static str> {
+    crate::sandbox::chat_is_sandboxed_in(env).then_some(SANDBOXED_NOTE)
 }
 
 /// The persona this session was started as, by the ladder the briefing reads it with.

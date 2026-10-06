@@ -1379,3 +1379,69 @@ fn an_agents_md_keeps_only_the_first_line_of_the_piece_note() {
     assert!(file.ends_with("⬢ You hold piece **p** of `r`\n"), "{file}");
     assert!(!file.contains("already claimed"), "{file}");
 }
+
+#[test]
+fn a_sandboxed_chat_is_told_how_to_get_unblocked_under_purlis() {
+    // #1342 (the 2026-10-06 comment): a chat blocked by the sandbox told the person to run
+    // `/sandbox exclude gh`, which purlis's own settings outrank, so it was a dead end. Every
+    // chat the app started sandboxed is told, at its start, the way out that works here.
+    let (_d, root) = plane();
+    let got = told(
+        &root,
+        &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_SANDBOXED", "1")],
+        serde_json::json!({}),
+    );
+    let note = got
+        .iter()
+        .find(|part| part.contains("purlis's sandbox"))
+        .expect("a sandboxed chat is told about its sandbox");
+    for said in [
+        "Allow for this chat",
+        "Always allow",
+        "Keep blocked",
+        "Start without the sandbox",
+        "`/sandbox`",
+        "`excludedCommands`",
+        "purlis secret exec",
+    ] {
+        assert!(note.contains(said), "{said} is missing from: {note}");
+    }
+
+    // A chat the app did not start sandboxed is told nothing of it: a profile's own variable
+    // cannot claim it either, since only the exact `1` the app sets counts.
+    for env in [
+        vec![("PURLIS_SESSION_ID", "s1")],
+        vec![("PURLIS_SESSION_ID", "s1"), ("PURLIS_SANDBOXED", "yes")],
+    ] {
+        let got = told(&root, &env, serde_json::json!({}));
+        assert!(
+            !got.iter().any(|part| part.contains("purlis's sandbox")),
+            "{env:?}: {got:?}"
+        );
+    }
+}
+
+#[test]
+fn only_the_exact_mark_the_app_sets_reads_as_a_sandboxed_chat() {
+    // The same decision as above, without a plane on disk (a sandbox that refuses writing a
+    // manifest can still run this one).
+    let env = |value: Option<&'static str>| {
+        move |name: &str| {
+            (name == "PURLIS_SANDBOXED")
+                .then_some(value)
+                .flatten()
+                .map(str::to_owned)
+        }
+    };
+    assert_eq!(sandboxed_note(&env(Some("1"))), Some(SANDBOXED_NOTE));
+    for value in [None, Some("yes"), Some("0"), Some("")] {
+        assert_eq!(sandboxed_note(&env(value)), None, "{value:?}");
+    }
+    for said in [
+        "`/sandbox exclude`",
+        "`excludedCommands`",
+        "Start without the sandbox",
+    ] {
+        assert!(SANDBOXED_NOTE.contains(said), "{said}");
+    }
+}
