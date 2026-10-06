@@ -86,6 +86,25 @@ pub fn state(dir: &Path) -> PathBuf {
     dir.join(state_name(dir))
 }
 
+/// A path RECORDED relative to the project at `dir` — a vault's `file` — read against the state
+/// folder the project has now (D-VP-1). A path whose first folder is any spelling of the state
+/// folder (`.charter/vaults/app.json`, `.purlis/vaults/app.json`) is that path under [`state`],
+/// so a record written before `rename-local` moved the folder still names the file it moved
+/// to, and one written after it still names the file an undo put back. Any other path — and an
+/// absolute one, which `dir.join` keeps — is `dir` joined to it, unchanged.
+pub fn under_state(dir: &Path, recorded: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut parts = recorded.components();
+    let mut first = parts.next();
+    while first == Some(Component::CurDir) {
+        first = parts.next();
+    }
+    match first {
+        Some(Component::Normal(first)) if STATE_DIR.is(first) => state(dir).join(parts.as_path()),
+        _ => dir.join(recorded),
+    }
+}
+
 /// [`state`]'s last component alone, for a walk that opens the folder one step at a time.
 pub fn state_name(dir: &Path) -> &'static str {
     state_name_with(dir, moved_by_rename_local)

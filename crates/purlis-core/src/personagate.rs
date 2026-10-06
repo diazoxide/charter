@@ -537,12 +537,15 @@ fn registered_vault_files(plane: &Path) -> Option<Vec<String>> {
             .into_values()
             .flatten()
             .map(|f| {
-                // `vault_file_path`: `Path(f).expanduser()`, then the plane under a relative one.
+                // `vault_file_path`: `Path(f).expanduser()`, then the plane under a relative one
+                // — under the state folder the project has now when it names one (D-VP-1).
                 let f = expanduser(&f);
                 if pypath::is_abs(&f) {
                     f
                 } else {
-                    plane.join(f).to_string_lossy().into_owned()
+                    crate::names::under_state(plane, Path::new(&f))
+                        .to_string_lossy()
+                        .into_owned()
                 }
             })
             .collect(),
@@ -1139,6 +1142,26 @@ mod tests {
         assert!(got.is_some());
         assert!(root.join(".charter/sessions/fresh.tools").is_file());
         assert!(root.join(".charter/sessions/fresh.gate").is_file());
+    }
+
+    #[test]
+    fn a_vault_file_recorded_under_the_old_state_folder_is_listed_where_it_moved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join(".purlis")).unwrap();
+        std::fs::write(
+            root.join("vaults.json"),
+            r#"{"vaults": {"db": {"config": {"file": ".charter/vaults/db.json"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            registered_vault_files(&root),
+            Some(vec![
+                root.join(".purlis/vaults/db.json")
+                    .to_string_lossy()
+                    .into_owned()
+            ])
+        );
     }
 
     #[test]

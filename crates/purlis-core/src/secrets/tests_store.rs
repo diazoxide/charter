@@ -910,7 +910,9 @@ fn a_reference_vault_is_0600_before_any_content_reaches_it() {
     chmod(&p, 0o644);
     reference::set(&ctx, &v, "B", "op://Eng/item/other").unwrap();
 
-    assert_eq!(*seen.borrow(), [(0o600, 0), (0o600, 0)]);
+    // Each set writes the vault, then its rotation record (D-VP-2): every file opened for
+    // writing was 0600 and empty when it was opened.
+    assert_eq!(*seen.borrow(), [(0o600, 0); 4]);
     assert_eq!(mode_of(&p), 0o600);
     assert_eq!(reference::keys(&ctx, &v).unwrap(), ["A", "B"]);
 }
@@ -1161,4 +1163,80 @@ fn a_keyring_index_that_is_a_link_is_never_read() {
     std::os::unix::fs::symlink(&theirs, &index).unwrap();
 
     assert!(keyring::load_index(&ctx, &v).is_err());
+}
+
+// ---------------------------------------------------------------------------------------------
+// A vault file that went missing (D-VP-2)
+// ---------------------------------------------------------------------------------------------
+
+/// A plain-file or reference vault written to, whose file is then deleted.
+fn written_then_deleted(provider: &str) -> (tempfile::TempDir, Ctx, registry::Vault, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = vault("app", provider, json!({"file": "vault/app.json"}));
+    match provider {
+        "plain-file" => plain_file::set(&ctx, &v, "A", "1", day("2026-10-01")).unwrap(),
+        _ => reference::set(&ctx, &v, "A", "op://v/i/f").unwrap(),
+    }
+    let p = tmp.path().join("vault/app.json");
+    std::fs::remove_file(&p).unwrap();
+    (tmp, ctx, v, p)
+}
+
+#[test]
+fn a_vault_file_that_went_missing_is_refused_by_path_never_read_as_empty() {
+    for provider in ["plain-file", "reference"] {
+        let (_tmp, ctx, v, p) = written_then_deleted(provider);
+        let refused = |e: VaultError| {
+            assert!(
+                e.message.contains("vault/app.json") && e.message.contains("missing"),
+                "{provider}: {}",
+                e.message
+            );
+        };
+        match provider {
+            "plain-file" => {
+                refused(plain_file::keys(&ctx, &v).unwrap_err());
+                refused(plain_file::get(&ctx, &v, "A").unwrap_err());
+                refused(plain_file::set(&ctx, &v, "B", "2", day("2026-10-02")).unwrap_err());
+            }
+            _ => {
+                refused(reference::keys(&ctx, &v).unwrap_err());
+                refused(reference::set(&ctx, &v, "B", "op://v/i/g").unwrap_err());
+            }
+        }
+        assert!(!p.exists(), "{provider}: no second vault is written");
+        let (ok, line) = match provider {
+            "plain-file" => plain_file::health(&ctx, &v),
+            _ => reference::health(&ctx, &v),
+        };
+        assert!(!ok && line.contains("missing"), "{provider}: {line}");
+    }
+}
+
+#[test]
+fn a_vault_never_written_to_is_still_empty_and_its_first_set_creates_it() {
+    for provider in ["plain-file", "reference"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+        let v = vault("app", provider, json!({"file": "vault/app.json"}));
+        match provider {
+            "plain-file" => {
+                assert_eq!(plain_file::keys(&ctx, &v).unwrap(), Vec::<String>::new());
+                plain_file::set(&ctx, &v, "A", "1", day("2026-10-01")).unwrap();
+            }
+            _ => {
+                assert_eq!(reference::keys(&ctx, &v).unwrap(), Vec::<String>::new());
+                reference::set(&ctx, &v, "A", "op://v/i/f").unwrap();
+            }
+        }
+        assert!(tmp.path().join("vault/app.json").is_file(), "{provider}");
+    }
+}
+
+#[test]
+fn removing_the_record_too_starts_the_vault_empty_on_purpose() {
+    let (tmp, ctx, v, _p) = written_then_deleted("plain-file");
+    std::fs::remove_file(tmp.path().join("vault/app.meta.json")).unwrap();
+    assert_eq!(plain_file::keys(&ctx, &v).unwrap(), Vec::<String>::new());
 }

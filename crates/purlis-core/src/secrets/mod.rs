@@ -241,13 +241,15 @@ impl Ctx {
     }
 
     /// `base.vault_file_path`: absolute as given, relative to the plane root otherwise, with
-    /// a leading `~` expanded.
+    /// a leading `~` expanded. A relative path under the state folder is read under the state
+    /// folder the project has NOW ([`crate::names::under_state`], D-VP-1): `rename-local`
+    /// moves the folder and leaves the recorded `file` as it was, and its undo moves it back.
     pub fn vault_file_path(&self, configured: &str) -> PathBuf {
         let p = expanduser(configured, &self.env);
         if p.is_absolute() {
             p
         } else {
-            self.root.join(p)
+            crate::names::under_state(&self.root, &p)
         }
     }
 
