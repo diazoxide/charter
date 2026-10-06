@@ -201,6 +201,7 @@ fn the_broker(root: PathBuf, forge: &Path) -> impl Fn(Ask) -> Answer + Send + Sy
                 persona: Some("steward".to_owned()),
                 harnessed: true,
                 unsandboxed: false,
+                config: None,
             },
             &asked,
             &isolation,
