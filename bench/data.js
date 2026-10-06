@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791245616618,
+  "lastUpdate": 1791248476716,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2562,6 +2562,48 @@ window.BENCHMARK_DATA = {
             "value": 104.9795895,
             "unit": "ms",
             "extra": "median of 5 runs: 103.237, 104.544, 104.980, 105.285, 108.416 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "cba7f1f342aa6968261315c641b73c00a9ab3f04",
+          "message": "A renamed workspace's todo, memory and session tabs come back at launch\n\nThe rename test's saved record now holds a todo tab (alpha/<slug>), a\nmemory tab (workspace/alpha/<slug>) and a session record tab\n(workspaces/alpha/sessions/<file>). After renaming alpha to beta, the\ntest reads the record the way the next launch does, through\nreopen::read_or_refusal, and checks that each tab is held and keyed by\nbeta, on beta's strip.\n\nThis is the after-a-rename half of the ticket. The rekeying (issue 1248)\nand the widened held() check both already on main make it pass; no code\nchange was needed. While writing it, a session key whose file name is not\na record's name (such as 2026-10-05-review.md) was dropped at read, which\nis correct: held() checks a session key with sessionrecord::locate. The\ntest uses a real record name.\n\nCloses #1297\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T04:58:32+04:00",
+          "tree_id": "bdf323829507a2db89f8bb354f295fd4a5e17076",
+          "url": "https://github.com/purlis/purlis/commit/cba7f1f342aa6968261315c641b73c00a9ab3f04"
+        },
+        "date": 1791248475346,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.276779,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.268, 0.270, 0.277, 0.289, 0.305 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.579482,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.430, 16.533, 16.579, 16.661, 16.686 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.33099899999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.140, 101.308, 101.331, 101.781, 102.187 ms"
           }
         ]
       }
