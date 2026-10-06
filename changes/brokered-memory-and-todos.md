@@ -15,3 +15,12 @@
 
 - **A `persona_remember` tool** on purlis's MCP server, beside `memory_add`: one memory of the
   chat's persona, or of shared memory, written by purlis for the chat (#1333).
+
+### Fixed
+
+- **purlis's `session_record` and `persona_remember` tools never write outside a chat's
+  sandbox.** In a chat purlis started they hand the write to purlis, and where purlis cannot
+  take it (under Codex, which gives the tools no connection to purlis, or when the hand-over
+  fails) they refuse and name the command to run in the chat instead: `purlis session record`
+  or `purlis persona remember`. Outside such a chat, or once purlis has quit, they write as
+  before (#1408).

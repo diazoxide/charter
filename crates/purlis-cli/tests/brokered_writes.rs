@@ -367,6 +367,16 @@ fn persona_remember_over_mcp(
     env: &[(String, String)],
     arguments: serde_json::Value,
 ) -> serde_json::Value {
+    tool_over_mcp(tmp, env, "persona_remember", arguments)
+}
+
+/// `purlis mcp` in chat 3, initialized, and `tool` called once with `arguments`.
+fn tool_over_mcp(
+    tmp: &tempfile::TempDir,
+    env: &[(String, String)],
+    tool: &str,
+    arguments: serde_json::Value,
+) -> serde_json::Value {
     let root = root(tmp);
     let mut child = Command::new(env!("CARGO_BIN_EXE_purlis"))
         .arg("mcp")
@@ -395,7 +405,7 @@ fn persona_remember_over_mcp(
             "clientInfo": { "name": "test-harness", "version": "1" } } }),
         serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
         serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "persona_remember", "arguments": arguments } }),
+            "name": tool, "arguments": arguments } }),
     ] {
         writeln!(stdin, "{message}").unwrap();
     }
@@ -519,4 +529,105 @@ fn the_persona_remember_tool_whose_app_has_gone_writes_the_persona_itself() {
         files(&root(&tmp).join("personas/steward/memory")),
         ["after-the-app.md"]
     );
+}
+
+// ---- the MCP server's session_record (#1332), under the same rule (#1408) ------------------
+
+const RECORD_BODY: &str = "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\no\n\n\
+                           ## How to resume\n\nr\n";
+
+fn records_in_alpha(tmp: &tempfile::TempDir) -> Vec<String> {
+    files(&root(tmp).join("workspaces/alpha/sessions"))
+        .into_iter()
+        .filter(|name| name != "index.md")
+        .collect()
+}
+
+fn session_record_over_mcp(tmp: &tempfile::TempDir, env: &[(String, String)]) -> serde_json::Value {
+    tool_over_mcp(
+        tmp,
+        env,
+        "session_record",
+        serde_json::json!({ "title": "Over MCP", "body": RECORD_BODY }),
+    )
+}
+
+#[test]
+fn the_session_record_tool_outside_any_chat_the_app_started_writes_the_record_itself() {
+    let tmp = a_project();
+
+    let result = session_record_over_mcp(&tmp, &[]);
+
+    assert_ne!(result["isError"], true, "{result}");
+    assert_eq!(records_in_alpha(&tmp).len(), 1);
+}
+
+#[test]
+fn the_session_record_tool_in_a_chat_whose_harness_gave_it_no_connection_writes_nothing() {
+    let tmp = a_project();
+
+    let result = session_record_over_mcp(
+        &tmp,
+        &[(
+            purlis_core::active::SESSION_ID_ENV.to_owned(),
+            "3".to_owned(),
+        )],
+    );
+
+    assert_eq!(result["isError"], true, "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(text.contains("purlis session record"), "{result}");
+    assert!(records_in_alpha(&tmp).is_empty());
+}
+
+#[test]
+fn the_session_record_tool_whose_app_dropped_the_ask_writes_nothing() {
+    let tmp = a_project();
+    let app = an_app(
+        &tmp,
+        Some(Answer::No {
+            why: hookwire::NOTHING_ANSWERS.to_owned(),
+        }),
+    );
+
+    let result = session_record_over_mcp(&tmp, &app.chat_env());
+
+    assert_eq!(result["isError"], true, "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(text.contains("purlis session record"), "{result}");
+    assert!(records_in_alpha(&tmp).is_empty());
+}
+
+#[test]
+fn the_session_record_tool_whose_app_has_gone_writes_the_record_itself() {
+    let tmp = a_project();
+    let gone = tmp.path().join("app").join("hooks.sock");
+
+    let result = session_record_over_mcp(
+        &tmp,
+        &[
+            (SOCKET_ENV.to_owned(), gone.display().to_string()),
+            (CHAT_ENV.to_owned(), "3".to_owned()),
+        ],
+    );
+
+    assert_ne!(result["isError"], true, "{result}");
+    assert_eq!(records_in_alpha(&tmp).len(), 1);
+}
+
+#[test]
+fn the_session_record_tool_refuses_a_title_that_is_not_one_line_before_asking_anyone() {
+    let tmp = a_project();
+    let app = an_app(&tmp, None);
+
+    let result = tool_over_mcp(
+        &tmp,
+        &app.chat_env(),
+        "session_record",
+        serde_json::json!({ "title": "Two\nlines", "body": RECORD_BODY }),
+    );
+
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(app.asked.try_recv().is_err(), "the app was asked");
+    assert!(records_in_alpha(&tmp).is_empty());
 }

@@ -120,7 +120,7 @@ fn record(
         .lock()
         .read_to_string(&mut body)
         .map_err(|e| format!("could not read the record from standard input: {e}"))?;
-    match write(here, title, &body, pieces, workspace, now) {
+    match write(here, title, &body, pieces, workspace, now, false) {
         Ok(saved) => {
             for warning in &saved.warnings {
                 voice::warn(warning);
@@ -171,6 +171,12 @@ pub enum NotWritten {
 /// the app's record of the chat. Where no app takes the ask (none listening, one older than
 /// the ask, or a socket the sandbox refuses), or where `-w` or the test clock names what the
 /// app's record would not, this process writes it, as it always has, and tells the app after.
+///
+/// **`outside_sandbox` is the MCP server's entrance** (#1408): it runs outside the chat's
+/// sandbox, so in a chat the app started it writes the record itself only where no app could
+/// have (no chat number, or an app whose socket is gone). A missing socket, a dropped line or
+/// a silence is refused, naming `purlis session record`: a record written there would be one no
+/// sandbox bounds and the app's record of the chat never placed.
 pub fn write(
     here: &Here,
     title: &str,
@@ -178,13 +184,17 @@ pub fn write(
     pieces: &[String],
     workspace: Option<&str>,
     now: Option<&str>,
+    outside_sandbox: bool,
 ) -> Result<Saved, NotWritten> {
     if workspace.is_none() && now.is_none() {
         match forwarded(here, title, body, pieces) {
             Forwarded::Written(saved) => return Ok(saved),
             Forwarded::Refused(why) => return Err(NotWritten::Refused(why)),
             Forwarded::Unsure(why) => return Err(NotWritten::Failed(why)),
-            Forwarded::NotTaken => {}
+            Forwarded::NotTaken(not) if outside_sandbox && !not.may_write_outside() => {
+                return Err(NotWritten::Refused(not.refusal("purlis session record")));
+            }
+            Forwarded::NotTaken(_) => {}
         }
     }
     let root = here.plane.root();
@@ -230,8 +240,9 @@ enum Forwarded {
     Written(Saved),
     /// The app read it and will not write it: the sentence says why.
     Refused(String),
-    /// No app took it, so this process writes it.
-    NotTaken,
+    /// No app took it, and why: a command writes it itself, and the MCP server only where
+    /// [`crate::brokered::NotTaken::may_write_outside`] says.
+    NotTaken(crate::brokered::NotTaken),
     /// The app took it and did not answer: it may be written, so nothing is written here.
     Unsure(String),
 }
@@ -259,7 +270,10 @@ fn forwarded(here: &Here, title: &str, body: &str, pieces: &[String]) -> Forward
         },
         A_RECORD_TAKES_AT_MOST,
     );
-    asked.map_or(Forwarded::NotTaken, answered)
+    match asked {
+        Ok(answer) => answered(answer),
+        Err(not) => Forwarded::NotTaken(not),
+    }
 }
 
 /// What the app's answer, or the way the asking failed, makes of a record handed to it.
@@ -269,6 +283,7 @@ fn forwarded(here: &Here, title: &str, body: &str, pieces: &[String]) -> Forward
 /// connection that went quiet is an app that may be writing it now: writing it here as well
 /// would leave two records, so the command says so and writes nothing (#1332).
 fn answered(answer: std::io::Result<hookwire::Answer>) -> Forwarded {
+    use crate::brokered::NotTaken::Dropped;
     match answer {
         Ok(hookwire::Answer::Recorded {
             record,
@@ -285,10 +300,12 @@ fn answered(answer: std::io::Result<hookwire::Answer>) -> Forwarded {
             tab_warns: false,
         }),
         // An app with nothing that answers asks: a test's, or one that is closing.
-        Ok(hookwire::Answer::No { why }) if why == hookwire::NOTHING_ANSWERS => Forwarded::NotTaken,
+        Ok(hookwire::Answer::No { why }) if why == hookwire::NOTHING_ANSWERS => {
+            Forwarded::NotTaken(Dropped)
+        }
         Ok(hookwire::Answer::No { why }) => Forwarded::Refused(why),
-        Ok(_) => Forwarded::NotTaken,
-        Err(e) if crate::brokered::not_taken(&e) => Forwarded::NotTaken,
+        Ok(_) => Forwarded::NotTaken(Dropped),
+        Err(e) if crate::brokered::not_taken(&e) => Forwarded::NotTaken(Dropped),
         Err(e) => Forwarded::Unsure(format!(
             "the app took this record and did not answer ({e}), so it may already be written. \
              Nothing was written again here: `purlis session list` shows whether it is there."
@@ -429,7 +446,10 @@ mod tests {
             ErrorKind::ConnectionReset,
         ] {
             assert!(
-                matches!(answered(Err(Error::new(kind, "gone"))), Forwarded::NotTaken),
+                matches!(
+                    answered(Err(Error::new(kind, "gone"))),
+                    Forwarded::NotTaken(_)
+                ),
                 "{kind:?}"
             );
         }
