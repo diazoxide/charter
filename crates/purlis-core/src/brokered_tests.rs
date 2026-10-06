@@ -295,6 +295,35 @@ fn every_name_the_sandbox_denies_as_later_code_is_refused_whatever_its_case() {
     }
 }
 
+#[test]
+fn a_name_that_only_contains_a_later_code_name_is_written() {
+    // The rule is whole names: a title about zshrc, or a workspace called `claude`, is fine.
+    let (_dir, root) = a_project();
+    std::fs::create_dir_all(root.join("workspaces/claude")).unwrap();
+    assert_eq!(
+        guard(
+            &root,
+            &root.join("workspaces/claude/memory/zshrc-tips.md"),
+            None
+        ),
+        Ok(())
+    );
+    let asker = Asker {
+        chat: 3,
+        place: Place::Workspace("claude".to_owned()),
+        persona: None,
+    };
+    let write = Write::WorkspaceRemember {
+        text: "Keep the prompt short".to_owned(),
+        title: Some("zshrc tips".to_owned()),
+    };
+
+    let written = perform(&root, &asker, &write, now()).expect("written");
+
+    assert_eq!(written.to, "claude");
+    assert!(root.join(&written.path).is_file(), "{}", written.path);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_shared_memory_folder_linked_into_another_workspace_s_harness_config_is_refused() {

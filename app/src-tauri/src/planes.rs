@@ -1717,6 +1717,7 @@ impl Planes {
         // program runs — an `Err` refuses a person's opt-out — and this machine's local count of
         // new chats with and without it (ruling V78 d), which `charter doctor` and Project
         // settings show.
+        chats.of_project(&root);
         {
             let events = self.events.clone();
             let project = root.clone();
@@ -5907,6 +5908,42 @@ mod tests {
             0,
             "a closed chat is still counted"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_in_a_clone_with_a_manifest_of_its_own_writes_its_workspace() {
+        // The clone is a repo that carries its own purlis.toml: the chat's workspace is read
+        // against the app's project, never a root found from the chat's directory.
+        use purlis_core::hookwire::Answer;
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let clone = root.join("workspaces/alpha/tool");
+        std::fs::create_dir_all(&clone).unwrap();
+        std::fs::write(clone.join(purlis_core::plane::MANIFEST), "").unwrap();
+        let (planes, _told) = planes_telling();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let mut chat = one_chat_on("/bin/cat").chats.remove(0);
+        chat.cwd = Some(clone);
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+
+        let answer = a_write_asked(
+            &held,
+            session,
+            session,
+            purlis_core::brokered::Write::Todo {
+                text: "From the clone".to_owned(),
+            },
+        );
+
+        let Answer::Written { to, .. } = answer else {
+            panic!("no todo was written: {answer:?}");
+        };
+        assert_eq!(to, "alpha");
+        held.close_chat(session).unwrap();
     }
 
     fn closes(answer: &purlis_core::hookwire::Answer) -> bool {

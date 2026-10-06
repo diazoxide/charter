@@ -60,12 +60,15 @@ fn operator_env_pass(cwd: Option<&std::path::Path>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The workspace of the project a chat started in `cwd` works in, read once as it starts
-/// (#1333): `None` at the project root or outside a project.
-fn workspace_at_start(cwd: Option<&std::path::Path>) -> Option<String> {
-    let cwd = cwd?;
-    let root = purlis_core::plane::find_root(cwd).ok()?;
-    purlis_core::active::workspace_of_tree(&root, cwd)
+/// The workspace of the project at `root` a chat started in `cwd` works in, read once as it
+/// starts (#1333): `None` at the project root or outside it. Against the app's own project,
+/// never a root found from `cwd`: a clone carrying a manifest of its own would read as a
+/// project root, and the chat's writes as a root chat's.
+fn workspace_at_start(
+    root: Option<&std::path::Path>,
+    cwd: Option<&std::path::Path>,
+) -> Option<String> {
+    purlis_core::active::workspace_of_tree(root?, cwd?)
 }
 
 /// One chat the app has open, as the UI and the quit warning see it.
@@ -255,6 +258,9 @@ struct Waiting {
 
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
+    /// The project these chats are the app's chats of, which a chat's workspace is read
+    /// against as it starts (#1333). Set once by the project that holds them.
+    project: Mutex<Option<PathBuf>>,
     /// Whatever runs the sessions (FD-3). A trait object, so nothing here can reach past
     /// [`SessionHost`] to a pty: a chat layer that did would not compile against another host.
     sessions: Box<dyn SessionHost>,
@@ -348,6 +354,7 @@ impl Chats {
     /// The same, on `host` — whatever runs the sessions, which is [`Sessions`] in the app.
     pub fn on_host(record_it: Recorder, host: Box<dyn SessionHost>) -> Self {
         Self {
+            project: Mutex::new(None),
             sessions: host,
             starting: Mutex::new(None),
             beginning: Mutex::new(None),
@@ -383,6 +390,12 @@ impl Chats {
     /// Chats nothing records — what the tests use when the record is not what they are about.
     pub fn new() -> Self {
         Self::recorded_by(Box::new(|_| {}))
+    }
+
+    /// These are the chats of the project at `root`: what each chat's workspace is read
+    /// against as it starts (#1333).
+    pub fn of_project(&self, root: &std::path::Path) {
+        *lock(&self.project) = Some(root.to_path_buf());
     }
 
     /// Calls `tell` as each chat starts, BEFORE its program does, with everything the board
@@ -1044,7 +1057,7 @@ impl Chats {
         if !late.is_empty() {
             lock(&self.late_notes).insert(session, late);
         }
-        let workspace = workspace_at_start(under.cwd.as_deref());
+        let workspace = workspace_at_start(lock(&self.project).as_deref(), under.cwd.as_deref());
         lock(&self.open).insert(
             session,
             Running {
