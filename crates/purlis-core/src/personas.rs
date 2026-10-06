@@ -679,7 +679,7 @@ pub fn memory_title(text: &str, title: Option<&str>) -> String {
             .next()
             .unwrap_or_default(),
     };
-    memstore::py_strip(chosen)
+    memstore::py_strip(&memstore::one_line(chosen))
         .chars()
         .take(memstore::TITLE_MAX)
         .collect()

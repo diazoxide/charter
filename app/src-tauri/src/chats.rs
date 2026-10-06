@@ -60,12 +60,23 @@ fn operator_env_pass(cwd: Option<&std::path::Path>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The workspace of the project a chat started in `cwd` works in, read once as it starts
+/// (#1333): `None` at the project root or outside a project.
+fn workspace_at_start(cwd: Option<&std::path::Path>) -> Option<String> {
+    let cwd = cwd?;
+    let root = purlis_core::plane::find_root(cwd).ok()?;
+    purlis_core::active::workspace_of_tree(&root, cwd)
+}
+
 /// One chat the app has open, as the UI and the quit warning see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Open {
     pub session: u32,
     pub name: String,
     pub cwd: Option<PathBuf>,
+    /// The workspace its directory was in when it started, resolved once then (#1333): what a
+    /// brokered write is made in, which no link made later can move.
+    pub workspace: Option<String>,
     pub harness: Option<Harness>,
     /// The harness profile it started on, and the persona it adopted — what the sidebar
     /// names a chat by, beside its harness.
@@ -168,6 +179,8 @@ struct Running {
     chat: Chat,
     how: Reopened,
     harness: Option<Harness>,
+    /// [`Open::workspace`], resolved as it started.
+    workspace: Option<String>,
     /// What runs beside a chat charter wraps — its egress proxy and its own temp directory —
     /// for as long as the chat is open (ADR 0067 §2). Dropped with it.
     #[allow(dead_code)]
@@ -1031,12 +1044,14 @@ impl Chats {
         if !late.is_empty() {
             lock(&self.late_notes).insert(session, late);
         }
+        let workspace = workspace_at_start(under.cwd.as_deref());
         lock(&self.open).insert(
             session,
             Running {
                 chat: under,
                 how,
                 harness,
+                workspace,
                 confinement,
             },
         );
@@ -1313,6 +1328,7 @@ impl Chats {
                     session,
                     name: chat.name.clone(),
                     cwd: chat.cwd.clone(),
+                    workspace: running.workspace.clone(),
                     // The harness this chat was STARTED as, not one inferred from its
                     // program's name — a profile's command is commonly a wrapper, and the
                     // sidebar used to answer "no harness" for one while the board knew the

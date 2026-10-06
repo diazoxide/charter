@@ -439,6 +439,25 @@ pub enum Ask {
     /// answers [`Answer::Recorded`], or [`Answer::No`] with the refusal. Boxed: it carries the
     /// record's whole body.
     SessionRecord(Box<RecordAsk>),
+    /// Write one of the project's own files for this chat: a brokered write (ADR 0067 §2,
+    /// #1333), as `purlis persona remember`, `purlis workspace remember` and `purlis workspace
+    /// todo` hand it over in a chat the app started. The app answers [`Answer::Written`], or
+    /// [`Answer::No`] with the refusal. Boxed: it carries the memory's whole text.
+    Write(Box<WriteAsk>),
+}
+
+/// A write a chat asks the app to make for it ([`crate::brokered`]).
+///
+/// **It names no place, and that is the guard**, as [`RecordAsk`]'s: the workspace and the
+/// persona it is written to are the app's record of the chat whose token the line carries.
+/// No ticket, for a record's reason: what it writes is the chat's own.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WriteAsk {
+    /// The chat asking, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// What to write.
+    #[serde(flatten)]
+    pub write: crate::brokered::Write,
 }
 
 /// A session record a chat asks the app to write for it, as `purlis session record` and the
@@ -584,6 +603,9 @@ pub enum Answer {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
     },
+    /// A brokered write is made (#1333): the workspace or persona it went to, and the file,
+    /// project-relative.
+    Written { to: String, path: String },
 }
 
 /// How long a ticket lives unspent.
@@ -732,6 +754,7 @@ impl Line {
             Self::Ask(Ask::Open(open)) => open.chat,
             Self::Ask(Ask::Report(back)) => back.chat,
             Self::Ask(Ask::SessionRecord(record)) => record.chat,
+            Self::Ask(Ask::Write(write)) => write.chat,
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
@@ -1657,14 +1680,34 @@ fn serve(
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
+        // A line the app will not read ends this connection, never the channel, and is
+        // answered with the reason first (#1333): an asker can then tell an app that refused
+        // from one that never took the ask. A hook reads anything but "taken" as not taken,
+        // and spools the line, as it did when nothing was written back.
+        let refuse = |writer: &mut std::os::unix::net::UnixStream, why: String| {
+            if let Ok(mut said) = serde_json::to_vec(&Answer::No { why }) {
+                said.push(b'\n');
+                let _ = writer.write_all(&said);
+            }
+        };
+        if !line.ends_with('\n') && line.len() as u64 >= A_LINE_IS_AT_MOST {
+            refuse(
+                &mut writer,
+                format!("the line was longer than the app reads ({A_LINE_IS_AT_MOST} bytes)"),
+            );
+            return;
+        }
         let Some((line, token)) = read_line(&line) else {
-            // A line that is none of them is the end of this connection, never of the channel.
+            refuse(
+                &mut writer,
+                "the app could not read this line: it is from a purlis this app does not know"
+                    .to_owned(),
+            );
             return;
         };
         // Every line is checked against the token of the chat it names, and one that does not
-        // carry it ends the connection unread, as a line that will not parse does: hook calls
-        // never break a turn, so nothing is written back. The chat's number is said in the
-        // app's log (#647); the token is not.
+        // carry it ends the connection unread, said so and never acted on. The chat's number
+        // is said in the app's log (#647); the token is not.
         let chat = line.chat();
         if !tokens.admits(chat, token.as_deref()) {
             if let Some(also) = TOKEN_REFUSALS.say() {
@@ -1673,6 +1716,10 @@ fn serve(
                      chat's token, so it was dropped{also}"
                 );
             }
+            refuse(
+                &mut writer,
+                format!("this line does not carry chat {chat}'s token, so nothing was done"),
+            );
             return;
         }
         // The first line waits for the connections that arrived before this one (FD-9).
@@ -1930,6 +1977,73 @@ mod tests {
             Report::read(Event::UserPromptSubmit, &prompt_payload("hi"), &env).expect("a report");
         let line = serde_json::to_string(&plain).expect("a line");
         assert!(!line.contains("smart_close"), "{line}");
+    }
+
+    #[test]
+    fn a_brokered_write_reads_back_off_the_socket_as_the_write_it_is_from_the_chat_it_names() {
+        // #1333: every write a command hands the app arrives whole, and is checked against the
+        // token of the chat it names.
+        for write in [
+            crate::brokered::Write::PersonaRemember {
+                text: "fact".to_owned(),
+                title: Some("T".to_owned()),
+                shared: true,
+            },
+            crate::brokered::Write::WorkspaceRemember {
+                text: "memo".to_owned(),
+                title: None,
+            },
+            crate::brokered::Write::Todo {
+                text: "todo".to_owned(),
+            },
+        ] {
+            let ask = Ask::Write(Box::new(WriteAsk { chat: 3, write }));
+            let token = ChatToken("t".repeat(64));
+            let line = line_with(Some(&token), &ask).expect("a line");
+            let (read, carried) = read_line(std::str::from_utf8(&line).unwrap()).expect("a line");
+            assert_eq!(read.chat(), 3);
+            assert_eq!(carried.as_deref(), Some(token.0.as_str()));
+            let Line::Ask(read) = read else {
+                panic!("not read as an ask: {read:?}");
+            };
+            assert_eq!(read, ask);
+        }
+    }
+
+    #[test]
+    fn the_largest_write_a_chat_may_ask_for_fits_on_one_line_of_the_socket() {
+        // Every byte a control character, which JSON spells in six: what `Write::check` lets
+        // through at its worst is still read whole and answered, never cut (#1333).
+        let most = crate::brokered::MOST_TEXT_BYTES;
+        let write = crate::brokered::Write::PersonaRemember {
+            text: "\u{1}".repeat(most),
+            title: None,
+            shared: true,
+        };
+        assert_eq!(write.check(), Ok(()));
+        let ask = Ask::Write(Box::new(WriteAsk {
+            chat: u32::MAX,
+            write,
+        }));
+        let line = line_with(Some(&ChatToken("t".repeat(64))), &ask).expect("a line");
+        assert!(
+            (line.len() as u64) < A_LINE_IS_AT_MOST,
+            "{} bytes does not fit in {A_LINE_IS_AT_MOST}",
+            line.len()
+        );
+    }
+
+    #[test]
+    fn a_written_answer_reads_back_as_written() {
+        let answer = Answer::Written {
+            to: "alpha".to_owned(),
+            path: "workspaces/alpha/todos/x.md".to_owned(),
+        };
+        let text = serde_json::to_string(&answer).expect("json");
+        assert_eq!(
+            serde_json::from_str::<Answer>(&text).expect("an answer"),
+            answer
+        );
     }
 
     #[test]
@@ -2998,16 +3112,18 @@ mod tests {
             Answer::Opened { chat: 9 }
         );
 
-        // A line longer than the cap is cut, and a cut line is no ask: the connection ends.
+        // A line longer than the cap is cut, and a cut line is no ask: the connection ends,
+        // with a refusal said first where the asker is still there to read it (#1333).
         let mut asking = Asking::on(&path, Some(token.clone())).expect("connected");
         let ticket = ticket_from(&mut asking);
         let Ask::Open(mut open) = an_open(3, &ticket) else {
             unreachable!()
         };
         open.message = "m".repeat(usize::try_from(A_LINE_IS_AT_MOST).unwrap());
+        let answered = asking.ask(&Ask::Open(open), within);
         assert!(
-            asking.ask(&Ask::Open(open), within).is_err(),
-            "a line past the cap was read"
+            matches!(&answered, Err(_) | Ok(Answer::No { .. })),
+            "a line past the cap was read: {answered:?}"
         );
     }
 
@@ -3032,7 +3148,7 @@ mod tests {
                             Err(why) => Answer::No { why },
                         }
                     }
-                    Ask::Report(_) | Ask::SessionRecord(_) => Answer::No {
+                    Ask::Report(_) | Ask::SessionRecord(_) | Ask::Write(_) => Answer::No {
                         why: "not here".to_owned(),
                     },
                 }
@@ -3720,7 +3836,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ask_without_its_chats_token_is_not_answered_and_ends_at_once() {
+    fn an_ask_without_its_chats_token_is_refused_unanswered_and_ends_at_once() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
@@ -3744,7 +3860,11 @@ mod tests {
             let answered = Asking::on(&path, token)
                 .expect("connected")
                 .ask(&Ask::Ticket { chat: 3 }, within);
-            assert!(answered.is_err(), "answered {answered:?}");
+            // Refused, and said so (#1333): never answered as the chat it names.
+            assert!(
+                matches!(&answered, Ok(Answer::No { why }) if why.contains("token")),
+                "answered {answered:?}"
+            );
             assert!(began.elapsed() < within / 2, "it waited for a deadline");
         }
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);

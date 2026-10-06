@@ -602,11 +602,8 @@ pub fn record(held: &Held, ask: &purlis_core::hookwire::RecordAsk) -> Answer {
             why: format!("chat {} is not one this app has open", ask.chat),
         };
     };
-    let place = open
-        .cwd
-        .as_deref()
-        .and_then(|cwd| purlis_core::active::workspace_of_tree(held.root(), cwd))
-        .map_or(Place::PlaneRoot, Place::Workspace);
+    // Resolved once, as the chat started (`chats::Open::workspace`, #1333).
+    let place = open.workspace.map_or(Place::PlaneRoot, Place::Workspace);
     let asker = purlis_core::sessionrecord::Asker {
         number: ask.chat,
         place,

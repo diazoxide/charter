@@ -247,22 +247,19 @@ pub const NO_PASS: &str = "No smart close was started for this chat (the tab's S
 
 /// Hands the record to the app that started this chat, over the chat's hook socket (#1332).
 fn forwarded(here: &Here, title: &str, body: &str, pieces: &[String]) -> Forwarded {
-    let socket = purlis_core::envvar::var_os(SOCKET_ENV).filter(|s| !s.is_empty());
-    let (Some(socket), Some(chat)) = (socket, chat_number()) else {
-        return Forwarded::NotTaken;
-    };
-    let Ok(mut asking) = hookwire::Asking::on(Path::new(&socket), hookwire::ChatToken::from_env())
-    else {
-        return Forwarded::NotTaken;
-    };
-    let ask = hookwire::Ask::SessionRecord(Box::new(hookwire::RecordAsk {
-        chat,
-        title: title.to_owned(),
-        body: body.to_owned(),
-        pieces: pieces.to_vec(),
-        cwd: Some(here.cwd.clone()),
-    }));
-    answered(asking.ask(&ask, A_RECORD_TAKES_AT_MOST))
+    let asked = crate::brokered::asked(
+        |chat| {
+            hookwire::Ask::SessionRecord(Box::new(hookwire::RecordAsk {
+                chat,
+                title: title.to_owned(),
+                body: body.to_owned(),
+                pieces: pieces.to_vec(),
+                cwd: Some(here.cwd.clone()),
+            }))
+        },
+        A_RECORD_TAKES_AT_MOST,
+    );
+    asked.map_or(Forwarded::NotTaken, answered)
 }
 
 /// What the app's answer, or the way the asking failed, makes of a record handed to it.
@@ -272,7 +269,6 @@ fn forwarded(here: &Here, title: &str, body: &str, pieces: &[String]) -> Forward
 /// connection that went quiet is an app that may be writing it now: writing it here as well
 /// would leave two records, so the command says so and writes nothing (#1332).
 fn answered(answer: std::io::Result<hookwire::Answer>) -> Forwarded {
-    use std::io::ErrorKind;
     match answer {
         Ok(hookwire::Answer::Recorded {
             record,
@@ -292,14 +288,7 @@ fn answered(answer: std::io::Result<hookwire::Answer>) -> Forwarded {
         Ok(hookwire::Answer::No { why }) if why == hookwire::NOTHING_ANSWERS => Forwarded::NotTaken,
         Ok(hookwire::Answer::No { why }) => Forwarded::Refused(why),
         Ok(_) => Forwarded::NotTaken,
-        Err(e)
-            if matches!(
-                e.kind(),
-                ErrorKind::UnexpectedEof | ErrorKind::BrokenPipe | ErrorKind::ConnectionReset
-            ) =>
-        {
-            Forwarded::NotTaken
-        }
+        Err(e) if crate::brokered::not_taken(&e) => Forwarded::NotTaken,
         Err(e) => Forwarded::Unsure(format!(
             "the app took this record and did not answer ({e}), so it may already be written. \
              Nothing was written again here: `purlis session list` shows whether it is there."
@@ -310,7 +299,7 @@ fn answered(answer: std::io::Result<hookwire::Answer>) -> Forwarded {
 /// The app's number for the chat this runs in: `$CHARTER_CHAT` where hooks report, else
 /// `$CHARTER_SESSION_ID`, which the app sets in every chat it starts to the same number. A value
 /// that is not a number (a session id from outside the app) is no chat.
-fn chat_number() -> Option<u32> {
+pub(crate) fn chat_number() -> Option<u32> {
     [CHAT_ENV, purlis_core::active::SESSION_ID_ENV]
         .into_iter()
         .filter_map(purlis_core::envvar::var)

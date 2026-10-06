@@ -138,6 +138,7 @@ fn a_harness_lists_charter_s_tools() {
             "todo_done",
             "memory_search",
             "memory_add",
+            "persona_remember",
             "session_record_list",
             "session_record_read",
             "session_record",

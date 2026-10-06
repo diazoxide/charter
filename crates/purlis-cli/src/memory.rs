@@ -18,6 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
+use purlis_core::brokered::Write;
 use purlis_core::memscope::Scope;
 use purlis_core::memstore::{self, Unread};
 use purlis_core::recall::{self, Ask, Workspaces};
@@ -702,6 +703,41 @@ pub fn workspace_remember(
     Ok(0)
 }
 
+/// `workspace remember` / `note` as typed: in a chat the app started, with no `-w` and no
+/// pinned clock, the app writes it in the chat's own workspace (#1333); otherwise
+/// [`workspace_remember`] here.
+pub fn workspace_remember_typed(
+    here: &crate::Here,
+    workspace: Option<&str>,
+    text: Option<&str>,
+    title: Option<&str>,
+    no_sync: bool,
+    now: Option<&str>,
+) -> Result<Code, String> {
+    if let Some(text) = text.filter(|t| !t.is_empty())
+        && workspace.is_none()
+        && now.is_none()
+    {
+        let write = Write::WorkspaceRemember {
+            text: text.to_owned(),
+            title: title.map(str::to_owned),
+        };
+        if let Some(code) = said_forwarded(crate::brokered::forwarded(write), |to, path| {
+            said_remembered(&here.plane, to, Path::new(path), no_sync);
+        }) {
+            return Ok(code);
+        }
+    }
+    workspace_remember(
+        &here.plane,
+        &here.active_workspace(workspace)?,
+        text,
+        title,
+        no_sync,
+        now,
+    )
+}
+
 /// What purlis says once a memory is written to workspace `name`'s journal at `path`: where it
 /// went, and whether it stays on this disk or is shared. `ws todo done` says it through
 /// [`workspace_remember`], and `ws todo promote` says it for the same close.
@@ -1252,6 +1288,22 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
                 [name, text] => (Some(name.as_str()), text),
                 _ => unreachable!("clap takes one or two"),
             };
+            // In a chat the app started, the app writes it (#1333): the chat's own persona, or
+            // shared memory. A persona named other than the chat's own, scratch and a pinned
+            // clock are written here, as they always were.
+            let own = named.is_none() || named == here.active_persona(None).as_deref();
+            if (shared || own) && !ephemeral && now.is_none() {
+                let write = Write::PersonaRemember {
+                    text: text.clone(),
+                    title: title.clone(),
+                    shared,
+                };
+                if let Some(code) = said_forwarded(crate::brokered::forwarded(write), |_, path| {
+                    said_persona_remembered(plane, shared, false, path, no_sync);
+                }) {
+                    return Ok(code);
+                }
+            }
             let Some(name) = here.active_persona(named) else {
                 return Ok(1);
             };
@@ -1513,6 +1565,7 @@ fn persona_remember(
         voice::err("empty memory");
         return Ok(1);
     }
+    let given = title;
     let title = purlis_core::personas::memory_title(text, title);
     let owner = if shared {
         purlis_core::contain::SHARED_PERSONA
@@ -1520,25 +1573,27 @@ fn persona_remember(
         name
     };
     let session = session();
-    let dir = if ephemeral {
-        recall::ephemeral_dir(root, &session, owner)
-    } else {
-        root.join("personas").join(owner).join("memory")
-    };
     let kind = if ephemeral { "ephemeral" } else { "persistent" };
-    let path = match memstore::write(
-        root,
-        &dir,
-        text,
-        Some(title.as_str()).filter(|t| !t.is_empty()),
-        false,
-        kind,
-        !ephemeral,
-        stamp,
-    ) {
+    let written = if ephemeral {
+        memstore::write(
+            root,
+            &recall::ephemeral_dir(root, &session, owner),
+            text,
+            Some(title.as_str()).filter(|t| !t.is_empty()),
+            false,
+            kind,
+            false,
+            stamp,
+        )
+        .map_err(|e| e.to_string())
+    } else {
+        // The write the app makes for a chat, made here (#1333).
+        purlis_core::brokered::remember_persona(root, owner, text, given, stamp)
+    };
+    let path = match written {
         Ok(path) => path,
         Err(e) => {
-            voice::err(&e.to_string());
+            voice::err(&e);
             return Ok(1);
         }
     };
@@ -1554,20 +1609,50 @@ fn persona_remember(
         ],
         stamp,
     );
+    said_persona_remembered(plane, shared, ephemeral, &voice::rel(root, &path), no_sync);
+    Ok(0)
+}
+
+/// What purlis says once a persona memory is written, at `shown` from the project root.
+fn said_persona_remembered(
+    plane: &Plane,
+    shared: bool,
+    ephemeral: bool,
+    shown: &str,
+    no_sync: bool,
+) {
+    let kind = if ephemeral { "ephemeral" } else { "persistent" };
     let place = format!("{}{kind}", if shared { "shared " } else { "" });
-    voice::ok(&format!(
-        "Remembered ({place}) → {}",
-        voice::rel(root, &path)
-    ));
+    voice::ok(&format!("Remembered ({place}) → {shown}"));
     if ephemeral {
-        return Ok(0);
+        return;
     }
     if no_sync {
         voice::info("  (--no-sync) recorded locally; share it later with: purlis save");
-        return Ok(0);
+        return;
     }
     reactive(plane);
-    Ok(0)
+}
+
+/// What a command says of a write it handed to the app (#1333): `said` with where it went when
+/// the app wrote it, the refusal when it would not, and `None` when no app took it, so the
+/// command writes it itself.
+pub fn said_forwarded(
+    forwarded: crate::brokered::Forwarded,
+    said: impl FnOnce(&str, &str),
+) -> Option<Code> {
+    use crate::brokered::Forwarded;
+    match forwarded {
+        Forwarded::Written { to, path } => {
+            said(&to, &path);
+            Some(0)
+        }
+        Forwarded::Refused(why) | Forwarded::Unsure(why) => {
+            voice::err(&why);
+            Some(1)
+        }
+        Forwarded::NotTaken(_) => None,
+    }
 }
 
 fn persona_recall(

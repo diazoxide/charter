@@ -21,6 +21,7 @@ mod alerts;
 mod asking;
 mod autosave;
 mod branchwatch;
+mod brokered;
 mod changes;
 mod chats;
 mod clipath;

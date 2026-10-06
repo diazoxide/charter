@@ -235,6 +235,8 @@ pub struct Held {
     closing: Arc<crate::smartclose::Closing>,
     /// The window, for each step of a smart close.
     smart: crate::smartclose::Teller,
+    /// How many brokered writes each chat has made lately (#1333).
+    brokered: purlis_core::brokered::Rate,
     /// This plane, once it is in its `Arc`: what a program's end writes the record through.
     me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
 }
@@ -389,6 +391,11 @@ impl Held {
     /// The chats being smart-closed (ADR 0064).
     pub fn closing(&self) -> &crate::smartclose::Closing {
         &self.closing
+    }
+
+    /// The cap on each chat's brokered writes (#1333).
+    pub fn brokered(&self) -> &purlis_core::brokered::Rate {
+        &self.brokered
     }
 
     /// Tells the window chat `session`'s smart close is at `phase`.
@@ -572,6 +579,7 @@ impl Held {
         self.typed.forget(session);
         // Closed by the operator's Close, or by its own record: either way nothing is owed.
         self.closing.forget(session);
+        self.brokered.forget(session);
         let closed = self.chats.close(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
@@ -1855,6 +1863,7 @@ impl Planes {
             typed,
             closing,
             smart: Arc::clone(&self.smart),
+            brokered: purlis_core::brokered::Rate::default(),
             me,
         }
     }
@@ -5737,6 +5746,167 @@ mod tests {
                 std::time::Duration::from_secs(10),
             )
             .unwrap_or_else(|e| purlis_core::hookwire::Answer::No { why: e.to_string() })
+    }
+
+    /// What `purlis workspace todo`, `purlis persona remember` and the MCP server's
+    /// `persona_remember` hand the app for chat `session` (#1333), with `as_chat`'s token.
+    fn a_write_asked(
+        held: &Held,
+        as_chat: u32,
+        session: u32,
+        write: purlis_core::brokered::Write,
+    ) -> purlis_core::hookwire::Answer {
+        let mut asking = purlis_core::hookwire::Asking::on(
+            held.hooks().socket().expect("the plane is listening"),
+            Some(held.hooks().token_for(as_chat)),
+        )
+        .expect("the socket");
+        asking
+            .ask(
+                &purlis_core::hookwire::Ask::Write(Box::new(purlis_core::hookwire::WriteAsk {
+                    chat: session,
+                    write,
+                })),
+                std::time::Duration::from_secs(10),
+            )
+            .unwrap_or_else(|e| purlis_core::hookwire::Answer::No { why: e.to_string() })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_s_brokered_write_is_made_by_the_app_where_the_chat_works_and_credited_to_it() {
+        use purlis_core::brokered::Write;
+        use purlis_core::hookwire::Answer;
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+        let (planes, _told) = planes_telling();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let mut chat = one_chat_on("/bin/cat").chats.remove(0);
+        chat.cwd = Some(root.join("workspaces/alpha"));
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+        let mut other = one_chat_on("/bin/cat").chats.remove(0);
+        other.name = "other".to_owned();
+        let other = held
+            .chats()
+            .start(&other, STARTING)
+            .expect("the other chat starts");
+
+        // The workspace is the one the chat works in, never one the request names.
+        let todo = a_write_asked(
+            &held,
+            session,
+            session,
+            Write::Todo {
+                text: "Port the docs command".to_owned(),
+            },
+        );
+        let Answer::Written { to, path } = todo else {
+            panic!("no todo was written: {todo:?}");
+        };
+        assert_eq!(to, "alpha");
+        assert!(path.starts_with("workspaces/alpha/todos/"), "{path}");
+        assert!(root.join(&path).is_file());
+
+        // Shared memory is any chat's; a persona of its own is only a chat's that runs as one.
+        let shared = a_write_asked(
+            &held,
+            session,
+            session,
+            Write::PersonaRemember {
+                text: "The forge is self-hosted".to_owned(),
+                title: None,
+                shared: true,
+            },
+        );
+        assert!(matches!(shared, Answer::Written { .. }), "{shared:?}");
+        let own = a_write_asked(
+            &held,
+            session,
+            session,
+            Write::PersonaRemember {
+                text: "Mine".to_owned(),
+                title: None,
+                shared: false,
+            },
+        );
+        assert!(
+            matches!(&own, Answer::No { why } if why.contains("no persona")),
+            "{own:?}"
+        );
+
+        // Credited to the chat that asked.
+        let trace = std::fs::read_to_string(purlis_core::trace::file(&root, &session.to_string()))
+            .expect("the chat's trace");
+        assert_eq!(
+            trace.matches("\"event\": \"brokered\"").count(),
+            2,
+            "{trace}"
+        );
+
+        // A chat cannot write for another: its token is not that chat's.
+        assert!(matches!(
+            a_write_asked(
+                &held,
+                other,
+                session,
+                Write::Todo {
+                    text: "Not mine to ask".to_owned(),
+                },
+            ),
+            Answer::No { .. }
+        ));
+        held.close_chat(session).unwrap();
+        held.close_chat(other).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_s_workspace_is_the_one_it_started_in_whatever_its_directory_leads_to_later() {
+        use purlis_core::hookwire::Answer;
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        for ws in ["alpha", "beta"] {
+            std::fs::create_dir_all(root.join("workspaces").join(ws)).unwrap();
+        }
+        // The chat works through a link, which leads into alpha as it starts.
+        let through = root.join("workspaces/alpha/through");
+        std::os::unix::fs::symlink(root.join("workspaces/alpha"), &through).unwrap();
+        let (planes, _told) = planes_telling();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let mut chat = one_chat_on("/bin/cat").chats.remove(0);
+        chat.cwd = Some(through.clone());
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+
+        // Then it is pointed at beta.
+        std::fs::remove_file(&through).unwrap();
+        std::os::unix::fs::symlink(root.join("workspaces/beta"), &through).unwrap();
+        let answer = a_write_asked(
+            &held,
+            session,
+            session,
+            purlis_core::brokered::Write::Todo {
+                text: "Where it started".to_owned(),
+            },
+        );
+
+        let Answer::Written { to, .. } = answer else {
+            panic!("no todo was written: {answer:?}");
+        };
+        assert_eq!(to, "alpha");
+        assert!(!root.join("workspaces/beta/todos").exists());
+        held.close_chat(session).unwrap();
+        assert_eq!(
+            held.brokered().counted(),
+            0,
+            "a closed chat is still counted"
+        );
     }
 
     fn closes(answer: &purlis_core::hookwire::Answer) -> bool {

@@ -310,9 +310,25 @@ pub(crate) fn memory_body(
     stamp: chrono::NaiveDateTime,
 ) -> String {
     format!(
-        "# {title}\n\n_{} · {kind}_\n\n{text}\n",
+        "# {}\n\n_{} · {kind}_\n\n{text}\n",
+        one_line(title),
         stamp.format("%Y-%m-%d %H:%M")
     )
+}
+
+/// `title` on one line: every control character, a newline or a carriage return among them,
+/// as a space. What a title is written as wherever it is written, in a heading or an index
+/// line, whoever gave it (#1333).
+pub fn one_line(title: &str) -> std::borrow::Cow<'_, str> {
+    if title.chars().any(char::is_control) {
+        title
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .into()
+    } else {
+        title.into()
+    }
 }
 
 /// Is `path` in the plane's state directory, `.charter/` or `.purlis/` — charter's own, and
@@ -746,7 +762,9 @@ pub(crate) fn index_dropping(text: &str, filename: &str) -> String {
 /// the text a Markdown reader shows.
 pub fn index_line(title: &str, filename: &str) -> String {
     let mut escaped = String::with_capacity(title.len());
-    for c in title.chars() {
+    // One line whatever the title holds: a newline in it would be a line of the index's own,
+    // linking whatever it names (#1333).
+    for c in one_line(title).chars() {
         if matches!(c, '\\' | '[' | ']') {
             escaped.push('\\');
         }
