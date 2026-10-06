@@ -735,13 +735,36 @@ const EXPORT_BUILTINS: [&str; 3] = ["export", "declare", "typeset"];
 /// `PreToolUse` payload carries the command and the cwd, not the environment the command will
 /// inherit. Stated limits, not gaps.
 pub fn exported_env(segments: &[Vec<String>]) -> Vec<Vec<String>> {
-    let mut out: Vec<Vec<String>> = Vec::with_capacity(segments.len());
+    let shared = exported_env_shared(segments);
+    (0..segments.len())
+        .map(|i| shared.before(i).to_vec())
+        .collect()
+}
+
+/// [`exported_env`] without a copy per segment: the list only ever grows, so every segment's
+/// environment is a PREFIX of one list, and a line of many exports costs what it is long
+/// rather than its square — a guard that timed out on a long line would let it through.
+pub struct ExportedEnv {
+    all: Vec<String>,
+    upto: Vec<usize>,
+}
+
+impl ExportedEnv {
+    /// What earlier segments exported, as segment `i` inherits it.
+    pub fn before(&self, i: usize) -> &[String] {
+        &self.all[..self.upto.get(i).copied().unwrap_or(self.all.len())]
+    }
+}
+
+/// [`exported_env`]'s answer, shared — see [`ExportedEnv`].
+pub fn exported_env_shared(segments: &[Vec<String>]) -> ExportedEnv {
+    let mut upto: Vec<usize> = Vec::with_capacity(segments.len());
     let mut exported: Vec<String> = Vec::new();
     // Python's `dict[str, str]`: last write wins, and the value is the whole `NAME=VALUE` token.
     let mut shell_vars: HashMap<String, String> = HashMap::new();
     let mut allexport = false;
     for toks in segments {
-        out.push(exported.clone());
+        upto.push(exported.len());
         let mut i = 0;
         while i < toks.len() && SHELL_KEYWORDS.contains(&toks[i].as_str()) {
             i += 1;
@@ -801,7 +824,10 @@ pub fn exported_env(segments: &[Vec<String>]) -> Vec<Vec<String>> {
             }
         }
     }
-    out
+    ExportedEnv {
+        all: exported,
+        upto,
+    }
 }
 
 /// `tok.split("=", 1)[0]` for a token [`is_env_assignment`] has already accepted.

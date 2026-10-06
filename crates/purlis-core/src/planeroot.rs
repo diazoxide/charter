@@ -396,6 +396,13 @@ pub struct RootInvocation {
     /// line's budget: it is refused (#1354, as #438 rules for an operand git could not be asked
     /// about).
     pub unread: bool,
+    /// The environment it may run with as the line sets it — earlier bare assignments and
+    /// exports, then its own assignments — which can define aliases (#1358).
+    pub env: Vec<String>,
+    /// Its own assignments alone: what reaches git whatever an earlier segment's fate (`unset`,
+    /// `env -u`, a subshell, `false &&`). An alias the two disagree on is unread ([`LineConfig`]),
+    /// so a line value can only add refusals.
+    pub own_env: Vec<String>,
 }
 
 /// The plane root as the walk recognises it: by IDENTITY, never by spelling (#346).
@@ -816,7 +823,7 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
         return Vec::new();
     };
     let argvs: Vec<Vec<String>> = segments.iter().map(|s| s.argv.clone()).collect();
-    let carried = shellwrap::exported_env(&argvs);
+    let carried = shellwrap::exported_env_shared(&argvs);
     // Stat-ed on the first git invocation, so a line with none pays nothing for it.
     let the_root = std::cell::OnceCell::new();
     let mut out = Vec::new();
@@ -826,11 +833,34 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
     let context = CdContext::of(cmd);
     // The root's configured aliases, read once for the whole line and only if it needs them.
     let aliases = AliasBook::of(root);
-    for (seg, before) in segments.iter().zip(carried.iter()) {
+    // Every assignment a bare assignment segment (`A=1;`) has made so far: each distinct one
+    // once, in order, so a line repeating one stays short and every value a variable was given
+    // is still there to be read (D-1358f).
+    let mut assigned: Vec<String> = Vec::new();
+    let mut assigned_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (i, seg) in segments.iter().enumerate() {
+        let before = carried.before(i);
         let call = shellwrap::split_env_chdir(&seg.argv);
         let (prog, env, args, chdir) = (call.prog, call.env, call.argv, call.chdir);
-        let mut inherited = before.clone();
-        inherited.extend(env);
+        // The segment's own assignments: the only line-set configuration git surely sees (#1358).
+        let own_env = env;
+        // `before + env`, built only for a segment that may be git: copying every earlier
+        // export into every segment made a line of exports cost its square.
+        let inherited = || {
+            let mut out = before.to_vec();
+            out.extend(own_env.iter().cloned());
+            out
+        };
+        // What may set git's configuration for this segment: every bare assignment the line
+        // made before it, exported or not — HOME and the session's own GIT_CONFIG_* are already
+        // exported, so a bare `HOME=/x;` reaches git — then the exports and the segment's own.
+        // Built only for a segment that may be git, so a long line of assignments costs what it
+        // is long.
+        let config_env = || {
+            let mut out: Vec<String> = assigned.clone();
+            out.extend(inherited());
+            out
+        };
         if let Some(cd) = cd_call(&seg.argv, &prog, &args) {
             let moved = cd_destinations(&cd.builtin, &cd.args, &here, &context);
             let piped = matches!(seg.before.as_deref(), Some("|" | "|&"));
@@ -850,6 +880,8 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
                     pre: Vec::new(),
                     unnamed: true,
                     unread: false,
+                    env: config_env(),
+                    own_env: own_env.clone(),
                 });
             }
         } else if let Some(at) = spliced_before_program(&seg.argv, &prog) {
@@ -857,13 +889,18 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
             // and `env -C $(…) git …` read as running the substitution's first word. A git
             // among what follows may be the one that runs, sent where the guard cannot name.
             let (pre, rest) = shellwrap::git_globals(&seg.argv[at..]);
-            if let Some((sub, post, unread)) = subcommand_after_splice(&pre, &rest, &aliases) {
+            let env = config_env();
+            if let Some((sub, post, unread)) =
+                subcommand_after_splice(&pre, &rest, &env, &own_env, &aliases)
+            {
                 out.push(RootInvocation {
                     sub,
                     post,
                     pre,
                     unnamed: true,
                     unread,
+                    env,
+                    own_env: own_env.clone(),
                 });
             }
         } else if shellwrap::base_lower(&prog) == "git" {
@@ -873,8 +910,9 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
             // it, are spread through what follows, so neither the directory nor the subcommand
             // can be read from their places.
             let spliced = pre.iter().any(|t| t.ends_with('$'));
+            let env = config_env();
             let words = if spliced {
-                subcommand_after_splice(&pre, &rest, &aliases)
+                subcommand_after_splice(&pre, &rest, &env, &own_env, &aliases)
             } else {
                 rest.split_first()
                     .map(|(sub, post)| (sub.clone(), post.to_vec(), false))
@@ -887,6 +925,7 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
                     .argv
                     .windows(2)
                     .any(|w| matches!(w[0].as_str(), "-C" | "-D" | "--chdir") && w[1] == chdir);
+                let inherited = inherited();
                 let readings =
                     invocation_readings(&pre, &inherited, &chdir, chdir_separated, &context);
                 let named = readings.as_ref().is_some_and(|readings| {
@@ -914,12 +953,21 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
                         pre,
                         unnamed,
                         unread,
+                        env,
+                        own_env: own_env.clone(),
                     });
                 }
             }
         }
         if !matches!(seg.after.as_deref(), Some("&&" | "|" | "|&")) {
             here.merge(std::mem::take(&mut left_behind));
+        }
+        if !seg.argv.is_empty() && seg.argv.iter().all(|t| shellwrap::is_env_assignment(t)) {
+            for assign in &seg.argv {
+                if assigned_seen.insert(assign.clone()) {
+                    assigned.push(assign.clone());
+                }
+            }
         }
     }
     out
@@ -957,6 +1005,8 @@ fn spliced_before_program(argv: &[String], prog: &str) -> Option<usize> {
 fn subcommand_after_splice(
     pre: &[String],
     rest: &[String],
+    env: &[String],
+    own_env: &[String],
     aliases: &AliasBook<'_>,
 ) -> Option<(String, Vec<String>, bool)> {
     if let Some((sub, post)) = literal_mover_after(rest) {
@@ -967,19 +1017,17 @@ fn subcommand_after_splice(
             .map(|(sub, post)| (sub.clone(), post.to_vec()))
     };
     let moves = |sub: &str| BRANCH_MOVERS.contains(&sub) || sub == "reset";
-    // The inline aliases in force at each word, kept as the walk goes: a `-c alias.x=…` pair
-    // joins them once both its words are behind (`inline_aliases` over everything before the
-    // word, built once rather than per word).
-    let mut inline: std::collections::HashMap<String, String> =
-        inline_aliases(pre).into_iter().collect();
+    // The aliases the line itself defines, kept as the walk goes: a `-c alias.x=…` or
+    // `--config-env` pair joins them once both its words are behind (built once rather than
+    // per word), over what the environment defines (#1358).
+    let mut inline = LineConfig::of(pre, env, own_env);
     let mut prev: Option<&String> = pre.last();
-    // What an alias is now: the inline body first, then the config's; `None` when git could
-    // not be asked.
-    let body_now = |inline: &std::collections::HashMap<String, String>, name: &str| {
+    // What an alias is now: the line's body first, then the config's.
+    let body_now = |inline: &LineConfig, name: &str| -> Result<String, AliasEnd> {
         let folded = name.to_lowercase();
-        match inline.get(&folded) {
-            Some(body) => Some(body.clone()),
-            None => aliases.body(&folded),
+        match inline.body(&folded) {
+            Some(found) => found,
+            None => aliases.body(&folded).ok_or(AliasEnd::Unasked),
         }
     };
     // Every alias chain already followed to no branch move, as the bodies it read: a word
@@ -988,7 +1036,7 @@ fn subcommand_after_splice(
     let mut cleared: Vec<Vec<(String, String)>> = Vec::new();
     for (k, word) in rest.iter().enumerate() {
         let folded = word.to_lowercase();
-        let named = inline.contains_key(&folded) || {
+        let named = inline.names(&folded, word) || {
             let Some(book) = aliases.bodies() else {
                 let (sub, post) = first().unwrap_or_default();
                 return Some((sub, post, true));
@@ -1000,7 +1048,7 @@ fn subcommand_after_splice(
                 chain.first().is_some_and(|(n, _)| *n == folded)
                     && chain
                         .iter()
-                        .all(|(n, b)| body_now(&inline, n).as_ref() == Some(b))
+                        .all(|(n, b)| body_now(&inline, n).as_ref() == Ok(b))
             })
         };
         if named && !known() {
@@ -1012,7 +1060,7 @@ fn subcommand_after_splice(
             let mut chain: Vec<(String, String)> = Vec::new();
             let (sub, post, end) = expand_alias(word, &rest[k + 1..], &mut |name| {
                 let body = body_now(&inline, name);
-                if let Some(b) = &body {
+                if let Ok(b) = &body {
                     chain.push((name.to_lowercase(), b.clone()));
                 }
                 body
@@ -1025,13 +1073,7 @@ fn subcommand_after_splice(
             }
             cleared.push(chain);
         }
-        if prev.is_some_and(|p| p == "-c")
-            && let Some((name, body)) = word.split_once('=')
-            && name.to_lowercase().starts_with("alias.")
-        {
-            let alias: String = name.chars().skip("alias.".len()).collect();
-            inline.insert(alias.to_lowercase(), body.to_string());
-        }
+        inline.read_option(prev.map(String::as_str), word, own_env, env);
         prev = Some(word);
     }
     // No word after the substitution is one the guards judge, or an alias of one.
@@ -1234,32 +1276,349 @@ pub fn resolve_git_alias(
     post: &[String],
     pre: &[String],
 ) -> (String, Vec<String>) {
-    let (sub, post, _) = resolve_git_alias_to_its_end(root, sub, post, pre);
+    let (sub, post, _) = resolve_git_alias_to_its_end(root, sub, post, pre, &[], &[]);
     (sub, post)
 }
 
 /// [`resolve_git_alias`], and how the walk ended: a chain still on an alias when
 /// [`MAX_ALIAS_HOPS`] ran out is [`AliasEnd::TooDeep`], which the branch guard refuses — the
 /// end it cannot see may move HEAD.
+///
+/// `env` is the invocation's environment as the line sets it ([`RootInvocation::env`]) and
+/// `own_env` its own assignments ([`RootInvocation::own_env`]): an alias they define, or one a
+/// source they name could define, is read from them first (#1358, [`LineConfig`]).
 pub fn resolve_git_alias_to_its_end(
     root: &str,
     sub: &str,
     post: &[String],
     pre: &[String],
+    env: &[String],
+    own_env: &[String],
 ) -> (String, Vec<String>, AliasEnd) {
-    let inline = inline_aliases(pre);
+    let line = LineConfig::of(pre, env, own_env);
     expand_alias(sub, post, &mut |name| {
-        let folded = name.to_lowercase();
-        if let Some((_, body)) = inline.iter().find(|(k, _)| *k == folded) {
-            return Some(body.clone());
+        if let Some(found) = line.body(&name.to_lowercase()) {
+            return found;
         }
         let key = format!("alias.{name}");
         match git_in(root, &["config", "--get", &key]) {
-            Ok(a) if a.ok => Some(py_strip(&a.out).to_string()),
-            Ok(_) => Some(String::new()),
-            Err(_) => None,
+            Ok(a) if a.ok => Ok(py_strip(&a.out).to_string()),
+            Ok(_) => Ok(String::new()),
+            Err(_) => Err(AliasEnd::Unasked),
         }
     })
+}
+
+/// The git configuration one invocation takes from its own command line and environment, as
+/// far as aliases go (#1358): `-c`, `--config-env`, `GIT_CONFIG_COUNT` with its numbered pairs,
+/// and `GIT_CONFIG_PARAMETERS`, each as the line sets it — the config FILES are git's to read,
+/// and the guard asks git about them.
+///
+/// A source the guard does not read makes the line OPAQUE: any alias may be defined there. That
+/// is a config file the line points git at (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+/// `GIT_CONFIG`, `HOME`, `XDG_CONFIG_HOME`, an `include.path` or `includeIf.*.path`) — never
+/// opened, because the same line may write it before git reads it — and a key, count or list
+/// only the shell can name. An alias whose VALUE only the shell can name is unread on its own.
+///
+/// **Only the invocation's own assignments and git's own options surely reach git** (D-1358f).
+/// A value an earlier segment sets may not — `unset`, `env -u`, `env -i`, a subshell, `false &&`
+/// — and any SUBSET of them may be the one that does, so no single reading is safe to trust. The
+/// guard reads the line twice, with every value and with the invocation's own alone, and an
+/// alias the two readings disagree on — defined, redefined or shadowed by a value that may not
+/// reach git — is UNREAD, as is every alias when only the fuller reading is opaque. A line value
+/// can therefore only add refusals.
+#[derive(Clone, Debug, Default)]
+struct LineConfig {
+    /// Folded alias name → body, or `None` for a body only the shell can name, as the
+    /// invocation's own assignments and git's options set them. Later sources were inserted
+    /// later, so the map holds the one git would use.
+    aliases: std::collections::HashMap<String, Option<String>>,
+    opaque: bool,
+    /// Aliases an earlier segment's value defines or shadows: unread.
+    unsure: std::collections::HashSet<String>,
+    /// An earlier segment's value may define ANY alias: every alias is unread.
+    unsure_all: bool,
+    /// Aliases git's own options on the command define: the last word, whatever came before.
+    argv: std::collections::HashSet<String>,
+}
+
+/// The environment variables that point git at a config file of their own choosing.
+const CONFIG_FILE_ENV: [&str; 5] = [
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG",
+    "HOME",
+    "XDG_CONFIG_HOME",
+];
+
+/// A value the line sets for an environment variable: the last assignment, `Some(None)` when
+/// only the shell can name it, `None` when the line does not set it.
+fn line_value(env: &[String], name: &str) -> Option<Option<String>> {
+    env.iter().rev().find_map(|assign| {
+        let (n, v) = assign.split_once('=')?;
+        (n == name).then(|| (!shell_fills(v)).then(|| v.to_string()))
+    })
+}
+
+/// Whether the shell, not the guard, decides what this word is: a parameter, a substitution.
+fn shell_fills(word: &str) -> bool {
+    word.contains(['$', '`'])
+}
+
+impl LineConfig {
+    /// The configuration of an invocation whose environment may be `env` — everything the line
+    /// set — and is surely `own_env`, with git's own options `pre`.
+    fn of(pre: &[String], env: &[String], own_env: &[String]) -> Self {
+        let mut own = Self::read(pre, own_env, env);
+        let before: Vec<&String> = env.iter().filter(|a| !own_env.contains(a)).collect();
+        own.mark_unsure(&before, env, own_env);
+        own
+    }
+
+    /// Every alias a value from an earlier segment may define or shadow, read leniently: EVERY
+    /// value each variable is given, not the last, because any subset of them may be the one
+    /// that reaches git (D-1358f). A config file, an include, or a key, count or list only the
+    /// shell can name may define any alias.
+    fn mark_unsure(&mut self, before: &[&String], env: &[String], own_env: &[String]) {
+        let mut all = false;
+        let mut names: Vec<String> = Vec::new();
+        let mut key = |key: &str, all: &mut bool| {
+            if shell_fills(key) {
+                *all = true;
+                return;
+            }
+            let folded = key.to_lowercase();
+            if folded == "include.path"
+                || (folded.starts_with("includeif.") && folded.ends_with(".path"))
+            {
+                *all = true;
+            } else if let Some(name) = folded.strip_prefix("alias.") {
+                names.push(name.to_string());
+            }
+        };
+        let own_sets = |prefix: &str| {
+            own_env.iter().any(|a| {
+                a.split_once('=')
+                    .is_some_and(|(n, _)| n.starts_with(prefix))
+            })
+        };
+        for assign in before {
+            let Some((name, value)) = assign.split_once('=') else {
+                continue;
+            };
+            if CONFIG_FILE_ENV.contains(&name) {
+                all = true;
+            } else if name == "GIT_CONFIG_PARAMETERS" {
+                match (shell_fills(value), shellseg::posix_split(value)) {
+                    (false, Ok(words)) => {
+                        for word in words {
+                            key(
+                                word.split_once('=').map_or(word.as_str(), |(k, _)| k),
+                                &mut all,
+                            );
+                        }
+                    }
+                    _ => all = true,
+                }
+            } else if name == "GIT_CONFIG_COUNT" {
+                // A count the shell fills in, or one that turns the invocation's own pairs on
+                // or off, may make any of them git's.
+                if shell_fills(value)
+                    || value.trim().parse::<usize>().is_err()
+                    || (!own_sets("GIT_CONFIG_COUNT")
+                        && (own_sets("GIT_CONFIG_KEY_") || own_sets("GIT_CONFIG_VALUE_")))
+                {
+                    all = true;
+                }
+            } else if name.starts_with("GIT_CONFIG_KEY_") {
+                key(value, &mut all);
+            } else if let Some(n) = name.strip_prefix("GIT_CONFIG_VALUE_") {
+                // The value is an alias's body if any key at its index names one.
+                let key_name = format!("GIT_CONFIG_KEY_{n}");
+                let mut keys: Vec<String> = env
+                    .iter()
+                    .filter_map(|a| a.split_once('='))
+                    .filter(|(k, _)| *k == key_name)
+                    .map(|(_, v)| v.to_string())
+                    .collect();
+                keys.extend(std::env::var(&key_name).ok());
+                if keys.is_empty() {
+                    all = true;
+                }
+                for k in keys {
+                    key(&k, &mut all);
+                }
+            }
+        }
+        for name in names {
+            if !self.argv.contains(&name) {
+                self.unsure.insert(name);
+            }
+        }
+        self.unsure_all |= all;
+    }
+
+    /// The configuration `env` sets, with git's own options `pre`; `full` is the whole line's
+    /// environment, which a `--config-env` variable is looked for in too.
+    fn read(pre: &[String], env: &[String], full: &[String]) -> Self {
+        let mut line = LineConfig::default();
+        let process = |name: &str| std::env::var(name).ok();
+        // The value an invocation sees: the line's, else the one this session started with.
+        let value = |name: &str| match line_value(env, name) {
+            Some(v) => v,
+            None => process(name),
+        };
+        let sets = |prefix: &str| {
+            env.iter().any(|a| {
+                a.split_once('=')
+                    .is_some_and(|(n, _)| n.starts_with(prefix))
+            })
+        };
+        if CONFIG_FILE_ENV
+            .iter()
+            .any(|name| line_value(env, name).is_some())
+        {
+            line.opaque = true;
+        }
+        // The numbered pairs, read where the line touches them: the session's own are git's to
+        // read, and the guard's git reads them.
+        if sets("GIT_CONFIG_COUNT") || sets("GIT_CONFIG_KEY_") || sets("GIT_CONFIG_VALUE_") {
+            match value("GIT_CONFIG_COUNT").map(|c| c.trim().parse::<usize>()) {
+                Some(Ok(count)) if count <= MAX_CHECKOUT_OPERANDS * 4 => {
+                    for n in 0..count {
+                        match value(&format!("GIT_CONFIG_KEY_{n}")) {
+                            Some(key) => {
+                                // A value set nowhere the guard can see is unread, not empty.
+                                let body = match line_value(env, &format!("GIT_CONFIG_VALUE_{n}")) {
+                                    Some(v) => v,
+                                    None => process(&format!("GIT_CONFIG_VALUE_{n}")),
+                                };
+                                line.entry(&key, body);
+                            }
+                            None => line.opaque = true,
+                        }
+                    }
+                }
+                Some(Ok(_)) | Some(Err(_)) => line.opaque = true,
+                None => {
+                    // A count only the shell can name, or pairs with no count to read them by.
+                    if line_value(env, "GIT_CONFIG_COUNT").is_some() {
+                        line.opaque = true;
+                    }
+                }
+            }
+        }
+        match line_value(env, "GIT_CONFIG_PARAMETERS") {
+            Some(Some(list)) => match shellseg::posix_split(&list) {
+                Ok(words) => {
+                    for word in words {
+                        let (key, body) = match word.split_once('=') {
+                            Some((k, v)) => (k.to_string(), v.to_string()),
+                            None => (word.clone(), String::new()),
+                        };
+                        line.entry(&key, Some(body));
+                    }
+                }
+                Err(_) => line.opaque = true,
+            },
+            Some(None) => line.opaque = true,
+            None => {}
+        }
+        let mut prev: Option<&str> = None;
+        for word in pre {
+            line.read_option(prev, word, env, full);
+            prev = Some(word);
+        }
+        line
+    }
+
+    /// Take in one of git's own options, given the word before it: `-c key=value`,
+    /// `--config-env key=VAR` and `--config-env=key=VAR`.
+    ///
+    /// These are git's own words, the last say whatever the environment holds, so an alias they
+    /// define is no longer unsure — unless its `--config-env` variable comes from an earlier
+    /// segment, which may not reach git.
+    fn read_option(&mut self, prev: Option<&str>, word: &str, env: &[String], full: &[String]) {
+        let config_env = |this: &mut Self, spec: &str| {
+            let Some((key, var)) = spec.split_once('=') else {
+                return;
+            };
+            // git reads VAR from the environment it is given; a VAR the invocation does not set
+            // is the session's, unless an earlier segment sets it — then it may not reach git —
+            // and one the session does not hold either is one the guard cannot see.
+            let body = match line_value(env, var) {
+                Some(v) => v,
+                None if line_value(full, var).is_some() => None,
+                None => std::env::var(var).ok(),
+            };
+            this.option_entry(key, body);
+        };
+        match prev {
+            Some("-c") => {
+                let (key, body) = match word.split_once('=') {
+                    Some((k, v)) => (k, Some(v.to_string())),
+                    None => (word, Some(String::new())),
+                };
+                let body = body.filter(|b| !shell_fills(b));
+                self.option_entry(key, body);
+            }
+            Some("--config-env") => config_env(self, word),
+            _ => {
+                if let Some(spec) = word.strip_prefix("--config-env=") {
+                    config_env(self, spec);
+                }
+            }
+        }
+    }
+
+    /// An entry git's own options make: the last word on that alias.
+    fn option_entry(&mut self, key: &str, body: Option<String>) {
+        self.entry(key, body);
+        if let Some(name) = key.to_lowercase().strip_prefix("alias.") {
+            self.argv.insert(name.to_string());
+            self.unsure.remove(name);
+        }
+    }
+
+    /// One configuration entry: an alias, a file to include, or nothing the guard reads.
+    fn entry(&mut self, key: &str, body: Option<String>) {
+        if shell_fills(key) {
+            self.opaque = true;
+            return;
+        }
+        let folded = key.to_lowercase();
+        if folded == "include.path"
+            || (folded.starts_with("includeif.") && folded.ends_with(".path"))
+        {
+            self.opaque = true;
+        } else if let Some(name) = folded.strip_prefix("alias.") {
+            self.aliases.insert(name.to_string(), body);
+        }
+    }
+
+    /// The body the line gives the alias `folded`: `Some(Ok(body))`, `Some(Err(Unread))` when
+    /// only the shell or an unread file can say, `None` when the config files are git's to ask.
+    fn body(&self, folded: &str) -> Option<Result<String, AliasEnd>> {
+        if !self.argv.contains(folded) && (self.unsure_all || self.unsure.contains(folded)) {
+            return Some(Err(AliasEnd::Unread));
+        }
+        match self.aliases.get(folded) {
+            Some(Some(body)) => Some(Ok(body.clone())),
+            Some(None) => Some(Err(AliasEnd::Unread)),
+            None if self.opaque => Some(Err(AliasEnd::Unread)),
+            None => None,
+        }
+    }
+
+    /// Whether `word` may be an alias the line defines: one it names, or, on an opaque line, any
+    /// word that is not git's own.
+    fn names(&self, folded: &str, word: &str) -> bool {
+        self.aliases.contains_key(folded)
+            || self.unsure.contains(folded)
+            || ((self.opaque || self.unsure_all)
+                && !BRANCH_MOVERS.contains(&word)
+                && !GIT_KNOWN_SUBCOMMANDS.contains(&word))
+    }
 }
 
 /// How following an alias ended.
@@ -1271,14 +1630,18 @@ pub enum AliasEnd {
     Unasked,
     /// Still on an alias when [`MAX_ALIAS_HOPS`] ran out.
     TooDeep,
+    /// Defined, or possibly defined, where the guard does not read: a config file the command
+    /// names, or a value only the shell can name (#1358).
+    Unread,
 }
 
-/// [`resolve_git_alias`]'s hops, with each alias's body asked of `body`: `Some(body)` (`""` for
-/// none), or `None` for a question that could not be put, which stops the walk where it stands.
+/// [`resolve_git_alias`]'s hops, with each alias's body asked of `body`: `Ok(body)` (`""` for
+/// none), or the end a body that could not be read makes — [`AliasEnd::Unasked`] or
+/// [`AliasEnd::Unread`] — which stops the walk where it stands.
 fn expand_alias(
     sub: &str,
     post: &[String],
-    body: &mut dyn FnMut(&str) -> Option<String>,
+    body: &mut dyn FnMut(&str) -> Result<String, AliasEnd>,
 ) -> (String, Vec<String>, AliasEnd) {
     let mut sub = sub.to_string();
     let mut post = post.to_vec();
@@ -1293,8 +1656,9 @@ fn expand_alias(
             return (sub, post, AliasEnd::Resolved);
         }
         seen.push(sub.clone());
-        let Some(text) = body(&sub) else {
-            return (sub, post, AliasEnd::Unasked);
+        let text = match body(&sub) {
+            Ok(text) => text,
+            Err(end) => return (sub, post, end),
         };
         let Some((first, tail)) = alias_words(&text) else {
             return (sub, post, AliasEnd::Resolved);
@@ -1309,9 +1673,9 @@ fn expand_alias(
         AliasEnd::Resolved
     } else {
         match body(&sub) {
-            None => AliasEnd::Unasked,
-            Some(text) if alias_words(&text).is_some() => AliasEnd::TooDeep,
-            Some(_) => AliasEnd::Resolved,
+            Err(end) => end,
+            Ok(text) if alias_words(&text).is_some() => AliasEnd::TooDeep,
+            Ok(_) => AliasEnd::Resolved,
         }
     };
     (sub, post, end)
@@ -1442,7 +1806,19 @@ pub fn plane_root_branch_reason(cmd: &str, cwd: &str, root: &str) -> Option<Stri
         if !BRANCH_MOVERS.contains(&sub.as_str()) {
             // `co = checkout` moves the root's HEAD exactly as far (#461, round two).
             let end;
-            (sub, post, end) = resolve_git_alias_to_its_end(&root, &sub, &post, &inv.pre);
+            (sub, post, end) =
+                resolve_git_alias_to_its_end(&root, &sub, &post, &inv.pre, &inv.env, &inv.own_env);
+            if end == AliasEnd::Unread {
+                return Some(format!(
+                    "cannot tell what `git {}` does: it may be an alias, and this command sets \
+                     git configuration purlis does not read — a config file it names, a value \
+                     only the shell fills in, or one an earlier command on the line sets, which \
+                     may not reach git — so where the alias leads is out of sight. \
+                     Run the command the alias stands for, or leave that setting off. {}",
+                    inv.sub,
+                    root_tail(default_branch(&root).as_deref())
+                ));
+            }
             if end == AliasEnd::TooDeep {
                 return Some(format!(
                     "cannot tell what `git {}` does in the PLANE ROOT: it is an alias that leads \
@@ -1703,14 +2079,25 @@ pub fn plane_root_reset_reason(cmd: &str, cwd: &str, root: &str) -> Option<Strin
     }
     let root = plane_root(root);
     for inv in plane_root_git(cmd, cwd, &root) {
-        let (mut sub, mut post) = (inv.sub.clone(), inv.post.clone());
-        if sub != "reset" {
-            (sub, post) = resolve_git_alias(&root, &sub, &post, &inv.pre);
-            if sub != "reset" {
+        let tree_mode =
+            |post: &[String]| post.iter().any(|a| RESET_TREE_MODES.contains(&a.as_str()));
+        let mut post = inv.post.clone();
+        if inv.sub != "reset" {
+            // Any reading that is a working-tree reset is the one measured (#1358).
+            let (s, p, _) = resolve_git_alias_to_its_end(
+                &root,
+                &inv.sub,
+                &inv.post,
+                &inv.pre,
+                &inv.env,
+                &inv.own_env,
+            );
+            if s != "reset" {
                 continue;
             }
+            post = p;
         }
-        if !post.iter().any(|a| RESET_TREE_MODES.contains(&a.as_str())) {
+        if !tree_mode(&post) {
             continue;
         }
         // What FOLLOWS `--` makes it a path form (`git reset <ref> -- <paths>` moves no HEAD).
