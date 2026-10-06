@@ -391,6 +391,11 @@ pub struct RootInvocation {
     /// (`cd "$X"`, `git -C "$X"`, a glob, `cd -`): it MAY act on the root, so it is refused, and
     /// the denial says that rather than claiming it does (#1323).
     pub unnamed: bool,
+    /// Its options held a substitution, and which word after it git runs could not be worked
+    /// out — git could not be asked about its aliases, or there were more alias words than the
+    /// line's budget: it is refused (#1354, as #438 rules for an operand git could not be asked
+    /// about).
+    pub unread: bool,
 }
 
 /// The plane root as the walk recognises it: by IDENTITY, never by spelling (#346).
@@ -819,6 +824,8 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
     // Where the shell stays if a `cd … &&` failed: back in play once the `&&` chain ends.
     let mut left_behind = Whereabouts::default();
     let context = CdContext::of(cmd);
+    // The root's configured aliases, read once for the whole line and only if it needs them.
+    let aliases = AliasBook::of(root);
     for (seg, before) in segments.iter().zip(carried.iter()) {
         let call = shellwrap::split_env_chdir(&seg.argv);
         let (prog, env, args, chdir) = (call.prog, call.env, call.argv, call.chdir);
@@ -832,10 +839,47 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
             } else {
                 here.merge(moved);
             }
+        } else if prog.contains('$') {
+            // The program is a word only the shell can name (`$G checkout -b x` after `G=git`,
+            // `$(which git) …`): it may be git, sent anywhere (#1354). Answered for when a
+            // branch move or reset follows it.
+            if let Some((sub, post)) = literal_mover_after(args.get(1..).unwrap_or(&[])) {
+                out.push(RootInvocation {
+                    sub,
+                    post,
+                    pre: Vec::new(),
+                    unnamed: true,
+                    unread: false,
+                });
+            }
+        } else if let Some(at) = spliced_before_program(&seg.argv, &prog) {
+            // The program itself is lost in a substitution's words (#1354): `GIT_DIR=$(…) git …`
+            // and `env -C $(…) git …` read as running the substitution's first word. A git
+            // among what follows may be the one that runs, sent where the guard cannot name.
+            let (pre, rest) = shellwrap::git_globals(&seg.argv[at..]);
+            if let Some((sub, post, unread)) = subcommand_after_splice(&pre, &rest, &aliases) {
+                out.push(RootInvocation {
+                    sub,
+                    post,
+                    pre,
+                    unnamed: true,
+                    unread,
+                });
+            }
         } else if shellwrap::base_lower(&prog) == "git" {
             // Folded: on APFS and NTFS `GIT` runs git (#346).
             let (pre, rest) = shellwrap::git_globals(&args);
-            if let Some((sub, post)) = rest.split_first() {
+            // A substitution among git's own options (#1354): its words, and every option after
+            // it, are spread through what follows, so neither the directory nor the subcommand
+            // can be read from their places.
+            let spliced = pre.iter().any(|t| t.ends_with('$'));
+            let words = if spliced {
+                subcommand_after_splice(&pre, &rest, &aliases)
+            } else {
+                rest.split_first()
+                    .map(|(sub, post)| (sub.clone(), post.to_vec(), false))
+            };
+            if let Some((sub, post, unread)) = words {
                 // `before + env`, in that order: an assignment on THIS invocation overrides an
                 // export.
                 // `env -C ~/x` hands the shell a word of its own; `env --chdir=~/x` does not.
@@ -862,13 +906,14 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
                     })
                 });
                 // Fail closed: a directory the guard cannot name may be the root (#1323).
-                let unnamed = !named && (here.anywhere || readings.is_none());
+                let unnamed = spliced || (!named && (here.anywhere || readings.is_none()));
                 if named || unnamed {
                     out.push(RootInvocation {
-                        sub: sub.clone(),
-                        post: post.to_vec(),
+                        sub,
+                        post,
                         pre,
                         unnamed,
+                        unread,
                     });
                 }
             }
@@ -878,6 +923,186 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
         }
     }
     out
+}
+
+/// Where a git invocation may begin in a segment whose PROGRAM was taken from a substitution's
+/// words, or `None`.
+///
+/// The reader spreads an unquoted `$(…)` or backtick substitution through the argv it stands in:
+/// the word it began in ends in `$`, then come its own words, then the rest (#1354). When that
+/// word stands before the program — an assignment, a wrapper's option — the program read is the
+/// substitution's first word; the first `git` after it is answered for instead.
+fn spliced_before_program(argv: &[String], prog: &str) -> Option<usize> {
+    let mark = argv.iter().position(|t| t.ends_with('$'))?;
+    let prog_at = argv.iter().position(|t| t == prog)?;
+    if mark >= prog_at || shellwrap::base_lower(prog) == "git" {
+        return None;
+    }
+    argv.iter()
+        .skip(mark + 1)
+        .position(|t| shellwrap::base_lower(t) == "git")
+        .map(|i| mark + 1 + i)
+}
+
+/// The subcommand of a git invocation whose options held a substitution, its arguments, and
+/// whether it could not be read (#1354).
+///
+/// Which word git really sees first cannot be read, so the guard looks for the words it judges:
+/// the first literal branch mover or `reset` among the words that follow; else the first word
+/// named as an alias — inline (`-c alias.co=checkout`, before the word) or in the root's config
+/// — that resolves to one, taken as what it resolves to; else nothing, since no word there is
+/// one the guards judge. Where git could not be asked about its aliases, or more than
+/// [`MAX_CHECKOUT_OPERANDS`] different aliases would have to be followed, the answer is UNREAD, and
+/// refused. Every alias is read from the line's one [`AliasBook`], so the cost stays flat.
+fn subcommand_after_splice(
+    pre: &[String],
+    rest: &[String],
+    aliases: &AliasBook<'_>,
+) -> Option<(String, Vec<String>, bool)> {
+    if let Some((sub, post)) = literal_mover_after(rest) {
+        return Some((sub, post, false));
+    }
+    let first = || {
+        rest.split_first()
+            .map(|(sub, post)| (sub.clone(), post.to_vec()))
+    };
+    let moves = |sub: &str| BRANCH_MOVERS.contains(&sub) || sub == "reset";
+    // The inline aliases in force at each word, kept as the walk goes: a `-c alias.x=…` pair
+    // joins them once both its words are behind (`inline_aliases` over everything before the
+    // word, built once rather than per word).
+    let mut inline: std::collections::HashMap<String, String> =
+        inline_aliases(pre).into_iter().collect();
+    let mut prev: Option<&String> = pre.last();
+    // What an alias is now: the inline body first, then the config's; `None` when git could
+    // not be asked.
+    let body_now = |inline: &std::collections::HashMap<String, String>, name: &str| {
+        let folded = name.to_lowercase();
+        match inline.get(&folded) {
+            Some(body) => Some(body.clone()),
+            None => aliases.body(&folded),
+        }
+    };
+    // Every alias chain already followed to no branch move, as the bodies it read: a word
+    // whose chain reads the same bodies now answers the same again, so `st st st …` costs one
+    // following, and redefining any alias on the chain makes it a new one.
+    let mut cleared: Vec<Vec<(String, String)>> = Vec::new();
+    for (k, word) in rest.iter().enumerate() {
+        let folded = word.to_lowercase();
+        let named = inline.contains_key(&folded) || {
+            let Some(book) = aliases.bodies() else {
+                let (sub, post) = first().unwrap_or_default();
+                return Some((sub, post, true));
+            };
+            book.iter().any(|(name, _)| *name == folded)
+        };
+        let known = || {
+            cleared.iter().any(|chain| {
+                chain.first().is_some_and(|(n, _)| *n == folded)
+                    && chain
+                        .iter()
+                        .all(|(n, b)| body_now(&inline, n).as_ref() == Some(b))
+            })
+        };
+        if named && !known() {
+            if cleared.len() >= MAX_CHECKOUT_OPERANDS {
+                // Past the budget the rest is unread, never allowed.
+                let (sub, post) = first().unwrap_or_default();
+                return Some((sub, post, true));
+            }
+            let mut chain: Vec<(String, String)> = Vec::new();
+            let (sub, post, end) = expand_alias(word, &rest[k + 1..], &mut |name| {
+                let body = body_now(&inline, name);
+                if let Some(b) = &body {
+                    chain.push((name.to_lowercase(), b.clone()));
+                }
+                body
+            });
+            if end != AliasEnd::Resolved {
+                return Some((sub, post, true));
+            }
+            if moves(&sub) {
+                return Some((sub, post, false));
+            }
+            cleared.push(chain);
+        }
+        if prev.is_some_and(|p| p == "-c")
+            && let Some((name, body)) = word.split_once('=')
+            && name.to_lowercase().starts_with("alias.")
+        {
+            let alias: String = name.chars().skip("alias.".len()).collect();
+            inline.insert(alias.to_lowercase(), body.to_string());
+        }
+        prev = Some(word);
+    }
+    // No word after the substitution is one the guards judge, or an alias of one.
+    None
+}
+
+/// The root's configured aliases for one command line: every `alias.*` read with ONE git
+/// question, the first time a line needs one, so a line that names an alias a thousand times
+/// asks git once (#1354). `None` inside is a question that could not be put.
+struct AliasBook<'a> {
+    root: &'a str,
+    bodies: std::cell::OnceCell<Option<Vec<(String, String)>>>,
+}
+
+impl<'a> AliasBook<'a> {
+    fn of(root: &'a str) -> Self {
+        AliasBook {
+            root,
+            bodies: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// Every alias as `(name, body)`, names folded as git keys them, or `None` when git could
+    /// not be asked.
+    fn bodies(&self) -> Option<&[(String, String)]> {
+        self.bodies
+            .get_or_init(|| configured_aliases(self.root))
+            .as_deref()
+    }
+
+    /// The body `git config --get alias.<name>` would answer — the last one set, `""` for none
+    /// — or `None` when git could not be asked.
+    fn body(&self, name: &str) -> Option<String> {
+        let folded = name.to_lowercase();
+        let book = self.bodies()?;
+        Some(
+            book.iter()
+                .rev()
+                .find(|(k, _)| *k == folded)
+                .map(|(_, b)| py_strip(b).to_string())
+                .unwrap_or_default(),
+        )
+    }
+}
+
+/// Every `alias.*` in the root's config, in order, as `(folded name, body)`: `git config -z
+/// --get-regexp`, whose NUL-separated records keep a body's own newlines. `None` when git could
+/// not be asked; a config with no alias is an empty list.
+fn configured_aliases(root: &str) -> Option<Vec<(String, String)>> {
+    let a = git_in(root, &["config", "-z", "--get-regexp", r"^alias\."]).ok()?;
+    if !a.ok {
+        return Some(Vec::new()); // exit 1: no key matched
+    }
+    Some(
+        a.out
+            .split('\0')
+            .filter_map(|record| {
+                let (key, body) = record.split_once('\n').unwrap_or((record, ""));
+                let name = key.strip_prefix("alias.")?;
+                Some((name.to_lowercase(), body.to_string()))
+            })
+            .collect(),
+    )
+}
+
+/// The first literal branch mover or `reset` in `words`, with the words after it.
+fn literal_mover_after(words: &[String]) -> Option<(String, Vec<String>)> {
+    let at = words
+        .iter()
+        .position(|t| BRANCH_MOVERS.contains(&t.as_str()) || t == "reset")?;
+    Some((words[at].clone(), words[at + 1..].to_vec()))
 }
 
 /// `Path(config.ROOT).resolve()` — the string every subject is compared to.
@@ -1009,59 +1234,112 @@ pub fn resolve_git_alias(
     post: &[String],
     pre: &[String],
 ) -> (String, Vec<String>) {
+    let (sub, post, _) = resolve_git_alias_to_its_end(root, sub, post, pre);
+    (sub, post)
+}
+
+/// [`resolve_git_alias`], and how the walk ended: a chain still on an alias when
+/// [`MAX_ALIAS_HOPS`] ran out is [`AliasEnd::TooDeep`], which the branch guard refuses — the
+/// end it cannot see may move HEAD.
+pub fn resolve_git_alias_to_its_end(
+    root: &str,
+    sub: &str,
+    post: &[String],
+    pre: &[String],
+) -> (String, Vec<String>, AliasEnd) {
     let inline = inline_aliases(pre);
+    expand_alias(sub, post, &mut |name| {
+        let folded = name.to_lowercase();
+        if let Some((_, body)) = inline.iter().find(|(k, _)| *k == folded) {
+            return Some(body.clone());
+        }
+        let key = format!("alias.{name}");
+        match git_in(root, &["config", "--get", &key]) {
+            Ok(a) if a.ok => Some(py_strip(&a.out).to_string()),
+            Ok(_) => Some(String::new()),
+            Err(_) => None,
+        }
+    })
+}
+
+/// How following an alias ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AliasEnd {
+    /// At a word that is no alias, a loop, or a body charter does not read.
+    Resolved,
+    /// A body git could not be asked for.
+    Unasked,
+    /// Still on an alias when [`MAX_ALIAS_HOPS`] ran out.
+    TooDeep,
+}
+
+/// [`resolve_git_alias`]'s hops, with each alias's body asked of `body`: `Some(body)` (`""` for
+/// none), or `None` for a question that could not be put, which stops the walk where it stands.
+fn expand_alias(
+    sub: &str,
+    post: &[String],
+    body: &mut dyn FnMut(&str) -> Option<String>,
+) -> (String, Vec<String>, AliasEnd) {
     let mut sub = sub.to_string();
     let mut post = post.to_vec();
     let mut seen: Vec<String> = Vec::new();
+    let settled = |sub: &str, seen: &[String]| {
+        BRANCH_MOVERS.contains(&sub)
+            || GIT_KNOWN_SUBCOMMANDS.contains(&sub)
+            || seen.iter().any(|s| s == sub)
+    };
     for _ in 0..MAX_ALIAS_HOPS {
-        if BRANCH_MOVERS.contains(&sub.as_str())
-            || GIT_KNOWN_SUBCOMMANDS.contains(&sub.as_str())
-            || seen.contains(&sub)
-        {
-            return (sub, post);
+        if settled(&sub, &seen) {
+            return (sub, post, AliasEnd::Resolved);
         }
         seen.push(sub.clone());
-        let folded = sub.to_lowercase();
-        let body = match inline.iter().find(|(k, _)| *k == folded) {
-            Some((_, b)) => b.clone(),
-            None => {
-                let key = format!("alias.{sub}");
-                match git_in(root, &["config", "--get", &key]) {
-                    Ok(a) if a.ok => py_strip(&a.out).to_string(),
-                    Ok(_) => String::new(),
-                    Err(_) => return (sub, post),
-                }
-            }
+        let Some(text) = body(&sub) else {
+            return (sub, post, AliasEnd::Unasked);
         };
-        if body.is_empty() {
-            return (sub, post);
-        }
-        let shell = body.starts_with('!');
-        let text = if shell { &body[1..] } else { &body[..] };
-        // A `!` alias is run by `sh -c`, so it is read as the shell reads it.
-        let split = if shell {
-            shellseg::shell_split(text)
-        } else {
-            shellseg::posix_split(text)
+        let Some((first, tail)) = alias_words(&text) else {
+            return (sub, post, AliasEnd::Resolved);
         };
-        let Ok(mut toks) = split else {
-            return (sub, post);
-        };
-        if shell {
-            if toks.first().map(|t| shellwrap::base_lower(t)).as_deref() != Some("git") {
-                return (sub, post);
-            }
-            toks.remove(0);
-        }
-        let Some((first, tail)) = toks.split_first() else {
-            return (sub, post);
-        };
-        let mut next = tail.to_vec();
+        let mut next = tail;
         next.extend(post);
-        sub = first.clone();
+        sub = first;
         post = next;
     }
-    (sub, post)
+    // The hops ran out: still on an alias is a chain whose end is out of sight.
+    let end = if settled(&sub, &seen) {
+        AliasEnd::Resolved
+    } else {
+        match body(&sub) {
+            None => AliasEnd::Unasked,
+            Some(text) if alias_words(&text).is_some() => AliasEnd::TooDeep,
+            Some(_) => AliasEnd::Resolved,
+        }
+    };
+    (sub, post, end)
+}
+
+/// The git words an alias body expands to — its first word and the rest — or `None` for an
+/// empty body, one that does not split, or a `!` body that runs something other than git.
+fn alias_words(body: &str) -> Option<(String, Vec<String>)> {
+    if body.is_empty() {
+        return None;
+    }
+    let shell = body.starts_with('!');
+    let text = if shell { &body[1..] } else { body };
+    // A `!` alias is run by `sh -c`, so it is read as the shell reads it.
+    let split = if shell {
+        shellseg::shell_split(text)
+    } else {
+        shellseg::posix_split(text)
+    };
+    let mut toks = split.ok()?;
+    if shell {
+        if toks.first().map(|t| shellwrap::base_lower(t)).as_deref() != Some("git") {
+            return None;
+        }
+        toks.remove(0);
+    }
+    let (first, tail) = toks.split_first()?;
+    Some((first.clone(), tail.to_vec()))
 }
 
 /// The name a branch-creating `checkout`/`switch` would create, for the DENIAL TEXT —
@@ -1150,10 +1428,31 @@ pub fn default_branch(root: &str) -> Option<String> {
 pub fn plane_root_branch_reason(cmd: &str, cwd: &str, root: &str) -> Option<String> {
     let root = plane_root(root);
     for inv in plane_root_git(cmd, cwd, &root) {
+        if inv.unread {
+            return Some(format!(
+                "cannot tell what this `git` command does: a command substitution among its \
+                 options hides which repository it acts on, and purlis could not work out which \
+                 of the words after it git would run as its command — a guard that opened \
+                 because it could not tell is no guard. Spell the path out and purlis checks \
+                 it: `git -C <path>` and `cd <path> && git …` are both read. {}",
+                root_tail(default_branch(&root).as_deref())
+            ));
+        }
         let (mut sub, mut post) = (inv.sub.clone(), inv.post.clone());
         if !BRANCH_MOVERS.contains(&sub.as_str()) {
             // `co = checkout` moves the root's HEAD exactly as far (#461, round two).
-            (sub, post) = resolve_git_alias(&root, &sub, &post, &inv.pre);
+            let end;
+            (sub, post, end) = resolve_git_alias_to_its_end(&root, &sub, &post, &inv.pre);
+            if end == AliasEnd::TooDeep {
+                return Some(format!(
+                    "cannot tell what `git {}` does in the PLANE ROOT: it is an alias that leads \
+                     to another alias more than {MAX_ALIAS_HOPS} times, past where purlis \
+                     follows them, and the end of a chain it cannot see may move HEAD. Run the \
+                     command it stands for instead. {}",
+                    inv.sub,
+                    root_tail(default_branch(&root).as_deref())
+                ));
+            }
             if !BRANCH_MOVERS.contains(&sub.as_str()) {
                 continue;
             }
@@ -1300,22 +1599,28 @@ pub fn plane_root_branch_reason(cmd: &str, cwd: &str, root: &str) -> Option<Stri
                 },
             }
         };
-        let back = match default.as_deref().filter(|d| !d.is_empty()) {
-            Some(d) => format!(
-                "`git checkout {d}` — putting the root back on its default branch — is always \
-                 allowed."
-            ),
-            None => "Putting the root back on its default branch is always allowed.".to_string(),
-        };
-        return Some(format!(
-            "{opening}The plane root is one working tree every session \
-             shares — two agents here silently clobber each other's branches, and the \
-             symptom looks like an unrelated bug. Branch work belongs in a workspace \
-             clone: `purlis workspace create <task>`, then `purlis clone <repo>`. \
-             {back}"
-        ));
+        return Some(format!("{opening}{}", root_tail(default.as_deref())));
     }
     None
+}
+
+/// What every branch-guard denial ends with: why the root is guarded, where branch work goes,
+/// and the remedy that stays runnable — naming the default branch when there is one.
+fn root_tail(default: Option<&str>) -> String {
+    let back = match default.filter(|d| !d.is_empty()) {
+        Some(d) => format!(
+            "`git checkout {d}` — putting the root back on its default branch — is always \
+             allowed."
+        ),
+        None => "Putting the root back on its default branch is always allowed.".to_string(),
+    };
+    format!(
+        "The plane root is one working tree every session \
+         shares — two agents here silently clobber each other's branches, and the \
+         symptom looks like an unrelated bug. Branch work belongs in a workspace \
+         clone: `purlis workspace create <task>`, then `purlis clone <repo>`. \
+         {back}"
+    )
 }
 
 /// `(commits destroyed, upstream ref)` if resetting `root` to `target` would take commits off the
@@ -1426,6 +1731,16 @@ pub fn plane_root_reset_reason(cmd: &str, cwd: &str, root: &str) -> Option<Strin
         } else {
             ("commits", "are")
         };
+        if inv.unnamed {
+            return Some(format!(
+                "cannot tell which repository this `git reset` acts on: a directory it is sent \
+                 to is named only when the shell runs it (a variable, a command substitution, a \
+                 glob, `~user`, `cd -`), so it may be the PLANE ROOT — and there it would delete \
+                 {n} {commits} that {are} not on {upstream}, overwriting the working tree. Spell \
+                 the path out and purlis checks it: `git -C <path>` and `cd <path> && git …` are \
+                 both read."
+            ));
+        }
         return Some(format!(
             "would delete {n} {commits} from the PLANE ROOT that {are} \
              not on {upstream}, and this reset overwrites the working tree — their content \

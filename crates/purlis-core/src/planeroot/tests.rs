@@ -915,3 +915,258 @@ fn a_tilde_spelled_without_one_or_reached_by_cd_is_read_literally_with_a_git_dir
 fn a_tilde_spelled_without_one_or_reached_by_cd_is_read_literally_with_a_git_file() {
     a_tilde_spelled_without_one_or_reached_by_cd_is_read_literally(true);
 }
+
+/// An unquoted command substitution among git's own options — `$(…)` or backticks — names a
+/// directory only the shell knows, and the reader spreads its words through git's argv (#1354).
+/// From a clone, a branch move or a reset after one is refused as unnamed: neither the directory
+/// nor the options after it can be read, and the words do not move the subcommand out of sight.
+fn a_substitution_among_gits_options_is_unnamed(linked: bool) {
+    let s = scratch(linked);
+    let root = &s.root;
+    let parent = &root[..root.rfind('/').unwrap()];
+    let r = std::path::Path::new(root);
+    // An upstream the root is a commit ahead of, so a reset there would lose one.
+    git(
+        std::path::Path::new(parent),
+        &["init", "-q", "--bare", "-b", "main", "up.git"],
+    );
+    git(r, &["remote", "add", "origin", &format!("{parent}/up.git")]);
+    git(r, &["push", "-q", "-u", "origin", "main"]);
+    git(r, &["commit", "-q", "--allow-empty", "-m", "unpushed"]);
+    let unnamed = "cannot tell which repository this `git ";
+    for (open, close) in [("$(", ")"), ("`", "`")] {
+        let sub = |inner: &str| format!("{open}{inner}{close}");
+        let echo = sub(&format!("echo {root}"));
+        for cmd in [
+            format!("git -C {echo} checkout -b x"),
+            format!("git -C {echo}/ switch -c x"),
+            format!(
+                "git -C {} checkout -b x",
+                sub("git rev-parse --show-toplevel")
+            ),
+            format!("git --git-dir={echo}/.git checkout -b x"),
+            format!("git --git-dir {echo}/.git switch -c x"),
+            format!("git --work-tree={echo} checkout -b x"),
+            format!("git --work-tree {echo} checkout --detach"),
+            format!("git -c x.y={} -C {root} checkout -b x", sub("echo 1")),
+            format!("GIT_DIR={echo}/.git git checkout -b x"),
+            format!("env -C {echo} git switch -c x"),
+        ] {
+            let said = plane_root_branch_reason(&cmd, &s.clone, root).expect(&cmd);
+            assert!(said.starts_with(unnamed), "{cmd:?}: {said}");
+        }
+        for cmd in [
+            format!("git -C {echo} reset --hard HEAD~1"),
+            format!("git --git-dir={echo}/.git reset --hard HEAD~1"),
+            format!("git --work-tree {echo} reset --hard HEAD~1"),
+        ] {
+            let said = plane_root_reset_reason(&cmd, &s.clone, root).expect(&cmd);
+            assert!(said.starts_with(unnamed), "{cmd:?}: {said}");
+        }
+        // A substitution after the subcommand is an argument, and the clone stays the clone.
+        let after = format!(
+            "git -C {} checkout -b x {}",
+            s.clone,
+            sub("git rev-parse HEAD")
+        );
+        assert_eq!(plane_root_branch_reason(&after, &s.session, root), None);
+    }
+}
+
+#[test]
+fn a_substitution_among_gits_options_is_unnamed_with_a_git_directory() {
+    a_substitution_among_gits_options_is_unnamed(false);
+}
+
+#[test]
+fn a_substitution_among_gits_options_is_unnamed_with_a_git_file() {
+    a_substitution_among_gits_options_is_unnamed(true);
+}
+
+/// An alias after a substitution among git's options is followed as one in its place would be:
+/// inline (`-c alias.co=checkout`, before or after the substitution) or in the root's config.
+/// And a program only the shell can name (`$G`, `$(which git)`) may be git: a branch move or
+/// reset after it is refused as unnamed (#1354).
+fn an_alias_or_a_variable_git_after_a_substitution_is_followed(linked: bool) {
+    let s = scratch(linked);
+    let root = &s.root;
+    git(
+        std::path::Path::new(root),
+        &["config", "alias.zzsw", "switch"],
+    );
+    let unnamed = "cannot tell which repository this `git ";
+    for (open, close) in [("$(", ")"), ("`", "`")] {
+        let echo = format!("{open}echo {root}{close}");
+        for cmd in [
+            format!("git -c alias.co=checkout -C {echo} co -b x"),
+            format!("git -C {echo} -c alias.co=checkout co -b x"),
+            format!("git -C {echo} zzsw -c x"),
+            format!("git --git-dir={echo}/.git zzsw -c x"),
+            format!("{open}which git{close} -C {root} switch -c x"),
+        ] {
+            let said = plane_root_branch_reason(&cmd, &s.clone, root).expect(&cmd);
+            assert!(said.starts_with(unnamed), "{cmd:?}: {said}");
+        }
+        // An alias that resolves to no branch move stays allowed.
+        let st = format!("git -c alias.st=status -C {echo} st");
+        assert_eq!(plane_root_branch_reason(&st, &s.clone, root), None);
+    }
+    for cmd in [
+        "G=git; $G checkout -b x",
+        "$GIT switch -c x",
+        "\"$G\" checkout --detach",
+    ] {
+        let said = plane_root_branch_reason(cmd, &s.session, root).expect(cmd);
+        assert!(said.starts_with(unnamed), "{cmd:?}: {said}");
+    }
+    assert_eq!(
+        plane_root_branch_reason("G=git; $G status", &s.session, root),
+        None
+    );
+}
+
+#[test]
+fn an_alias_or_a_variable_git_after_a_substitution_is_followed_with_a_git_directory() {
+    an_alias_or_a_variable_git_after_a_substitution_is_followed(false);
+}
+
+#[test]
+fn an_alias_or_a_variable_git_after_a_substitution_is_followed_with_a_git_file() {
+    an_alias_or_a_variable_git_after_a_substitution_is_followed(true);
+}
+
+/// Following aliases after a substitution costs one git question per command line, however
+/// many segments and alias words it holds: the hook answers on a deadline (#1354).
+#[test]
+fn aliases_after_substitutions_are_read_once_per_line() {
+    let s = scratch(true);
+    let root = &s.root;
+    git(
+        std::path::Path::new(root),
+        &["config", "alias.st", "status"],
+    );
+    let one = format!("git -C $(echo {root}) {}", "st ".repeat(40));
+    let cmd = vec![one; 200].join("; ");
+    let started = std::time::Instant::now();
+    assert_eq!(plane_root_branch_reason(&cmd, &s.clone, root), None);
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+    // Past the budget of different aliases to follow, what git runs is unread, and refused.
+    let mut words = String::new();
+    for n in 0..=MAX_CHECKOUT_OPERANDS {
+        let name = format!("alias.st{n}");
+        git(std::path::Path::new(root), &["config", &name, "status"]);
+        words.push_str(&format!("st{n} "));
+    }
+    let many = format!("git -C $(echo {root}) {words}");
+    let said = plane_root_branch_reason(&many, &s.clone, root).unwrap();
+    assert!(
+        said.starts_with("cannot tell what this `git` command does"),
+        "{said}"
+    );
+}
+
+/// Where git cannot be asked which words are aliases — here, an alias body that is not UTF-8 —
+/// a branch move hidden behind a substitution is not taken to be absent: it is refused (#1354,
+/// as an operand git cannot be asked about is, #438).
+fn an_alias_book_git_cannot_read_keeps_the_refusal(linked: bool) {
+    use std::io::Write;
+    let s = scratch(linked);
+    let config = if linked {
+        format!("{}.gitdir/config", s.root)
+    } else {
+        format!("{}/.git/config", s.root)
+    };
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(config)
+        .unwrap();
+    f.write_all(b"[alias]\n\tzzbad = checkout \xff\n").unwrap();
+    let cmd = format!("git -C $(echo {}) zzco -b x", s.root);
+    let said = plane_root_branch_reason(&cmd, &s.clone, &s.root).unwrap();
+    assert!(
+        said.starts_with("cannot tell what this `git` command does"),
+        "{said}"
+    );
+}
+
+#[test]
+fn an_alias_book_git_cannot_read_keeps_the_refusal_with_a_git_directory() {
+    an_alias_book_git_cannot_read_keeps_the_refusal(false);
+}
+
+#[test]
+fn an_alias_book_git_cannot_read_keeps_the_refusal_with_a_git_file() {
+    an_alias_book_git_cannot_read_keeps_the_refusal(true);
+}
+
+/// An alias redefined on the line after a word that named it is a new alias: what the word
+/// after the redefinition runs is followed again, not answered from the first (#1354).
+#[test]
+fn an_alias_redefined_after_a_substitution_is_followed_again() {
+    let s = scratch(true);
+    let cmd = format!(
+        "git -c alias.zz=status -C $(echo {}; : zz) -c alias.zz=checkout zz -b x",
+        s.root
+    );
+    assert!(plane_root_branch_reason(&cmd, &s.clone, &s.root).is_some());
+}
+
+/// Thousands of inline alias definitions after a substitution are read in one pass, not once
+/// per word: the hook answers on a deadline (#1354).
+#[test]
+fn many_inline_aliases_after_a_substitution_are_read_in_time() {
+    let s = scratch(true);
+    let cmd = format!(
+        "git -C $(echo {}) {}",
+        s.root,
+        "-c alias.zz=status zz ".repeat(6000)
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(plane_root_branch_reason(&cmd, &s.clone, &s.root), None);
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+}
+
+/// A chain of aliases longer than the guard follows is refused, not taken to end where the
+/// guard stopped looking: written out, and after a substitution (#1354).
+fn an_alias_chain_past_the_hop_limit_is_refused(linked: bool) {
+    let s = scratch(linked);
+    let r = std::path::Path::new(&s.root);
+    for (name, body) in [
+        ("e1", "e2"),
+        ("e2", "e3"),
+        ("e3", "e4"),
+        ("e4", "e5"),
+        ("e5", "checkout"),
+    ] {
+        git(r, &["config", &format!("alias.{name}"), body]);
+    }
+    let said =
+        plane_root_branch_reason(&format!("git -C {} e1 -b x", s.root), &s.clone, &s.root).unwrap();
+    assert!(said.starts_with("cannot tell what `git e1` does"), "{said}");
+    let said = plane_root_branch_reason(
+        &format!("git -C $(echo {}) e1 -b x", s.root),
+        &s.clone,
+        &s.root,
+    )
+    .unwrap();
+    assert!(
+        said.starts_with("cannot tell what this `git` command does"),
+        "{said}"
+    );
+    // Four hops still reach the end.
+    let said =
+        plane_root_branch_reason(&format!("git -C {} e2 -b x", s.root), &s.clone, &s.root).unwrap();
+    assert!(said.starts_with("would create 'x'"), "{said}");
+}
+
+#[test]
+fn an_alias_chain_past_the_hop_limit_is_refused_with_a_git_directory() {
+    an_alias_chain_past_the_hop_limit_is_refused(false);
+}
+
+#[test]
+fn an_alias_chain_past_the_hop_limit_is_refused_with_a_git_file() {
+    an_alias_chain_past_the_hop_limit_is_refused(true);
+}
