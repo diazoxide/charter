@@ -781,6 +781,86 @@ mod live {
     }
 
     #[test]
+    fn a_wrapped_chat_writes_a_manifest_only_where_it_cannot_change_a_chats_sandbox() {
+        // #1336: a chat in `ws/repo` may write a manifest below its folder (a clone's fixture)
+        // and in its temp folder, and never at the root, in `ws` or in its own folder, nor move
+        // one there. The plane is reached through the temp folder's link (`/var` on macOS), so
+        // the profile holds the folders by the names the kernel gives them.
+        let plane = plane_saying(ON);
+        let repo = plane.path().join("ws/repo");
+        std::fs::create_dir_all(&repo).expect("a repo");
+        let home = tempfile::tempdir().expect("a home");
+        let machine = Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: Some(home.path().to_path_buf()),
+            os: Os::MacOs,
+        };
+        let applied = for_start(Harness::Opencode, plane.path(), &machine, &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let line = line_in(&applied, &repo, None, &confinement).expect("starts");
+        for name in MANIFESTS {
+            for allowed in [
+                format!("mkdir -p sub && echo x > sub/{name}"),
+                format!("mkdir -p \"$TMPDIR/x\" && echo x > \"$TMPDIR/x/{name}\""),
+            ] {
+                assert!(ran_in(&line, &repo, &allowed), "{allowed} was refused");
+            }
+            for refused in [
+                format!("echo x > {name}"),
+                format!("echo x > ../{name}"),
+                format!("echo x > ../../{name}"),
+                format!("mv sub/{name} {name}"),
+            ] {
+                assert!(!ran_in(&line, &repo, &refused), "{refused} was let through");
+            }
+            assert!(!repo.join(name).exists(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_root_manifest_that_is_a_link_is_held_by_its_own_name() {
+        // #1336: an operator may keep `purlis.local.toml` as a link into a dotfiles repository.
+        // A plane-root chat may neither remove the link nor put a file of its own in its place.
+        let plane = plane_saying(ON);
+        let dotfiles = tempfile::tempdir().expect("a dotfiles repository");
+        let target = dotfiles.path().join("purlis.local.toml");
+        std::fs::write(&target, "").expect("the operator's settings");
+        let link = plane.path().join("purlis.local.toml");
+        std::os::unix::fs::symlink(&target, &link).expect("a linked manifest");
+        let home = tempfile::tempdir().expect("a home");
+        let machine = Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: Some(home.path().to_path_buf()),
+            os: Os::MacOs,
+        };
+        let applied = for_start(Harness::Opencode, plane.path(), &machine, &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let line = line_in(&applied, plane.path(), None, &confinement).expect("starts");
+        for refused in [
+            "rm purlis.local.toml",
+            "echo x > purlis.local.toml",
+            "mv purlis.local.toml moved",
+            "rm purlis.local.toml; printf '[chat_env]\\n' > purlis.local.toml",
+            "ln -sf /tmp/elsewhere purlis.local.toml",
+        ] {
+            assert!(
+                !ran_in(&line, plane.path(), refused),
+                "{refused} was let through"
+            );
+            assert_eq!(
+                std::fs::read_link(&link).ok(),
+                Some(target.clone()),
+                "{refused}"
+            );
+        }
+        assert_eq!(std::fs::read_to_string(&target).expect("kept"), "");
+    }
+
+    #[test]
     fn opencodes_own_directories_are_made_before_the_wrap_so_a_first_run_need_not_make_them() {
         // Measured: on a home with no `~/.local`, opencode stops at its first `mkdir`. The wrap
         // lets it make none of them, since a directory made could be one moved into place.
@@ -1164,9 +1244,9 @@ mod live_pinned {
 }
 
 /// `charter.local.toml` is what the machine adds to the plane, and charter reads it unsandboxed
-/// at every later start (`[chat_env] pass`, plugins, extensions): no harness writes it.
+/// at every later start (`[chat_env] pass`, plugins, extensions): no harness writes the root's.
 #[test]
-fn every_harness_is_kept_from_writing_charter_local_toml() {
+fn every_harness_is_kept_from_writing_the_roots_charter_local_toml() {
     let plane = plane_saying(ON);
     let root = real(plane.path());
     let home = tempfile::tempdir().expect("a home");
@@ -1177,12 +1257,13 @@ fn every_harness_is_kept_from_writing_charter_local_toml() {
     };
     for harness in Harness::ALL {
         let stated = stated(harness, &root, &root, &machine);
+        // Held by path at the root (#1336), no longer by name at any depth.
         let path = match harness {
-            Harness::ClaudeCode => "**/charter.local.toml".to_owned(),
-            Harness::Codex | Harness::Opencode => {
-                let escaped = root.display().to_string().replace('.', "\\\\.");
-                format!("^{escaped}/(.*/)?charter\\\\.local\\\\.toml(/.*)?$")
-            }
+            Harness::ClaudeCode => root.join("charter.local.toml").display().to_string(),
+            Harness::Codex | Harness::Opencode => format!(
+                "(deny file-write* (subpath \"{}\"))",
+                root.join("charter.local.toml").display()
+            ),
         };
         assert!(
             (stated.denies_write)(&path),

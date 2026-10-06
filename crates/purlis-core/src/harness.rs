@@ -1187,7 +1187,8 @@ mod tests {
         // stays, because a deny outranks an allow and the two name different things.
         let (plane, applied) = testing::sandbox_compiled_for(Harness::ClaudeCode);
         let applied = applied.expect("starts");
-        let crate::sandbox::Form::ClaudeCode(compiled) = applied.form() else {
+        // As compiled for the folder the chat runs in, its manifests among the rules (#1336).
+        let crate::sandbox::Form::ClaudeCode(compiled) = applied.form_in(Some(plane.path())) else {
             panic!("compiled for Claude Code");
         };
         let StateHooks::ThisSessionOnly { args, .. } = Harness::ClaudeCode.state_hooks(
@@ -1227,16 +1228,17 @@ mod tests {
     ) -> (tempfile::TempDir, Result<crate::sandbox::Line, String>) {
         let (plane, applied) = testing::sandbox_compiled_for(Harness::ClaudeCode);
         let applied = applied.expect("starts");
+        // Armed for the folder it opens in, as every chat is.
+        let cwd = plane.path().join("w");
+        std::fs::create_dir_all(&cwd).expect("a workspace");
         let StateHooks::ThisSessionOnly { args, .. } = Harness::ClaudeCode.state_hooks(
             kit("/bin/charter"),
-            Some(plane.path()),
+            Some(&cwd),
             &BTreeMap::new(),
             Some(&applied),
         ) else {
             panic!("armed per session");
         };
-        let cwd = plane.path().join("w");
-        std::fs::create_dir_all(&cwd).expect("a workspace");
         let line = applied.line(
             crate::sandbox::Words {
                 program: "claude".to_owned(),
@@ -1312,6 +1314,44 @@ mod tests {
             let why = line.expect_err("refused");
             assert!(why.contains("nothing was started"), "{armed:?}: {why}");
         }
+    }
+
+    #[test]
+    fn a_claude_code_chat_armed_for_another_folder_is_not_handed_the_socket() {
+        // Fail closed (#1336): the sandbox names the manifests of the folders above the chat,
+        // so one armed for the project root does not open in a folder below it.
+        let sockets = tempfile::tempdir().expect("a directory");
+        let socket = sockets.path().join("hooks.sock");
+        let (plane, applied) = testing::sandbox_compiled_for(Harness::ClaudeCode);
+        let applied = applied.expect("starts");
+        let StateHooks::ThisSessionOnly { args, .. } = Harness::ClaudeCode.state_hooks(
+            kit("/bin/charter"),
+            Some(plane.path()),
+            &BTreeMap::new(),
+            Some(&applied),
+        ) else {
+            panic!("armed per session");
+        };
+        let cwd = plane.path().join("w");
+        std::fs::create_dir_all(&cwd).expect("a workspace");
+        let open_in = |cwd: &std::path::Path| {
+            applied.line(
+                crate::sandbox::Words {
+                    program: "claude".to_owned(),
+                    command: Vec::new(),
+                    armed: args.clone(),
+                    charters: Vec::new(),
+                },
+                &crate::sandbox::At {
+                    cwd: Some(cwd),
+                    hook_socket: Some(&socket),
+                    confinement: None,
+                },
+            )
+        };
+        assert!(open_in(plane.path()).is_ok(), "where it was armed for");
+        let why = open_in(&cwd).expect_err("refused");
+        assert!(why.contains("nothing was started"), "{why}");
     }
 
     #[test]

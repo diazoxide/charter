@@ -37,9 +37,11 @@ impl HarnessAdapter for ClaudeCode {
         let Some(plugin) = kit.plugin else {
             return StateHooks::None;
         };
-        // Claude Code carries its sandbox in the same `--settings`. A form of another kind is
-        // not one, and the chat is armed with nothing rather than started without it.
-        let sandbox = match sandbox.applied().map(crate::sandbox::Applied::form) {
+        // Claude Code carries its sandbox in the same `--settings`, as compiled for the folder
+        // the chat runs in (its manifests, #1336). A form of another kind is not one, and the
+        // chat is armed with nothing rather than started without it.
+        let form = sandbox.applied().map(|applied| applied.form_in(cwd));
+        let sandbox = match &form {
             None => None,
             Some(crate::sandbox::Form::ClaudeCode(settings)) => Some(settings),
             Some(_) => return StateHooks::None,

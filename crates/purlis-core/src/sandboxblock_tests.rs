@@ -228,6 +228,28 @@ fn the_chats_folder_is_where_it_was_started_not_where_the_command_ran() {
     );
 }
 
+/// A manifest is protected only where the sandbox holds one (#1336): at the project root and in
+/// each folder from the chat's up to it. Below the chat's folder it is the chat's own file.
+#[test]
+fn a_manifest_is_a_protected_file_only_where_the_sandbox_holds_it() {
+    for (path, kind) in [
+        (format!("{ROOT}/purlis.toml"), Kind::ProtectedFile),
+        (format!("{ROOT}/charter.local.toml"), Kind::ProtectedFile),
+        (
+            format!("{ROOT}/workspaces/charter.toml"),
+            Kind::ProtectedFile,
+        ),
+        (format!("{CHAT}/purlis.local.toml"), Kind::ProtectedFile),
+        (format!("{CHAT}/sub/purlis.toml"), Kind::ChatFolder),
+        (
+            format!("{ROOT}/workspaces/beta/charter.toml"),
+            Kind::ProjectFiles,
+        ),
+    ] {
+        assert_eq!(kind_of(Path::new(&path), &place()), kind, "{path}");
+    }
+}
+
 // ---- a program's own words, on its standard error ---------------------------------------------
 
 /// What a probe of each program printed when the sandbox refused it, and how it sorts.
