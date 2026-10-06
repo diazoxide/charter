@@ -43,8 +43,12 @@ use sha2::{Digest, Sha256};
 
 use crate::forge::{self, ForgeError};
 
-/// The repository reports are filed on.
-pub const UPSTREAM: &str = "diazoxide/charter";
+/// The repository reports are filed on (RN-9: the product's repository since 2026-10-05).
+pub const UPSTREAM: &str = "purlis/purlis";
+
+/// The address [`UPSTREAM`] had before the repository moved (V92). GitHub redirects it, so it
+/// is still the product's own address, and it is never reused for anything else.
+pub const UPSTREAM_BEFORE: &str = "diazoxide/charter";
 
 /// The most characters a report body may hold. GitHub refuses a body over 65,536.
 pub const BODY_MAX: usize = 60_000;

@@ -116,7 +116,7 @@ fn named(repo: &Path, address: &str) -> Vec<(String, String)> {
                 continue;
             }
             let literal = code.match_indices(address).any(|(at, _)| {
-                // `diazoxide/charter` followed by a path end, never `diazoxide/charter-plane`.
+                // `purlis/purlis` followed by a path end, never `purlis/purlis-plane`.
                 let next = code[at + address.len()..].chars().next();
                 !next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
             });
@@ -132,8 +132,19 @@ fn named(repo: &Path, address: &str) -> Vec<(String, String)> {
 fn only_the_updater_and_report_name_charters_own_address() {
     charter_core::unsteered!();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let address = charter_core::report::UPSTREAM;
-    let found = named(&repo, address);
+    // The address now, and the one before the move: GitHub redirects the old one (V92), so a
+    // literal of it reaches Charter just the same (RN-9).
+    let mut found = Vec::new();
+    for address in [
+        charter_core::report::UPSTREAM,
+        charter_core::report::UPSTREAM_BEFORE,
+    ] {
+        for line in named(&repo, address) {
+            if !found.contains(&line) {
+                found.push(line);
+            }
+        }
+    }
     let outside: Vec<&str> = found
         .iter()
         .filter(|(file, _)| !ALLOWED.iter().any(|(allowed, _)| allowed == file))

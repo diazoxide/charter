@@ -51,12 +51,12 @@ fn dir_from(named: Option<OsString>) -> Option<PathBuf> {
     }
 }
 
-/// The app's bundle identifier, which names its log folder.
-pub(crate) const APP: &str = "dev.charter.app";
+/// The app's bundle identifier, which names its log folder: `dev.purlis.app` (RN-9).
+pub(crate) const APP: &str = crate::names::BUNDLE_ID.write;
 
-/// Tauri's `app_log_dir` for charter's identifier, worked out without Tauri: the core never
-/// depends on it, and the app wants its log before Tauri has started. The purlis identifier's
-/// folder once rename-local has moved the logs there ([`log_dir_for`]).
+/// Tauri's `app_log_dir` for the app's identifier, worked out without Tauri: the core never
+/// depends on it, and the app wants its log before Tauri has started. The old identifier's
+/// folder while rename-local has not moved the logs from there yet ([`log_dir_for`]).
 pub fn app_log_dir() -> Option<PathBuf> {
     log_dir_for(APP)
 }
@@ -477,8 +477,10 @@ mod tests {
         let app = app_log_dir().expect("a home to find it under");
         let app = app.to_string_lossy();
         assert!(
-            app.ends_with("Library/Logs/dev.charter.app") || app.ends_with("dev.charter.app/logs"),
-            "Tauri's `app_log_dir` for charter's identifier: {app}"
+            ["dev.purlis.app", "dev.charter.app"].iter().any(|id| {
+                app.ends_with(&format!("Library/Logs/{id}")) || app.ends_with(&format!("{id}/logs"))
+            }),
+            "Tauri's `app_log_dir` for the app's identifier, or the old one's: {app}"
         );
     }
 

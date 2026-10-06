@@ -161,9 +161,9 @@ describe("the README", () => {
 describe("the links About Charter draws", () => {
   it("are the repository's Discussions, its issue chooser and its SUPPORT.md", () => {
     expect(HELP).toEqual({
-      discussions: "https://github.com/diazoxide/charter/discussions",
-      newIssue: "https://github.com/diazoxide/charter/issues/new/choose",
-      support: "https://github.com/diazoxide/charter/blob/main/SUPPORT.md",
+      discussions: "https://github.com/purlis/purlis/discussions",
+      newIssue: "https://github.com/purlis/purlis/issues/new/choose",
+      support: "https://github.com/purlis/purlis/blob/main/SUPPORT.md",
     });
     expect(existsSync(join(ROOT, "SUPPORT.md"))).toBe(true);
   });

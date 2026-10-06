@@ -8,7 +8,7 @@
 //! download, and a binary built without its dependency list fails the release instead of
 //! producing an SBOM that quietly lists nothing.
 //!
-//! The SBOM files are build files like any other: uploaded as a `charter-*` artifact, attested
+//! The SBOM files are build files like any other: uploaded as a `purlis-*` artifact, attested
 //! by `provenance`, verified and uploaded by `publish`.
 //!
 //! The workflow is read by `workflow/mod.rs`, which the other workflow tests share.
@@ -136,8 +136,8 @@ fn the_sbom_job_holds_nothing_and_reads_the_sbom_off_the_built_bundles() {
     assert_eq!(
         downloads_by_name(sbom),
         [
-            "charter-linux-x86_64-${{ needs.plan.outputs.version }}",
-            "charter-macos-arm64-${{ needs.plan.outputs.version }}",
+            "purlis-linux-x86_64-${{ needs.plan.outputs.version }}",
+            "purlis-macos-arm64-${{ needs.plan.outputs.version }}",
         ]
     );
 
@@ -202,7 +202,7 @@ fn the_sbom_job_holds_nothing_and_reads_the_sbom_off_the_built_bundles() {
         let scan = position(
             &lines,
             &format!(
-                r#""$RUNNER_TEMP/syft" scan "dir:sbom/{platform}" -o "cyclonedx-json=out/charter-{platform}.cdx.json""#
+                r#""$RUNNER_TEMP/syft" scan "dir:sbom/{platform}" -o "cyclonedx-json=out/purlis-{platform}.cdx.json""#
             ),
         );
         assert!(unpack < scan);
@@ -234,7 +234,7 @@ fn the_sbom_job_holds_nothing_and_reads_the_sbom_off_the_built_bundles() {
         .expect("the sbom job uploads what it made");
     assert_eq!(
         step_value(&upload, "with", "name"),
-        Some("charter-sbom-${{ needs.plan.outputs.version }}")
+        Some("purlis-sbom-${{ needs.plan.outputs.version }}")
     );
     assert_eq!(step_value(&upload, "with", "path"), Some("out/"));
 }

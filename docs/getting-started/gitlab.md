@@ -24,18 +24,18 @@ else: the git repository where charter keeps your workspaces, personas, memory a
 Download the newest release from the
 [releases page](https://github.com/diazoxide/charter/releases/latest):
 
-- **macOS:** `charter-macos-arm64.dmg`. Open it and drag **charter** to Applications. The build
+- **macOS:** `purlis-macos-arm64.dmg`. Open it and drag **purlis** to Applications. The build
   is not notarized, so macOS refuses the first launch from a download. Run this once, before
   the first launch:
 
   ```sh
-  xattr -dr com.apple.quarantine /Applications/charter.app
+  xattr -dr com.apple.quarantine /Applications/purlis.app
   ```
 
   To use the `charter` command in a terminal, run **Install `charter` command in PATH** from the
   command palette.
-- **Linux:** `charter-linux-x86_64.deb` (`sudo apt install ./charter-linux-x86_64.deb`, which also
-  puts `charter` on your `PATH`), or the AppImage, `charter-linux-x86_64-appimage.AppImage`.
+- **Linux:** `purlis-linux-x86_64.deb` (`sudo apt install ./purlis-linux-x86_64.deb`, which also
+  puts `purlis` on your `PATH`), or the AppImage, `purlis-linux-x86_64-appimage.AppImage`.
 
 After that, charter updates itself: it checks the release's signature before it installs
 anything, and it asks before it installs. A `.deb` install is updated by installing the next

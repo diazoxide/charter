@@ -10,7 +10,8 @@ import { Notice } from "./Notice";
  * At launch the app copies each project's keychain items to the new names with macOS's
  * Keychain dialogs off, so nothing asks before a window is even up (`vaultswaiting.rs`). An
  * item macOS would have asked about (one an earlier build made) is not read, and its vault stays
- * where it was, whole and working. This Notice says how many wait and offers to finish them:
+ * where it was, whole and working. So does a vault whose items wait to be held again by the app
+ * under its new name (RN-9). This Notice says how many wait and offers to finish them:
  * only on that press does the copy run with the dialogs on, so macOS asks once for each secret
  * while the person is expecting it.
  *
@@ -77,9 +78,9 @@ export function VaultsWaitingNotice() {
     >
       {moving
         ? `Moving ${vaults}: macOS asks once for ${secrets}.`
-        : `${vaults} still ${waiting.vaults === 1 ? "reads" : "read"} secrets under the old ` +
-          `name, where they keep working. Moving ${waiting.vaults === 1 ? "it" : "them"} ` +
-          `makes macOS ask once for ${secrets}.`}
+        : `${vaults} still ${waiting.vaults === 1 ? "waits" : "wait"} to move to the new ` +
+          `name, and ${waiting.vaults === 1 ? "keeps" : "keep"} working meanwhile. Moving ` +
+          `${waiting.vaults === 1 ? "it" : "them"} makes macOS ask once for ${secrets}.`}
       {trouble && !moving && ` ${trouble}`}
     </Notice>
   );

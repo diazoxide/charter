@@ -2149,9 +2149,19 @@ pub fn run() {
     // Before anything that can panic: a panic that ends the app is written down on its way
     // out, where one that went to a standard error nobody reads was lost (charter-app#16).
     panics::record();
+    // The log folder moves from the old identifier's name to `dev.purlis.app`'s (RN-9) before
+    // the log file is opened in it, so this launch's log is already under the new name. Done
+    // once, journalled, and only with nothing else of charter's running. Off in the scenario
+    // build, whose specs name the old folders (D-RN5-7).
+    #[cfg(not(feature = "e2e"))]
+    let logs_moved = charter_core::renamelocal::logs_at_launch();
     // Next, so everything the app notices from here on is kept in a file as well as said on
     // a standard error that, launched from the Dock, nobody reads (#647).
     charter_core::applog::install();
+    #[cfg(not(feature = "e2e"))]
+    if let Some(moved) = &logs_moved {
+        log_the_rename(moved);
+    }
     // A variable that chooses the project, named twice with two values, is refused rather
     // than read under one of its names (D-RN2d-8). The sentence names the remedy, both names
     // set to the same value. It goes to the app's log, which a terminal launch also sees on
@@ -2280,6 +2290,30 @@ pub fn run() {
             // when it is stale on the promise that no second app is running.
             #[cfg(target_os = "linux")]
             instance::one_per_user(app);
+            // The app under its old name, still running beside this one (RN-9): the two have
+            // different single-instance names, so this launch would not be handed to it.
+            // Said, and this launch ends, before it opens anything. Asked for a few seconds
+            // first: the update from the old app restarts into this one, and the old one may
+            // still be letting go of its endpoint as this starts.
+            let places = charter_core::renamelocal::busy::Places::here();
+            let older =
+                || charter_core::renamelocal::busy::older_app(&places, &app.config().identifier);
+            let mut found = older();
+            for _ in 0..30 {
+                if found.is_none() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                found = older();
+            }
+            if let Some(why) = found {
+                tracing::error!(
+                    "{} ({why})",
+                    charter_core::renamelocal::busy::OLDER_APP_RUNNING
+                );
+                app.handle().cleanup_before_exit();
+                std::process::exit(1);
+            }
             // This machine's local state moves to the purlis names (RN-5, V93f): after the
             // single-instance handoff and the one-per-user lock, so a second launch never
             // migrates, and before any project, chat or watch opens a file under one. Anything

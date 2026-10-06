@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "identifier": "dev.charter.app.e2e",
+  "identifier": "dev.purlis.app.e2e",
   "build": {
     "beforeBuildCommand": "npm run build:e2e"
   },

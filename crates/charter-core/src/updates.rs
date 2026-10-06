@@ -47,8 +47,9 @@
 //! catches is the case this repository would otherwise ship by accident: a placeholder, an
 //! empty string, or the untrusted-comment line pasted in instead of the key.
 
-/// The repository the app updates itself from.
-pub const REPO: &str = "https://github.com/diazoxide/charter";
+/// The repository the app updates itself from (RN-9, V93b). A build from before the move reads
+/// its manifest at `diazoxide/charter`, which GitHub redirects here.
+pub const REPO: &str = "https://github.com/purlis/purlis";
 
 /// The one tag that is not a version, and the whole of the dev channel's address.
 ///

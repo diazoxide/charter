@@ -211,7 +211,7 @@ describe("About Charter", () => {
     await within(dialog).findByTestId("about-version");
     expect(within(dialog).getByRole("link", { name: "releases page" })).toHaveAttribute(
       "href",
-      "https://github.com/diazoxide/charter/releases",
+      "https://github.com/purlis/purlis/releases",
     );
     expect(dialog).not.toHaveTextContent("charter news");
   });

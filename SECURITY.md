@@ -16,9 +16,9 @@ runner, and names the commit the workflow ran at. With the [GitHub CLI](https://
 installed, for a stable release tagged `<tag>`:
 
 ```sh
-gh attestation verify charter-macos-arm64.dmg \
-  --repo diazoxide/charter \
-  --signer-workflow diazoxide/charter/.github/workflows/release.yml \
+gh attestation verify purlis-macos-arm64.dmg \
+  --repo purlis/purlis \
+  --signer-workflow purlis/purlis/.github/workflows/release.yml \
   --source-ref refs/tags/<tag> \
   --deny-self-hosted-runners
 ```
@@ -41,7 +41,7 @@ fails.
 ## What a release is made of: the SBOM, and `cargo audit bin`
 
 Each release carries a [CycloneDX](https://cyclonedx.org/) SBOM for each platform:
-`charter-macos-arm64.cdx.json` and `charter-linux-x86_64.cdx.json`. What it lists, exactly:
+`purlis-macos-arm64.cdx.json` and `purlis-linux-x86_64.cdx.json`. What it lists, exactly:
 
 - **The Rust crates of the three charter binaries**: the app, the `charter` command beside it
   and the built-in `persona-statistics` extension. They are read out of the built binaries
@@ -57,11 +57,11 @@ Like every build file, the SBOM carries provenance, so check it with `gh attesta
 first. Then list what it names:
 
 ```sh
-jq -r '.components[] | "\(.purl // .name)"' charter-macos-arm64.cdx.json
+jq -r '.components[] | "\(.purl // .name)"' purlis-macos-arm64.cdx.json
 ```
 
 Any scanner that reads CycloneDX can check it against advisories, for example
-`grype sbom:charter-macos-arm64.cdx.json`.
+`grype sbom:purlis-macos-arm64.cdx.json`.
 
 **Every Rust binary charter ships carries its own dependency list.** The app, the `charter`
 command beside it and the built-in extensions are built with
@@ -76,8 +76,8 @@ copy against the [RustSec](https://rustsec.org/) advisory database with no SBOM 
 ```sh
 cargo install cargo-audit --locked
 # macOS
-cargo audit bin /Applications/charter.app/Contents/MacOS/* \
-  /Applications/charter.app/Contents/Resources/extensions/persona-statistics/bin/persona-statistics
+cargo audit bin /Applications/purlis.app/Contents/MacOS/* \
+  /Applications/purlis.app/Contents/Resources/extensions/persona-statistics/bin/persona-statistics
 # Linux (.deb)
 cargo audit bin /usr/bin/charter* \
   /usr/lib/charter/extensions/persona-statistics/bin/persona-statistics

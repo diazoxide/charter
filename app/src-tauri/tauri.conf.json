@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "charter",
+  "productName": "purlis",
   "version": "0.4.2",
-  "identifier": "dev.charter.app",
+  "identifier": "dev.purlis.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "charter",
+        "title": "purlis",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,
@@ -37,6 +37,12 @@
       "icons/icon.ico"
     ],
     "createUpdaterArtifacts": true,
+    "linux": {
+      "deb": {
+        "conflicts": ["charter"],
+        "replaces": ["charter"]
+      }
+    },
     "resources": {
       "plugin/": "plugin/"
     }
@@ -45,7 +51,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFENTdFNzcxREM2RDhBRjEKUldUeGltM2NjZWRYcmFiREoxM2hWc2VRSWFoYUs0QjZFSVBRMEw0Rk1sOGtJY1pyNUVhTTBteDkK",
       "endpoints": [
-        "https://github.com/diazoxide/charter/releases/latest/download/latest.json"
+        "https://github.com/purlis/purlis/releases/latest/download/latest.json"
       ],
       "requireSignedVersion": true
     }

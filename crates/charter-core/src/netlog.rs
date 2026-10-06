@@ -312,13 +312,18 @@ pub fn template(path: &str) -> String {
 }
 
 /// Whether `host` and `path` (as sent, or as listed) name one of Charter's own addresses: its
-/// repository's files on its forge, or that repository's API.
+/// repository's files on its forge, or that repository's API, at its address now or the one
+/// GitHub redirects to it (`report::UPSTREAM_BEFORE`, which an older build's lines name).
 pub fn is_charters(host: &str, path: &str) -> bool {
-    let Some((owner, repo)) = crate::report::UPSTREAM.split_once('/') else {
-        return false;
-    };
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    let names = |at: usize| segments.get(at) == Some(&owner) && segments.get(at + 1) == Some(&repo);
+    let names = |at: usize| {
+        [crate::report::UPSTREAM, crate::report::UPSTREAM_BEFORE]
+            .iter()
+            .filter_map(|upstream| upstream.split_once('/'))
+            .any(|(owner, repo)| {
+                segments.get(at) == Some(&owner) && segments.get(at + 1) == Some(&repo)
+            })
+    };
     match host.to_ascii_lowercase().as_str() {
         "github.com" => names(0),
         "api.github.com" => segments.first() == Some(&"repos") && names(1),
@@ -664,6 +669,13 @@ mod tests {
 
     #[test]
     fn charters_addresses_are_its_repositorys_files_and_api_and_nothing_beside_them() {
+        assert!(is_charters(
+            "github.com",
+            "/purlis/purlis/releases/latest/download/latest.json"
+        ));
+        assert!(is_charters("api.github.com", "/repos/purlis/purlis/issues"));
+        assert!(!is_charters("github.com", "/purlis/purlis-plane/releases"));
+        // The address before the move, which GitHub redirects (V92).
         assert!(is_charters(
             "github.com",
             "/diazoxide/charter/releases/latest/download/latest.json"

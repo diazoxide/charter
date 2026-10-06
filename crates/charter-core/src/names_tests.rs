@@ -319,7 +319,10 @@ fn the_entries_carry_the_names_on_disk_today() {
         format!("mcp__{}__", crate::chattools::SERVER),
         MCP_TOOL_PREFIX.write
     );
-    assert_eq!(crate::applog::APP, BUNDLE_ID.reads[0]);
+    // RN-9 moved the app to `dev.purlis.app`; the old identifier's log folder, lock and
+    // single-instance socket are still found (`applog::log_dir_for`, `renamelocal::busy`).
+    assert_eq!(crate::applog::APP, BUNDLE_ID.write);
+    assert_eq!(BUNDLE_ID.reads[0], "dev.charter.app");
     // RN-3 ships `purlis` with `charter` as its alias; the guards know every name it has had.
     assert_eq!(crate::cliname::PRIMARY, BINARY.write);
     assert_eq!(BINARY.reads, [crate::cliname::ALIAS]);

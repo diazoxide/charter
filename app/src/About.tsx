@@ -6,15 +6,15 @@ import { ExternalLink, ReleaseNotes } from "./ReleaseNotes";
 import vendored from "../icons/vendored.json";
 
 /** Where every version's notes are, the same text this dialog shows for one of them. */
-const RELEASES = "https://github.com/diazoxide/charter/releases";
+const RELEASES = "https://github.com/purlis/purlis/releases";
 
 /** The community channels (FR-14, #609). `SUPPORT.md` says what each one is for and how soon
  *  we aim to answer; security reports go where `SECURITY.md` says, never to these. */
 export const HELP = {
-  discussions: "https://github.com/diazoxide/charter/discussions",
+  discussions: "https://github.com/purlis/purlis/discussions",
   /** GitHub's issue chooser: the forms and contact links of `.github/ISSUE_TEMPLATE/`. */
-  newIssue: "https://github.com/diazoxide/charter/issues/new/choose",
-  support: "https://github.com/diazoxide/charter/blob/main/SUPPORT.md",
+  newIssue: "https://github.com/purlis/purlis/issues/new/choose",
+  support: "https://github.com/purlis/purlis/blob/main/SUPPORT.md",
 } as const;
 
 /**
