@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791256405827,
+  "lastUpdate": 1791258423683,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2730,6 +2730,48 @@ window.BENCHMARK_DATA = {
             "value": 101.37131600000001,
             "unit": "ms",
             "extra": "median of 5 runs: 100.910, 100.961, 101.371, 102.214, 102.695 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "29f2ddbaed7e2a60d027161a2924d2446d86dfb7",
+          "message": "e2e: the app launched over an old charter install, migrated at launch (RN-10)\n\nA wdio run of its own (`npm run e2e:upgrade`, `wdio.upgrade.conf.ts`) starts the\nreal app over an old install built inside the run's own HOME: the config home\nunder `<home>/.config/charter/` (an approved, pinned project with a pinned\nworkspace, on the dev channel), and a project in git with `.charter/`,\n`charter.toml`, `charter.local.toml` and a keyring vault whose item is under\n`charter/…` in the fenced build's stub keychain.\n\nThe scenario build skips the launch's rename-local (D-RN5-7); the app now runs\nit there when `PURLIS_E2E_RENAME_LOCAL=1`, which only this run sets. The spec\nasserts the approval, the pins and the channel survived, the config home is\n`purlis/` with no `charter/` beside it, the project's state and local settings\nmoved, the vault reads under `purlis/…` with nothing left waiting for the\nkeychain, and the doctor's `rename-plane` runs by name in one commit. The run\nremoves the old install when it passes.\n\nCI is this spec's first real run: wdio does not run reliably on this machine.\nThe fixture and the migration were checked locally instead: the old install\nthe helper writes was migrated by the core's rename-local in a fenced test\nbuild (config home, local settings, state folder, vault copied and read back,\nnothing waiting), and rename-plane then made its one commit on a clean tree.\n\nDecided in implementation:\n- D-RN10-1: The switch is `PURLIS_E2E_RENAME_LOCAL`, read only by the `e2e`\n  build and on only for exactly `1`. It calls `renamelocal::at_launch` with no\n  plugin to move: the build is fenced, so its busy check asks only the\n  project's own sockets, its keychain is the stub, and no harness is touched.\n  The log-folder move stays off, since every run names its log folder.\n- D-RN10-2: A run of its own, as the layout run is: the Tauri service keeps one\n  app per run and the old install has to be on disk before it starts. The base\n  run excludes `*.upgrade.e2e.ts`; CI runs it after the layout run on both\n  OSes; stress.yml ignores its files.\n- D-RN10-3: The old install is written as files in the old layout, not made\n  with the `charter` CLI: CI's CLI is not fenced, so making a keyring vault\n  with it would reach the runner's real keychain. `upgrade.test.ts` holds the\n  fixture to the old layout, and the variable's spelling in the config to the\n  one `lib.rs` reads.\n- D-RN10-4: The config home is `<run tree>/home/.config`, named by\n  `CHARTER_CONFIG_HOME` as well, because GitHub runners export an\n  `XDG_CONFIG_HOME` of their own. The helper refuses a home outside the run's\n  tree.\n- D-RN10-5: The values are ones no launch sets on its own: an approval, a\n  project pin, the `beta` workspace pin (a first open pins the most active\n  workspace, `alpha`), the dev channel. A store lost in the move fails the spec.\n- D-RN10-6: No doctor row offers `rename-plane` (it runs by name only, RN-7),\n  so the spec runs it by name through the Doctor's own command,\n  `plane_doctor_fix`, and asserts one commit, `purlis.toml` and a clean tree.\n  The project is committed clean and its profile program lives outside it.\n- D-RN10-7: The store remembers the project by its real path, which the app\n  resolves it to; `CHARTER_ROOT` is the copied path inside the fence.\n- D-RN10-8: Cleanup in `onComplete`: a passing run removes the project and the\n  config home; a failing one keeps them as evidence. Its own run tree and app\n  process, so nothing reaches a later run.\n- D-RN10-9: No changelog fragment: nothing a user sees changes.\n\nCloses #1268\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T07:45:53+04:00",
+          "tree_id": "4013e9f47dd6c31c99aa9ac18b68ad879f534899",
+          "url": "https://github.com/purlis/purlis/commit/29f2ddbaed7e2a60d027161a2924d2446d86dfb7"
+        },
+        "date": 1791258423011,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5209405,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.505, 0.519, 0.521, 0.529, 0.534 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.1283735,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.520, 16.808, 17.128, 17.337, 17.406 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.49872099999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 104.850, 105.092, 105.499, 105.733, 108.273 ms"
           }
         ]
       }
