@@ -82,14 +82,23 @@ pub(crate) struct Store {
 }
 
 /// The sentence for a store reached through a link, or holding one at `inside`. Never the
-/// absolute path.
+/// absolute path. A store held from the project's root also says where a link may land
+/// (D-T55-1), as the path guard's refusal did before the brokered writes held it (#1333).
 fn reaches_outside(said: &str, within: &str, below: &str, inside: Option<&str>) -> String {
+    let where_links_land = if within == "the project" {
+        "; purlis follows a link only when it lands inside persona-state, personas or \
+         workspaces"
+    } else {
+        ""
+    };
     match inside {
         Some(entry) => format!(
-            "{said} reaches outside {within} through a link ({below}/{entry}), so nothing was \
-             done"
+            "{said} reaches outside {within} through a link ({below}/{entry}){where_links_land}, \
+             so nothing was done"
         ),
-        None => format!("{said} reaches outside {within} through a link, so nothing was done"),
+        None => format!(
+            "{said} reaches outside {within} through a link{where_links_land}, so nothing was done"
+        ),
     }
 }
 
