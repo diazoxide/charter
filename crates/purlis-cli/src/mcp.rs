@@ -85,6 +85,9 @@ impl ServerHandler for Server {
         if name == chattools::ASK_OPERATOR {
             return ask_operator(&request, &args, &context).await;
         }
+        if name == chattools::SESSION_RECORD {
+            return Ok(done(blocking(move || session_record(&args)).await));
+        }
         let name = name.to_owned();
         Ok(done(
             blocking(move || {
@@ -113,6 +116,26 @@ async fn blocking(
     tokio::task::spawn_blocking(body)
         .await
         .unwrap_or_else(|e| Err(format!("the tool failed inside purlis: {e}")))
+}
+
+/// `session_record`: the one operation `purlis session record` run in the chat performs
+/// ([`crate::session::write`]), so the app that started the chat writes it over the chat's hook
+/// socket where it can, and this server writes it where it cannot (#1332). Answered with what
+/// the command prints: the record, then what becomes of the tab.
+fn session_record(args: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
+    let (title, body, pieces) = chattools::record_args(args)?;
+    let here = crate::Here::read()?;
+    match crate::session::write(&here, &title, &body, &pieces, None, None) {
+        Ok(saved) => {
+            let mut said = vec![format!("Session record → {}", saved.shown)];
+            said.extend(saved.warnings);
+            said.push(saved.tab);
+            Ok(said.join("\n"))
+        }
+        Err(crate::session::NotWritten::Refused(why) | crate::session::NotWritten::Failed(why)) => {
+            Err(format!("nothing was written: {why}"))
+        }
+    }
 }
 
 fn tool(spec: &chattools::Tool) -> Tool {

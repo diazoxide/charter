@@ -17,8 +17,13 @@
 //! are charter's too, rebuilt from the records themselves every time one is written, so a hand
 //! edit to either lasts until the next record and the records stay the one source of truth.
 //!
-//! `charter session record` is the one writer. The app never writes a record: it waits for the
-//! [`crate::hookwire::SessionSaved`] line that command sends once all of this is on disk.
+//! [`record`] is the one writer, and it has two callers. In a chat the app started, the record
+//! is a **brokered write** (ADR 0067 §2, #1332): `purlis session record` and the MCP server's
+//! `session_record` tool hand the title and body to the app over the chat's hook socket, and
+//! the app writes it ([`brokered`]) from its own record of the chat, so a chat's sandbox never
+//! has to reach the project's files. Anywhere else, or with an app that does not take the ask,
+//! the command writes it itself and tells the app with a [`crate::hookwire::SessionSaved`]
+//! line once all of this is on disk.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -938,6 +943,111 @@ pub fn saved(root: &Path, path: &Path) -> Option<Listed> {
     open(root, &parts.join("/"))
         .ok()
         .map(|opened| opened.listed)
+}
+
+// ---- the pieces, as git reports them -------------------------------------------------------------
+
+/// The pieces a chat worked in: the one `cwd` stands in, and each of `named` (`<repo>/<piece>`,
+/// as `--piece` takes them), as git reports them in `place`'s workspace. A named piece git does
+/// not report there is refused, never recorded; the one `cwd` stands in is left out rather
+/// than refused when git will not describe it, because nobody named it.
+pub fn touched(
+    root: &Path,
+    cwd: Option<&Path>,
+    place: &Place,
+    named: &[String],
+) -> Result<Vec<Touched>, String> {
+    let mut out: Vec<Touched> = Vec::new();
+    let mut add = |ws: &str, repo: &str, piece: &str| -> Result<(), String> {
+        if out.iter().any(|t| t.repo == repo && t.piece == piece) {
+            return Ok(());
+        }
+        let listed = crate::worktree::list(root, ws, repo)
+            .map_err(|e| format!("--piece {repo}/{piece}: {e}"))?;
+        let Some(found) = listed.into_iter().find(|p| p.piece == piece) else {
+            return Err(format!(
+                "--piece {repo}/{piece}: git reports no such piece of {repo} in workspace {ws}"
+            ));
+        };
+        out.push(Touched {
+            repo: repo.to_owned(),
+            piece: piece.to_owned(),
+            branch: found.branch,
+        });
+        Ok(())
+    };
+    let ws = match place {
+        Place::Workspace(ws) => Some(ws.as_str()),
+        Place::PlaneRoot => None,
+    };
+    if let (Some(ws), Some(cwd)) = (ws, cwd)
+        && let Some((at, repo, Some(piece))) = crate::pieces::tree_at(root, cwd)
+        && at == ws
+    {
+        let _ = add(ws, &repo, &piece);
+    }
+    for one in named {
+        let Some(ws) = ws else {
+            return Err(format!(
+                "--piece {one}: the plane root has no pieces; name the workspace with -w"
+            ));
+        };
+        let Some((repo, piece)) = one.split_once('/') else {
+            return Err(format!("--piece {one}: name it as <repo>/<piece>"));
+        };
+        add(ws, repo, piece)?;
+    }
+    Ok(out)
+}
+
+// ---- the brokered write ---------------------------------------------------------------------------
+
+/// The chat a brokered record is written for, as the app that started it records it: never as
+/// the request says (#1332).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asker {
+    /// The app's number for the chat, the one the line's token was issued for.
+    pub number: u32,
+    /// Where it works: the workspace its folder is in, or the plane root.
+    pub place: Place,
+    /// The persona it started as.
+    pub persona: Option<String>,
+}
+
+/// Writes the session record `ask` hands over for `asker`: a brokered write (ADR 0067 §2,
+/// #1332). The same [`record`] the terminal's command calls, with every fact in the
+/// frontmatter taken from the app's record of the chat ([`chat_facts`], `asker`) and git
+/// ([`touched`]), and only the title, the body and the pieces it names from the request. The
+/// sentence a refusal is said in is the command's.
+pub fn brokered(
+    root: &Path,
+    asker: &Asker,
+    ask: &crate::hookwire::RecordAsk,
+    at: chrono::NaiveDateTime,
+) -> Result<Recorded, String> {
+    if ask.chat != asker.number {
+        return Err(format!(
+            "this record names chat {} and was asked for by chat {}",
+            ask.chat, asker.number
+        ));
+    }
+    let pieces = touched(root, ask.cwd.as_deref(), &asker.place, &ask.pieces)?;
+    let facts = Facts {
+        place: asker.place.clone(),
+        at,
+        chat: Some(chat_facts(root, asker.number)),
+        persona: asker.persona.clone(),
+        pieces,
+    };
+    record(
+        root,
+        &New {
+            title: &ask.title,
+            body: &ask.body,
+            facts: &facts,
+        },
+    )
+    .map_err(|refused| refused.to_string())
 }
 
 // ---- the chat, from the app's record of it -------------------------------------------------------

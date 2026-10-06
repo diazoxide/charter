@@ -796,3 +796,75 @@ fn a_record_that_spells_a_credential_through_its_escapes_is_refused() {
     assert!(!refused.contains(tail), "{refused}");
     assert!(check(&spelled, BODY).is_err());
 }
+
+// ---- the brokered write (#1332) -----------------------------------------------------------
+
+fn asked(chat: u32, title: &str) -> crate::hookwire::RecordAsk {
+    crate::hookwire::RecordAsk {
+        chat,
+        title: title.to_owned(),
+        body: BODY.to_owned(),
+        pieces: Vec::new(),
+        cwd: None,
+    }
+}
+
+#[test]
+fn a_brokered_record_is_placed_and_credited_by_the_apps_record_of_the_chat() {
+    let tmp = plane(&["alpha", "beta"]);
+    let asker = Asker {
+        number: 4,
+        place: alpha(),
+        persona: Some("steward".to_owned()),
+    };
+
+    let recorded = brokered(tmp.path(), &asker, &asked(4, "Broker it"), at(10, 0, 0))
+        .expect("the record is written");
+
+    assert_eq!(
+        recorded.shown,
+        "workspaces/alpha/sessions/20260928-100000-broker-it.md"
+    );
+    let text = std::fs::read_to_string(&recorded.path).unwrap();
+    assert!(text.contains("\nchat: 4\n"), "{text}");
+    assert!(text.contains("\npersona: steward\n"), "{text}");
+    assert!(text.contains("\nworkspace: alpha\n"), "{text}");
+    assert!(
+        list(tmp.path(), &Place::Workspace("beta".to_owned())).is_empty(),
+        "a record landed where the chat does not work"
+    );
+}
+
+#[test]
+fn a_brokered_record_naming_another_chat_is_refused_and_nothing_is_written() {
+    // No plane is needed: the refusal comes before anything is read or written.
+    let tmp = tempfile::tempdir().unwrap();
+    let asker = Asker {
+        number: 4,
+        place: alpha(),
+        persona: None,
+    };
+
+    let refused = brokered(tmp.path(), &asker, &asked(5, "Not mine"), at(10, 0, 0))
+        .expect_err("another chat's record");
+
+    assert!(refused.contains("chat 5"), "{refused}");
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_brokered_record_with_a_piece_the_workspace_lacks_is_refused_naming_it() {
+    let tmp = plane(&["alpha"]);
+    let asker = Asker {
+        number: 4,
+        place: alpha(),
+        persona: None,
+    };
+    let mut ask = asked(4, "Pieces");
+    ask.pieces = vec!["nope/main".to_owned()];
+
+    let refused = brokered(tmp.path(), &asker, &ask, at(10, 0, 0)).expect_err("refused");
+
+    assert!(refused.contains("nope/main"), "{refused}");
+    assert!(list(tmp.path(), &alpha()).is_empty());
+}

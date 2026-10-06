@@ -140,10 +140,62 @@ fn a_harness_lists_charter_s_tools() {
             "memory_add",
             "session_record_list",
             "session_record_read",
+            "session_record",
             "change_status",
             "ask_operator",
         ]
     );
+}
+
+const RECORD_BODY: &str = "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\no\n\n\
+                           ## How to resume\n\nr\n";
+
+#[test]
+fn a_session_record_written_over_mcp_with_no_app_lands_where_the_chat_works() {
+    // No hook socket in the server's environment: no app to hand it to, so the server writes
+    // it itself, as `purlis session record` would (#1332).
+    let p = project();
+    let mut server = Server::start(p.path(), "alpha");
+    server.initialize(false);
+
+    let written = server.call(
+        "session_record",
+        json!({ "title": "Over MCP", "body": RECORD_BODY }),
+    );
+
+    assert_ne!(written["isError"], true, "{written}");
+    assert!(
+        text(&written).contains("Session record → workspaces/alpha/sessions/"),
+        "{written}"
+    );
+    assert!(
+        text(&written).contains("tab will not close by itself"),
+        "{written}"
+    );
+    let records: Vec<String> = std::fs::read_dir(p.path().join("workspaces/alpha/sessions"))
+        .expect("alpha's records")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with("-over-mcp.md"))
+        .collect();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert!(!p.path().join("workspaces/beta/sessions").exists());
+}
+
+#[test]
+fn a_session_record_that_is_not_one_is_a_tool_error_and_nothing_is_written() {
+    let p = project();
+    let mut server = Server::start(p.path(), "alpha");
+    server.initialize(false);
+
+    let refused = server.call(
+        "session_record",
+        json!({ "title": "Half", "body": "## Goal\n\ng\n" }),
+    );
+
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(text(&refused).contains("nothing was written"), "{refused}");
+    assert!(!p.path().join("workspaces/alpha/sessions").exists());
 }
 
 #[test]
