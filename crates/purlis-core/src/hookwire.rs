@@ -498,16 +498,16 @@ impl ChatTokens {
     /// still the process that started then, or run inside it ([`descends`]). No peer, and a
     /// chat with no program recorded, are [`Admission::Outside`].
     pub fn admission(&self, chat: u32, token: Option<&str>, peer: Option<u32>) -> Admission {
-        self.admission_by(chat, token, peer, &descends)
+        self.admission_by(chat, token, peer, &|peer, program| descends(*peer, program))
     }
 
-    /// [`Self::admission`], asking `inside` whether a process runs inside a chat's program.
-    pub(crate) fn admission_by(
+    /// [`Self::admission`], asking `inside` whether `peer` runs inside a chat's program.
+    pub(crate) fn admission_by<P>(
         &self,
         chat: u32,
         token: Option<&str>,
-        peer: Option<u32>,
-        inside: &dyn Fn(u32, &Program) -> bool,
+        peer: Option<P>,
+        inside: &dyn Fn(&P, &Program) -> bool,
     ) -> Admission {
         use subtle::ConstantTimeEq;
 
@@ -524,7 +524,7 @@ impl ChatTokens {
         let Some(program) = self.rooted().get(&chat).cloned() else {
             return Admission::Unbound;
         };
-        if peer.is_some_and(|peer| inside(peer, &program)) {
+        if peer.is_some_and(|peer| inside(&peer, &program)) {
             Admission::Admitted
         } else {
             Admission::Outside
@@ -538,39 +538,81 @@ impl ChatTokens {
     }
 }
 
-/// Whether process `peer` is `program`, or runs inside it: in the session `program` leads (every
-/// chat's program leads its own), or below it in the process tree. `program` must still be the
-/// process that started when it was recorded. Asked of the kernel, in one reading of the
-/// process table and the same walk the human scopes are refused by
-/// ([`purlis_same_user::inside_a_chat`]); every doubt is no.
-///
-/// On macOS the table is one `/bin/ps` run per line, through the fork lock: reading a process's
-/// parent and start in-process there is `proc_pidinfo`, which needs an `unsafe` block this
-/// workspace allows only by the operator's ruling (D-1407-8). Linux reads `/proc`.
-pub fn descends(peer: u32, program: &Program) -> bool {
-    #[cfg(unix)]
-    {
-        let Ok(processes) = purlis_same_user::Parents::now(crate::forklock::output) else {
-            return false;
-        };
-        if processes.started(program.pid).as_deref() != Some(program.started.as_str()) {
-            return false;
+/// A process as the channel sees it (D-1407-10): itself, the leader of its session and its
+/// ancestors, each with when it started, all from one reading of the process table. A line is
+/// judged by this once its token has checked, so a connection with no token, or one that never
+/// writes, costs no reading at all. Every purlis sender stays until the app has let its
+/// connection go, so it is still running when it is read; a process given a sender's number
+/// since is told apart by when it started, since it is below no chat's program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Seen {
+    pub pid: u32,
+    started: String,
+    /// Its session's leader, then its parent and up: each with when it started, where known.
+    around: Vec<(u32, Option<String>)>,
+}
+
+impl Seen {
+    /// Process `pid` now, or `None` where it cannot be read (it has gone, or the process table
+    /// would not say), which no chat admits.
+    pub fn of(pid: u32) -> Option<Self> {
+        Self::all(&[pid]).and_then(|mut seen| seen.pop())
+    }
+
+    /// Each of `pids` now, from ONE reading of the process table, or `None` where any cannot be
+    /// read.
+    ///
+    /// On macOS the table is one `/bin/ps` run, through the fork lock: reading a process's
+    /// parent and start in-process there is `proc_pidinfo`, which needs an `unsafe` block this
+    /// workspace allows only by the operator's ruling (D-1407-8). Linux reads `/proc`.
+    pub fn all(pids: &[u32]) -> Option<Vec<Self>> {
+        #[cfg(unix)]
+        {
+            let processes = purlis_same_user::Parents::now(crate::forklock::output).ok()?;
+            pids.iter()
+                .map(|&pid| {
+                    let started = processes.started(pid)?;
+                    let mut around = Vec::new();
+                    if let Ok(session) = purlis_same_user::session_of(pid) {
+                        around.push((session, processes.started(session)));
+                    }
+                    for up in processes.chain(pid) {
+                        around.push((up, processes.started(up)));
+                    }
+                    Some(Self {
+                        pid,
+                        started,
+                        around,
+                    })
+                })
+                .collect()
         }
-        matches!(
-            purlis_same_user::inside_a_chat(
-                peer,
-                &[program.pid],
-                |pid| processes.of(pid),
-                purlis_same_user::session_of,
-            ),
-            Ok(Some(_))
-        )
+        #[cfg(not(unix))]
+        {
+            let _ = pids;
+            None
+        }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (peer, program);
-        false
+
+    /// Whether it runs inside `program`: it is that process, or its session's leader or one of
+    /// its ancestors is, each by pid AND by when it started.
+    pub fn inside(&self, program: &Program) -> bool {
+        std::iter::once((self.pid, Some(&self.started)))
+            .chain(
+                self.around
+                    .iter()
+                    .map(|(pid, started)| (*pid, started.as_ref())),
+            )
+            .any(|(pid, started)| {
+                pid == program.pid && started.is_some_and(|started| *started == program.started)
+            })
     }
+}
+
+/// Whether process `peer` is `program`, or runs inside it, now ([`Seen::of`] and
+/// [`Seen::inside`]): every doubt is no.
+pub fn descends(peer: u32, program: &Program) -> bool {
+    Seen::of(peer).is_some_and(|seen| seen.inside(program))
 }
 
 /// The line `what` is on the wire: its JSON with `token` beside it, and a newline.
@@ -1456,8 +1498,8 @@ fn within<T: Send + 'static>(
     })
 }
 
-/// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent connecting
-/// and writing it.
+/// One connection, one line, and the app's letting go waited for: at most
+/// [`A_NOTICE_TAKES_AT_MOST`] spent writing it, and [`A_NOTICE_IS_SEEN_WITHIN`] in all.
 #[cfg(unix)]
 fn one_line_with_a_deadline(
     path: &std::path::Path,
@@ -1469,11 +1511,21 @@ fn one_line_with_a_deadline(
     let bytes = line_with(token, line)?;
     let path = path.to_path_buf();
     // The connect as well as the write is bounded: see [`within`].
-    within(A_NOTICE_TAKES_AT_MOST, move || {
+    within(A_NOTICE_IS_SEEN_WITHIN, move || {
         let mut socket = std::os::unix::net::UnixStream::connect(&path)?;
         socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
         socket.write_all(&bytes)?;
-        socket.flush()
+        socket.flush()?;
+        // And then stays until the app has let the connection go (D-1407-10): it judges a line
+        // by the process that sent it, read once the line has arrived, and one that exited the
+        // moment it wrote could be gone by then. An app that says nothing closes once the line
+        // is handled; one that answers is read to its end. A frozen app costs a notice up to
+        // [`A_NOTICE_IS_SEEN_WITHIN`] where it once cost [`A_NOTICE_TAKES_AT_MOST`].
+        socket.shutdown(std::net::Shutdown::Write)?;
+        socket.set_read_timeout(Some(A_NOTICE_IS_SEEN_WITHIN))?;
+        let mut rest = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut socket, &mut rest);
+        Ok(())
     })
 }
 
@@ -1481,6 +1533,11 @@ fn one_line_with_a_deadline(
 /// a thread of its own, so this is only a bound on an app that has stopped reading.
 #[cfg(unix)]
 const A_NOTICE_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How long a notice's sender stays, all told, for the app to look at who sent it and let the
+/// connection go (D-1407-10). Spent in full only on an app that has stopped reading.
+#[cfg(unix)]
+const A_NOTICE_IS_SEEN_WITHIN: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// One conversation with the app: lines written, and each answered on the same connection.
 ///
@@ -2009,10 +2066,22 @@ fn serve(
         let now = purlis_same_user::peer_process_of(&writer)
             .ok()
             .map(|(_, pid)| pid);
-        let mut admission = tokens.admission(chat, token.as_deref(), now);
-        if admission == Admission::Admitted && now != peer {
-            admission = tokens.admission(chat, token.as_deref(), peer);
-        }
+        // The process that connected and the one the socket names now (a connection handed on
+        // mid-line names its new holder on macOS): each must run inside the chat, read in one
+        // snapshot, and only once the line's token has checked (D-1407-10).
+        let senders: Vec<u32> = match (peer, now) {
+            (Some(peer), Some(now)) if peer != now => vec![peer, now],
+            (Some(pid), _) | (None, Some(pid)) => vec![pid],
+            (None, None) => Vec::new(),
+        };
+        let admission = tokens.admission_by(
+            chat,
+            token.as_deref(),
+            (!senders.is_empty()).then_some(senders),
+            &|senders, program| {
+                Seen::all(senders).is_some_and(|seen| seen.iter().all(|one| one.inside(program)))
+            },
+        );
         match admission {
             Admission::Admitted => {}
             Admission::NoToken => {
@@ -4529,7 +4598,7 @@ mod tests {
     fn a_line_with_a_chats_token_is_read_only_from_inside_that_chat() {
         let tokens = ChatTokens::default();
         let token = tokens.issue(5).expect("a token");
-        let inside = |peer: u32, program: &Program| peer == program.pid || peer == 101;
+        let inside = |peer: &u32, program: &Program| *peer == program.pid || *peer == 101;
         let of = |peer| tokens.admission_by(5, Some(token.expose()), peer, &inside);
         assert_eq!(
             of(Some(100)),
@@ -4579,10 +4648,153 @@ mod tests {
         assert_eq!(Admission::Admitted.refusal(), None);
     }
 
+    fn seen(pid: u32, started: &str, around: &[(u32, Option<&str>)]) -> Seen {
+        Seen {
+            pid,
+            started: started.to_owned(),
+            around: around
+                .iter()
+                .map(|(pid, started)| (*pid, started.map(str::to_owned)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_sender_is_judged_by_what_it_was_when_it_connected() {
+        let program = program(100);
+        assert!(
+            seen(100, "then", &[]).inside(&program),
+            "the program itself"
+        );
+        assert!(
+            seen(205, "now", &[(100, Some("then"))]).inside(&program),
+            "below it, or in its session"
+        );
+        assert!(
+            !seen(205, "now", &[(100, Some("before"))]).inside(&program),
+            "below a process that had the program's number at another time"
+        );
+        assert!(
+            !seen(205, "now", &[(100, None)]).inside(&program),
+            "below a process whose start could not be read"
+        );
+        assert!(
+            !seen(100, "another time", &[]).inside(&program),
+            "the program's number, started at another time"
+        );
+    }
+
+    /// Run by [`a_sender_that_writes_and_exits_at_once_is_still_heard`] in a process of its
+    /// own, which tells the app and then ends, as `purlis session save` and a shell's guard do.
+    #[test]
+    #[ignore = "run in a child by a_sender_that_writes_and_exits_at_once_is_still_heard"]
+    fn a_sender_that_writes_and_exits() {
+        let (Some(path), Some(token)) = (
+            crate::envvar::var_os("PURLIS_TEST_HOOK_SOCKET"),
+            crate::envvar::var("PURLIS_TEST_HOOK_TOKEN"),
+        ) else {
+            return;
+        };
+        let notice = StartedByHand {
+            chat: 12,
+            started_by_hand: "claude".to_owned(),
+            cwd: None,
+        };
+        let token = ChatToken::from(token.as_str());
+        if crate::envvar::var("PURLIS_TEST_HOOK_RAW").is_some() {
+            // A sender that does not wait for the app: its line written, its connection
+            // closed, and it stays a moment longer only as any process would on its way out.
+            use std::io::Write;
+            if let Ok(mut socket) = std::os::unix::net::UnixStream::connect(&path)
+                && let Ok(line) = line_with(Some(&token), &notice)
+            {
+                let _ = socket.write_all(&line);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            return;
+        }
+        let _ = tell(std::path::Path::new(&path), Some(&token), &notice);
+    }
+
+    #[test]
+    fn a_sender_that_writes_and_exits_at_once_is_still_heard() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener
+            .tokens()
+            .issue_to_this_process(12)
+            .expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.each_answering_and_noticing(
+            Box::new(|_| panic!("a notice is not a report")),
+            Box::new(|_, _| panic!("a notice is not an ask")),
+            Box::new(move |notice| tx.lock().unwrap().send(notice).unwrap()),
+        );
+        let ran = crate::forklock::output(
+            std::process::Command::new(std::env::current_exe().expect("this test binary"))
+                .args([
+                    "--exact",
+                    "hookwire::tests::a_sender_that_writes_and_exits",
+                    "--ignored",
+                    "--quiet",
+                ])
+                .env("PURLIS_TEST_HOOK_SOCKET", &path)
+                .env("PURLIS_TEST_HOOK_TOKEN", token.expose()),
+        )
+        .expect("the sender runs");
+        assert!(ran.status.success(), "{ran:?}");
+        let heard = rx.recv_timeout(std::time::Duration::from_secs(5));
+        assert_eq!(
+            heard.map(|notice| notice.chat),
+            Ok(12),
+            "the line of a sender that has already exited"
+        );
+    }
+
+    #[test]
+    fn a_sender_that_does_not_wait_is_heard_when_it_is_still_running_as_its_line_is_read() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener
+            .tokens()
+            .issue_to_this_process(12)
+            .expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.each_answering_and_noticing(
+            Box::new(|_| panic!("a notice is not a report")),
+            Box::new(|_, _| panic!("a notice is not an ask")),
+            Box::new(move |notice| tx.lock().unwrap().send(notice).unwrap()),
+        );
+        let ran = crate::forklock::output(
+            std::process::Command::new(std::env::current_exe().expect("this test binary"))
+                .args([
+                    "--exact",
+                    "hookwire::tests::a_sender_that_writes_and_exits",
+                    "--ignored",
+                    "--quiet",
+                ])
+                .env("PURLIS_TEST_HOOK_SOCKET", &path)
+                .env("PURLIS_TEST_HOOK_TOKEN", token.expose())
+                .env("PURLIS_TEST_HOOK_RAW", "1"),
+        )
+        .expect("the sender runs");
+        assert!(ran.status.success(), "{ran:?}");
+        let heard = rx.recv_timeout(std::time::Duration::from_secs(5));
+        assert_eq!(
+            heard.map(|notice| notice.chat),
+            Ok(12),
+            "the line of a sender that did not wait, read while it still ran"
+        );
+    }
+
     #[test]
     fn a_chat_whose_program_ended_speaks_for_nothing_and_a_late_end_changes_nothing() {
         let tokens = ChatTokens::default();
-        let inside = |peer: u32, program: &Program| peer == program.pid;
+        let inside = |peer: &u32, program: &Program| *peer == program.pid;
         let first = tokens.issue(5).expect("a token");
         tokens.bind(5, program(100));
         tokens.program_ended(5, 100);
