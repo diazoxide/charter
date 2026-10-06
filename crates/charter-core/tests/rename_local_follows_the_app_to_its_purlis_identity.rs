@@ -74,6 +74,7 @@ fn machine() -> Machine {
             logs: None,
             planes: Vec::new(),
             own_app: Some(NEW_APP.to_owned()),
+            plugin: None,
         },
         home,
         plane,
