@@ -6,10 +6,10 @@ description: Hand a request that does not belong in this chat to a new chat — 
 # Handing work to a chat that is not this one
 
 The operator is talking to you about one thing and has asked for another. There are three
-places that second thing can run, and charter names none of them for you — it cannot judge
+places that second thing can run, and purlis names none of them for you — it cannot judge
 the work. It supplies the facts, the two tests below, and the mechanism.
 
-1. **A sub-agent** — your harness's own. charter never touches one.
+1. **A sub-agent** — your harness's own. purlis never touches one.
 2. **A new chat in this workspace.**
 3. **A new chat in another workspace**, existing or new.
 
@@ -36,10 +36,10 @@ chat here. No → another workspace.
 ## 2. Find the workspace
 
 ```bash
-charter workspace list
+purlis workspace list
 ```
 
-Match the ask against each workspace's vision — `charter workspace vision -w <name>` prints one.
+Match the ask against each workspace's vision — `purlis workspace vision -w <name>` prints one.
 The rules for the *proposal* — the command refuses none of them:
 
 - a workspace with **no vision** is never proposed; there is nothing to match against;
@@ -71,7 +71,7 @@ answered in one line.
 Make the first line a title somebody scanning a strip of tabs would recognise.
 
 **A brief never carries a secret.** It reaches the harness as a command-line argument, so
-any process on the machine can read it while the chat starts. charter refuses a
+any process on the machine can read it while the chat starts. purlis refuses a
 credential-shaped brief by kind, and that refusal is a backstop, not the rule.
 
 ## 4. Ask, with the brief on screen
@@ -100,7 +100,7 @@ BRIEF
 `billing` is the workspace from step 2, spelled out: the workspace is always named, the
 current one included, because the permission prompt has to say where the chat goes and `.`
 says nothing. Write the name, never a placeholder in angle brackets — the shell reads `<`
-as a redirect and charter refuses the call.
+as a redirect and purlis refuses the call.
 
 **Always pass `--name`**: a short task name you write from the brief, a few words a person
 scanning a strip of tabs recognises — `drop account-console-commons`, not `handoff` and not
@@ -116,19 +116,19 @@ The brief goes on **stdin, as one quoted heredoc in the same call**. That is wha
 permission prompt show the exact text the new chat is sent. There is no `--brief-file`: a
 prompt that shows a path is an approval of a path.
 
-**What happens next.** Inside the charter app, the app opens the new chat as a tab in that
+**What happens next.** Inside the purlis app, the app opens the new chat as a tab in that
 workspace, already started on the brief, and says so. Anywhere else there is no app to open
-it, so nothing is opened: charter says to open the charter app and exits 1 — tell the
+it, so nothing is opened: purlis says to open the purlis app and exits 1 — tell the
 operator that, rather than trying to start a chat yourself.
 
-## What charter refuses, and why
+## What purlis refuses, and why
 
-The prompt your harness raises in front of the handoff **is** the consent, so charter refuses
+The prompt your harness raises in front of the handoff **is** the consent, so purlis refuses
 every shape that prompt cannot stand in front of. Each one is the rule working:
 
 | It refuses | Because |
 |---|---|
-| any spelling but `charter handoff` — a path to the binary, `charter 'handoff'` | the host's permission rule does not match those, so no prompt appears |
+| any spelling but `charter handoff` — a path to the binary, `purlis 'handoff'` | the host's permission rule does not match those, so no prompt appears |
 | a brief from a pipe, a file, a here-string, or a heredoc a shell runs | the prompt would show a path or a `bash`, not the brief |
 | a call from a sub-agent | there is no operator in a sub-agent's turn to answer the prompt |
 | an unattended run (`bypassPermissions`) | the same, and nothing would ask |
@@ -146,7 +146,7 @@ One caller left in billing-ui, noted in its todos."
 ```
 
 A few plain lines: what was done, where it is, what is left. No secrets, no pasted files —
-name them by path. It goes back to the chat that asked, and only there; charter chose the
+name them by path. It goes back to the chat that asked, and only there; purlis chose the
 recipient when it opened this chat. **You get exactly one report**, so send it at the end,
 not as progress notes; a second is refused whatever happens in between. If the chat that
 asked needs another answer later, it hands off again with `--report`.
@@ -164,4 +164,4 @@ is refused — just finish the work.
 - A handed-off chat may hand off again, under the same prompt. There is no depth limit,
   because every hop needs its own yes.
 
-`charter docs show handoff` has the whole of it.
+`purlis docs show handoff` has the whole of it.

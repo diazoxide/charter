@@ -376,7 +376,7 @@ function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fi
         aria-label={`Fix ${row.name}`}
         aria-expanded={opens?.open}
         aria-controls={opens?.open ? opens.id : undefined}
-        title={`charter doctor --fix ${row.fix}`}
+        title={`purlis doctor --fix ${row.fix}`}
         disabled={fixer.busy}
         onClick={press}
       >
@@ -625,7 +625,7 @@ export function Health({
           <Dialog.Title>Doctor</Dialog.Title>
           <p className="honest" id="doctor-depth">
             {report === undefined
-              ? "charter has not answered yet."
+              ? "purlis has not answered yet."
               : report.full
                 ? "Every check, with each harness profile probed — run inside this app, so every answer is the app's own environment."
                 : "The preflight every session start runs; the harness profiles are not probed. Run inside this app, so every answer is the app's own environment."}
@@ -661,9 +661,9 @@ export function Health({
             <section aria-label="This app">
               <h3>This app</h3>
               {/* Said rather than left to be noticed: an operator comparing this with
-                  `charter doctor` in a terminal has to know why one row is not there. */}
+                  `purlis doctor` in a terminal has to know why one row is not there. */}
               <p className="honest">
-                What the chats this window starts can do. `charter doctor` does not print these.
+                What the chats this window starts can do. `purlis doctor` does not print these.
               </p>
               <Rows rows={ours} onOpenSettings={settings} />
             </section>

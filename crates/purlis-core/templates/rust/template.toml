@@ -1,0 +1,17 @@
+# The Rust project template. Everything else in this directory is copied into a new
+# project as it is laid out here (crates/purlis-core/src/template.rs). A published version
+# never changes: change any file and `version` goes up by one, with a new row in
+# `a_published_template_version_never_changes` (crates/purlis-core/tests/project_templates.rs).
+kind = "stack"
+title = "Rust"
+summary = "A Cargo crate or workspace."
+version = 1
+
+[detect]
+# A repo is this template's when one of these files is at its top level (a file, not a link).
+files = ["Cargo.toml"]
+
+[guard]
+# Commands every harness with command permissions asks the operator about before a chat
+# runs them.
+ask = ["cargo publish *"]

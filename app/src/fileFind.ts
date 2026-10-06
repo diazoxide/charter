@@ -6,7 +6,7 @@ import { placeName, type Place } from "./pieceViews";
  * **⌘P's files** (FM-7, #1110; #1103, V86 F10): a file found by its fuzzy name, in a scope that
  * follows the window's focus and that Tab widens.
  *
- * The ranking, and what is never offered, are `charter_core::files::find`'s (`find_files`):
+ * The ranking, and what is never offered, are `purlis_core::files::find`'s (`find_files`):
  * the window names a project and a branch, never a directory. This module decides the scope
  * ladder, how a hit is said on its row, and asks once per keystroke, the newest answer winning.
  */

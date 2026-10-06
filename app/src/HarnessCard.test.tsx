@@ -9,7 +9,7 @@ import { StartChat } from "./StartChat";
 /**
  * The harness capability card at a glance (HP-19, W10, ADR 0072 §3): in the picker, under the
  * row that is picked, and in a chat's header, where it opens the card's own tab. What a card
- * says is the core's (`charter_core::harness_card`'s tests); here the core's answer is written
+ * says is the core's (`purlis_core::harness_card`'s tests); here the core's answer is written
  * out, and what is held is where the window says it.
  */
 
@@ -25,7 +25,7 @@ const CLAUDE: HarnessGlance = {
 
 const OPENCODE_LINES = [
   "opencode says nothing until your first prompt, so a new chat looks idle until then.",
-  "opencode cannot have a prompt typed in for you, because charter cannot tell when it has finished starting.",
+  "opencode cannot have a prompt typed in for you, because purlis cannot tell when it has finished starting.",
 ];
 
 const OPENCODE: HarnessGlance = {
@@ -67,7 +67,7 @@ describe("the picker", () => {
     picker();
 
     const card = screen.getByRole("region", { name: "What Claude Code can do here" });
-    expect(card).toHaveTextContent("Everything charter asks of it.");
+    expect(card).toHaveTextContent("Everything purlis asks of it.");
 
     await userEvent.setup().click(screen.getByRole("radio", { name: "opencode" }));
 
@@ -108,7 +108,7 @@ describe("a chat's header", () => {
 
     expect(screen.getByRole("button", { name: "What Claude Code can do here" })).toHaveAttribute(
       "title",
-      "Everything charter asks of it.",
+      "Everything purlis asks of it.",
     );
   });
 });

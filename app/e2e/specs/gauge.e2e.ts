@@ -24,7 +24,7 @@ import { endChat, harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.j
  *
  * **What is not here, said:** that a real Claude Code runs the `statusLine` a `--settings`
  * argument names. `--settings` MERGES and was measured doing so for hooks on claude 2.1.276
- * (`charter_core::harness`); for `statusLine` it is Claude Code's documented settings key,
+ * (`purlis_core::harness`); for `statusLine` it is Claude Code's documented settings key,
  * and this run does not have a Claude Code to ask.
  */
 
@@ -146,7 +146,7 @@ describe("a chat's context gauge", () => {
       enabledPlugins?: Record<string, boolean>;
     };
 
-    // 0. **The bundled plugin** (`charter_core::plugin`): the chat is started with the plugin
+    // 0. **The bundled plugin** (`purlis_core::plugin`): the chat is started with the plugin
     // the app ships, loaded for this session alone, its hooks reading the binary from the
     // variable the app sets — and the Python charter's plugin turned off for this session.
     const pluginDir = now[`plugin-${chat}`];
@@ -176,7 +176,7 @@ describe("a chat's context gauge", () => {
     if (settings.statusLine === undefined) {
       throw new Error(
         "charter armed no statusLine for this chat. Either the rule broke, or this machine " +
-          "already fills Claude Code's status line (`~/.claude/settings.json`), which charter " +
+          "already fills Claude Code's status line (`~/.claude/settings.json`), which purlis " +
           "is right not to replace — the doctor's `chat footer` row says which.",
       );
     }

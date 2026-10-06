@@ -1,6 +1,6 @@
 //! What ConPTY does that a unix pty does not, measured on a real Windows runner.
 //!
-//! `crates/charter-core/src/session.rs` is written against three properties of a unix pty,
+//! `crates/purlis-core/src/session.rs` is written against three properties of a unix pty,
 //! and none of them is stated anywhere as a property of `portable-pty`'s *interface* — they
 //! are properties of its unix *implementation*. A read of `portable-pty` 0.9's `src/win`
 //! says all three are different on Windows. A read is not a measurement, so this asks:
@@ -45,7 +45,7 @@ const PATIENCE: Duration = Duration::from_secs(10);
 
 fn main() {
     println!("# windows-probe: what ConPTY does that a unix pty does not");
-    println!("# portable-pty 0.9, the version crates/charter-core pins");
+    println!("# portable-pty 0.9, the version crates/purlis-core pins");
 
     let dir = std::env::temp_dir().join(format!("windows-probe-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a directory to work in");
@@ -80,7 +80,7 @@ fn close(master: Box<dyn portable_pty::MasterPty + Send>, what: &str) {
         Ok(()) => println!("close-{what}: the master dropped"),
         Err(_) => println!(
             "close-{what}: BLOCKED — {PATIENCE:?} inside the drop. ClosePseudoConsole waits \
-             for the last attached client, and charter drops a master on the UI's thread"
+             for the last attached client, and purlis drops a master on the UI's thread"
         ),
     }
 }

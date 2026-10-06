@@ -4,7 +4,7 @@
 //! **Keyed by path, never by an open project.** Most of what the store remembers is not open:
 //! a recent from last month, a pin in a project on a disk that is not plugged in. So every
 //! command here names the project by the path the store holds it under, and acts on the store
-//! alone — the same entry points `charter-core` gives the CLI.
+//! alone — the same entry points `purlis-core` gives the CLI.
 //!
 //! **Nothing here grants anything.** Forget and Revoke only take away, and an approval comes
 //! back only by the operator answering the ask at the next open; an Undo is offered only for an
@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use charter_core::machine;
+use purlis_core::machine;
 
 use crate::planes::Planes;
 
@@ -81,7 +81,7 @@ fn listed(loaded: machine::Loaded) -> ThisMachine {
             // The project's own list says which pins still resolve; one that cannot be read
             // says nothing, and no pin is called gone on a guess.
             let there = if gone.is_none() {
-                charter_core::workspaces::Plane::open(&entry.plane)
+                purlis_core::workspaces::Plane::open(&entry.plane)
                     .workspaces()
                     .ok()
             } else {
@@ -177,7 +177,7 @@ mod tests {
         let planes = tempfile::tempdir().unwrap();
         let root = planes.path().join("p");
         std::fs::create_dir_all(root.join("workspaces/ide")).unwrap();
-        std::fs::write(root.join(charter_core::plane::MANIFEST), "").unwrap();
+        std::fs::write(root.join(purlis_core::plane::MANIFEST), "").unwrap();
         let away = planes.path().join("away");
         let mut store = machine::Store::default();
         store.remember(&away, 1);

@@ -8,7 +8,7 @@ name: mutants
 # roughly fifty PRs merged past the red X, because "failure" was the answer to four different
 # questions at once. Measured from run 35580456628's own artifacts, 2026-09-21:
 #
-#   * charter-core generates 6,555 mutants (1,639 per shard, four shards).
+#   * purlis-core generates 6,555 mutants (1,639 per shard, four shards).
 #   * A mutant costs 34.6 s on average — about 19 s to rebuild the crate and 45 s to run its
 #     tests — measured over the 1,868 that finished. The whole crate is therefore ~63 HOURS
 #     of serial work, and a quarter of it is ~15.8 h against a job limit of 6.
@@ -60,14 +60,14 @@ name: mutants
 #    budget prevents; a smaller shard loses less when it happens.
 # 2. **The baseline is checked ONCE.** With a per-shard baseline, 24 shards is 24 rolls of
 #    the same flaky dice: three separate deadline-bound tests were caught failing an
-#    unmutated charter-core while this was being written. One job asks the question, every
-#    shard runs `--baseline skip`, and a red `baseline` job means "charter-core's own tests do
+#    unmutated purlis-core while this was being written. One job asks the question, every
+#    shard runs `--baseline skip`, and a red `baseline` job means "purlis-core's own tests do
 #    not pass", which is a different sentence from anything mutation testing says.
 # 3. **Survivors are reported by a different job from the one that runs the shards.** So:
 #
-#        baseline   red  ->  charter-core's own tests do not pass. Nothing else is evidence.
+#        baseline   red  ->  purlis-core's own tests do not pass. Nothing else is evidence.
 #        core (N)   red  ->  shard N's run did not finish. The runner, or the budget.
-#        survivors  red  ->  charter-core has code that no test distinguishes. READ IT.
+#        survivors  red  ->  purlis-core has code that no test distinguishes. READ IT.
 #
 #    Only the last one is mutation testing talking. `tools/mutants-report.py` decides which by
 #    comparing each shard's planned list (`mutants.json`) against what it actually finished
@@ -77,14 +77,14 @@ name: mutants
 #    each the whole crate is ~96 runner-HOURS, which at eight runners wide (see `max-parallel`)
 #    is ~12 h of wall clock — every day, eight of the account's twenty job slots from 03:17
 #    UTC into the afternoon. So Monday to Saturday run `cargo mutants --in-diff` on the diff of
-#    `crates/charter-core` since the head of the last GREEN run of this workflow: measured on
-#    2026-09-23, one day of charter-core's churn is ~1,500 mutants, ~2 h at eight wide. With no
+#    `crates/purlis-core` since the head of the last GREEN run of this workflow: measured on
+#    2026-09-23, one day of purlis-core's churn is ~1,500 mutants, ~2 h at eight wide. With no
 #    green run in the last 72 hours it takes the last 24 hours instead of a diff that grows into
 #    a whole-crate run every night the survivors stay red.
 #    What the diff cannot see — a deleted test that stops catching an UNCHANGED line — is what
 #    Sunday is for, and a clean diff night never closes the issue below.
 #
-# 5. **Sunday tests one slice of the crate, not all of it** (#1200). By 2026-10-03 charter-core
+# 5. **Sunday tests one slice of the crate, not all of it** (#1200). By 2026-10-03 purlis-core
 #    had 21,035 mutants: at 131 s each that is ~765 runner-hours, ~96 h of wall clock at eight
 #    wide, and the last full run (2026-09-27, run 36308723145) ran 37 h without finishing. A
 #    full run that never finishes never closes the issue. So Sunday tests slice `W mod SLICES`
@@ -105,7 +105,7 @@ name: mutants
 # 6. **Every mutant builds without debug info** (`[profile.mutants]` in `Cargo.toml`, chosen by
 #    `profile = "mutants"` in `.cargo/mutants.toml`, as the cargo-mutants book recommends). On
 #    2026-10-03 the build was 90-120 s of a mutant's 131 s, and most of a build is linking
-#    charter-core's test binaries, whose debug info no mutation verdict reads.
+#    purlis-core's test binaries, whose debug info no mutation verdict reads.
 #
 # And because the real failure here was that nobody LOOKED for five days, the last job keeps
 # one issue in this repo up to date with the answer, and closes it when every file it holds
@@ -223,13 +223,14 @@ jobs:
 
           # Every mutant of the crate, and so every file that has one: `notice` keeps its record
           # of what is not known clean in these files.
-          cargo mutants --package charter-core --list > mutants.all
+          cargo mutants --package purlis-core --list > mutants.all
           cut -d: -f1 mutants.all | sort -u > mutants.files
           : > mutants.diff
           if [ "$SCOPE" = diff ]; then
-            git diff "$BASE" HEAD -- crates/charter-core > mutants.diff
+            # `-M` and the old path: a file that only moved (crates/charter-core, RN-13) is not new.
+            git diff -M "$BASE" HEAD -- crates/purlis-core crates/charter-core > mutants.diff
             # An empty diff lists nothing (cargo-mutants says so on stderr and exits 0).
-            cargo mutants --package charter-core --in-diff mutants.diff --list > mutants.run
+            cargo mutants --package purlis-core --in-diff mutants.diff --list > mutants.run
             cut -d: -f1 mutants.run | sort -u > mutants.tested
           elif [ "$SCOPE" = slice ]; then
             WEEK=$(( $(date -u +%s) / 604800 ))
@@ -238,7 +239,7 @@ jobs:
             mapfile -t SLICE < mutants.tested
             if [ "${#SLICE[@]}" -gt 0 ]; then
               # The shards list exactly this, so the count and the matrix agree with them.
-              cargo mutants --package charter-core "${SLICE[@]/#/--file=}" --list > mutants.run
+              cargo mutants --package purlis-core "${SLICE[@]/#/--file=}" --list > mutants.run
             else
               : > mutants.run
             fi
@@ -274,14 +275,14 @@ jobs:
           if-no-files-found: error
 
   baseline:
-    name: charter-core's own tests
+    name: purlis-core's own tests
     needs: plan
     if: needs.plan.outputs.scope != 'none'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # bubblewrap and socat, as `ci.yml` installs them: a project charter makes runs its chats
-      # sandboxed (ADR 0067 §1), so charter-core's start tests refuse without them. On a shard
+      # sandboxed (ADR 0067 §1), so purlis-core's start tests refuse without them. On a shard
       # their absence is worse than a red baseline: every mutant those tests cover reads as
       # caught, by a test that fails whatever the mutant does.
       - name: The sandbox's programs
@@ -290,16 +291,16 @@ jobs:
           sudo apt-get install -y bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Every crate the workspace's lock names, and not only charter-core's: the gitoxide
+      # Every crate the workspace's lock names, and not only purlis-core's: the gitoxide
       # guard reads `cargo metadata --offline` over the whole workspace, which a
-      # `--package charter-core` build never downloads.
+      # `--package purlis-core` build never downloads.
       - name: Every crate the lock names
         run: cargo fetch --locked
       # Exactly what cargo-mutants runs as its baseline, and the reason the shards below can
       # skip it. `--no-fail-fast` for `ci.yml`'s reason: cargo stops at the first failing test
       # binary and skips every later one, so a single flake would hide the rest.
       - name: The unmutated tree, once, for every shard
-        run: cargo test --package charter-core --profile mutants --locked --no-fail-fast
+        run: cargo test --package purlis-core --profile mutants --locked --no-fail-fast
 
   core:
     name: shard ${{ matrix.shard }}
@@ -321,7 +322,7 @@ jobs:
         with:
           name: plan-diff
       # bubblewrap and socat, as `ci.yml` installs them: a project charter makes runs its chats
-      # sandboxed (ADR 0067 §1), so charter-core's start tests refuse without them. On a shard
+      # sandboxed (ADR 0067 §1), so purlis-core's start tests refuse without them. On a shard
       # their absence is worse than a red baseline: every mutant those tests cover reads as
       # caught, by a test that fails whatever the mutant does.
       - name: The sandbox's programs
@@ -330,9 +331,9 @@ jobs:
           sudo apt-get install -y bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Every crate the workspace's lock names, and not only charter-core's: the gitoxide
+      # Every crate the workspace's lock names, and not only purlis-core's: the gitoxide
       # guard reads `cargo metadata --offline` over the whole workspace, which a
-      # `--package charter-core` build never downloads.
+      # `--package purlis-core` build never downloads.
       - name: Every crate the lock names
         run: cargo fetch --locked
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
@@ -380,7 +381,7 @@ jobs:
               ;;
           esac
           cargo mutants \
-            --package charter-core \
+            --package purlis-core \
             --shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }} \
             --sharding round-robin \
             --baseline skip \
@@ -407,7 +408,7 @@ jobs:
           if-no-files-found: warn
 
   survivors:
-    # THE job to read. Red here means charter-core contains a change that no test notices.
+    # THE job to read. Red here means purlis-core contains a change that no test notices.
     # It is deliberately separate from `core` so that the two sentences cannot be confused,
     # and `always()` so that survivors found by the shards that DID finish are reported even
     # when another shard died.
@@ -421,7 +422,7 @@ jobs:
         with:
           path: artifacts
           pattern: mutants-*
-      # Red for what is NEW, not for what is known. charter-core had 141 survivors in the 38%
+      # Red for what is NEW, not for what is known. purlis-core had 141 survivors in the 38%
       # of itself that ran on 2026-09-21, and a 5% sample on 09-22 found 31 more; a job that fails on any survivor at all would be red
       # every night from here to the end of the backlog, which is the disease and not the cure.
       # `.github/mutants-survivors.txt` is the backlog, and it is a file people edit on purpose.

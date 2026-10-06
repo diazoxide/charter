@@ -10,13 +10,13 @@
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use charter_session_protocol::link::{self, ProvenDevice};
-use charter_session_protocol::session::{
+use futures::future::BoxFuture;
+use purlis_session_protocol::link::{self, ProvenDevice};
+use purlis_session_protocol::session::{
     self, Answer, Attached, Chat, Command, Host, Peer, Refusal,
 };
-use charter_session_protocol::ui::{self, Handler};
-use charter_session_protocol::view::{Attacher, Feed, Limits, ViewId};
-use futures::future::BoxFuture;
+use purlis_session_protocol::ui::{self, Handler};
+use purlis_session_protocol::view::{Attacher, Feed, Limits, ViewId};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, join};
 use tokio::process::Command as Process;

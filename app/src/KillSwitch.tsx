@@ -76,8 +76,8 @@ export function KillSwitch() {
   };
 
   const label = stopped
-    ? "Every chat charter started is stopped — re-arm to let chats start again"
-    : "Stop every chat and shell charter started, in every project and window";
+    ? "Every chat purlis started is stopped — re-arm to let chats start again"
+    : "Stop every chat and shell purlis started, in every project and window";
   return (
     <>
       {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186); being a `<button>` is

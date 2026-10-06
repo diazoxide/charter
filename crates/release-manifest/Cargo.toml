@@ -11,7 +11,7 @@ publish = false
 default-run = "release-manifest"
 
 [dependencies]
-charter-core.workspace = true
+purlis-core.workspace = true
 serde_json.workspace = true
 # The verifier tauri-plugin-updater itself uses, at the version already in Cargo.lock through
 # it — so what this refuses at release time is exactly what the app would refuse on a laptop.

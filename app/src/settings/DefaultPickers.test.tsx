@@ -13,7 +13,7 @@ import type { SettingsEdit, SettingsField, SettingsFile, SettingsWhich } from ".
  * harness profiles a chat can start on — and a New… entry that opens the matching create flow
  * and picks what it made. A value set by hand that names nothing is shown as such, with the
  * core's sentence for it, and is replaced from the picker. The core is the mock: what it lists
- * and refuses is `charter_core`'s to test.
+ * and refuses is `purlis_core`'s to test.
  */
 
 const PLANE = "/home/dev/plane";
@@ -61,7 +61,7 @@ const profile = (name: string, source = "built-in") => ({
 });
 
 const GHOST =
-  '[persona] default = "ghost" names no persona in this project, so charter reads it as no default. Pick one that is here, or make it.';
+  '[persona] default = "ghost" names no persona in this project, so purlis reads it as no default. Pick one that is here, or make it.';
 
 /** The core, as a mock: the two files, and what the project has to pick from. */
 function core({

@@ -55,7 +55,7 @@ their current names until the rename lands, so `<plane>` in a path is the projec
 
 - **There is no index and no database.** `Cargo.lock` has no SQLite, redb or sled. `charter
   recall` reads every entry of every memory base and keyword-scans it per query
-  (`crates/charter-core/src/recall.rs`, through `memstore::read_files`). A chat's briefing reads
+  (`crates/purlis-core/src/recall.rs`, through `memstore::read_files`). A chat's briefing reads
   its store's entries the same way (`briefing.rs`), and so do the memory duplicate checks. Track 02
   of the research counts about eight such reads per project change, and calls them a felt hitch at
   thousands of memories. `memory/index.md` and `sessions/index.md` are lists for people, not

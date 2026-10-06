@@ -9,7 +9,7 @@ the end — what has to be true before a line of runtime ships.
 
 The work is charter-app's. The record is here because `0001`–`0040` are here and a decision about
 charter's trust boundary kept in the other repository would split the sequence; ADR 0031 made the
-same move for the same reason. Every path below (`crates/charter-core/…`, `app/src-tauri/…`,
+same move for the same reason. Every path below (`crates/purlis-core/…`, `app/src-tauri/…`,
 `app/src/…`) is in `diazoxide/charter` and every bare `#nnn` is an issue there.
 
 **Nothing in this record is implemented.** It is a gate, written before the thing it gates, which
@@ -20,9 +20,9 @@ is the only order in which a gate is worth anything.
 charter-app's whole M3 milestone is a guard that stands between a model and a credential. Its
 state today, read off the tree rather than remembered:
 
-- `charter hook pretooluse` is **one switch**. `crates/charter-cli/src/main.rs`'s `is_a_tool_hook`
+- `charter hook pretooluse` is **one switch**. `crates/purlis-cli/src/main.rs`'s `is_a_tool_hook`
   answers every word in the `pretooluse`/`posttooluse` namespace with exit 2 — which a harness
-  reads as *block* — and `crates/charter-cli/tests/hook.rs` pins that behaviour.
+  reads as *block* — and `crates/purlis-cli/tests/hook.rs` pins that behaviour.
 - Three of six stages are in the tree and **each one is wired to nothing, deliberately**.
   `shellseg.rs` ("This module is stage 1 and is wired to nothing"), `heredoc.rs` and
   `shellwrap.rs` ("stage 2 of six and is wired to nothing"), `leakguard.rs` ("This is stage 3 of
@@ -507,7 +507,7 @@ second door beside the one being built.
 
 **The gap is in this record's own wording**, which is why the amendment is here rather than in a
 code comment. Decision 3 says the fingerprint *"has to be a hash of the executable and of every
-file it declares, checked at each launch"*. `crates/charter-core/src/extension.rs` implemented
+file it declares, checked at each launch"*. `crates/purlis-core/src/extension.rs` implemented
 exactly that. **So a plugin could add or change an UNDECLARED sibling and the fingerprint said
 unchanged** — a `.dylib` beside the program, a script it `source`s, a config it reads. None of
 those is declared; none of them was hashed.
@@ -594,7 +594,7 @@ Directories count as entries, which bounds the depth without a second limit to k
 
 charter-app#150's point 6 left this unmeasured and the operator asked for it. Measured on an
 M-series machine, release build, warm page cache, mean of five re-hashes
-(`what_the_re_hash_costs_at_launch` in `crates/charter-core/src/extension/tests.rs`, so it can be
+(`what_the_re_hash_costs_at_launch` in `crates/purlis-core/src/extension/tests.rs`, so it can be
 re-run rather than believed):
 
 | plugin | re-hash at launch |
@@ -639,9 +639,9 @@ reader checks rather than a thing a brief asserts. The operator has not ruled on
 
 **What was built**, in `diazoxide/charter`:
 
-- `crates/charter-core/src/executor.rs` — the executor. It starts an approved extension's
+- `crates/purlis-core/src/executor.rs` — the executor. It starts an approved extension's
   declared program, hands it one question, reads one answer, and stops it.
-- `crates/charter-core/src/handed.rs` — the one file that says what charter hands a program,
+- `crates/purlis-core/src/handed.rs` — the one file that says what charter hands a program,
   and the one sentence the consent prompt says about it, held to each other by a test.
 - A third word in the manifest vocabulary, **`views`**: a surface the operator opens, filled by
   asking the extension's program. It is this record's second minimum capability — *"a named

@@ -5,7 +5,7 @@
 // as `{"ui":{"call":{"id":…,"method":…,"args":…}}}`, and its answer comes back as
 // `{"ui":{"reply":{"re":…,"ok":…}}}` or `…"err":…`. The host serves it only to the app's window
 // (`local-ui`) and only to its own build, so the window says which build it is first
-// (`openUiRpc`). `charter_session_protocol::ui` is the host's side of the same frames.
+// (`openUiRpc`). `purlis_session_protocol::ui` is the host's side of the same frames.
 //
 // What carries the frames is the caller's: a link to `charterd` once FD-5 starts one.
 

@@ -26,11 +26,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use charter_core::change::land::{self, How, Through, Verified};
-use charter_core::change::push::{self, Destination};
-use charter_core::forge::pr::Repo;
-use charter_core::forge::{ForgeBackend, Kind};
-use charter_core::repocmd::Say;
+use purlis_core::change::land::{self, How, Through, Verified};
+use purlis_core::change::push::{self, Destination};
+use purlis_core::forge::pr::Repo;
+use purlis_core::forge::{ForgeBackend, Kind};
+use purlis_core::repocmd::Say;
 
 use crate::planes::{PlaneId, Planes};
 
@@ -60,7 +60,7 @@ impl Busy {
         let mut running = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if !running.insert(key.clone()) {
             return Err(format!(
-                "charter is already pushing or landing {slug} in {ws}. Wait for it to finish."
+                "purlis is already pushing or landing {slug} in {ws}. Wait for it to finish."
             ));
         }
         Ok(Running {
@@ -225,7 +225,7 @@ impl LandQuestion {
     fn of(v: Verified, said: Vec<String>) -> Result<Self, String> {
         Ok(Self {
             number: u32::try_from(v.number)
-                .map_err(|_| format!("request {} is not a number charter can show", v.number))?,
+                .map_err(|_| format!("request {} is not a number purlis can show", v.number))?,
             head_short: v.head_short(),
             how: v.how(),
             squash: v.squash_is_charters(),
@@ -274,8 +274,8 @@ pub(crate) struct ChangeMember {
     pub repo: String,
 }
 
-impl From<charter_core::change::view::ChangeAt> for ChangeList {
-    fn from(c: charter_core::change::view::ChangeAt) -> Self {
+impl From<purlis_core::change::view::ChangeAt> for ChangeList {
+    fn from(c: purlis_core::change::view::ChangeAt) -> Self {
         Self {
             at: u32::try_from(c.at).unwrap_or(u32::MAX),
             change: c.change,
@@ -306,10 +306,10 @@ fn parted(said: Vec<Say>) -> (Vec<String>, Vec<String>) {
 
 /// A workspace name the core would read, or the refusal.
 fn workspace_ok(ws: &str) -> Result<(), String> {
-    if charter_core::contain::workspace_name_ok(ws) {
+    if purlis_core::contain::workspace_name_ok(ws) {
         Ok(())
     } else {
-        Err(format!("{ws:?} is not a workspace name charter would read"))
+        Err(format!("{ws:?} is not a workspace name purlis would read"))
     }
 }
 
@@ -424,7 +424,7 @@ pub(crate) fn land_in(
 /// The real forges and remotes, logged under this device's id from the store at `config`
 /// (FD-25).
 fn real<T>(config: Option<&Path>, then: impl FnOnce(&Reach) -> T) -> T {
-    let host = charter_core::dispatch::log_name(config, &charter_core::dispatch::host());
+    let host = purlis_core::dispatch::log_name(config, &purlis_core::dispatch::host());
     then(&Reach {
         backend_of: &|repo: &Repo| repo.backend(),
         route: &|https: &str| https.to_owned(),

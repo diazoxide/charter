@@ -268,7 +268,7 @@ pub async fn serve(
             Ok(Some(chat)) => Some(format!(
                 "this connection comes from inside a chat (process {pid}, under chat program \
                  {chat}), and a chat never holds a person's scope: ask in the chat, and answer \
-                 in charter's window"
+                 in purlis's window"
             )),
             Err(why) => Some(format!(
                 "whether this connection comes from inside a chat could not be read ({why}), so \

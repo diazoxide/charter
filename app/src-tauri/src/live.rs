@@ -8,9 +8,9 @@
 
 use std::path::Path;
 
-use charter_core::planegit::Trigger;
-use charter_core::repocmd::Say;
-use charter_core::wscmd;
+use purlis_core::planegit::Trigger;
+use purlis_core::repocmd::Say;
+use purlis_core::wscmd;
 
 use crate::planes::{PlaneId, Planes};
 
@@ -64,14 +64,14 @@ pub async fn workspace_live(
 
 /// [`workspace_live_preview`], without a runtime.
 pub fn preview(root: &Path, name: &str) -> Result<LivePreview, String> {
-    if !charter_core::contain::workspace_name_ok(name) {
+    if !purlis_core::contain::workspace_name_ok(name) {
         return Err(format!("invalid workspace name '{name}'"));
     }
     Ok(LivePreview {
         live: wscmd::live_workspaces(root).contains(name),
         files: wscmd::meta_paths(root, name),
         remote: origin_of(root),
-        mode: charter_core::planesave::Settings::read(root)
+        mode: purlis_core::planesave::Settings::read(root)
             .plane
             .mode
             .value
@@ -91,13 +91,13 @@ pub struct LiveSwitched {
 
 /// `origin` as git has it, whichever host it is on.
 fn origin_of(root: &Path) -> Option<String> {
-    charter_core::worktree::git::run(
+    purlis_core::worktree::git::run(
         root,
         &["remote", "get-url", "origin"],
-        charter_core::worktree::git::READ,
+        purlis_core::worktree::git::READ,
     )
     .ok()
-    .filter(charter_core::worktree::git::Run::ok)
+    .filter(purlis_core::worktree::git::Run::ok)
     .map(|r| r.line().trim().to_owned())
     .filter(|url| !url.is_empty())
 }
@@ -123,7 +123,7 @@ pub fn switch(root: &Path, name: &str, live: bool) -> Result<LiveSwitched, Strin
 /// saves: going LIVE is not an answer to that question, and a save would push every other
 /// change in the plane with it (ADR 0051). Answers why it did not save, if it did not.
 pub fn save_after(root: &Path, lines: &mut Vec<String>) -> Option<String> {
-    if charter_core::planesave::Settings::read(root)
+    if purlis_core::planesave::Settings::read(root)
         .plane
         .mode
         .value
@@ -143,7 +143,7 @@ pub fn save_after(root: &Path, lines: &mut Vec<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use charter_core::planegit;
+    use purlis_core::planegit;
     use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) -> String {
@@ -159,7 +159,7 @@ mod tests {
             .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
             .env("GIT_COMMITTER_NAME", "t")
             .env("GIT_COMMITTER_EMAIL", "t@example.invalid");
-        let out = charter_core::forklock::output(&mut command).expect("git runs");
+        let out = purlis_core::forklock::output(&mut command).expect("git runs");
         assert!(
             out.status.success(),
             "git {args:?}: {}",

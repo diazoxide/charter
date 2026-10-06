@@ -50,7 +50,7 @@ import { ago } from "./BottomBar";
  * # What is on the line, and the rules it is composed by
  *
  * charter's own footer is the starting point rather than an invention:
- * `crates/charter-core/src/footer.rs` draws `⬢ alpha · todo 3 · pieces 2 1 done · ws 4` as
+ * `crates/purlis-core/src/footer.rs` draws `⬢ alpha · todo 3 · pieces 2 1 done · ws 4` as
  * zone 1, *"where I am"*, and it arrived at that over a long time. Three of its rules are
  * taken whole:
  *
@@ -359,7 +359,7 @@ function AlertsButton({ alerts }: { alerts?: Alerts }) {
       }
       title={
         count === undefined
-          ? "charter could not count every open project's alerts — open the drawer to see why"
+          ? "purlis could not count every open project's alerts — open the drawer to see why"
           : "Open the alerts drawer: every open project's alerts"
       }
       onClick={alerts.open}

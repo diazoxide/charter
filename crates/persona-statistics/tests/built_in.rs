@@ -11,15 +11,15 @@
 
 use std::path::{Path, PathBuf};
 
-use charter_core::executor::Executor;
+use purlis_core::executor::Executor;
 
 /// How long the program is given here (#422): it is copied into a fresh bundle for each test,
 /// and macOS assesses a program file the first time it runs — under a loaded machine, for
 /// longer than the real five seconds. No test here is about the deadline.
 const PATIENT: std::time::Duration = std::time::Duration::from_secs(30);
-use charter_core::extension::{self, BuiltIn, Source, Standing};
-use charter_core::handed;
-use charter_core::panel::Block;
+use purlis_core::extension::{self, BuiltIn, Source, Standing};
+use purlis_core::handed;
+use purlis_core::panel::Block;
 
 const ID: &str = "persona-statistics";
 
@@ -96,7 +96,7 @@ impl Shipped {
         self.built_in().root().expect("a root").join(ID)
     }
 
-    fn ask(&self, focus: Option<&str>) -> Result<charter_core::executor::Answer, String> {
+    fn ask(&self, focus: Option<&str>) -> Result<purlis_core::executor::Answer, String> {
         let plane = self.plane();
         Executor::with_built_in(self.built_in())
             .with_deadline(PATIENT)
@@ -286,7 +286,7 @@ fn a_workspace_can_turn_it_off_while_the_project_has_it_on() {
 
 #[test]
 fn its_numbers_are_the_numbers_charter_persona_stats_gives() {
-    use charter_core::personaverbs::stats;
+    use purlis_core::personaverbs::stats;
     let shipped = Shipped::new();
     let today = noon().date();
 

@@ -4,13 +4,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link;
-use charter_session_protocol::session::{
-    self, Answer, Client, Command, Frame, Host, Peer, Refusal,
-};
-use charter_session_protocol::ui::{self, Handler};
 use futures::future::BoxFuture;
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link;
+use purlis_session_protocol::session::{self, Answer, Client, Command, Frame, Host, Peer, Refusal};
+use purlis_session_protocol::ui::{self, Handler};
 use serde_json::{Value, json};
 use tokio::io::duplex;
 

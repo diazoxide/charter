@@ -24,7 +24,7 @@ Linux and Windows. macOS and Linux build, test and package. Nothing has ever bee
 Windows — charter-app#93 is the first time any of this code has run there — and the estimate
 for the whole rebuild has been resting on that gap.
 
-Every path below (`crates/charter-core/…`, `app/src-tauri/…`, `tests/differential/run.py`) is
+Every path below (`crates/purlis-core/…`, `app/src-tauri/…`, `tests/differential/run.py`) is
 in `diazoxide/charter`, and every bare `#nnn` is an issue there.
 
 **The decision: Windows does not ship until charter's containment guards have a Windows
@@ -264,7 +264,7 @@ configured out"*. That is charter-app#101 arriving exactly where it was predicte
 Two things this PR's own `cfg` work leaves behind, said here so a reviewer does not have to
 find them: three constants in `hookwire` and `session` became unix-only and are now marked so
 (they were dead-code warnings for one run), and the empty-enum `Listener` produces four
-`unreachable definition` warnings at its call sites in `crates/charter-cli/tests/statusline.rs`.
+`unreachable definition` warnings at its call sites in `crates/purlis-cli/tests/statusline.rs`.
 Warnings, because this job clears `-D warnings` — but the day Windows becomes a gate they are
 errors, and that is the right moment to decide whether those tests should be `cfg(unix)` too.
 

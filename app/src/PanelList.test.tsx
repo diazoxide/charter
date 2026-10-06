@@ -178,7 +178,7 @@ describe("the count is bounded", () => {
   it("draws a page and offers the rest, rather than every row there is", () => {
     // *"max 10 or 20 todos should be loaded … and load more"*. The scroll is the CSS half
     // (`.panel-rows` has a `max-height`); this is the half that keeps the DOM small, which is
-    // the half that matters at the 500 rows `charter_core::panel::MOST_ROWS` allows.
+    // the half that matters at the 500 rows `purlis_core::panel::MOST_ROWS` allows.
     draw(many(30), { page: 5 });
 
     expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(5);
@@ -309,7 +309,7 @@ describe("the search", () => {
 describe("an empty list", () => {
   it("says the panel's own sentence and not a shared default", () => {
     // *"Nothing to do"* and *"No personas on this plane"* are different claims, which is why
-    // the sentence is part of the contract (`charter_core::panel::Empty`) rather than a
+    // the sentence is part of the contract (`purlis_core::panel::Empty`) rather than a
     // default this component supplies.
     render(
       <PanelList

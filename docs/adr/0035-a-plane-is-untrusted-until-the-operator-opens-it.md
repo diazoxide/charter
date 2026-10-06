@@ -12,7 +12,7 @@ first open, and the answer has to be shown to the operator.
 ## What a plane contributes, measured
 
 **Its committed settings choose your plugins and set your environment.**
-`crates/charter-core/src/layer.rs` reads the plane's own `.claude/settings.json`
+`crates/purlis-core/src/layer.rs` reads the plane's own `.claude/settings.json`
 (`layer::plane_settings(plane, SETTINGS)`, where `SETTINGS = ".claude/settings.json"`) and copies
 two keys out of it:
 
@@ -137,7 +137,7 @@ repository it writes `charter.toml`, `personas/`, `workspaces/`, `.charter/` and
 *offers* — as a printed command, because charter cannot prompt — `charter init --clone-this-repo`,
 which clones the repo into `workspaces/default/<name>/`. The offer exists already, as a
 consequence of [ADR 0007](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) removing the embedded shape; it is pinned by
-`tests/test_init_first_clone.py` and ported to Rust in `crates/charter-core/src/scaffold/`.
+`tests/test_init_first_clone.py` and ported to Rust in `crates/purlis-core/src/scaffold/`.
 
 **The default reverses.** `charter init` on an existing repo adopts that repo as the plane's first
 clone and makes the plane beside it. "Make this repo itself the plane" stays available — it is how

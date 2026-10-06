@@ -430,7 +430,7 @@ const fourth = await theAppRuns(
 );
 check(
   "the launch after a restart to update says why it is asking",
-  fourth.answered?.said?.includes("charter restarted to install an update.") === true,
+  fourth.answered?.said?.includes("purlis restarted to install an update.") === true,
   `the question said: ${JSON.stringify(fourth.answered?.said)}`,
 );
 check(

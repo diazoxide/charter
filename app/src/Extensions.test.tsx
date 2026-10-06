@@ -28,20 +28,20 @@ afterEach(() => {
 
 /** The question charter asks, as the core builds it. The two sentences are the core's own. */
 const RUNS_AS_YOU =
-  "charter does not confine an extension. It runs as you do, with your files, your network " +
-  "and your ability to start programs — nothing charter has stops one reading your vaults, " +
-  "writing charter's own settings, or changing what your next launch runs. What is listed " +
+  "purlis does not confine an extension. It runs as you do, with your files, your network " +
+  "and your ability to start programs — nothing purlis has stops one reading your vaults, " +
+  "writing purlis's own settings, or changing what your next launch runs. What is listed " +
   "above is what this extension DECLARES, not what it is LIMITED to.";
 const FINGERPRINTED =
-  "charter has read every file in this extension's directory — not only the ones it " +
+  "purlis has read every file in this extension's directory — not only the ones it " +
   "declares — and will ask again if any of them changes, or if one is added or taken away. " +
   "That catches an extension that changed under you. It is not a defence against one written " +
   "to deceive you, and it is not a boundary.";
-/** `charter_core::extension::state_note("cache")`, for an extension that declares one. */
+/** `purlis_core::extension::state_note("cache")`, for an extension that declares one. */
 const STATE_NOTE =
-  "charter does not read 'cache/'. That is this extension's state directory: the one place " +
-  "it may write without charter asking again. charter refuses to load the extension if that " +
-  "directory holds a link or a program, so what is in there is data — but charter cannot stop " +
+  "purlis does not read 'cache/'. That is this extension's state directory: the one place " +
+  "it may write without charter asking again. purlis refuses to load the extension if that " +
+  "directory holds a link or a program, so what is in there is data — but purlis cannot stop " +
   "a program it has already read from treating its own data as code.";
 
 const ASK = {
@@ -188,7 +188,7 @@ describe("the extension registry", () => {
     ).toBeInTheDocument();
   });
 
-  it("says why an extension charter could not read is contributing nothing", async () => {
+  it("says why an extension purlis could not read is contributing nothing", async () => {
     core({
       rows: [
         {
@@ -259,7 +259,7 @@ describe("the consent surface", () => {
 
   it("renders the core's sentences as given rather than words of its own", async () => {
     // A dialog that composed its own reassurance would drift kinder than the truth one edit at
-    // a time. These two strings come out of `charter_core::extension` and are pinned there.
+    // a time. These two strings come out of `purlis_core::extension` and are pinned there.
     core({ rows: [newRow] });
     render(<Extensions onClose={() => undefined} />);
     await userEvent.click(await screen.findByRole("button", { name: "Review" }));
@@ -268,7 +268,7 @@ describe("the consent surface", () => {
     expect(screen.getByText(FINGERPRINTED)).toBeInTheDocument();
   });
 
-  it("names the one directory charter does not read, when there is one", async () => {
+  it("names the one directory purlis does not read, when there is one", async () => {
     // charter-app#152. The fingerprint note says charter read every file in the directory; an
     // extension with a state directory has one exception to that, and the exception belongs on
     // the screen where the operator says yes.
@@ -297,13 +297,13 @@ describe("the consent surface", () => {
           ...newRow,
           declares: [
             "a theme, “Midnight”",
-            "a program, bin/x — charter starts it only when you open one of this extension's views",
+            "a program, bin/x — purlis starts it only when you open one of this extension's views",
           ],
           ask: {
             ...ASK,
             declares: [
               "a theme, “Midnight”",
-              "a program, bin/x — charter starts it only when you open one of this extension's views",
+              "a program, bin/x — purlis starts it only when you open one of this extension's views",
             ],
           },
         },
@@ -319,7 +319,7 @@ describe("the consent surface", () => {
   it("names each capability the extension asks for, as the core words it", async () => {
     // ADR 0053: every capability is visible where the operator says yes. The line is the
     // core's (`Capability::asks`), listed first, and the dialog draws it as given.
-    const capability = "the capability “probe” — charter's test capability, which grants nothing";
+    const capability = "the capability “probe” — purlis's test capability, which grants nothing";
     const declares = [capability, "a theme, “Midnight”"];
     core({ rows: [{ ...newRow, declares, ask: { ...ASK, declares } }] });
     render(<Extensions onClose={() => undefined} />);

@@ -39,7 +39,7 @@ const REPO = "/home/dev/widget";
 const NOT_INTO_A_REPO = [
   "✗ this is the git repo 'svc', and `charter init` does not make a repository into a control plane unless you ask it to. Nothing was written.",
   "• A plane is a directory of its own, and this repo is the first clone in it:",
-  "• To make THIS repo the plane instead — ask for it by name: charter init --plane-is-this-repo",
+  "• To make THIS repo the plane instead — ask for it by name: purlis init --plane-is-this-repo",
 ].join("\n");
 
 /** The core, with a plane open and a `create_project` that answers as charter's does. */
@@ -183,7 +183,7 @@ describe("making a project", () => {
       expect(within(dialog).getByLabelText(name).closest(".ui-setting-row")).not.toBeNull();
 
     expect(within(dialog).getByLabelText("Folder")).toHaveAccessibleDescription(
-      "It does not have to exist yet. charter makes it, and writes the plane into it.",
+      "It does not have to exist yet. purlis makes it, and writes the plane into it.",
     );
     expect(within(dialog).getByLabelText("Repository to adopt")).toHaveAccessibleDescription(
       /^Optional: the plane goes in the folder above/,

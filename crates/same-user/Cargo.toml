@@ -1,5 +1,5 @@
 [package]
-name = "charter-same-user"
+name = "purlis-same-user"
 description = "Is the other end, or this file, this user's alone: the peer-uid check and the private directory and file every charter socket and credential rests on"
 version.workspace = true
 edition.workspace = true

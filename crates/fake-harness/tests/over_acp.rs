@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use charter_core::acp::{self, Chat, Event, Launch, NotStarted, Stop, TurnFailed};
-use charter_core::harness::asks::{Admitted, Answerer, Asks, Raised, Refused};
-use charter_core::harness::model::{Began, Deadline, Plan, Said, Session, Step, Turn, Usage};
+use purlis_core::acp::{self, Chat, Event, Launch, NotStarted, Stop, TurnFailed};
+use purlis_core::harness::asks::{Admitted, Answerer, Asks, Raised, Refused};
+use purlis_core::harness::model::{Began, Deadline, Plan, Said, Session, Step, Turn, Usage};
 
 const PATIENCE: Duration = Duration::from_secs(20);
 
@@ -16,7 +16,7 @@ const PATIENCE: Duration = Duration::from_secs(20);
 fn leave_the_terminal() {
     static LEFT: std::sync::Once = std::sync::Once::new();
     LEFT.call_once(|| {
-        use charter_core::noterminal::{Left, leave};
+        use purlis_core::noterminal::{Left, leave};
         if let Left::Relaunched(code) = leave().expect("the tests leave their terminal") {
             std::process::exit(code);
         }
@@ -124,7 +124,7 @@ fn the_handshake_offers_no_file_system_and_no_terminal_and_hands_the_session_cha
     assert_eq!(
         new["mcpServers"],
         serde_json::json!([{
-            "name": charter_core::chattools::SERVER,
+            "name": purlis_core::chattools::SERVER,
             "command": "/bin/charter",
             "args": ["mcp"],
             "env": [{"name": "PURLIS_ROOT", "value": "/project"}],
@@ -363,20 +363,20 @@ fn a_chat_dropped_ends_its_agent() {
 }
 
 /// A project with one approved profile, `work`, of kind opencode, running `program`: what a
-/// chat started from the window starts from ([`charter_core::start::ready`]).
+/// chat started from the window starts from ([`purlis_core::start::ready`]).
 fn an_opencode_project(program: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a project");
     std::fs::write(dir.path().join("charter.toml"), "").expect("charter.toml");
     std::fs::write(
-        dir.path().join(charter_core::profiles::LOCAL_FILE),
+        dir.path().join(purlis_core::profiles::LOCAL_FILE),
         format!("[harness.work]\nkind = \"opencode\"\ncommand = [{program:?}]\n"),
     )
     .expect("the profile");
-    let set = charter_core::profiles::current(dir.path());
-    charter_core::profiletrust::record_launched(
+    let set = purlis_core::profiles::current(dir.path());
+    purlis_core::profiletrust::record_launched(
         dir.path(),
         "work",
-        &charter_core::profiletrust::fingerprint(set.get("work").expect("declared")),
+        &purlis_core::profiletrust::fingerprint(set.get("work").expect("declared")),
     )
     .expect("approved");
     dir
@@ -389,13 +389,13 @@ fn started_at_level_3(
     app: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 ) -> (Arc<Chat>, acp::Events) {
     leave_the_terminal();
-    let start = charter_core::start::Start {
+    let start = purlis_core::start::Start {
         profile: Some("work".to_owned()),
         name: "level three".to_owned(),
         cwd: Some(project.to_path_buf()),
-        ..charter_core::start::Start::default()
+        ..purlis_core::start::Start::default()
     };
-    let ready = charter_core::start::ready(&start, project).expect("the chat may start");
+    let ready = purlis_core::start::ready(&start, project).expect("the chat may start");
     let launch = Launch::for_start(
         &ready,
         acp::Host {
@@ -422,7 +422,7 @@ fn started_at_level_3(
 
 /// The board's view of a chat, moved by every event it hears, until `until` accepts one.
 fn board_until(
-    board: &mut charter_core::state::Chat,
+    board: &mut purlis_core::state::Chat,
     events: &acp::Events,
     until: impl Fn(&Event) -> bool,
 ) -> Vec<Event> {
@@ -435,10 +435,10 @@ fn board_until(
 
 #[test]
 fn an_opencode_chat_started_at_level_3_runs_over_acp_and_its_board_follows_its_turns() {
-    use charter_core::state::State;
+    use purlis_core::state::State;
     let project = an_opencode_project(env!("CARGO_BIN_EXE_fake-harness"));
     let (chat, events) = started_at_level_3(project.path(), Vec::new());
-    let mut board = charter_core::state::Chat::new();
+    let mut board = purlis_core::state::Chat::new();
     board_until(&mut board, &events, |event| {
         matches!(event, Event::Said(Said::Session(_)))
     });
@@ -483,12 +483,12 @@ fn turn_text(chat: &Arc<Chat>, events: &acp::Events, prompt: &str) -> String {
 #[test]
 #[ignore = "runs the real opencode and spends a turn of its model"]
 fn an_opencode_chat_runs_over_acp() {
-    use charter_core::state::State;
+    use purlis_core::state::State;
     let project = an_opencode_project("opencode");
     let (chat, events) = started_at_level_3(project.path(), std::env::vars_os().collect());
     assert_eq!(chat.negotiated().protocol, 1);
     assert!(chat.negotiated().resumes_by_id, "{:?}", chat.negotiated());
-    let mut board = charter_core::state::Chat::new();
+    let mut board = purlis_core::state::Chat::new();
 
     assert_eq!(
         chat.prompt("Reply with the single word pong, and use no tools."),
@@ -779,7 +779,7 @@ fn unread_text_is_bounded_in_bytes_and_a_long_reply_comes_in_pieces() {
 fn the_agent_does_not_inherit_the_host_s_relaunch_marker() {
     // An app started from a chat would otherwise think it had already left its terminal.
     let dir = tempfile::tempdir().expect("a worktree");
-    let marker = charter_core::noterminal::RELAUNCHED_ENV;
+    let marker = purlis_core::noterminal::RELAUNCHED_ENV;
     let (chat, events) = Chat::start(
         Launch {
             env: vec![(marker.into(), "1".into())],
@@ -935,7 +935,7 @@ fn the_kill_switch_ends_a_chat_still_held_and_withdraws_its_asks() {
 #[test]
 fn the_agent_gets_the_chat_s_environment_and_nothing_else_of_the_host_s() {
     // ADR 0080 §1: the agent is started like a terminal chat's program, which starts from an
-    // empty environment plus what charter keeps for it (`charter_core::chatenv`).
+    // empty environment plus what charter keeps for it (`purlis_core::chatenv`).
     assert!(std::env::var_os("HOME").is_some(), "the host has a HOME");
     let dir = tempfile::tempdir().expect("a worktree");
     let (chat, events) = Chat::start(

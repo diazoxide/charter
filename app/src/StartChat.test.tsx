@@ -163,16 +163,16 @@ describe("the picker a chat starts from", () => {
     // box is drawn unticked and the start carries `false`.
     const { onStart, user } = show();
 
-    expect(screen.getByRole("checkbox", { name: /charter's footer/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /purlis's footer/ })).not.toBeChecked();
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(onStart).toHaveBeenCalledWith("claude", "steward", false, null, false, null);
   });
 
-  it("starts a chat that draws charter's footer when the box is ticked", async () => {
+  it("starts a chat that draws purlis's footer when the box is ticked", async () => {
     const { onStart, user } = show();
 
-    await user.click(screen.getByRole("checkbox", { name: /charter's footer/ }));
+    await user.click(screen.getByRole("checkbox", { name: /purlis's footer/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(onStart).toHaveBeenCalledWith("claude", "steward", true, null, false, null);
@@ -232,7 +232,7 @@ describe("the picker a chat starts from", () => {
       ],
     });
 
-    await user.click(screen.getByRole("checkbox", { name: /charter's footer/ }));
+    await user.click(screen.getByRole("checkbox", { name: /purlis's footer/ }));
     await user.click(screen.getByRole("button", { name: "Approve and start" }));
 
     expect(onApprove).toHaveBeenCalledWith(
@@ -625,7 +625,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
 
   it("says why a chat on a system with no backend starts without the sandbox", () => {
     const said =
-      "This chat runs without the sandbox: charter has no sandbox backend on Windows yet, so every chat here starts without it until one exists.";
+      "This chat runs without the sandbox: purlis has no sandbox backend on Windows yet, so every chat here starts without it until one exists.";
     showWith({ state: "unsandboxed", said, install: null });
 
     expect(screen.getByText(said)).toBeInTheDocument();
@@ -664,7 +664,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
 describe("a harness charter cannot wrap on this system in a sandboxed project", () => {
   it("shows Codex's refusal and starts it only without the sandbox", async () => {
     const said =
-      "this plane runs every chat sandboxed, and charter runs Codex inside a sandbox of its own, which it can apply on macOS but not yet on Linux (#1040), so it was not started. Start this chat on a Claude Code profile.";
+      "this plane runs every chat sandboxed, and purlis runs Codex inside a sandbox of its own, which it can apply on macOS but not yet on Linux (#1040), so it was not started. Start this chat on a Claude Code profile.";
     const onStart = vi.fn();
     render(
       <StartChat
@@ -710,7 +710,7 @@ describe("a program the sandbox will not bind (V87g)", () => {
     ],
     [
       "a command word too long to check",
-      "this plane runs every chat sandboxed, and a word of this profile's command is longer than 4 KiB, which charter does not check, so it was not started sandboxed. Keep what it says in a file outside the plane and name that file instead.",
+      "this plane runs every chat sandboxed, and a word of this profile's command is longer than 4 KiB, which purlis does not check, so it was not started sandboxed. Keep what it says in a file outside the plane and name that file instead.",
     ],
     [
       "a program named by a relative path",
@@ -746,7 +746,7 @@ describe("a program the sandbox will not bind (V87g)", () => {
 describe("a profile nobody has approved, in a sandboxed project", () => {
   it("says its program is checked once it is approved, and still asks for the approval", () => {
     const said =
-      "charter checks this profile's program before it starts sandboxed, once the profile may start: approved, and declared in a file git does not carry.";
+      "purlis checks this profile's program before it starts sandboxed, once the profile may start: approved, and declared in a file git does not carry.";
     render(
       <StartChat
         options={options({

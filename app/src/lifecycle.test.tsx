@@ -318,7 +318,7 @@ describe("what the window does with the chats the core already has", () => {
       chat({
         session: 7,
         harness: null,
-        fresh: "charter has not measured how this program resumes",
+        fresh: "purlis has not measured how this program resumes",
         in_front: true,
       }),
     ]);
@@ -509,7 +509,7 @@ describe("being asked to quit", () => {
 
     expect(
       within(screen.getByRole("dialog")).getByText(
-        /codex ide\.7 reports no state, so charter cannot tell whether it is mid-turn/,
+        /codex ide\.7 reports no state, so purlis cannot tell whether it is mid-turn/,
       ),
     ).toBeInTheDocument();
   });

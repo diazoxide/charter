@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use charter_core::change::{Member, Record, store};
-use charter_core::forge::recorded::Recorded;
+use purlis_core::change::{Member, Record, store};
+use purlis_core::forge::recorded::Recorded;
 use serde_json::{Value, json};
 
 use super::*;
@@ -18,7 +18,7 @@ const BRANCH: &str = "change/api-2";
 const HEAD: &str = "6dcb09b5b57875f334f61aebed695e2e4193db5e";
 const MERGE: &str = "e5bd3914e2e596debea16f433f57875b5b90bcd6";
 const PROBE: &str =
-    include_str!("../../../../crates/charter-core/src/forge/github/queries/merge_queue.graphql");
+    include_str!("../../../../crates/purlis-core/src/forge/github/queries/merge_queue.graphql");
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let mut command = Command::new("git");
@@ -28,7 +28,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null");
-    let out = charter_core::forklock::output(&mut command).unwrap();
+    let out = purlis_core::forklock::output(&mut command).unwrap();
     assert!(out.status.success(), "git {args:?}: {out:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
@@ -116,7 +116,7 @@ impl World {
             "--quiet",
             &format!("refs/heads/{BRANCH}"),
         ]);
-        charter_core::forklock::output(&mut command)
+        purlis_core::forklock::output(&mut command)
             .unwrap()
             .status
             .success()
@@ -298,7 +298,7 @@ fn push_then_land_asks_first_names_what_it_will_do_and_does_only_that() {
             LandThrough::Merge,
             "pull request",
             "#",
-            "charter merges it now, at 6dcb09b5b578 and no other.",
+            "purlis merges it now, at 6dcb09b5b578 and no other.",
             true
         )
     );
@@ -385,7 +385,7 @@ fn a_second_push_or_landing_of_a_change_while_one_runs_is_refused_in_words() {
 
     assert_eq!(
         second.as_deref(),
-        Some("charter is already pushing or landing api-2 in alpha. Wait for it to finish.")
+        Some("purlis is already pushing or landing api-2 in alpha. Wait for it to finish.")
     );
     assert!(
         busy.claim(root, "alpha", "other").is_ok(),

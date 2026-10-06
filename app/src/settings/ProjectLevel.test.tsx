@@ -22,7 +22,7 @@ import type {
  * **The Settings tab at the Project level** (SE-17, #1167; the spec on #558, V89b, V89e, V89h):
  * the project's groups in V89h's order, each control writing its one key through the core as it
  * changes, Undo of the last change, and a refused write said beside its setting. The core is the
- * mock here: what it keeps of a file and what it refuses is `charter_core::settings`'s tests.
+ * mock here: what it keeps of a file and what it refuses is `purlis_core::settings`'s tests.
  * What is held here is what the person sees and what the window sends.
  */
 

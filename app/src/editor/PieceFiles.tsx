@@ -277,7 +277,7 @@ function ImagePreview({ name, mime, base64 }: { name: string; mime: string; base
         say({ size: `${bitmap.width} × ${bitmap.height}` });
         bitmap.close();
       } catch (err) {
-        say({ trouble: `charter could not draw ${name}: ${String(err)}` });
+        say({ trouble: `purlis could not draw ${name}: ${String(err)}` });
       }
     })();
     return () => {

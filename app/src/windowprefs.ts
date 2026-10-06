@@ -16,7 +16,7 @@ import { load, type Theme } from "./theme/theme";
 /** The global the initialization script defines. `windowprefs.rs` names it too. */
 export const GLOBAL = "__CHARTER_AT_CREATION__";
 
-/** One file's reading — `charter_core::windowprefs::Reading`, as serialised. */
+/** One file's reading — `purlis_core::windowprefs::Reading`, as serialised. */
 export type Reading = {
   /** Where the file is, or would be. */
   path: string;

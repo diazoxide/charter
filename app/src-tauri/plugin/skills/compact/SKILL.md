@@ -1,6 +1,6 @@
 ---
 name: compact
-description: Compact and improve a charter workspace's or persona's memory — find duplicates and stale entries with charter's optimize and dedupe reports, prune only with the operator's yes, and fold durable lessons into workspace.md or persona.md. Use when asked to compact, tidy, prune, dedupe or improve a workspace's or persona's memory.
+description: Compact and improve a purlis workspace's or persona's memory — find duplicates and stale entries with purlis's optimize and dedupe reports, prune only with the operator's yes, and fold durable lessons into workspace.md or persona.md. Use when asked to compact, tidy, prune, dedupe or improve a workspace's or persona's memory.
 ---
 
 # Compact & improve
@@ -14,14 +14,14 @@ chat reads first (`workspace.md` for a workspace, `persona.md` for a persona).
 A workspace:
 
 ```bash
-charter workspace optimize <name>        # exact duplicates, near duplicates, stale, index drift
+purlis workspace optimize <name>        # exact duplicates, near duplicates, stale, index drift
 ```
 
 A persona:
 
 ```bash
-charter persona optimize <name>
-charter persona dedupe <name>            # near-duplicate pairs
+purlis persona optimize <name>
+purlis persona dedupe <name>            # near-duplicate pairs
 ```
 
 These only read. Done when you can say, for each finding, what you propose.
@@ -35,12 +35,12 @@ These only read. Done when you can say, for each finding, what you propose.
   place; one that is no longer so is archived, and only when the operator agrees.
 
 ```bash
-charter workspace edit -w <name> <slug> [--title "<title>"] ["<body>" | -]
-charter persona edit-memory <name> <slug> [--title "<title>"] ["<body>" | -] [--shared]
-charter workspace archive -w <name> <slug>              # undo: workspace unarchive
-charter persona archive-memory <name> <slug> [--shared] # undo: persona unarchive-memory
-charter workspace move-memory -w <name> <slug> --to-shared  # or --to-persona <p>
-charter persona move-memory <name> <slug> [--shared] --to-workspace <ws>
+purlis workspace edit -w <name> <slug> [--title "<title>"] ["<body>" | -]
+purlis persona edit-memory <name> <slug> [--title "<title>"] ["<body>" | -] [--shared]
+purlis workspace archive -w <name> <slug>              # undo: workspace unarchive
+purlis persona archive-memory <name> <slug> [--shared] # undo: persona unarchive-memory
+purlis workspace move-memory -w <name> <slug> --to-shared  # or --to-persona <p>
+purlis persona move-memory <name> <slug> [--shared] --to-workspace <ws>
 ```
 
 Each move takes exactly one of `--to-workspace <ws>`, `--to-persona <p>` and `--to-shared`.
@@ -62,7 +62,7 @@ says what to do and why, then archive the memories it replaces.
 For a persona, regenerate its sub-agent after editing `persona.md`:
 
 ```bash
-charter persona sync-agents
+purlis persona sync-agents
 ```
 
 Show the operator the charter's diff. Done when they have read it. Both files are committed, so

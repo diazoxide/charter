@@ -156,7 +156,7 @@ something a teammate pushed. So a workspace narrows or names what the project sa
 **One resolver, one more input.** `Choices` carries the workspace's layer
 (`Choices::read_in(root, workspace)`, `Choices::in_workspace`), and `resolve` reads the three
 layers in order; nothing else changed about it, and no consumer has an order of its own. The
-precedence matrix in `crates/charter-core/src/extension/project/tests.rs` has the rows above.
+precedence matrix in `crates/purlis-core/src/extension/project/tests.rs` has the rows above.
 
 **The file's shape mirrors the TOML tables.** `settings` in `workspace.json` holds
 `extensions.<id>.enabled` and `extensions.<id>.settings.<key>`, which is `[extensions.<id>]` in
@@ -265,7 +265,7 @@ every table in it.
 no reader — `LayerText::LeftOut`, carrying the check's sentence (charter-app#319, below); `extension::project::Choices::read`, `theme::Said::read` and
 `harness_plugin::Choices::read` each call it, and so does every `read_in` through them. #308 was
 three readers that each read the file themselves and so each forgot the check, so a test
-(`crates/charter-core/tests/the_local_layer_has_one_reader.rs`) fails on production code that
+(`crates/purlis-core/tests/the_local_layer_has_one_reader.rs`) fails on production code that
 reads the file by name anywhere but `settings.rs` and `profiles.rs`. A reader added later — the
 plane's own save settings (ADR 0051) are the next — goes through `layer_text` or turns that test
 red.
@@ -356,4 +356,4 @@ the file stays on this machine, which is why a Local file git would carry is not
   added it, above, on the same precedence.
 - **Resolving in each consumer.** Four consumers with four copies of the order would drift; one
   function answers, and a precedence matrix in its tests pins it
-  (`crates/charter-core/src/extension/project/tests.rs`).
+  (`crates/purlis-core/src/extension/project/tests.rs`).

@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use charter_core::engine::{AlacrittyEngine, Size};
-use charter_core::hookwire::{CHAT_ENV, ChatTokens, SOCKET_ENV, TOKEN_ENV};
-use charter_core::session::{Attachment, Session, Spec};
+use purlis_core::engine::{AlacrittyEngine, Size};
+use purlis_core::hookwire::{CHAT_ENV, ChatTokens, SOCKET_ENV, TOKEN_ENV};
+use purlis_core::session::{Attachment, Session, Spec};
 
 use crate::host::{Ends, Opening, Readiness, SessionHost, Sink, Watching};
 
@@ -24,7 +24,7 @@ pub const SCROLLBACK: u32 = 5_000;
 const ENDED: &str = "\r\n\x1b[2m— the program has ended —\x1b[0m\r\n";
 
 /// Why a start was refused while the kill switch is thrown (OV-1).
-pub const STOPPED: &str = "Every chat charter started is stopped. Re-arm from the title bar to \
+pub const STOPPED: &str = "Every chat purlis started is stopped. Re-arm from the title bar to \
                            start chats again; a new shell still opens.";
 
 /// What a session is told, so a hook running inside it can find its way back.
@@ -169,15 +169,15 @@ impl SessionHost for Sessions {
         // **A chat starts from an empty environment plus a keep-list**, not from the app's
         // whole one minus what charter knows to remove: whatever the app inherited — from a
         // terminal, `launchctl setenv`, a login item — is not the chat's unless
-        // `charter_core::chatenv` names it, the harness declares it, or the operator lists it
+        // `purlis_core::chatenv` names it, the harness declares it, or the operator lists it
         // for this plane. The chat's own come after, so a profile's value wins over the app's;
         // a profile's `OP_*`, and any identity variable a vault declares, is dropped with the
         // app's own (#237, and #271 review U6); and charter's git hooks (SQ-16, ADR 0074) are
         // armed last. The same composition starts a level-3 agent (ADR 0080 §1).
         spec.env_clear = true;
-        spec.env = charter_core::chatenv::compose(
+        spec.env = purlis_core::chatenv::compose(
             std::env::vars_os(),
-            &charter_core::chatenv::Starting {
+            &purlis_core::chatenv::Starting {
                 harness: opening.harness,
                 operator: &opening.env_pass,
                 strip: &opening.env_strip,
@@ -203,12 +203,12 @@ impl SessionHost for Sessions {
         // is the sharing hazard `WINDOWID` was taken out of `PANE_ID_VARS` for, one layer
         // down.
         //
-        // It is set here rather than in `charter_core::start::environment` because the
+        // It is set here rather than in `purlis_core::start::environment` because the
         // number does not exist yet where that runs: `start::ready` resolves a launch before
         // any session is opened, and the id is chosen above. The value is the one
         // `CHARTER_CHAT` carries, so the two can never name different chats.
         spec.env.push((
-            charter_core::active::SESSION_ID_ENV.into(),
+            purlis_core::active::SESSION_ID_ENV.into(),
             id.to_string().into(),
         ));
         // **And the chat's own token**, which every line its hooks and commands write on the
@@ -227,7 +227,7 @@ impl SessionHost for Sessions {
             spec.env.push((TOKEN_ENV.into(), token.expose().into()));
         }
         // What the host added, under both names too (V93k), as `compose` gave the rest.
-        spec.env = charter_core::envvar::twinned(std::mem::take(&mut spec.env));
+        spec.env = purlis_core::envvar::twinned(std::mem::take(&mut spec.env));
         // Before the program exists, so its very first hook lands somewhere.
         announce(id);
         let engine = AlacrittyEngine::new(opening.size, SCROLLBACK as usize);
@@ -472,7 +472,7 @@ pub(crate) fn all_at_once<T: Send + 'static, J: FnOnce() -> T + Send + 'static>(
 /// Whether a process is still there and not a zombie, as the operating system sees it.
 #[cfg(test)]
 pub(crate) fn alive(pid: u32) -> bool {
-    charter_core::forklock::output(std::process::Command::new("ps").args([
+    purlis_core::forklock::output(std::process::Command::new("ps").args([
         "-o",
         "stat=",
         "-p",
@@ -742,7 +742,7 @@ mod tests {
     fn a_stopped_switch() -> Arc<crate::killswitch::KillSwitch> {
         let switch = crate::killswitch::KillSwitch::unthrown();
         // No config home to keep it in, which the stop says; it holds all the same.
-        let _ = switch.stop(charter_core::halt::Actor::Window);
+        let _ = switch.stop(purlis_core::halt::Actor::Window);
         switch
     }
 
@@ -968,7 +968,7 @@ mod tests {
             ("GIT_CONFIG_KEY_0".to_owned(), "user.signingKey".to_owned()),
             ("GIT_CONFIG_VALUE_0".to_owned(), "ABC".to_owned()),
         ];
-        opening.git_hooks = Some(charter_core::githooks::GitHooks::at("/app/data/git-hooks"));
+        opening.git_hooks = Some(purlis_core::githooks::GitHooks::at("/app/data/git-hooks"));
         let id = sessions
             .open(None, &opening, &|_| {})
             .expect("the session opens");
@@ -1082,7 +1082,7 @@ mod tests {
         // The app inherits whatever started it, and a chat inherits the app. Setting a variable
         // in this process would need `unsafe`, so the app is this test binary run again with
         // the tokens in its environment.
-        let out = charter_core::forklock::output(
+        let out = purlis_core::forklock::output(
             std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -1108,7 +1108,7 @@ mod tests {
         assert!(printed.contains("chat-env-checked"), "{printed}");
     }
 
-    // --- a chat starts from a keep-list (charter_core::chatenv) ------------------------ //
+    // --- a chat starts from a keep-list (purlis_core::chatenv) ------------------------ //
 
     /// Set in the child's environment only, so the parent knows it is the child.
     const KEEP_LIST_CHILD: &str = "CHARTER_TEST_KEEP_LIST_CHILD";
@@ -1160,7 +1160,7 @@ mod tests {
             .iter()
             .filter(|name| {
                 !THE_SHELLS_OWN.contains(&name.as_str())
-                    && !charter_core::chatenv::PASSED.iter().any(|pattern| {
+                    && !purlis_core::chatenv::PASSED.iter().any(|pattern| {
                         match pattern.strip_suffix('*') {
                             Some(prefix) => name.starts_with(prefix),
                             None => *name == pattern,
@@ -1182,7 +1182,7 @@ mod tests {
 
         // A chat on a harness: its own declared names too, and still no credential.
         let mut on_claude = opening("");
-        on_claude.harness = Some(charter_core::harness::Harness::ClaudeCode);
+        on_claude.harness = Some(purlis_core::harness::Harness::ClaudeCode);
         let names = names_in_a_chat(&sessions, on_claude);
         assert!(names.iter().any(|n| n == "CLAUDE_CONFIG_DIR"), "{names:?}");
         for name in credentials.iter().chain(&["CODEX_HOME"]) {
@@ -1216,7 +1216,7 @@ mod tests {
     fn a_chat_is_started_with_the_keep_list_and_not_the_apps_whole_environment() {
         // Setting a variable in this process would need `unsafe`, so the app is this test
         // binary run again with the variables in its environment.
-        let out = charter_core::forklock::output(
+        let out = purlis_core::forklock::output(
             std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -1281,7 +1281,7 @@ mod tests {
         if std::env::var_os(PINNED_CHILD).is_none() {
             return;
         }
-        use charter_core::active::{PLANE_ROOT_ENV, PLANE_ROOT_ON, WORKSPACE_ENV};
+        use purlis_core::active::{PLANE_ROOT_ENV, PLANE_ROOT_ON, WORKSPACE_ENV};
         let sessions = Sessions::new();
         // A workspace chat: `start::ready` put the workspace in its environment.
         let in_alpha = pins_in_a_chat(
@@ -1306,7 +1306,7 @@ mod tests {
 
     #[test]
     fn no_chat_inherits_where_the_apps_own_launcher_was_pinned() {
-        let out = charter_core::forklock::output(
+        let out = purlis_core::forklock::output(
             std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -1315,8 +1315,8 @@ mod tests {
                     "--test-threads=1",
                 ])
                 .env(PINNED_CHILD, "1")
-                .env(charter_core::active::WORKSPACE_ENV, "launcher")
-                .env(charter_core::active::PLANE_ROOT_ENV, "1")
+                .env(purlis_core::active::WORKSPACE_ENV, "launcher")
+                .env(purlis_core::active::PLANE_ROOT_ENV, "1")
                 .stdin(std::process::Stdio::null()),
         )
         .unwrap();
@@ -1379,8 +1379,8 @@ mod tests {
     /// `Ids::of` and not `Ids::from_env`, so the answer is the chat's and not the test
     /// runner's — and it asks for no tty, which is the app's own case: a chat gets a pty of
     /// its own and none of `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/`$SSH_TTY`.
-    fn who_it_is(sid: &str, conversation: &str) -> charter_core::active::Ids {
-        use charter_core::active::{CONVERSATION_ENV, SESSION_ID_ENV};
+    fn who_it_is(sid: &str, conversation: &str) -> purlis_core::active::Ids {
+        use purlis_core::active::{CONVERSATION_ENV, SESSION_ID_ENV};
         let held: HashMap<String, String> = [
             (SESSION_ID_ENV.to_owned(), sid.to_owned()),
             (CONVERSATION_ENV.to_owned(), conversation.to_owned()),
@@ -1388,15 +1388,15 @@ mod tests {
         .into_iter()
         .filter(|(_, value)| !value.is_empty())
         .collect();
-        charter_core::active::Ids::of(&|name| held.get(name).cloned())
+        purlis_core::active::Ids::of(&|name| held.get(name).cloned())
     }
 
     /// The ladder, asked with no flag and from nowhere in particular.
     fn workspace_of(
         root: &std::path::Path,
-        ids: &charter_core::active::Ids,
-    ) -> charter_core::active::ActiveWorkspace {
-        charter_core::active::workspace(&charter_core::active::Asking {
+        ids: &purlis_core::active::Ids,
+    ) -> purlis_core::active::ActiveWorkspace {
+        purlis_core::active::workspace(&purlis_core::active::Asking {
             root,
             // Not inside any tree, so the cwd rung cannot answer and the pointers decide.
             cwd: root,
@@ -1636,7 +1636,7 @@ mod tests {
         //
         // It asserts the RUNG and not only the name: landing on `finance` because some other
         // rung happens to name it would prove nothing about what the pointer is keyed on.
-        use charter_core::wscmd::select::{Scope, is_locked, set_active};
+        use purlis_core::wscmd::select::{Scope, is_locked, set_active};
         let (_plane, root) = bare_plane();
         let sessions = Sessions::new();
         let (_id, sid) = session_id_of_a_chat(&sessions);
@@ -1660,7 +1660,7 @@ mod tests {
             assert_eq!(found.name, "finance", "{when}");
             assert_eq!(
                 found.rung,
-                charter_core::active::WorkspaceRung::SessionPointer,
+                purlis_core::active::WorkspaceRung::SessionPointer,
                 "{when}: the pointer is not keyed on the chat"
             );
             // The same key carries the session LOCK, so a chat that lost its pointer also lost
@@ -1679,7 +1679,7 @@ mod tests {
         // than about the ladder: keyed on the conversation, what was written in one
         // conversation is not read in the next. Written out here so that a chat which stops
         // being given a session id cannot pass the suite by looking like this.
-        use charter_core::wscmd::select::set_active;
+        use purlis_core::wscmd::select::set_active;
         let (_plane, root) = bare_plane();
         let picked_in = who_it_is("", "9f2c-the-conversation-it-was-picked-in");
         let after_the_clear = who_it_is("", "41ab-the-one-the-clear-started");
@@ -1688,7 +1688,7 @@ mod tests {
         assert_eq!(workspace_of(&root, &picked_in).name, "finance");
         let after = workspace_of(&root, &after_the_clear);
         assert_eq!(after.name, "default");
-        assert_eq!(after.rung, charter_core::active::WorkspaceRung::BuiltIn);
+        assert_eq!(after.rung, purlis_core::active::WorkspaceRung::BuiltIn);
     }
 
     #[test]

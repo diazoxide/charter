@@ -1,7 +1,7 @@
 //! The weekly-user estimate, read off GitHub's download counts (OB-17).
 //!
 //! The first update check of each ISO week fetches the channel's weekly manifest instead of its
-//! manifest ([`charter_core::updates::weekly_due`]). The two files have the same bytes, and the
+//! manifest ([`purlis_core::updates::weekly_due`]). The two files have the same bytes, and the
 //! request names nothing about the machine, so the only thing that reaches anyone is GitHub's
 //! download count of the weekly file. This reads those counts out of a release listing, the
 //! JSON `gh api --paginate repos/diazoxide/charter/releases` writes, and reports them per
@@ -17,7 +17,7 @@
 //! Nothing here reaches the network, and nothing is kept: the listings are the operator's own
 //! files, and this prints.
 
-use charter_core::updates::{Channel, DEV_TAG};
+use purlis_core::updates::{Channel, DEV_TAG};
 
 /// One release's line of the report.
 #[derive(Debug, Clone, PartialEq, Eq)]

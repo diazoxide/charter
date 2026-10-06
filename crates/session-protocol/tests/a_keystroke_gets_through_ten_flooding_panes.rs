@@ -19,10 +19,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link;
-use charter_session_protocol::version::{Speaks, Version};
-use charter_session_protocol::view::{Attacher, Chunk, Limits, ViewId, Viewer};
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link;
+use purlis_session_protocol::version::{Speaks, Version};
+use purlis_session_protocol::view::{Attacher, Chunk, Limits, ViewId, Viewer};
 use tokio::net::{UnixListener, UnixStream};
 
 mod common;

@@ -8,14 +8,14 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-# **No dependency on charter-core**, for persona-statistics' reason: an extension is written the
+# **No dependency on purlis-core**, for persona-statistics' reason: an extension is written the
 # way a stranger would write one, knowing the protocol and nothing of charter's insides. The
 # test that drives it through the real registry and executor is what depends on the core.
 [dependencies]
 serde_json.workspace = true
 
 [dev-dependencies]
-charter-core = { workspace = true, features = ["fenced"] }
+purlis-core = { workspace = true, features = ["fenced"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 tempfile.workspace = true
 

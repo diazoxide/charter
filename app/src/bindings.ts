@@ -313,7 +313,7 @@ export const commands = {
 	 *  (FR-29, ruling V65).
 	 * 
 	 *  **The window names the harness, never the command.** The line is charter's own,
-	 *  compiled in (`charter_core::noharness::installer`) and shown word for word on the tab
+	 *  compiled in (`purlis_core::noharness::installer`) and shown word for word on the tab
 	 *  before the press, so no text from a project, a plane or the window can reach the shell
 	 *  through here. A word that is not a harness charter starts is refused, and nothing is typed.
 	 */
@@ -575,7 +575,7 @@ export const commands = {
 	/**  Whether the window is on screen. The scenario tests ask; nothing in the UI does. */
 	windowShowing: () => __TAURI_INVOKE<boolean>("window_showing"),
 	/**
-	 *  The sidebar, answered from the plane's model (FD-10b, [`charter_core::planemodel`]).
+	 *  The sidebar, answered from the plane's model (FD-10b, [`purlis_core::planemodel`]).
 	 * 
 	 *  The model is read once when the plane is held, and from then on each change the watch
 	 *  names re-reads only what it is part of: a todo closed in `beta` re-reads `beta/todos/`,
@@ -606,7 +606,7 @@ export const commands = {
 	 *  window showing a project the launch had not opened drew the workspaces of the one it had.
 	 *  A workspace name means nothing without its project; two projects can both have an `alpha`.
 	 * 
-	 *  **Served from the plane's model, per section** (FD-10c, [`charter_core::planemodel`]): a
+	 *  **Served from the plane's model, per section** (FD-10c, [`purlis_core::planemodel`]): a
 	 *  workspace's clones, todos, memories and session records are read the first time it is
 	 *  focused, and from then on each section again only when a change the watch names is part
 	 *  of it. A memory an agent saves re-reads that workspace's `memory/` and nothing else.
@@ -636,7 +636,7 @@ export const commands = {
 	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 	 *  given its conversation where it can be, and told the record in its briefing
-	 *  (`charter_core::sessionresume`). The answer is the chat as the window draws it, whose
+	 *  (`purlis_core::sessionresume`). The answer is the chat as the window draws it, whose
 	 *  `resumed` or `fresh` says which happened.
 	 * 
 	 *  `instead_of` is the window saying the chat it resumed this record into, by its number, ended
@@ -1384,7 +1384,7 @@ export const commands = {
 	extensionViews: () => typedError<ExtensionView[], string>(__TAURI_INVOKE("extension_views")),
 	/**
 	 *  Whether this platform runs extension programs at all
-	 *  ([`charter_core::executor::RUNS_PROGRAMS`]). On one that does not, [`extension_views`]
+	 *  ([`purlis_core::executor::RUNS_PROGRAMS`]). On one that does not, [`extension_views`]
 	 *  offers nothing and the window should not draw a place for a view to go.
 	 */
 	extensionProgramsRun: () => __TAURI_INVOKE<boolean>("extension_programs_run"),
@@ -1516,7 +1516,7 @@ export const commands = {
 	/**
 	 *  Move the values at `paths` into `to`, out of the other file: the Settings tab's "Shared /
 	 *  Only on this machine" choice (SE-18). Both files are written or neither is
-	 *  (`charter_core::settings::move_keys`).
+	 *  (`purlis_core::settings::move_keys`).
 	 * 
 	 *  `shared_base` and `local_base` are the texts the window read (`null`: not there), so a file
 	 *  changed on disk since is refused rather than overwritten.
@@ -1524,7 +1524,7 @@ export const commands = {
 	moveProjectSettings: (plane: PlaneId, to: SettingsWhich, sharedBase: string | null, localBase: string | null, paths: SettingsStep[][]) => typedError<SettingsMoved, string>(__TAURI_INVOKE("move_project_settings", { plane, to, sharedBase, localBase, paths })),
 	/**
 	 *  Add a `[[forge]]` block to `charter.toml`, checked whole by the core
-	 *  (`charter_core::settings::forges::add`).
+	 *  (`purlis_core::settings::forges::add`).
 	 * 
 	 *  `base` is the text the window read (`null`: not there), so a file changed on disk since is
 	 *  refused rather than overwritten.
@@ -1532,7 +1532,7 @@ export const commands = {
 	addProjectForge: (plane: PlaneId, base: string | null, entry: ForgeEntry) => typedError<EntryWritten, string>(__TAURI_INVOKE("add_project_forge", { plane, base, entry })),
 	/**
 	 *  Remove the `[[forge]]` block called `id` (as `charter.toml`'s `entries` list it) — refused,
-	 *  naming them, while a repo or a setting uses it (`charter_core::settings::forges::remove`).
+	 *  naming them, while a repo or a setting uses it (`purlis_core::settings::forges::remove`).
 	 * 
 	 *  `base` is the text the entries were drawn from, so an entry that moved or changed since is
 	 *  refused rather than another removed.
@@ -1540,7 +1540,7 @@ export const commands = {
 	removeProjectForge: (plane: PlaneId, base: string | null, id: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_project_forge", { plane, base, id })),
 	/**
 	 *  Add a `[harness.<name>]` profile to the project's local settings file, checked whole by the
-	 *  core's profile rules (`charter_core::settings::harness_profiles::add`). Its first run still
+	 *  core's profile rules (`purlis_core::settings::harness_profiles::add`). Its first run still
 	 *  asks for approval.
 	 * 
 	 *  `base` is the text the window read (`null`: not there), so a file changed on disk since is
@@ -1550,12 +1550,12 @@ export const commands = {
 	/**
 	 *  Remove the profile called `id` (as the local file's `entries` list it) — refused, naming
 	 *  them, while a `[harness] default` uses it
-	 *  (`charter_core::settings::harness_profiles::remove`).
+	 *  (`purlis_core::settings::harness_profiles::remove`).
 	 */
 	removeProjectProfile: (plane: PlaneId, base: string | null, id: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("remove_project_profile", { plane, base, id })),
 	/**
 	 *  Rename the profile called `id` to `to`, only while nothing uses it — refused, naming them,
-	 *  otherwise (`charter_core::settings::harness_profiles::rename`). Answers the renamed entry's
+	 *  otherwise (`purlis_core::settings::harness_profiles::rename`). Answers the renamed entry's
 	 *  identity as `added`: what its Undo renames back.
 	 */
 	renameProjectProfile: (plane: PlaneId, base: string | null, id: string, to: string) => typedError<EntryWritten, string>(__TAURI_INVOKE("rename_project_profile", { plane, base, id, to })),
@@ -1571,7 +1571,7 @@ export const commands = {
 	/**
 	 *  Change one workspace's `workspace.json`: a form's changes to its settings, written with every
 	 *  other key kept, or Edit as JSON's whole text (NO-7, #1232) — each checked by the readers of
-	 *  the project's files (`charter_core::settings::workspace`).
+	 *  the project's files (`purlis_core::settings::workspace`).
 	 * 
 	 *  `base` is the text the window read (`null`: the file was not there), so a file changed on
 	 *  disk since is refused rather than overwritten.
@@ -1791,7 +1791,7 @@ export type Asking = {
 /**
  *  One reason a workspace holds work that deleting it would discard.
  * 
- *  A mirror of [`wscmd::AtRisk`] rather than the thing itself, because `charter-core` never
+ *  A mirror of [`wscmd::AtRisk`] rather than the thing itself, because `purlis-core` never
  *  depends on the app and the app's wire types are generated into TypeScript.
  */
 export type AtRisk = {
@@ -1890,7 +1890,7 @@ export type ByHand = {
 
 /**
  *  What one changed path is part of, as the window's readers divide the plane
- *  ([`charter_core::planechange::Kind`], which this mirrors for the bindings).
+ *  ([`purlis_core::planechange::Kind`], which this mirrors for the bindings).
  */
 export type ChangeKind = "project" | "harness" | "workspace" | "todos" | "memory" | "sessions" | "persona" | "git";
 
@@ -1932,7 +1932,7 @@ export type ChatTouching = {
 	session: number,
 	/**
 	 *  The path inside the chat's own folder, `/`-separated, with no `..` and no `.git`:
-	 *  confined by `charter_core::touching::confine` before it is sent.
+	 *  confined by `purlis_core::touching::confine` before it is sent.
 	 */
 	path: string,
 };
@@ -2118,7 +2118,7 @@ export type DoctorRow = {
 	 */
 	settings: string | null,
 	/**
-	 *  The fix charter can make for this finding itself (FX-1, `charter_core::doctor::fix`),
+	 *  The fix charter can make for this finding itself (FX-1, `purlis_core::doctor::fix`),
 	 *  by the id `charter doctor --fix <id>` takes: the dialog draws a Fix button for it, which
 	 *  calls [`plane_doctor_fix`]. `None` for a row charter cannot fix, and for the app's own.
 	 */
@@ -2160,7 +2160,7 @@ export type EntryValue = {
 /**
  *  What adding or removing a collection entry answered: the file as it now stands, or every
  *  reason nothing was written — by field, by what uses the entry, and for the whole write
- *  (`charter_core::settings::collection::Refusal`).
+ *  (`purlis_core::settings::collection::Refusal`).
  */
 export type EntryWritten = 
 /**
@@ -2173,7 +2173,7 @@ export type EntryWritten =
 /**
  *  The question charter asks before an extension contributes anything.
  * 
- *  A mirror of [`extension::Prompt`] rather than the thing itself, because `charter-core` never
+ *  A mirror of [`extension::Prompt`] rather than the thing itself, because `purlis-core` never
  *  depends on the app and the app's wire types are generated into TypeScript.
  * 
  *  **charter's own sentences travel with it rather than being written in the dialog.** That is
@@ -2545,7 +2545,7 @@ export type ForgeTrouble = {
 };
 
 /**
- *  A forge on the wire: the window's spelling of `charter_core::forge::Kind`, which the core
+ *  A forge on the wire: the window's spelling of `purlis_core::forge::Kind`, which the core
  *  keeps free of serde and specta.
  */
 export type ForgeWord = "github" | "gitlab";
@@ -2560,7 +2560,7 @@ export type FoundFile = {
 	path: string,
 };
 
-/**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
+/**  How a number reads, as the window colours it — `purlis_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
 /**
@@ -2599,7 +2599,7 @@ export type HandedFromNote = {
 	name: string,
 	/**
 	 *  The workspace it came from, or `plane root` for a chat that handed off from there
-	 *  (SI-1b) — `charter_core::active::Place::word`, drawn as it is.
+	 *  (SI-1b) — `purlis_core::active::Place::word`, drawn as it is.
 	 */
 	workspace: string,
 };
@@ -2607,7 +2607,7 @@ export type HandedFromNote = {
 /**
  *  A harness's capability card at a glance (HP-19, W10, ADR 0072 §3): what the picker says under
  *  the harness that is picked, what a chat's header draws, and what a control that is off for a
- *  missing capability says. Every word is `charter_core::harness_card`'s, read off the harness's
+ *  missing capability says. Every word is `purlis_core::harness_card`'s, read off the harness's
  *  declaration and the adapter charter ships for it; the whole card is the `harness` view.
  */
 export type HarnessGlance = {
@@ -2754,7 +2754,7 @@ export type InstalledExtensions = {
 
 /**
  *  One agent instruction file in a workspace's clone, as the tab that offers it draws it
- *  (FR-18a, `charter_core::repoinstructions`).
+ *  (FR-18a, `purlis_core::repoinstructions`).
  */
 export type InstructionFile = {
 	/**  The clone's name in the workspace. */
@@ -3001,7 +3001,7 @@ export type Moved = {
 	/**
 	 *  When this chat last moved, as a count of moves on every plane's board in this process
 	 *  — bigger is more recent, within a plane and across planes.
-	 *  `charter_core::state::Board::moved_at` is the whole definition.
+	 *  `purlis_core::state::Board::moved_at` is the whole definition.
 	 * 
 	 *  **The window cannot work this out for itself, which is why it rides an event that
 	 *  already fires.** Charter ADR 0039 sorts the chat strip's overflow menu by last
@@ -3211,7 +3211,7 @@ export type OpenedRepo = {
 export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } | { kind: "note"; text: string; tone: string } | 
 /**
  *  Magnitudes charter draws — only ever in an answer from an extension's program
- *  (`panel::answered`), never declared. See `charter_core::panel`'s header for why.
+ *  (`panel::answered`), never declared. See `purlis_core::panel`'s header for why.
  */
 { kind: "chart"; title: string; 
 /**  `bars` or `columns` (`panel::Shape`). */
@@ -3223,7 +3223,7 @@ shape: string; unit: string | null; points: PanelPoint[] } |
  *  What opens when a row is opened, as the window receives it.
  * 
  *  A mirror of [`panel::Detail`] rather than the thing itself, for the reason
- *  [`crate::extensions::ExtensionAsk`] is one: `charter-core` never depends on the app, and the
+ *  [`crate::extensions::ExtensionAsk`] is one: `purlis-core` never depends on the app, and the
  *  app's wire types are what generate `app/src/bindings.ts`.
  */
 export type PanelDetail = 
@@ -3277,7 +3277,7 @@ export type PanelRow = {
 	/**
 	 *  The catalogue row this runs when pressed (`app/src/actions.ts`), or nothing.
 	 * 
-	 *  **Never set from a manifest** — `charter_core::panel`'s header has the whole of why, and
+	 *  **Never set from a manifest** — `purlis_core::panel`'s header has the whole of why, and
 	 *  `panel::NO_VERB` is the sentence an extension that tried gets. What is here comes from
 	 *  charter's own contributions, below, and the window looks the id up in the catalogue: a
 	 *  row cannot invent a verb even here.
@@ -3367,7 +3367,7 @@ export type Panels = {
 	sessions: SessionRecordRow[],
 	/**
 	 *  **The same facts again, as contributions** — charter's own two panels, in the shape a
-	 *  stranger's extension contributes one in (`charter_core::panel`).
+	 *  stranger's extension contributes one in (`purlis_core::panel`).
 	 * 
 	 *  # Why the fields above survived, which is a decision and not an oversight
 	 * 
@@ -3543,7 +3543,7 @@ export type PlaneAlerts = {
 };
 
 /**
- *  One answer the window reads from the plane ([`charter_core::planechange::Answer`],
+ *  One answer the window reads from the plane ([`purlis_core::planechange::Answer`],
  *  mirrored for the bindings).
  */
 export type PlaneAnswer = 
@@ -3564,7 +3564,7 @@ export type PlaneAnswer =
 /**  The view tabs. */
 { answer: "views" };
 
-/**  One changed path ([`charter_core::planechange::Change`], mirrored for the bindings). */
+/**  One changed path ([`purlis_core::planechange::Change`], mirrored for the bindings). */
 export type PlaneChange = {
 	kind: ChangeKind,
 	/**  The workspace it is in, where it is in one. */
@@ -3593,7 +3593,7 @@ export type PlaneChanged = {
 	 *  The answers these changes concern, each once, or `null` — every answer — when what
 	 *  changed is not known. A reader names the answer it holds and reads again only when it
 	 *  is here: which answer a change concerns is the core's question
-	 *  ([`charter_core::planechange::answers`]), never the window's.
+	 *  ([`purlis_core::planechange::answers`]), never the window's.
 	 */
 	answers: PlaneAnswer[] | null,
 };
@@ -3602,7 +3602,7 @@ export type PlaneChanged = {
  *  What a plane would contribute, as the trust prompt draws it — **and the exact value the
  *  operator's approval is checked against.**
  * 
- *  A mirror of [`machine::Contribution`] rather than the thing itself, because `charter-core`
+ *  A mirror of [`machine::Contribution`] rather than the thing itself, because `purlis-core`
  *  never depends on the app and the app's wire types are generated into TypeScript. Each of
  *  the four maps travels as pairs in the map's own order, which is `BTreeMap`'s and therefore
  *  sorted, so a value that comes back from the window compares against one taken from disk
@@ -4178,7 +4178,7 @@ export type RowAction = {
 	title: string,
 	/**
 	 *  Whether the window asks the operator before running it: the manifest's `confirm`, and
-	 *  always for one that deletes (`charter_core::extension::Action::asks_first`).
+	 *  always for one that deletes (`purlis_core::extension::Action::asks_first`).
 	 */
 	asks_first: boolean,
 	/**  Whether it says it deletes, so the question the window asks can say so. */
@@ -4356,7 +4356,7 @@ export type SettingsEdit = {
 	value: SettingsValue | null,
 };
 
-/**  One entry of a collection, as the core lists it (`charter_core::settings::collection::Listed`). */
+/**  One entry of a collection, as the core lists it (`purlis_core::settings::collection::Listed`). */
 export type SettingsEntry = {
 	/**  Which collection: `forges` or `profiles`. */
 	collection: string,
@@ -4599,7 +4599,7 @@ export type SubjectCurations = {
 };
 
 /**
- *  Which project template the repo's project is laid out from: `charter_core::firstrun::Choice`
+ *  Which project template the repo's project is laid out from: `purlis_core::firstrun::Choice`
  *  on the wire, which the core keeps free of serde and specta.
  */
 export type TemplateChoice = 

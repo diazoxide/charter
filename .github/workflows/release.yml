@@ -341,7 +341,7 @@ jobs:
           case "$triple" in
             aarch64-apple-darwin) slug=macos-arm64; updater=darwin-aarch64 ;;
             x86_64-unknown-linux-gnu) slug=linux-x86_64; updater=linux-x86_64-appimage ;;
-            *) echo "::error::$triple has no updater target in charter_core::updates::TARGETS"; exit 1 ;;
+            *) echo "::error::$triple has no updater target in purlis_core::updates::TARGETS"; exit 1 ;;
           esac
           {
             echo "triple=$triple"
@@ -382,7 +382,7 @@ jobs:
       # `purlis` is the command line; `charter` is its alias for the rename's window, a small
       # program that runs the `purlis` beside it (RN-3). Both ship, each as a file of its own.
       - name: The purlis binary the app's hooks run, its charter alias, and the built-in extensions
-        run: cargo auditable build --release --locked -p charter-cli -p persona-statistics
+        run: cargo auditable build --release --locked -p purlis-cli -p persona-statistics
 
       - name: Stage them where Tauri's bundler picks them up
         run: |
@@ -617,8 +617,8 @@ jobs:
             echo; echo "ldd of the app:"; ldd target/release/charter-app || true
           fi
 
-      # The plugin every Claude Code chat loads (`charter_core::plugin`), and the shim every
-      # opencode chat loads from inside it (`charter_core::opencode`). A bundle without it
+      # The plugin every Claude Code chat loads (`purlis_core::plugin`), and the shim every
+      # opencode chat loads from inside it (`purlis_core::opencode`). A bundle without it
       # starts every chat unarmed — no state, no guard, no skills — so its absence fails the
       # build rather than reaching anyone.
       - name: The bundle carries charter's own plugin
@@ -906,7 +906,7 @@ jobs:
       # binary was built with cargo-auditable, and so do the front end's packages.
       - name: Each SBOM names every binary it ships, and the front end
         env:
-          REQUIRED_PURLS: pkg:cargo/charter-app@ pkg:cargo/charter-cli@ pkg:cargo/persona-statistics@ pkg:npm/
+          REQUIRED_PURLS: pkg:cargo/purlis-app@ pkg:cargo/purlis-cli@ pkg:cargo/persona-statistics@ pkg:npm/
         run: |
           set -euo pipefail
           for sbom in out/*.cdx.json; do

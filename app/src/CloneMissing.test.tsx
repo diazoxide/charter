@@ -206,7 +206,7 @@ describe("a repo that is not cloned here", () => {
 
     const alert = await within(absentRow("charter")).findByRole("alert");
     expect(alert).toHaveTextContent(
-      "charter was cloned, but charter does not see it in alpha. charter said: charter: already cloned in 'alpha'",
+      "charter was cloned, but purlis does not see it in alpha. purlis said: charter: already cloned in 'alpha'",
     );
     await userEvent.click(
       within(absentRow("charter")).getByRole("button", { name: "Retry charter" }),
@@ -393,7 +393,7 @@ describe("removing a repo that is not cloned here from the workspace", () => {
 
   it("says the core's refusal in the question, and keeps the repo", async () => {
     const said =
-      "workspaces/alpha/workspace.json is not JSON charter can read, so 'web' was left in it.";
+      "workspaces/alpha/workspace.json is not JSON purlis can read, so 'web' was left in it.";
     core({ refuseDrop: said });
     render(<App />);
 

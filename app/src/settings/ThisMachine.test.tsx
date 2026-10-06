@@ -259,12 +259,12 @@ describe("You › This machine", () => {
 
   it("says a refusal in the row it was made in, in the core's words", async () => {
     await thisMachine();
-    refuse = "charter could not forget that project: the store is locked";
+    refuse = "purlis could not forget that project: the store is locked";
 
     await userEvent.click(await screen.findByRole("button", { name: "Forget plane" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "charter could not forget that project: the store is locked",
+      "purlis could not forget that project: the store is locked",
     );
     expect(entries("Recent projects")).toHaveLength(2);
   });

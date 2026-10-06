@@ -234,7 +234,7 @@ export async function settled<T>(
   try {
     const answer = await asked;
     // Whole-window tests mock every command they do not care about with `null`.
-    return answer ?? { status: "error", error: "charter did not answer" };
+    return answer ?? { status: "error", error: "purlis did not answer" };
   } catch (err) {
     return { status: "error", error: String(err) };
   }

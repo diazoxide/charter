@@ -176,7 +176,7 @@ describe("the command palette", () => {
     // Every action, not a chosen few: the bar shows four of these rows as buttons and the
     // palette shows all of them.
     expect(await rows()).toEqual(
-      expect.arrayContaining(["New tab", "Split right", "Split down", "Quit charter"]),
+      expect.arrayContaining(["New tab", "Split right", "Split down", "Quit purlis"]),
     );
     await browser.keys(["Escape"]);
   });

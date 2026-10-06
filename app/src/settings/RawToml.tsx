@@ -11,7 +11,7 @@ import type { Shown } from "./fileControls";
  *
  * **Nothing here decides what a file may say.** Save sends the whole text against the text the
  * edit began from, and the core checks it with the rules it reads the file with
- * (`charter_core::settings::save`): text that does not parse, or that the next read would refuse,
+ * (`purlis_core::settings::save`): text that does not parse, or that the next read would refuse,
  * is refused in the core's words and nothing is written.
  *
  * **A file changed outside the tab** — by hand, by a chat — is read again by the level's driver.
@@ -132,7 +132,7 @@ export function RawEditor({
       <p className="ui-setting-help">
         {raw.as === "TOML" ? "The whole file, comments and all." : "The whole file."} {raw.kept}
         {!file.exists && " Not created yet: the first save creates it."} Nothing is written until
-        you save, and charter refuses text it would not read.
+        you save, and purlis refuses text it would not read.
       </p>
       {moved && (
         <p className="ui-setting-help" role="status">

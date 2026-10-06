@@ -120,8 +120,8 @@ if (!options["skip-build"]) {
   run(
     "cargo",
     [
-      "build", "--release", "-p", "fake-harness", "-p", "charter-cli",
-      "-p", "charter-session-protocol", "--features", "charter-session-protocol/bench",
+      "build", "--release", "-p", "fake-harness", "-p", "purlis-cli",
+      "-p", "purlis-session-protocol", "--features", "purlis-session-protocol/bench",
     ],
     { cwd: ROOT },
   );

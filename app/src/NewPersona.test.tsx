@@ -27,7 +27,7 @@ function draw(over: { trouble?: string; making?: boolean } = {}) {
 }
 
 describe("the new-persona dialog", () => {
-  it("asks for what charter persona create takes, and passes an empty box as not given", async () => {
+  it("asks for what purlis persona create takes, and passes an empty box as not given", async () => {
     const { create, dialog, button } = draw();
     await userEvent.type(within(dialog).getByLabelText("Name"), "devops");
     expect(button).toBeDisabled();

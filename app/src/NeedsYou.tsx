@@ -187,8 +187,8 @@ export type Quiet = {
 /** What the faint hand says, in its name and its tooltip. */
 function quietSaid(quiet: readonly Quiet[]): string {
   return quiet.length === 1
-    ? `Nothing has asked for you, but ${quiet[0].name} can't tell charter it's waiting`
-    : `Nothing has asked for you, but ${quiet.length} chats can't tell charter they're waiting`;
+    ? `Nothing has asked for you, but ${quiet[0].name} can't tell purlis it's waiting`
+    : `Nothing has asked for you, but ${quiet.length} chats can't tell purlis they're waiting`;
 }
 
 /**
@@ -413,7 +413,7 @@ export function NeedsYouMenu({
                   {quiet.map((one) => (
                     <p key={`${one.project}#${one.name}`}>
                       <span className="needs-you-name">{one.name}</span>
-                      {` · ${one.project} can't tell charter it's waiting`}
+                      {` · ${one.project} can't tell purlis it's waiting`}
                     </p>
                   ))}
                 </Menu.Group>

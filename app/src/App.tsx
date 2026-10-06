@@ -563,7 +563,7 @@ function App() {
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (answer.status === "error") return { ok: false, refused: answer.error };
       takeOut(plane);
-      return { ok: true, said: `charter let go of ${plane}. Nothing in it was changed.` };
+      return { ok: true, said: `purlis let go of ${plane}. Nothing in it was changed.` };
     },
     [takeOut],
   );
@@ -887,7 +887,7 @@ function App() {
           plane: it.plane,
           // A directory it could read, that is in no plane, versus nothing to go on.
           here: it.from !== null,
-          reason: it.why ?? "charter has no plane open.",
+          reason: it.why ?? "purlis has no plane open.",
         }),
       )
       // A command can also fail outright, with no answer of its own to give.
@@ -1197,7 +1197,7 @@ function App() {
    */
   const nowhere = (): Ran => ({
     ok: false,
-    refused: "charter has no plane open, so there is nowhere to start a chat.",
+    refused: "purlis has no plane open, so there is nowhere to start a chat.",
   });
   const windowDoing = useMemo<Doing>(
     () => ({
@@ -1878,7 +1878,7 @@ function App() {
       {/* A launch nobody could see. The core only answers here when the start passed the
           spec's limit, so on an ordinary launch there is nothing to draw and nothing to
           dismiss. It is the one place an operator who clicked an icon can be told — the
-          line charter writes while it waits goes to standard error, which they do not have.
+          line purlis writes while it waits goes to standard error, which they do not have.
           Dismissible, because the launch is over and the news does not improve. Where the
           core knows the relaunch that avoids the wait, it is offered as Copy command (NO-4):
           the window has no fix for a launch already made, so this is V91q's last resort and
@@ -1982,7 +1982,7 @@ function App() {
           to give the window a project.
           **Not before the core has answered, and not while the restore is still opening
           projects.** Both are about to decide whether this window has one, and an opener that
-          flashed up in between would be charter telling a newcomer there is nothing here half
+          flashed up in between would be purlis telling a newcomer there is nothing here half
           a second before eight projects arrive. */}
       {openerUp && (
         <div className="body">

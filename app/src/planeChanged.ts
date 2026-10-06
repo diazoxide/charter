@@ -7,7 +7,7 @@ import type { PlaneAnswer, PlaneChanged, PlaneId } from "./bindings";
  * The answer a reader of the plane holds, by its name (FD-10).
  *
  * **Which answer a change concerns is the core's question, never the window's**
- * (`charter_core::planechange::answers`): the core reads the plane format's paths, so it is
+ * (`purlis_core::planechange::answers`): the core reads the plane format's paths, so it is
  * the one place that knows a todo is part of the sidebar and a memory is not. `plane-changed`
  * carries the answers a batch concerns, and a reader here only names the one it holds.
  */

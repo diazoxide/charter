@@ -1,5 +1,5 @@
 {
-  "description": "Generated from charter_core::hookreg (charter hook --list --json). Do not edit: `cargo test -p charter-app -- --ignored` rewrites it.",
+  "description": "Generated from purlis_core::hookreg (purlis hook --list --json). Do not edit: `cargo test -p purlis-app -- --ignored` rewrites it.",
   "hooks": {
     "SessionStart": [
       {

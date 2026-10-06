@@ -241,7 +241,7 @@ export function StartChat({
             <p className="honest">
               {/* Said rather than shown as an empty list: a plane that declares nothing is the
                 ordinary first state, not a fault, and the built-ins below still start. */}
-              This plane declares no profiles of its own, so these are charter&apos;s built-ins.
+              This plane declares no profiles of its own, so these are purlis&apos;s built-ins.
               Declare your own in <code>charter.local.toml</code>, which stays on this machine.
             </p>
           )}
@@ -294,7 +294,7 @@ export function StartChat({
               panels repeat most of what the footer says, and the footer says it about THIS
               chat's own workspace. */}
           <SettingRow
-            label="draw charter's footer in this chat"
+            label="draw purlis's footer in this chat"
             help={
               "Blank by default, because the panels already draw the plane. The footer says " +
               "which workspace this chat is on, which the panels say only for the focused one. " +
@@ -349,7 +349,7 @@ export function StartChat({
                   help={
                     "This project runs every chat sandboxed: it reaches only the hosts the " +
                     "project allows, and never your vaults. Ticked, this one chat runs without " +
-                    "it, its tab says so, and charter records that you turned it off. Nothing " +
+                    "it, its tab says so, and purlis records that you turned it off. Nothing " +
                     "inherits it: a relaunch or a resume asks the sandbox again."
                   }
                   control={(ids) => (
@@ -375,8 +375,8 @@ export function StartChat({
                   </p>
                   {sandbox.install !== null && (
                     <p className="honest">
-                      Install it with <code>{sandbox.install}</code>. It needs sudo, so charter
-                      types it in a shell tab and leaves running it to you.{" "}
+                      Install it with <code>{sandbox.install}</code>. It needs sudo, so purlis types
+                      it in a shell tab and leaves running it to you.{" "}
                       {onInstall && (
                         <button type="button" tabIndex={0} onClick={onInstall}>
                           Type it in a shell tab
@@ -401,7 +401,7 @@ export function StartChat({
           {options.refused.length > 0 && (
             <details className="refused">
               {/* A missing profile is a row that is not in the list — easy to miss in a way a
-                missing panel is not — so the ones charter will not use say why. */}
+                missing panel is not — so the ones purlis will not use say why. */}
               <summary>{options.refused.length} refused</summary>
               <ul>
                 {options.refused.map(([name, why]) => (

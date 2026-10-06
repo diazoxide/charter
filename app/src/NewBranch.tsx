@@ -77,7 +77,7 @@ export function NewBranch({
               label="Name"
               help={
                 <>
-                  Optional. Left empty, charter names it chat-1, chat-2 and on. It is cut from what{" "}
+                  Optional. Left empty, purlis names it chat-1, chat-2 and on. It is cut from what{" "}
                   <code>{repo}</code> has checked out, in a folder of its own, and new chats start
                   on it until you pick somewhere else.
                 </>

@@ -72,38 +72,38 @@ function run(shards, knownLines = []) {
   return { gather, current: () => readFileSync(join(root, "current.txt"), "utf8") };
 }
 
-const MISSED = "crates/charter-core/src/a.rs:1:1: replace f -> bool with true";
-const HUNG = "crates/charter-core/src/b.rs:2:3: replace += with *= in walk";
+const MISSED = "crates/purlis-core/src/a.rs:1:1: replace f -> bool with true";
+const HUNG = "crates/purlis-core/src/b.rs:2:3: replace += with *= in walk";
 
 test("a mutant that outlives a timeout well above the whole suite is a hang, and not red", () => {
   const { gather, current } = run(
     [
       [
-        outcome("CaughtMutant", "crates/charter-core/src/c.rs:1:1: delete ! in g", 20),
+        outcome("CaughtMutant", "crates/purlis-core/src/c.rs:1:1: delete ! in g", 20),
         outcome("MissedMutant", MISSED, 140),
         outcome("Timeout", HUNG, 240),
       ],
     ],
-    ["crates/charter-core/src/a.rs: replace f -> bool with true"],
+    ["crates/purlis-core/src/a.rs: replace f -> bool with true"],
   );
   const result = gather("--timeout", "240");
   assert.equal(result.code, 0, result.out);
   assert.match(result.out, /## 1 hang/);
-  assert.match(result.out, /`crates\/charter-core\/src\/b\.rs: replace \+= with \*= in walk`/);
+  assert.match(result.out, /`crates\/purlis-core\/src\/b\.rs: replace \+= with \*= in walk`/);
   // The hang is caught, so it is not a survivor to write down either.
-  assert.equal(current().trim(), "crates/charter-core/src/a.rs: replace f -> bool with true");
+  assert.equal(current().trim(), "crates/purlis-core/src/a.rs: replace f -> bool with true");
 });
 
 test("a timeout on a shard whose suite nears the limit is a suite cut short, and stays red", () => {
   const { gather, current } = run(
     [[outcome("MissedMutant", MISSED, 200), outcome("Timeout", HUNG, 240)]],
-    ["crates/charter-core/src/a.rs: replace f -> bool with true"],
+    ["crates/purlis-core/src/a.rs: replace f -> bool with true"],
   );
   const result = gather("--timeout", "240");
   assert.equal(result.code, 1, result.out);
   assert.doesNotMatch(result.out, /## \d+ hang/);
   assert.match(result.out, /too close to the 240 s limit/);
-  assert.match(result.out, /\| Timeout \| `crates\/charter-core\/src\/b\.rs` \|/);
+  assert.match(result.out, /\| Timeout \| `crates\/purlis-core\/src\/b\.rs` \|/);
   assert.match(current(), /b\.rs: replace \+= with \*= in walk/);
 });
 
@@ -112,19 +112,19 @@ test("a fast shard's suite says nothing about a slow shard's timeouts", () => {
   // beside slow ones that reported only TIMEOUTs, every one a suite cut short.
   const { gather, current } = run(
     [[outcome("MissedMutant", MISSED, 100)], [outcome("Timeout", HUNG, 240)]],
-    ["crates/charter-core/src/a.rs: replace f -> bool with true"],
+    ["crates/purlis-core/src/a.rs: replace f -> bool with true"],
   );
   const result = gather("--timeout", "240");
   assert.equal(result.code, 1, result.out);
   assert.doesNotMatch(result.out, /## \d+ hang/);
-  assert.match(result.out, /\| Timeout \| `crates\/charter-core\/src\/b\.rs` \|/);
+  assert.match(result.out, /\| Timeout \| `crates\/purlis-core\/src\/b\.rs` \|/);
   assert.match(current(), /b\.rs: replace \+= with \*= in walk/);
 });
 
 test("without the run's timeout, a timeout is a survivor", () => {
   const { gather } = run(
     [[outcome("MissedMutant", MISSED, 20)], [outcome("Timeout", HUNG, 240)]],
-    ["crates/charter-core/src/a.rs: replace f -> bool with true"],
+    ["crates/purlis-core/src/a.rs: replace f -> bool with true"],
   );
   assert.equal(gather().code, 1);
 });
@@ -195,7 +195,7 @@ test("a red night updates the nightly's issue wherever it sits among the open on
   const { actions, body } = notice({ baseline: "failure" }, backlog(480));
   assert.deepEqual(actions, ["edit 480"]);
   assert.match(body, new RegExp(`Last run: ${RUN_URL}`));
-  assert.match(body, /charter-core's own tests do not pass/);
+  assert.match(body, /purlis-core's own tests do not pass/);
 });
 
 test("a red night with no issue open files one", () => {
@@ -297,7 +297,7 @@ test("an issue that does not say which files are clean holds the whole crate", (
     { tested: ["src/a.rs", "src/b.rs"], files: CRATE },
   );
   assert.deepEqual(actions, ["edit 480"]);
-  assert.match(body, /\*\*2 of charter-core's 4 files are not known clean/);
+  assert.match(body, /\*\*2 of purlis-core's 4 files are not known clean/);
   // What the last red night said stays: a clean slice adds to the record, it does not erase it.
   assert.match(body, /Last run: an older one/);
 });
@@ -308,7 +308,7 @@ test("a clean slice clears only its own files, and the last of them closes the i
     files: CRATE,
   });
   assert.deepEqual(red.actions, ["create"]);
-  assert.match(red.body, /\*\*2 of charter-core's 4 files are not known clean/);
+  assert.match(red.body, /\*\*2 of purlis-core's 4 files are not known clean/);
 
   // Another slice ran clean: nothing it tested was dirty, so nothing changes and it stays open.
   const other = notice({ scope: "slice" }, left(9, red.body), {
@@ -316,14 +316,14 @@ test("a clean slice clears only its own files, and the last of them closes the i
     files: CRATE,
   });
   assert.deepEqual(other.actions, ["edit 9"]);
-  assert.match(other.body, /\*\*2 of charter-core's 4 files/);
+  assert.match(other.body, /\*\*2 of purlis-core's 4 files/);
 
   const half = notice({ scope: "slice" }, left(9, red.body), {
     tested: ["src/a.rs"],
     files: CRATE,
   });
   assert.deepEqual(half.actions, ["edit 9"]);
-  assert.match(half.body, /\*\*1 of charter-core's 4 files is not known clean/);
+  assert.match(half.body, /\*\*1 of purlis-core's 4 files is not known clean/);
 
   const last = notice({ scope: "slice" }, left(9, half.body), {
     tested: ["src/b.rs"],
@@ -373,7 +373,7 @@ test("a red diff night marks the files it changed, and their slice running clean
     files: CRATE,
   });
   assert.deepEqual(red.actions, ["create"]);
-  assert.match(red.body, /\*\*1 of charter-core's 4 files is not known clean/);
+  assert.match(red.body, /\*\*1 of purlis-core's 4 files is not known clean/);
   // A clean diff night after it is not a clean c.rs: it tested only the lines that changed.
   assert.deepEqual(
     notice({ scope: "diff" }, left(9, red.body), { tested: ["src/c.rs"], files: CRATE }).actions,
@@ -396,7 +396,7 @@ test("a diff night that did not finish marks the files it changed", () => {
     files: CRATE,
   });
   assert.deepEqual(actions, ["edit 9"]);
-  assert.match(body, /\*\*2 of charter-core's 4 files are not known clean/);
+  assert.match(body, /\*\*2 of purlis-core's 4 files are not known clean/);
 });
 
 test("a night that cannot say what it tested marks the whole crate", () => {
@@ -411,7 +411,7 @@ test("a night that cannot say what it tested marks the whole crate", () => {
     tested: ["src/a.rs", "src/b.rs"],
     files: CRATE,
   });
-  assert.match(next.body, /\*\*2 of charter-core's 4 files are not known clean/);
+  assert.match(next.body, /\*\*2 of purlis-core's 4 files are not known clean/);
 });
 
 test("a file deleted from the crate does not hold the issue open", () => {
@@ -432,7 +432,7 @@ test("a red full run marks the whole crate", () => {
     files: CRATE,
   });
   assert.deepEqual(actions, ["create"]);
-  assert.match(body, /\*\*4 of charter-core's 4 files are not known clean/);
+  assert.match(body, /\*\*4 of purlis-core's 4 files are not known clean/);
 });
 
 test("a record that is not a list of files holds the whole crate, and never closes the issue", () => {
@@ -445,8 +445,23 @@ test("a record that is not a list of files holds the whole crate, and never clos
       files: ["src/a.rs", "src/b.rs"],
     });
     assert.deepEqual(actions, ["edit 9"], record);
-    assert.match(next, /\*\*1 of charter-core's 2 files is not known clean/, record);
+    assert.match(next, /\*\*1 of purlis-core's 2 files is not known clean/, record);
   }
+});
+
+test("a record written before the crate's folder was renamed is read under the new folder", () => {
+  // RN-13 moved crates/charter-core to crates/purlis-core. The record in the issue still names
+  // the old folder; reading it as files that no longer exist would close the issue on nothing.
+  const files = ["crates/purlis-core/src/a.rs", "crates/purlis-core/src/b.rs"];
+  const record = JSON.stringify(["crates/charter-core/src/a.rs", "crates/charter-core/src/b.rs"]);
+  const body = `Last run: an older one\n\n<!-- mutants-report dirty: ${record} -->\n`;
+  const { actions, body: next } = notice({ scope: "slice" }, left(9, body), {
+    tested: ["crates/purlis-core/src/a.rs"],
+    files,
+  });
+  assert.deepEqual(actions, ["edit 9"]);
+  assert.match(next, /\*\*1 of purlis-core's 2 files is not known clean/);
+  assert.match(next, /dirty: \["crates\/purlis-core\/src\/b\.rs"\]/);
 });
 
 test("a record of no files, written by hand, is nothing left", () => {

@@ -12,7 +12,7 @@ repo. This skill crosses that boundary correctly.
 ## 1. Know the workspace, and stay inside it
 
 ```bash
-charter workspace current      # the active workspace, by name
+purlis workspace current      # the active workspace, by name
 ```
 
 Clones live at `workspaces/<workspace>/<repo>`. Work in the **active** workspace only.
@@ -22,11 +22,11 @@ never reached across.
 ## 2. Make sure it is cloned
 
 ```bash
-charter clone <repo>           # skipped if already present; checks out its real default branch
+purlis clone <repo>           # skipped if already present; checks out its real default branch
 ```
 
-`<repo>` is a name from the plane's inventory (`charter discover` refreshes it). Default
-branches differ across an org (`main`, `master`, `develop`); `charter clone` reads each
+`<repo>` is a name from the plane's inventory (`purlis discover` refreshes it). Default
+branches differ across an org (`main`, `master`, `develop`); `purlis clone` reads each
 repo's actual default branch, so never assume one.
 
 ## 3. Adopt the repo's own conventions before editing
@@ -40,9 +40,9 @@ build and test commands. Use those — never commands carried over from a differ
 A clone is its own git repository, so committing there touches *its* history and never the
 plane's. Push per that repo's workflow.
 
-The plane's own tracked files are a separate concern — `charter save` commits and pushes
+The plane's own tracked files are a separate concern — `purlis save` commits and pushes
 those. A chat the app did not start, such as a terminal `claude`, gets no auto-save: there
-the plane is saved only when `charter save` runs, and `charter save --pull` first brings in
+the plane is saved only when `purlis save` runs, and `purlis save --pull` first brings in
 what the remote has.
 
 ## The boundary that is easy to get wrong
@@ -60,17 +60,17 @@ Two layers resolve differently:
 belonging to another project, and running them from here merges two trust boundaries that
 were separated on purpose.
 
-To use them, work in a chat rooted in the repo — the supported way. In the charter app, ask
+To use them, work in a chat rooted in the repo — the supported way. In the purlis app, ask
 the operator to start a new chat in that clone (or in a worktree of it) from the chat picker;
-in a terminal, `cd workspaces/<workspace>/<repo> && claude` — which runs charter's guard
-only once the operator has run `charter plugin install` on this machine. There the repo's full
-configuration loads natively, and `charter` still works from inside it when the control plane
+in a terminal, `cd workspaces/<workspace>/<repo> && claude` — which runs purlis's guard
+only once the operator has run `purlis plugin install` on this machine. There the repo's full
+configuration loads natively, and `purlis` still works from inside it when the control plane
 is needed.
 
-charter puts its own layer in a worktree it cuts — the plane's settings and its
+purlis puts its own layer in a worktree it cuts — the plane's settings and its
 `.claude/agents/`, which the clone's git root would otherwise cut off — and hides those exact
 paths in the clone's `.git/info/exclude`, so the repo's `git status` is unaffected.
-`charter workspace reinit` is the repair if a workspace is missing its layer.
+`purlis workspace reinit` is the repair if a workspace is missing its layer.
 
 ## Guardrails
 

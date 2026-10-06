@@ -332,7 +332,7 @@ fn write_heard(state: &Path, line: &str) -> std::io::Result<()> {
 /// its view's subject and nothing else — so it names the one repo its tests clone.
 pub const REPO: &str = "svc";
 
-/// The facts file's name inside the state directory (`charter_core::extension::facts::FILE`,
+/// The facts file's name inside the state directory (`purlis_core::extension::facts::FILE`,
 /// which a stranger's extension would know from the documentation, not by linking the core).
 pub const FACTS: &str = "facts.json";
 

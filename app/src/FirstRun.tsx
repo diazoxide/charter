@@ -121,8 +121,8 @@ export function FirstRun({
     <section className="opener first-run" aria-labelledby="first-run-heading">
       <h1 id="first-run-heading">Open a repo to start</h1>
       <p className="came-back">
-        charter has nothing saved on this machine yet. A project is where charter keeps your
-        workspaces, personas and memory: charter makes one for you, on this machine only, and opens
+        purlis has nothing saved on this machine yet. A project is where purlis keeps your
+        workspaces, personas and memory: purlis makes one for you, on this machine only, and opens
         your repo in a workspace of its own. Nothing is written into your repo.
       </p>
 
@@ -164,7 +164,7 @@ export function FirstRun({
         <SettingRow
           label="Project template"
           help={
-            "Personas, a review checklist and the commands charter asks you about before a chat " +
+            "Personas, a review checklist and the commands purlis asks you about before a chat " +
             "runs them, for the stack you work in. Nothing is written into your repo."
           }
           grouped
@@ -209,8 +209,8 @@ export function FirstRun({
           <h2 id="first-run-found">On this machine</h2>
           {found.harnesses.every((row) => !row.installed) && (
             <p className="came-back">
-              No harness is installed on this machine. Once your repo is open, charter lists each
-              one with its own installer, which runs in a shell tab when you press Install.
+              No harness is installed on this machine. Once your repo is open, purlis lists each one
+              with its own installer, which runs in a shell tab when you press Install.
             </p>
           )}
           <ul className="first-run-found" aria-labelledby="first-run-found">
@@ -247,7 +247,7 @@ export function FirstRun({
 
 /** What "Fits the repo" says it will pick: the template, once there is a path to look at. */
 function fitsSays(fits: string | null | undefined, templates: TemplateRow[]): string {
-  if (fits === undefined) return "charter picks by the files at the repo's top level.";
+  if (fits === undefined) return "purlis picks by the files at the repo's top level.";
   if (fits === null) return "None fits this repo, so it opens with no template.";
   const title = templates.find((one) => one.id === fits)?.title ?? fits;
   return `${title}, by the files at the repo's top level.`;

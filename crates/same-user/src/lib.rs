@@ -4,8 +4,8 @@
 //! on the checks here, and only here, so they cannot drift apart (FD-6, ADR 0068 §5):
 //!
 //! - [`admit_peer`]: a connection on a unix socket is read only when its peer runs as the
-//!   socket's owner. `charterd.sock` (`charter_session_protocol::local`) and each plane's hook
-//!   socket (`charter_core::hookwire`) both call it.
+//!   socket's owner. `charterd.sock` (`purlis_session_protocol::local`) and each plane's hook
+//!   socket (`purlis_core::hookwire`) both call it.
 //! - [`private_directory`]: a directory made, or found, `0700` and owned by this user, never a
 //!   link, for a socket or for credentials to sit in.
 //! - [`read_private_file`]: a file read only when it is a regular file of this user's that

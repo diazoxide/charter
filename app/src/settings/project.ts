@@ -60,7 +60,7 @@ import { settled } from "../PlaneEdits";
  * setting is hidden.
  *
  * **One driver for the tab** ({@link useProjectLevel}, on `driver.ts`'s, which the Workspace
- * level shares): each change is written as its own keys through the core (`save_project_settings`, `charter_core::settings::save`, which keeps every
+ * level shares): each change is written as its own keys through the core (`save_project_settings`, `purlis_core::settings::save`, which keeps every
  * other key and comment and refuses what the next read would refuse), one write at a time and
  * each against the file as it now stands; the last change can be undone; and a refused write is
  * kept by the setting it was for, while the files are read again so what is shown is what is on
@@ -143,7 +143,7 @@ function assistedBy(path: string[]): Control {
 /**
  * **Forges as a collection** (ST-3): each `[[forge]]` block the core lists in `charter.toml` an
  * entry over its own rows, and the Add form's four fields, written by
- * `charter_core::settings::forges` (`add_project_forge`, `remove_project_forge`).
+ * `purlis_core::settings::forges` (`add_project_forge`, `remove_project_forge`).
  */
 function forgesCollection(shared: SettingsFile, settings: readonly FileSetting[]): Collection {
   const under = (keys: readonly SettingsStep[], key: readonly SettingsStep[]) =>
@@ -201,7 +201,7 @@ export function profilePage(name: string): string {
 /**
  * **Harness profiles as a collection** (ST-4, #1236): each `[harness.<name>]` table the core lists
  * in `charter.local.toml` is an entry with a page of its own, and the Add form asks for its name,
- * kind and command, written by `charter_core::settings::harness_profiles` (`add_project_profile`,
+ * kind and command, written by `purlis_core::settings::harness_profiles` (`add_project_profile`,
  * `remove_project_profile`, `rename_project_profile`). On Harness & profiles each entry is a
  * heading that opens its page, with Remove; its page holds it alone, with its rows, Rename and
  * Remove.
@@ -321,7 +321,7 @@ function sandboxSettings(shared: Shown, sandbox: SandboxState | undefined): Cont
   const set = valueAt(shared, SANDBOX_MODE) !== undefined;
   // The opt-out count is this machine's, and is never sent (ADR 0067 §7, V78 d).
   const said = sandbox?.on
-    ? `On: every chat charter starts here runs in a sandbox.${sandbox.said ? ` ${sandbox.said}. Counted on this machine only, and never sent.` : ""}`
+    ? `On: every chat purlis starts here runs in a sandbox.${sandbox.said ? ` ${sandbox.said}. Counted on this machine only, and never sent.` : ""}`
     : "Not set: chats here run without a sandbox. On runs every chat sandboxed.";
   const egress = key("sandbox", "egress");
   return [
@@ -439,7 +439,7 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
     {
       id: "project.sandbox",
       label: "Sandbox",
-      help: "Whether the chats charter starts here run in a sandbox, and which hosts it lets them reach.",
+      help: "Whether the chats purlis starts here run in a sandbox, and which hosts it lets them reach.",
       settings: fromShared("project.sandbox", sandboxSettings(shared, read.sandbox)).map((one) =>
         same(one.key, SANDBOX_MODE) ? { ...one, oneWay: true } : one,
       ),
@@ -473,7 +473,7 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
     {
       id: "project.plugins",
       label: "Plugins",
-      help: "Which harness plugins the chats charter starts here have on.",
+      help: "Which harness plugins the chats purlis starts here have on.",
       settings: fromShared(
         "project.plugins",
         plugins.flatMap((one) => one.controls),

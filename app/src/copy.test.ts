@@ -25,7 +25,7 @@ describe("the copy guide's mechanical rules (docs/ui-copy.md)", () => {
   });
 
   it("passes copy that says what happened and what to do", () => {
-    expect(copyFaults("charter could not read the alerts: the file is gone")).toEqual([]);
+    expect(copyFaults("purlis could not read the alerts: the file is gone")).toEqual([]);
     expect(copyFaults("No vaults yet. Make one with New vault… in the palette.")).toEqual([]);
     // A word that only contains a stock one is not it.
     expect(copyFaults("The errors pane is empty")).toEqual([]);
@@ -71,13 +71,16 @@ describe("the copy guide's mechanical rules (docs/ui-copy.md)", () => {
     expect(copyFaults("Back to the whole workspace (Esc)", "shown")).toEqual([]);
   });
 
-  it("allows a capital Charter only as the About dialog's title", () => {
-    expect(copyFaults("About Charter", "shown")).toEqual([]);
-    expect(copyFaults("About Charter — what this version brought", "shown")).toEqual([]);
-    expect(copyFaults("This is Charter 0.4.0.", "shown")).toEqual([
-      "a capital Charter: charter is lowercase outside the About title",
+  it("allows no capital product name, not even in the About dialog's title", () => {
+    expect(copyFaults("About purlis", "shown")).toEqual([]);
+    expect(copyFaults("About purlis — what this version brought", "shown")).toEqual([]);
+    expect(copyFaults("This is Purlis 0.4.0.", "shown")).toEqual([
+      "a capital product name: purlis is lowercase, the About title too",
     ]);
-    expect(copyFaults("This is charter 0.4.0.", "shown")).toEqual([]);
+    expect(copyFaults("About Charter", "shown")).toEqual([
+      "a capital product name: purlis is lowercase, the About title too",
+    ]);
+    expect(copyFaults("This is purlis 0.4.0.", "shown")).toEqual([]);
     // The source is not the window: a type or a component may be called Charter.
     expect(copyFaults("AboutCharter")).toEqual([]);
   });
@@ -93,7 +96,7 @@ describe("the strings the guard reads", () => {
       `const a = <button aria-label="Close find" title={\`Save \${repo}\`} className="x-y">
          Open project…
        </button>;
-       const b = "charter could not read it";
+       const b = "purlis could not read it";
        import { x } from "./not-copy";`,
     );
     expect(found).toEqual([
@@ -102,7 +105,7 @@ describe("the strings the guard reads", () => {
       // Every other string is source: copy built in code, and ids and classes beside it.
       { text: "x-y", seen: "source", line: 1 },
       { text: "Open project…", seen: "shown", line: 2 },
-      { text: "charter could not read it", seen: "source", line: 4 },
+      { text: "purlis could not read it", seen: "source", line: 4 },
     ]);
   });
 });
@@ -115,8 +118,8 @@ describe("shown text reached through an expression", () => {
 
   it("reads a JSX child's literals, through a conditional and a logical branch", () => {
     expect(
-      shown(`<p>{busy ? "Reading it…" : \`Read \${n}\`}{error && "charter could not read it"}</p>`),
-    ).toEqual(["Reading it…", "Read …", "charter could not read it"]);
+      shown(`<p>{busy ? "Reading it…" : \`Read \${n}\`}{error && "purlis could not read it"}</p>`),
+    ).toEqual(["Reading it…", "Read …", "purlis could not read it"]);
   });
 
   it("reads a shown attribute's conditional branches, and not its condition", () => {

@@ -242,13 +242,13 @@ replica of the updater's own install code, running inside an ad-hoc-signed app i
 Management permission was requested, and the replaced bundle launched and updated again. ADR
 0042 §3 has the table and the limits.
 
-## The `charter` command in a terminal
+## The `purlis` command in a terminal
 
 The app ships its own command line as `purlis`, with `charter` beside it as an alias that runs
 it, for the rename's window (RN-3). Every chat the app starts finds both first on its `PATH`. A
 terminal does not, until they are put there:
 
-- **macOS**: run **Install `charter` command in PATH** from the command palette. It links
+- **macOS**: run **Install `purlis` command in PATH** from the command palette. It links
   `/usr/local/bin/purlis` and `/usr/local/bin/charter` to the `purlis` inside the app, the way
   VS Code's "Install 'code' command in PATH" does, and macOS asks once for an administrator's
   password when that directory is not yours. Links rather than copies, so the commands follow

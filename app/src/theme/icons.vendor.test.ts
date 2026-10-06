@@ -6,7 +6,7 @@ import charterIcons from "./charter-icons.json";
 import { fromSvg } from "./icons.vendor";
 
 /**
- * **charter's own icons are the vendored files, converted** (FM-3, #1106): each symbol in
+ * **purlis's own icons are the vendored files, converted** (FM-3, #1106): each symbol in
  * `charter-icons.json` is what `fromSvg` makes of the Material Icon Theme file of the same
  * name under `app/icons/material-icon-theme/`, so the provenance and the licence of every
  * shape the window draws is one directory listing away.

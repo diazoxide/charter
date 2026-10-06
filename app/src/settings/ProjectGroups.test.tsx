@@ -27,7 +27,7 @@ import type {
  * Its Shared and Local sections are one form now: a setting is kept in the file it belongs in,
  * and a key in the other file is reached with Edit as TOML (`RawToml.test.tsx`) until SE-18
  * gives each value its file choice. The core is the mock; what it refuses, and in which words,
- * is `charter_core::settings`'s tests.
+ * is `purlis_core::settings`'s tests.
  */
 
 const PLANE = "/home/dev/plane";
@@ -260,7 +260,7 @@ describe("the files, at the Project level", () => {
     await at();
 
     expect(
-      screen.getByText("charter does not take this from the files as they stand:"),
+      screen.getByText("purlis does not take this from the files as they stand:"),
     ).toBeVisible();
     expect(screen.getByText(`charter.toml: ${standing}`)).toBeVisible();
   });
@@ -321,7 +321,7 @@ const EXTENSIONS: ProjectExtension[] = [
     ignored: [
       {
         file: "charter.toml",
-        why: "charter.toml sets extensions.stats.settings.nope, which stats does not declare — charter hands it nothing",
+        why: "charter.toml sets extensions.stats.settings.nope, which stats does not declare — purlis hands it nothing",
       },
     ],
   },
@@ -502,7 +502,7 @@ describe("the theme, in Appearance (charter-app#273)", () => {
 /** The ignore check's sentence for a `charter.local.toml` git would commit, as the core says it
  *  (charter-app#308). */
 const LEFT_OUT =
-  "git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter doctor --fix local-ignore adds /charter.local.toml to .gitignore.";
+  "git would commit charter.local.toml, so purlis reads nothing in it until it is ignored — purlis doctor --fix local-ignore adds /charter.local.toml to .gitignore.";
 
 describe("a charter.local.toml git would carry (charter-app#319)", () => {
   it("is said once in each group that shows what is in force", async () => {

@@ -208,7 +208,7 @@ export function BottomBar({
           workspace with fewer repos than it has. */}
       {panels?.refused.map(([name, why]) => (
         <Trouble key={`refused-${name}`}>
-          charter will not read <code>{name}</code>: {why}
+          purlis will not read <code>{name}</code>: {why}
         </Trouble>
       ))}
 
@@ -429,7 +429,7 @@ function CiCell({
 /**
  * The mark for each of the seven words a pipeline may be in.
  *
- * `CI_STATES` in `crates/charter-core/src/cistate.rs` is the closed list — both forges map
+ * `CI_STATES` in `crates/purlis-core/src/cistate.rs` is the closed list — both forges map
  * their own vocabulary onto it — so this is exhaustive rather than a guess, and anything the
  * cache holds that is not one of the seven gets the dashed circle, which is what charter
  * already draws for "there is a fetch here and it names nothing".

@@ -2,7 +2,7 @@
 //! window this process has, and the watch that hears `charter stop --all` throw it.
 //!
 //! **While the app runs, the switch in its memory is the authority.** The files on disk
-//! (`charter_core::halt`) are how another process throws it and how the next launch learns it
+//! (`purlis_core::halt`) are how another process throws it and how the next launch learns it
 //! was thrown. They can stop this process but never re-arm it: a stop on disk is in force the
 //! moment it is written, and a marker that goes away while agents are stopped is put back and
 //! journaled as a tamper. Only [`KillSwitch::rearm`], which the window's control alone calls,
@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::Duration;
 
-use charter_core::halt::{self, Actor};
 use notify::RecursiveMode;
+use purlis_core::halt::{self, Actor};
 
 /// The event every window is sent when the switch moves, carrying whether agents are stopped.
 pub(crate) const CHANGED: &str = "kill-switch";
@@ -128,7 +128,7 @@ impl KillSwitch {
             }
             if let Err(why) = halt::restore(config, halt::now()) {
                 tracing::warn!(
-                    "charter: the kill switch's marker was removed and could not be put back ({why})"
+                    "purlis: the kill switch's marker was removed and could not be put back ({why})"
                 );
             }
             return Moved::Tampered;
@@ -334,7 +334,7 @@ pub fn hear(app: &tauri::AppHandle) {
             app.manage(watch);
         }
         Some(Err(why)) => tracing::warn!(
-            "charter: `charter stop --all` will not be heard by this app until it restarts ({why})"
+            "purlis: `purlis stop --all` will not be heard by this app until it restarts ({why})"
         ),
         None => {}
     }
@@ -349,7 +349,7 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-    use charter_core::halt::{Entry, Event};
+    use purlis_core::halt::{Entry, Event};
 
     fn a_config_home() -> tempfile::TempDir {
         tempfile::tempdir().expect("a config home")
@@ -468,7 +468,7 @@ mod tests {
     fn a_stop_defeated_in_advance_by_a_chmod_still_stops_this_app_and_says_so() {
         use std::os::unix::fs::PermissionsExt;
         let config = a_config_home();
-        let dir = charter_core::machine::dir(config.path());
+        let dir = purlis_core::machine::dir(config.path());
         std::fs::create_dir_all(&dir).expect("charter's directory");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).expect("chmod");
         let switch = switch_in(config.path());

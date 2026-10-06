@@ -82,7 +82,7 @@ decision; building it is not, because most of it exists.
 
 **Alerts are the opposite case: the surface is assigned and there is nothing to draw.** charter's
 footer has an alert row in zone 2 (`charter/statusline.py:_alerts`), and it is not ported —
-`crates/charter-core/src/footer.rs` names the omission in the output rather than hiding it:
+`crates/purlis-core/src/footer.rs` names the omission in the output rather than hiding it:
 
 ```
 not drawn by this build: repos · personas · alerts · session
@@ -112,7 +112,7 @@ will use to conclude that anything not in the table was considered and dropped.
   Rust footer does not draw them yet either."* `footer.rs` draws zone 1 and the sentence above.
 
   The recording side is alive and the drawing side does not exist. `usage::record` is called from
-  `crates/charter-cli/src/statusline.rs`, which is the side effect ADR 0019 exists to protect —
+  `crates/purlis-cli/src/statusline.rs`, which is the side effect ADR 0019 exists to protect —
   so the history is accumulating. What is *not* ported is a renderer: `usage::rows_at` is a
   private helper of the writer, called only by `record_turn` to rewrite the file it keeps, and
   it has no caller outside its own module. The app exposes no command for any of it.
@@ -125,10 +125,10 @@ will use to conclude that anything not in the table was considered and dropped.
 - **Usage and the token trend.** Same history, a different view of it — the trend over a
   session's turns rather than this turn's percentage. Zone 3. Nothing renders it and, as above,
   no renderer was ported.
-- **News, and "an update is available".** `crates/charter-core/src/news.rs` is ported and
+- **News, and "an update is available".** `crates/purlis-core/src/news.rs` is ported and
   `charter news` works. The app has no command for it, so an operator who never types `charter`
   in a pane is never told an update exists.
-- **`doctor`.** `crates/charter-core/src/doctor/` is ported across twelve modules and is CLI
+- **`doctor`.** `crates/purlis-core/src/doctor/` is ported across twelve modules and is CLI
   only. It is the thing an operator reaches for when something is wrong, and in a window whose
   whole premise is not typing `charter`, it is reachable only by typing `charter`.
 

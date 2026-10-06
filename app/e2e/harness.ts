@@ -37,7 +37,7 @@ export const READY = "session ready";
  * Pinning `$CHARTER_ROOT` is how a run *avoids* that, and it is not enough on its own: a
  * config that stops pinning it goes green and poisons a plane. So every process also carries
  * `$CHARTER_PLANE_FENCE` pointing here, and the binary the scenario tests drive is built with
- * the fence in it (`e2e` turns on `charter-core/fenced`). A run that resolves any plane this
+ * the fence in it (`e2e` turns on `purlis-core/fenced`). A run that resolves any plane this
  * tree does not hold dies naming it, in the job that broke it.
  *
  * Made once per launcher process, and `wdio.state.conf.ts` and `wdio.bench.conf.ts` spread
@@ -372,7 +372,7 @@ export function copyFixturePlane(name = "daily"): string {
 /**
  * A `charter.local.toml` in `plane` declaring one profile that runs `program`.
  *
- * The profile's own program is a wrapper around `program`. charter puts its own words on the
+ * The profile's own program is a wrapper around `program`. purlis puts its own words on the
  * line for a Claude Code chat — `--plugin-dir`, `--settings`, `--session-id <uuid> --name
  * <name>` — which the fake harness has no flags for, so the wrapper writes down what it was
  * given and drops its arguments exactly as a real wrapper profile does. Nothing is installed
@@ -444,7 +444,7 @@ function theProfilesProgram(program: string): string {
     '  SEEN="$CHARTER_ROOT/.charter/scenario-harness"',
     '  mkdir -p "$SEEN"',
     `  printf '%s' "\${CHARTER_HOOK_SOCKET:-}" > "$SEEN/socket-$CHARTER_CHAT"`,
-    "  # The binary the bundled plugin's hooks run (`charter_core::plugin::BINARY_ENV`).",
+    "  # The binary the bundled plugin's hooks run (`purlis_core::plugin::BINARY_ENV`).",
     `  printf '%s' "\${CHARTER_HOOK_BINARY:-}" > "$SEEN/hookbinary-$CHARTER_CHAT"`,
     "fi",
     "while [ $# -gt 0 ]; do",
@@ -567,7 +567,7 @@ export function anEmptyRecord(plane: string): void {
 }
 
 /**
- * A config home of this run's own, so charter's machine store is empty when the app starts.
+ * A config home of this run's own, so purlis's machine store is empty when the app starts.
  *
  * The store holds which projects this machine remembers and which the operator has approved
  * (ADR 0034), and it lives under `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`,
@@ -597,7 +597,7 @@ export function aDataHomeOfItsOwn(): string {
  * `statusLine` in it.
  *
  * **What it is for.** charter arms its own `statusLine` for a chat only where nothing else
- * fills the line (`charter_core::footerclaim`, the operator's ruling of 2026-09-22), and this
+ * fills the line (`purlis_core::footerclaim`, the operator's ruling of 2026-09-22), and this
  * is how a scenario puts something there. The Finder launcher uses it, because that launch
  * already has a `$HOME` of its own.
  *

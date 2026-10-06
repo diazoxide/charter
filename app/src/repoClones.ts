@@ -139,8 +139,8 @@ async function seen(
   return {
     state: "failed",
     said:
-      `${repo} was cloned, but charter does not see it in ${workspace}.` +
-      (cloned.said ? ` charter said: ${cloned.said}` : ""),
+      `${repo} was cloned, but purlis does not see it in ${workspace}.` +
+      (cloned.said ? ` purlis said: ${cloned.said}` : ""),
   };
 }
 

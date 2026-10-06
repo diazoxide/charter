@@ -85,7 +85,7 @@ describe("the operator's own theme", () => {
     const [said] = aboutThisMachine();
     expect(said.subject).toBe("theme");
     expect(said.detail).toContain(PATH);
-    expect(said.detail).toContain("surface.bass is not a charter token");
+    expect(said.detail).toContain("surface.bass is not a purlis token");
     expect(said.detail).toContain("surface.base is");
   });
 

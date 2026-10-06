@@ -326,7 +326,7 @@ export type Does =
   | { verb: "showExtensions" }
   /** Puts the app's own `charter` on a terminal's `PATH` — VS Code's "Install 'code' command
    *  in PATH". Only ever on this row: nothing links a command anywhere behind the operator's
-   *  back (spec decision 21, `charter_core::clipath`). A refusal comes back as the core's
+   *  back (spec decision 21, `purlis_core::clipath`). A refusal comes back as the core's
    *  sentence: somebody else's `charter` already there, a cancelled password prompt, or a
    *  platform where the installer already did it. */
   | { verb: "installCli" }
@@ -1357,7 +1357,7 @@ export function catalogue(now: Now): Offer[] {
       ? cannot(
           "workspace.create",
           newWorkspace,
-          "charter found no plane, so there is nowhere to make a workspace.",
+          "purlis found no plane, so there is nowhere to make a workspace.",
         )
       : can("workspace.create", newWorkspace, { verb: "createWorkspace" }),
   );
@@ -1405,7 +1405,7 @@ export function catalogue(now: Now): Offer[] {
   // deleting are `charter persona create` and `remove`, through the core, so the window refuses
   // what a terminal refuses. Editing is the operator's own editor on the persona's `persona.md`:
   // a charter is prose, and charter draws no editor for it.
-  const personaPlane = "charter found no plane, so there is nowhere to keep a persona.";
+  const personaPlane = "purlis found no plane, so there is nowhere to keep a persona.";
   offers.push(
     now.plane === undefined
       ? cannot("persona.create", "New persona…", personaPlane)
@@ -1462,7 +1462,7 @@ export function catalogue(now: Now): Offer[] {
         made(
           journal,
           `New memory in ${now.focused}…`,
-          `Recorded in ${now.focused}'s journal, as \`charter workspace remember\` records one.`,
+          `Recorded in ${now.focused}'s journal, as \`purlis workspace remember\` records one.`,
         ),
         archive(journal),
       );
@@ -1473,7 +1473,7 @@ export function catalogue(now: Now): Offer[] {
         made(
           own,
           `New memory for ${persona}…`,
-          `Kept in personas/${persona}/memory/, as \`charter persona remember\` keeps one.`,
+          `Kept in personas/${persona}/memory/, as \`purlis persona remember\` keeps one.`,
         ),
         archive(own),
       );
@@ -1519,7 +1519,7 @@ export function catalogue(now: Now): Offer[] {
       ),
     );
   }
-  const noVaultPlane = "charter found no plane, so there are no vaults to reach.";
+  const noVaultPlane = "purlis found no plane, so there are no vaults to reach.";
   offers.push(
     now.plane === undefined
       ? cannot("vault.pick", "Open vault…", noVaultPlane)
@@ -1776,7 +1776,7 @@ export function catalogue(now: Now): Offer[] {
   // feature. The merges are here, above the line; the removes are below with the rest.
   const pieces = now.pieces ?? [];
   const noPlane =
-    now.plane === undefined ? "charter found no plane, so it cannot reach a branch." : undefined;
+    now.plane === undefined ? "purlis found no plane, so it cannot reach a branch." : undefined;
   for (const cut of pieces) {
     // The branch's cockpit first (FM-5): the explorer narrowed to it, which changes nothing.
     const focusOn = cut.branch ? `Focus on branch ${cut.branch}` : `Focus on folder ${cut.piece}`;
@@ -2016,11 +2016,11 @@ export function catalogue(now: Now): Offer[] {
   // about what is in front before it. The words are VS Code's for the same thing, which is
   // what an operator will type.
   offers.push({
-    ...can("charter.installCli", "Install `charter` command in PATH", { verb: "installCli" }),
-    note: "Links the charter this app ships into /usr/local/bin, so a terminal finds it. macOS asks for your password when that directory is not yours.",
+    ...can("charter.installCli", "Install `purlis` command in PATH", { verb: "installCli" }),
+    note: "Links the purlis this app ships into /usr/local/bin, so a terminal finds it. macOS asks for your password when that directory is not yours.",
   });
 
-  offers.push(can("charter.quit", "Quit charter", { verb: "quit" }));
+  offers.push(can("charter.quit", "Quit purlis", { verb: "quit" }));
 
   return offers;
 }
@@ -2421,9 +2421,9 @@ function nothingSaidSoFar(quiet: readonly string[]): string {
 function frontWorktree(now: Now, inFront: boolean): { cut: Cut } | { why: string } {
   if (!inFront) return { why: "No chat is in front." };
   if (now.plane === undefined)
-    return { why: "charter found no plane, so it cannot reach a branch." };
+    return { why: "purlis found no plane, so it cannot reach a branch." };
   if (now.worktree === undefined)
-    return { why: "The chat in front is not working in a branch charter cut." };
+    return { why: "The chat in front is not working in a branch purlis cut." };
   return { cut: now.worktree };
 }
 
@@ -2875,7 +2875,7 @@ export const REVEAL_SAID = revealSaid(typeof navigator === "undefined" ? "" : na
 
 /** Why a link's row copies only its relative path. */
 export const NO_LINK_FOLLOWED =
-  "charter follows no link: it reveals and places only the branch's own files and folders.";
+  "purlis follows no link: it reveals and places only the branch's own files and folders.";
 
 /**
  * The rows a file or folder's menu draws, in order (FM-10): copy its path, relative or

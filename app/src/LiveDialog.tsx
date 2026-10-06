@@ -164,13 +164,13 @@ function whereText(read: LivePreview): string {
     return "This plane has not been told how it is saved yet: the switch is made now, and nothing is committed until you choose how in the Saving tab.";
   }
   if (read.mode === "off") {
-    return "This plane's mode is off, so charter commits nothing; they are published when you commit and push them.";
+    return "This plane's mode is off, so purlis commits nothing; they are published when you commit and push them.";
   }
   if (read.mode === "commit") {
     return "This plane's mode is commit, so they are committed on this machine and published when you push.";
   }
   if (read.remote === null) {
-    return "This plane has no remote charter can push to, so they are committed on this machine only.";
+    return "This plane has no remote purlis can push to, so they are committed on this machine only.";
   }
   return `The next save pushes them to ${read.remote} — anyone who can read that repository will read them.`;
 }

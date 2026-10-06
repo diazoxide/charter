@@ -157,7 +157,7 @@ export function loadMotion(raw: unknown, base: Motion): { motion: Motion; said: 
 
   const known = new Set<string>(MOTION_TOKENS);
   for (const name of Object.keys(given)) {
-    if (!known.has(name)) said.push(`${name} is not a charter motion token`);
+    if (!known.has(name)) said.push(`${name} is not a purlis motion token`);
   }
 
   const motion = { durations: { ...base.durations }, easings: { ...base.easings } } as Motion;

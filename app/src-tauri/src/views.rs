@@ -4,12 +4,12 @@
 //! **A tab is a layout of panes, and a pane holds a session or a view** (ADR 0043, as
 //! amended 2026-09-23). A view is named by data — who draws it, which of theirs, and what it is
 //! about — and **charter's own views and an approved extension's come through the one command**
-//! ([`open_view`]) and answer in the one vocabulary (`charter_core::panel`). The persona view
+//! ([`open_view`]) and answer in the one vocabulary (`purlis_core::panel`). The persona view
 //! is the first built-in one (`panels::persona_view`); persona statistics is the first an
 //! extension offers. The window draws both with the same code and cannot tell them apart except
 //! by whose they are, which it says.
 //!
-//! `charter_core::executor` is the whole of the thinking for an extension's view — the gate
+//! `purlis_core::executor` is the whole of the thinking for an extension's view — the gate
 //! re-taken at the press, the one-question process, the bounds, the kill. This is the wire, and
 //! two decisions that are the app's to make:
 //!
@@ -40,9 +40,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use charter_core::executor::Executor;
-use charter_core::extension;
-use charter_core::panel::Subject;
+use purlis_core::executor::Executor;
+use purlis_core::extension;
+use purlis_core::panel::Subject;
 
 use crate::panels::{PanelBlock, RowAction};
 
@@ -82,7 +82,7 @@ impl Views {
 
 /// Whether charter starts an extension's program on this platform at all.
 ///
-/// **The same answer `charter_core::executor` gives**, asked here so that a platform where every
+/// **The same answer `purlis_core::executor` gives**, asked here so that a platform where every
 /// view would be refused does not offer one: a Statistics button that always answers *"charter
 /// does not start an extension's program on this platform"* is a button that should not be
 /// drawn. The executor keeps its own refusal as the gate; this only decides what is offered.
@@ -145,8 +145,8 @@ pub(crate) async fn extension_views() -> Result<Vec<ExtensionView>, String> {
     if !RUNS_PROGRAMS {
         return Ok(Vec::new());
     }
-    let root = charter_core::machine::config_root().ok_or_else(|| {
-        "this machine has no config home, so charter keeps no extensions".to_owned()
+    let root = purlis_core::machine::config_root().ok_or_else(|| {
+        "this machine has no config home, so purlis keeps no extensions".to_owned()
     })?;
     tauri::async_runtime::spawn_blocking(move || {
         offered(&extension::survey(&root, &crate::extensions::built_in()))
@@ -156,22 +156,22 @@ pub(crate) async fn extension_views() -> Result<Vec<ExtensionView>, String> {
 }
 
 /// Whether this platform runs extension programs at all
-/// ([`charter_core::executor::RUNS_PROGRAMS`]). On one that does not, [`extension_views`]
+/// ([`purlis_core::executor::RUNS_PROGRAMS`]). On one that does not, [`extension_views`]
 /// offers nothing and the window should not draw a place for a view to go.
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn extension_programs_run() -> bool {
-    charter_core::executor::RUNS_PROGRAMS
+    purlis_core::executor::RUNS_PROGRAMS
 }
 
 /// [`extension_views`] with the survey already taken, so the shaping is testable without a
 /// Tauri runtime.
 ///
 /// **Nothing on a platform that runs no programs**: a view's button there could only ever
-/// answer [`charter_core::executor::REFUSED_HERE`], and a button that always refuses is a
+/// answer [`purlis_core::executor::REFUSED_HERE`], and a button that always refuses is a
 /// button the operator should not have been shown.
 fn offered(seen: &extension::Survey) -> Vec<ExtensionView> {
-    if !charter_core::executor::RUNS_PROGRAMS {
+    if !purlis_core::executor::RUNS_PROGRAMS {
         return Vec::new();
     }
     seen.installed
@@ -210,17 +210,17 @@ pub(crate) async fn open_view(
     let root = planes.held(&plane)?.root().to_path_buf();
     let Some(extension) = from else {
         // The state directory `charter persona list` reads the vault registry's local half from.
-        let state = charter_core::personaverbs::state_dir(&root);
+        let state = purlis_core::personaverbs::state_dir(&root);
         return tauri::async_runtime::spawn_blocking(move || built_in(&root, &state, &view, &key))
             .await
             .map_err(|err| format!("reading that view did not finish: {err}"))?;
     };
-    let config = charter_core::machine::config_root().ok_or_else(|| {
-        "this machine has no config home, so charter keeps no extensions".to_owned()
+    let config = purlis_core::machine::config_root().ok_or_else(|| {
+        "this machine has no config home, so purlis keeps no extensions".to_owned()
     })?;
-    if !key.is_empty() && !charter_core::personas::valid_name(&key) {
+    if !key.is_empty() && !purlis_core::personas::valid_name(&key) {
         return Err(format!(
-            "{key:?} is not a persona name charter would hand anybody"
+            "{key:?} is not a persona name purlis would hand anybody"
         ));
     }
     let executor = Arc::clone(&views.executor);
@@ -255,7 +255,7 @@ pub(crate) async fn open_view(
                 Some(key.as_str()).filter(|key| !key.is_empty()),
                 |about| match about {
                     Subject::Personas => {
-                        charter_core::handed::personas(&root, chrono::Local::now().naive_local())
+                        purlis_core::handed::personas(&root, chrono::Local::now().naive_local())
                     }
                 },
             )
@@ -307,12 +307,12 @@ pub(crate) async fn run_action(
     confirmed: bool,
 ) -> Result<ActionAnswer, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    let config = charter_core::machine::config_root().ok_or_else(|| {
-        "this machine has no config home, so charter keeps no extensions".to_owned()
+    let config = purlis_core::machine::config_root().ok_or_else(|| {
+        "this machine has no config home, so purlis keeps no extensions".to_owned()
     })?;
-    if !key.is_empty() && !charter_core::personas::valid_name(&key) {
+    if !key.is_empty() && !purlis_core::personas::valid_name(&key) {
         return Err(format!(
-            "{key:?} is not a persona name charter would hand anybody"
+            "{key:?} is not a persona name purlis would hand anybody"
         ));
     }
     let executor = Arc::clone(&views.executor);
@@ -326,7 +326,7 @@ pub(crate) async fn run_action(
                 &project,
                 &extension,
                 &action,
-                charter_core::executor::On {
+                purlis_core::executor::On {
                     view: view.as_deref(),
                     focus: Some(key.as_str()).filter(|key| !key.is_empty()),
                     row: row.as_deref(),
@@ -334,7 +334,7 @@ pub(crate) async fn run_action(
                 confirmed,
                 |about| match about {
                     Subject::Personas => {
-                        charter_core::handed::personas(&root, chrono::Local::now().naive_local())
+                        purlis_core::handed::personas(&root, chrono::Local::now().naive_local())
                     }
                 },
             )
@@ -383,8 +383,8 @@ pub(crate) async fn extension_commands() -> Result<Vec<ExtensionCommand>, String
     if !RUNS_PROGRAMS {
         return Ok(Vec::new());
     }
-    let root = charter_core::machine::config_root().ok_or_else(|| {
-        "this machine has no config home, so charter keeps no extensions".to_owned()
+    let root = purlis_core::machine::config_root().ok_or_else(|| {
+        "this machine has no config home, so purlis keeps no extensions".to_owned()
     })?;
     tauri::async_runtime::spawn_blocking(move || {
         commanded(&extension::survey(&root, &crate::extensions::built_in()))
@@ -395,7 +395,7 @@ pub(crate) async fn extension_commands() -> Result<Vec<ExtensionCommand>, String
 
 /// [`extension_commands`] with the survey already taken.
 fn commanded(seen: &extension::Survey) -> Vec<ExtensionCommand> {
-    if !charter_core::executor::RUNS_PROGRAMS {
+    if !purlis_core::executor::RUNS_PROGRAMS {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -480,17 +480,15 @@ fn built_in(
         // built-in view that asks a forge, and it is asked only here: when its tab is opened and
         // when its Refresh is pressed, never on a workspace switch.
         "changes" => {
-            if !charter_core::contain::workspace_name_ok(key) {
-                return Err(format!(
-                    "{key:?} is not a workspace name charter would read"
-                ));
+            if !purlis_core::contain::workspace_name_ok(key) {
+                return Err(format!("{key:?} is not a workspace name purlis would read"));
             }
-            if !charter_core::wscmd::workspace_dir_exists(root, key) {
+            if !purlis_core::wscmd::workspace_dir_exists(root, key) {
                 return Ok(ViewAnswer::Gone {
                     why: format!("This plane has no workspace called {key} any more."),
                 });
             }
-            let drawn = charter_core::change::view::view(root, key, chrono::Utc::now());
+            let drawn = purlis_core::change::view::view(root, key, chrono::Utc::now());
             Ok(ViewAnswer::Answered {
                 blocks: drawn.blocks.iter().map(PanelBlock::from).collect(),
                 took_ms: millis(began.elapsed()),
@@ -506,7 +504,7 @@ fn built_in(
         }
         // A harness's capability card (HP-19), keyed by the harness's name: read off its
         // declaration in this project and the adapter charter ships for it.
-        "harness" => Ok(match charter_core::harness_card::named(root, key) {
+        "harness" => Ok(match purlis_core::harness_card::named(root, key) {
             Some(card) => ViewAnswer::Answered {
                 blocks: card.blocks().iter().map(PanelBlock::from).collect(),
                 took_ms: millis(began.elapsed()),
@@ -516,12 +514,12 @@ fn built_in(
             None => ViewAnswer::Gone {
                 why: format!(
                     "This project has no harness called {} any more.",
-                    charter_core::shown::short(key)
+                    purlis_core::shown::short(key)
                 ),
             },
         }),
         other => Ok(ViewAnswer::Gone {
-            why: format!("This version of charter has no view called '{other}'."),
+            why: format!("This version of purlis has no view called '{other}'."),
         }),
     }
 }
@@ -553,8 +551,8 @@ pub(crate) struct ViewTab {
     pub split: Option<u8>,
 }
 
-impl From<charter_core::reopen::View> for ViewTab {
-    fn from(view: charter_core::reopen::View) -> Self {
+impl From<purlis_core::reopen::View> for ViewTab {
+    fn from(view: purlis_core::reopen::View) -> Self {
         Self {
             from: view.from,
             view: view.view,
@@ -569,7 +567,7 @@ impl From<charter_core::reopen::View> for ViewTab {
     }
 }
 
-impl From<ViewTab> for charter_core::reopen::View {
+impl From<ViewTab> for purlis_core::reopen::View {
     fn from(tab: ViewTab) -> Self {
         Self {
             from: tab.from,
@@ -626,8 +624,8 @@ pub(crate) struct Focused {
     pub piece: Option<String>,
 }
 
-impl From<charter_core::reopen::Focus> for Focused {
-    fn from(focus: charter_core::reopen::Focus) -> Self {
+impl From<purlis_core::reopen::Focus> for Focused {
+    fn from(focus: purlis_core::reopen::Focus) -> Self {
         Self {
             workspace: focus.workspace,
             repo: focus.repo,
@@ -663,9 +661,9 @@ pub(crate) fn window_focus(
 }
 
 /// The focus the window said, held to the names charter mints.
-fn held_focus(focus: Focused) -> Result<charter_core::reopen::Focus, String> {
-    charter_core::reopen::Focus::named(&focus.workspace, &focus.repo, focus.piece.as_deref())
-        .ok_or_else(|| "charter will not remember a focus on a branch it did not name.".to_owned())
+fn held_focus(focus: Focused) -> Result<purlis_core::reopen::Focus, String> {
+    purlis_core::reopen::Focus::named(&focus.workspace, &focus.repo, focus.piece.as_deref())
+        .ok_or_else(|| "purlis will not remember a focus on a branch it did not name.".to_owned())
 }
 
 fn millis(took: std::time::Duration) -> u32 {
@@ -722,7 +720,7 @@ mod tests {
     fn an_approved_extension_s_view_is_offered_with_what_it_is_about() {
         let (_dir, config) = made(true);
         let offered = offered(&extension::survey(&config, &extension::BuiltIn::none()));
-        if !charter_core::executor::RUNS_PROGRAMS {
+        if !purlis_core::executor::RUNS_PROGRAMS {
             assert!(
                 offered.is_empty(),
                 "a view was offered where it could only refuse"
@@ -992,7 +990,7 @@ mod tests {
 
         let shown = vault_fact(plane.path(), &state, "release");
 
-        let cli = charter_core::personaverbs::vault_of(plane.path(), &state, "release")
+        let cli = purlis_core::personaverbs::vault_of(plane.path(), &state, "release")
             .expect("the CLI names one");
         assert!(shown.starts_with(&format!("{cli} — ")), "{shown}");
         assert!(shown.contains("vault registry"), "{shown}");
@@ -1110,7 +1108,7 @@ mod tests {
     fn an_approved_extension_s_palette_commands_carry_its_name_and_what_each_does() {
         let (_dir, config) = commanding(true);
         let commands = commanded(&extension::survey(&config, &extension::BuiltIn::none()));
-        if !charter_core::executor::RUNS_PROGRAMS {
+        if !purlis_core::executor::RUNS_PROGRAMS {
             assert!(commands.is_empty());
             return;
         }
@@ -1170,7 +1168,7 @@ echo changed
             confirm: true,
             deletes: false,
         }];
-        let blocks = charter_core::panel::answered(&serde_json::json!([{
+        let blocks = purlis_core::panel::answered(&serde_json::json!([{
             "kind": "list",
             "rows": [{ "key": "a", "text": "A", "actions": ["close"] }]
         }]))

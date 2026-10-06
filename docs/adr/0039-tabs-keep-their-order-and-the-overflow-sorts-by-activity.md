@@ -79,7 +79,7 @@ records:
 
 - **A project** is a plane, and which planes this machine knows is machine state outside every
   plane ([ADR 0034](0034-charter-keeps-a-little-state-outside-every-plane.md),
-  `crates/charter-core/src/machine.rs`). A project pin belongs there. That module's doc comment
+  `crates/purlis-core/src/machine.rs`). A project pin belongs there. That module's doc comment
   says **"Three things, and nothing else"** and then lists them; a pin is a fourth. **This needs
   an amendment to ADR 0034 rather than a quiet extra field**, because the "nothing else" is the
   whole reason a file outside the plane was allowed to exist at all.
@@ -91,7 +91,7 @@ records:
   `charter.toml`, and if it is a plane's own emphasis it must.
 - **A chat** has no home on the plane at all. ADR 0036 states it: *"nothing on the plane records a
   chat"*, and what relates a chat to a workspace is the directory it works in. The only record of
-  a chat is the app's own `.charter/app/reopen.json` (`crates/charter-core/src/reopen.rs`), which
+  a chat is the app's own `.charter/app/reopen.json` (`crates/purlis-core/src/reopen.rs`), which
   is per-plane, per-app, and versioned — `VERSION: u32 = 1`, and a record of any other version is
   ignored whole. **A chat pin is therefore an app record and a format version bump**, not a plane
   fact, and a pin that survives a relaunch survives only because that file did.

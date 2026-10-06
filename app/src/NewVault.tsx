@@ -128,7 +128,7 @@ export function NewVault({
             {needsOp && (
               <SettingRow
                 label="1Password vault"
-                help="Where charter creates this vault's items."
+                help="Where purlis creates this vault's items."
                 control={(ids) => (
                   <Field kind="text" ids={ids} value={opVault} onChange={setOpVault} />
                 )}

@@ -15,7 +15,7 @@ sends it instead. The prompt is the whole contract between the action and the op
 operator always sees it before anything runs.
 
 The model and its resolution are `charter_core::curation`. The app's side, SI-2b, calls
-[`resolve`](../../crates/charter-core/src/curation.rs) and nothing else to decide what is offered;
+[`resolve`](../../crates/purlis-core/src/curation.rs) and nothing else to decide what is offered;
 it is recorded under **The app's side** below.
 
 ### What a subject is offered

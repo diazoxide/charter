@@ -51,7 +51,7 @@ pub fn while_it_waits(
 /// What is said while the wait is still going on.
 fn still_starting(limit: Duration, os: &str) -> String {
     let mut said = format!(
-        "charter: still starting — no window yet, {} after launch.",
+        "purlis: still starting — no window yet, {} after launch.",
         seconds(limit)
     );
     if let Some(cause) = the_known_cause(os) {
@@ -79,7 +79,7 @@ pub fn why(took: Duration, os: &str) -> Option<SlowStart> {
         return None;
     }
     let mut said = format!(
-        "charter took {} to start, against a {} limit.",
+        "purlis took {} to start, against a {} limit.",
         seconds(took),
         seconds(LIMIT)
     );
@@ -110,10 +110,10 @@ fn relaunch() -> String {
 fn the_known_cause(os: &str) -> Option<String> {
     (os == "linux").then(|| {
         format!(
-            "The cause charter has measured on Linux is a desktop portal that cannot start: GTK \
+            "The cause purlis has measured on Linux is a desktop portal that cannot start: GTK \
              asks the session bus for org.freedesktop.portal.Desktop and D-Bus gives up after \
              25 s, then WebKitGTK asks it for the colour scheme and gives up after 5 more. \
-             charter asks the bus first and starts without it when the portal is silent, but a \
+             purlis asks the bus first and starts without it when the portal is silent, but a \
              portal that answers and then stalls gets past that. To start without the session \
              bus: {} — charter-app#24.",
             relaunch()

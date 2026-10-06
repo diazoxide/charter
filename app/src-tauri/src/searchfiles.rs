@@ -3,7 +3,7 @@
 //! window that asked.
 //!
 //! Thin, as `findfiles.rs` is: what is read, how a line matches and what is never looked inside
-//! are `charter_core::files::search`'s answers. This keeps each window's running searches, one
+//! are `purlis_core::files::search`'s answers. This keeps each window's running searches, one
 //! per Search tab, and pages them:
 //!
 //! - **Streamed.** A page's files are sent as `files-searched` events to the window that asked,
@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use charter_core::files::{self, Ended, Named, Place, Search, Searched};
+use purlis_core::files::{self, Ended, Named, Place, Search, Searched};
 
 use crate::findfiles::{FileScope, branches_in, projects_of};
 use crate::planes::{PlaneId, Planes};
@@ -406,7 +406,7 @@ mod tests {
     use std::path::Path;
 
     fn git(dir: &Path, args: &[&str]) {
-        let ran = charter_core::forklock::output(
+        let ran = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
@@ -430,7 +430,7 @@ mod tests {
         std::fs::write(clone.join("README.md"), "one\n").unwrap();
         git(&clone, &["add", "-A"]);
         git(&clone, &["commit", "-q", "-m", "one"]);
-        let piece = charter_core::worktree::add(&root, "alpha", "thing", "piece", None)
+        let piece = purlis_core::worktree::add(&root, "alpha", "thing", "piece", None)
             .unwrap()
             .path;
         std::fs::create_dir_all(piece.join("src")).unwrap();

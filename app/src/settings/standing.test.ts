@@ -30,7 +30,7 @@ describe("the key a refusal names", () => {
       "[harness.work] is in charter.toml, which is committed — a profile is this machine's",
       undefined,
     ],
-    ["[plane] mode holds a value charter does not read", undefined],
+    ["[plane] mode holds a value purlis does not read", undefined],
     ["plane.mode in charter.local.toml is not a mode", undefined],
   ])("%s", (why, keys) => {
     expect(keyOfRefusal(why, "charter.toml")).toEqual(keys);
@@ -44,7 +44,7 @@ describe("the key a refusal names", () => {
     ]);
     expect(keyOfRefusal(`settings in ${file} is not an object`, file, "settings")).toBeUndefined();
     expect(
-      keyOfRefusal(`${file} is not a JSON object, so charter reads no settings`, file, "settings"),
+      keyOfRefusal(`${file} is not a JSON object, so purlis reads no settings`, file, "settings"),
     ).toBeUndefined();
   });
 });

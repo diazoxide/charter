@@ -51,8 +51,8 @@ export function RemovePersona({
           <AlertDialog.Title>Delete persona {persona}?</AlertDialog.Title>
           <AlertDialog.Description className="came-back">
             This deletes <code>personas/{persona}/</code> — its definition, its memory and its refs
-            — and the agent charter generated for it. Its vault is left alone. Commit the deletion
-            to share it.
+            — and the agent purlis generated for it. Its vault is left alone. Commit the deletion to
+            share it.
           </AlertDialog.Description>
 
           {trouble && (

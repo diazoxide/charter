@@ -14,7 +14,7 @@ export function ApprovalSentence({ row }: { row: ProfileRow | undefined }) {
   if (!row?.approval) return null;
   return (
     <p className="honest approve" role="alert">
-      charter has not run this profile {row.approval === "new" ? "before" : "as it now stands"}. It
+      purlis has not run this profile {row.approval === "new" ? "before" : "as it now stands"}. It
       would run: <code>{row.shown}</code>
     </p>
   );

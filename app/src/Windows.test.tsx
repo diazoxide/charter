@@ -181,14 +181,14 @@ describe("a project moved into a window of its own", () => {
   it("keeps its tab when the core refuses, and says why", async () => {
     core({
       restore: { windows: [{ planes: [ONE, TWO], active: 0 }], dropped: [] },
-      refuseMove: "charter could not make a window: no display",
+      refuseMove: "purlis could not make a window: no display",
     });
     render(<App />);
     await vi.waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
 
     await fromTheMenu("two", "Move project two to a new window");
 
-    expect(await screen.findByText("charter could not make a window: no display")).toBeVisible();
+    expect(await screen.findByText("purlis could not make a window: no display")).toBeVisible();
     expect(projectTabs()).toEqual(["one*", "two"]);
   });
 

@@ -26,7 +26,7 @@ export function ForgeQuestion({ ask }: { ask: ForgeAsk }) {
         label={QUESTION}
         grouped
         help={
-          "charter reads the forge from the remote of the repo the project is made for, and here " +
+          "purlis reads the forge from the remote of the repo the project is made for, and here " +
           `it could not: ${ask.why}. You can change it later in Settings, at the Project level.`
         }
         control={() => (

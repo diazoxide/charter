@@ -1,6 +1,6 @@
 //! The first task's runs, as the window starts them (FR-28, #621).
 //!
-//! The script is `charter_core::firsttask`'s: the task's text, what each run is called and the
+//! The script is `purlis_core::firsttask`'s: the task's text, what each run is called and the
 //! command that shows its diff. This module starts one run: a chat on the profile the operator
 //! picked for it, **on a branch of its own** cut off the workspace's clone (GL-1), with the task
 //! typed into it once its harness has started **and never sent** — the curation action's typed
@@ -12,9 +12,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use charter_core::engine::Size;
-use charter_core::firsttask;
-use charter_core::harness::{Harness, ReadyToType};
+use purlis_core::engine::Size;
+use purlis_core::firsttask;
+use purlis_core::harness::{Harness, ReadyToType};
 
 use crate::curation::{self, ChatTyped};
 use crate::planes::{Held, PlaneId, Planes};
@@ -72,7 +72,7 @@ pub async fn first_task_run(
         )
     })
     .await
-    .map_err(|why| format!("charter could not start the chat: {why}"))?
+    .map_err(|why| format!("purlis could not start the chat: {why}"))?
 }
 
 /// [`first_task_run`], against a plane the registry has already vouched for.
@@ -92,7 +92,7 @@ pub fn start(
         ));
     }
     let root = held.root().to_path_buf();
-    if charter_core::chatpiece::clone_at(&root, cwd).is_none() {
+    if purlis_core::chatpiece::clone_at(&root, cwd).is_none() {
         return Err(format!(
             "{} is not a repo's clone in this project, so the first task has no branch to work \
              on and nothing was started.",
@@ -108,7 +108,7 @@ pub fn start(
         Some(&label),
         true,
         |dir, cut| {
-            let cut = cut.ok_or("charter cut no branch for the chat, so nothing was started.")?;
+            let cut = cut.ok_or("purlis cut no branch for the chat, so nothing was started.")?;
             // Asked before the chat starts, while the branch is still exactly what it was cut
             // from; a refusal here takes the branch back like any other.
             let from = firsttask::cut_from(&cut.path)?;
@@ -134,7 +134,7 @@ pub fn start(
             ))
         },
     )?;
-    let workspace = charter_core::workspaces::Plane::open(&root)
+    let workspace = purlis_core::workspaces::Plane::open(&root)
         .workspace_of(started.ready.cwd.as_deref().unwrap_or(folder.as_path()));
     Ok(FirstTaskRun {
         session: started.session,
@@ -154,13 +154,13 @@ pub fn start(
 fn cannot_type(
     profile: &str,
     harness: Option<Harness>,
-    card: Option<&charter_core::harness_card::Card>,
+    card: Option<&purlis_core::harness_card::Card>,
 ) -> Result<ReadyToType, String> {
     harness.and_then(Harness::ready_to_type).ok_or_else(|| {
         match curation::cannot_be_typed_into(card) {
             Some(lacks) => format!("'{profile}' cannot start the first task: {lacks}"),
             None => format!(
-                "'{profile}' starts a program charter has not measured, so it cannot tell when \
+                "'{profile}' starts a program purlis has not measured, so it cannot tell when \
                  to type the first task into it."
             ),
         }
@@ -188,7 +188,7 @@ mod tests {
         fn new(kind: &str) -> Self {
             let dir = tempfile::tempdir().expect("a directory");
             let root = std::fs::canonicalize(dir.path()).expect("it resolves");
-            std::fs::write(root.join(charter_core::plane::MANIFEST), "schema = 1\n").unwrap();
+            std::fs::write(root.join(purlis_core::plane::MANIFEST), "schema = 1\n").unwrap();
             let clone = root.join("workspaces/shop/shop");
             std::fs::create_dir_all(&clone).unwrap();
             std::fs::write(root.join("workspaces/shop/workspace.md"), "# shop\n").unwrap();
@@ -202,7 +202,7 @@ mod tests {
                 "#!/bin/sh\nstty raw -echo\nexec cat > /dev/null\n",
             );
             std::fs::write(
-                root.join(charter_core::profiles::LOCAL_FILE),
+                root.join(purlis_core::profiles::LOCAL_FILE),
                 format!(
                     "[harness]\ndefault = \"work\"\n\n[harness.work]\nkind = {kind:?}\n\
                      command = [{:?}]\n",
@@ -210,12 +210,12 @@ mod tests {
                 ),
             )
             .unwrap();
-            let set = charter_core::profiles::current(&root);
+            let set = purlis_core::profiles::current(&root);
             let work = set.get("work").expect("the profile reads");
-            charter_core::profiletrust::record_launched(
+            purlis_core::profiletrust::record_launched(
                 &root,
                 "work",
-                &charter_core::profiletrust::fingerprint(work),
+                &purlis_core::profiletrust::fingerprint(work),
             )
             .expect("approved");
             Self {
@@ -227,7 +227,7 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let ran = charter_core::forklock::output(
+        let ran = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(run.harness.as_deref(), Some("claude"));
         assert_eq!(run.workspace.as_deref(), Some("shop"));
         // Against the commit the branch was cut from, not the clone's moving `main`.
-        let head = charter_core::forklock::output(
+        let head = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(&project.clone)
@@ -316,7 +316,7 @@ mod tests {
         // What it lacks, in its capability card's line and label (HP-19).
         assert!(
             refused.contains(
-                "opencode cannot have a prompt typed in for you, because charter cannot tell when \
+                "opencode cannot have a prompt typed in for you, because purlis cannot tell when \
                  it has finished starting. See What opencode can do here."
             ),
             "{refused}"
@@ -329,7 +329,7 @@ mod tests {
                 .exists(),
             "the branch's folder was taken back"
         );
-        let branches = charter_core::forklock::output(
+        let branches = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(&project.clone)

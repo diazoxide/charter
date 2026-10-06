@@ -32,7 +32,7 @@ const ROW = (over: Partial<DoctorRow> = {}): DoctorRow => ({
   name: "charter.toml",
   status: "warn",
   detail: "plane.mod in charter.toml is not read",
-  hint: "Fix or remove it: until then charter reads the next file down, or the default.",
+  hint: "Fix or remove it: until then purlis reads the next file down, or the default.",
   checked: true,
   settings: "project.saving",
   fix: null,
@@ -43,7 +43,7 @@ let doctorRows: DoctorRow[] = [];
 
 /** The project's save standing: a request mode on an origin no forge charter knows (NO-7). */
 const NO_FORGE =
-  "[plane] mode is pr, and this plane's origin is not a GitHub or GitLab forge charter knows, so a save goes no further than a commit";
+  "[plane] mode is pr, and this plane's origin is not a GitHub or GitLab forge purlis knows, so a save goes no further than a commit";
 const saving: PlaneSaving = {
   stage: "changed",
   changed: ["a.md"],

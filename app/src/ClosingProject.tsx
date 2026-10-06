@@ -70,7 +70,7 @@ export function ClosingProject({
             {chats.length > 0 && `${count} ${chats.length === 1 ? "ends" : "end"}`}
             {where.length > 0 && ` in ${where.join(", ")}`}
             {chats.length > 0 && ". Ending a chat ends the program it runs. There is no undo. "}
-            {!heard && "charter has not yet heard what this project has open, so it may be more. "}
+            {!heard && "purlis has not yet heard what this project has open, so it may be more. "}
             Nothing of the project on disk goes.
           </Alert.Description>
           {chats.length > 0 && (

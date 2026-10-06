@@ -108,7 +108,7 @@ afterEach(() => {
 });
 
 const REPOS_REFUSED = "git status timed out in svc";
-const BRANCHES_REFUSED = "charter will not run git through a symlink";
+const BRANCHES_REFUSED = "purlis will not run git through a symlink";
 const count = (asked: Asked[], cmd: string) => asked.filter((one) => one.cmd === cmd).length;
 const explorer = () => screen.getByTestId("explorer");
 

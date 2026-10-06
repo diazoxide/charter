@@ -13,7 +13,7 @@ import { listen } from "./here";
  * and folders, and what "Changed only" collapses its tree to.
  *
  * A branch is named, never given as a directory: a repo and a piece, or no piece for the repo's
- * own folder. What it changed is `charter_core::files::status`'s answer through `branch_status`:
+ * own folder. What it changed is `purlis_core::files::status`'s answer through `branch_status`:
  * against the branch it was cut from, committed or not, each folder rolling up what it holds.
  *
  * **Live, on a watch of the whole branch** (`branchwatch.rs`): the core listens to every branch

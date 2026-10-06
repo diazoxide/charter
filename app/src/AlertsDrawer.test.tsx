@@ -62,7 +62,7 @@ describe("what the window says about this machine", () => {
           {
             severity: "warn",
             subject: "layout",
-            detail: 'layout.json: "minimap" is not a region this charter has',
+            detail: 'layout.json: "minimap" is not a region this purlis has',
             remedy: "fix layout.json",
           } satisfies MachineAlert,
         ]}
@@ -74,7 +74,7 @@ describe("what the window says about this machine", () => {
 
     const machine = screen.getByRole("region", { name: "Alerts about this machine" });
     expect(machine).toHaveTextContent("This machine");
-    expect(machine).toHaveTextContent('"minimap" is not a region this charter has');
+    expect(machine).toHaveTextContent('"minimap" is not a region this purlis has');
     expect(machine).toHaveTextContent("fix layout.json");
     expect(machine.querySelector("code")).toBeNull();
     const regions = screen.getAllByRole("region");
@@ -139,7 +139,7 @@ describe("the alerts drawer", () => {
     expect(project("beta-plane")).not.toHaveTextContent("Nothing needs you here.");
   });
 
-  it("says where charter stopped looking, keeps what it found, and does not call it nothing", () => {
+  it("says where purlis stopped looking, keeps what it found, and does not call it nothing", () => {
     draw({
       at: "read",
       planes: [
@@ -150,7 +150,7 @@ describe("the alerts drawer", () => {
 
     const alpha = project("alpha-plane");
     expect(within(alpha).getByRole("alert")).toHaveTextContent(
-      "charter stopped looking here: charter.toml is not valid TOML",
+      "purlis stopped looking here: charter.toml is not valid TOML",
     );
     expect(alpha).not.toHaveTextContent("Nothing needs you here.");
 
@@ -175,7 +175,7 @@ describe("the alerts drawer", () => {
 
     draw({ at: "failed", why: "the registry is gone" });
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "charter could not read the alerts: the registry is gone",
+      "purlis could not read the alerts: the registry is gone",
     );
   });
 

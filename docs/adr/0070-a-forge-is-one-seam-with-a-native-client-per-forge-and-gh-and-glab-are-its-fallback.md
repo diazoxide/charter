@@ -36,7 +36,7 @@ tokens (SD-7a and SD-7b), and every `a`/`b` twin after them.
 
 ## Where charter is today
 
-**Every forge call runs the forge's own CLI.** `crates/charter-core/src/forge.rs` finds `gh` or
+**Every forge call runs the forge's own CLI.** `crates/purlis-core/src/forge.rs` finds `gh` or
 `glab` (the operator's `PATH` first, then pinned by absolute path), starts it with an emptied
 environment that keeps only the CLI's credential variables, and parses what it prints. Its
 module docs state the rule this came from: *"The token lives in the forge's own CLI … charter
@@ -55,7 +55,7 @@ only ever runs that CLI. It is never read here."* Three modules hold the calls:
 
 **There is no seam.** Each function matches on `Kind` and builds `gh api` or `glab api`
 arguments inline. Parity is a matter of discipline, and so is the choice between a strict read
-and a permissive one (`crates/charter-core/docs/forges.md`). The tests pin argv:
+and a permissive one (`crates/purlis-core/docs/forges.md`). The tests pin argv:
 `a_forge_cli_is_asked_exactly_what_python_asked.rs` and
 `a_pr_is_opened_or_updated_and_set_to_auto_merge.rs` run a stand-in `gh` and `glab`
 (`tests/support/forge_cli.rs`) that answers only the exact questions a test wrote down.
@@ -85,7 +85,7 @@ one set per forge, host and tier. One contract suite, written once, runs against
 
 ### 1. One trait per area, neutral types, no default methods
 
-The seam lives in `crates/charter-core/src/forge/backend.rs`. It speaks only neutral types:
+The seam lives in `crates/purlis-core/src/forge/backend.rs`. It speaks only neutral types:
 FI4's work model (FW-5 defines the types), plus the types the core already has (a repo record, a
 request, `Checks`, `AutoMerge`). A forge's own identifiers (a GitHub node id, a GitLab global id
 or `iid`) travel inside a neutral type as an opaque `ForgeRef`, so that a round trip never
@@ -195,7 +195,7 @@ pub enum Fallback {
 ### 3. The native clients live in `charter-core`, over one synchronous transport
 
 ```
-crates/charter-core/src/forge/
+crates/purlis-core/src/forge/
   backend.rs     the area traits, Caller, Reach, Support, Unavailable, ForgeError, ForgeRef
   transport.rs   Transport: one request in, one response out, and its middleware chain
   http.rs        the native transport: ureq, rustls, a token from a TokenSource
@@ -392,16 +392,16 @@ never skipped silently.
 
 Nothing changes in code with this ADR. Its tickets make these changes:
 
-- **`crates/charter-core/src/forge/`** gains `backend.rs`, `transport.rs`, `http.rs`, `cli.rs`,
+- **`crates/purlis-core/src/forge/`** gains `backend.rs`, `transport.rs`, `http.rs`, `cli.rs`,
   `github/` and `gitlab/` (FW-2a/b, FG-3). `forge.rs`, `forge/pr.rs` and `forge/checks.rs` shrink
   to the plane-config half (`Kind`, hosts, `[[forge]]` blocks, credential helpers), and their
   forge calls move behind the traits.
-- **`crates/charter-core/docs/forges.md` must change**, because its first paragraph says every
+- **`crates/purlis-core/docs/forges.md` must change**, because its first paragraph says every
   operation "goes through that forge's own official CLI". FG-3 rewrites it to describe the traits,
   the two transports, the capability flags and the parity table.
-- **`crates/charter-core/Cargo.toml`** gains `ureq`, `gitlab`, `graphql_client`, `secrecy` and the
+- **`crates/purlis-core/Cargo.toml`** gains `ureq`, `gitlab`, `graphql_client`, `secrecy` and the
   conditional-request middleware.
-- **`crates/charter-core/tests/`** gains the contract suite and its recordings. The stand-in CLI
+- **`crates/purlis-core/tests/`** gains the contract suite and its recordings. The stand-in CLI
   tests stay.
 - **`CONTEXT.md`** gains "Forge account" and "Forge capability", and its "Forge extension" entry
   gains the PE-29 caveat (this PR).

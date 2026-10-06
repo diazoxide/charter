@@ -1,16 +1,16 @@
 //! The first run's two commands (FR-4, #603): what this machine has, and a repository opened
 //! into the local plane, laid out from the project template the operator chose (FR-17).
 //!
-//! The rules are `charter_core::firstrun`'s. This module is the window's door to them: it puts
+//! The rules are `purlis_core::firstrun`'s. This module is the window's door to them: it puts
 //! the answers in the shape the window draws, keeps the slow parts off the thread that draws,
 //! and opens the local plane through the same trust gate every other open goes through.
 
 use std::path::{Path, PathBuf};
 
-use charter_core::firstrun;
-use charter_core::forge::{Forge, Kind};
-use charter_core::noharness;
-use charter_core::repoinstructions::{self, Standing};
+use purlis_core::firstrun;
+use purlis_core::forge::{Forge, Kind};
+use purlis_core::noharness;
+use purlis_core::repoinstructions::{self, Standing};
 
 use crate::opener::Opened;
 use crate::planes::{PlaneId, Planes};
@@ -114,7 +114,7 @@ fn local_model_rows(answered: &[noharness::LocalServer]) -> Vec<LocalModelRow> {
         .collect()
 }
 
-/// Which project template the repo's project is laid out from: `charter_core::firstrun::Choice`
+/// Which project template the repo's project is laid out from: `purlis_core::firstrun::Choice`
 /// on the wire, which the core keeps free of serde and specta.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -139,7 +139,7 @@ impl From<TemplateChoice> for firstrun::Choice {
 
 /// Every project template this charter ships.
 fn templates() -> Vec<TemplateRow> {
-    charter_core::template::all()
+    purlis_core::template::all()
         .iter()
         .map(|one| TemplateRow {
             id: one.id.clone(),
@@ -207,7 +207,7 @@ pub struct RepoAnswer {
 }
 
 /// One agent instruction file in a workspace's clone, as the tab that offers it draws it
-/// (FR-18a, `charter_core::repoinstructions`).
+/// (FR-18a, `purlis_core::repoinstructions`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct InstructionFile {
     /// The clone's name in the workspace.
@@ -259,14 +259,14 @@ pub async fn harness_setup_found() -> Result<HarnessSetupFound, String> {
         local_models: local_model_rows(&noharness::local_models_here()),
     })
     .await
-    .map_err(|err| format!("charter could not look at this machine: {err}"))
+    .map_err(|err| format!("purlis could not look at this machine: {err}"))
 }
 
 /// Types harness `harness`'s official installer into shell session `session`, and runs it
 /// (FR-29, ruling V65).
 ///
 /// **The window names the harness, never the command.** The line is charter's own,
-/// compiled in (`charter_core::noharness::installer`) and shown word for word on the tab
+/// compiled in (`purlis_core::noharness::installer`) and shown word for word on the tab
 /// before the press, so no text from a project, a plane or the window can reach the shell
 /// through here. A word that is not a harness charter starts is refused, and nothing is typed.
 #[tauri::command]
@@ -285,9 +285,9 @@ pub fn type_installer(
 
 /// The line [`type_installer`] types for `harness`: its installer and a newline.
 fn installer_line(harness: &str) -> Result<String, String> {
-    let Some(harness) = charter_core::harness::Harness::of_kind(harness) else {
+    let Some(harness) = purlis_core::harness::Harness::of_kind(harness) else {
         return Err(format!(
-            "{harness:?} is not a harness charter starts, so there is no installer to type"
+            "{harness:?} is not a harness purlis starts, so there is no installer to type"
         ));
     };
     Ok(format!("{}\n", noharness::installer(harness).command))
@@ -303,7 +303,7 @@ pub async fn first_run_found() -> Result<FirstRunFound, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let harnesses = harness_rows(&firstrun::harnesses_here());
         let forges = forge_rows(
-            &|kind| charter_core::forge::find_cli(kind.cli()).is_some(),
+            &|kind| purlis_core::forge::find_cli(kind.cli()).is_some(),
             &|kind| Forge::default_of(kind).check_auth().is_ok(),
         );
         FirstRunFound {
@@ -314,7 +314,7 @@ pub async fn first_run_found() -> Result<FirstRunFound, String> {
         }
     })
     .await
-    .map_err(|err| format!("charter could not look at this machine: {err}"))
+    .map_err(|err| format!("purlis could not look at this machine: {err}"))
 }
 
 /// Opens `path`, a repo, into this machine's local plane: the plane is made when there is
@@ -351,7 +351,7 @@ pub async fn open_repo(
         Ok::<_, String>(Ok((root, taken, harness, none_installed, instructions)))
     })
     .await
-    .map_err(|err| format!("charter could not open the repo: {err}"))??;
+    .map_err(|err| format!("purlis could not open the repo: {err}"))??;
     let (root, taken, harness, none_installed, instructions) = match made {
         Ok(made) => made,
         Err(why) => {
@@ -384,7 +384,7 @@ pub async fn open_repo(
 pub async fn template_that_fits(path: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || fits(&path))
         .await
-        .map_err(|err| format!("charter could not look at the repo: {err}"))
+        .map_err(|err| format!("purlis could not look at the repo: {err}"))
 }
 
 fn fits(path: &str) -> Option<String> {
@@ -392,10 +392,10 @@ fn fits(path: &str) -> Option<String> {
     if !repo.is_absolute() || !repo.is_dir() {
         return None;
     }
-    charter_core::template::detect(repo).map(|one| one.id.clone())
+    purlis_core::template::detect(repo).map(|one| one.id.clone())
 }
 
-/// A forge on the wire: the window's spelling of `charter_core::forge::Kind`, which the core
+/// A forge on the wire: the window's spelling of `purlis_core::forge::Kind`, which the core
 /// keeps free of serde and specta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
@@ -446,7 +446,7 @@ pub async fn repo_instructions(
     let root = planes.held(&plane)?.root().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || instruction_files(&root, &workspace))
         .await
-        .map_err(|err| format!("charter could not read the repo's instructions: {err}"))?
+        .map_err(|err| format!("purlis could not read the repo's instructions: {err}"))?
 }
 
 /// Adds the files the operator ticked to workspace `workspace`'s memory — the preview's yes
@@ -469,7 +469,7 @@ pub async fn import_instructions(
         )
     })
     .await
-    .map_err(|err| format!("charter could not add them to memory: {err}"))?
+    .map_err(|err| format!("purlis could not add them to memory: {err}"))?
 }
 
 fn instruction_files(root: &Path, workspace: &str) -> Result<Vec<InstructionFile>, String> {
@@ -525,14 +525,14 @@ pub async fn open_local_project(
             .map_err(|why| why.to_string())
     })
     .await
-    .map_err(|err| format!("charter could not open its project: {err}"))??;
+    .map_err(|err| format!("purlis could not open its project: {err}"))??;
     planes.open_if_approved(&root).map(Opened::from)
 }
 
 /// Where the local project goes, or why this machine has nowhere to keep it.
 fn config_of(planes: &Planes) -> Result<PathBuf, String> {
     planes.config().map(Path::to_path_buf).ok_or_else(|| {
-        "charter has nowhere to keep a project on this machine. Open a project, or make one \
+        "purlis has nowhere to keep a project on this machine. Open a project, or make one \
          under New project → Advanced."
             .to_owned()
     })
@@ -558,7 +558,7 @@ fn taken_in(
 ) -> Result<Taken, String> {
     if !repo.is_absolute() {
         return Err(format!(
-            "'{}' is not a full path, so charter cannot tell which directory it means. Pick a \
+            "'{}' is not a full path, so purlis cannot tell which directory it means. Pick a \
              folder, or type the whole path.",
             repo.display()
         ));
@@ -615,7 +615,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
         let repo = a_repo(&dir.path().join("widget"));
-        let added = charter_core::forklock::output(
+        let added = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(&repo)
@@ -675,7 +675,7 @@ mod tests {
     #[test]
     fn every_harness_row_carries_its_vendors_installer() {
         let found = [firstrun::HarnessFound {
-            harness: charter_core::harness::Harness::Opencode,
+            harness: purlis_core::harness::Harness::Opencode,
             program: None,
             signed_in: false,
         }];
@@ -722,13 +722,13 @@ mod tests {
         assert!(refused.contains("not a harness"), "{refused}");
     }
 
-    /// A repo with one commit, made from charter-core's git template so it never asks the
+    /// A repo with one commit, made from purlis-core's git template so it never asks the
     /// developer's signer (charter-app#191) — `testgit`'s rule, which `extensions.rs`'s
     /// `test_plane` follows the same way from this crate.
     fn a_repo(at: &Path) -> PathBuf {
         let template = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../crates/charter-core/tests/support/git-template"
+            "/../../crates/purlis-core/tests/support/git-template"
         );
         std::fs::create_dir_all(at).expect("the repo's directory");
         for argv in [
@@ -750,7 +750,7 @@ mod tests {
                 "first".into(),
             ],
         ] {
-            let done = charter_core::forklock::output(
+            let done = purlis_core::forklock::output(
                 std::process::Command::new("git")
                     .arg("-C")
                     .arg(at)
@@ -899,7 +899,7 @@ mod tests {
             ["add", "AGENTS.md"].as_slice(),
             &["commit", "-q", "-m", "agents"],
         ] {
-            let done = charter_core::forklock::output(
+            let done = purlis_core::forklock::output(
                 std::process::Command::new("git")
                     .arg("-C")
                     .arg(&repo)
@@ -923,7 +923,7 @@ mod tests {
                 standing: InstructionStanding::Offered { caution: None },
             }]
         );
-        let workspace = charter_core::workspaces::Plane::open(&root)
+        let workspace = purlis_core::workspaces::Plane::open(&root)
             .workspace("widget")
             .expect("the workspace");
         assert!(workspace.memories().unwrap_or_default().is_empty());

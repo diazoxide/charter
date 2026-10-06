@@ -153,14 +153,14 @@ fn make_split<R: Runtime>(app: &AppHandle<R>, label: &str) -> Result<(), String>
         .ok_or("tauri.conf.json declares no main window")?;
     config.label = label.to_owned();
     tauri::WebviewWindowBuilder::from_config(app, &config)
-        .map_err(|err| format!("charter could not make a window: {err}"))?
+        .map_err(|err| format!("purlis could not make a window: {err}"))?
         .initialization_script(crate::windowprefs::creation_script(
-            charter_core::machine::config_root().as_deref(),
+            purlis_core::machine::config_root().as_deref(),
         ))
         .on_new_window(crate::navguard::no_new_window)
         .build()
         .map(|_| ())
-        .map_err(|err| format!("charter could not make a window: {err}"))
+        .map_err(|err| format!("purlis could not make a window: {err}"))
 }
 
 /// Moves projects into another window — **a new one when `to` is null** — and answers the
@@ -195,7 +195,7 @@ pub async fn move_projects(
     let to = match to {
         Some(to) if to == from => return Err("Those projects are already in this window.".into()),
         Some(to) if is_charter_window(&to) && app.get_webview_window(&to).is_some() => to,
-        Some(to) => return Err(format!("charter has no window called {to}.")),
+        Some(to) => return Err(format!("purlis has no window called {to}.")),
         None => showing.fresh_label(),
     };
     // A new window has something in front from its first frame; a window projects join keeps
@@ -208,7 +208,7 @@ pub async fn move_projects(
         .map_err(|theirs| {
             format!(
                 "{} is in another window, and only that window can move it.",
-                charter_core::shown::short(theirs.as_str())
+                purlis_core::shown::short(theirs.as_str())
             )
         })?;
     if made {

@@ -101,32 +101,32 @@ export function DeleteWorkspace({
           {/* The three lines below are **about the preview**, so they stop being drawn the
               moment there has been an attempt: after one, what is on screen is the core's own
               reading and a sentence about how the guess was taken is noise at best and a
-              contradiction at worst — "charter found no uncommitted work in it" above a
+              contradiction at worst — "purlis found no uncommitted work in it" above a
               refusal listing two dirty clones (charter-app#182). */}
 
           {/* Still reading. Said rather than drawn as an empty list: "nothing is at risk" is a
-              claim about every clone in the workspace, and charter has not made it yet. */}
+              claim about every clone in the workspace, and purlis has not made it yet. */}
           {refusal === undefined && atRisk === undefined && unreadable === undefined && (
             <p className="pending">Asking git what is in it…</p>
           )}
 
           {refusal === undefined && unreadable !== undefined && (
             <p className="trouble" role="alert">
-              charter could not read what is in it before asking: {unreadable}. Delete still checks
-              — the refusal you would get is the one that decides.
+              purlis could not read what is in it before asking: {unreadable}. Delete still checks —
+              the refusal you would get is the one that decides.
             </p>
           )}
 
           {refusal === undefined && atRisk !== undefined && risky.length === 0 && (
             <p className="came-back">
-              charter found no uncommitted or unpushed work in it. It checks again when you press
+              purlis found no uncommitted or unpushed work in it. It checks again when you press
               Delete, against the workspace as it is then.
             </p>
           )}
 
           {risky.length > 0 && (
             <>
-              <h3>What charter would discard</h3>
+              <h3>What purlis would discard</h3>
               {/* The core's sentences, one per row, and never a count. `svc: 2 unpushed
                   commit(s)` is what a terminal shows and what the refusal repeats — and once
                   there has been a refusal these rows ARE the refusal's own list. */}

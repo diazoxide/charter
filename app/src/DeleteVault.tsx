@@ -85,7 +85,7 @@ export function DeleteVault({
           )}
           {holds === undefined && unreadable !== undefined && (
             <p className="trouble" role="alert">
-              charter could not read what it holds: {unreadable}. Delete reads it again, and a
+              purlis could not read what it holds: {unreadable}. Delete reads it again, and a
               keychain vault's secrets are still destroyed.
             </p>
           )}
@@ -139,18 +139,18 @@ export function DeleteVault({
 /** What deleting does to the secrets, for the provider this vault is kept by. */
 function fate(holds: VaultHolds | undefined): string {
   if (holds === undefined) {
-    return "charter forgets this vault. A keychain vault's secrets are destroyed with it and cannot be recovered.";
+    return "purlis forgets this vault. A keychain vault's secrets are destroyed with it and cannot be recovered.";
   }
   const n = holds.secrets.length;
   const secrets = `${n} ${n === 1 ? "secret" : "secrets"}`;
   switch (holds.provider) {
     case "keyring":
       return n === 0
-        ? "charter forgets this vault. It holds no secrets in your system keychain."
-        : `Its ${secrets} are destroyed in your system keychain and cannot be recovered. Then charter forgets the vault.`;
+        ? "purlis forgets this vault. It holds no secrets in your system keychain."
+        : `Its ${secrets} are destroyed in your system keychain and cannot be recovered. Then purlis forgets the vault.`;
     case "1password":
-      return "charter forgets this vault. Its item in 1Password is left alone — delete it there if it should go.";
+      return "purlis forgets this vault. Its item in 1Password is left alone — delete it there if it should go.";
     default:
-      return "charter forgets this vault. Its file is left on disk, where you can delete it yourself.";
+      return "purlis forgets this vault. Its file is left on disk, where you can delete it yourself.";
   }
 }

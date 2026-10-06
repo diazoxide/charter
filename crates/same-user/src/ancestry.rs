@@ -43,7 +43,7 @@ pub fn ps_command() -> Command {
 
 impl Parents {
     /// The table now, with `run` running [`ps_command`] where the platform needs it. `run` is the
-    /// caller's way to start a process (charter-core starts every one under its fork lock).
+    /// caller's way to start a process (purlis-core starts every one under its fork lock).
     pub fn now(run: impl FnOnce(&mut Command) -> io::Result<Output>) -> io::Result<Parents> {
         if cfg!(any(target_os = "linux", target_os = "android")) {
             return Ok(Parents::Proc);

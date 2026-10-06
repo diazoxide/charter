@@ -2,7 +2,7 @@
 //! file watcher, started when the plane is held and stopped when it is let go of.
 //!
 //! There is no daemon (ADR 0025): a plane is saved by itself only while the app holds it. What
-//! decides is the core's ([`charter_core::autosave`]); this module is the clock and the loop.
+//! decides is the core's ([`purlis_core::autosave`]); this module is the clock and the loop.
 //!
 //! On each look the worker:
 //! - saves once the plane has been quiet for `[plane] autosave_after` ([`autosave::Quiet`]);
@@ -28,10 +28,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use charter_core::autosave::{self, Decision, Quiet};
-use charter_core::planegit::{self, Stage, Trigger};
-use charter_core::planesave;
-use charter_core::reposave;
+use purlis_core::autosave::{self, Decision, Quiet};
+use purlis_core::planegit::{self, Stage, Trigger};
+use purlis_core::planesave;
+use purlis_core::reposave;
 
 use crate::planes::PlaneId;
 
@@ -121,7 +121,7 @@ impl Worker {
                 );
             });
         let thread = spawned
-            .map_err(|why| tracing::warn!("charter: auto-save did not start ({why}); save by hand"))
+            .map_err(|why| tracing::warn!("purlis: auto-save did not start ({why}); save by hand"))
             .ok();
         Self {
             poke,
@@ -156,15 +156,15 @@ impl Worker {
 /// rebased onto the remote. The watch would tell the files it moved only where it watches —
 /// it is not recursive, and a project it could not watch has none — so not knowing is said.
 fn what_it_did(moved: bool) -> crate::planewatch::What {
-    (!moved).then(|| vec![charter_core::planechange::saved()])
+    (!moved).then(|| vec![purlis_core::planechange::saved()])
 }
 
 /// `HEAD` of the repository at `dir`, or `None` where it cannot be read.
 fn head_of(dir: &Path) -> Option<String> {
-    let read = charter_core::worktree::git::run(
+    let read = purlis_core::worktree::git::run(
         dir,
         &["rev-parse", "--verify", "-q", "HEAD"],
-        charter_core::worktree::git::READ,
+        purlis_core::worktree::git::READ,
     )
     .ok()?;
     read.ok().then(|| read.line().trim().to_owned())
@@ -180,10 +180,10 @@ fn tree_moved(dir: &Path, before: Option<&str>) -> bool {
     if after == before {
         return false;
     }
-    let parent = charter_core::worktree::git::run(
+    let parent = purlis_core::worktree::git::run(
         dir,
         &["rev-parse", "--verify", "-q", "HEAD^"],
-        charter_core::worktree::git::READ,
+        purlis_core::worktree::git::READ,
     )
     .ok()
     .filter(|read| read.ok())
@@ -342,12 +342,12 @@ impl State {
             self.repos.clear();
             return false;
         }
-        let Ok(workspaces) = charter_core::workspaces::Plane::open(root).workspaces() else {
+        let Ok(workspaces) = purlis_core::workspaces::Plane::open(root).workspaces() else {
             return false;
         };
         let mut did = false;
         for workspace in workspaces {
-            let Ok(found) = charter_core::repos::clones(root, &workspace) else {
+            let Ok(found) = purlis_core::repos::clones(root, &workspace) else {
                 continue;
             };
             let mut busy: Option<Vec<String>> = None;
@@ -411,7 +411,7 @@ impl State {
 
 /// Every clone whose `[repos.<name>] autosave` is on, in every workspace of the plane at
 /// `root`, as `(workspace, clone)`.
-fn auto_saved_repos(root: &Path) -> Vec<(String, charter_core::repos::Repo)> {
+fn auto_saved_repos(root: &Path) -> Vec<(String, purlis_core::repos::Repo)> {
     let settings = planesave::Settings::read(root);
     let saved: Vec<String> = settings
         .repo_tables()
@@ -421,13 +421,13 @@ fn auto_saved_repos(root: &Path) -> Vec<(String, charter_core::repos::Repo)> {
     if saved.is_empty() {
         return Vec::new();
     }
-    let workspaces = charter_core::workspaces::Plane::open(root)
+    let workspaces = purlis_core::workspaces::Plane::open(root)
         .workspaces()
         .unwrap_or_default();
     workspaces
         .into_iter()
         .flat_map(|workspace| {
-            let found = charter_core::repos::clones(root, &workspace)
+            let found = purlis_core::repos::clones(root, &workspace)
                 .map(|found| found.repos)
                 .unwrap_or_default();
             found
@@ -599,7 +599,7 @@ mod tests {
             .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
             .env("GIT_COMMITTER_NAME", "t")
             .env("GIT_COMMITTER_EMAIL", "t@example.invalid");
-        let out = charter_core::forklock::output(&mut command).expect("git runs");
+        let out = purlis_core::forklock::output(&mut command).expect("git runs");
         assert!(
             out.status.success(),
             "git {args:?}: {}",

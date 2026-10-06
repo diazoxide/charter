@@ -1848,7 +1848,7 @@ export const PlaneView = memo(function PlaneView({
       // "Typed, not run" holds here, not only in the core's host check: a line with a control
       // character in it (a newline is a Return) is refused and typed nowhere.
       if (HAS_CONTROL.test(asked.line)) {
-        refusedBy("shell", "charter will not type a login line that holds a control character");
+        refusedBy("shell", "purlis will not type a login line that holds a control character");
         return;
       }
       openShell(sidebar.root, OUTSIDE, { line: asked.line, held: true });
@@ -2923,7 +2923,7 @@ export const PlaneView = memo(function PlaneView({
     async (key: string): Promise<Ran> => {
       if (frontSession === undefined)
         return { ok: false, refused: "No chat is in front, so there is nowhere to send it." };
-      if (key !== PASS_THROUGH_KEY) return { ok: false, refused: `charter cannot send ${key}.` };
+      if (key !== PASS_THROUGH_KEY) return { ok: false, refused: `purlis cannot send ${key}.` };
       const sent = await commands
         .sendInput(plane, frontSession, PASS_THROUGH_BYTES)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -3615,7 +3615,7 @@ export const PlaneView = memo(function PlaneView({
       dismissStopped: (session: number) => stoppedFor(session, undefined),
       // The verb still names a persona — that is what the catalogue row is about — and the
       // window turns it into the row it opens. `charter/personas` is charter's own panel's
-      // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
+      // key (`purlis_core::panel::Panel::key`), and it is written here because the catalogue
       // is not a reader of the panel list.
       openView: showView,
       resumeSession: (path: string) => resumeSession(path),
@@ -5042,7 +5042,7 @@ export const PlaneView = memo(function PlaneView({
                 <EmptyState
                   mark={MessageSquarePlus}
                   headline="No chats yet"
-                  body="charter runs each chat in its own pane. Open the first one here."
+                  body="purlis runs each chat in its own pane. Open the first one here."
                   action={
                     <Doer offer={by("chat.new")} onPress={press} words="Open the first chat" />
                   }
@@ -5241,7 +5241,7 @@ export const PlaneView = memo(function PlaneView({
       {forgetting && (
         <ChatAsk
           title={`Forget ${forgetting.name}?`}
-          says={`charter stops keeping ${forgetting.name}, and no later launch tries to start it again. This cannot be undone.`}
+          says={`purlis stops keeping ${forgetting.name}, and no later launch tries to start it again. This cannot be undone.`}
           answer="Forget chat"
           trouble={forgetting.trouble}
           busy={forgetting.busy}
@@ -5547,7 +5547,7 @@ function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: b
       fixes={[{ label: "Open as chat", onPress: () => onAnswer(true) }]}
       onDismiss={() => onAnswer(false)}
     >
-      {note.harness} runs outside charter&apos;s session tracking here.
+      {note.harness} runs outside purlis&apos;s session tracking here.
     </Notice>
   );
 }
@@ -5630,7 +5630,7 @@ function StartNotice({
           { label: "Keep it", onPress: () => setAsking(undefined) },
         ]}
       >
-        Move the AGENTS.md of {branchName(asking)} aside? charter renames it to AGENTS.aside.md (or
+        Move the AGENTS.md of {branchName(asking)} aside? purlis renames it to AGENTS.aside.md (or
         the next free AGENTS.aside-N.md), never over a file, and git status shows it again.
       </Notice>
     );

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate `crates/charter-core/src/tui/tables.rs` from CPython's own `unicodedata`.
+"""Regenerate `crates/purlis-core/src/tui/tables.rs` from CPython's own `unicodedata`.
 
 Every Unicode table the core carries is generated here, because the core has exactly one
 Unicode question per table and two hand-written answers to one question is how the two
@@ -30,13 +30,13 @@ emoji presentation sequences and zeroes default-ignorables, neither of which
 
 Run it with a CPython whose Unicode version is the one the header of `tables.rs` names (the
 recorded answers in `tests/fixtures/recorded/` were taken under it, ADR 0046), and paste the
-output into `crates/charter-core/src/tui/tables.rs`. The header line records which Unicode
+output into `crates/purlis-core/src/tui/tables.rs`. The header line records which Unicode
 version the tables are of, so a future reader can tell whether a disagreement is a bug or a
 version. It is a generator for a checked-in file, run by hand: nothing in CI or in a build runs
 it.
 
-    python3 tools/gen-unicode-tables.py > crates/charter-core/src/tui/tables.rs
-    rustfmt --edition 2024 crates/charter-core/src/tui/tables.rs
+    python3 tools/gen-unicode-tables.py > crates/purlis-core/src/tui/tables.rs
+    rustfmt --edition 2024 crates/purlis-core/src/tui/tables.rs
 
 The `rustfmt` is not optional: CI checks formatting over every file, generated or not, and
 this one prints four ranges to a line where `rustfmt` wants one.

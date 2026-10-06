@@ -32,7 +32,7 @@ Download the newest release from the
   xattr -dr com.apple.quarantine /Applications/purlis.app
   ```
 
-  To use the `charter` command in a terminal, run **Install `charter` command in PATH** from the
+  To use the `purlis` command in a terminal, run **Install `purlis` command in PATH** from the
   command palette.
 - **Linux:** `purlis-linux-x86_64.deb` (`sudo apt install ./purlis-linux-x86_64.deb`, which also
   puts `purlis` on your `PATH`), or the AppImage, `purlis-linux-x86_64-appimage.AppImage`.

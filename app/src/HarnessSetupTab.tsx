@@ -9,7 +9,7 @@ import { askHarnessSetup } from "./harnessSetup";
  * fallback"*.
  *
  * - **Official installers in a shell tab.** Each harness is listed with its vendor's own
- *   install command, shown before anything runs (`charter_core::noharness::installer`). Install
+ *   install command, shown before anything runs (`purlis_core::noharness::installer`). Install
  *   opens a shell tab at the project's root and the core types that command into it and runs it
  *   — one press, which ruling V65 allows only for a compiled-in installer shown word for word.
  *   The tab names the harness and never sends the words. The shell is the operator's, so the

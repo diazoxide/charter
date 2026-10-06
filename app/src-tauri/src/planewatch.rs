@@ -22,7 +22,7 @@
 //!   and each `personas/<name>/memory/`, which the Personas panel counts;
 //! - `.claude/` and `.claude/agents/`, the harness settings and sub-agents a chat reads at its
 //!   start — with the root's `CLAUDE.md`, what the window marks a chat for when it changes under
-//!   it (charter#369, [`charter_core::instructions`]).
+//!   it (charter#369, [`purlis_core::instructions`]).
 //!
 //! Not the plane recursively, because a workspace holds its clones: a recursive inotify watch
 //! would put one watch on every directory of every clone's `node_modules/` and `target/`, and
@@ -36,7 +36,7 @@
 //! The platform's events are folded into bursts ([`crate::watchset::bursts`]) — `git pull`
 //! landing ten todos, an editor's write-then-rename — and a burst is one `plane-changed` carrying the plane
 //! **and what changed in it**: each path, and what it is part of
-//! ([`charter_core::planechange`]) — a todo of `alpha`, a memory of `steward`, the root's
+//! ([`purlis_core::planechange`]) — a todo of `alpha`, a memory of `steward`, the root's
 //! session records. A panel reads again only on a change its answer is made of (FD-10), so a
 //! memory an agent saves no longer makes the sidebar list every workspace's todos once more.
 //!
@@ -58,8 +58,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
-use charter_core::planechange::{self, Answer, Change, Kind};
-use charter_core::workspaces::Plane;
+use purlis_core::planechange::{self, Answer, Change, Kind};
+use purlis_core::workspaces::Plane;
 
 use crate::planes::PlaneId;
 use crate::watchset::Burst;
@@ -81,7 +81,7 @@ pub struct PlaneChanged {
     /// The answers these changes concern, each once, or `null` — every answer — when what
     /// changed is not known. A reader names the answer it holds and reads again only when it
     /// is here: which answer a change concerns is the core's question
-    /// ([`charter_core::planechange::answers`]), never the window's.
+    /// ([`purlis_core::planechange::answers`]), never the window's.
     pub answers: Option<Vec<PlaneAnswer>>,
 }
 
@@ -98,7 +98,7 @@ impl PlaneChanged {
     }
 }
 
-/// One answer the window reads from the plane ([`charter_core::planechange::Answer`],
+/// One answer the window reads from the plane ([`purlis_core::planechange::Answer`],
 /// mirrored for the bindings).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(tag = "answer", rename_all = "camelCase")]
@@ -137,7 +137,7 @@ impl From<Answer> for PlaneAnswer {
 }
 
 /// What one changed path is part of, as the window's readers divide the plane
-/// ([`charter_core::planechange::Kind`], which this mirrors for the bindings).
+/// ([`purlis_core::planechange::Kind`], which this mirrors for the bindings).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum ChangeKind {
@@ -151,7 +151,7 @@ pub enum ChangeKind {
     Git,
 }
 
-/// One changed path ([`charter_core::planechange::Change`], mirrored for the bindings).
+/// One changed path ([`purlis_core::planechange::Change`], mirrored for the bindings).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct PlaneChange {
     pub kind: ChangeKind,
@@ -374,7 +374,7 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
             }
             // Before the window hears it, so the reads it makes on `plane-changed` are of the
             // plane as it is now, not the shared standings from before (FD-11).
-            charter_core::planegit::touch(&at);
+            purlis_core::planegit::touch(&at);
             changed(plane.clone(), what);
         };
         std::thread::Builder::new()
@@ -596,7 +596,7 @@ mod tests {
     /// The same on the watcher the app runs on macOS. Ignored because FSEvents gives no bound
     /// on when it delivers, so on a busy Mac this fails however long it waits; until #756 the
     /// "about a second" of #264 is checked on Linux's inotify only.
-    /// `cargo test -p charter-app planewatch -- --ignored` runs it.
+    /// `cargo test -p purlis-app planewatch -- --ignored` runs it.
     #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "FSEvents has no delivery bound on a busy Mac (#577, #756)"]
@@ -750,7 +750,7 @@ mod tests {
             .into_iter()
             .chain(args.iter().copied())
             .collect();
-        let done = charter_core::worktree::git::run(dir, &argv, charter_core::worktree::git::READ)
+        let done = purlis_core::worktree::git::run(dir, &argv, purlis_core::worktree::git::READ)
             .expect("git runs in a test");
         assert!(done.ok(), "git {args:?}: {done:?}");
     }
@@ -766,7 +766,7 @@ mod tests {
         git(&root, &["config", "user.name", "t"]);
         git(&root, &["commit", "-q", "--allow-empty", "-m", "one"]);
         assert!(
-            charter_core::planegit::shared_standing(&root)
+            purlis_core::planegit::shared_standing(&root)
                 .changed
                 .is_empty()
         );
@@ -776,7 +776,7 @@ mod tests {
         told.recv_timeout(PATIENCE).expect("told about the todo");
 
         assert_eq!(
-            charter_core::planegit::shared_standing(&root).changed,
+            purlis_core::planegit::shared_standing(&root).changed,
             vec!["workspaces/alpha/todos/new.md".to_owned()]
         );
     }

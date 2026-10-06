@@ -11,7 +11,7 @@ import { $, browser, expect } from "@wdio/globals";
  * Remove, leaving the file without it.
  *
  * What is proved here and not in jsdom: `add_project_forge` and `remove_project_forge` exist,
- * write a real file through `charter_core::settings::forges`, and the window re-reads what they
+ * write a real file through `purlis_core::settings::forges`, and the window re-reads what they
  * wrote.
  *
  * **It leaves the window and the plane as it found them**: one app process serves the whole run

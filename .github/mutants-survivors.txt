@@ -1,15 +1,15 @@
-# Mutants charter-core does not catch yet — the backlog the nightly measures against.
+# Mutants purlis-core does not catch yet — the backlog the nightly measures against.
 #
 # `.github/workflows/mutants.yml`'s `survivors` job is red when it finds a survivor that is
 # NOT in this file. Without that, it would be red every single night and mean nothing: the
 # run of 2026-09-21 found 141 survivors in the 38% of the crate it managed to test before
 # GitHub killed it, and the whole crate is likely to hold two or three times that.
 #
-# So this file is the difference between "charter-core has a coverage backlog", which is a
+# So this file is the difference between "purlis-core has a coverage backlog", which is a
 # fact about today, and "something got worse last night", which is news. Only the second one
 # turns the nightly red.
 #
-# **It is a backlog and not an absolution.** Every line is a change to charter-core that no
+# **It is a backlog and not an absolution.** Every line is a change to purlis-core that no
 # test notices. There were fourteen in `leakguard.rs`, the guard that stops a credential
 # reaching a model, until #311 wrote their tests. Deleting a line by writing the test is the
 # point of the file.
@@ -48,49 +48,49 @@
 # that could not be STARTED for the push (a push that runs past its deadline comes back as a run
 # with no exit code, not here): no test reaches it short of taking git off the machine between
 # the commit and the push, so the line stays.
-crates/charter-core/src/planegit.rs: delete field detail from struct PushResult expression in push_head_within
+crates/purlis-core/src/planegit.rs: delete field detail from struct PushResult expression in push_head_within
 
-crates/charter-core/src/cistate.rs: replace && with || in Cache::age_of
-crates/charter-core/src/cistate.rs: replace > with == in read
-crates/charter-core/src/cistate.rs: replace > with >= in Cache::about
-crates/charter-core/src/cistate.rs: replace > with >= in read
-crates/charter-core/src/cistate.rs: replace match guard why.kind() == std::io::ErrorKind::NotFound with true in read
-crates/charter-core/src/contain.rs: replace nofollow -> &mut std::fs::OpenOptions with Box::leak(Box::new(Default::default()))
-crates/charter-core/src/contain.rs: replace | with ^ in nofollow
-crates/charter-core/src/dispatch.rs: delete ! in truthy
-crates/charter-core/src/docsrc.rs: replace source -> String with String::new()
-crates/charter-core/src/layer.rs: replace == with != in publish_io
-crates/charter-core/src/layer.rs: replace Record::names -> bool with false
-crates/charter-core/src/layer.rs: replace Record::names -> bool with true
-crates/charter-core/src/layer.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in publish_io
-crates/charter-core/src/layer.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in publish_io
-crates/charter-core/src/workspaces.rs: delete ! in Plane::is_live
-crates/charter-core/src/workspaces.rs: delete ! in Workspace::remember_titled
-crates/charter-core/src/workspaces.rs: delete ! in Workspace::scaffold_memory
-crates/charter-core/src/workspaces.rs: replace && with || in Plane::personas
-crates/charter-core/src/workspaces.rs: replace && with || in Workspace::remember_titled
-crates/charter-core/src/workspaces.rs: replace && with || in Workspace::scaffold_memory
-crates/charter-core/src/workspaces.rs: replace && with || in parse_entry
-crates/charter-core/src/workspaces.rs: replace << with >> in scratch_tag
-crates/charter-core/src/workspaces.rs: replace == with != in Plane::is_live
-crates/charter-core/src/workspaces.rs: replace == with != in Plane::read_workspaces
-crates/charter-core/src/workspaces.rs: replace == with != in Workspace::scaffold_charter
-crates/charter-core/src/workspaces.rs: replace Plane::is_live -> bool with false
-crates/charter-core/src/workspaces.rs: replace Plane::is_live -> bool with true
-crates/charter-core/src/workspaces.rs: replace Workspace::name -> &str with ""
-crates/charter-core/src/workspaces.rs: replace Workspace::name -> &str with "xyzzy"
-crates/charter-core/src/workspaces.rs: replace ^ with | in scratch_tag
-crates/charter-core/src/workspaces.rs: replace match guard !found.is_dir() with false in Plane::read_workspaces
-crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::AlreadyExists with false in Workspace::scaffold_charter
-crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::AlreadyExists with true in Workspace::scaffold_charter
-crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with false in Plane::read_workspaces
-crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with true in Plane::read_workspaces
-crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with true in read_dir_sorted
-crates/charter-core/src/wscmd/mod.rs: delete ! in git_user
-crates/charter-core/src/wscmd/mod.rs: replace && with || in live_line
-crates/charter-core/src/wscmd/mod.rs: replace && with || in work_at_risk
-crates/charter-core/src/wscmd/mod.rs: replace > with >= in work_at_risk
-crates/charter-core/src/wscmd/mod.rs: replace cannot_check_workspace -> String with "xyzzy".into()
-crates/charter-core/src/wscmd/mod.rs: replace cannot_check_workspace -> String with String::new()
-crates/charter-core/src/wscmd/mod.rs: replace git_user -> String with "xyzzy".into()
-crates/charter-core/src/wscmd/mod.rs: replace git_user -> String with String::new()
+crates/purlis-core/src/cistate.rs: replace && with || in Cache::age_of
+crates/purlis-core/src/cistate.rs: replace > with == in read
+crates/purlis-core/src/cistate.rs: replace > with >= in Cache::about
+crates/purlis-core/src/cistate.rs: replace > with >= in read
+crates/purlis-core/src/cistate.rs: replace match guard why.kind() == std::io::ErrorKind::NotFound with true in read
+crates/purlis-core/src/contain.rs: replace nofollow -> &mut std::fs::OpenOptions with Box::leak(Box::new(Default::default()))
+crates/purlis-core/src/contain.rs: replace | with ^ in nofollow
+crates/purlis-core/src/dispatch.rs: delete ! in truthy
+crates/purlis-core/src/docsrc.rs: replace source -> String with String::new()
+crates/purlis-core/src/layer.rs: replace == with != in publish_io
+crates/purlis-core/src/layer.rs: replace Record::names -> bool with false
+crates/purlis-core/src/layer.rs: replace Record::names -> bool with true
+crates/purlis-core/src/layer.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in publish_io
+crates/purlis-core/src/layer.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in publish_io
+crates/purlis-core/src/workspaces.rs: delete ! in Plane::is_live
+crates/purlis-core/src/workspaces.rs: delete ! in Workspace::remember_titled
+crates/purlis-core/src/workspaces.rs: delete ! in Workspace::scaffold_memory
+crates/purlis-core/src/workspaces.rs: replace && with || in Plane::personas
+crates/purlis-core/src/workspaces.rs: replace && with || in Workspace::remember_titled
+crates/purlis-core/src/workspaces.rs: replace && with || in Workspace::scaffold_memory
+crates/purlis-core/src/workspaces.rs: replace && with || in parse_entry
+crates/purlis-core/src/workspaces.rs: replace << with >> in scratch_tag
+crates/purlis-core/src/workspaces.rs: replace == with != in Plane::is_live
+crates/purlis-core/src/workspaces.rs: replace == with != in Plane::read_workspaces
+crates/purlis-core/src/workspaces.rs: replace == with != in Workspace::scaffold_charter
+crates/purlis-core/src/workspaces.rs: replace Plane::is_live -> bool with false
+crates/purlis-core/src/workspaces.rs: replace Plane::is_live -> bool with true
+crates/purlis-core/src/workspaces.rs: replace Workspace::name -> &str with ""
+crates/purlis-core/src/workspaces.rs: replace Workspace::name -> &str with "xyzzy"
+crates/purlis-core/src/workspaces.rs: replace ^ with | in scratch_tag
+crates/purlis-core/src/workspaces.rs: replace match guard !found.is_dir() with false in Plane::read_workspaces
+crates/purlis-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::AlreadyExists with false in Workspace::scaffold_charter
+crates/purlis-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::AlreadyExists with true in Workspace::scaffold_charter
+crates/purlis-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with false in Plane::read_workspaces
+crates/purlis-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with true in Plane::read_workspaces
+crates/purlis-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with true in read_dir_sorted
+crates/purlis-core/src/wscmd/mod.rs: delete ! in git_user
+crates/purlis-core/src/wscmd/mod.rs: replace && with || in live_line
+crates/purlis-core/src/wscmd/mod.rs: replace && with || in work_at_risk
+crates/purlis-core/src/wscmd/mod.rs: replace > with >= in work_at_risk
+crates/purlis-core/src/wscmd/mod.rs: replace cannot_check_workspace -> String with "xyzzy".into()
+crates/purlis-core/src/wscmd/mod.rs: replace cannot_check_workspace -> String with String::new()
+crates/purlis-core/src/wscmd/mod.rs: replace git_user -> String with "xyzzy".into()
+crates/purlis-core/src/wscmd/mod.rs: replace git_user -> String with String::new()
