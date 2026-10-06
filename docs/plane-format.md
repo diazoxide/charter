@@ -4555,12 +4555,16 @@ down rather than read off the code.
   counts it, and a Report of a block is drafted from the window's Notice, not from this file.
 - **Format:** JSON, pretty-printed, trailing `\n`, read and replaced whole under purlis's lock on
   the directory (`rewrite::update`). A file that is not this shape reads as empty, and the next
-  block starts it again.
+  block starts it again. Each block is read on its own: one this build cannot read, such as a
+  kind a newer build added, is kept as it was, let go of by its `at` like any other, and not
+  counted. Builds from before `system-temp` read the whole file as empty and rewrite it with
+  their next block.
 - **Keys:** `blocks` — a list, oldest first, of `{"at": <seconds since 1970>, "operation":
   "write"|"read"|"connect"|"lookup"|"run"|"file"|"other", "kind": "project-files"|
-  "project-state"|"protected-file"|"chat-folder"|"toolchain-cache"|"home"|"temp"|"system"|
-  "host"|"local-socket"|"certificate-check"|"system-service", "ours": <bool>}`. A block older
-  than seven days is let go of when the next is kept, and at most 1000 are held.
+  "project-state"|"protected-file"|"chat-folder"|"toolchain-cache"|"home"|"temp"|
+  "system-temp"|"system-cache"|"system"|"host"|"local-socket"|"certificate-check"|
+  "system-service", "ours": <bool>}`. A block older than seven days is let go of when the next
+  is kept, and at most 1000 are held.
 - **Who writes it:** the app, as each block arrives on the hook channel
   (`purlis_core::sandboxblock::record`), at most once a minute for one chat's same block and
   ten a minute per chat (`sandboxblock::Throttle`). A sandboxed chat cannot: `.purlis/app/` is the

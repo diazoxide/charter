@@ -3335,3 +3335,27 @@ fn no_directory_a_chat_searches_is_one_its_sandbox_lets_it_write() {
         }
     }
 }
+
+/// What macOS tools read in place of `TMPDIR` (#1120, measured on macOS 26.2), each pointed into
+/// the wrapped chat's own temp directory: `TMP` and `TEMP`; `xcrun`'s cache, which it otherwise
+/// writes in the system's per-user temp folder; and clang's module cache, which clang and Swift
+/// otherwise write in the per-user cache folder and fail without.
+#[test]
+fn a_wrapped_chat_points_what_tools_read_in_place_of_tmpdir_at_its_own_temp_directory() {
+    let env: std::collections::BTreeMap<String, String> =
+        seatbelt::env("http://127.0.0.1:1", Path::new("/c/.purlis-tmp/x"))
+            .into_iter()
+            .collect();
+    for (key, value) in [
+        ("TMPDIR", "/c/.purlis-tmp/x"),
+        ("TMP", "/c/.purlis-tmp/x"),
+        ("TEMP", "/c/.purlis-tmp/x"),
+        ("xcrun_db", "/c/.purlis-tmp/x/xcrun_db"),
+        (
+            "CLANG_MODULE_CACHE_PATH",
+            "/c/.purlis-tmp/x/clang-module-cache",
+        ),
+    ] {
+        assert_eq!(env.get(key).map(String::as_str), Some(value), "{key}");
+    }
+}

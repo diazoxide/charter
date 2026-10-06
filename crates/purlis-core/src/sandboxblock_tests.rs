@@ -346,11 +346,13 @@ fn cargos_caused_by_names_its_path_on_a_line_before() {
 
 #[test]
 fn a_programs_refusal_of_what_the_chat_may_write_is_not_the_sandboxs() {
-    // Its own folder and the temporary folders are writable: a refusal there is something else
-    // (a file's own flags, macOS's privacy controls), never a sandbox block.
+    // Its own folder and its temp folder (Claude Code's, under /tmp) are writable: a refusal
+    // there is something else (a file's own flags, macOS's privacy controls), never a sandbox
+    // block. macOS's per-user folders under /var/folders are not, and a write refused there is
+    // the next test's.
     for line in [
         "touch: /Users/dev/plane/workspaces/alpha/repo/src/a.rs: Operation not permitted",
-        "rm: /private/var/folders/ab/T/x: Operation not permitted",
+        "rm: /private/tmp/claude-501/x: Operation not permitted",
         "touch: src/a.rs: Operation not permitted",
     ] {
         assert!(
@@ -358,6 +360,96 @@ fn a_programs_refusal_of_what_the_chat_may_write_is_not_the_sandboxs() {
             "{line}"
         );
     }
+}
+
+const PER_USER_T: &str = "/var/folders/wl/hs3pdt2j0t9gyc_l73py38l80000gp/T";
+const PER_USER_C: &str = "/var/folders/wl/hs3pdt2j0t9gyc_l73py38l80000gp/C";
+
+/// What macOS tools that ignore `TMPDIR` printed in a sandboxed chat (#1120, measured on macOS
+/// 26.2): they ask the system for the per-user temporary or cache folder instead, which no
+/// sandboxed chat may write, so each is a block the notice names with its way round.
+#[test]
+fn a_tool_that_ignores_tmpdir_is_told_apart_from_the_chats_own_temp() {
+    let (t, c) = (PER_USER_T, PER_USER_C);
+    for (line, kind) in [
+        (
+            format!("mktemp: mkstemp failed on {t}/tmp.mWjq8inJrH: Operation not permitted"),
+            Kind::SystemTemp,
+        ),
+        (
+            format!("mktemp: mkdtemp failed on {t}/tmp.ZqSxZqUwQX: Operation not permitted"),
+            Kind::SystemTemp,
+        ),
+        (
+            format!("rm: /private{t}/x: Operation not permitted"),
+            Kind::SystemTemp,
+        ),
+    ] {
+        assert_eq!(
+            detect(&came_back("x", "", &line), &place()),
+            vec![block(Operation::Write, kind, false)],
+            "{line}"
+        );
+    }
+    for (line, kind) in [
+        (
+            format!("mktemp(1) deny(1) file-write-create /private{t}/tmp.G9c8tiJuCM"),
+            Kind::SystemTemp,
+        ),
+        (
+            format!("xcrun(2) deny(1) file-write-create /private{t}/xcrun_db-5UlOOWst"),
+            Kind::SystemTemp,
+        ),
+        (
+            format!("swift(3) deny(1) file-write-create /private{t}/p1120.txt"),
+            Kind::SystemTemp,
+        ),
+        (
+            format!(
+                "swift-frontend(4) deny(1) file-write-create \
+                 /private{c}/clang/ModuleCache/1XGORMFR2JUL/SwiftShims-6PVXR3VD9JVP.pcm"
+            ),
+            Kind::SystemCache,
+        ),
+    ] {
+        assert_eq!(
+            detect(&failed("x", &appended("Exit code 1", &[&line])), &place()),
+            vec![block(Operation::Write, kind, false)],
+            "{line}"
+        );
+    }
+}
+
+/// A read of the per-user folders that macOS's privacy controls refuse, not the sandbox: `du`,
+/// `find` and `ls` over them print the same words, and are no block.
+#[test]
+fn a_programs_refused_read_of_the_per_user_folders_is_not_a_block() {
+    for line in [
+        format!("du: {PER_USER_C}/com.apple.WebKit.WebContent.Sandbox: Operation not permitted"),
+        format!("find: {PER_USER_C}/com.apple.x: Operation not permitted"),
+        format!("ls: /private{PER_USER_T}/com.apple.y: Operation not permitted"),
+    ] {
+        assert!(
+            detect(&came_back("x", "", &line), &place()).is_empty(),
+            "{line}"
+        );
+    }
+}
+
+/// The temp folder's notice gives mktemp's way round; the cache folder's says Swift and clang
+/// builds cannot write it yet, and offers no variable to set.
+#[test]
+fn the_per_user_folders_notices_name_each_folder_and_its_way_round() {
+    let temp = block(Operation::Write, Kind::SystemTemp, false).said();
+    assert!(temp.contains("temporary folder"), "{temp}");
+    assert!(temp.contains("mktemp -p \"$TMPDIR\""), "{temp}");
+    let cache = block(Operation::Write, Kind::SystemCache, false).said();
+    assert!(cache.contains("cache folder"), "{cache}");
+    assert!(cache.contains("Swift and clang builds"), "{cache}");
+    assert!(
+        !cache.contains("TMPDIR") && !cache.contains("temporary"),
+        "{cache}"
+    );
 }
 
 #[test]
@@ -559,6 +651,46 @@ fn the_app_keeps_seven_days_of_blocks_and_counts_them_per_operation() {
     // The one from eight days before was let go of when the next was kept.
     let text = std::fs::read_to_string(path(root)).unwrap();
     assert_eq!(text.matches("\"at\"").count(), 3, "{text}");
+}
+
+/// A block of a kind this build does not know, written by a newer one, is kept as it was and
+/// let go of by its age like any other: a build that reads it is no reason to lose the rest.
+#[test]
+fn a_block_of_a_kind_this_build_does_not_know_is_kept_across_a_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let now = 100 * DAY;
+    let file = path(root);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        json!({"blocks": [
+            {"at": now - DAY, "operation": "write", "kind": "a-kind-from-later", "ours": false},
+            {"at": now - 8 * DAY, "operation": "write", "kind": "a-kind-from-later", "ours": false},
+            {"at": now - DAY, "operation": "write", "kind": "home", "ours": false},
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    record(root, &block(Operation::Read, Kind::Home, false), now).unwrap();
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(text.matches("a-kind-from-later").count(), 1, "{text}");
+    assert_eq!(text.matches("\"at\"").count(), 3, "{text}");
+    assert_eq!(
+        counts(root, now),
+        vec![
+            Count {
+                operation: Operation::Write,
+                blocks: 1,
+                ours: 0
+            },
+            Count {
+                operation: Operation::Read,
+                blocks: 1,
+                ours: 0
+            },
+        ]
+    );
 }
 
 #[test]
