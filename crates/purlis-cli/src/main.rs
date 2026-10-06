@@ -39,6 +39,7 @@ mod change;
 mod curation;
 mod extcmd;
 mod extensions;
+mod gitask;
 mod githook;
 mod guard;
 mod handoff;
@@ -2094,6 +2095,7 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
             workspace,
             now,
         } => {
+            let on_a_test_clock = now.is_some();
             let now = match now {
                 Some(text) => match text.parse::<chrono::NaiveDateTime>() {
                     // A naive stamp is LOCAL time, as `--now` is everywhere in this binary.
@@ -2126,6 +2128,26 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
                 Ok(ws) => ws,
                 Err(why) => return Some(refused(&why)),
             };
+            // In a chat the app started, the app clones (#1335): a sandboxed chat may not
+            // write the clone's `.git/config`, hooks or editor settings. `--now` is a test's
+            // clock, which only this process keeps.
+            let asked = if on_a_test_clock {
+                None
+            } else {
+                gitask::told(
+                    gitask::forwarded(
+                        &ws,
+                        purlis_core::hookwire::GitWork::Clone {
+                            repos: repos.clone(),
+                        },
+                        gitask::a_clone_takes_at_most(repos.len()),
+                    ),
+                    &mut say,
+                )
+            };
+            if let Some(code) = asked {
+                return Some(ExitCode::from(code));
+            }
             repocmd::clone::clone(
                 &repocmd::clone::Request {
                     root: &root,
@@ -2133,6 +2155,7 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
                     repos,
                     now,
                     author: &author,
+                    hosts: None,
                 },
                 &mut say,
             )
