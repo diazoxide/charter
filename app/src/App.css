@@ -1168,6 +1168,17 @@ button.show-more:focus-visible {
   gap: 0.5rem;
 }
 
+/* A sandbox block's Allow (#1342), under its Notice: what it would allow, whole, and the two
+   Always buttons. */
+.block-allow-target {
+  overflow-wrap: anywhere;
+}
+
+.block-allow-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .gauge-ok {
   color: var(--state-success);
 }
@@ -5844,6 +5855,20 @@ h2.sidebar-title .node-icon {
   margin: 0.2rem 0;
   border-bottom: 0;
   border-radius: 3px;
+}
+
+/* Settings › Sandbox › Granted (#1348): one grant a row, its Revoke beside it; and the folders
+   chats may be granted, each with Remove. */
+.granted-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.granted-note {
+  color: var(--text-secondary);
 }
 
 /* A collection (ST-3): each entry a heading with its Remove over its rows, then Add, whose form

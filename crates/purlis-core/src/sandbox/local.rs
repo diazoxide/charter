@@ -42,6 +42,35 @@ struct OnDisk {
     /// grant anything ([`super::hosts::personal`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     hosts_mine: Vec<String>,
+    /// The folders you let every chat of this project on this machine write (#1342), each whole
+    /// as [`super::grant::write`] took it: the only place a write grant of yours is kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    writes_mine: Vec<String>,
+    /// Each grant made on this machine from a block's Notice that lasts past one chat (#1342):
+    /// what Settings' Granted list says of who granted it, when, and from which chat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    granted: Vec<Made>,
+    /// The folders you listed in Settings › Sandbox as ones chats may be granted (D-1342-10):
+    /// added to the allowlist a write grant must be inside, on this machine only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    grantable: Vec<String>,
+}
+
+/// One grant made on this machine that lasts past its chat (#1342), as `app/sandbox.json` keeps
+/// it: what Settings' Granted list says of it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Made {
+    /// `host` or `write`.
+    pub what: String,
+    /// The host or the folder, as the sandbox writes it.
+    pub target: String,
+    /// `you` or `project`.
+    pub level: String,
+    /// When, in seconds since 1970.
+    pub at: u64,
+    /// The chat it was granted from, by the name its tab showed, where it came from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<String>,
 }
 
 fn read(root: &Path) -> OnDisk {
@@ -257,6 +286,90 @@ pub fn confirm_host(root: &Path, host: &str) -> io::Result<()> {
 /// Takes `host` off the record: Settings' Remove.
 pub fn unconfirm_host(root: &Path, host: &str) -> io::Result<()> {
     change(root, |held| held.hosts_mine.retain(|one| one != host))
+}
+
+// ---- the folders you let every chat write (#1342) --------------------------------------------
+
+/// The folders you let every chat of the project at `root` write on this machine, as granted.
+/// [`super::Compiled::granted`] judges each again before a start compiles it in.
+pub fn granted_writes(root: &Path) -> Vec<std::path::PathBuf> {
+    read(root)
+        .writes_mine
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
+/// Lets every chat of the project at `root` write `folder` on this machine: a block's Notice,
+/// never a chat (a sandboxed chat cannot write this file). `folder` is one
+/// [`super::grant::write`] took.
+pub fn grant_write(root: &Path, folder: &Path) -> io::Result<()> {
+    let folder = folder.display().to_string();
+    change(root, |held| {
+        if !held.writes_mine.contains(&folder) {
+            held.writes_mine.push(folder);
+        }
+    })
+}
+
+/// Takes `folder` off what you let every chat write: Settings' Revoke.
+pub fn revoke_write(root: &Path, folder: &Path) -> io::Result<()> {
+    let folder = folder.display().to_string();
+    change(root, |held| {
+        held.writes_mine.retain(|one| *one != folder);
+        held.granted
+            .retain(|made| !(made.what == "write" && made.target == folder));
+    })
+}
+
+/// The folders you listed as ones chats in the project at `root` may be granted (D-1342-10).
+pub fn grantable_folders(root: &Path) -> Vec<std::path::PathBuf> {
+    read(root)
+        .grantable
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
+/// Lists `folder` as one chats may be granted: Settings, never a chat. `folder` is one
+/// [`super::grant::grantable`] took.
+pub fn list_grantable(root: &Path, folder: &Path) -> io::Result<()> {
+    let folder = folder.display().to_string();
+    change(root, |held| {
+        if !held.grantable.contains(&folder) {
+            held.grantable.push(folder);
+        }
+    })
+}
+
+/// Takes `folder` off that list. A grant already made inside it is judged again at the next
+/// start, and no longer reaches a chat.
+pub fn unlist_grantable(root: &Path, folder: &Path) -> io::Result<()> {
+    let folder = folder.display().to_string();
+    change(root, |held| held.grantable.retain(|one| *one != folder))
+}
+
+/// Records that `made` was granted here, replacing an earlier record of the same grant.
+pub fn record_made(root: &Path, made: Made) -> io::Result<()> {
+    change(root, |held| {
+        held.granted.retain(|one| {
+            !(one.what == made.what && one.target == made.target && one.level == made.level)
+        });
+        held.granted.push(made);
+    })
+}
+
+/// Takes the record of a grant off, once it is revoked.
+pub fn forget_made(root: &Path, what: &str, target: &str, level: &str) -> io::Result<()> {
+    change(root, |held| {
+        held.granted
+            .retain(|one| !(one.what == what && one.target == target && one.level == level));
+    })
+}
+
+/// Every grant made on this machine that lasts past its chat, as recorded.
+pub fn made(root: &Path) -> Vec<Made> {
+    read(root).granted
 }
 
 // ---- the opt-out count -----------------------------------------------------------------------

@@ -134,6 +134,20 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
         edit_rules.push(format!("Edit({glob})"));
         edit_rules.push(format!("Edit({glob}/**)"));
     }
+    // Under each granted folder (#1342), every later-code name again, by absolute path: a
+    // relative `**/<name>` is read against the chat's folder, so it is not known to hold in a
+    // folder outside it (D-1342-3). The folder is the kernel's spelling already (D-1342-12).
+    for folder in &compiled.writable {
+        for planted in super::PLANTED
+            .iter()
+            .filter(|planted| planted.reach == super::Reach::AndBelow)
+        {
+            let glob = format!("{}/**/{}", folder.display(), planted.path);
+            edit_rules.push(format!("Edit(/{glob})"));
+            edit_rules.push(format!("Edit(/{glob}/**)"));
+            deny_write.push(glob);
+        }
+    }
     // The project's package caches (D-1337-6), each path as written and as the kernel names it.
     let mut allow_write: Vec<String> = Vec::new();
     if let Some(caches) = &compiled.widened.caches {
@@ -177,6 +191,16 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
             }
         }
     }
+    // A person's grants (#1342), each exactly as judged: already the kernel's spelling
+    // (D-1342-12), never resolved again here, so a folder swapped for a link since is not
+    // followed to where it now points. Claude Code holds `denyWrite` over `allowWrite`, so a
+    // class inside one still wins.
+    for path in &compiled.writable {
+        let path = path.display().to_string();
+        if !allow_write.contains(&path) {
+            allow_write.push(path);
+        }
+    }
     let mut filesystem = json!({
         "denyRead": deny_read,
         "denyWrite": deny_write,
@@ -190,8 +214,7 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
         .chain(read_rules)
         .chain(edit_rules)
         .collect();
-    Ok(Settings {
-        sandbox: json!({
+    let sandbox = json!({
             "enabled": true,
             "failIfUnavailable": true,
             "allowUnsandboxedCommands": false,
@@ -202,9 +225,8 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
                 "allowAllUnixSockets": false,
             },
             "filesystem": filesystem,
-        }),
-        deny,
-    })
+    });
+    Ok(Settings { sandbox, deny })
 }
 
 impl Settings {

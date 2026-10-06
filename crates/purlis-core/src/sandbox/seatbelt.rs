@@ -159,6 +159,22 @@ pub fn widen(own: &mut Own, widened: &super::Widened) -> Result<(), &'static str
     Ok(())
 }
 
+/// Lets a wrapped chat write each of `folders`, a person's grants (#1342): each in the
+/// `file-write*` allow, and each a root the later-code names are denied at any depth in. Every
+/// denial class follows them in the profile, so a class still wins inside one.
+pub fn granted(own: &mut Own, folders: &[PathBuf]) -> Result<(), &'static str> {
+    for folder in folders {
+        // As judged, already the kernel's spelling (D-1342-12): never resolved again, so a
+        // folder swapped for a link since is not followed to where it now points.
+        own.allow.push(format!(
+            "(subpath {})",
+            string(&folder.display().to_string())?
+        ));
+        own.roots.push(folder.clone());
+    }
+    Ok(())
+}
+
 /// The keychain files of the home `home`, denied with the vaults class: no lookup of the
 /// security service is allowed either, so a wrap holds a keyring vault ([`BASE`]).
 pub fn keychains(home: Option<&Path>) -> Option<Denial> {

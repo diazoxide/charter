@@ -203,8 +203,9 @@ pub type Blocks = Arc<dyn Fn(purlis_core::hookwire::SandboxBlocked) + Send + Syn
 pub const SANDBOX_BLOCKED: &str = "chat-sandbox-blocked";
 
 /// A sandbox block, as the window shows it on the chat's tab (#1338): an operation and the kind
-/// of path or host, by their fixed words, and the sentence purlis says about them. **No path,
-/// argument, host or output**: the hook kept none of it.
+/// of path or host, by their fixed words, and the sentence purlis says about them; and what the
+/// Notice can offer for it (#1342): Allow for a host or a folder, with what it would name, or
+/// the way that works for what is never granted. **No argument or output**.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct ChatBlocked {
     pub plane: PlaneId,
@@ -220,6 +221,15 @@ pub struct ChatBlocked {
     pub harness: Option<String>,
     /// What was blocked, as a sentence names it: "a write to the project's own files".
     pub said: String,
+    /// What the Notice offers (#1342).
+    pub offer: BlockOffer,
+    /// What Allow would name, shown whole before anyone presses it: the host the report named,
+    /// or the folder a refused write was in. Null for a host the report did not name, which the
+    /// person types. The app checks it again before anything is granted.
+    pub target: Option<String>,
+    /// For [`BlockOffer::Brokered`], the way that works instead; for
+    /// [`BlockOffer::Unsandboxed`], why purlis grants nothing here.
+    pub route: Option<String>,
 }
 
 /// What the app does with a sandbox block chat `block.chat`'s hook sent on the project at
@@ -261,7 +271,11 @@ pub type BlockTeller = Arc<dyn Fn(ChatBlocked) + Send + Sync + 'static>;
 /// app does not start is no harness: the line is the chat's own.
 pub fn blocked(plane: &PlaneId, blocked: &purlis_core::hookwire::SandboxBlocked) -> ChatBlocked {
     let block = blocked.sandbox_blocked;
+    let (offer, target, route) = offered(plane.root(), &block, blocked.target.as_deref());
     ChatBlocked {
+        offer,
+        target,
+        route,
         plane: plane.clone(),
         session: blocked.chat,
         operation: block.operation.word().to_owned(),
@@ -273,6 +287,98 @@ pub fn blocked(plane: &PlaneId, blocked: &purlis_core::hookwire::SandboxBlocked)
             .and_then(purlis_core::harness::Harness::of_kind)
             .map(|harness| harness.name().to_owned()),
         said: block.said(),
+    }
+}
+
+/// What a block's Notice offers (#1342).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum BlockOffer {
+    /// Allow a host.
+    Host,
+    /// Allow a folder to write.
+    Write,
+    /// Never granted, and there is a way that works: [`ChatBlocked::route`] says it.
+    Brokered,
+    /// Not something purlis grants a chat (off the allowlist, a local socket): the person may
+    /// start this chat again without the sandbox; [`ChatBlocked::route`] says why.
+    Unsandboxed,
+    /// Nothing to allow: purlis's own operation (a bug to report), or a block with nothing a
+    /// grant could name.
+    None,
+}
+
+/// What a block's Notice offers (#1342) for `block`, refused on `target` as the hook read it, in
+/// the project at `root`: the offer, what Allow would name, and the sentence for one that is not
+/// Allow.
+///
+/// - purlis's own operation is a purlis bug: Report, never Allow.
+/// - A refused host: Allow, naming it where the report named one concrete host. A wildcard on
+///   the line is never proposed (review S3): a real refusal names one host, and a person can
+///   still type a wildcard in Settings.
+/// - A refused write: Allow on the folder it was in, shown whole, where that folder is on the
+///   allowlist ([`purlis_core::sandbox::grant::write`], D-1342-10); a denial class gets the way
+///   that works; anything else gets "Start without the sandbox".
+/// - purlis's state, a protected file and any read (reads are denied only for the classes no
+///   person grants): the brokered route. A local socket: "Start without the sandbox".
+fn offered(
+    root: &Path,
+    block: &purlis_core::sandboxblock::Block,
+    target: Option<&str>,
+) -> (BlockOffer, Option<String>, Option<String>) {
+    use purlis_core::sandbox::{Class, grant};
+    use purlis_core::sandboxblock::{Kind, Operation};
+    if block.ours {
+        return (BlockOffer::None, None, None);
+    }
+    let brokered = |class| {
+        (
+            BlockOffer::Brokered,
+            None,
+            Some(grant::brokered_route(class).to_owned()),
+        )
+    };
+    match (block.operation, block.kind) {
+        (Operation::Connect, Kind::Host) => (
+            BlockOffer::Host,
+            target
+                .and_then(|typed| grant::host(typed).ok())
+                .map(|host| host.to_string())
+                .filter(|host| !host.starts_with("*.")),
+            None,
+        ),
+        (Operation::Connect, Kind::LocalSocket) => (
+            BlockOffer::Unsandboxed,
+            None,
+            Some(
+                "purlis will not let a sandboxed chat reach a local socket other than its own: \
+                 one could be any service on this machine."
+                    .to_owned(),
+            ),
+        ),
+        (_, Kind::ProjectState) => brokered(Class::Integrity),
+        (_, Kind::ProtectedFile) => brokered(Class::LaterCode),
+        (Operation::Read, _) => brokered(Class::Vaults),
+        (
+            Operation::Write | Operation::File,
+            Kind::ProjectFiles | Kind::Home | Kind::ToolchainCache | Kind::System,
+        ) => {
+            let Some(path) = target.filter(|path| Path::new(path).is_absolute()) else {
+                return (BlockOffer::None, None, None);
+            };
+            let folder = grant::proposed_folder(Path::new(path))
+                .display()
+                .to_string();
+            let ground = grant::Ground::of(root, root, &purlis_core::sandbox::Machine::this());
+            match grant::write(&folder, &ground.place()) {
+                Ok(folder) => (BlockOffer::Write, Some(folder.display().to_string()), None),
+                Err(grant::Refused::Never(route)) => (BlockOffer::Brokered, None, Some(route)),
+                Err(grant::Refused::Outside(why) | grant::Refused::Not(why)) => {
+                    (BlockOffer::Unsandboxed, Some(folder), Some(why))
+                }
+            }
+        }
+        _ => (BlockOffer::None, None, None),
     }
 }
 
@@ -733,6 +839,33 @@ impl Hooks {
     /// Records every hook call this project's channel hears into `events` from now on (FD-9).
     pub fn record_into(&self, events: Events) {
         *self.events.lock().unwrap_or_else(PoisonError::into_inner) = Some(events);
+    }
+
+    /// **Audits a sandbox grant or revoke** (#1342) in the host's event log, under chat
+    /// `number` where it came from one, and made durable before it answers. Refused where this
+    /// machine has no event log open: a grant nobody recorded is never made.
+    pub fn record_grant(
+        &self,
+        root: &Path,
+        number: Option<u32>,
+        audited: &purlis_core::sandbox::grant::Audited<'_>,
+    ) -> Result<(), String> {
+        let Some(events) = self
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        else {
+            return Err(
+                "purlis's event log is not open on this machine, so nothing was changed: every \
+                 sandbox grant is recorded"
+                    .to_owned(),
+            );
+        };
+        let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+        log.sandbox_grant(root, number, audited)
+            .map(|_| ())
+            .map_err(|why| format!("the event log refused it ({why}), so nothing was changed"))
     }
 
     /// Drains this project's hook spool into the event log (FD-30, ADR 0068 §6): the lines its
@@ -1475,6 +1608,7 @@ mod tests {
                         chat: 3,
                         sandbox_blocked: block,
                         harness: Some("claude".to_owned()),
+                        target: None,
                     },
                 )
             })
@@ -1489,6 +1623,10 @@ mod tests {
                 ours: true,
                 harness: Some("claude".to_owned()),
                 said: "a write to the project's own files".to_owned(),
+                // purlis's own: a bug to report, never something to allow.
+                offer: BlockOffer::None,
+                target: None,
+                route: None,
             }]
         );
         // A harness word purlis does not start is no harness.
@@ -1498,6 +1636,7 @@ mod tests {
                 chat: 3,
                 sandbox_blocked: told_block(),
                 harness: Some("/home/dev/bin/thing".to_owned()),
+                target: None,
             },
         );
         assert_eq!(other.harness, None);
@@ -1529,6 +1668,7 @@ mod tests {
             chat: 3,
             sandbox_blocked: told_block(),
             harness: None,
+            target: None,
         };
         for _ in 0..50 {
             heard_block(dir.path(), &throttle, &slot, line.clone(), (100, now));
@@ -1541,6 +1681,104 @@ mod tests {
         assert_eq!(
             purlis_core::sandboxblock::counts(dir.path(), 100)[0].blocks,
             1
+        );
+    }
+
+    #[test]
+    fn a_block_s_notice_offers_allow_only_for_a_host_or_a_folder_and_the_way_out_otherwise() {
+        use purlis_core::sandboxblock::{Block, Kind, Operation};
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path().canonicalize().expect("real");
+        let plane: PlaneId =
+            serde_json::from_value(serde_json::json!(root.display().to_string())).expect("an id");
+        let told = |operation, kind, ours, target: Option<&str>| {
+            let said = blocked(
+                &plane,
+                &purlis_core::hookwire::SandboxBlocked {
+                    chat: 3,
+                    sandbox_blocked: Block {
+                        operation,
+                        kind,
+                        ours,
+                    },
+                    harness: None,
+                    target: target.map(str::to_owned),
+                },
+            );
+            (said.offer, said.target, said.route.is_some())
+        };
+        let host = |target| told(Operation::Connect, Kind::Host, false, target);
+        // A host, named where the report named one, typed by the person where it did not.
+        assert_eq!(
+            host(Some("API.example.com:443")),
+            (
+                BlockOffer::Host,
+                Some("api.example.com:443".to_owned()),
+                false
+            )
+        );
+        assert_eq!(host(None), (BlockOffer::Host, None, false));
+        // Never proposed: a host the sandbox never lets a chat reach, and a wildcard a line
+        // named (a real refusal names one host).
+        for target in ["169.254.169.254", "*.amazonaws.com"] {
+            assert_eq!(
+                host(Some(target)),
+                (BlockOffer::Host, None, false),
+                "{target}"
+            );
+        }
+        // A write in the project, on the folder it was refused in. A fixture made in a
+        // harness's own temp root (an agent's `/private/tmp/claude-<uid>`) is refused with it:
+        // that refusal is never lifted for a project that lives there.
+        let other = root.join("workspaces/beta/out");
+        let in_a_harness_temp_root = root
+            .strip_prefix("/private/tmp")
+            .ok()
+            .and_then(|below| below.components().next())
+            .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with("claude-"));
+        let (offer, target, why) = told(
+            Operation::Write,
+            Kind::ProjectFiles,
+            false,
+            Some(&other.join("x.lock").display().to_string()),
+        );
+        assert_eq!(target, Some(other.display().to_string()));
+        if in_a_harness_temp_root {
+            assert_eq!((offer, why), (BlockOffer::Unsandboxed, true));
+        } else {
+            assert_eq!((offer, why), (BlockOffer::Write, false));
+        }
+        // Off the allowlist (D-1342-10): no Allow, and the chat without the sandbox instead.
+        let home = std::env::var("HOME").expect("a home");
+        for path in [
+            format!("{home}/Library/LaunchAgents/x.plist"),
+            format!("{home}/.config/git/config"),
+            "/opt/tool/cache/x.lock".to_owned(),
+        ] {
+            let (offer, _, why) = told(Operation::Write, Kind::Home, false, Some(&path));
+            assert_eq!((offer, why), (BlockOffer::Unsandboxed, true), "{path}");
+        }
+        // A local socket: the same.
+        assert_eq!(
+            told(Operation::Connect, Kind::LocalSocket, false, None),
+            (BlockOffer::Unsandboxed, None, true)
+        );
+        // Never granted: the way that works instead.
+        for (operation, kind) in [
+            (Operation::Write, Kind::ProjectState),
+            (Operation::Write, Kind::ProtectedFile),
+            (Operation::Read, Kind::Home),
+        ] {
+            assert_eq!(
+                told(operation, kind, false, Some("/x/y")),
+                (BlockOffer::Brokered, None, true),
+                "{operation:?} {kind:?}"
+            );
+        }
+        // purlis's own operation is reported, never allowed.
+        assert_eq!(
+            told(Operation::Write, Kind::System, true, Some("/opt/x")),
+            (BlockOffer::None, None, false)
         );
     }
 

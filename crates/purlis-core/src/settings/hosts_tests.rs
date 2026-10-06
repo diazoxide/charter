@@ -211,3 +211,45 @@ fn a_sandbox_that_is_not_a_table_or_hosts_that_are_not_a_list_are_left_to_edit_a
     assert!(with(Which::Shared, "sandbox = 1\n", &host("a.example")).is_err());
     assert!(with(Which::Shared, "[sandbox]\nhosts = 1\n", &host("a.example")).is_err());
 }
+
+#[test]
+fn a_notice_grants_and_settings_revokes_a_host_against_the_file_as_it_is_now() {
+    // #1342 and #1348: the same rules Settings' Add and Remove keep, read from disk.
+    let dir = project(ON);
+    let host = Host::parse("api.example.com").unwrap();
+    grant(dir.path(), Which::Local, &host).expect("yours");
+    assert_eq!(
+        crate::sandbox::hosts::personal(dir.path()),
+        std::slice::from_ref(&host),
+        "granted from a Notice, so confirmed on this machine"
+    );
+    grant(
+        dir.path(),
+        Which::Shared,
+        &Host::parse("10.0.0.5:6443").unwrap(),
+    )
+    .expect("the project's");
+    assert!(
+        text(dir.path(), "charter.toml")
+            .unwrap()
+            .contains("10.0.0.5:6443")
+    );
+    // Granted twice is said, not written twice.
+    assert!(grant(dir.path(), Which::Local, &host).is_err());
+
+    revoke(dir.path(), Which::Local, &host).expect("revoked");
+    assert!(crate::sandbox::hosts::personal(dir.path()).is_empty());
+    revoke(
+        dir.path(),
+        Which::Shared,
+        &Host::parse("10.0.0.5:6443").unwrap(),
+    )
+    .expect("revoked");
+    assert!(
+        !text(dir.path(), "charter.toml")
+            .unwrap()
+            .contains("10.0.0.5")
+    );
+    // Revoking what is not there changes nothing.
+    revoke(dir.path(), Which::Shared, &host).expect("nothing to do");
+}

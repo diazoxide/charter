@@ -390,9 +390,679 @@ fn shown_draft(
     Ok(draft)
 }
 
+// ---- a block's Allow, and every grant (#1342, #1348) -----------------------------------------
+
+/// What a grant names, as the window sends it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum GrantWhat {
+    /// A host to reach.
+    Host,
+    /// A folder to write, and everything in it.
+    Write,
+}
+
+impl GrantWhat {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Write => "write",
+        }
+    }
+
+    fn of_word(word: &str) -> Option<Self> {
+        [Self::Host, Self::Write]
+            .into_iter()
+            .find(|what| what.word() == word)
+    }
+}
+
+/// Who a grant is for, as the window sends it ([`sandbox::grant::Level`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum GrantLevel {
+    /// This chat, while the app holds it.
+    Chat,
+    /// Every chat of this project on this machine.
+    You,
+    /// Everyone in the project: committed. A host only.
+    Project,
+}
+
+impl From<GrantLevel> for sandbox::grant::Level {
+    fn from(level: GrantLevel) -> Self {
+        match level {
+            GrantLevel::Chat => Self::Chat,
+            GrantLevel::You => Self::You,
+            GrantLevel::Project => Self::Project,
+        }
+    }
+}
+
+impl From<sandbox::grant::Level> for GrantLevel {
+    fn from(level: sandbox::grant::Level) -> Self {
+        match level {
+            sandbox::grant::Level::Chat => Self::Chat,
+            sandbox::grant::Level::You => Self::You,
+            sandbox::grant::Level::Project => Self::Project,
+        }
+    }
+}
+
+/// What allowing a block answered (#1342): the sentence the Notice says. The chat is then owed
+/// a restart on its conversation, which the window asks for once its turn has ended.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct Allowed {
+    pub said: String,
+}
+
+/// Seconds since 1970, now.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// Writes the audit of a grant or revoke, and answers whether it was written.
+type Audit<'a> = &'a dyn Fn(Option<u32>, &sandbox::grant::Audited<'_>) -> Result<(), String>;
+
+/// The project's file a host is kept in at `level`: yours or the committed one.
+fn hosts_file(level: sandbox::grant::Level) -> purlis_core::settings::Which {
+    if level == sandbox::grant::Level::Project {
+        purlis_core::settings::Which::Shared
+    } else {
+        purlis_core::settings::Which::Local
+    }
+}
+
+/// **Allows what chat `session`'s sandbox blocked** (#1342), at `level`, in the project at
+/// `root` on `machine`: the core judges `target` again (the window's word and the chat's count
+/// for nothing), the audit is written, then the grant is kept where its level keeps it and the
+/// chat is owed a restart on its conversation. Never a class 1–3 path, never a folder off the
+/// allowlist (D-1342-10), never a folder for the project, never past a policy lock.
+fn allow(
+    root: &std::path::Path,
+    machine: &sandbox::Machine,
+    chats: &crate::chats::Chats,
+    session: u32,
+    (what, target, level): (GrantWhat, &str, GrantLevel),
+    audit: Audit<'_>,
+    at: u64,
+) -> Result<Allowed, String> {
+    use sandbox::grant::{self, Level, What};
+    let level = Level::from(level);
+    if level == Level::Project && what == GrantWhat::Write {
+        return Err(
+            "purlis will not allow a folder for everyone in the project: a folder is a path on \
+             this machine. Allow it for this chat, or for every chat of this project on this \
+             machine."
+                .to_owned(),
+        );
+    }
+    let what = match what {
+        GrantWhat::Host => What::Host(grant::host(target).map_err(|why| why.to_string())?),
+        GrantWhat::Write => {
+            let folder = chats.folder_of(session).ok_or_else(|| {
+                format!("purlis did not allow anything for chat {session}: it is not open.")
+            })?;
+            let ground = grant::Ground::of(root, &folder, machine);
+            What::Write(grant::write(target, &ground.place()).map_err(|why| why.to_string())?)
+        }
+    };
+    if let What::Host(host) = &what
+        && let Some(why) = sandbox::hosts::Locks::of(root).refuses(&sandbox::hosts::Granted {
+            host: host.clone(),
+            level: level.hosts_level(),
+        })
+    {
+        return Err(why);
+    }
+    let target = what.target();
+    audit(
+        Some(session),
+        &grant::Audited {
+            granted: true,
+            what: what.word(),
+            target: &target,
+            level,
+        },
+    )?;
+    let told = grant::told(&what, level);
+    match (&what, level) {
+        (_, Level::Chat) => chats.grant(session, what.clone(), at, told)?,
+        (What::Host(host), Level::You | Level::Project) => {
+            purlis_core::settings::hosts::grant(root, hosts_file(level), host)?;
+            chats.owe_restart(session, told);
+        }
+        (What::Write(folder), _) => {
+            sandbox::local::grant_write(root, folder)
+                .map_err(|why| format!("purlis could not keep {}: {why}", folder.display()))?;
+            chats.owe_restart(session, told);
+        }
+    }
+    if level != Level::Chat
+        && let Err(why) = sandbox::local::record_made(
+            root,
+            sandbox::local::Made {
+                what: what.word().to_owned(),
+                target: target.clone(),
+                level: level.word().to_owned(),
+                at,
+                chat: None,
+            },
+        )
+    {
+        // The grant stands, and is audited; only the Granted list's "when" is lost.
+        tracing::warn!("purlis: a sandbox grant was kept without when it was made ({why})");
+    }
+    Ok(Allowed {
+        said: format!(
+            // No target in the sentence: it is the chat's choice, and the window shows it apart.
+            "Allowed {}. The chat restarts on the same conversation once its turn ends, and is \
+             told to retry.",
+            level.said()
+        ),
+    })
+}
+
+/// **Allow** on a block's Notice (#1342): `target` is the host or folder the Notice showed whole
+/// (or the person typed). The window then restarts the chat once its turn has ended
+/// (`restart_chat_for_grant`).
+#[tauri::command]
+#[specta::specta]
+pub fn allow_sandbox_block(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    what: GrantWhat,
+    target: String,
+    level: GrantLevel,
+) -> Result<Allowed, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    allow(
+        &root,
+        &sandbox::Machine::this(),
+        held.chats(),
+        session,
+        (what, &target, level),
+        &|number, audited| held.hooks().record_grant(&root, number, audited),
+        now_secs(),
+    )
+}
+
+/// The chats of this project owed a restart to take a grant (#1342), for the window that drives
+/// it once each one's turn has ended.
+#[tauri::command]
+#[specta::specta]
+pub fn owed_restarts(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<u32>, String> {
+    Ok(planes.held(&plane)?.chats().owed_restarts())
+}
+
+/// One grant, as Settings' Granted list shows it (#1348).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SandboxGrant {
+    /// What Revoke is sent by.
+    pub id: String,
+    pub what: GrantWhat,
+    /// The host or the folder.
+    pub target: String,
+    pub level: GrantLevel,
+    /// Who committed it, for one the project carries; null for one you granted, or one the
+    /// project's file holds that is not committed yet.
+    pub by: Option<String>,
+    /// When, in seconds since 1970, where that is known.
+    pub at: Option<u32>,
+    /// The chat it was granted from, where it came from one.
+    pub chat: Option<String>,
+    /// Why a policy locks it out, where one does.
+    pub locked: Option<String>,
+}
+
+/// Who last committed a line naming `host` in the project's committed file, and when: the
+/// project's history, asked of git. `None` where git has nothing to say (not committed yet).
+fn committed_by(root: &std::path::Path, host: &str) -> Option<(String, u64)> {
+    let manifest = purlis_core::names::manifest(root);
+    let file = manifest.file_name()?.to_str()?.to_owned();
+    let mut git = std::process::Command::new("git");
+    git.arg("-C")
+        .arg(root)
+        .args(["log", "-1", "--format=%an%x09%at", "-S"])
+        .arg(format!("\"{host}\""))
+        .args(["--", &file]);
+    let out = purlis_core::forklock::output(&mut git).ok()?;
+    let line = String::from_utf8(out.stdout).ok()?;
+    let (name, at) = line.trim().split_once('\t')?;
+    Some((name.to_owned(), at.parse().ok()?))
+}
+
+/// The separator of a grant's id: no host or folder purlis grants holds it.
+const SEP: char = '\u{1f}';
+
+/// **Every grant in force for the project at `root`** (#1348): each open chat's (a closed
+/// chat's ended with it, D-1348-1), yours (hosts and folders), and the project's own hosts.
+fn grants_of(root: &std::path::Path, chats: &crate::chats::Chats) -> Vec<SandboxGrant> {
+    use sandbox::grant::Level;
+    let made = sandbox::local::made(root);
+    let when = |what: GrantWhat, target: &str, level: Level| {
+        made.iter()
+            .find(|one| {
+                one.what == what.word() && one.target == target && one.level == level.word()
+            })
+            .and_then(|one| u32::try_from(one.at).ok())
+    };
+    let row = |what: GrantWhat, target: String, level: Level, at| SandboxGrant {
+        id: format!("{}{SEP}{}{SEP}{target}", level.word(), what.word()),
+        what,
+        target,
+        level: level.into(),
+        by: None,
+        at,
+        chat: None,
+        locked: None,
+    };
+    let mut out: Vec<SandboxGrant> = chats
+        .chat_grants()
+        .into_iter()
+        .filter_map(|(id, one)| {
+            let what = GrantWhat::of_word(one.what.word())?;
+            let target = one.what.target();
+            Some(SandboxGrant {
+                id: format!("chat{SEP}{id}{SEP}{}{SEP}{target}", what.word()),
+                chat: Some(one.chat),
+                ..row(what, target, Level::Chat, u32::try_from(one.at).ok())
+            })
+        })
+        .collect();
+    for host in sandbox::hosts::personal(root) {
+        let target = host.to_string();
+        let at = when(GrantWhat::Host, &target, Level::You);
+        out.push(row(GrantWhat::Host, target, Level::You, at));
+    }
+    for folder in sandbox::local::granted_writes(root) {
+        let target = folder.display().to_string();
+        let at = when(GrantWhat::Write, &target, Level::You);
+        out.push(row(GrantWhat::Write, target, Level::You, at));
+    }
+    if let Some(policy) = sandbox::Plane::read(root).said().policy {
+        for host in policy.hosts {
+            let target = host.to_string();
+            let committed = committed_by(root, &target);
+            let at = committed
+                .as_ref()
+                .and_then(|(_, at)| u32::try_from(*at).ok())
+                .or_else(|| when(GrantWhat::Host, &target, Level::Project));
+            out.push(SandboxGrant {
+                by: committed.map(|(name, _)| name),
+                ..row(GrantWhat::Host, target, Level::Project, at)
+            });
+        }
+    }
+    let locks = sandbox::hosts::Locks::of(root);
+    for one in &mut out {
+        if one.what == GrantWhat::Host
+            && let Ok(host) = sandbox::hosts::Host::parse(&one.target)
+        {
+            one.locked = locks.refuses(&sandbox::hosts::Granted {
+                host,
+                level: sandbox::grant::Level::from(one.level).hosts_level(),
+            });
+        }
+    }
+    out
+}
+
+/// **Revokes the grant called `id`** ([`grants_of`]) in the project at `root` (#1348): checked
+/// to be there, audited, then taken out of every later start. A project host's revoke is a
+/// change to the committed file, which teammates follow like any other.
+fn revoke(
+    root: &std::path::Path,
+    chats: &crate::chats::Chats,
+    id: &str,
+    audit: Audit<'_>,
+) -> Result<(), String> {
+    use sandbox::grant::{Audited, Level, What};
+    let gone = || "purlis did not revoke it: that grant is no longer there.".to_owned();
+    let parts: Vec<&str> = id.split(SEP).collect();
+    let (level, chat, what, target) = match parts.as_slice() {
+        ["chat", chat, what, target] => (Level::Chat, Some(*chat), *what, *target),
+        [level, what, target] => (
+            Level::of_word(level).ok_or_else(gone)?,
+            None,
+            *what,
+            *target,
+        ),
+        _ => return Err(gone()),
+    };
+    let grant = match GrantWhat::of_word(what).ok_or_else(gone)? {
+        GrantWhat::Host => What::Host(sandbox::hosts::Host::parse(target).map_err(|_| gone())?),
+        GrantWhat::Write => What::Write(std::path::PathBuf::from(target)),
+    };
+    let there = match (&grant, level, chat) {
+        (_, Level::Chat, Some(chat)) => chats.holds(chat, &grant),
+        (What::Host(host), Level::You, _) => sandbox::hosts::personal(root).contains(host),
+        (What::Host(host), Level::Project, _) => sandbox::Plane::read(root)
+            .said()
+            .policy
+            .is_some_and(|policy| policy.hosts.contains(host)),
+        (What::Write(folder), Level::You, _) => {
+            sandbox::local::granted_writes(root).contains(folder)
+        }
+        _ => false,
+    };
+    if !there {
+        return Err(gone());
+    }
+    audit(
+        None,
+        &Audited {
+            granted: false,
+            what,
+            target,
+            level,
+        },
+    )?;
+    match (&grant, chat) {
+        (_, Some(chat)) => {
+            chats.revoke(chat, &grant);
+        }
+        (What::Host(host), None) => {
+            purlis_core::settings::hosts::revoke(root, hosts_file(level), host)?;
+        }
+        (What::Write(folder), None) => {
+            sandbox::local::revoke_write(root, folder)
+                .map_err(|why| format!("purlis could not revoke {}: {why}", folder.display()))?;
+        }
+    }
+    if let Err(why) = sandbox::local::forget_made(root, what, target, level.word()) {
+        tracing::warn!("purlis: a revoked grant's record was left behind ({why})");
+    }
+    Ok(())
+}
+
+/// Every grant in force here, for Settings' Granted list (#1348).
+#[tauri::command]
+#[specta::specta]
+pub fn sandbox_grants(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Vec<SandboxGrant>, String> {
+    let held = planes.held(&plane)?;
+    Ok(grants_of(held.root(), held.chats()))
+}
+
+/// **Revoke** on Settings' Granted list (#1348): the grant called `id` is taken out of every
+/// later start, and audited. Answers the list as it is now.
+#[tauri::command]
+#[specta::specta]
+pub fn revoke_sandbox_grant(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    id: String,
+) -> Result<Vec<SandboxGrant>, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    revoke(&root, held.chats(), &id, &|number, audited| {
+        held.hooks().record_grant(&root, number, audited)
+    })?;
+    Ok(grants_of(&root, held.chats()))
+}
+
+/// The folders you listed as ones chats in this project may be granted (D-1342-10), each as it
+/// was resolved; and each one dropped from the list now because it no longer resolves to itself
+/// (it, or a folder above it, was swapped for a link since: R8), for Settings to say.
+#[tauri::command]
+#[specta::specta]
+pub fn grantable_folders(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<GrantableFolders, String> {
+    let held = planes.held(&plane)?;
+    Ok(listed_and_pruned(held.root()))
+}
+
+/// The folders chats may be granted, and those just dropped from the list.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct GrantableFolders {
+    pub folders: Vec<String>,
+    pub dropped: Vec<String>,
+}
+
+fn listed_and_pruned(root: &std::path::Path) -> GrantableFolders {
+    let mut dropped = Vec::new();
+    for listed in sandbox::local::grantable_folders(root) {
+        if !sandbox::grant::still_itself(&listed) {
+            match sandbox::local::unlist_grantable(root, &listed) {
+                Ok(()) => dropped.push(listed.display().to_string()),
+                Err(why) => tracing::warn!(
+                    "purlis: a listed folder that resolves elsewhere was left listed ({why})"
+                ),
+            }
+        }
+    }
+    GrantableFolders {
+        folders: listed_folders(root),
+        dropped,
+    }
+}
+
+fn listed_folders(root: &std::path::Path) -> Vec<String> {
+    sandbox::local::grantable_folders(root)
+        .iter()
+        .map(|folder| folder.display().to_string())
+        .collect()
+}
+
+/// Lists `folder` as one chats here may be granted (D-1342-10), this machine only: every refusal
+/// a write grant makes, but the allowlist it adds to. Answers the list as it is now, and what
+/// the folder holds that later code is loaded from, for the warning Settings shows.
+#[tauri::command]
+#[specta::specta]
+pub fn list_grantable_folder(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    folder: String,
+) -> Result<GrantableListed, String> {
+    let held = planes.held(&plane)?;
+    list_folder(held.root(), &sandbox::Machine::this(), &folder)
+}
+
+fn list_folder(
+    root: &std::path::Path,
+    machine: &sandbox::Machine,
+    folder: &str,
+) -> Result<GrantableListed, String> {
+    let ground = sandbox::grant::Ground::of(root, root, machine);
+    let folder =
+        sandbox::grant::grantable(folder, &ground.place()).map_err(|why| why.to_string())?;
+    let holds = sandbox::grant::holds_later_code(&folder, &ground.place());
+    sandbox::local::list_grantable(root, &folder)
+        .map_err(|why| format!("purlis could not keep {}: {why}", folder.display()))?;
+    Ok(GrantableListed {
+        folders: listed_folders(root),
+        holds,
+    })
+}
+
+/// The folders chats may be granted once one was listed, and what the one listed holds that
+/// later code is loaded from, outside any sandbox: what Settings warns of.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct GrantableListed {
+    pub folders: Vec<String>,
+    pub holds: Vec<String>,
+}
+
+/// Takes `folder` off the folders chats here may be granted. Answers the list as it is now.
+#[tauri::command]
+#[specta::specta]
+pub fn unlist_grantable_folder(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    folder: String,
+) -> Result<Vec<String>, String> {
+    let held = planes.held(&plane)?;
+    sandbox::local::unlist_grantable(held.root(), std::path::Path::new(&folder))
+        .map_err(|why| format!("purlis could not take {folder} off the list: {why}"))?;
+    Ok(listed_folders(held.root()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- a block's Allow, and the Granted list (#1342, #1348) ----
+
+    fn no_audit() -> impl Fn(Option<u32>, &sandbox::grant::Audited<'_>) -> Result<(), String> {
+        |_, _| Err("the event log is not open".to_owned())
+    }
+
+    fn machine() -> sandbox::Machine {
+        sandbox::Machine {
+            env: purlis_core::secrets::Env::of(&[]),
+            home: Some(std::path::PathBuf::from("/nohome/dev")),
+            os: sandbox::Os::MacOs,
+        }
+    }
+
+    #[test]
+    fn nothing_is_allowed_that_was_not_audited_or_that_a_grant_cannot_name() {
+        let project = tempfile::tempdir().expect("a project");
+        let chats = crate::chats::Chats::new();
+        let refused = |what, target: &str, level| {
+            allow(
+                project.path(),
+                &machine(),
+                &chats,
+                3,
+                (what, target, level),
+                &no_audit(),
+                100,
+            )
+            .expect_err("refused")
+        };
+        assert!(
+            refused(GrantWhat::Write, "/tmp/x", GrantLevel::Project)
+                .contains("everyone in the project")
+        );
+        assert!(
+            refused(GrantWhat::Host, "169.254.169.254", GrantLevel::You).contains("link-local")
+        );
+        // A write is judged against the chat's own folder, so a chat that is not open gets none.
+        assert!(refused(GrantWhat::Write, "/tmp/x", GrantLevel::Chat).contains("not open"));
+        // An unaudited grant is no grant: nothing is kept at any level.
+        assert!(refused(GrantWhat::Host, "api.example.com", GrantLevel::You).contains("event log"));
+        assert!(sandbox::hosts::personal(project.path()).is_empty());
+        assert!(grants_of(project.path(), &chats).is_empty());
+    }
+
+    #[test]
+    fn a_folder_you_were_granted_is_listed_and_revoke_takes_it_out_audited_once() {
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path();
+        let chats = crate::chats::Chats::new();
+        let folder = std::path::PathBuf::from("/tmp/tool-cache");
+        sandbox::local::grant_write(root, &folder).expect("granted");
+        sandbox::local::record_made(
+            root,
+            sandbox::local::Made {
+                what: "write".to_owned(),
+                target: "/tmp/tool-cache".to_owned(),
+                level: "you".to_owned(),
+                at: 42,
+                chat: None,
+            },
+        )
+        .expect("recorded");
+        let listed = grants_of(root, &chats);
+        assert_eq!(
+            listed,
+            [SandboxGrant {
+                id: "you\u{1f}write\u{1f}/tmp/tool-cache".to_owned(),
+                what: GrantWhat::Write,
+                target: "/tmp/tool-cache".to_owned(),
+                level: GrantLevel::You,
+                by: None,
+                at: Some(42),
+                chat: None,
+                locked: None,
+            }]
+        );
+        // Not audited, not revoked.
+        assert!(revoke(root, &chats, &listed[0].id, &no_audit()).is_err());
+        assert_eq!(grants_of(root, &chats).len(), 1);
+
+        let heard = std::sync::Mutex::new(Vec::new());
+        let audit = |number: Option<u32>, audited: &sandbox::grant::Audited<'_>| {
+            heard
+                .lock()
+                .unwrap()
+                .push((number, audited.kind(), audited.target.to_owned()));
+            Ok(())
+        };
+        revoke(root, &chats, &listed[0].id, &audit).expect("revoked");
+        assert!(grants_of(root, &chats).is_empty());
+        assert!(sandbox::local::granted_writes(root).is_empty());
+        // Revoked twice: the second is refused before anything is audited.
+        let again = revoke(root, &chats, &listed[0].id, &audit).expect_err("not there");
+        assert!(again.contains("no longer there"), "{again}");
+        assert!(revoke(root, &chats, "nonsense", &audit).is_err());
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [(None, "trust.sandbox.revoke", "/tmp/tool-cache".to_owned())],
+            "one audit, for the one revoke that happened"
+        );
+    }
+
+    #[test]
+    fn a_folder_you_list_widens_the_allowlist_and_nothing_a_class_or_path_holds() {
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path();
+        assert_eq!(
+            list_folder(root, &machine(), "/noopt/tools"),
+            Ok(GrantableListed {
+                folders: vec!["/noopt/tools".to_owned()],
+                holds: Vec::new(),
+            })
+        );
+        for refused in ["/", "/nohome/dev", "relative"] {
+            assert!(list_folder(root, &machine(), refused).is_err(), "{refused}");
+        }
+        // Listed, and Settings is told what it holds that later code loads (review R3).
+        let agents =
+            list_folder(root, &machine(), "/nohome/dev/Library/LaunchAgents").expect("listed");
+        assert!(
+            agents
+                .holds
+                .iter()
+                .any(|one| one.ends_with("Library/LaunchAgents")),
+            "{agents:?}"
+        );
+        // One that holds a harness's own is refused outright.
+        assert!(list_folder(root, &machine(), "/nohome/dev/Library").is_err());
+        assert_eq!(
+            listed_folders(root),
+            ["/noopt/tools", "/nohome/dev/Library/LaunchAgents"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_listed_folder_that_now_resolves_elsewhere_is_dropped_and_said() {
+        // Review R8: listed, then swapped for a link by whatever could write where it was.
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path().canonicalize().expect("real");
+        let listed = root.join("tools");
+        let out = root.join("elsewhere");
+        std::fs::create_dir_all(&listed).expect("made");
+        std::fs::create_dir_all(&out).expect("made");
+        sandbox::local::list_grantable(&root, &listed).expect("listed");
+        assert_eq!(listed_and_pruned(&root).dropped, Vec::<String>::new());
+        std::fs::remove_dir(&listed).expect("removed");
+        std::os::unix::fs::symlink(&out, &listed).expect("linked");
+        let now = listed_and_pruned(&root);
+        assert_eq!(now.dropped, [listed.display().to_string()]);
+        assert!(now.folders.is_empty());
+    }
 
     #[test]
     fn a_block_report_is_drafted_from_the_fixed_words_alone() {

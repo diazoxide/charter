@@ -146,6 +146,7 @@ pub fn ready(root: &Path, path: &str, name: &str, after_failure: bool) -> Result
         // takes a persona's hosts past the default persona's on the record's word: it holds the
         // default's until the person allows its own (#1362, D-1362-6).
         held: None,
+        grants: Default::default(),
     };
     let base = Start {
         held: resumed_holds(root, base.persona.as_deref()),

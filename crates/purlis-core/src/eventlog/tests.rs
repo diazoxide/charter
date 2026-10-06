@@ -1585,3 +1585,58 @@ fn the_sandbox_coming_back_on_for_a_chat_is_a_trust_event_too() {
         })
     );
 }
+
+#[test]
+fn every_sandbox_grant_and_revoke_is_a_trust_event_naming_what_it_named() {
+    // #1342: a grant reaches a chat only once it is recorded, under the chat it came from.
+    use crate::sandbox::grant::{Audited, Level};
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    let mut host = recorder(dir.path());
+
+    let granted = host
+        .sandbox_grant(
+            plane,
+            Some(3),
+            &Audited {
+                granted: true,
+                what: "host",
+                target: "api.example.com",
+                level: Level::Chat,
+            },
+        )
+        .unwrap();
+    assert_eq!(granted.kind, "trust.sandbox.grant");
+    assert!(
+        granted.chat.is_some() && granted.run.is_some(),
+        "{granted:?}"
+    );
+    assert_eq!(
+        granted.body,
+        serde_json::json!({
+            "actor_kind": "human",
+            "actor": "operator",
+            "scope": "local-ui",
+            "level": "chat",
+            "what": "host",
+            "target": "api.example.com",
+        })
+    );
+
+    // Taken back in Settings, where no chat asked.
+    let revoked = host
+        .sandbox_grant(
+            plane,
+            None,
+            &Audited {
+                granted: false,
+                what: "write",
+                target: "/opt/cache",
+                level: Level::You,
+            },
+        )
+        .unwrap();
+    assert_eq!(revoked.kind, "trust.sandbox.revoke");
+    assert_eq!(revoked.chat, None);
+    assert_eq!(read(dir.path()).unwrap().last(), Some(&revoked), "written");
+}

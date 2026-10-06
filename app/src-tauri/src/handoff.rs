@@ -413,6 +413,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
             resuming: None,
             without_sandbox: None,
             held: held_grants.clone(),
+            grants: Default::default(),
         },
         root,
     )
@@ -602,6 +603,7 @@ mod tests {
                 resuming: None,
                 without_sandbox: None,
                 held: None,
+                grants: Default::default(),
             },
             root,
         )

@@ -168,8 +168,8 @@ pub fn is_a_block_word(word: &str) -> bool {
 pub fn blocks(
     payload: &serde_json::Value,
     env: &dyn Fn(&str) -> Option<String>,
-) -> Vec<purlis_core::sandboxblock::Block> {
-    use purlis_core::sandboxblock::{CHAT_DIR_ENV, Place, detect};
+) -> Vec<(purlis_core::sandboxblock::Block, Option<String>)> {
+    use purlis_core::sandboxblock::{CHAT_DIR_ENV, Place, detect_with_targets as detect};
     if !purlis_core::sandbox::chat_is_sandboxed_in(env) {
         return Vec::new();
     }
