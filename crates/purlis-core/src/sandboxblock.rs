@@ -154,6 +154,16 @@ pub enum Kind {
     Home,
     /// A temporary folder.
     Temp,
+    /// macOS's per-user temporary folder (`/var/folders/<a>/<b>/T`, what
+    /// `getconf DARWIN_USER_TEMP_DIR` answers), which some tools ask the system for in place of
+    /// `TMPDIR` (#1120): `mktemp` without a path, Foundation's `NSTemporaryDirectory`, and
+    /// `xcrun`'s cache, which only warns. No sandboxed chat may write it (D-1342-11).
+    SystemTemp,
+    /// macOS's per-user cache folder (`/var/folders/<a>/<b>/C`, `DARWIN_USER_CACHE_DIR`), where
+    /// clang and Swift keep their module cache. A wrapped chat's module cache is its own temp
+    /// directory (`sandbox::seatbelt::TEMP_ENV`); a Claude Code chat's is not yet (#1416), so
+    /// those builds fail there. No sandboxed chat may write it: it holds what other programs load.
+    SystemCache,
     /// Anywhere else on the machine.
     System,
     /// An internet host the project does not allow.
@@ -168,7 +178,7 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in the order they are listed.
-    pub const ALL: [Kind; 12] = [
+    pub const ALL: [Kind; 14] = [
         Self::ProjectFiles,
         Self::ProjectState,
         Self::ProtectedFile,
@@ -176,6 +186,8 @@ impl Kind {
         Self::ToolchainCache,
         Self::Home,
         Self::Temp,
+        Self::SystemTemp,
+        Self::SystemCache,
         Self::System,
         Self::Host,
         Self::LocalSocket,
@@ -193,6 +205,8 @@ impl Kind {
             Self::ToolchainCache => "toolchain-cache",
             Self::Home => "home",
             Self::Temp => "temp",
+            Self::SystemTemp => "system-temp",
+            Self::SystemCache => "system-cache",
             Self::System => "system",
             Self::Host => "host",
             Self::LocalSocket => "local-socket",
@@ -216,6 +230,14 @@ impl Kind {
             Self::ToolchainCache => "a toolchain's package cache",
             Self::Home => "your home folder",
             Self::Temp => "a temporary folder",
+            Self::SystemTemp => {
+                "macOS's per-user temporary folder, which mktemp and Swift programs use in place \
+                 of this chat's own. mktemp -p \"$TMPDIR\" writes in this chat's own"
+            }
+            Self::SystemCache => {
+                "macOS's per-user cache folder, where Swift and clang builds keep compiled \
+                 modules. Swift and clang builds cannot write it in a sandboxed Claude Code chat yet"
+            }
             Self::System => "a system folder",
             Self::Host => "an internet host this project does not allow",
             Self::LocalSocket => "a local socket",
@@ -306,6 +328,12 @@ fn on_stderr(text: &str, place: &Place<'_>) -> Vec<Block> {
             (0..lines.len())
                 .filter_map(|at| refused_path(&lines, at, place))
                 .filter(|(_, kind)| !matches!(kind, Kind::ChatFolder | Kind::Temp))
+                // A read there that macOS's privacy controls refuse (`du`, `find`, `ls`) says
+                // the same words: only a write is the sandbox's.
+                .filter(|(operation, kind)| {
+                    *operation == Operation::Write
+                        || !matches!(kind, Kind::SystemTemp | Kind::SystemCache)
+                })
                 .map(|(operation, kind)| Block {
                     operation,
                     kind,
@@ -396,11 +424,12 @@ fn last_quoted(field: &str) -> Option<&str> {
 fn writes(program: &str, said: &str) -> bool {
     let said = said.to_ascii_lowercase();
     [
-        "touch", "mkdir", "cp", "mv", "ln", "rm", "tee", "install", "rmdir",
+        "touch", "mkdir", "cp", "mv", "ln", "rm", "tee", "install", "rmdir", "mktemp",
     ]
     .contains(&program)
         || [
-            "lock", "creat", "writ", "renam", "remov", "delet", "copy", "mkdir",
+            "lock", "creat", "writ", "renam", "remov", "delet", "copy", "mkdir", "mkstemp",
+            "mkdtemp",
         ]
         .iter()
         .any(|stem| said.contains(stem))
@@ -536,6 +565,18 @@ pub fn kind_of(path: &Path, place: &Place<'_>) -> Kind {
         return Kind::ProjectFiles;
     }
     let temp = std::env::temp_dir();
+    // Before the temp folders: a hook whose own `TMPDIR` is the per-user folder itself would
+    // otherwise take a tool's write there for the chat's own.
+    if let Some(parts) = per_user_folder(&unprivate(&path))
+        && !(within(&temp)
+            && per_user_folder(&unprivate(&lexical(&temp))).is_some_and(|at| at.len() > 1))
+    {
+        return if parts[0] == "C" {
+            Kind::SystemCache
+        } else {
+            Kind::SystemTemp
+        };
+    }
     if [
         "/tmp",
         "/private/tmp",
@@ -577,6 +618,31 @@ pub fn kind_of(path: &Path, place: &Place<'_>) -> Kind {
         };
     }
     Kind::System
+}
+
+/// What `path` names below macOS's per-user temporary or cache folder,
+/// `/var/folders/<a>/<b>/T` or `…/C` (what `getconf DARWIN_USER_TEMP_DIR` and
+/// `DARWIN_USER_CACHE_DIR` answer), as its parts from that folder on: `["T", "tmp.x"]`. `None`
+/// anywhere else. Read from the path's shape alone, so the hook asks the system nothing.
+fn per_user_folder(path: &Path) -> Option<Vec<&std::ffi::OsStr>> {
+    let mut parts = path.components();
+    if parts.next() != Some(Component::RootDir) {
+        return None;
+    }
+    let names: Vec<&std::ffi::OsStr> = parts
+        .map(|part| match part {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    match names.as_slice() {
+        [var, folders, _, _, which, ..]
+            if *var == "var" && *folders == "folders" && (*which == "T" || *which == "C") =>
+        {
+            Some(names[4..].to_vec())
+        }
+        _ => None,
+    }
 }
 
 /// Whether `path` is, or is under, a name the sandbox protects wherever it is
@@ -692,10 +758,18 @@ pub struct Kept {
     pub block: Block,
 }
 
+/// The file's shape. Each block is read on its own, as `reopen`'s `lenient` reads a field: one
+/// that does not read as a [`Kept`], such as a kind a newer build added, is kept as it was by
+/// [`record`] and let go of by its `at` like any other, and [`counts`] passes over it.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct OnDisk {
     #[serde(default)]
-    blocks: Vec<Kept>,
+    blocks: Vec<serde_json::Value>,
+}
+
+/// When `entry` was heard, if it says.
+fn heard_at(entry: &serde_json::Value) -> Option<u64> {
+    entry["at"].as_u64()
 }
 
 /// Keeps `block`, heard at `at` (seconds since 1970), in the project at `root`, and lets go of
@@ -711,9 +785,11 @@ pub fn record(root: &Path, block: &Block, at: u64) -> std::io::Result<()> {
         let mut held: OnDisk = now
             .and_then(|text| serde_json::from_str(text).ok())
             .unwrap_or_default();
+        held.blocks.retain(|entry| {
+            heard_at(entry).is_some_and(|then| then.saturating_add(KEPT_FOR_SECS) > at)
+        });
         held.blocks
-            .retain(|kept| kept.at.saturating_add(KEPT_FOR_SECS) > at);
-        held.blocks.push(Kept { at, block: *block });
+            .push(serde_json::to_value(Kept { at, block: *block }).map_err(std::io::Error::other)?);
         let over = held.blocks.len().saturating_sub(AT_MOST_KEPT);
         held.blocks.drain(..over);
         serde_json::to_string_pretty(&held)
@@ -739,8 +815,12 @@ pub fn counts(root: &Path, now: u64) -> Vec<Count> {
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
-    let recent: Vec<&Kept> = held
+    let read: Vec<Kept> = held
         .blocks
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect();
+    let recent: Vec<&Kept> = read
         .iter()
         .filter(|kept| kept.at <= now && kept.at.saturating_add(KEPT_FOR_SECS) > now)
         .collect();

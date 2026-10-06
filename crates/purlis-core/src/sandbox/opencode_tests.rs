@@ -179,6 +179,15 @@ fn a_wrapped_chat_reaches_the_network_through_charters_proxy_and_has_its_own_tem
     assert_eq!(env.get("NO_PROXY"), Some(&""));
     assert_eq!(env.get("no_proxy"), Some(&""));
     assert_eq!(env.get("TMPDIR"), Some(&tmp.as_str()));
+    // What other tools read in place of TMPDIR, each in the chat's own temp directory (#1120).
+    assert_eq!(env.get("TMP"), Some(&tmp.as_str()));
+    assert_eq!(env.get("TEMP"), Some(&tmp.as_str()));
+    let within = |key: &str| {
+        env.get(key)
+            .is_some_and(|value| Path::new(value).parent() == Some(confinement.tmp()))
+    };
+    assert!(within("xcrun_db"), "{env:?}");
+    assert!(within("CLANG_MODULE_CACHE_PATH"), "{env:?}");
     assert!(confinement.tmp().is_dir());
     let profile = profile_of(&line);
     assert!(

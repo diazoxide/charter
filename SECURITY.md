@@ -186,8 +186,15 @@ it, and never sends that count anywhere.
 - **A directory moved into place, for Claude Code.** Claude Code's own sandbox keeps a chat
   from writing a clone's git config and hooks, but cannot keep it from moving a whole `.git`
   into place (#1065). purlis's wrap holds this for opencode and Codex.
-- **Temp directories.** A wrapped opencode or Codex chat gets a temp directory of its own. Some macOS
-  tools ignore `TMPDIR` and are refused (#1120).
+- **Temp directories.** A wrapped opencode or Codex chat gets a temp directory of its own, under
+  `TMPDIR`, `TMP` and `TEMP`, and `xcrun`'s cache and clang's module cache go there too. Some
+  macOS tools read no variable and ask the system for its per-user temp folder, which no
+  sandboxed chat may write: `mktemp` without a path and Foundation's `NSTemporaryDirectory`
+  (Swift and Objective-C programs) are refused there in every sandboxed chat, and in a Claude
+  Code chat so are `xcrun`'s cache and clang's module cache, so Swift and clang builds fail
+  there (#1416). In a Claude Code chat, such a block's notice names the folder, and for the
+  temp folder the way round it, `mktemp -p "$TMPDIR"` (#1120). Wrapped chats show no block
+  notices yet (#1353).
 - **An embedded bare repository.** A chat can write a directory that git takes for a bare
   repository, and a git run *inside* it later reads its config. No protected name is in it,
   so the sandbox cannot tell it apart. Setting git's `safe.bareRepository = explicit` closes
