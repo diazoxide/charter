@@ -284,6 +284,56 @@ fn a_recorded_path_under_either_state_spelling_is_read_under_the_state_folder_th
     }
 }
 
+/// A project holding only its state folder, `name`: what [`under_state`] reads, with no
+/// manifest written.
+fn state_folder(name: &str) -> Plane {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    fs::create_dir(root.join(name)).unwrap();
+    Plane { _tmp: tmp, root }
+}
+
+#[test]
+fn an_absolute_path_inside_the_projects_state_folder_is_read_under_the_state_folder_there_now() {
+    for folder in [".charter", ".purlis"] {
+        let p = state_folder(folder);
+        for spelling in [".charter", ".purlis"] {
+            let recorded = p.root.join(spelling).join("vaults/app.json");
+            assert_eq!(
+                under_state(&p.root, &recorded),
+                p.root.join(folder).join("vaults/app.json"),
+                "{}",
+                recorded.display()
+            );
+        }
+        // Inside the project but not its state folder, or a state folder of another project:
+        // as recorded.
+        let elsewhere = p.root.join("secrets/app.json");
+        assert_eq!(under_state(&p.root, &elsewhere), elsewhere);
+        let nested = p.root.join("sub/.charter/vaults/app.json");
+        assert_eq!(under_state(&p.root, &nested), nested);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_absolute_path_through_another_spelling_of_the_project_is_read_under_its_state_folder() {
+    // The project reached through a link (`/var` and `/private/var` on macOS): the record
+    // names the real path, the caller the linked one, or the other way round.
+    let p = state_folder(".purlis");
+    let links = tempfile::tempdir().unwrap();
+    let linked = links.path().join("plane");
+    std::os::unix::fs::symlink(&p.root, &linked).unwrap();
+    assert_eq!(
+        under_state(&linked, &p.root.join(".charter/vaults/app.json")),
+        linked.join(".purlis/vaults/app.json")
+    );
+    assert_eq!(
+        under_state(&p.root, &linked.join(".charter/vaults/app.json")),
+        p.root.join(".purlis/vaults/app.json")
+    );
+}
+
 #[test]
 fn a_path_under_the_state_folder_is_recorded_in_the_old_spelling_during_the_window() {
     for path in [

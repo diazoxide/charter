@@ -90,10 +90,22 @@ pub fn state(dir: &Path) -> PathBuf {
 /// folder the project has now (D-VP-1). A path whose first folder is any spelling of the state
 /// folder (`.charter/vaults/app.json`, `.purlis/vaults/app.json`) is that path under [`state`],
 /// so a record written before `rename-local` moved the folder still names the file it moved
-/// to, and one written after it still names the file an undo put back. Any other path — and an
-/// absolute one, which `dir.join` keeps — is `dir` joined to it, unchanged.
+/// to, and one written after it still names the file an undo put back.
+///
+/// An ABSOLUTE path inside the project's own state folder, under either spelling
+/// (`<dir>/.charter/vaults/app.json`), is read the same way: it names charter's folder in this
+/// project, wherever that folder is now (#1321). The project may be named through a link on
+/// either side (`/var` and `/private/var`), so the folder's parent is compared by its real path
+/// when the spelling differs. Any other path — relative or absolute, a nested project's state
+/// folder included — is `dir` joined to it, unchanged.
 pub fn under_state(dir: &Path, recorded: &Path) -> PathBuf {
     use std::path::Component;
+    if recorded.is_absolute() {
+        return match below_state(dir, recorded) {
+            Some(rest) => state(dir).join(rest),
+            None => recorded.to_path_buf(),
+        };
+    }
     let mut parts = recorded.components();
     let mut first = parts.next();
     while first == Some(Component::CurDir) {
@@ -103,6 +115,28 @@ pub fn under_state(dir: &Path, recorded: &Path) -> PathBuf {
         Some(Component::Normal(first)) if STATE_DIR.is(first) => state(dir).join(parts.as_path()),
         _ => dir.join(recorded),
     }
+}
+
+/// What the absolute `path` names below the state folder of the project at `dir`, under either
+/// spelling, or `None` when it is not in it. The folder's parent must BE `dir`: by spelling, or
+/// as the same real directory.
+fn below_state<'a>(dir: &Path, path: &'a Path) -> Option<&'a Path> {
+    let mut real_dir = None;
+    let mut at = PathBuf::new();
+    let mut parts = path.components();
+    while let Some(part) = parts.next() {
+        if let std::path::Component::Normal(name) = part
+            && STATE_DIR.is(name)
+            && (at == dir || {
+                let real_dir = real_dir.get_or_insert_with(|| std::fs::canonicalize(dir).ok());
+                real_dir.is_some() && std::fs::canonicalize(&at).ok() == *real_dir
+            })
+        {
+            return Some(parts.as_path());
+        }
+        at.push(part);
+    }
+    None
 }
 
 /// A path under the state folder, relative to the project, as a record WRITES it (D-VP-5): its

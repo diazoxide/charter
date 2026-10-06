@@ -286,6 +286,7 @@ pub fn set(ctx: &Ctx, vault: &Vault, key: &str, value: &str) -> Result<(), Vault
     // The same rotation record a plain-file vault keeps, so a reference file that goes missing
     // is told from one never written (D-VP-2).
     plain_file::stamp(
+        ctx,
         &plain_file::file_path(ctx, vault)?,
         key,
         chrono::Local::now().date_naive(),
@@ -302,7 +303,7 @@ pub fn delete(ctx: &Ctx, vault: &Vault, key: &str) -> Result<(), VaultError> {
         )));
     }
     save(ctx, vault, data)?;
-    plain_file::unstamp(&plain_file::file_path(ctx, vault)?, key)
+    plain_file::unstamp(ctx, &plain_file::file_path(ctx, vault)?, key)
 }
 
 /// `_save`: sorted keys, indented, ASCII-escaped, 0600 from the moment the file exists.
@@ -317,7 +318,7 @@ fn save(ctx: &Ctx, vault: &Vault, data: Map<String, Value>) -> Result<(), VaultE
     // Through the plain-file provider's writer, so the file is 0600 before a byte of it is
     // written (#356) — a write followed by a chmod left it at the umask in between.
     let text = crate::pyjson::dumps_indent2(&Value::Object(sorted));
-    plain_file::write_private_text(&p, &text)
+    plain_file::write_vault(ctx, &p, &text)
 }
 
 /// `health`: reference count and resolver availability — never resolving anything.
@@ -328,6 +329,10 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
     let Ok(p) = plain_file::file_path(ctx, vault) else {
         return (false, "no 'file' configured".into());
     };
+    // Gated before the existence test, which follows links (#1321).
+    if let Some(refused) = plain_file::linked_on_the_way(ctx, &p) {
+        return (false, refused.message);
+    }
     let note = super::loose_dir_note(&ctx.root, &plain_file::loose_dirs(ctx, vault));
     let line = |text: String| {
         let mut parts = vec![text];

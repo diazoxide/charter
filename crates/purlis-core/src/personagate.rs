@@ -539,12 +539,14 @@ fn registered_vault_files(plane: &Path) -> Option<Vec<String>> {
             .flat_map(|f| {
                 // `vault_file_path`: `Path(f).expanduser()`, then the plane under a relative one.
                 // Both the path as recorded and where it is read under the state folder the
-                // project has now (D-VP-1): the union only widens what the gate protects.
+                // project has now (D-VP-1, and #1321 for an absolute one): the union only widens
+                // what the gate protects.
                 let f = expanduser(&f);
-                if pypath::is_abs(&f) {
-                    return vec![f];
-                }
-                let as_recorded = plane.join(&f).to_string_lossy().into_owned();
+                let as_recorded = if pypath::is_abs(&f) {
+                    f.clone()
+                } else {
+                    plane.join(&f).to_string_lossy().into_owned()
+                };
                 let read = crate::names::under_state(plane, Path::new(&f))
                     .to_string_lossy()
                     .into_owned();
@@ -1166,6 +1168,28 @@ mod tests {
                 root.join(".charter/vaults/db.json")
                     .to_string_lossy()
                     .into_owned(),
+                root.join(".purlis/vaults/db.json")
+                    .to_string_lossy()
+                    .into_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_absolute_vault_file_in_the_old_state_folder_is_listed_as_recorded_and_where_it_moved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join(".purlis")).unwrap();
+        let recorded = root.join(".charter/vaults/db.json");
+        std::fs::write(
+            root.join("vaults.json"),
+            serde_json::json!({"vaults": {"db": {"config": {"file": recorded}}}}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            registered_vault_files(&root),
+            Some(vec![
+                recorded.to_string_lossy().into_owned(),
                 root.join(".purlis/vaults/db.json")
                     .to_string_lossy()
                     .into_owned(),
