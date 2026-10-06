@@ -338,12 +338,11 @@ fn occupied(path: &Path) -> bool {
 }
 
 /// The words the OS gave for `e`, without Rust's `(os error N)` — Python's `strerror`.
+///
+/// The OS's own words even for a refusal [`crate::rewrite::refused_write`] reworded: every
+/// sentence here names the path already, and the rewording would name it a second time.
 fn strerror(e: &std::io::Error) -> String {
-    let text = e.to_string();
-    match text.rfind(" (os error ") {
-        Some(at) => text[..at].to_owned(),
-        None => text,
-    }
+    crate::rewrite::os_words(e)
 }
 
 /// Whether `root`'s `charter.toml` is a link this command's containment gate refuses: one that
@@ -2826,6 +2825,15 @@ mod tests {
             strerror(&std::io::Error::other("it is not UTF-8 text")),
             "it is not UTF-8 text"
         );
+    }
+
+    #[test]
+    fn a_refusal_already_naming_its_path_is_said_without_it() {
+        // #1359: `init`'s `.gitignore` line named the path, then the rewording named it again.
+        let path = Path::new("/project/.gitignore");
+        let refused =
+            crate::rewrite::refused_write(std::io::Error::from_raw_os_error(1), path, true);
+        assert_eq!(strerror(&refused), "Operation not permitted");
     }
 
     /// `cli._plane_refusal`: a `charter.toml` from a newer charter stops `init` AND `reinit`

@@ -121,7 +121,9 @@ impl State {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = crate::contain::nofollow(&mut options).open(path)?;
+        let mut file = crate::contain::nofollow(&mut options)
+            .open(path)
+            .map_err(crate::rewrite::refused_at(path))?;
         file.flush()?;
         file.set_modified(std::time::SystemTime::now())
     }

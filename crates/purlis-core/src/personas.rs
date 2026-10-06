@@ -222,15 +222,17 @@ fn create_absent(root: &Path, dir: &Path, name: &str, body: &str) -> io::Result<
     // of the flag two lines down" is the shape that has produced five rounds of findings.
     crate::contain::writable(root, dir).map_err(refusal)?;
     crate::contain::writable(root, &dir.join(name)).map_err(refusal)?;
-    std::fs::create_dir_all(dir)?;
+    crate::rewrite::create_dir_all(dir)?;
+    let path = dir.join(name);
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(dir.join(name))
+        .open(&path)
     {
-        Ok(mut f) => std::io::Write::write_all(&mut f, body.as_bytes()),
+        Ok(mut f) => std::io::Write::write_all(&mut f, body.as_bytes())
+            .map_err(crate::rewrite::refused_at(&path)),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
-        Err(e) => Err(e),
+        Err(e) => Err(crate::rewrite::refused_at(&path)(e)),
     }
 }
 
