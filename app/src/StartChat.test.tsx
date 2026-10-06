@@ -283,6 +283,30 @@ describe("the picker a chat starts from", () => {
     expect(onStart).not.toHaveBeenCalled();
   });
 
+  it("shows a command longer than the display limit whole, and approves that line (#1014)", async () => {
+    const long = `claude --note ${"x".repeat(200)} --and-then the-last-word (kind claude)`;
+    const { onApprove, user } = show({
+      profiles: [
+        {
+          name: "work",
+          kind: "claude",
+          shown: long,
+          source: "charter.local.toml",
+          is_default: true,
+          ready_to_type: true,
+          harness: null,
+          sandbox: null,
+          approval: "new",
+        },
+      ],
+    });
+
+    expect(screen.getByRole("alert").querySelector("code")?.textContent).toBe(long);
+    await user.click(screen.getByRole("button", { name: "Approve and start" }));
+
+    expect(onApprove).toHaveBeenCalledWith("work", "steward", false, long, null, false, null);
+  });
+
   it("says a changed command is changed rather than new", () => {
     show({
       profiles: [

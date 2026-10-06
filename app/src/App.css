@@ -2776,7 +2776,10 @@ h2.sidebar-title .node-icon {
   opacity: 1;
 }
 
-.warning .honest.approve code {
+/* Wherever the approval sentence is drawn — a dialog, or the first-task tab outside one — the
+   command wraps whole rather than running off the edge: every word of it is what is approved
+   (#1014). */
+.honest.approve code {
   overflow-wrap: anywhere;
 }
 
@@ -3151,6 +3154,13 @@ h2.sidebar-title .node-icon {
   margin: 0;
   font-size: 0.8rem;
   opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+/* A profile's command in its row's detail wraps whole wherever the row is drawn, in a dialog or
+   not (#1014); `min-width: 0` lets it shrink inside the row's flex line so it can wrap. */
+.meta .where {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
