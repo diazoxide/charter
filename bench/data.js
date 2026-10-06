@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791258423683,
+  "lastUpdate": 1791260089164,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2772,6 +2772,48 @@ window.BENCHMARK_DATA = {
             "value": 105.49872099999999,
             "unit": "ms",
             "extra": "median of 5 runs: 104.850, 105.092, 105.499, 105.733, 108.273 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "43c789086c103b0c86906e435b9ae8eff7d8ed09",
+          "message": "Bump source-map-js from 1.2.1 to 1.2.2 in /app\n\nBumps [source-map-js](https://github.com/7rulnik/source-map-js) from 1.2.1 to 1.2.2.\n- [Release notes](https://github.com/7rulnik/source-map-js/releases)\n- [Changelog](https://github.com/7rulnik/source-map-js/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/7rulnik/source-map-js/compare/v1.2.1...v1.2.2)\n\n---\nupdated-dependencies:\n- dependency-name: source-map-js\n  dependency-version: 1.2.2\n  dependency-type: indirect\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-10-06T08:13:30+04:00",
+          "tree_id": "5d12ce1d84edb271a5a11a244d646635cc0d8dbb",
+          "url": "https://github.com/purlis/purlis/commit/43c789086c103b0c86906e435b9ae8eff7d8ed09"
+        },
+        "date": 1791260088192,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.290132,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.264, 0.280, 0.290, 0.297, 0.300 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.613564500000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.547, 16.600, 16.614, 16.614, 16.682 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.675401,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.334, 101.624, 101.675, 101.792, 102.265 ms"
           }
         ]
       }
