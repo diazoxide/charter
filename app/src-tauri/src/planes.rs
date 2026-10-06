@@ -554,7 +554,7 @@ impl Held {
             }
         };
         let wanted = record.chats.len();
-        let back = self.chats.put_back(&record, &self.root, size).len();
+        let back = self.chats.put_back(&record, size).len();
         if wanted > 0 {
             tracing::info!(
                 "purlis: plane {}, {back} of {wanted} chats back",
@@ -613,9 +613,7 @@ impl Held {
     }
 
     fn start_chat_again(&self, session: u32, size: Size, resuming: bool) -> Result<u32, String> {
-        let started = self
-            .chats
-            .start_again(session, &self.root, size, resuming)?;
+        let started = self.chats.start_again(session, size, resuming)?;
         let in_front = self.chats.front() == Some(session);
         // The new one has started, so it is the answer whatever the old one's end says: a
         // program that had already ended answers its close with an error, and the new chat
@@ -1730,9 +1728,11 @@ impl Planes {
             clone_seat: reopen::CloneSeat::of(&root, device.clone()),
         });
         let writes = Arc::clone(&records);
+        // The project every chat started here is of, sandbox and all (#1410).
         let mut chats = Chats::on_host(
             Box::new(move |record| writes.write(record)),
             (self.hosting)(reporting),
+            root.clone(),
         );
         chats.arming_with(self.shipped.clone());
         chats.stopped_by(Arc::clone(&self.kill_switch));
@@ -1756,7 +1756,6 @@ impl Planes {
         // program runs — an `Err` refuses a person's opt-out — and this machine's local count of
         // new chats with and without it (ruling V78 d), which `charter doctor` and Project
         // settings show.
-        chats.of_project(&root);
         {
             let events = self.events.clone();
             let project = root.clone();
@@ -3563,7 +3562,6 @@ mod tests {
                 chats: vec![an_agent_that_will_not_go_quietly()],
                 ..one_chat_on("/bin/sh")
             },
-            held.root(),
             A_PANE,
         );
 

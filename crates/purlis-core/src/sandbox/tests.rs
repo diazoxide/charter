@@ -1687,6 +1687,46 @@ fn a_person_can_start_one_chat_without_the_sandbox_and_every_class_is_lifted_for
 }
 
 #[test]
+fn a_project_whose_manifest_has_gone_never_reads_as_the_sandbox_being_off() {
+    // D-1410e: a project with no manifest at its root cannot say whether it runs chats
+    // sandboxed, so the chat is refused; a person's opt-out still starts it, audited.
+    let gone = tempfile::tempdir().unwrap();
+    for os in [Os::MacOs, Os::Linux] {
+        let refused = decide(
+            Harness::ClaudeCode,
+            gone.path(),
+            &machine(os),
+            &|_| true,
+            None,
+            None,
+        );
+        assert_eq!(refused, Err(NotStarted::PlaneMissing), "{os:?}");
+    }
+    assert!(
+        NotStarted::PlaneMissing
+            .to_string()
+            .starts_with(&format!("This project's {FILE} is missing")),
+        "{}",
+        NotStarted::PlaneMissing
+    );
+    let started = decide(
+        Harness::ClaudeCode,
+        gone.path(),
+        &machine(Os::MacOs),
+        &|_| true,
+        Some(&off(None)),
+        None,
+    );
+    assert_eq!(
+        started,
+        Ok(Some(Decided::Unsandboxed(Lifted {
+            by: By::Person,
+            reason: None,
+        })))
+    );
+}
+
+#[test]
 fn the_opt_out_is_what_lets_a_chat_start_where_the_sandbox_cannot_be_applied() {
     let plane = plane_saying(ON);
     let refused = decide(
