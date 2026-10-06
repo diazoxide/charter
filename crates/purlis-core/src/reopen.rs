@@ -140,6 +140,10 @@ pub struct Chat {
     /// Riding the record is what lets the pairing outlive a relaunch. `None` is every chat the
     /// operator opened, and every record written before this field.
     pub from: Option<HandedFrom>,
+    /// Whose persona grants it holds instead of its own, where it holds another's (#1362):
+    /// see [`HeldGrants`]. Its own home, apart from [`Self::from`], so a handoff note that does
+    /// not read never drops it, and a Resume, which has no note, can hold too.
+    pub held: Option<HeldGrants>,
     /// The workspace this chat's directory was renamed away from, where a rename left it with
     /// no conversation its harness can find (charter#367, D10).
     ///
@@ -221,6 +225,17 @@ pub struct HandedFrom {
     pub workspace: crate::active::Place,
     /// Whether it asked for a report, and whether one has been sent.
     pub report: Owed,
+}
+
+/// **The persona grants a chat holds instead of its own persona's** (#1362, D-1362-5 and
+/// D-1362-6): set where a chat was started as a persona nobody the person trusts chose — a
+/// handoff to a persona whose hosts reach past the asking chat's, or a Resume of a record whose
+/// persona reaches past the default's — until the person allows its own on its tab. `persona` is
+/// the grants it runs with meanwhile: the asking chat's as that chat ran, from the app's own
+/// record and never from a request, or the default persona's. `None` is no persona's grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldGrants {
+    pub persona: Option<String>,
 }
 
 /// What a handed-off chat owes the chat that opened it.
@@ -1194,6 +1209,11 @@ struct ChatOnDisk {
     /// always wrote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     from: Option<FromOnDisk>,
+    /// [`Chat::held`]: the persona whose grants the chat holds, `""` for none; absent where it
+    /// holds its own. **Read failing closed**: any value present that is not a persona's name
+    /// holds no persona's grants, never its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    held: Option<serde_json::Value>,
     /// The workspace a rename moved this chat away from, or absent — see
     /// [`Chat::renamed_from`]. A value that is not a workspace name reads as absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1312,6 +1332,9 @@ impl From<&Record> for OnDisk {
                     number: chat.number.unwrap_or_default(),
                     label: chat.label.clone().unwrap_or_default(),
                     from: chat.from.as_ref().map(FromOnDisk::from),
+                    held: chat.held.as_ref().map(|held| {
+                        serde_json::Value::String(held.persona.clone().unwrap_or_default())
+                    }),
                     renamed_from: chat.renamed_from.clone().unwrap_or_default(),
                     sandbox: if chat.unsandboxed {
                         SANDBOX_OFF.to_owned()
@@ -1375,6 +1398,12 @@ impl From<ChatOnDisk> for Chat {
             number: (chat.number > 0).then_some(chat.number),
             label: label(&chat.label).ok().flatten(),
             from: chat.from.and_then(FromOnDisk::sound),
+            held: chat.held.map(|value| HeldGrants {
+                persona: value
+                    .as_str()
+                    .filter(|persona| crate::personas::valid_name(persona))
+                    .map(str::to_owned),
+            }),
             renamed_from: Some(chat.renamed_from)
                 .filter(|name| crate::contain::workspace_name_ok(name)),
             unsandboxed: chat.sandbox == SANDBOX_OFF,
@@ -3216,6 +3245,44 @@ pub(crate) mod tests {
         write(plane.path(), &record).unwrap();
 
         assert_eq!(read(plane.path()).chats[0].from, Some(sent));
+    }
+
+    /// #1362, D-1362-5/6: a chat holding another persona's grants keeps holding them across a
+    /// relaunch, and the hold is read failing closed: a value that is not a persona's name holds
+    /// no persona's grants, and a handoff note that does not read never drops it.
+    #[test]
+    fn a_chat_holding_another_persona_s_grants_comes_back_holding_them() {
+        let plane = tempfile::tempdir().unwrap();
+        let holding = |persona: Option<&str>| Chat {
+            from: Some(handed()),
+            held: Some(HeldGrants {
+                persona: persona.map(str::to_owned),
+            }),
+            ..claude("3", None)
+        };
+        for persona in [Some("qa"), None] {
+            let record = Record {
+                chats: vec![holding(persona)],
+                ..Default::default()
+            };
+            write(plane.path(), &record).unwrap();
+            assert_eq!(
+                read(plane.path()).chats[0].held,
+                holding(persona).held,
+                "{persona:?}"
+            );
+        }
+        let held_none = Some(HeldGrants { persona: None });
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        for (from, to) in [
+            (r#""held": """#, r#""held": "../Not A Persona""#),
+            (r#""held": """#, r#""held": 7"#),
+            // The note around it unsound: the hold still reads.
+            (r#""name": "steward 3""#, r#""name": """#),
+        ] {
+            std::fs::write(path(plane.path()), text.replace(from, to)).unwrap();
+            assert_eq!(read(plane.path()).chats[0].held, held_none, "{to}");
+        }
     }
 
     #[test]

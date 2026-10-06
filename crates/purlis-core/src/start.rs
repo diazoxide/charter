@@ -61,6 +61,35 @@ pub struct Start {
     /// make: a relaunch, a resume, a handoff and the CLI all leave it so, which is what keeps
     /// an opt-out from being inherited by anything.
     pub without_sandbox: Option<crate::sandbox::OptOut>,
+    /// The persona grants a handed-off chat holds instead of its own until the person allows
+    /// them (#1362, D-1362-5): the app's record of the asking chat, never the request. `None`
+    /// for every other start, which holds its own persona's.
+    pub held: Option<crate::reopen::HeldGrants>,
+}
+
+/// **The persona grants the recorded chat `chat` runs with** in the project at `root`: what
+/// [`ready`] compiles its sandbox with when it starts again from its record (the start's
+/// [`Start::held`] and [`Start::persona`] are the record's). The one answer the start and a
+/// handoff from that chat both take (#1362, D-1362-5).
+pub fn runs_with(chat: &crate::reopen::Chat, root: &Path) -> Option<String> {
+    grants_persona(chat.held.as_ref(), chat.persona.as_deref(), || {
+        persona_for_a_new_chat(root)
+    })
+}
+
+/// **Whose persona grants a chat's sandbox is compiled with** (#1362): the grants a handoff
+/// left it holding ([`Start::held`]), else its own persona's, else — for a chat that names none
+/// — the persona a new chat adopts by default (`default`), which is the one its briefing
+/// takes. Fixed at the start: a persona switched mid-chat changes them at the next start.
+pub fn grants_persona(
+    held: Option<&crate::reopen::HeldGrants>,
+    persona: Option<&str>,
+    default: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    match held {
+        Some(held) => held.persona.clone(),
+        None => persona.map(str::to_owned).or_else(default),
+    }
 }
 
 /// Where a chat is told to draw charter's footer rather than a blank line.
@@ -290,6 +319,11 @@ pub fn ready_on(
             machine,
             has,
             start.without_sandbox.as_ref(),
+            // A persona's own hosts reach its chats and no other's (#1362).
+            grants_persona(start.held.as_ref(), persona.as_deref(), || {
+                persona_for_a_new_chat(root)
+            })
+            .as_deref(),
         )
         .map_err(|refused| refused.to_string())?
         {

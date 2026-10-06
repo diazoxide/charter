@@ -58,7 +58,7 @@ export function ProjectHostsNotice({
       ]}
     >
       <p>
-        The hosts every chat in this project may reach have changed in the project's settings, which
+        The hosts chats in this project may reach have changed in the project's settings, which
         everyone who opens it follows.
         {changed.added.length > 0 && <> Added: {changed.added.join(", ")}.</>}
         {changed.removed.length > 0 && <> Taken away: {changed.removed.join(", ")}.</>}

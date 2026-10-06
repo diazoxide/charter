@@ -90,6 +90,17 @@ pub struct Resumed {
     pub notes: Vec<String>,
 }
 
+/// What a chat resuming a record as `persona` holds (#1362, D-1362-6): the default persona's
+/// grants where `persona`'s hosts reach past them, else its own.
+pub fn resumed_holds(root: &Path, persona: Option<&str>) -> Option<crate::reopen::HeldGrants> {
+    let default = start::persona_for_a_new_chat(root);
+    crate::sandbox::persona::held_unless_within(
+        crate::sandbox::Plane::read(root).said().policy.as_ref(),
+        default.as_deref(),
+        persona.or(default.as_deref()),
+    )
+}
+
 /// The chat that resumes the record at the plane-relative `path` ([`sessionrecord::locate`]),
 /// named `name`, or the one sentence saying why nothing may start.
 ///
@@ -131,6 +142,14 @@ pub fn ready(root: &Path, path: &str, name: &str, after_failure: bool) -> Result
         // A resumed chat starts sandboxed, or is refused, whatever the chat it resumes ran under
         // (ADR 0067 §7): an opt-out is never inherited.
         without_sandbox: None,
+        // A record's `persona:` is written from what the chat said it was, so a Resume never
+        // takes a persona's hosts past the default persona's on the record's word: it holds the
+        // default's until the person allows its own (#1362, D-1362-6).
+        held: None,
+    };
+    let base = Start {
+        held: resumed_holds(root, base.persona.as_deref()),
+        ..base
     };
 
     let (set, _) = crate::profiles::for_launch(root);

@@ -410,6 +410,7 @@ mod tests {
             Some(crate::sandbox::Policy {
                 egress: crate::sandbox::Preset::DEFAULT.to_vec(),
                 hosts: vec![],
+                personas: Default::default(),
             })
         );
         assert!(said.refused.is_empty(), "{:?}", said.refused);

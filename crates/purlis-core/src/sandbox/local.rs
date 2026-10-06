@@ -206,6 +206,9 @@ pub struct HostsChange {
 /// amended: each teammate sees a one-time Notice naming what changed). `None` when nothing did,
 /// and in a project whose chats are not sandboxed, where its hosts reach nothing. A project
 /// first seen on this machine with hosts is a change: nothing widens unseen. Order is no change.
+///
+/// A persona's own hosts (#1362) are committed too, so they are told the same way, each named
+/// with the persona whose chats reach it ([`Plane::granted_hosts`]).
 pub fn hosts_changed(root: &Path) -> Option<HostsChange> {
     let plane = Plane::read(root);
     plane.said().policy?;
