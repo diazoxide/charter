@@ -262,11 +262,15 @@ enum Command {
 ///
 /// A config that names more than purlis follows ([`MOST_MOVES`], [`MOST_NAMED`]) is [`Unread`]:
 /// the chat is refused rather than started with what was read so far.
-pub fn scripts_named(dir: &Path, home: Option<&Path>) -> Result<Vec<Resolved>, Unread> {
+pub fn scripts_named(
+    project: &Path,
+    dir: &Path,
+    home: Option<&Path>,
+) -> Result<Vec<Resolved>, Unread> {
     let mut found = Vec::new();
     for name in COMMAND_CONFIGS {
         if let Ok(text) = std::fs::read_to_string(dir.join(name)) {
-            found.extend(scripts_in(dir, name, &text, home)?);
+            found.extend(scripts_in(project, dir, name, &text, home)?);
         }
     }
     Ok(found)
@@ -303,8 +307,10 @@ const RUNNERS: [&str; 10] = [
     "node", "deno", "bun", "tsx", "ts-node", "npx", "python", "python3", "ruby", "php",
 ];
 
-/// [`scripts_named`] for one of the [`COMMAND_CONFIGS`], `name`, in `dir`, that holds `text`.
+/// [`scripts_named`] for one of the [`COMMAND_CONFIGS`], `name`, in `dir`, that holds `text`,
+/// in the project at `project`.
 pub fn scripts_in(
+    project: &Path,
     dir: &Path,
     name: &str,
     text: &str,
@@ -322,6 +328,7 @@ pub fn scripts_in(
         commands_in(&value, false, &mut commands);
     }
     let mut scan = Scan {
+        project,
         dir,
         home,
         file: dir.join(name),
@@ -392,6 +399,8 @@ const SHELLS: [&str; 7] = ["sh", "bash", "zsh", "dash", "ksh", "mksh", "fish"];
 
 /// Where [`scripts_in`] gathers what one config names.
 struct Scan<'a> {
+    /// The project the config is in, whose folders a value may name ([`Scan::values`]).
+    project: &'a Path,
     dir: &'a Path,
     home: Option<&'a Path>,
     file: PathBuf,
@@ -440,7 +449,7 @@ impl Scan<'_> {
             }
             match one.kind {
                 MoveKind::To | MoveKind::Push => {
-                    let written = self.expanded(&one.word);
+                    let written = self.substituted(&one.word);
                     if let Some(path) = absolute(&written, &bases.now, self.home) {
                         if one.kind == MoveKind::Push {
                             bases.stack.push(bases.now.clone());
@@ -476,11 +485,27 @@ impl Scan<'_> {
         if self.unread.is_some() {
             return;
         }
-        let written = self.expanded(word);
-        let folder_word = runner && matches!(written.as_str(), "." | "..");
-        if reads_as_a_path(&written) || folder_word {
+        for written in self.values(word) {
+            self.named_as(&written, word, bases, runner);
+        }
+        let split_again = word.contains(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '|' | ';' | '&' | '<' | '>' | '(' | ')' | '"' | '\'' | '`'
+                )
+        });
+        if split_again && let Some(depth) = depth.checked_sub(1) {
+            self.line(word, bases, depth);
+        }
+    }
+
+    /// `written`, one value of `word`, named where it reads as a path.
+    fn named_as(&mut self, written: &str, word: &str, bases: &Bases, runner: bool) {
+        let folder_word = runner && matches!(written, "." | "..");
+        if reads_as_a_path(written) || folder_word {
             for base in bases.visited.clone() {
-                let Some(path) = absolute(&written, &base, self.home) else {
+                let Some(path) = absolute(written, &base, self.home) else {
                     continue;
                 };
                 // A folder that holds the config is no script: replaced, it would take the
@@ -499,16 +524,6 @@ impl Scan<'_> {
                 self.name(path, word);
                 self.name(plain, word);
             }
-        }
-        let split_again = word.contains(|c: char| {
-            c.is_whitespace()
-                || matches!(
-                    c,
-                    '|' | ';' | '&' | '<' | '>' | '(' | ')' | '"' | '\'' | '`'
-                )
-        });
-        if split_again && let Some(depth) = depth.checked_sub(1) {
-            self.line(word, bases, depth);
         }
     }
 
@@ -536,33 +551,107 @@ impl Scan<'_> {
         });
     }
 
-    /// `word` as the harness would see it: a `file://` plugin as its path, the project folder's
-    /// variable as the folder, and an option's value as that value, after `=` (`--flag=value`)
-    /// or written against a short option (`-L./lib`).
-    fn expanded(&self, word: &str) -> String {
-        let written = word
-            .trim_start_matches("file://")
+    /// `word` as the harness would see it: a `file://` plugin as its path, and the project
+    /// folder's variable as the folder.
+    fn substituted(&self, word: &str) -> String {
+        word.trim_start_matches("file://")
             .replace("${CLAUDE_PROJECT_DIR}", &self.dir_text)
-            .replace("$CLAUDE_PROJECT_DIR", &self.dir_text);
-        if let Some((flag, value)) = written.split_once('=')
+            .replace("$CLAUDE_PROJECT_DIR", &self.dir_text)
+    }
+
+    /// What `word` may hand its program as a file ([`Self::substituted`]): an option's value
+    /// after `=` (`--flag=value`) or after a JVM agent's colon, or each value it may have
+    /// written against a short option ([`attached_values`]), as a separated value would be;
+    /// any other word as it is (#1356).
+    ///
+    /// A value taken out of a word that starts with `~` is named as written too, below the
+    /// folder the command runs in: a shell expands `~` only at a word's start, and bash after
+    /// an option's `=` as well, so the program may open either (D-1356-8).
+    fn values(&self, word: &str) -> Vec<String> {
+        let written = self.substituted(word);
+        let taken: Vec<String> = if let Some(value) = COLON_OPTIONS
+            .iter()
+            .find_map(|option| written.strip_prefix(option))
+        {
+            // A JVM agent's file, and its options after `=`, which can name files.
+            value.splitn(2, '=').map(str::to_owned).collect()
+        } else if let Some((flag, value)) = written.split_once('=')
             && flag.starts_with('-')
         {
-            return value.to_owned();
+            vec![value.to_owned()]
+        } else {
+            attached_values(&written)
+                .into_iter()
+                .filter(|(value, first)| *first || !value.starts_with('/') || self.holds(value))
+                .map(|(value, _)| value)
+                .collect()
+        };
+        if taken.is_empty() {
+            return vec![written];
         }
-        let attached = written
-            .strip_prefix('-')
-            .filter(|short| !short.starts_with('-'))
-            .and_then(|short| {
-                let mut chars = short.chars();
-                chars.next()?;
-                Some(chars.as_str())
-            })
-            .filter(|value| value.contains('/'));
-        match attached {
-            Some(value) => value.to_owned(),
-            None => written,
+        let mut out = Vec::new();
+        for value in taken {
+            if value.starts_with('~') {
+                out.push(format!("./{value}"));
+            }
+            out.push(value);
         }
+        out
     }
+
+    /// Whether the absolute `path` is in the project or the home folder: where a chat could
+    /// write it.
+    fn holds(&self, path: &str) -> bool {
+        let path = lexical(Path::new(path));
+        path.starts_with(self.project) || self.home.is_some_and(|home| path.starts_with(home))
+    }
+}
+
+/// Options whose value is written after a colon: a JVM's agents (`-javaagent:<jar>[=<options>]`).
+const COLON_OPTIONS: [&str; 3] = ["-javaagent:", "-agentpath:", "-agentlib:"];
+
+/// The values a cluster of short options may have written against one of them, `-L./lib` or
+/// `-bf./x.awk`: what follows each of its leading letters, where that holds a `/`, and whether
+/// it follows the first letter.
+///
+/// **Fail closed** (#1356, D-1356-1). Which letter takes a value is the program's to say, so
+/// every split is read. A relative split that is no value names a file below the config's
+/// folder that nobody runs, and denies a chat nothing it needs. An absolute split after a
+/// later letter could name a real folder elsewhere (`-Ivendor/tmp` names `/tmp`), so
+/// [`Scan::values`] keeps one only where a chat could write it, in the project or the home
+/// folder (D-1356-7).
+fn attached_values(word: &str) -> Vec<(String, bool)> {
+    let Some(short) = word
+        .strip_prefix('-')
+        .filter(|short| !short.starts_with('-'))
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (at, letter) in short.char_indices() {
+        if !letter.is_ascii_alphanumeric() {
+            break;
+        }
+        let value = &short[at + letter.len_utf8()..];
+        if !value.contains('/') {
+            break;
+        }
+        out.push((value.to_owned(), at == 0));
+    }
+    out
+}
+
+/// Whether `word` is a cluster of short options whose leading letters hold `letter`, with or
+/// without a value written against the last of them (`-rf`, `-rf./x.jq`).
+fn short_leads_with(word: &str, letter: char) -> bool {
+    word.strip_prefix('-')
+        .filter(|short| !short.starts_with('-'))
+        .is_some_and(|short| {
+            short
+                .chars()
+                .take_while(char::is_ascii_alphabetic)
+                .any(|it| it == letter)
+        })
 }
 
 /// One command's words, sorted by what they are to a script search.
@@ -683,9 +772,9 @@ fn read_segment(segment: &[String]) -> Read {
         return read;
     }
     if INERT_TEXT.contains(&name) {
-        let from_file = rest
-            .iter()
-            .any(|word| word == "--from-file" || short_holds(word, 'f'));
+        let from_file = rest.iter().any(|word| {
+            word == "--from-file" || word.starts_with("--from-file=") || short_leads_with(word, 'f')
+        });
         let mut text_given = from_file;
         while let Some(word) = words.next() {
             match word.as_str() {
@@ -924,7 +1013,7 @@ pub fn resolved(
     let clones = clones(&dirs);
     let mut found = hooks_paths(&clones, home, xdg_config);
     for dir in &dirs {
-        found.extend(scripts_named(dir, home)?);
+        found.extend(scripts_named(root, dir, home)?);
     }
     let mut seen = std::collections::HashSet::new();
     found.retain(|it| seen.insert(it.path.clone()));
@@ -1028,7 +1117,7 @@ mod tests {
             "[mcp_servers.z]\ncommand = \"/opt/z/run\"\nargs = [\"-c\", \"scripts/z.py\"]\n",
         )
         .expect("config.toml");
-        let found: Vec<PathBuf> = scripts_named(dir.path(), None)
+        let found: Vec<PathBuf> = scripts_named(dir.path(), dir.path(), None)
             .expect("read")
             .into_iter()
             .map(|it| it.path)
@@ -1057,22 +1146,34 @@ mod tests {
         let settings = serde_json::json!({"hooks": {"PostToolUse": [{"hooks": [
             {"type": "command", "command": command}
         ]}]}});
-        let found = scripts_in(&dir, ".claude/settings.json", &settings.to_string(), None)
-            .expect("read")
-            .into_iter()
-            .map(|named| named.path)
-            .collect();
+        let found = scripts_in(
+            Path::new("/plane"),
+            &dir,
+            ".claude/settings.json",
+            &settings.to_string(),
+            None,
+        )
+        .expect("read")
+        .into_iter()
+        .map(|named| named.path)
+        .collect();
         (dir, found)
     }
 
     /// What `scripts_in` names for the `.mcp.json` server `server`, as JSON.
     fn named_by_server(server: &str) -> Vec<PathBuf> {
         let text = format!(r#"{{"mcpServers": {{"x": {server}}}}}"#);
-        scripts_in(Path::new("/plane/ws/repo"), ".mcp.json", &text, None)
-            .expect("read")
-            .into_iter()
-            .map(|named| named.path)
-            .collect()
+        scripts_in(
+            Path::new("/plane"),
+            Path::new("/plane/ws/repo"),
+            ".mcp.json",
+            &text,
+            None,
+        )
+        .expect("read")
+        .into_iter()
+        .map(|named| named.path)
+        .collect()
     }
 
     /// `found` with each path once, in order.
@@ -1209,6 +1310,7 @@ mod tests {
             [dir.join("a.sh"), dir.join("b.sh")]
         );
         let opencode = scripts_in(
+            Path::new("/plane"),
             dir,
             "opencode.json",
             r#"{"mcp": {"y": {"command": ["bash", "-c", "./scripts/oc.sh --x"]}}}"#,
@@ -1232,6 +1334,7 @@ mod tests {
     fn each_script_is_named_with_the_file_and_the_word_that_name_it() {
         let dir = Path::new("/plane/ws/repo");
         let named = scripts_in(
+            Path::new("/plane"),
             dir,
             ".mcp.json",
             r#"{"mcpServers": {"x": {"command": "node", "args": ["--inspect", "tools/my server.js"]}}}"#,
@@ -1289,8 +1392,14 @@ mod tests {
             })
             .collect();
         let settings = serde_json::json!({"hooks": {"Stop": [{"hooks": hooks}]}});
-        let found = scripts_in(dir, ".claude/settings.json", &settings.to_string(), None)
-            .expect("every hook read");
+        let found = scripts_in(
+            Path::new("/plane"),
+            dir,
+            ".claude/settings.json",
+            &settings.to_string(),
+            None,
+        )
+        .expect("every hook read");
         assert_eq!(found.len(), 100);
         assert!(found.iter().any(|it| it.path == dir.join("scripts/h99.sh")));
     }
@@ -1303,7 +1412,13 @@ mod tests {
             {"type": "command", "command": format!("{} && ./x.sh", moves.join(" && "))}
         ]}]}});
         assert_eq!(
-            scripts_in(dir, ".claude/settings.json", &settings.to_string(), None),
+            scripts_in(
+                Path::new("/plane"),
+                dir,
+                ".claude/settings.json",
+                &settings.to_string(),
+                None
+            ),
             Err(Unread {
                 file: dir.join(".claude/settings.json"),
                 word: format!("./d{MOST_MOVES}"),
@@ -1350,6 +1465,142 @@ mod tests {
         assert_eq!(found, [dir.join("jqlib")]);
         let (dir, found) = named_by_hook("awk -f./tools/sum.awk data");
         assert_eq!(found, [dir.join("tools/sum.awk")]);
+    }
+
+    /// What a hook running `command` in `/plane/ws/repo` names, for an operator whose home is
+    /// `/home/op`.
+    fn named_at_home(command: &str) -> Vec<PathBuf> {
+        let settings = serde_json::json!({"hooks": {"PostToolUse": [{"hooks": [
+            {"type": "command", "command": command}
+        ]}]}});
+        scripts_in(
+            Path::new("/plane"),
+            Path::new("/plane/ws/repo"),
+            ".claude/settings.json",
+            &settings.to_string(),
+            Some(Path::new("/home/op")),
+        )
+        .expect("read")
+        .into_iter()
+        .map(|named| named.path)
+        .collect()
+    }
+
+    #[test]
+    fn an_absolute_split_of_a_cluster_is_named_where_a_chat_could_write_it() {
+        // #1356, D-1356-7: an absolute value after any letter, in the project or the home
+        // folder, is named; one after a later letter elsewhere names no `/tmp` for `-Ivendor/tmp`.
+        for (command, want) in [
+            ("cc -I/opt/include/x.h -c a.c", "/opt/include/x.h"),
+            ("gawk -bf/plane/tools/x.awk data", "/plane/tools/x.awk"),
+            ("sed -nf/plane/ws/repo/fix.sed x", "/plane/ws/repo/fix.sed"),
+            ("jq -rf/plane/filters/x.jq ./in.json", "/plane/filters/x.jq"),
+            ("cc -xI/plane/inc/x.h a.c", "/plane/inc/x.h"),
+            ("cc -xI/home/op/inc/x.h a.c", "/home/op/inc/x.h"),
+        ] {
+            let found = named_at_home(command);
+            assert!(found.contains(&PathBuf::from(want)), "{command}: {found:?}");
+        }
+        for (command, not) in [
+            ("cc -Ivendor/tmp -c a.c", "/tmp"),
+            ("cc -Isrc/usr/local x.c", "/usr/local"),
+            ("cc -xI/opt/elsewhere x.c", "/opt/elsewhere"),
+        ] {
+            let found = named_at_home(command);
+            assert!(!found.contains(&PathBuf::from(not)), "{command}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_tilde_inside_a_word_is_named_as_written_and_as_the_home_folder() {
+        // #1356, D-1356-8: a shell expands `~` only at a word's start (and after `=` in bash),
+        // so a value taken out of a word may be either.
+        for (command, tail) in [
+            ("cc -I~/lib/x.h a.c", "lib/x.h"),
+            ("cc --include=~/lib/x.h a.c", "lib/x.h"),
+            ("java -javaagent:~/tools/a.jar -jar x", "tools/a.jar"),
+            ("awk -bf~/tools/x.awk data", "tools/x.awk"),
+        ] {
+            let found = named_at_home(command);
+            for want in [
+                PathBuf::from("/plane/ws/repo/~").join(tail),
+                PathBuf::from("/home/op").join(tail),
+            ] {
+                assert!(
+                    found.contains(&want),
+                    "{command}: {want:?} not in {found:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_java_agent_s_file_written_after_a_colon_is_named() {
+        // #1356 review: `-javaagent:<jar>[=options]`, `-agentpath:<lib>[=options]`, `-agentlib:`.
+        for (command, want) in [
+            (
+                "java -javaagent:./tools/agent.jar -jar app.jar",
+                "tools/agent.jar",
+            ),
+            (
+                "java -javaagent:./tools/agent.jar=./conf/a.yml -jar x",
+                "tools/agent.jar",
+            ),
+            (
+                "java -javaagent:./tools/agent.jar=./conf/a.yml -jar x",
+                "conf/a.yml",
+            ),
+            (
+                "java -agentpath:./lib/prof.so=depth=3 -jar x",
+                "lib/prof.so",
+            ),
+            ("java -agentlib:./lib/hprof=cpu=times -jar x", "lib/hprof"),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(found.contains(&dir.join(want)), "{command}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn an_option_s_value_attached_to_it_names_what_it_names_given_apart() {
+        // #1356: written against its option, alone or after other short options, or after `=`,
+        // a value is the operand it is when it is a word of its own.
+        for (apart, attached) in [
+            (
+                "gawk -b -f ./tools/sum.awk data",
+                "gawk -bf./tools/sum.awk data",
+            ),
+            (
+                "sed -n -f ./scripts/fix.sed x",
+                "sed -nf./scripts/fix.sed x",
+            ),
+            (
+                "jq -f ./filters/x.jq ./data/in.json",
+                "jq -f./filters/x.jq ./data/in.json",
+            ),
+            (
+                "jq -r -f ./filters/x.jq ./data/in.json",
+                "jq -rf./filters/x.jq ./data/in.json",
+            ),
+            (
+                "jq --from-file ./filters/x.jq ./data/in.json",
+                "jq --from-file=./filters/x.jq ./data/in.json",
+            ),
+            (
+                "node --require ./tools/hook.js",
+                "node --require=./tools/hook.js",
+            ),
+        ] {
+            let (_, want) = named_by_hook(apart);
+            let (_, found) = named_by_hook(attached);
+            assert!(!want.is_empty(), "{apart}");
+            for path in &want {
+                assert!(
+                    found.contains(path),
+                    "{attached}: {path:?} not in {found:?}"
+                );
+            }
+        }
     }
 
     #[test]

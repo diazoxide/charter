@@ -292,6 +292,8 @@ impl Settings {
 /// is denied by both names and a rule matches whichever name the sandbox or a tool compares
 /// (FD-27); and, where its last part is a link, that link in its folder as the kernel names
 /// it, so the link itself is held as well as its target ([`super::seatbelt::held_names`], #1336).
+/// Each of those is also denied on the other side of a macOS firmlink (`/Users` and
+/// `/System/Volumes/Data/Users`, #1356), which resolving leaves as it is spelled.
 fn names_of(denied: &[super::Denial]) -> Vec<(&super::Denial, std::path::PathBuf)> {
     let mut out = Vec::new();
     for denial in denied {
@@ -299,6 +301,15 @@ fn names_of(denied: &[super::Denial]) -> Vec<(&super::Denial, std::path::PathBuf
         for name in super::seatbelt::held_names(&denial.path) {
             if !names.contains(&name) {
                 names.push(name);
+            }
+        }
+        let twins: Vec<_> = names
+            .iter()
+            .filter_map(|it| super::firmlink_twin(it))
+            .collect();
+        for twin in twins {
+            if !names.contains(&twin) {
+                names.push(twin);
             }
         }
         out.extend(names.into_iter().map(|name| (denial, name)));
