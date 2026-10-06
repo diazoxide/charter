@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791261032105,
+  "lastUpdate": 1791266171933,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2856,6 +2856,48 @@ window.BENCHMARK_DATA = {
             "value": 103.68939750000001,
             "unit": "ms",
             "extra": "median of 5 runs: 102.990, 103.377, 103.689, 104.005, 104.262 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "2c8b8ffd786b204707d0f3b7aceace6b3b74092e",
+          "message": "chats: name the local file once in the approval test\n\nThe test that a refused Retry reads the approval again rewrote the\nprofiles' local file in one statement that both named it and read it.\nThe local-layer guard reads that shape as a reader that skips\nsettings::layer_text, and it failed train 51's rust job. The test now\nputs the path in a local first. It is test code, so nothing it decides\nchanges.\n\nTrain fold-in.\n\nRefs #1246\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T09:55:03+04:00",
+          "tree_id": "0205ada3e113972fb18f607577fc8bd251af7b90",
+          "url": "https://github.com/purlis/purlis/commit/2c8b8ffd786b204707d0f3b7aceace6b3b74092e"
+        },
+        "date": 1791266170699,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.47029850000000006,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.457, 0.459, 0.470, 0.475, 0.477 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.2398685,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.195, 16.232, 16.240, 16.259, 16.331 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.713942,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.820, 101.597, 101.714, 101.862, 102.450 ms"
           }
         ]
       }
