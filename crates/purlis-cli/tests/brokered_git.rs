@@ -161,7 +161,7 @@ fn an_app(
 ) -> (Reading, ChatToken, PathBuf, mpsc::Receiver<Ask>) {
     let socket = base.join("app").join("hooks.sock");
     let listener = Listener::bind(base, &socket).expect("a socket");
-    let token = listener.tokens().issue(3).expect("a token");
+    let token = listener.tokens().issue_to_this_process(3).expect("a token");
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     let reading = listener.each_answering(

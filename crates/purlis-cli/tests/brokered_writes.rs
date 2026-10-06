@@ -55,7 +55,7 @@ fn an_app(tmp: &tempfile::TempDir, answer: Option<Answer>) -> App {
     let (tx, asked) = mpsc::channel();
     let tx = Mutex::new(tx);
     let listener = Listener::bind(tmp.path(), &socket).unwrap_or_else(|e| panic!("a socket: {e}"));
-    let token = listener.tokens().issue(3).expect("a token");
+    let token = listener.tokens().issue_to_this_process(3).expect("a token");
     let project = root(tmp);
     let reading = listener.each_answering(
         Box::new(|_| {}),

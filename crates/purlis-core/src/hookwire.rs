@@ -2495,7 +2495,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(3).expect("a token");
+        let token = listener.tokens().issue_to_this_process(3).expect("a token");
         let slow = A_REPORT_TAKES_AT_MOST + std::time::Duration::from_secs(1);
         let _reading = listener.each_answering(
             Box::new(|_| {}),
