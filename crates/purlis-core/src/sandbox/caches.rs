@@ -242,13 +242,22 @@ fn write_beside(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     })
 }
 
+/// Where [`home_of`] puts the cache home of the project at `root` on `machine`, whether or not
+/// it is made or given: `cache-homes/<project key>` under purlis's data home. `None` where
+/// there is no data home.
+pub fn root_of(machine: &Machine, root: &Path) -> Option<PathBuf> {
+    Some(
+        super::Homes::charter_data(machine)?
+            .join("cache-homes")
+            .join(super::Homes::project_key(root)),
+    )
+}
+
 /// The cache home of the project at `root` on `machine`'s sandboxed chats: a folder named for
 /// the project as the kernel names it, under purlis's data home. `None` where there is no data
 /// home, or where the folder is not one a chat may be given ([`granted`]).
 pub fn home_of(machine: &Machine, root: &Path, denied: &Denied) -> Option<CacheHome> {
-    let base = super::Homes::charter_data(machine)?
-        .join("cache-homes")
-        .join(super::Homes::project_key(root));
+    let base = root_of(machine, root)?;
     let cargo = base.join("cargo");
     let mut home = CacheHome {
         root: base.clone(),
