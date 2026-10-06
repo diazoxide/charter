@@ -1671,26 +1671,105 @@ fn secret_on_disk(root: &Path, path: &str) -> bool {
     {
         return false;
     }
-    std::fs::read(&file).is_ok_and(|bytes| {
-        unscanned(path, &bytes).is_none()
-            && secret_in(path, &String::from_utf8_lossy(&bytes)).is_some()
+    remembered(&file, || {
+        std::fs::read(&file).is_ok_and(|bytes| {
+            unscanned(path, &bytes).is_none()
+                && secret_in(path, &String::from_utf8_lossy(&bytes)).is_some()
+        })
     })
+}
+
+/// What changes whenever a file's content does: its length, its modification time, and on
+/// Unix its inode and change time — the change time moves on every write and no caller can
+/// set it back, so a rewrite of the same length within one tick is still a change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed: (i64, i64),
+}
+
+impl Stamp {
+    fn of(file: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(file).ok()?;
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            #[cfg(unix)]
+            inode: meta.ino(),
+            #[cfg(unix)]
+            changed: (meta.ctime(), meta.ctime_nsec()),
+        })
+    }
+}
+
+/// The most files whose standing answer is remembered; past it the memory starts again.
+const REMEMBERED: usize = 4096;
+
+/// How long ago a file must have been modified for its answer to be remembered. A file's
+/// times move in ticks of the clock its filesystem keeps, and a second write within one
+/// tick of the first can leave every time as it was — git's "racily clean" — so an answer
+/// about a file that recent is never kept.
+const SETTLED: Duration = Duration::from_secs(3);
+
+/// `ask`'s answer for `file`, asked again only once the file has changed ([`Stamp`]) — the
+/// standing is read often and a changed JSON or TOML file is parsed each time it is asked
+/// (#1304). Only the standing remembers: a save asks every staged file every time. A file
+/// whose metadata cannot be read, or that changed in the last [`SETTLED`], is asked every
+/// time.
+fn remembered(file: &Path, ask: impl FnOnce() -> bool) -> bool {
+    use std::sync::{Mutex, OnceLock};
+    static ANSWERS: OnceLock<Mutex<std::collections::HashMap<PathBuf, (Stamp, bool)>>> =
+        OnceLock::new();
+    let Some(before) = Stamp::of(file) else {
+        return ask();
+    };
+    let answers = ANSWERS.get_or_init(Mutex::default);
+    let known = answers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(file)
+        .filter(|(stamp, _)| *stamp == before)
+        .map(|(_, answer)| *answer);
+    if let Some(answer) = known {
+        return answer;
+    }
+    let answer = ask();
+    // Remembered only for a file that has settled and did not change while it was read.
+    let settled = before
+        .modified
+        .and_then(|at| SystemTime::now().duration_since(at).ok())
+        .is_some_and(|age| age >= SETTLED);
+    if settled && Stamp::of(file) == Some(before) {
+        let mut answers = answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if answers.len() >= REMEMBERED {
+            answers.clear();
+        }
+        answers.insert(file.to_path_buf(), (before, answer));
+    }
+    answer
 }
 
 /// What the secret guard finds in the text of the file at `path`: its kind, and the line it
 /// starts on when the text spells it. The one question the save and the standing both ask.
 ///
-/// The text first, as it always was. Then, for a file whose name says JSON or TOML, the
-/// document as it reads, with every escape decoded ([`secretshape::parsed_kind`], #1295) —
-/// asked only when the text was clean, and with no line, since the decoded document's lines
-/// are not the file's. Text that does not parse has had its one scan, as before.
+/// The text first, as it always was. Then what it spells through its escapes
+/// ([`secretshape::decoded_kind`]): the parsed document for a file whose name says JSON or
+/// TOML (#1295), and the text with its escapes decoded for every file, parsed or not (#1304) —
+/// asked only when the text was clean, and with no line, since the decoded text's lines are
+/// not the file's. The settings editors ask the same of what is typed into them.
 fn secret_in(path: &str, text: &str) -> Option<(Option<usize>, &'static str)> {
     if let Some(found) = secretshape::found(text) {
         return Some((Some(found.line), found.kind));
     }
-    secretshape::Structured::of(path)
-        .and_then(|form| secretshape::parsed_kind(form, text))
-        .map(|kind| (None, kind))
+    secretshape::decoded_kind(secretshape::Structured::of(path), text).map(|kind| (None, kind))
 }
 
 /// How many `git show`s the secret guard runs at once. Each is a process of its own, and a

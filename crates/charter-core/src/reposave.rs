@@ -752,8 +752,9 @@ pub(crate) fn secret_name(name: &str) -> Option<&'static str> {
 /// - a file whose NAME is a credential's: `.env` and `.env.*` (not `.example`, `.sample`,
 ///   `.template`, `.dist`), an SSH private key, `*.pem`, `*.p12`, `*.pfx`, `*.key`,
 ///   `credentials.json`, and a `.npmrc` or `.pypirc` that holds a token or a password;
-/// - a private key block or a live token by its forge's own prefix in any file's staged text
-///   ([`crate::secretshape::token_kind`]).
+/// - a private key block or a live token by its forge's own prefix in any file's staged text,
+///   as written and with its escapes decoded ([`crate::secretshape::token_kind_as_read`],
+///   #1304), since a string can spell a character as an escape.
 ///
 /// Asked of the staged blob (`git show :<path>`), as the plane's guard asks it. What was found
 /// is named by path and kind, never by value.
@@ -786,7 +787,7 @@ fn secret_files(clone: &Path, staged: &[String]) -> Vec<(String, &'static str)> 
             out.push((path.clone(), "a package registry token"));
             continue;
         }
-        if let Some(kind) = crate::secretshape::token_kind(&blob.out) {
+        if let Some(kind) = crate::secretshape::token_kind_as_read(&blob.out) {
             out.push((path.clone(), kind));
         }
     }

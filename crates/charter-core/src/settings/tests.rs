@@ -1263,7 +1263,7 @@ fn with_both_names_the_purlis_file_is_read_and_written_and_the_old_one_left_alon
 #[test]
 fn a_secret_is_refused_as_the_file_reads_it_not_only_as_typed() {
     // `\u0041` is `A`, and `\u0077` is `w`: what charter reads is the secret, so it is refused
-    // the way Edit as JSON refuses a manifest's.
+    // the way Edit as JSON refuses a manifest's and the project save refuses a staged file.
     let dir = plane(COMMENTED);
     for body in [
         "[workspace]\ndefault = \"\\u0041KIAIOSFODNN7EXAMPLE\"\n",
@@ -1275,8 +1275,30 @@ fn a_secret_is_refused_as_the_file_reads_it_not_only_as_typed() {
         let err = save(dir.path(), Which::Shared, Some(COMMENTED), body).unwrap_err();
         assert!(err.iter().any(|one| one == &why[0]), "{err:?}");
     }
+    // Every spelling the project save refuses (#1304): a text that parses is refused for the
+    // secret it spells, and one that does not is refused as no TOML.
+    for shape in crate::secretshape::escaped::shapes() {
+        let body = &shape.text;
+        let err = save(dir.path(), Which::Shared, Some(COMMENTED), body).unwrap_err();
+        if body.parse::<toml::Table>().is_ok() {
+            let named = secret_refusal(Which::Shared, shape.kind);
+            assert!(err.contains(&named), "{body}: {err:?}");
+        }
+    }
     assert_eq!(
         fs::read_to_string(dir.path().join("charter.toml")).unwrap(),
         COMMENTED
     );
+}
+
+#[test]
+fn a_file_with_escapes_and_no_secret_is_not_refused_for_one() {
+    let dir = plane(COMMENTED);
+    for (_, body) in crate::secretshape::escaped::clean() {
+        let why = refusals(dir.path(), Which::Shared, &body);
+        assert!(
+            !why.iter().any(|one| one.contains("holds a secret")),
+            "{body}: {why:?}"
+        );
+    }
 }

@@ -565,59 +565,11 @@ fn a_bare_token_in_a_memory_files_prose_stops_the_save() {
 }
 
 #[test]
-fn a_secret_spelled_with_escapes_in_a_json_or_toml_file_stops_the_save() {
-    // Each shape the settings editors refuse as they read the document (#1295): JSON and TOML
-    // let a string spell any character as an escape, and what the file holds — what charter
-    // and everyone who reads it get — is the character.
-    let manifest = "workspaces/alpha/workspace.json";
-    for (path, text, kind) in [
-        (
-            manifest,
-            r#"{"name": "alpha", "description": "\u0041KIAIOSFODNN7EXAMPLE"}"#,
-            "AWS access key",
-        ),
-        (
-            manifest,
-            r#"{"name": "alpha", "description": "AKIAIOSF\u004fDNN7EXAMPLE"}"#,
-            "AWS access key",
-        ),
-        (
-            manifest,
-            r#"{"name": "alpha", "description": "\u0067hp_0123456789abcdefABCDEFghij"}"#,
-            "a token by its forge's prefix",
-        ),
-        (
-            manifest,
-            r#"{"name": "alpha", "\u0041KIAIOSFODNN7EXAMPLE": true}"#,
-            "AWS access key",
-        ),
-        (
-            "charter.toml",
-            "[workspace]\ndefault = \"\\u0041KIAIOSFODNN7EXAMPLE\"\n",
-            "AWS access key",
-        ),
-        (
-            "charter.toml",
-            "[workspace]\ndefault = \"AKIA\\U00000049OSFODNN7EXAMPLE\"\n",
-            "AWS access key",
-        ),
-        (
-            "charter.toml",
-            "[extensions.stats.settings]\n\"pass\\u0077ord\" = \"hunter2hunter2\"\n",
-            "credential assignment",
-        ),
-        // An escaped tab in front of a token (D-1295-6).
-        (
-            manifest,
-            r#"{"name": "alpha", "description": "the deploy\tghp_0123456789abcdefABCDEFghij"}"#,
-            "a token by its forge's prefix",
-        ),
-        (
-            "charter.toml",
-            "[workspace]\ndefault = \"the deploy\\tghp_0123456789abcdefABCDEFghij\"\n",
-            "a token by its forge's prefix",
-        ),
-    ] {
+fn a_secret_spelled_with_escapes_stops_the_save() {
+    // Every spelling through escapes (#1295, NO-7, #1304): what the file holds — what charter
+    // and everyone who reads it get — is the character, whether or not the file parses.
+    for shape in crate::secretshape::escaped::shapes() {
+        let (path, text) = (shape.path, &shape.text);
         let fixture = Fixture::plane();
         let (code, said) = fixture.save_with(path, text.as_bytes());
 
@@ -627,7 +579,7 @@ fn a_secret_spelled_with_escapes_in_a_json_or_toml_file_stops_the_save() {
             "{text}: {said}"
         );
         assert!(
-            said.contains(&format!("{path}  ({kind})")),
+            said.contains(&format!("{path}  ({})", shape.kind)),
             "{text}: {said}"
         );
         for value in [
@@ -680,14 +632,14 @@ fn a_json_or_toml_file_that_does_not_parse_is_still_scanned_as_text() {
 }
 
 #[test]
-fn a_json_or_toml_file_with_escapes_and_no_secret_is_saved() {
-    let fixture = Fixture::plane();
-    let (code, said) = fixture.save_with(
-        "workspaces/alpha/workspace.json",
-        br#"{"name": "\u0061lpha", "description": "caf\u00e9 \u2014 the deploy"}"#,
-    );
-    assert_eq!(code, 0, "{said}");
-    assert_eq!(fixture.head_subject(), "a save");
+fn a_file_with_escapes_and_no_secret_is_saved() {
+    for (path, text) in crate::secretshape::escaped::clean() {
+        let fixture = Fixture::plane();
+        let (code, said) = fixture.save_with(path, text.as_bytes());
+        assert_eq!(code, 0, "{text}: {said}");
+        assert_eq!(fixture.head_subject(), "a save", "{text}");
+        assert_eq!(standing(&fixture.root).blocked, None, "{text}");
+    }
 }
 
 #[test]
@@ -3822,4 +3774,56 @@ fn an_empty_message_is_no_message_and_the_save_says_what_changed_itself() {
         fixture.head_subject(),
         "charter save: 1 file (steward memory 1)"
     );
+}
+
+#[test]
+fn the_standing_reads_an_unchanged_file_once_and_a_changed_one_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("workspace.json");
+    let asked = std::cell::Cell::new(0);
+    let ask = |answer: bool| {
+        asked.set(asked.get() + 1);
+        answer
+    };
+    let write = |text: &str, age: u64| {
+        std::fs::write(&file, text).unwrap();
+        let at = SystemTime::now() - Duration::from_secs(age);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    };
+    write("{}", 60);
+    assert!(!remembered(&file, || ask(false)));
+    assert!(
+        !remembered(&file, || ask(true)),
+        "an unchanged file is not read again"
+    );
+    assert_eq!(asked.get(), 1);
+
+    write("{\"a\": 1}", 61);
+    assert!(
+        remembered(&file, || ask(true)),
+        "a changed file is read again"
+    );
+    assert_eq!(asked.get(), 2);
+
+    // The same length, written again.
+    write("{\"b\": 1}", 62);
+    assert!(!remembered(&file, || ask(false)));
+    assert_eq!(asked.get(), 3);
+
+    // Modified a moment ago: its times may not have moved yet, so it is asked every time.
+    std::fs::write(&file, "{\"c\": 1}").unwrap();
+    assert!(remembered(&file, || ask(true)));
+    assert!(remembered(&file, || ask(true)));
+    assert_eq!(asked.get(), 5);
+
+    // A file whose metadata cannot be read is asked every time.
+    let gone = dir.path().join("gone.json");
+    assert!(remembered(&gone, || ask(true)));
+    assert!(remembered(&gone, || ask(true)));
+    assert_eq!(asked.get(), 7);
 }

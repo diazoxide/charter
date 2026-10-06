@@ -314,22 +314,14 @@ fn writer_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
             out.push(check.reason);
         }
     }
-    if let Some(kind) = secret_in_toml(text) {
+    // As typed, and as charter reads it (#1304): the one answer the project save gives a
+    // staged charter.toml, so the editor and the save refuse the same files.
+    if let Some(kind) =
+        crate::secretshape::kind_as_read(Some(crate::secretshape::Structured::Toml), text)
+    {
         out.push(secret_refusal(which, kind));
     }
     out
-}
-
-/// **The kind of secret a TOML text holds**, as typed or as charter reads it: the text itself
-/// (a comment included), then the table it parses to, written out again. A string can spell a
-/// character as an escape, and what charter reads — and what anyone reading the file gets — is
-/// the character, so the check is made on that too. Edit as JSON asks the same of a manifest
-/// (`workspace::save_text`).
-fn secret_in_toml(text: &str) -> Option<&'static str> {
-    crate::secretshape::secret_kind(text).or_else(|| {
-        let table = text.parse::<toml::Table>().ok()?;
-        crate::secretshape::secret_kind(&toml::to_string(&table).ok()?)
-    })
 }
 
 /// The reasons the set refused a table or a profile in `file`, and the doctor's findings about

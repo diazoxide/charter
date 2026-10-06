@@ -617,6 +617,43 @@ fn a_secret_shaped_file_is_refused_by_name_and_its_value_never_said() {
 }
 
 #[test]
+fn a_credential_spelled_with_escapes_is_refused_as_the_file_reads() {
+    // Every bare-credential spelling of #1295, NO-7 and #1304: a string can spell a character
+    // as an escape, and what the file holds is the character, parsed or not.
+    for shape in crate::secretshape::escaped::shapes()
+        .into_iter()
+        .filter(|shape| shape.token)
+    {
+        let (path, kind) = (shape.path, shape.kind);
+        let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+        f.write(path, &shape.text);
+        let head = f.head();
+
+        let (code, said) = f.save();
+
+        assert_eq!(code, 1, "{}: {said}", shape.text);
+        assert!(said.contains(&format!("{path} ({kind})")), "{path}: {said}");
+        for secret in ["KIAIOSFODNN7EXAMPLE", "0123456789abcdef"] {
+            assert!(!said.contains(secret), "{path} said its value: {said}");
+        }
+        assert_eq!(f.head(), head, "{path} was committed");
+    }
+}
+
+#[test]
+fn a_file_with_escapes_and_no_credential_is_saved() {
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    for (path, text) in crate::secretshape::escaped::clean() {
+        f.write(path, &text);
+    }
+
+    let (code, said) = f.save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(f.journal()[0]["outcome"], "committed");
+}
+
+#[test]
 fn ordinary_code_and_the_files_that_only_look_like_secrets_are_saved() {
     let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
     f.write(

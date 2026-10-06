@@ -10,6 +10,12 @@
 //! **Only added lines.** A value already in the history, or one this commit removes, is not
 //! something this commit publishes. A file git calls binary has no lines and is not read.
 //!
+//! **Each line as written, and as it reads** (#1304): a string can spell a character as an
+//! escape (`\u0041` is `A`), so each added line is also asked with its escapes decoded
+//! ([`crate::secretshape::escaped_leaks`]) — no parse, so a file of any name and one that
+//! would not parse are read alike. What is found that way is masked, fingerprinted and
+//! allowlisted by the value it spells, so an entry names a value however it is spelled.
+//!
 //! **What is shown is masked** ([`crate::secretshape::masked`]): the kind, where it is, and a
 //! short head of the value. Never the value.
 //!
@@ -323,13 +329,24 @@ fn in_diff(diff: &str) -> Result<Vec<Finding>, String> {
             let Some(path) = &path else {
                 return Err("git showed added lines with no file named for them".to_owned());
             };
-            found.extend(secretshape::leaks(added).into_iter().map(|leak| Finding {
+            // As written, then what the line spells through its escapes (#1304), each where
+            // it sits on the line and named by the value it spells.
+            let mut on_line: Vec<(secretshape::Leak, String)> = secretshape::leaks(added)
+                .into_iter()
+                .map(|leak| {
+                    let value = added[leak.span.clone()].to_owned();
+                    (leak, value)
+                })
+                .chain(secretshape::escaped_leaks(added))
+                .collect();
+            on_line.sort_by_key(|(leak, _)| leak.span.start);
+            found.extend(on_line.into_iter().map(|(leak, value)| Finding {
                 path: path.clone(),
                 line: at,
                 rule: leak.rule,
                 kind: leak.kind,
-                masked: secretshape::masked(&added[leak.span.clone()]),
-                fingerprint: scanallow::fingerprint(&added[leak.span]),
+                masked: secretshape::masked(&value),
+                fingerprint: scanallow::fingerprint(&value),
             }));
             at += 1;
         } else if in_hunk && line.starts_with(' ') {
@@ -954,5 +971,113 @@ mod tests {
 
         assert!(scan.refused.is_empty(), "{scan:?}");
         assert_eq!(scan.allowed.len(), 1);
+    }
+
+    /// The value an escaped shape spells: the AWS key or the forge token it carries.
+    fn spelled(kind: &str) -> String {
+        if kind == "AWS access key" {
+            ["AKIA", "IOSFODNN7EXAMPLE"].concat()
+        } else {
+            crate::secretshape::escaped::token()
+        }
+    }
+
+    #[test]
+    fn a_credential_spelled_with_escapes_on_an_added_line_is_found_by_the_value_it_spells() {
+        // Every bare-credential spelling of #1295, NO-7 and #1304, one added line at a time:
+        // the escapes decoded with no parse, in a file of any name, parsed or not.
+        for shape in crate::secretshape::escaped::shapes()
+            .into_iter()
+            .filter(|shape| shape.token)
+        {
+            let (_dir, repo) = repo();
+            let file = repo.join(shape.path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, &shape.text).unwrap();
+            testgit::run(&repo, &["add", "."]);
+
+            let found = staged(&repo).unwrap();
+            let value = spelled(shape.kind);
+            assert_eq!(found.len(), 1, "{}: {found:?}", shape.text);
+            let one = &found[0];
+            assert_eq!(
+                (one.path.as_str(), one.kind),
+                (shape.path, shape.kind),
+                "{}",
+                shape.text
+            );
+            assert_eq!(
+                one.fingerprint,
+                scanallow::fingerprint(&value),
+                "{}",
+                shape.text
+            );
+            assert_eq!(one.masked, secretshape::masked(&value), "{}", shape.text);
+            let line = shape.text.lines().nth(one.line - 1).unwrap();
+            assert!(line.contains('\\'), "{}: line {}", shape.text, one.line);
+            let said = refusal(Stopped::Commit, &found);
+            assert!(!said.contains(&value[4..]), "{said}");
+        }
+    }
+
+    #[test]
+    fn a_push_of_a_credential_spelled_with_escapes_is_refused() {
+        let (_dir, repo) = repo();
+        std::fs::write(repo.join("README.md"), "one\n").unwrap();
+        let published = commit_all(&repo, "one");
+        let tail = &crate::secretshape::escaped::token()[1..];
+        std::fs::write(
+            repo.join("events.jsonl"),
+            format!("{{\"n\": \"\\u0067{tail}\"}}\n"),
+        )
+        .unwrap();
+        let tip = commit_all(&repo, "new");
+
+        let url = "https://forge.invalid/o/r.git";
+        let scan = pushed(&repo, url, url, &update(&tip, &published)).unwrap();
+
+        assert_eq!(
+            scan.refused
+                .iter()
+                .map(|f| (f.path.as_str(), f.rule))
+                .collect::<Vec<_>>(),
+            [("events.jsonl", "forge-token")]
+        );
+    }
+
+    #[test]
+    fn an_entry_naming_a_value_lets_it_through_however_it_is_spelled() {
+        let (_dir, repo) = repo();
+        let value = crate::secretshape::escaped::token();
+        allowlist_at_head(
+            &repo,
+            &format!(
+                "[[allow]]\nfingerprint = \"{}\"\nreason = \"a revoked fixture\"\n",
+                scanallow::fingerprint(&value)
+            ),
+        );
+        std::fs::write(
+            repo.join("fixture.json"),
+            format!("{{\"t\": \"\\u0067{}\"}}\n", &value[1..]),
+        )
+        .unwrap();
+        testgit::run(&repo, &["add", "fixture.json"]);
+
+        let scan = checked(&repo).unwrap();
+
+        assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+        assert_eq!(scan.allowed.len(), 1);
+    }
+
+    #[test]
+    fn a_file_with_escapes_and_no_credential_finds_nothing() {
+        for (path, text) in crate::secretshape::escaped::clean() {
+            let (_dir, repo) = repo();
+            let file = repo.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, &text).unwrap();
+            testgit::run(&repo, &["add", "."]);
+            assert_eq!(staged(&repo).unwrap(), Vec::new(), "{text}");
+        }
     }
 }

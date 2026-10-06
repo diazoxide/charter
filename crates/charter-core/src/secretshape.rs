@@ -439,9 +439,9 @@ impl Structured {
 /// and string value on its own. `None` for a document with no secret, and for text that does
 /// not parse as `form`, whose bytes are all a scan of the text has to go on.
 ///
-/// A project save asks it of each staged file of that form (#1295). The settings editors ask
-/// the whole-document half of it of what is typed into them, so a document the editors refuse
-/// is one the save refuses; the save refuses a little more, until the editors ask this too.
+/// Asked through [`decoded_kind`], by the project save of each staged file of that form (#1295)
+/// and by the settings editors of what is typed into them (#1304), so the two refuse the same
+/// documents.
 pub fn parsed_kind(form: Structured, text: &str) -> Option<&'static str> {
     let mut strings = Vec::new();
     match form {
@@ -494,6 +494,149 @@ fn toml_strings<'a>(table: &'a toml::Table, out: &mut Vec<&'a str>) {
         out.push(key);
         value(item, out);
     }
+}
+
+/// [`secret_kind`] of `text` as written, then as it reads ([`decoded_kind`]). What the settings
+/// editors refuse a typed document for, and — with the line [`found`] gives as written — what
+/// a project save refuses a staged file for, so the two can never disagree (#1304).
+pub fn kind_as_read(form: Option<Structured>, text: &str) -> Option<&'static str> {
+    secret_kind(text).or_else(|| decoded_kind(form, text))
+}
+
+/// [`secret_kind`] of what `text` spells through its escapes, for a caller that has asked the
+/// text as written already: the parsed document when `form` names one and the text parses
+/// ([`parsed_kind`]), then the text with every escape decoded and no parse ([`unescaped`]).
+///
+/// The parse reads a quoted key as the bare key it is, so a key and its value still form an
+/// assignment; the lexical pass reads what the parse refuses or drops — comments, a trailing
+/// comma, JSON5, JSON lines, a key given twice — and a file of any name (#1304).
+pub fn decoded_kind(form: Option<Structured>, text: &str) -> Option<&'static str> {
+    form.and_then(|form| parsed_kind(form, text))
+        .or_else(|| unescaped(text).and_then(|read| secret_kind(&read)))
+}
+
+/// [`token_kind`] of `text` as written, then with every escape decoded ([`unescaped`]). What a
+/// workspace repo's save refuses a staged file for.
+pub fn token_kind_as_read(text: &str) -> Option<&'static str> {
+    token_kind(text).or_else(|| unescaped(text).and_then(|read| token_kind(&read)))
+}
+
+/// `text` with every string escape decoded to the character it spells, read lexically — no
+/// parse, so it reads what a parser refuses, and one added line as well as a whole file. `None`
+/// when `text` holds no escape, so a caller asks nothing twice.
+///
+/// The escapes of JSON and TOML (`\uXXXX` with surrogate pairs, `\UXXXXXXXX`, `\xHH`, `\n`,
+/// `\t`, `\r`, `\b`, `\f`, `\e`, `\"`, `\/`, `\\`) and the `\u{…}` of JavaScript and Rust. An
+/// escaped backslash is one backslash, so `\\u0041` reads as the six characters it shows. A
+/// sequence that spells no character stays as written; a lone surrogate reads as U+FFFD.
+pub fn unescaped(text: &str) -> Option<String> {
+    decode(text, None)
+}
+
+/// [`unescaped`], with where each byte of the result came from: `map[i]` is the offset in
+/// `text` of the escape (or character) that byte `i` was read from, and one more entry,
+/// `text.len()`, closes the last.
+fn decode(text: &str, mut map: Option<&mut Vec<usize>>) -> Option<String> {
+    if !text.contains('\\') {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut changed = false;
+    let mut at = 0;
+    while at < text.len() {
+        let (ch, len) = match escape_at(&text[at..]) {
+            Some(read) => {
+                changed = true;
+                read
+            }
+            None => {
+                let ch = text[at..].chars().next().expect("at is on a char boundary");
+                (ch, ch.len_utf8())
+            }
+        };
+        if let Some(map) = map.as_deref_mut() {
+            map.extend(std::iter::repeat_n(at, ch.len_utf8()));
+        }
+        out.push(ch);
+        at += len;
+    }
+    if let Some(map) = map {
+        map.push(text.len());
+    }
+    changed.then_some(out)
+}
+
+/// The character the escape at the start of `s` spells, and how many bytes it takes; `None`
+/// when `s` does not start with one.
+fn escape_at(s: &str) -> Option<(char, usize)> {
+    let rest = s.strip_prefix('\\')?;
+    let hex = |digits: &str| -> Option<u32> {
+        (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| u32::from_str_radix(digits, 16).ok())
+            .flatten()
+    };
+    let fixed = |n: usize| rest.get(1..=n).and_then(hex);
+    match rest.as_bytes().first()? {
+        b'n' => Some(('\n', 2)),
+        b't' => Some(('\t', 2)),
+        b'r' => Some(('\r', 2)),
+        b'b' => Some(('\u{8}', 2)),
+        b'f' => Some(('\u{c}', 2)),
+        b'e' => Some(('\u{1b}', 2)),
+        b'"' => Some(('"', 2)),
+        b'/' => Some(('/', 2)),
+        b'\\' => Some(('\\', 2)),
+        b'x' => Some((char::from_u32(fixed(2)?)?, 4)),
+        b'U' => Some((char::from_u32(fixed(8)?)?, 10)),
+        b'u' if rest[1..].starts_with('{') => {
+            let close = rest[2..].find('}').filter(|n| (1..=6).contains(n))?;
+            Some((char::from_u32(hex(&rest[2..2 + close])?)?, 4 + close))
+        }
+        b'u' => {
+            let unit = fixed(4)?;
+            if !(0xD800..0xE000).contains(&unit) {
+                return Some((char::from_u32(unit)?, 6));
+            }
+            let low = rest
+                .get(5..11)
+                .and_then(|next| next.strip_prefix("\\u"))
+                .and_then(hex)
+                .filter(|low| (0xDC00..0xE000).contains(low));
+            match low {
+                Some(low) if unit < 0xDC00 => Some((
+                    char::from_u32(0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00))?,
+                    12,
+                )),
+                _ => Some(('\u{FFFD}', 6)),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// What [`leaks`] finds on `line` only once its escapes are decoded ([`unescaped`]): each with
+/// the span of `line` it was read from — escapes and all, for a caller that names where it is —
+/// and the value it spells, which is what a caller masks and fingerprints, so an allowlist
+/// entry names a value however it is spelled. A hit whose rule and value the line as written
+/// already shows is that one, and is left to it; one that differs in any character is its
+/// own, so a value read as written never answers for a longer one its escapes spell.
+pub fn escaped_leaks(line: &str) -> Vec<(Leak, String)> {
+    let mut map = Vec::new();
+    let Some(read) = decode(line, Some(&mut map)) else {
+        return Vec::new();
+    };
+    let written = leaks(line);
+    leaks(&read)
+        .into_iter()
+        .filter_map(|leak| {
+            let value = read[leak.span.clone()].to_owned();
+            let shown = written
+                .iter()
+                .any(|w| w.rule == leak.rule && line[w.span.clone()] == value);
+            let span = map[leak.span.start]..map[leak.span.end];
+            (!shown).then_some((Leak { span, ..leak }, value))
+        })
+        .collect()
 }
 
 /// A credential [`found`] in a text: its kind, and the 1-based line it starts on. Never the
@@ -1549,5 +1692,277 @@ mod parsed_tests {
         ] {
             assert_eq!(Structured::of(path), form, "{path}");
         }
+    }
+}
+
+/// Every spelling of a credential through escapes that a guard must read through (#1295, NO-7,
+/// #1304), shared by each guard's tests so every guard is asked the same list.
+#[cfg(test)]
+pub(crate) mod escaped {
+    /// One spelling: the file it sits in, its text, the kind the project save and the settings
+    /// editors name, and whether it is a bare credential that the token-only guards (the commit
+    /// and push scan, the repo save) find too, rather than an assignment only the wider rule
+    /// reads.
+    pub(crate) struct Shape {
+        pub path: &'static str,
+        pub text: String,
+        pub kind: &'static str,
+        pub token: bool,
+    }
+
+    const AWS: &str = "AWS access key";
+    const FORGE: &str = "a token by its forge's prefix";
+    const ASSIGNED: &str = "credential assignment";
+
+    /// The forge token every shape that needs one carries, unescaped.
+    pub(crate) fn token() -> String {
+        ["ghp", "_0123456789abcdefABCDEFghij"].concat()
+    }
+
+    pub(crate) fn shapes() -> Vec<Shape> {
+        let token = token();
+        let tail = &token[1..];
+        let one = |path, text: String, kind, token| Shape {
+            path,
+            text,
+            kind,
+            token,
+        };
+        let manifest = "workspaces/alpha/workspace.json";
+        vec![
+            // #1295 and NO-7: a character written as an escape, JSON.
+            one(
+                manifest,
+                r#"{"name": "alpha", "description": "\u0041KIAIOSFODNN7EXAMPLE"}"#.into(),
+                AWS,
+                true,
+            ),
+            one(
+                manifest,
+                r#"{"name": "alpha", "description": "AKIAIOSF\u004fDNN7EXAMPLE"}"#.into(),
+                AWS,
+                true,
+            ),
+            one(
+                manifest,
+                format!(r#"{{"name": "alpha", "description": "\u0067{tail}"}}"#),
+                FORGE,
+                true,
+            ),
+            one(
+                manifest,
+                r#"{"name": "alpha", "\u0041KIAIOSFODNN7EXAMPLE": true}"#.into(),
+                AWS,
+                true,
+            ),
+            // ... and TOML, `\U` and a quoted key included.
+            one(
+                "charter.toml",
+                "[workspace]\ndefault = \"\\u0041KIAIOSFODNN7EXAMPLE\"\n".into(),
+                AWS,
+                true,
+            ),
+            one(
+                "charter.toml",
+                "[workspace]\ndefault = \"AKIA\\U00000049OSFODNN7EXAMPLE\"\n".into(),
+                AWS,
+                true,
+            ),
+            one(
+                "charter.toml",
+                "[extensions.stats.settings]\n\"pass\\u0077ord\" = \"hunter2hunter2\"\n".into(),
+                ASSIGNED,
+                false,
+            ),
+            // D-1295-6: an escaped control character in front of a credential.
+            one(
+                manifest,
+                format!(r#"{{"name": "alpha", "description": "the deploy\t{token}"}}"#),
+                FORGE,
+                true,
+            ),
+            one(
+                manifest,
+                format!(r#"{{"name": "alpha", "description": "the deploy\n{token}"}}"#),
+                FORGE,
+                true,
+            ),
+            one(
+                manifest,
+                r#"{"name": "alpha", "description": "the deploy\npassword: hunter2hunter2"}"#
+                    .into(),
+                ASSIGNED,
+                false,
+            ),
+            one(
+                "charter.toml",
+                format!("[workspace]\nnotes = [\"one\", \"the deploy\\t{token}\"]\n"),
+                FORGE,
+                true,
+            ),
+            // #1304: what the parse drops — a JSON key given twice keeps only its last value.
+            one(
+                manifest,
+                format!(r#"{{"name": "alpha", "note": "\u0067{tail}", "note": "x"}}"#),
+                FORGE,
+                true,
+            ),
+            // ... and what does not parse at all: a TOML key given twice, JSON with comments
+            // and a trailing comma, JSON5, JSON lines, a TOML file with no extension.
+            one(
+                "charter.toml",
+                "[workspace]\ndefault = \"\\u0041KIAIOSFODNN7EXAMPLE\"\ndefault = 1\n".into(),
+                AWS,
+                true,
+            ),
+            one(
+                ".vscode/settings.json",
+                format!("// the deploy\n{{\n  \"note\": \"\\u0067{tail}\",\n}}\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "config/app.json5",
+                format!("{{note: '\\u0067{tail}'}}\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "workspaces/alpha/events.jsonl",
+                "{\"a\": 1}\n{\"note\": \"\\u0041KIAIOSFODNN7EXAMPLE\"}\n".into(),
+                AWS,
+                true,
+            ),
+            one(
+                "deploy/settings",
+                "[deploy]\nkey = \"AKIA\\U00000049OSFODNN7EXAMPLE\"\n".into(),
+                AWS,
+                true,
+            ),
+            // The other escapes a string can spell a character with: TOML 1.1's `\x`, and the
+            // `\u{…}` of JavaScript and Rust.
+            one(
+                "deploy.toml",
+                format!("[deploy]\nnote = \"\\x67{tail}\"\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "scripts/deploy.js",
+                format!("const note = \"\\u{{67}}{tail}\";\n"),
+                FORGE,
+                true,
+            ),
+        ]
+    }
+
+    /// Files with escapes and no credential, which every guard lets through: a decoded
+    /// character, an escaped backslash in front of what would otherwise read as an escape, a
+    /// Windows path, and an escaped newline in prose.
+    pub(crate) fn clean() -> Vec<(&'static str, String)> {
+        vec![
+            (
+                "workspaces/alpha/workspace.json",
+                r#"{"name": "\u0061lpha", "description": "caf\u00e9 \u2014 the deploy\nruns nightly", "path": "C:\\Users\\ada\\new", "how": "a key starts \\u0041KIA"}"#
+                    .into(),
+            ),
+            (
+                "charter.toml",
+                "[workspace]\ndefault = \"caf\\u00e9\"\nnote = \"one\\ttwo\\nthree\"\n".into(),
+            ),
+            (
+                "src/main.rs",
+                "fn main() {\n    println!(\"caf\\u{e9}\\n\\t\\\\done\");\n}\n".into(),
+            ),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod escaped_tests {
+    use super::*;
+
+    #[test]
+    fn every_escaped_spelling_is_a_secret_as_the_text_reads() {
+        for shape in escaped::shapes() {
+            assert_eq!(
+                found(&shape.text),
+                None,
+                "{}: the raw scan already saw it",
+                shape.text
+            );
+            let form = Structured::of(shape.path);
+            assert_eq!(
+                kind_as_read(form, &shape.text),
+                Some(shape.kind),
+                "{}",
+                shape.text
+            );
+            assert_eq!(
+                decoded_kind(form, &shape.text),
+                Some(shape.kind),
+                "{}",
+                shape.text
+            );
+            if shape.token {
+                assert_eq!(
+                    token_kind_as_read(&shape.text),
+                    Some(shape.kind),
+                    "{}",
+                    shape.text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_file_with_escapes_and_no_secret_is_clean_as_it_reads() {
+        for (path, text) in escaped::clean() {
+            let form = Structured::of(path);
+            assert_eq!(kind_as_read(form, &text), None, "{text}");
+            assert_eq!(token_kind_as_read(&text), None, "{text}");
+            for line in text.lines() {
+                assert_eq!(escaped_leaks(line), Vec::new(), "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_escape_decodes_to_the_character_it_spells() {
+        for (text, read) in [
+            (r"\u0041", "A"),
+            (r"\U00000041", "A"),
+            (r"\x41", "A"),
+            (r"\u{41}", "A"),
+            (r"\ud83d\ude00", "\u{1F600}"),
+            (r"\ud83d!", "\u{FFFD}!"),
+            (r#"\n\t\r\b\f\e\"\/\\"#, "\n\t\r\u{8}\u{c}\u{1b}\"/\\"),
+            (r"\\u0041", r"\u0041"),
+            (r"\q \u00zz \U0011FFFF", r"\q \u00zz \U0011FFFF"),
+        ] {
+            assert_eq!(unescaped(text).as_deref().unwrap_or(text), read, "{text}");
+        }
+        assert_eq!(unescaped("no escape here"), None);
+    }
+
+    #[test]
+    fn an_escaped_leak_on_a_line_is_where_its_escapes_are_and_names_the_value_it_spells() {
+        let token = escaped::token();
+        let line = format!(r#"  "note": "\u0067{}","#, &token[1..]);
+        let found = escaped_leaks(&line);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let (leak, value) = &found[0];
+        assert_eq!(leak.rule, "forge-token");
+        assert_eq!(&line[leak.span.clone()], format!(r"\u0067{}", &token[1..]));
+        assert_eq!(value, &token);
+        // What the raw line already shows is not found a second time.
+        let plain = format!(r#""note": "{token}", "x": "caf\u00e9""#);
+        assert_eq!(leaks(&plain).len(), 1);
+        assert_eq!(escaped_leaks(&plain), Vec::new());
+        // A value its escapes make longer is its own, though the shorter one overlaps it.
+        let longer = format!(r#""note": "{token}\u0041BC""#);
+        let found = escaped_leaks(&longer);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].1, format!("{token}ABC"));
     }
 }
