@@ -525,6 +525,34 @@ pub struct Invocation {
     /// file flag, the target of an input redirection, and — where the option grammar ran out —
     /// the whole rest of the segment.
     pub reads: Vec<String>,
+    /// Where each wrapper the shell runs on the way to [`Self::prog`] starts in [`Self::taken`],
+    /// outermost first, at most [`MAX_LAYERS`]: [`Self::layer`] rebuilds its argv. Read by a
+    /// guard whose rule may name the wrapper itself (#1286).
+    pub layers: Vec<usize>,
+    /// Every token taken off the front on the way to the program, in order.
+    pub taken: Vec<String>,
+    /// More wrappers than [`MAX_LAYERS`] stand in front of the program.
+    pub too_deep: bool,
+}
+
+impl Invocation {
+    /// The program of wrapper layer `k`, as written.
+    pub fn layer_program(&self, k: usize) -> Option<&str> {
+        self.taken.get(*self.layers.get(k)?).map(String::as_str)
+    }
+
+    /// The argv wrapper layer `k` was handed: `sudo -u x timeout 5 cat f` has the layers
+    /// `sudo -u x timeout 5 cat f` and `timeout 5 cat f`.
+    pub fn layer(&self, k: usize) -> Vec<String> {
+        let Some(&at) = self.layers.get(k) else {
+            return Vec::new();
+        };
+        self.taken[at..]
+            .iter()
+            .chain(self.argv.iter())
+            .cloned()
+            .collect()
+    }
 }
 
 /// `(program, env-assignment prefixes, argv)` — [`split_env_chdir`] without the directory or the
@@ -557,23 +585,27 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
     // command from either side, so the whole segment is the scan.
     let mut reads: Vec<String> = redirect_reads(toks);
     let mut toks: VecDeque<String> = toks.iter().cloned().collect();
+    let mut layers: Vec<usize> = Vec::new();
+    let mut taken: Vec<String> = Vec::new();
+    let mut too_deep = false;
 
     while let Some(front) = toks.front().cloned() {
         if redirect_re().is_match(&front) {
             // A redirection in FRONT of the command — `< <vault> cat`, `2>/dev/null env …`.
             // Neither it nor its target is the program; the target is already in `reads`.
-            toks.pop_front();
-            toks.pop_front();
+            take(&mut toks, &mut taken);
+            take(&mut toks, &mut taken);
             continue;
         }
         if is_env_assignment(&front) {
-            env.push(toks.pop_front().expect("the front was just read"));
+            env.push(take(&mut toks, &mut taken).expect("the front was just read"));
             continue;
         }
         let base = base_lower(&front);
         if crate::cliname::is_installed(&base)
             && let Some(verb) = secret_exec_verb(&toks)
         {
+            record_layer(&mut layers, &mut too_deep, taken.len());
             // `charter secret exec <vault> … -- <command>` RUNS `<command>`, with a vault's
             // credential in its environment: it is a wrapper exactly as `env` is, and
             // `charter secret exec devops -- cat .charter/vaults/devops.json` is a `cat` of the
@@ -582,11 +614,11 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
             // reported as files it may open — the same fail-safe as an unplaced wrapper flag.
             match toks.iter().skip(verb).position(|t| t == "--") {
                 Some(at) => {
-                    toks.drain(..verb + at + 1);
+                    taken.extend(toks.drain(..verb + at + 1));
                     // `secret exec` drops one more leading `--` from the command it runs, so
                     // `… -- -- cat <vault>` runs `cat`; the guard has to see the same program.
                     if toks.front().is_some_and(|t| t == "--") {
-                        toks.pop_front();
+                        take(&mut toks, &mut taken);
                     }
                     continue;
                 }
@@ -599,18 +631,21 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
         if !SHELL_KEYWORDS.contains(&front.as_str()) && !WRAPPERS.contains(&base.as_str()) {
             break;
         }
-        toks.pop_front();
+        if WRAPPERS.contains(&base.as_str()) {
+            record_layer(&mut layers, &mut too_deep, taken.len());
+        }
+        take(&mut toks, &mut taken);
         let mut leading = table(&WRAPPER_LEADING_OPERANDS, base.as_str()).unwrap_or(0);
         while let Some(nxt) = toks.front().cloned() {
             if nxt.starts_with('-') && nxt.chars().count() > 1 {
-                toks.pop_front();
+                take(&mut toks, &mut taken);
                 // ONE reading of the flag, giving both its NAME and its VALUE: the name decides
                 // whether the next token is the program, the value is where a chdir flag
                 // relocates to. Two readings is how the value came to be lost.
                 let opt = wrapper_option(&base, &nxt);
                 let mut value = opt.value;
                 if opt.wants_next
-                    && let Some(v) = toks.pop_front()
+                    && let Some(v) = take(&mut toks, &mut taken)
                 {
                     value = v;
                     if nxt != opt.name {
@@ -661,16 +696,16 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
             }
             if WRAPPER_ASSIGN_OPERANDS.contains(&base.as_str()) && nxt.contains('=') {
                 // THIS wrapper's rule for what an assignment is, not the shell's.
-                env.push(toks.pop_front().expect("the front was just read"));
+                env.push(take(&mut toks, &mut taken).expect("the front was just read"));
                 continue;
             }
             if leading > 0 {
                 leading -= 1;
-                toks.pop_front(); // the wrapper's own operand, not the program
+                take(&mut toks, &mut taken); // the wrapper's own operand, not the program
                 continue;
             }
             if base == "timeout" && duration_re().is_match(&nxt) {
-                toks.pop_front(); // the duration, not the program
+                take(&mut toks, &mut taken); // the duration, not the program
                 continue;
             }
             break;
@@ -683,6 +718,29 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
         argv,
         chdir,
         reads,
+        layers,
+        taken,
+        too_deep,
+    }
+}
+
+/// The front token, kept in `taken` too: what [`Invocation::layer`] rebuilds a wrapper's argv
+/// from, so a layer costs an index rather than a copy of the rest of the segment (#1286).
+fn take(toks: &mut VecDeque<String>, taken: &mut Vec<String>) -> Option<String> {
+    let front = toks.pop_front()?;
+    taken.push(front.clone());
+    Some(front)
+}
+
+/// The most wrapper layers one segment is read through; past it [`Invocation::too_deep`].
+pub const MAX_LAYERS: usize = 64;
+
+/// Record a wrapper layer starting at `at` in the taken tokens, or mark the segment too deep.
+fn record_layer(layers: &mut Vec<usize>, too_deep: &mut bool, at: usize) {
+    if layers.len() < MAX_LAYERS {
+        layers.push(at);
+    } else {
+        *too_deep = true;
     }
 }
 

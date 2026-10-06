@@ -1847,6 +1847,26 @@ mod tests {
         }
     }
 
+    /// …but in a `"$( … )"` alone, a body that holds a `)` and no `"`, backtick or `$(` stays
+    /// inside the double quotes for GNU bash 3.2.57 too, so it is data to every shell: a commit
+    /// message that says `1) …` is not read as commands (#1286). Measured with a `touch` marker
+    /// against /bin/bash 3.2.57 and zsh 5.9.
+    #[test]
+    fn a_message_with_a_paren_in_a_quoted_substitutions_heredoc_is_data() {
+        let message = |body: &str| {
+            format!("git commit -m \"$(cat <<'EOF'\n{body}\ncat .charter/vaults/x.json\nEOF\n)\"")
+        };
+        for body in ["1) Build first", "(see #12)", "- a) first"] {
+            let cmd = message(body);
+            assert_eq!(reason(&cmd), None, "{cmd:?}");
+            let rows = lines_a_command_could_run(&cmd);
+            assert!(rows.iter().all(|(l, _)| l != body), "{cmd:?}: {rows:?}");
+        }
+        // A `"` after the `)` ends the double quotes for GNU bash 3.2.57, and it runs the read.
+        let cmd = message("1) \"");
+        assert!(reason(&cmd).is_some(), "{cmd:?}");
+    }
+
     /// zsh's `=(…)` runs its command and hands the program a file holding the output, so a read
     /// inside one is a read (zsh 5.9).
     #[test]
