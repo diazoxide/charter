@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791248476716,
+  "lastUpdate": 1791250220163,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2604,6 +2604,48 @@ window.BENCHMARK_DATA = {
             "value": 101.33099899999999,
             "unit": "ms",
             "extra": "median of 5 runs: 101.140, 101.308, 101.331, 101.781, 102.187 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "aded4442c0473c7f79f87548a16feb0a34098d6f",
+          "message": "train 7: RN-9's identity test sets the plugin field rename-local has since RN-8\n\nRN-8 (train 6) added a `plugin` field to rename-local's `Local`, and RN-9's new\ntest was written before it. The test now sets it to `None`, as the other\nrename-local tests do. Local clippy caught it.\n\nRefs #1267\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T05:28:46+04:00",
+          "tree_id": "6aa113e5fb984709c6160f2a193baf670fb142a5",
+          "url": "https://github.com/purlis/purlis/commit/aded4442c0473c7f79f87548a16feb0a34098d6f"
+        },
+        "date": 1791250219570,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.533472,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.520, 0.526, 0.533, 0.534, 0.535 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.8076875,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.341, 16.525, 16.808, 16.888, 17.299 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.72969,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.026, 102.263, 102.730, 103.283, 104.473 ms"
           }
         ]
       }
