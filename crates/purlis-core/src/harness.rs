@@ -1211,6 +1211,101 @@ mod tests {
         );
     }
 
+    /// The line a sandboxed Claude Code chat in `plane` opens with, its hooks reporting on
+    /// `socket`, armed with `armed` (what its arming gave, where `None`).
+    fn sandboxed_claude_line(
+        socket: Option<&std::path::Path>,
+        armed: Option<Vec<String>>,
+    ) -> (tempfile::TempDir, Result<crate::sandbox::Line, String>) {
+        let (plane, applied) = testing::sandbox_compiled_for(Harness::ClaudeCode);
+        let applied = applied.expect("starts");
+        let StateHooks::ThisSessionOnly { args, .. } = Harness::ClaudeCode.state_hooks(
+            kit("/bin/charter"),
+            Some(plane.path()),
+            &BTreeMap::new(),
+            Some(&applied),
+        ) else {
+            panic!("armed per session");
+        };
+        let cwd = plane.path().join("w");
+        std::fs::create_dir_all(&cwd).expect("a workspace");
+        let line = applied.line(
+            crate::sandbox::Words {
+                program: "claude".to_owned(),
+                command: Vec::new(),
+                armed: armed.unwrap_or(args),
+                charters: Vec::new(),
+            },
+            &crate::sandbox::At {
+                cwd: Some(&cwd),
+                hook_socket: socket,
+                confinement: None,
+            },
+        );
+        (plane, line)
+    }
+
+    #[test]
+    fn a_sandboxed_claude_code_chat_reaches_its_hook_socket_and_no_other() {
+        // ADR 0067 §2 (#1328): a `purlis` command the chat runs asks the app over the socket
+        // its hooks report on, so the chat's sandbox allows that one path and nothing more.
+        let sockets = tempfile::tempdir().expect("a directory");
+        let socket = sockets.path().join("hooks.sock");
+        let (_plane, line) = sandboxed_claude_line(Some(&socket), None);
+        let line = line.expect("starts");
+        let settings: serde_json::Value =
+            serde_json::from_str(settings_of(&line.args)).expect("JSON");
+        let network = settings["sandbox"]["network"]
+            .as_object()
+            .expect("a network object");
+        assert_eq!(
+            network["allowUnixSockets"],
+            serde_json::json!([crate::sandbox::real(&socket).display().to_string()])
+        );
+        assert_eq!(network["allowAllUnixSockets"], false, "{network:?}");
+        // The socket's folder is denied to the Edit tool, after the compiled rules.
+        let folder = crate::sandbox::real(sockets.path()).display().to_string();
+        let deny = settings["permissions"]["deny"]
+            .as_array()
+            .expect("deny rules");
+        assert_eq!(
+            deny[deny.len() - 2..],
+            [
+                serde_json::json!(format!("Edit(/{folder})")),
+                serde_json::json!(format!("Edit(/{folder}/**)")),
+            ]
+        );
+
+        // Without a socket to report on, it reaches none.
+        let (_plane, line) = sandboxed_claude_line(None, None);
+        let line = line.expect("starts");
+        let settings: serde_json::Value =
+            serde_json::from_str(settings_of(&line.args)).expect("JSON");
+        assert!(
+            settings["sandbox"]["network"]
+                .get("allowUnixSockets")
+                .is_none(),
+            "{settings}"
+        );
+    }
+
+    #[test]
+    fn a_claude_code_chat_whose_settings_lost_its_sandbox_is_not_handed_the_socket() {
+        // Fail closed: the socket is added only to the sandbox this adapter compiled, so a
+        // line whose `--settings` is missing or carries another sandbox does not start.
+        let sockets = tempfile::tempdir().expect("a directory");
+        let socket = sockets.path().join("hooks.sock");
+        for armed in [
+            Vec::new(),
+            words(["--settings", "not json"]),
+            words(["--settings", r#"{"sandbox":{"enabled":false}}"#]),
+        ] {
+            let (_plane, line) = sandboxed_claude_line(Some(&socket), Some(armed.clone()));
+            let why = line.expect_err("refused");
+            assert!(why.contains("nothing was started"), "{armed:?}: {why}");
+        }
+    }
+
     #[test]
     fn an_unsandboxed_claude_code_chat_carries_no_sandbox_key_at_all() {
         // Absent, not `enabled: false`: the operator's own settings decide, as before.

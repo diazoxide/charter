@@ -119,23 +119,82 @@ impl HarnessAdapter for ClaudeCode {
     }
 
     /// The line as it is: Claude Code's sandbox rides in the `--settings` charter hands it (in
-    /// `armed`), which a project's settings cannot loosen (ADR 0067 §2). Its own flags are
-    /// not asked about yet.
+    /// `armed`), which a project's settings cannot loosen (ADR 0067 §2), and there it is
+    /// allowed the chat's hook socket, which only the place the chat opens knows (`at`).
+    /// Its own flags are not asked about yet.
     fn sandboxed_line(
         &self,
         form: &Form,
         words: crate::sandbox::Words,
-        _at: &crate::sandbox::At<'_>,
+        at: &crate::sandbox::At<'_>,
     ) -> Result<crate::sandbox::Line, String> {
         match form {
-            Form::ClaudeCode(_) => Ok(crate::sandbox::Line {
+            Form::ClaudeCode(compiled) => Ok(crate::sandbox::Line {
                 program: words.program,
-                args: [words.command, words.armed, words.charters].concat(),
+                args: [
+                    words.command,
+                    reporting_on(words.armed, compiled, at.hook_socket)?,
+                    words.charters,
+                ]
+                .concat(),
                 env: Vec::new(),
             }),
             _ => Err(super::adapter::not_compiled_for(Harness::ClaudeCode)),
         }
     }
+}
+
+/// `armed` with the sandbox and deny rules in its `--settings` allowed to reach `socket`
+/// ([`crate::sandbox::claude::Settings::reporting_on`]), or as it is without one.
+///
+/// **Fail closed.** A `--settings` that is missing, is not JSON, or does not carry `compiled`
+/// as [`ClaudeCode::arm_under`] wrote it refuses the chat: the socket is never added to a
+/// sandbox this adapter did not compile.
+fn reporting_on(
+    mut armed: Vec<String>,
+    compiled: &crate::sandbox::claude::Settings,
+    socket: Option<&std::path::Path>,
+) -> Result<Vec<String>, String> {
+    if socket.is_none() {
+        return Ok(armed);
+    }
+    let not_carried = || {
+        "this Claude Code chat's settings do not carry the sandbox compiled for it, so nothing \
+         was started"
+            .to_owned()
+    };
+    let at = armed
+        .iter()
+        .position(|word| word == "--settings")
+        .map(|flag| flag + 1)
+        .filter(|&at| at < armed.len())
+        .ok_or_else(not_carried)?;
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&armed[at]).map_err(|_| not_carried())?;
+    if settings.get("sandbox") != Some(&compiled.sandbox) {
+        return Err(not_carried());
+    }
+    // The compiled deny rules lead the list; the operator's rule twins may follow them.
+    let deny = settings
+        .pointer_mut("/permissions/deny")
+        .and_then(serde_json::Value::as_array_mut)
+        .filter(|deny| {
+            deny.len() >= compiled.deny.len()
+                && deny
+                    .iter()
+                    .zip(&compiled.deny)
+                    .all(|(had, rule)| had == rule)
+        })
+        .ok_or_else(not_carried)?;
+    let reporting = compiled.reporting_on(socket);
+    deny.extend(
+        reporting.deny[compiled.deny.len()..]
+            .iter()
+            .map(|rule| serde_json::json!(rule)),
+    );
+    settings["sandbox"] = reporting.sandbox;
+    armed[at] = settings.to_string();
+    Ok(armed)
 }
 
 /// The settings a Claude Code chat is started with, as JSON on the argument.
