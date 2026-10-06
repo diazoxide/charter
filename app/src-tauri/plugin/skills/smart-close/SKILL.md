@@ -37,12 +37,11 @@ each lasting decision, term or goal change is in its section, or there was none.
 
 ## 3. Write the record
 
-Title it in one line. Pass the pieces this session worked in that you are not standing in, as
-`--piece <repo>/<piece>`; purlis reads their branches from git. The body is exactly these five
-sections, in this order, each with at least one line:
+Title it in one line. Name the pieces this session worked in that you are not standing in, as
+`<repo>/<piece>`; purlis reads their branches from git. The body is exactly these five sections,
+in this order, each with at least one line:
 
-```bash
-purlis session record --title "<one-line title>" <<'RECORD'
+```markdown
 ## Goal
 
 <what this session set out to do>
@@ -62,9 +61,19 @@ purlis session record --title "<one-line title>" <<'RECORD'
 ## How to resume
 
 <the first step for the next chat>
+```
+
+Call purlis's `session_record` tool with `title`, `body` and, where there are any, `pieces`.
+purlis writes the record for this chat, so it works from a sandboxed chat and from a clone. A
+harness without purlis's tools runs the command instead, with the same title and body:
+
+```bash
+purlis session record --title "<one-line title>" --piece <repo>/<piece> <<'RECORD'
+<the five sections>
 RECORD
 ```
 
-A refusal says what to fix: fix it and run the command again. Done when it prints the record's
-path. Then stop: the app closes this tab. When the command says the tab will not close by
-itself, tell the operator the record is written and the tab is theirs to close.
+A refusal says what to fix: fix it and write the record again. Done when the answer names the
+record's path. Then stop: when the operator started this close, the app closes this tab once this
+turn ends. When the answer says the tab will not close by itself, tell the operator the record is
+written and the tab is theirs to close.

@@ -434,6 +434,16 @@ impl Held {
         {
             self.tell_smart_close(session, crate::smartclose::Phase::Cancelled);
         }
+        // **And an Enter into a chat that waits for the person is the person submitting a
+        // prompt**, which is what a typed `/smart-close` is believed beside (#1332). Marked
+        // before the bytes are sent, so it is there before the hook the prompt fires can be.
+        if bytes.contains(&b'\r') && crate::smartclose::typed_by_the_operator(bytes) {
+            let glance = self.board().glance(session);
+            if glance.state == purlis_core::state::State::Waiting && !glance.asking {
+                self.closing
+                    .person_submitted(session, std::time::Instant::now());
+            }
+        }
         self.chats.sessions().input(session, bytes)
     }
 
@@ -1027,7 +1037,9 @@ impl Planes {
             })
         });
         // A curation chat's prompt is typed when its harness reports its start (ADR 0061), and
-        // the socket's thread is where that report arrives. Weak for the handoff's reason.
+        // the socket's thread is where that report arrives. A person's typed `/smart-close` is
+        // heard here too: only a report the board took, so a harness nested in the chat never
+        // issues its chat a pass (#1332). Weak for the handoff's reason.
         held.hooks.when_heard({
             let held = Arc::downgrade(&held);
             Arc::new(move |report| {
@@ -1035,6 +1047,7 @@ impl Planes {
                 if strong.typed.heard(report) {
                     crate::curation::type_when_it_reads_keys(&strong, report.chat);
                 }
+                crate::smartclose::heard(&strong, report);
             })
         });
         // A smart close queued for its chat's turn to end is sent then, and one whose record is
@@ -1784,12 +1797,18 @@ impl Planes {
                     // A chat that ended on its own while it wrapped up wrote no record, and the
                     // window says so (ADR 0064). One closed by Close or by its record was let go
                     // of before its program was ended, so it says nothing here.
-                    if closing.forget(session) {
+                    // One whose record the app had already written under its pass ended the
+                    // way it was asked to, and is told as closed on that record (#1332).
+                    if let Some(record) = closing.ended(session) {
                         smart(crate::smartclose::SmartClosing {
                             plane: plane.clone(),
                             session,
-                            phase: crate::smartclose::Phase::Ended,
-                            record: None,
+                            phase: if record.is_some() {
+                                crate::smartclose::Phase::Closed
+                            } else {
+                                crate::smartclose::Phase::Ended
+                            },
+                            record,
                         });
                     }
                     let changed = hooks::held_board(&board).exited(session, hooks::code_of(&exit));
@@ -5665,6 +5684,230 @@ mod tests {
         a_record_saved_by(&held, session);
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert!(is_open(&held, session), "a late record closed the chat");
+        held.close_chat(session).unwrap();
+    }
+
+    /// What a chat's harness reports when the person's prompt was `/smart-close` (#1332), or
+    /// a prompt of any other words.
+    fn a_prompt_from(held: &Held, session: u32, smart_close: bool) {
+        let turns = held.hooks().board().turns(session);
+        purlis_core::hookwire::send(
+            held.hooks().socket().expect("the plane is listening"),
+            Some(&held.hooks().token_for(session)),
+            &purlis_core::hookwire::Report {
+                chat: session,
+                event: purlis_core::state::Event::UserPromptSubmit,
+                conversation: purlis_core::hookwire::Conversation::Unknown,
+                pid: None,
+                agent: None,
+                detail: purlis_core::state::Detail {
+                    smart_close,
+                    ..purlis_core::state::Detail::default()
+                },
+            },
+        )
+        .expect("the hook reaches the plane");
+        assert!(
+            becomes(|| held.hooks().board().turns(session) > turns),
+            "the board never took the prompt"
+        );
+    }
+
+    /// What `purlis session record` and the MCP server's `session_record` hand the app for
+    /// chat `session` (#1332): `as_chat`'s token on the line, `session` named in it.
+    fn a_record_asked(held: &Held, as_chat: u32, session: u32) -> purlis_core::hookwire::Answer {
+        let mut asking = purlis_core::hookwire::Asking::on(
+            held.hooks().socket().expect("the plane is listening"),
+            Some(held.hooks().token_for(as_chat)),
+        )
+        .expect("the socket");
+        asking
+            .ask(
+                &purlis_core::hookwire::Ask::SessionRecord(Box::new(
+                    purlis_core::hookwire::RecordAsk {
+                        chat: session,
+                        title: format!("Record of {session}"),
+                        body: "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\n\
+                               o\n\n## How to resume\n\nr\n"
+                            .to_owned(),
+                        pieces: Vec::new(),
+                        cwd: None,
+                    },
+                )),
+                std::time::Duration::from_secs(10),
+            )
+            .unwrap_or_else(|e| purlis_core::hookwire::Answer::No { why: e.to_string() })
+    }
+
+    fn closes(answer: &purlis_core::hookwire::Answer) -> bool {
+        match answer {
+            purlis_core::hookwire::Answer::Recorded { closes, .. } => *closes,
+            other => panic!("no record was written: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_typed_smart_close_is_a_pass_and_the_record_the_app_writes_closes_the_tab_at_the_turn_s_end()
+     {
+        use purlis_core::state::Event::Stop;
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "typed-close-stand-in");
+        has_had_two_turns(&held, session);
+
+        held.operator_input(session, b"/smart-close\r")
+            .expect("sent");
+        a_prompt_from(&held, session, true);
+
+        assert!(
+            becomes(|| held.closing().holds_pass(session)),
+            "the person's /smart-close issued no pass"
+        );
+        let answer = a_record_asked(&held, session, session);
+        assert!(closes(&answer), "{answer:?}");
+        assert_eq!(
+            purlis_core::sessionrecord::list(&root, &purlis_core::active::Place::PlaneRoot).len(),
+            1,
+            "the app did not write the record"
+        );
+        // The chat's own call has its answer before anything closes under it.
+        assert!(is_open(&held, session), "closed mid-turn");
+
+        reported(&held, session, &[Stop]);
+
+        assert!(becomes(|| !is_open(&held, session)), "the tab stayed open");
+        assert_eq!(
+            phases(&told, session),
+            [
+                crate::smartclose::Phase::Sent,
+                crate::smartclose::Phase::Closed
+            ]
+        );
+        assert!(
+            !held.closing().holds_pass(session),
+            "the pass outlived its close"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_smart_close_the_chat_starts_itself_gets_no_pass_and_its_record_closes_nothing() {
+        use purlis_core::state::Event::Stop;
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "self-close-stand-in");
+        has_had_two_turns(&held, session);
+
+        // A `/smart-close` report with no Enter of the person's behind it: something inside
+        // the chat holding its token, which is all a chat can do.
+        a_prompt_from(&held, session, true);
+        // And the person's Enter behind a prompt that was not one.
+        reported(&held, session, &[Stop]);
+        held.operator_input(session, b"go on\r").expect("sent");
+        a_prompt_from(&held, session, false);
+        reported(&held, session, &[Stop]);
+        // An Enter is spent on the prompt it submitted, never a later one.
+        a_prompt_from(&held, session, true);
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            !held.closing().holds_pass(session),
+            "a chat issued itself a pass"
+        );
+        let answer = a_record_asked(&held, session, session);
+        assert!(!closes(&answer), "{answer:?}");
+        reported(&held, session, &[Stop]);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            is_open(&held, session),
+            "a record with no pass closed the tab"
+        );
+        assert!(phases(&told, session).is_empty());
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pass_is_one_chat_s_and_is_spent_by_its_close() {
+        use purlis_core::state::Event::Stop;
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (closing, _) = a_smart_closable_chat(&held, dir.path(), "passed-stand-in");
+        let (other, _) = a_smart_closable_chat(&held, dir.path(), "unpassed-stand-in");
+        has_had_two_turns(&held, closing);
+        has_had_two_turns(&held, other);
+        crate::smartclose::begin(&held, closing).expect("smart close begins");
+
+        // Another chat's record is its own, and the pass is not: it closes nothing.
+        assert!(!closes(&a_record_asked(&held, other, other)));
+        // Nor can a chat ask for another's record: its token is not that chat's.
+        assert!(matches!(
+            a_record_asked(&held, other, closing),
+            purlis_core::hookwire::Answer::No { .. }
+        ));
+        reported(
+            &held,
+            other,
+            &[purlis_core::state::Event::UserPromptSubmit, Stop],
+        );
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(is_open(&held, other), "another chat's pass closed this one");
+
+        assert!(closes(&a_record_asked(&held, closing, closing)));
+        reported(&held, closing, &[Stop]);
+        assert!(becomes(|| !is_open(&held, closing)), "the tab stayed open");
+
+        // Spent: a chat that has closed has no record to ask for, under any pass.
+        assert!(matches!(
+            a_record_asked(&held, other, closing),
+            purlis_core::hookwire::Answer::No { .. }
+        ));
+        assert!(!held.closing().holds_pass(closing));
+        assert!(is_open(&held, other));
+        held.close_chat(other).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_written_mid_turn_before_a_queued_smart_close_s_prompt_closes_nothing() {
+        use purlis_core::state::Event::{Stop, UserPromptSubmit};
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, typed) = a_smart_closable_chat(&held, dir.path(), "queued-record-stand-in");
+        has_had_two_turns(&held, session);
+        reported(&held, session, &[UserPromptSubmit]);
+        let phase = crate::smartclose::begin(&held, session).expect("smart close begins");
+        assert_eq!(phase, crate::smartclose::Phase::Queued);
+
+        // The chat's own record, in the turn the smart close is queued behind.
+        assert!(!closes(&a_record_asked(&held, session, session)));
+        reported(&held, session, &[Stop]);
+
+        // The queued prompt still goes, and the tab is still open for its record.
+        assert!(
+            becomes(|| std::fs::read_to_string(&typed).is_ok_and(|t| t == SENT_AS)),
+            "the queued prompt was not sent"
+        );
+        assert!(
+            is_open(&held, session),
+            "a record from before the prompt closed the tab"
+        );
+        assert_eq!(
+            phases(&told, session),
+            [
+                crate::smartclose::Phase::Queued,
+                crate::smartclose::Phase::Sent
+            ]
+        );
         held.close_chat(session).unwrap();
     }
 

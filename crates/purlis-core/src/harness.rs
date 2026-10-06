@@ -941,6 +941,10 @@ mod tests {
         assert!(args.iter().all(|arg| !arg.contains("plugins")), "{args:?}");
     }
 
+    /// The one write tool a Claude Code chat runs without asking: `session_record`, the record
+    /// command's twin (#1332), beside the read-only tools of `chattools::PRE_ALLOWED`.
+    const THE_RECORD_TOOLS_ALLOW: usize = 1;
+
     #[test]
     fn a_claude_code_chat_may_run_charter_session_record_and_read_charter_without_asking() {
         // SI-8e, the operator's ruling: a Smart close never stops on a permission prompt for
@@ -957,6 +961,7 @@ mod tests {
             settings["permissions"],
             serde_json::json!({"allow": [
                 "Bash(purlis session record *)",
+                "mcp__purlis__session_record",
                 "mcp__purlis__todo_list",
                 "mcp__purlis__memory_search",
                 "mcp__purlis__session_record_list",
@@ -977,12 +982,14 @@ mod tests {
             .as_array()
             .expect("a list")
             .clone();
+        // And `session_record`, the record command's twin (#1332), which ends a Smart close.
         let reads = [
             "todo_list",
             "memory_search",
             "session_record_list",
             "session_record_read",
             "change_status",
+            "session_record",
         ];
         let others: Vec<&str> = crate::chattools::TOOLS
             .iter()
@@ -1052,7 +1059,7 @@ mod tests {
                     .as_str()
                     .is_some_and(|r| r.starts_with("mcp__purlis__")))
                 .count(),
-            crate::chattools::PRE_ALLOWED.len(),
+            crate::chattools::PRE_ALLOWED.len() + THE_RECORD_TOOLS_ALLOW,
             "no allow is twinned: {allowed:?}"
         );
     }
@@ -1198,6 +1205,7 @@ mod tests {
             settings["permissions"]["allow"],
             serde_json::json!([
                 "Bash(purlis session record *)",
+                "mcp__purlis__session_record",
                 "mcp__purlis__todo_list",
                 "mcp__purlis__memory_search",
                 "mcp__purlis__session_record_list",

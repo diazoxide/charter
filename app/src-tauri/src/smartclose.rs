@@ -28,13 +28,28 @@
 //!
 //! The window learns each step over [`EVENT`]; the app holds the truth, so a window that reloads
 //! still has its tab closed when the record lands.
+//!
+//! **The smart-close pass** (#1332). A smart close under way IS the chat's pass: the app holds
+//! one per chat, and only a person's act issues it, the tab's Smart close ([`begin`]) or the
+//! person typing `/smart-close` into a waiting chat ([`typed`]). It is bound to that chat and
+//! that close, and it ends with the close: when the tab closes, when the operator cancels, when
+//! no record comes in time, or when the chat's program ends. A chat cannot issue one to itself:
+//! a `UserPromptSubmit` that says `/smart-close` is believed only beside the person's own Enter
+//! in that chat's pane moments before ([`Closing::person_submitted`]), which nothing inside the
+//! chat can press.
+//!
+//! **The record is a brokered write** (ADR 0067 §2): `purlis session record` and the MCP
+//! server's `session_record` hand it to the app over the chat's hook socket, and the app
+//! writes it ([`record`]) whether or not the chat holds a pass. Under a pass, the tab closes
+//! when that turn ends: never while the chat's own call is still waiting for the answer.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use purlis_core::hookwire::{Report, SessionSaved};
+use purlis_core::active::Place;
+use purlis_core::hookwire::{Answer, Report, SessionSaved};
 use purlis_core::reopen::Reopened;
 use purlis_core::state::State;
 
@@ -199,22 +214,35 @@ fn only_the_mouse(bytes: &[u8]) -> bool {
 #[derive(Debug)]
 pub struct Closing {
     chats: Mutex<HashMap<u32, Entry>>,
+    /// The chats whose pane the person pressed Enter in while the chat waited for them, and
+    /// when: what a typed `/smart-close` is believed beside ([`Closing::person_submitted`]).
+    submitted: Mutex<HashMap<u32, std::time::Instant>>,
     /// Each smart close's number, so a timer set for one that was cancelled and begun again
     /// cannot give up on the new one.
     dealt: AtomicU64,
     gives_up_after: Mutex<Duration>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Entry {
     sent: bool,
     number: u64,
+    /// The record the app wrote for it under this pass, plane-relative and with its title:
+    /// the tab closes when the turn that wrote it ends.
+    recorded: Option<SavedRecord>,
 }
+
+/// How long after the person's Enter the `UserPromptSubmit` it caused may arrive and still be
+/// taken as theirs. A hook fires within milliseconds of the prompt; this is room for a loaded
+/// machine and nothing like the time it would take something to wait for the person's next
+/// keystroke.
+pub const A_PERSONS_ENTER_IS_HEARD_WITHIN: Duration = Duration::from_secs(5);
 
 impl Default for Closing {
     fn default() -> Self {
         Self {
             chats: Mutex::new(HashMap::new()),
+            submitted: Mutex::new(HashMap::new()),
             dealt: AtomicU64::new(0),
             gives_up_after: Mutex::new(GIVES_UP_AFTER),
         }
@@ -262,7 +290,43 @@ impl Closing {
     /// Lets go of chat `session`'s smart close without closing anything: it was closed, or its
     /// program ended. Answers whether it was being smart-closed.
     pub fn forget(&self, session: u32) -> bool {
+        self.submitted().remove(&session);
         self.chats().remove(&session).is_some()
+    }
+
+    /// Lets go of chat `session`'s smart close because its program ended: none when it was
+    /// not being smart-closed, else the record the app wrote for it under its pass, if any.
+    pub fn ended(&self, session: u32) -> Option<Option<SavedRecord>> {
+        self.submitted().remove(&session);
+        self.chats().remove(&session).map(|entry| entry.recorded)
+    }
+
+    /// Whether chat `session` holds a smart-close pass: a person started its smart close.
+    #[cfg(test)]
+    pub fn holds_pass(&self, session: u32) -> bool {
+        self.chats().contains_key(&session)
+    }
+
+    fn submitted(&self) -> MutexGuard<'_, HashMap<u32, std::time::Instant>> {
+        self.submitted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The person pressed Enter in chat `session`'s pane at `at` while the chat was waiting for
+    /// them and asking nothing: the prompt its harness hears next is the person's.
+    pub fn person_submitted(&self, session: u32, at: std::time::Instant) {
+        self.submitted().insert(session, at);
+    }
+
+    /// Takes the person's Enter in chat `session`, answering whether there was one within
+    /// [`A_PERSONS_ENTER_IS_HEARD_WITHIN`] of `now`. Taken whatever the answer, so one Enter
+    /// stands behind one prompt and no more.
+    fn took_submission(&self, session: u32, now: std::time::Instant) -> bool {
+        self.submitted().remove(&session).is_some_and(|at| {
+            now.checked_duration_since(at)
+                .is_some_and(|since| since <= A_PERSONS_ENTER_IS_HEARD_WITHIN)
+        })
     }
 
     /// The operator sent chat `session` `bytes`. Answers whether that cancelled its smart close:
@@ -347,7 +411,14 @@ pub fn begin(held: &Arc<Held>, session: u32) -> Result<Phase, String> {
         held.chats()
             .sessions()
             .input(session, sent_as().as_bytes())?;
-        chats.insert(session, Entry { sent: true, number });
+        chats.insert(
+            session,
+            Entry {
+                sent: true,
+                number,
+                recorded: None,
+            },
+        );
         Phase::Sent
     } else {
         chats.insert(
@@ -355,6 +426,7 @@ pub fn begin(held: &Arc<Held>, session: u32) -> Result<Phase, String> {
             Entry {
                 sent: false,
                 number,
+                recorded: None,
             },
         );
         Phase::Queued
@@ -375,8 +447,60 @@ pub fn cancel(held: &Held, session: u32) {
     }
 }
 
-/// A report reached the plane: a queued smart close whose chat has now ended its turn — waiting,
-/// and asking nothing — is sent its prompt.
+/// The board took chat `session`'s `report`: a `UserPromptSubmit` that says the person typed
+/// `/smart-close`, beside the person's own Enter in its pane, issues the chat a pass, as the
+/// tab's Smart close does. Nothing is sent: the person's prompt is already the skill's.
+///
+/// Every `UserPromptSubmit` takes the person's Enter, whatever it says, so an Enter stands
+/// behind the one prompt it submitted and never a later one.
+pub fn heard(held: &Arc<Held>, report: &Report) {
+    if report.event != purlis_core::state::Event::UserPromptSubmit {
+        return;
+    }
+    let person = held
+        .closing()
+        .took_submission(report.chat, std::time::Instant::now());
+    if !report.detail.smart_close {
+        return;
+    }
+    if person {
+        typed(held, report.chat);
+    } else {
+        // Said, because a chat asking for a pass it was not given is worth seeing: the chat's
+        // number only, never anything it typed.
+        tracing::warn!(
+            "purlis: chat {} reported a typed /smart-close with no Enter of the person's behind \
+             it, so no smart-close pass was issued",
+            report.chat
+        );
+    }
+}
+
+/// Issues chat `session` a smart-close pass because the person typed `/smart-close` into it. A
+/// chat already being smart-closed keeps the pass it has.
+fn typed(held: &Arc<Held>, session: u32) {
+    let closing = held.closing();
+    let mut chats = closing.chats();
+    if chats.contains_key(&session) {
+        return;
+    }
+    let number = closing.dealt.fetch_add(1, Ordering::SeqCst);
+    chats.insert(
+        session,
+        Entry {
+            sent: true,
+            number,
+            recorded: None,
+        },
+    );
+    drop(chats);
+    give_up_later(held, session, number);
+    held.tell_smart_close(session, Phase::Sent);
+}
+
+/// A report reached the plane: a smart close whose record the app wrote closes its tab once
+/// that turn has ended, and a queued one whose chat has now ended its turn — waiting, and asking
+/// nothing — is sent its prompt.
 pub fn reported(held: &Arc<Held>, report: &Report) {
     reported_sending(held, report, |chat, prompt| {
         held.chats().sessions().input(chat, prompt.as_bytes())
@@ -395,14 +519,17 @@ pub(crate) fn reported_sending(
     let Some(entry) = chats.get_mut(&report.chat) else {
         return;
     };
-    if entry.sent {
-        return;
-    }
     let ready = {
         let board = held.board().glance(report.chat);
         board.state == State::Waiting && !board.asking
     };
-    if !ready {
+    if ready && let Some(record) = entry.recorded.clone() {
+        chats.remove(&report.chat);
+        drop(chats);
+        close_on_its_record(held, report.chat, Some(record));
+        return;
+    }
+    if entry.sent || !ready {
         return;
     }
     if send(report.chat, sent_as()).is_err() {
@@ -433,12 +560,6 @@ pub fn saved(held: &Held, saved: &SessionSaved) {
         );
         return;
     }
-    if let Err(why) = held.close_chat(saved.chat) {
-        tracing::warn!(
-            "purlis: chat {} wrote its session record and did not close cleanly ({why})",
-            saved.chat
-        );
-    }
     // Read through the one reading of a record's path there is, so a line naming anything else
     // still closes the tab and names nothing.
     let record =
@@ -448,7 +569,96 @@ pub fn saved(held: &Held, saved: &SessionSaved) {
                 title: listed.title,
             }
         });
-    held.tell_smart_closed(saved.chat, record);
+    close_on_its_record(held, saved.chat, record);
+}
+
+/// Closes chat `session`, whose pass has been let go of, on its record, and tells the window.
+fn close_on_its_record(held: &Held, session: u32, record: Option<SavedRecord>) {
+    if let Err(why) = held.close_chat(session) {
+        tracing::warn!(
+            "purlis: chat {session} wrote its session record and did not close cleanly ({why})"
+        );
+    }
+    held.tell_smart_closed(session, record);
+}
+
+/// Chat `ask.chat` asked the app to write its session record: a brokered write (ADR 0067 §2,
+/// #1332), made with the core's own writer ([`purlis_core::sessionrecord::brokered`]) from the
+/// app's record of the chat, never the request's.
+///
+/// It is written whether or not the chat holds a pass: a record is the chat's own to write.
+/// Under a pass whose prompt has reached the chat (or that the person typed), the answer says
+/// the tab closes, and it does once this turn ends ([`reported`]),
+/// so the chat's own call has its answer before anything is closed under it. The chat the line
+/// names is the one whose token it carries: the listener checks that before this is asked.
+pub fn record(held: &Held, ask: &purlis_core::hookwire::RecordAsk) -> Answer {
+    let Some(open) = held
+        .chats()
+        .open_now()
+        .into_iter()
+        .find(|open| open.session == ask.chat)
+    else {
+        return Answer::No {
+            why: format!("chat {} is not one this app has open", ask.chat),
+        };
+    };
+    let place = open
+        .cwd
+        .as_deref()
+        .and_then(|cwd| purlis_core::active::workspace_of_tree(held.root(), cwd))
+        .map_or(Place::PlaneRoot, Place::Workspace);
+    let asker = purlis_core::sessionrecord::Asker {
+        number: ask.chat,
+        place,
+        persona: open.persona,
+    };
+    let recorded = match purlis_core::sessionrecord::brokered(
+        held.root(),
+        &asker,
+        ask,
+        chrono::Local::now().naive_local(),
+    ) {
+        Ok(recorded) => recorded,
+        Err(why) => return Answer::No { why },
+    };
+    let title = purlis_core::sessionrecord::saved(held.root(), &recorded.path)
+        .map_or_else(|| ask.title.trim().to_owned(), |listed| listed.title);
+    let closes = {
+        let closing = held.closing();
+        let mut chats = closing.chats();
+        match chats.get_mut(&ask.chat) {
+            // Only a close whose prompt has gone, or the person typed: a record the chat wrote
+            // mid-turn on its own, before a queued smart close's prompt reached it, is its own
+            // record and closes nothing. The prompt is still sent when the turn ends.
+            Some(entry) if entry.sent => {
+                entry.recorded = Some(SavedRecord {
+                    path: recorded.shown.clone(),
+                    title,
+                });
+                true
+            }
+            _ => false,
+        }
+    };
+    if closes {
+        tracing::info!(
+            "purlis: chat {} wrote its session record {} under its smart-close pass; the tab \
+             closes when this turn ends",
+            ask.chat,
+            recorded.shown
+        );
+    } else {
+        tracing::info!(
+            "purlis: chat {} wrote its session record with no smart-close pass under way, so its \
+             tab stays open",
+            ask.chat
+        );
+    }
+    Answer::Recorded {
+        record: recorded.shown,
+        closes,
+        warnings: recorded.warnings,
+    }
 }
 
 /// Gives up on smart close `number` of chat `session` if no record has arrived by then. On a
@@ -466,13 +676,17 @@ fn give_up_later(held: &Arc<Held>, session: u32, number: u64) {
                 let still = chats
                     .get(&session)
                     .is_some_and(|entry| entry.sent && entry.number == number);
-                if still {
-                    chats.remove(&session);
-                }
-                still
+                if still { chats.remove(&session) } else { None }
             };
-            if gave_up {
-                held.tell_smart_close(session, Phase::NoRecord);
+            match gave_up {
+                // Its record is written and its turn never ended: the person asked for the
+                // close, and the record it waited for is there.
+                Some(Entry {
+                    recorded: Some(record),
+                    ..
+                }) => close_on_its_record(&held, session, Some(record)),
+                Some(_) => held.tell_smart_close(session, Phase::NoRecord),
+                None => {}
             }
         });
 }

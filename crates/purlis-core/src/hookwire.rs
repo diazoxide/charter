@@ -202,6 +202,11 @@ impl Report {
             detail: Detail {
                 started: Started::of(source.as_deref()),
                 ending: Ending::of(reason.as_deref()),
+                // One bit of the prompt, and only on the event that carries one: whether the
+                // person typed `/smart-close` (#1332). The prompt never leaves the hook.
+                smart_close: event == Event::UserPromptSubmit
+                    && field("prompt")
+                        .is_some_and(|prompt| crate::state::smart_close_typed(&prompt)),
             },
         })
     }
@@ -430,6 +435,38 @@ pub enum Ask {
     /// Spend a ticket: hand a report back to the chat that opened this one (charter-app#259).
     /// Boxed for `Open`'s reason.
     Report(Box<ReportBack>),
+    /// Write this chat's session record: a brokered write (ADR 0067 §2, #1332). The app
+    /// answers [`Answer::Recorded`], or [`Answer::No`] with the refusal. Boxed: it carries the
+    /// record's whole body.
+    SessionRecord(Box<RecordAsk>),
+}
+
+/// A session record a chat asks the app to write for it, as `purlis session record` and the
+/// MCP server's `session_record` tool both hand it over: **a brokered write** (ADR 0067 §2,
+/// #1332). The chat's sandbox may forbid the write; the app makes it, with the same core code
+/// the terminal's command uses ([`crate::sessionrecord::record`]).
+///
+/// **It names no place, and that is the guard.** Where the record goes, the persona and every
+/// other fact in its frontmatter are the app's record of the chat whose token the line carries,
+/// never the request's. The request carries only what the model writes (the title and the
+/// body) and the pieces it says it worked in, which git is asked about before any is recorded.
+///
+/// No ticket: a record is the chat's own to write, with or without a smart close, and a line
+/// can only ever name the chat whose token it carries. What only a person grants, the close of
+/// the tab, is the smart-close pass the app holds, never anything on this line.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RecordAsk {
+    /// The chat whose record it is, from [`CHAT_ENV`].
+    pub chat: u32,
+    pub title: String,
+    pub body: String,
+    /// The pieces named as `<repo>/<piece>`, as `--piece` takes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pieces: Vec<String>,
+    /// The directory the asker runs in, so the piece it stands in is recorded as the terminal's
+    /// command records it. Only ever looked up among the pieces git reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 /// A report a handed-off chat sends back, as `charter handoff report` hands it over.
@@ -538,6 +575,15 @@ pub enum Answer {
     /// to run in a terminal and says this underneath it: a refusal the operator cannot see
     /// is a handoff that vanished.
     No { why: String },
+    /// The session record is written (#1332): where, plane-relative, and whether the chat's
+    /// tab now closes, which it does only under a smart-close pass. `warnings` is what did not
+    /// follow it ([`crate::sessionrecord::Recorded::warnings`]).
+    Recorded {
+        record: String,
+        closes: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
+    },
 }
 
 /// How long a ticket lives unspent.
@@ -685,6 +731,7 @@ impl Line {
             Self::Ask(Ask::Ticket { chat }) => *chat,
             Self::Ask(Ask::Open(open)) => open.chat,
             Self::Ask(Ask::Report(back)) => back.chat,
+            Self::Ask(Ask::SessionRecord(record)) => record.chat,
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
@@ -1834,6 +1881,77 @@ mod tests {
         "transcript_path":"/tmp/t.jsonl","cwd":"/tmp","hook_event_name":"Stop",
         "stop_hook_active":false,"last_assistant_message":"pong"}"#;
 
+    /// A Claude Code `UserPromptSubmit` payload whose prompt is `prompt`.
+    fn prompt_payload(prompt: &str) -> String {
+        serde_json::json!({
+            "session_id": "11111111-2222-4333-8444-555555555555",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": prompt,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_typed_smart_close_is_one_bit_of_the_prompt_and_the_prompt_goes_nowhere() {
+        let env = env_of(&[(SOCKET_ENV, "/tmp/s.sock"), (CHAT_ENV, "7")]);
+        for typed in [
+            "/smart-close",
+            "/purlis:smart-close",
+            "  /smart-close now please",
+        ] {
+            let report = Report::read(Event::UserPromptSubmit, &prompt_payload(typed), &env)
+                .expect("a report");
+            assert!(
+                report.detail.smart_close,
+                "{typed:?} was not heard as smart close"
+            );
+            let line = serde_json::to_string(&report).expect("a line");
+            assert!(!line.contains("please"), "the prompt left the hook: {line}");
+        }
+        for typed in [
+            "please /smart-close",
+            "/smart-closer",
+            "/other:smart-close",
+            "smart-close",
+            "",
+        ] {
+            let report = Report::read(Event::UserPromptSubmit, &prompt_payload(typed), &env)
+                .expect("a report");
+            assert!(
+                !report.detail.smart_close,
+                "{typed:?} was heard as smart close"
+            );
+        }
+        // Only the event that carries a person's prompt says it.
+        let stop = Report::read(Event::Stop, &prompt_payload("/smart-close"), &env).expect("one");
+        assert!(!stop.detail.smart_close);
+        // And a report that is not one says nothing new on the wire.
+        let plain =
+            Report::read(Event::UserPromptSubmit, &prompt_payload("hi"), &env).expect("a report");
+        let line = serde_json::to_string(&plain).expect("a line");
+        assert!(!line.contains("smart_close"), "{line}");
+    }
+
+    #[test]
+    fn the_largest_record_a_chat_may_write_fits_on_one_line_of_the_socket() {
+        // Every byte of the body one JSON doubles, and the longest title: what `check` lets
+        // through at its worst still reaches the app whole (#1332).
+        let ask = Ask::SessionRecord(Box::new(RecordAsk {
+            chat: u32::MAX,
+            title: "\"".repeat(crate::sessionrecord::MOST_TITLE_CHARS),
+            body: "\"".repeat(crate::sessionrecord::MOST_BODY_BYTES),
+            pieces: vec!["repo/piece".to_owned(); 8],
+            cwd: Some(std::path::PathBuf::from("/a/long/enough/path/to/a/piece")),
+        }));
+        let token = ChatToken("t".repeat(64));
+        let line = line_with(Some(&token), &ask).expect("a line");
+        assert!(
+            (line.len() as u64) < A_LINE_IS_AT_MOST,
+            "{} bytes does not fit in {A_LINE_IS_AT_MOST}",
+            line.len()
+        );
+    }
+
     #[test]
     fn a_hook_reports_the_chat_its_environment_names() {
         // Measured on claude 2.1.276: the payload carries `session_id`, and it is the same
@@ -2914,7 +3032,7 @@ mod tests {
                             Err(why) => Answer::No { why },
                         }
                     }
-                    Ask::Report(_) => Answer::No {
+                    Ask::Report(_) | Ask::SessionRecord(_) => Answer::No {
                         why: "not here".to_owned(),
                     },
                 }

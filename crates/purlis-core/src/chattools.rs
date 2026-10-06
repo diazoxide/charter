@@ -42,6 +42,12 @@ pub const SUBCOMMAND: &str = "mcp";
 /// harness, can ask the person through it.
 pub const ASK_OPERATOR: &str = "ask_operator";
 
+/// The tool that writes this chat's session record, which [`call`] does not answer either: the
+/// server hands it to the app that started the chat (a brokered write, ADR 0067 §2, #1332), as
+/// `purlis session record` run in the chat does, and only where no app takes it writes it
+/// itself. One operation behind both, in the CLI that serves the tools.
+pub const SESSION_RECORD: &str = "session_record";
+
 /// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
 /// the five that only read. Named one by one, never derived from [`Tool::read_only`]:
 /// `ask_operator` is marked read-only too and still asks, and a tool added later is asked
@@ -187,7 +193,7 @@ fn one_string(key: &str, description: &str) -> Value {
 }
 
 /// Every tool, in the order a harness lists them.
-pub static TOOLS: [Tool; 9] = [
+pub static TOOLS: [Tool; 10] = [
     Tool {
         name: "todo_list",
         description: "List the open todos of the workspace this chat works in, oldest first, \
@@ -249,6 +255,41 @@ pub static TOOLS: [Tool; 9] = [
         read_only: true,
     },
     Tool {
+        name: SESSION_RECORD,
+        description: "Write this chat's session record: a summary of this session, never the \
+                      transcript, that the next chat reads to pick up where this one stopped. \
+                      purlis writes it where this chat works and says whether the tab now \
+                      closes, which it does when the person started a smart close. The body is \
+                      exactly the sections ## Goal, ## Done, ## Decisions, ## Open and \
+                      ## How to resume, in that order. Never a secret.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "The record's title: one line, at most 120 characters.",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "The five sections, each a `## ` heading with at least \
+                                        one line under it.",
+                    },
+                    "pieces": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Pieces this session worked in that this chat does not \
+                                        stand in, each as <repo>/<piece>; purlis reads their \
+                                        branches from git.",
+                    },
+                },
+                "required": ["title", "body"],
+                "additionalProperties": false,
+            })
+        },
+        read_only: false,
+    },
+    Tool {
         name: "change_status",
         description: "The cross-repo changes of this workspace: with no change named, one line \
                       each; with one, its record (why, members, branches and what each \
@@ -291,6 +332,11 @@ pub fn call(
     if tool == ASK_OPERATOR {
         return Err(format!(
             "{ASK_OPERATOR} is asked through the harness by purlis's MCP server, not here"
+        ));
+    }
+    if tool == SESSION_RECORD {
+        return Err(format!(
+            "{SESSION_RECORD} is handed to the app by purlis's MCP server, not written here"
         ));
     }
     // FR-24, at every write and not only when the server started: the server lives as long
@@ -450,6 +496,27 @@ fn run(
 fn must_open(root: &Path, place: &Place, store: &str) -> Result<held::Store, String> {
     held::Store::open(root, place, store, true)?
         .ok_or_else(|| format!("the chat's {store} could not be made"))
+}
+
+/// What a `session_record` call hands over: its title, its body and the pieces it names, or
+/// why it hands over nothing.
+pub fn record_args(args: &Map<String, Value>) -> Result<(String, String, Vec<String>), String> {
+    let title = string(args, "title")?.to_owned();
+    let body = string(args, "body")?.to_owned();
+    let pieces = match args.get("pieces") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(pieces)) => pieces
+            .iter()
+            .map(|piece| {
+                piece
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "`pieces` is a list of strings".to_owned())
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err("`pieces` is a list of strings".to_owned()),
+    };
+    Ok((title, body, pieces))
 }
 
 /// The question an `ask_operator` call puts, trimmed, or why it puts none.

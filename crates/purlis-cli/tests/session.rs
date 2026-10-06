@@ -431,3 +431,153 @@ fn the_profile_and_directory_are_the_apps_record_of_the_chat_never_the_commands_
         "the chat's directory, plane-relative"
     );
 }
+
+// ---- the brokered write (#1332) -----------------------------------------------------------
+
+/// An app at `socket` that answers a record ask with `answer`, and hands every ask it is sent
+/// to the receiver.
+fn an_app_answering(
+    tmp: &tempfile::TempDir,
+    socket: &Path,
+    answer: hookwire::Answer,
+) -> (
+    hookwire::Reading,
+    hookwire::ChatToken,
+    mpsc::Receiver<hookwire::Ask>,
+) {
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let listener = Listener::bind(tmp.path(), socket).expect("a socket");
+    let token = listener.tokens().issue(3).expect("a token");
+    let reading = listener.each_answering(
+        Box::new(|_| {}),
+        Box::new(move |_, ask| {
+            tx.lock().unwrap().send(ask).unwrap();
+            answer.clone()
+        }),
+    );
+    (reading, token, rx)
+}
+
+/// `purlis session record` in chat 3, in `alpha`, with the app at `socket`, on no test clock:
+/// as a chat runs it.
+fn record_in_chat_3(tmp: &tempfile::TempDir, socket: &Path, token: &hookwire::ChatToken) -> Output {
+    charter(
+        tmp,
+        &["session", "record", "--title", "Ship the record"],
+        &[
+            IN_ALPHA,
+            (SOCKET_ENV, socket.to_str().unwrap()),
+            (CHAT_ENV, "3"),
+            (TOKEN_ENV, token.expose()),
+        ],
+        BODY,
+    )
+}
+
+fn records_in_alpha(tmp: &tempfile::TempDir) -> usize {
+    std::fs::read_dir(root(tmp).join("workspaces/alpha/sessions"))
+        .map(|dir| {
+            dir.filter_map(Result::ok)
+                .filter(|e| e.file_name() != "index.md")
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+#[test]
+fn in_a_chat_the_app_started_the_app_writes_the_record_and_the_command_writes_nothing() {
+    let tmp = daily();
+    let socket = tmp.path().join("app").join("hooks.sock");
+    let shown = "workspaces/alpha/sessions/20261006-120000-ship-the-record.md";
+    let (_reading, token, asked) = an_app_answering(
+        &tmp,
+        &socket,
+        hookwire::Answer::Recorded {
+            record: shown.to_owned(),
+            closes: true,
+            warnings: Vec::new(),
+        },
+    );
+
+    let ran = record_in_chat_3(&tmp, &socket, &token);
+
+    assert!(ran.status.success(), "{}", err(&ran));
+    assert_eq!(out(&ran).trim(), shown);
+    assert!(err(&ran).contains("closes this tab"), "{}", err(&ran));
+    let hookwire::Ask::SessionRecord(ask) = asked.recv_timeout(Duration::from_secs(5)).unwrap()
+    else {
+        panic!("the app was not asked for a record");
+    };
+    assert_eq!(ask.chat, 3);
+    assert_eq!(ask.title, "Ship the record");
+    assert_eq!(ask.body, BODY);
+    assert_eq!(
+        records_in_alpha(&tmp),
+        0,
+        "the command wrote the record itself"
+    );
+}
+
+#[test]
+fn with_no_smart_close_started_the_command_says_the_tab_is_the_operators() {
+    let tmp = daily();
+    let socket = tmp.path().join("app").join("hooks.sock");
+    let (_reading, token, _asked) = an_app_answering(
+        &tmp,
+        &socket,
+        hookwire::Answer::Recorded {
+            record: "workspaces/alpha/sessions/20261006-120000-ship-the-record.md".to_owned(),
+            closes: false,
+            warnings: Vec::new(),
+        },
+    );
+
+    let ran = record_in_chat_3(&tmp, &socket, &token);
+
+    assert!(ran.status.success(), "{}", err(&ran));
+    assert!(
+        err(&ran).contains("No smart close was started for this chat"),
+        "{}",
+        err(&ran)
+    );
+}
+
+#[test]
+fn a_record_the_app_refuses_is_refused_here_with_exit_2_and_never_written_here() {
+    let tmp = daily();
+    let socket = tmp.path().join("app").join("hooks.sock");
+    let (_reading, token, _asked) = an_app_answering(
+        &tmp,
+        &socket,
+        hookwire::Answer::No {
+            why: "the body is missing ## Open".to_owned(),
+        },
+    );
+
+    let ran = record_in_chat_3(&tmp, &socket, &token);
+
+    assert_eq!(ran.status.code(), Some(2), "{}", err(&ran));
+    assert!(err(&ran).contains("missing ## Open"), "{}", err(&ran));
+    assert_eq!(records_in_alpha(&tmp), 0);
+}
+
+#[test]
+fn an_app_that_does_not_answer_record_asks_still_gets_the_record_written_here() {
+    // An app with nothing answering asks (a test's, an older app's refusal word for word): the
+    // command writes it, as it always has.
+    let tmp = daily();
+    let socket = tmp.path().join("app").join("hooks.sock");
+    let (_reading, token, _asked) = an_app_answering(
+        &tmp,
+        &socket,
+        hookwire::Answer::No {
+            why: hookwire::NOTHING_ANSWERS.to_owned(),
+        },
+    );
+
+    let ran = record_in_chat_3(&tmp, &socket, &token);
+
+    assert!(ran.status.success(), "{}", err(&ran));
+    assert_eq!(records_in_alpha(&tmp), 1);
+}

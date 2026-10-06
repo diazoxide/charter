@@ -253,11 +253,22 @@ fn settings(
     // `deny` still refused, a user `allow` still allowed, and a compound command that holds the
     // record command beside another was still asked about).
     //
+    // **Its twin on charter's MCP server, `session_record`, the same way** (#1332): the one
+    // operation, through the other entrance (ADR 0067 §2), so the skill that calls the tool
+    // stops on no prompt either.
+    //
     // **And the five read-only tools of charter's own MCP server** (V79, #1050, amending
     // SI-8e): a chat reading its own todos, memory, records or change status does not stop on
-    // a prompt. Each by its full name, never the server as a whole, so the writes and
+    // a prompt. Each by its full name, never the server as a whole, so the other writes and
     // `ask_operator` still ask, and an operator's `ask` or `deny` for any of them still wins.
-    let mut allow = vec![SMART_CLOSE_ALLOW.to_owned()];
+    let mut allow = vec![
+        SMART_CLOSE_ALLOW.to_owned(),
+        format!(
+            "mcp__{}__{}",
+            crate::chattools::SERVER,
+            crate::chattools::SESSION_RECORD
+        ),
+    ];
     allow.extend(
         crate::chattools::PRE_ALLOWED
             .iter()
