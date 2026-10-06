@@ -337,8 +337,9 @@ pub fn save_text(
         .collect();
     // As typed, and as charter reads it: a string can spell a character as an escape, and the
     // document — which is also what charter's own writer puts on disk — holds the character.
-    if let Some(kind) = crate::secretshape::secret_kind(text)
-        .or_else(|| crate::secretshape::secret_kind(&crate::pyjson::dumps_indent2_unicode(&doc)))
+    // The one answer the project save gives a staged workspace.json (#1304).
+    if let Some(kind) =
+        crate::secretshape::kind_as_read(Some(crate::secretshape::Structured::Json), text)
     {
         refused.push(format!(
             "{file} looks like it holds a secret ({kind}), so nothing was saved — it is \

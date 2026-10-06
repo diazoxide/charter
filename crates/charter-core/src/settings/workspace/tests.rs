@@ -603,3 +603,40 @@ fn a_secret_is_refused_as_the_manifest_reads_it_not_only_as_typed() {
         assert_eq!(on_disk(dir.path()), before, "{whose}");
     }
 }
+
+#[test]
+fn every_escaped_spelling_the_project_save_refuses_is_refused_here() {
+    // The same answer as the project save (#1304): a text that parses is refused for the
+    // secret it spells; one that does not is refused as no JSON object. Either way, untouched.
+    let hand = "{\n  \"name\": \"alpha\",\n  \"repos\": []\n}\n";
+    for shape in crate::secretshape::escaped::shapes() {
+        let typed = &shape.text;
+        for (whose, before) in [("the operator's", hand.to_owned()), ("charter's", old())] {
+            let dir = plane(Some(&before));
+            let refused = save_text(dir.path(), "alpha", Some(&before), typed).unwrap_err();
+            if serde_json::from_str::<Json>(typed).is_ok_and(|doc| doc.is_object()) {
+                assert!(
+                    refused
+                        .iter()
+                        .any(|why| why.contains(&format!("holds a secret ({})", shape.kind))),
+                    "{whose}: {typed}: {refused:?}"
+                );
+            }
+            for value in ["KIAIOSFODNN7EXAMPLE", "0123456789abcdef", "hunter2"] {
+                assert!(
+                    !refused.iter().any(|why| why.contains(value)),
+                    "{whose}: {typed}: {refused:?}"
+                );
+            }
+            assert_eq!(on_disk(dir.path()), before, "{whose}: {typed}");
+        }
+    }
+}
+
+#[test]
+fn a_manifest_with_escapes_and_no_secret_is_saved() {
+    let (_, typed) = crate::secretshape::escaped::clean().remove(0);
+    let before = old();
+    let dir = plane(Some(&before));
+    save_text(dir.path(), "alpha", Some(&before), &typed).unwrap();
+}
