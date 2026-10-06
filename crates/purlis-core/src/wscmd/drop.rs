@@ -98,7 +98,10 @@ pub fn drop_repo(root: &Path, ws: &str, repo: &str, say: Sink) -> Removal {
     if let Err(why) = std::fs::remove_dir_all(&clone) {
         return fail(
             say,
-            format!("could not remove '{repo}' ({why}) — some of it may still be there."),
+            format!(
+                "could not remove '{repo}' ({}) — some of it may still be there.",
+                crate::rewrite::os_words(&why)
+            ),
         );
     }
     forget_in_manifest(root, ws, repo, say);

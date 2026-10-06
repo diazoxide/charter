@@ -577,6 +577,11 @@ pub const BUNDLE_ID: Name = name(
 /// and is recognised forever, as the guards always have.
 pub const BINARY: Name = name("binary", Kind::Binary, "purlis", &["charter"], &["edm"]);
 
+/// What `purlis handoff`'s own lines start with (#1421): the program as [`BINARY`] writes it,
+/// then the command. Visible text, which nothing reads back, so it has no old spelling to
+/// read; it is here so the program's name in it moves with the program's.
+pub const HANDOFF_SAYS: &str = "purlis handoff:";
+
 // ---- themes --------------------------------------------------------------------------- //
 
 /// The built-in dark theme.

@@ -721,7 +721,7 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     let file = path(plane_root);
     no_link_on_the_way(plane_root, &file)?;
     let dir = file.parent().expect("the record's path has a directory");
-    std::fs::create_dir_all(dir)?;
+    crate::rewrite::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(&OnDisk::from(record))
         .expect("the record is plain data serde can always write");
     crate::rewrite::replace(
@@ -1422,6 +1422,21 @@ impl From<ChatOnDisk> for Chat {
 pub(crate) mod tests {
     use super::*;
     use std::fs;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_record_folder_the_filesystem_refuses_to_make_is_named() {
+        // #1421: an EPERM here printed only "Operation not permitted (os error 1)".
+        let plane = tempfile::tempdir().unwrap();
+        let dir = path(plane.path()).parent().unwrap().to_path_buf();
+        let state = dir.parent().unwrap();
+        fs::create_dir_all(state).unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(state);
+
+        let refused = write(plane.path(), &Record::default()).unwrap_err();
+
+        crate::rewrite::frozen::names(&refused, &dir);
+    }
 
     /// The ULIDs the core's tests spell a chat's ids with, one set for every module.
     pub(crate) const CHAT: &str = "01K6E8ZK6V4Q9T0N3M2B1C5D7F";

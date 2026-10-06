@@ -1080,11 +1080,25 @@ fn ensure_gitignore(path: &Path) -> Result<bool, String> {
 ///
 /// A link the caller's gate let through — one that stays inside the plane — is followed, as
 /// it always was: the file it lands on is the one replaced, and the link is left a link.
+///
+/// A failure names the file it lands on as well, when that is not `path` (#1421): the caller's
+/// sentence names `path`, the link, and the file refused is the one it leads to.
 fn replace_text(path: &Path, text: &str) -> Result<(), String> {
     let target = linked_to(path);
     let dir = target.parent().unwrap_or(Path::new("."));
-    crate::rewrite::replace(dir, &target, text.as_bytes(), crate::rewrite::Mode::Kept)
-        .map_err(|e| strerror(&e))
+    crate::rewrite::replace(dir, &target, text.as_bytes(), crate::rewrite::Mode::Kept).map_err(
+        |e| {
+            let words = strerror(&e);
+            if target == path {
+                words
+            } else {
+                format!(
+                    "{words}, writing {}, where the link leads",
+                    target.display()
+                )
+            }
+        },
+    )
 }
 
 /// Where `path` lands when it is a symlink, else `path` itself.
@@ -2827,13 +2841,41 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_refusal_through_a_link_names_the_link_and_the_file_it_leads_to() {
+        // #1421: the caller names the link; the file refused is the one it leads to.
+        let dir = tempfile::tempdir().expect("a directory");
+        let kept = dir.path().join("kept");
+        std::fs::create_dir(&kept).expect("a folder");
+        let target = kept.join("ignore");
+        std::fs::write(&target, "old\n").expect("the file");
+        let link = dir.path().join(".gitignore");
+        std::os::unix::fs::symlink(&target, &link).expect("a link");
+        let _frozen = crate::rewrite::frozen::Frozen::at(&kept);
+
+        let said = replace_text(&link, "new\n").expect_err("refused");
+
+        let real = crate::contain::resolved(&link).expect("it resolves");
+        assert!(said.starts_with("Operation not permitted"), "{said}");
+        assert!(said.contains(&real.display().to_string()), "{said}");
+        assert!(said.ends_with("where the link leads"), "{said}");
+    }
+
     #[test]
     fn a_refusal_already_naming_its_path_is_said_without_it() {
         // #1359: `init`'s `.gitignore` line named the path, then the rewording named it again.
         let path = Path::new("/project/.gitignore");
         let refused =
-            crate::rewrite::refused_write(std::io::Error::from_raw_os_error(1), path, true);
+            crate::rewrite::refused_write(std::io::Error::from_raw_os_error(1), path, false);
         assert_eq!(strerror(&refused), "Operation not permitted");
+        // #1421: in a sandboxed chat it still says whose refusal it was.
+        let sandboxed =
+            crate::rewrite::refused_write(std::io::Error::from_raw_os_error(1), path, true);
+        assert_eq!(
+            strerror(&sandboxed),
+            "Operation not permitted: this chat's sandbox refused it"
+        );
     }
 
     /// `cli._plane_refusal`: a `charter.toml` from a newer charter stops `init` AND `reinit`

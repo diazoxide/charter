@@ -699,6 +699,69 @@ pub fn chat_is_sandboxed_in(env: &dyn Fn(&str) -> Option<String>) -> bool {
     env(crate::hookwire::SANDBOXED_ENV).as_deref() == Some("1")
 }
 
+/// The harness [`crate::hookwire::HARNESS_ENV`] names: the profile's registry name
+/// (`claude-code`, `codex`, `opencode`; [`crate::profiles::KINDS`]), which is what a chat's start
+/// puts there, and not the kind word a profile is written with.
+fn harness_of_registry(registry: &str) -> Option<Harness> {
+    crate::profiles::KINDS
+        .iter()
+        .find(|kind| kind.registry == registry)
+        .and_then(|kind| Harness::of_kind(kind.word))
+}
+
+/// What started this process: a command the chat ran, or the harness itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Started {
+    /// A command the chat ran, in its shell or tool: what a chat's sandbox confines first.
+    ByTheChat,
+    /// The harness itself, for one of its hooks or as its MCP server. Inside the chat's sandbox
+    /// only where the harness's adapter says its sandbox holds what it starts
+    /// ([`crate::harness::adapter::HarnessAdapter::sandbox_holds_what_it_starts`]).
+    ByTheHarness,
+}
+
+/// Set once, at the start of a hook or the MCP server ([`started_by_the_harness`]).
+static STARTED_BY_THE_HARNESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Says that this process is one the harness itself started, a hook or its MCP server: the
+/// entry of `purlis hook` and `purlis mcp` calls it before anything is written (#1421).
+pub fn started_by_the_harness() {
+    STARTED_BY_THE_HARNESS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// [`Started`], for this process.
+pub fn started() -> Started {
+    if STARTED_BY_THE_HARNESS.load(std::sync::atomic::Ordering::Relaxed) {
+        Started::ByTheHarness
+    } else {
+        Started::ByTheChat
+    }
+}
+
+/// Whether a write this process makes is held to its chat's sandbox, so a refusal of it may be
+/// told as the sandbox's (#1345, #1421). [`chat_is_sandboxed`] alone says only that the chat
+/// has one: a hook inherits that from its chat, and Claude Code's sandbox confines the commands
+/// its Bash tool runs and not its hooks, so a hook there that meets `EPERM` met something else.
+pub fn writes_are_sandboxed() -> bool {
+    writes_are_sandboxed_in(&crate::envvar::var, started())
+}
+
+/// [`writes_are_sandboxed`], asking `env`, for a process `started` so. A harness this binary
+/// does not know, or none named, is not taken to hold what it starts: a refusal is then told
+/// without blaming a sandbox, which is the side that is never untrue.
+pub fn writes_are_sandboxed_in(env: &dyn Fn(&str) -> Option<String>, started: Started) -> bool {
+    if !chat_is_sandboxed_in(env) {
+        return false;
+    }
+    match started {
+        Started::ByTheChat => true,
+        Started::ByTheHarness => env(crate::hookwire::HARNESS_ENV)
+            .and_then(|registry| harness_of_registry(&registry))
+            .is_some_and(|harness| harness.adapter().sandbox_holds_what_it_starts()),
+    }
+}
+
 /// What a denied path is denied for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {

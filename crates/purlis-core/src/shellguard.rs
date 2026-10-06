@@ -114,14 +114,17 @@ impl Shims {
 
         // The operator's alone, like everything else under the app's data directory: what is
         // in here runs in every shell tab.
+        let refused = || crate::rewrite::refused_at(&self.root);
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(&self.root)?;
-        std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))?;
+            .create(&self.root)
+            .map_err(refused())?;
+        std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))
+            .map_err(refused())?;
         let bin = self.bin();
         for dir in [&bin, &self.zdotdir(), &self.root.join("bash")] {
-            std::fs::create_dir_all(dir)?;
+            crate::rewrite::create_dir_all(dir)?;
         }
         for harness in SHIMMED {
             put(
@@ -215,11 +218,15 @@ fn put(path: &Path, text: &str, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let beside = path.with_extension(format!("purlis-{}", std::process::id()));
-    std::fs::write(&beside, text)?;
-    std::fs::set_permissions(&beside, std::fs::Permissions::from_mode(mode))?;
-    std::fs::rename(&beside, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&beside);
-    })
+    // Named as the file it is for (#1421): the file beside it is this write's own.
+    let refused = || crate::rewrite::refused_at(path);
+    std::fs::write(&beside, text).map_err(refused())?;
+    std::fs::set_permissions(&beside, std::fs::Permissions::from_mode(mode)).map_err(refused())?;
+    std::fs::rename(&beside, path)
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&beside);
+        })
+        .map_err(refused())
 }
 
 /// `text` as one POSIX shell word, whatever is in it.
@@ -402,6 +409,19 @@ pub fn plan(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_shim_the_filesystem_refuses_names_the_shim() {
+        // #1421: an EPERM here printed only "Operation not permitted (os error 1)".
+        let dir = tempfile::tempdir().unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(dir.path());
+        let shim = dir.path().join("claude");
+
+        let refused = put(&shim, "#!/bin/sh\n", 0o755).unwrap_err();
+
+        crate::rewrite::frozen::names(&refused, &shim);
+    }
 
     fn program_in(dir: &Path, name: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
