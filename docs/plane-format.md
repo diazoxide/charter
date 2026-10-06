@@ -5075,7 +5075,8 @@ semantics below.
 
 **What purlis keeps outside the plane** (ADR 0034, ADR 0069). `<config>` is the machine
 store's directory: `$PURLIS_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then
-`purlis/` once rename-local has moved it, else `charter/` (the `CHARTER_` spellings of both in it `0600` (`crates/purlis-core/src/machine.rs`). On a
+`purlis/` once rename-local has moved it, else `charter/` (the `CHARTER_` spellings of both
+variables are read too, until 1.0), `0700`, and every file in it `0600` (`crates/purlis-core/src/machine.rs`). On a
 platform that is not unix none of it is written (ADR 0031). **Rename window (RN-5):** the
 folder is `purlis/` once `rename-local` has moved it (or it is the one there), else `charter/`;
 the same rule holds for the session host's `purlisd/`/`charterd/` in it, for `<data>`'s folder and
