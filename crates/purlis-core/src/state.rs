@@ -115,7 +115,8 @@ pub struct Detail {
     pub ending: Ending,
     /// On a `UserPromptSubmit`: the prompt was `/smart-close` ([`smart_close_typed`]). Never the
     /// prompt itself: the app hears one bit of it, and only this bit. Absent from an older hook,
-    /// which reads as no. The app believes it only beside the person's own Enter (#1332).
+    /// which reads as no. It never issues a pass on its own: the app issues one on the line the
+    /// person typed into the chat's pane, and this bit can only withhold it (#1332, #1361).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub smart_close: bool,
 }
