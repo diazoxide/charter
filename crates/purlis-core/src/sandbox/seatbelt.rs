@@ -171,6 +171,19 @@ pub fn granted(own: &mut Own, folders: &[PathBuf]) -> Result<(), &'static str> {
             string(&folder.display().to_string())?
         ));
         own.roots.push(folder.clone());
+        // And every project manifest at any depth of it (D-T55-4): #1336 holds them by path
+        // only in the chat's own folders, which a granted folder is not.
+        let names = super::MANIFESTS
+            .iter()
+            .map(|name| escaped(name))
+            .collect::<Vec<_>>()
+            .join("|");
+        let regex = format!(
+            "^{}/(.*/)?({names})$",
+            escaped(&folder.display().to_string())
+        );
+        own.deny
+            .push(format!("(deny file-write* (regex {}))", string(&regex)?));
     }
     Ok(())
 }

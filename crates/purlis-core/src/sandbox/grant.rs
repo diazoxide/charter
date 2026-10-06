@@ -529,14 +529,30 @@ fn judged(typed: &str, place: &Place<'_>) -> Result<PathBuf, Refused> {
     {
         return Err(Refused::Never(brokered_route(denial.class).to_owned()));
     }
+    // A project manifest too, wherever it is: a granted folder is written past what the chat's
+    // own start compiled, so the manifests are held in it by name as the later-code names are
+    // (D-T55-4), not only in the chat's own chain of folders (#1336).
     let planted = |path: &Path| {
         crate::sandboxblock::is_planted(path)
-            || (place.folded && crate::sandboxblock::is_planted(&key(path, place)))
+            || names_a_manifest(path)
+            || (place.folded
+                && (crate::sandboxblock::is_planted(&key(path, place))
+                    || names_a_manifest(&key(path, place))))
     };
     if planted(&resolved) || planted(&lexical(asked)) {
         return Err(Refused::Never(brokered_route(Class::LaterCode).to_owned()));
     }
     Ok(resolved)
+}
+
+/// Whether any part of `path` is a project manifest's name ([`super::MANIFESTS`]).
+fn names_a_manifest(path: &Path) -> bool {
+    path.components().any(|part| match part {
+        std::path::Component::Normal(name) => name
+            .to_str()
+            .is_some_and(|name| super::MANIFESTS.contains(&name)),
+        _ => false,
+    })
 }
 
 /// `writes`, less each folder that is no longer one a grant may name at `place`, or that no
