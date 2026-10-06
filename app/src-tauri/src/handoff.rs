@@ -138,6 +138,10 @@ pub fn answer(
         Ask::SessionRecord(record) => crate::smartclose::record(held, &record),
         // Another brokered write: the project's own files, for the chat that asks (#1333).
         Ask::Write(write) => crate::brokered::write(held, &write),
+        // A brokered git action (#1335): no ticket, for the record's reason — the line names
+        // only the chat whose token it carries, and what it asks is checked against the app's
+        // record of that chat.
+        Ask::Git(git) => crate::gitbroker::answer(held, &git),
     }
 }
 

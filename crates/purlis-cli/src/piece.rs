@@ -87,16 +87,36 @@ pub fn run(here: &Here, command: WorktreeCommand) -> Result<u8, String> {
             piece,
             branch,
             workspace,
-        } => piececmd::add(
-            &root,
-            &here.active_workspace(workspace.as_deref())?,
-            &repo,
-            &piece,
-            branch.as_deref(),
-            &who,
-            now,
-            &mut say,
-        ),
+        } => {
+            let ws = here.active_workspace(workspace.as_deref())?;
+            // In a chat the app started, the app cuts it (#1335): a sandboxed chat may not
+            // write the worktree's git files or the editor settings it checks out.
+            let asked = crate::gitask::told(
+                crate::gitask::forwarded(
+                    &ws,
+                    purlis_core::hookwire::GitWork::WorktreeAdd {
+                        repo: repo.clone(),
+                        piece: piece.clone(),
+                        branch: branch.clone(),
+                    },
+                    crate::gitask::A_WORKTREE_TAKES_AT_MOST,
+                ),
+                &mut say,
+            );
+            match asked {
+                Some(code) => code,
+                None => piececmd::add(
+                    &root,
+                    &ws,
+                    &repo,
+                    &piece,
+                    branch.as_deref(),
+                    &who,
+                    now,
+                    &mut say,
+                ),
+            }
+        }
         WorktreeCommand::Done => {
             piececmd::declare(&root, &here.cwd, Declaration::Done, &who, now, &mut say)
         }
