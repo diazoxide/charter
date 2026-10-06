@@ -457,7 +457,11 @@ fn a_claude_code_chat_reaches_only_the_presets_hosts_and_is_never_asked_to_widen
     let settings = claude::settings(&compiled(Denied::default(), Os::MacOs)).expect("compiles");
     assert_eq!(
         settings.sandbox["network"],
-        serde_json::json!({"allowedDomains": ["github.com"], "strictAllowlist": true})
+        serde_json::json!({
+            "allowedDomains": ["github.com"],
+            "strictAllowlist": true,
+            "allowAllUnixSockets": false,
+        })
     );
 }
 
@@ -1830,22 +1834,59 @@ fn the_picker_shows_every_refusal_of_the_program_check() {
 
 /// A file denial does not stop a connect to a unix socket: a sandbox treats that connect as
 /// network. So no compiler may allow one beyond what it must, or a chat could reach
-/// `charterd.sock` through a folder it cannot read (FD-27, ADR 0068 §5). Claude Code's hooks
-/// reach the hook socket from outside its sandbox, so its sandbox is handed none. Codex runs in
-/// charter's wrap, which allows the hook socket alone (`codex_tests`).
+/// `charterd.sock` through a folder it cannot read (FD-27, ADR 0068 §5). What it must is the
+/// chat's own hook socket, which a `purlis` command the chat runs asks the app over (ADR 0067
+/// §2, #1328): compiled, Claude Code's sandbox allows no unix socket, and where the chat opens
+/// it is allowed that one path, as the kernel names it, and never every socket. Codex and
+/// opencode run in charter's wrap, which allows the hook socket alone (`codex_tests`,
+/// `opencode_tests`).
 #[test]
-fn claude_code_allows_a_chat_no_unix_socket() {
+fn claude_code_allows_a_chat_no_unix_socket_but_its_hook_socket() {
     let (_plane, denied) = denied_with(None, Os::MacOs);
     let settings = claude::settings(&compiled(denied, Os::MacOs)).expect("compiles");
-    let network = settings.sandbox["network"]
-        .as_object()
-        .expect("a network object");
-    for key in network.keys() {
-        assert!(
-            !key.to_lowercase().contains("unix"),
-            "Claude Code's sandbox is handed {key}: {network:?}"
-        );
-    }
+    let unix = |sandbox: &serde_json::Value| -> serde_json::Map<String, serde_json::Value> {
+        sandbox["network"]
+            .as_object()
+            .expect("a network object")
+            .iter()
+            .filter(|(key, _)| key.to_lowercase().contains("unix"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    };
+    // Every socket refused in so many words, so a user's `true` cannot merge in.
+    assert_eq!(
+        serde_json::Value::Object(unix(&settings.sandbox)),
+        serde_json::json!({"allowAllUnixSockets": false})
+    );
+    assert_eq!(settings.reporting_on(None), settings);
+
+    let sockets = tempfile::tempdir().expect("a directory");
+    let socket = sockets.path().join("hooks.sock");
+    let reporting = settings.reporting_on(Some(&socket));
+    assert_eq!(
+        serde_json::Value::Object(unix(&reporting.sandbox)),
+        serde_json::json!({
+            "allowAllUnixSockets": false,
+            "allowUnixSockets": [real(&socket).display().to_string()],
+        })
+    );
+    // Nothing else moves but the socket's folder, denied to writes, so the bind the grant
+    // carries can never replace the app's socket.
+    let folder = real(sockets.path()).display().to_string();
+    let mut without = reporting.clone();
+    without.sandbox["network"]
+        .as_object_mut()
+        .expect("a network object")
+        .remove("allowUnixSockets");
+    let denied = without.sandbox["filesystem"]["denyWrite"]
+        .as_array_mut()
+        .expect("a denyWrite list");
+    assert_eq!(denied.pop(), Some(serde_json::json!(folder)));
+    assert_eq!(
+        without.deny.split_off(settings.deny.len()),
+        [format!("Edit(/{folder})"), format!("Edit(/{folder}/**)")]
+    );
+    assert_eq!(without, settings);
 }
 
 #[test]
