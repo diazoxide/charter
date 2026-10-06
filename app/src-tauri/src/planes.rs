@@ -5776,7 +5776,9 @@ mod tests {
         // The chat's own call has its answer before anything closes under it.
         assert!(is_open(&held, session), "closed mid-turn");
 
-        reported(&held, session, &[Stop]);
+        // Sent and not waited on as `reported` waits: the Stop is what closes the chat, and a
+        // closed chat leaves the board before `reported` could see it waiting.
+        a_report_from(&held, session, Stop);
 
         assert!(becomes(|| !is_open(&held, session)), "the tab stayed open");
         assert_eq!(
@@ -5861,7 +5863,9 @@ mod tests {
         assert!(is_open(&held, other), "another chat's pass closed this one");
 
         assert!(closes(&a_record_asked(&held, closing, closing)));
-        reported(&held, closing, &[Stop]);
+        // Sent and not waited on as `reported` waits: the Stop is what closes the chat, and a
+        // closed chat leaves the board before `reported` could see it waiting.
+        a_report_from(&held, closing, Stop);
         assert!(becomes(|| !is_open(&held, closing)), "the tab stayed open");
 
         // Spent: a chat that has closed has no record to ask for, under any pass.

@@ -69,7 +69,6 @@ const STILL_SPELLED: &[(&str, usize, Why)] = &[
     // Visible text: RN-11a (#1269).
     ("app/src-tauri/src/doctor.rs", 1, Why::Prose),
     ("app/src-tauri/src/planes.rs", 1, Why::Prose),
-    ("crates/purlis-cli/src/session.rs", 1, Why::Prose),
     ("crates/purlis-core/src/active.rs", 2, Why::Prose),
     ("crates/purlis-core/src/adopt.rs", 2, Why::Prose),
     ("crates/purlis-core/src/alerts.rs", 3, Why::Prose),
