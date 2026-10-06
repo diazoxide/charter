@@ -17,7 +17,9 @@
     "sharp": "file:no-sharp",
     "starlight-links-validator": "^0.26.0"
   },
+  "//overrides": "postcss-nested: GHSA-rj75-hqrm-r3gf (CVE-2026-104844, postcss-selector-parser < 7.1.6). @expressive-code/core 0.44.2, the latest, still asks for postcss-nested ^6, which pins the unpatched parser 6.x; postcss-nested 7 takes parser 7. Drop this once expressive-code moves to postcss-nested 7 or later.",
   "overrides": {
-    "sharp": "$sharp"
+    "sharp": "$sharp",
+    "postcss-nested": "^7.0.2"
   }
 }
