@@ -292,6 +292,7 @@ mod tests {
             saved: Box::new(|_| {}),
             refused: Box::new(|_| Ok(())),
             tool: Box::new(|_| Ok(())),
+            blocked: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             permission: Box::new(move |asked| {
                 held(asked).map(|waiting| Waiting {

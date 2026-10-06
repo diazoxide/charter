@@ -123,6 +123,7 @@ pub mod retention;
 pub mod rewrite;
 pub mod roster;
 pub mod sandbox;
+pub mod sandboxblock;
 pub mod scaffold;
 pub mod scanallow;
 pub mod secrets;

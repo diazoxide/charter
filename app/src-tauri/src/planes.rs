@@ -758,6 +758,8 @@ pub struct Planes {
     by_hand: hooks::ByHandTeller,
     /// Told each file a chat's tool touched, confined and rated (FM-6).
     touches: hooks::TouchTeller,
+    /// Told each sandbox block a chat's hook found, once kept for the doctor (#1338).
+    blocks: hooks::BlockTeller,
     /// Told each step of a smart close in any plane (ADR 0064).
     smart: crate::smartclose::Teller,
     /// Told a plane's permission asks each time they change (HP-6).
@@ -855,6 +857,7 @@ impl Planes {
             closed: Arc::new(|_| {}),
             by_hand: Arc::new(|_| {}),
             touches: Arc::new(|_| {}),
+            blocks: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
             asks: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
@@ -937,6 +940,13 @@ impl Planes {
     /// confined to the chat's folder, so the window can mark it in the tree (FM-6).
     pub fn telling_touches(mut self, touches: hooks::TouchTeller) -> Self {
         self.touches = touches;
+        self
+    }
+
+    /// Tells `blocks` each sandbox block a chat's hook finds in a plane this registry holds, so
+    /// the window can show it as a Notice on the chat's tab (#1338).
+    pub fn telling_blocks(mut self, blocks: hooks::BlockTeller) -> Self {
+        self.blocks = blocks;
         self
     }
 
@@ -1069,6 +1079,13 @@ impl Planes {
                     touches(told);
                 }
             })
+        });
+        // A sandbox block a chat's hook found (#1338): the window shows it on the chat's tab.
+        // It carries no path, so there is nothing to confine.
+        held.hooks.when_blocked({
+            let plane = id.clone();
+            let blocks = Arc::clone(&self.blocks);
+            Arc::new(move |block| blocks(hooks::blocked(&plane, &block)))
         });
         // The conversation a chat's own harness moves it onto — the first one Codex or
         // opencode names, a Claude Code `/clear` — is the one the record resumes it by (Q10).

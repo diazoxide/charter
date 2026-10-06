@@ -44,7 +44,7 @@ pub struct Handler {
 }
 
 /// Every hook the Rust `charter` answers, in the order a session meets them.
-pub const HANDLERS: [Handler; 14] = [
+pub const HANDLERS: [Handler; 16] = [
     Handler {
         name: "sessionstart",
         event: "SessionStart",
@@ -103,6 +103,21 @@ pub const HANDLERS: [Handler; 14] = [
         name: "posttooluse-message",
         event: "PostToolUse",
         matcher: Some("SendMessage"),
+        timeout: 5,
+    },
+    // A sandbox block in what a Bash command came back with (#1338): read in the hook, which
+    // runs outside the chat's sandbox, and told to the app as an operation and a kind only
+    // (`sandboxblock`). On both ends of a call: a command that failed is a `PostToolUseFailure`.
+    Handler {
+        name: "posttooluse-blocked",
+        event: "PostToolUse",
+        matcher: Some("Bash"),
+        timeout: 5,
+    },
+    Handler {
+        name: "posttoolusefailure-blocked",
+        event: "PostToolUseFailure",
+        matcher: Some("Bash"),
         timeout: 5,
     },
     Handler {
@@ -214,7 +229,7 @@ mod tests {
     #[test]
     fn a_tool_hook_names_its_tool_and_an_event_hook_names_none() {
         for h in HANDLERS {
-            let tool_event = matches!(h.event, "PreToolUse" | "PostToolUse");
+            let tool_event = matches!(h.event, "PreToolUse" | "PostToolUse" | "PostToolUseFailure");
             assert_eq!(h.matcher.is_some(), tool_event, "{}", h.name);
         }
     }

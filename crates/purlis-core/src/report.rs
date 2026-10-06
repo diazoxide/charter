@@ -409,6 +409,42 @@ impl Draft {
         Draft::assemble(Kind::Bug, title, text.trim_end().to_string(), scrubbed)
     }
 
+    /// A draft bug from a sandbox block of purlis's own operation (#1338): the operation, the
+    /// kind of path or host, the harness by the word the project calls it, and the versions.
+    ///
+    /// **Made of closed words only.** Every part is one of [`crate::sandboxblock`]'s fixed
+    /// words or phrases, a harness kind, or a version purlis itself names, so no path, argument,
+    /// host or output can be in it, and there is nothing for [`Known::scrub`] to find.
+    pub fn of_sandbox_block(
+        block: &crate::sandboxblock::Block,
+        harness: Option<crate::harness::Harness>,
+    ) -> Result<Draft, Refused> {
+        let crate::sandboxblock::Block {
+            operation, kind, ..
+        } = *block;
+        let harness = harness.map_or("not known", |harness| harness.name());
+        let text = format!(
+            "The sandbox blocked an operation purlis itself ran in a chat: {}.\n\n\
+             - **operation:** {}\n\
+             - **kind of path or host:** {} ({})\n\
+             - **harness:** {harness}\n\
+             - **purlis version:** {}\n\n\
+             The app drafted this from the block alone. It names no path, argument, host or \
+             output.",
+            block.said(),
+            operation.word(),
+            kind.word(),
+            kind.phrase(),
+            crate::adopt::app_version(),
+        );
+        let title = cut_title(&format!(
+            "Sandbox blocked purlis's own {} ({})",
+            operation.word(),
+            kind.word()
+        ));
+        Draft::assemble(Kind::Bug, title, text, Vec::new())
+    }
+
     fn assemble(
         kind: Kind,
         title: String,
@@ -422,7 +458,7 @@ impl Draft {
         let mut body = text;
         let _ = write!(
             body,
-            "\n\n---\ncharter {} · {} {}\n_Filed with `charter report {}`._",
+            "\n\n---\npurlis {} · {} {}\n_Filed with `purlis report {}`._",
             crate::adopt::app_version(),
             std::env::consts::OS,
             std::env::consts::ARCH,

@@ -40,6 +40,7 @@ import {
   commands,
   type AtRisk,
   type ByHand,
+  type ChatBlocked,
   type PlaneSaving,
   type ChatWorktree,
   type HarnessGlance,
@@ -143,6 +144,8 @@ import {
 } from "./planeChanged";
 import { FreshMark, freshMarkShown, usePlaneUpdated } from "./PlaneUpdated";
 import { Notice, NoticeBand } from "./Notice";
+import { SandboxBlockNotice } from "./SandboxBlockNotice";
+import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -682,6 +685,8 @@ export const PlaneView = memo(function PlaneView({
   const [byHand, setByHand] = useState<Record<number, ByHandNote>>({});
   /** What each chat's start found to say, by session, until it is dismissed (ADR 0085). */
   const [startNotes, setStartNotes] = useState<Record<number, StartNotes>>({});
+  /** What each chat's sandbox blocked, by session, for the Notice on its tab (#1338). */
+  const { blocks: sandboxBlocks, dismiss: dismissBlock } = useSandboxBlocks(plane);
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
@@ -5050,6 +5055,8 @@ export const PlaneView = memo(function PlaneView({
                   onByHand={answerByHand}
                   startNotes={startNotes}
                   onDismissStartNote={dismissStartNote}
+                  blocks={sandboxBlocks}
+                  onDismissBlock={dismissBlock}
                   offered={views}
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
@@ -5883,6 +5890,8 @@ function PaneFrame({
   onByHand,
   startNotes,
   onDismissStartNote,
+  blocks,
+  onDismissBlock,
   doing,
   children,
 }: {
@@ -5902,6 +5911,9 @@ function PaneFrame({
   /** What this chat's start found to say, while it is up (ADR 0085). */
   startNotes?: StartNotes;
   onDismissStartNote: () => void;
+  /** What this chat's sandbox blocked, newest last, while any is up (#1338). */
+  blocks?: readonly ChatBlocked[];
+  onDismissBlock: (block: ChatBlocked) => void;
   doing: ReactNode;
   children: ReactNode;
 }) {
@@ -5913,6 +5925,7 @@ function PaneFrame({
   const running = useChatsSelect(chats, (states) => stateOf(states, session) === "running");
   const usage = useChatUsage(plane, session, moved, running);
   const lent = useReferenceChats();
+  const newest = blocks?.[blocks.length - 1];
   return (
     <div
       className="pane-frame"
@@ -5937,6 +5950,14 @@ function PaneFrame({
         {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
         {startNotes && (
           <StartNotice plane={plane} found={startNotes} onDismiss={onDismissStartNote} />
+        )}
+        {newest !== undefined && (
+          <SandboxBlockNotice
+            key={`${newest.operation}:${newest.kind}:${newest.ours ? "ours" : "chat"}`}
+            block={newest}
+            more={(blocks?.length ?? 1) - 1}
+            onDismiss={() => onDismissBlock(newest)}
+          />
         )}
       </div>
       <div className="pane-corner at-end">{doing}</div>
@@ -6299,6 +6320,8 @@ function LayoutPanes({
   onByHand,
   startNotes,
   onDismissStartNote,
+  blocks,
+  onDismissBlock,
   offered,
   onOpenView,
   onAsk,
@@ -6331,6 +6354,9 @@ function LayoutPanes({
   /** What each chat's start found to say, by session (ADR 0085). */
   startNotes: Readonly<Record<number, StartNotes>>;
   onDismissStartNote: (session: number) => void;
+  /** What each chat's sandbox blocked, by session (#1338). */
+  blocks: Blocks;
+  onDismissBlock: (session: number, block: ChatBlocked) => void;
   /** The views approved extensions offer, for the buttons a view draws beside itself. */
   offered: readonly ExtensionView[];
   onOpenView: (view: ViewRef, title: string) => void;
@@ -6407,6 +6433,8 @@ function LayoutPanes({
         onByHand={(open) => onByHand(content.session, open)}
         startNotes={startNotes[content.session]}
         onDismissStartNote={() => onDismissStartNote(content.session)}
+        blocks={blocks[content.session]}
+        onDismissBlock={(block) => onDismissBlock(content.session, block)}
         doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
       >
         <SessionPane
@@ -6455,6 +6483,8 @@ function LayoutPanes({
               onByHand={onByHand}
               startNotes={startNotes}
               onDismissStartNote={onDismissStartNote}
+              blocks={blocks}
+              onDismissBlock={onDismissBlock}
               offered={offered}
               onOpenView={onOpenView}
               onAsk={onAsk}

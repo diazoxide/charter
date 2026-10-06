@@ -30,6 +30,7 @@ each is wired to.
 | `pretooluse-dispatch` on `Task`/`Agent` | asks before a persona that writes code is dispatched beside an agent already running (*A dispatch beside a running agent*, below) |
 | `posttooluse` on `Write`/`Edit`/`MultiEdit`, in a plane | warns when a memory or ref just written looks like it holds a secret; says what the workspace flow expects on the first edit in a LIVE workspace's clone; and every twelfth change without a memory, reminds the session to record one |
 | `posttooluse-skill`, `posttooluse-dispatch`, `posttooluse-message`, in a plane | log which skill the active persona used, which persona was dispatched, and a message that resumes one |
+| `posttooluse-blocked` and `posttoolusefailure-blocked` on `Bash`, in a chat the app started sandboxed | read the `<sandbox_violations>` block Claude Code appended to the command's result, and, from the command's standard error alone, an egress proxy's refusal and a program's own "Operation not permitted" for a path outside what the chat may write. Each block goes to the app as an operation and the kind of path or host, and as purlis's own only when the process the sandbox names is `purlis`. Never the path, the command or its output. The harness is told nothing; the window shows a notice on the chat's tab and `purlis doctor` counts them (#1338) |
 | any other `pretooluse…` or `posttooluse…` word | **blocks** the tool call, with the reason on stderr |
 | any other word | exits 1 with the reason on stderr, and blocks nothing |
 

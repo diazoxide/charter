@@ -53,6 +53,8 @@ macro_rules! app_commands {
                 sandboxing::sandbox_state,
                 sandboxing::answer_sandbox_offer,
                 sandboxing::type_sandbox_install,
+                sandboxing::sandbox_block_report,
+                sandboxing::file_sandbox_block_report,
                 firstrun::open_repo,
                 firstrun::template_that_fits,
                 firstrun::open_local_project,

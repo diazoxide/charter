@@ -1985,6 +1985,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<hooks::ByHand>()
         // What `chat-touching` carries (FM-6).
         .typ::<hooks::ChatTouching>()
+        // What `chat-sandbox-blocked` carries (#1338).
+        .typ::<hooks::ChatBlocked>()
         // What `smart-close` carries (ADR 0064).
         .typ::<smartclose::SmartClosing>()
         // The event a launch without the session bus is told the bus answers on (`portal.rs`),
@@ -2598,6 +2600,19 @@ pub fn run() {
                             &window,
                             &told.plane.clone(),
                             hooks::TOUCHING,
+                            &told,
+                        );
+                    })
+                })
+                // A sandbox block a chat's hook found: the window shows it as a Notice on the
+                // chat's tab, with Report for one of purlis's own (#1338).
+                .telling_blocks({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |told: hooks::ChatBlocked| {
+                        windows::emit_for_plane(
+                            &window,
+                            &told.plane.clone(),
+                            hooks::SANDBOX_BLOCKED,
                             &told,
                         );
                     })

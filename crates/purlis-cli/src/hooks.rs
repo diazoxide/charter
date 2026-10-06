@@ -138,8 +138,58 @@ pub fn handler(name: &str) -> Option<Handler> {
         "posttooluse-skill" => toolhooks::posttooluse_skill,
         "posttooluse-dispatch" => toolhooks::posttooluse_dispatch,
         "posttooluse-message" => toolhooks::posttooluse_message,
+        // The harness is told nothing: what these hooks find goes to the app ([`blocks`]).
+        BLOCKED | BLOCKED_ON_FAILURE => says_nothing,
         _ => return None,
     })
+}
+
+fn says_nothing(_: &Hook) -> Answer {
+    Answer::Nothing
+}
+
+/// The hook words that read a Bash command's result for a sandbox block (#1338): the end of a
+/// call that came back, and of one that failed.
+pub const BLOCKED: &str = "posttooluse-blocked";
+pub const BLOCKED_ON_FAILURE: &str = "posttoolusefailure-blocked";
+
+/// Whether `word` is one of the block words.
+pub fn is_a_block_word(word: &str) -> bool {
+    word == BLOCKED || word == BLOCKED_ON_FAILURE
+}
+
+/// The sandbox blocks in a block word's `payload` ([`purlis_core::sandboxblock`]), read through
+/// `env`: none unless the app started this chat sandboxed
+/// ([`purlis_core::sandbox::chat_is_sandboxed`]), since a refusal in any other chat is not the
+/// sandbox's, and none without the folder the app started the chat in
+/// ([`purlis_core::sandboxblock::CHAT_DIR_ENV`], else Claude Code's `CLAUDE_PROJECT_DIR`), which
+/// is never guessed from a working directory. Sorted against that folder, the project this hook
+/// resolves, the folder the payload says the command ran in for a relative path, and the home.
+pub fn blocks(
+    payload: &serde_json::Value,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Vec<purlis_core::sandboxblock::Block> {
+    use purlis_core::sandboxblock::{CHAT_DIR_ENV, Place, detect};
+    if !purlis_core::sandbox::chat_is_sandboxed_in(env) {
+        return Vec::new();
+    }
+    let absolute = |path: Option<String>| path.map(PathBuf::from).filter(|p| p.is_absolute());
+    let Some(chat) = absolute(env(CHAT_DIR_ENV)).or_else(|| absolute(env("CLAUDE_PROJECT_DIR")))
+    else {
+        return Vec::new();
+    };
+    let here = Where::here();
+    let cwd = absolute(payload["cwd"].as_str().map(str::to_owned)).unwrap_or_else(|| chat.clone());
+    let home = absolute(env("HOME"));
+    detect(
+        payload,
+        &Place {
+            root: &here.root,
+            chat: &chat,
+            cwd: &cwd,
+            home: home.as_deref(),
+        },
+    )
 }
 
 /// The decision an answer gave: a denial is one; a line said is whatever permission it names,
