@@ -3521,9 +3521,11 @@ mod tests {
         );
         let waiting = chats.would_not_start();
         assert_eq!(waiting[0].approval, None, "no such profile to approve");
+        let local = root.join(purlis_core::profiles::LOCAL_FILE);
+
         std::fs::write(
-            root.join(purlis_core::profiles::LOCAL_FILE),
-            std::fs::read_to_string(root.join(purlis_core::profiles::LOCAL_FILE))
+            &local,
+            std::fs::read_to_string(&local)
                 .unwrap()
                 .replace("[harness.work]", "[harness.not-declared-yet]"),
         )
