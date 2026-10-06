@@ -164,7 +164,7 @@ pub fn ensure_index(
         holding::Reach::Refused(e) => return Err(e),
         holding::Reach::ByPath => {}
     }
-    std::fs::create_dir_all(dir)?;
+    crate::rewrite::create_dir_all(dir)?;
     if !index.exists() {
         let header = if header.ends_with('\n') {
             header.to_string()
@@ -178,9 +178,10 @@ pub fn ensure_index(
             .create_new(true)
             .open(&index)
         {
-            Ok(mut f) => std::io::Write::write_all(&mut f, header.as_bytes())?,
+            Ok(mut f) => std::io::Write::write_all(&mut f, header.as_bytes())
+                .map_err(crate::rewrite::refused_at(&index))?,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
+            Err(e) => return Err(crate::rewrite::refused_at(&index)(e)),
         }
     }
     Ok(index)
@@ -231,7 +232,7 @@ pub fn write(
     if private {
         crate::trace::private_mkdir(dir)?;
     } else {
-        std::fs::create_dir_all(dir)?;
+        crate::rewrite::create_dir_all(dir)?;
     }
 
     // Held from choosing the name to appending the index line (SI-9d). The append is `O_APPEND`
@@ -367,7 +368,7 @@ pub fn index_append(
         && std::fs::symlink_metadata(index).is_err()
     {
         gate(root, parent)?;
-        std::fs::create_dir_all(parent)?;
+        crate::rewrite::create_dir_all(parent)?;
     }
     let line = format!("{}\n", index_line(title, filename));
     // Neither open follows a link at the index (#420): `create_new` is `O_EXCL`, which never
@@ -375,14 +376,16 @@ pub fn index_append(
     // link swapped in since is refused rather than written through.
     let mut fresh = std::fs::OpenOptions::new();
     fresh.write(true).create_new(true);
-    match crate::contain::nofollow(&mut fresh).open(index) {
+    let appended = match crate::contain::nofollow(&mut fresh).open(index) {
         Ok(mut f) => {
             std::io::Write::write_all(&mut f, format!("{INDEX_FALLBACK}{line}").as_bytes())
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             let mut more = std::fs::OpenOptions::new();
             more.append(true);
-            let mut f = crate::contain::nofollow(&mut more).open(index)?;
+            let mut f = crate::contain::nofollow(&mut more)
+                .open(index)
+                .map_err(crate::rewrite::refused_at(index))?;
             // Opened without waiting (`nofollow` is non-blocking too), and only a file takes
             // the line.
             if !f.metadata()?.is_file() {
@@ -394,7 +397,9 @@ pub fn index_append(
             std::io::Write::write_all(&mut f, line.as_bytes())
         }
         Err(e) => Err(e),
-    }
+    };
+    // Whichever step the filesystem refused, the index is named (#1359).
+    appended.map_err(crate::rewrite::refused_at(index))
 }
 
 /// Find a memory file by its full filename or by a bare slug — the lookup for a name a person
@@ -1529,7 +1534,7 @@ fn archive_moving(
             .ok_or_else(|| no_such(ident));
     };
     gate(root, &dest_dir)?;
-    std::fs::create_dir_all(&dest_dir)?;
+    crate::rewrite::create_dir_all(&dest_dir)?;
     let name = file
         .file_name()
         .unwrap_or_default()
@@ -1552,7 +1557,7 @@ fn archive_moving(
     }
     gate(root, &file)?;
     gate(root, &dest)?;
-    std::fs::rename(&file, &dest)?;
+    std::fs::rename(&file, &dest).map_err(crate::rewrite::refused_at(&dest))?;
     drop_index_line(root, dir, &name);
     Ok((dest, true))
 }
@@ -1624,7 +1629,7 @@ pub fn unarchive(
                 .to_string_lossy()
                 .into_owned()
         });
-    std::fs::rename(&file, &dest)?;
+    std::fs::rename(&file, &dest).map_err(crate::rewrite::refused_at(&dest))?;
     if !listed(root, dir).contains(&name) {
         index_append(root, &index, &name, &title)?;
     }
@@ -1935,8 +1940,8 @@ fn move_by_path(
     gate(root, &index)?;
     let title = title_in(&target, &text);
     // Made only now, once every check has passed: a refusal leaves no empty store.
-    std::fs::create_dir_all(to)?;
-    std::fs::rename(&file, &target)?;
+    crate::rewrite::create_dir_all(to)?;
+    std::fs::rename(&file, &target).map_err(crate::rewrite::refused_at(&target))?;
     if !index.exists() {
         let _ = std::fs::write(&index, header);
     }
@@ -2616,5 +2621,64 @@ mod gate_tests {
             resolve(dir.path(), &store, "real").unwrap(),
             store.join("real.md")
         );
+    }
+
+    /// A persona's store, reached by path, with no `charter.toml` beside it: a refusal test
+    /// needs nothing the sandbox would not let it write.
+    #[cfg(target_os = "macos")]
+    fn persona_store() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("personas/devops/memory");
+        (dir, store)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_store_the_filesystem_refuses_to_make_is_named() {
+        // #1359: `persona remember` into a store not there yet printed only the OS error.
+        let (dir, store) = persona_store();
+        let persona = store.parent().unwrap();
+        std::fs::create_dir_all(persona).unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(persona);
+
+        let refused = write(
+            dir.path(),
+            &store,
+            "a fact",
+            None,
+            false,
+            "fact",
+            true,
+            stamp(),
+        )
+        .unwrap_err();
+
+        crate::rewrite::frozen::names(&refused, &store);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_index_line_the_filesystem_refuses_names_the_index() {
+        let (dir, store) = persona_store();
+        std::fs::create_dir_all(&store).unwrap();
+        let index = store.join(INDEX);
+        std::fs::write(&index, INDEX_FALLBACK).unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(&index);
+
+        let refused = index_append(dir.path(), &index, "a-fact.md", "A fact").unwrap_err();
+
+        crate::rewrite::frozen::names(&refused, &index);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_index_the_filesystem_refuses_to_create_is_named() {
+        let (dir, store) = persona_store();
+        std::fs::create_dir_all(&store).unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(&store);
+
+        let refused = ensure_index(dir.path(), &store, "# Memory").unwrap_err();
+
+        crate::rewrite::frozen::names(&refused, &store.join(INDEX));
     }
 }

@@ -308,12 +308,34 @@ pub fn refused_write(e: io::Error, path: &Path, sandboxed: bool) -> io::Error {
     )
 }
 
+/// [`refused_write`] for a write to `path` by this process, which asks
+/// [`crate::sandbox::chat_is_sandboxed`] itself: the `map_err` of every write that does not go
+/// through [`replace`] — an append to a log, a directory made ahead of a write (#1359).
+pub fn refused_at(path: &Path) -> impl FnOnce(io::Error) -> io::Error + '_ {
+    move |e| refused_write(e, path, crate::sandbox::chat_is_sandboxed())
+}
+
+/// [`std::fs::create_dir_all`], with a refusal naming `dir` ([`refused_at`]).
+pub fn create_dir_all(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir).map_err(refused_at(dir))
+}
+
 /// The OS error under `e`: the one a [`refused_write`] rewording carries, or `e` itself. What a
 /// caller reads an errno or the OS's own sentence from.
 pub fn os_cause(e: &io::Error) -> &io::Error {
     e.get_ref()
         .and_then(|inner| inner.downcast_ref::<WriteRefused>())
         .map_or(e, |refused| &refused.source)
+}
+
+/// The OS's own words for `e`, without Rust's `(os error N)`: for a sentence that names the
+/// path itself, which the [`refused_write`] rewording would name a second time.
+pub fn os_words(e: &io::Error) -> String {
+    let text = os_cause(e).to_string();
+    match text.rfind(" (os error ") {
+        Some(at) => text[..at].to_owned(),
+        None => text,
+    }
 }
 
 /// A write refused with `EPERM`; see [`refused_write`].
@@ -385,6 +407,50 @@ fn directory_of(path: &Path) -> io::Result<PathBuf> {
             io::ErrorKind::InvalidInput,
             format!("{} has no directory", path.display()),
         )),
+    }
+}
+
+/// A directory the filesystem refuses every write into with `EPERM`, as a sandbox does: macOS's
+/// user immutable flag (`chflags uchg`), lifted again when the guard drops. A mode refuses with
+/// `EACCES` instead, and on Linux only root may set the immutable attribute, so the write
+/// classes' refusal tests run on macOS (#1359).
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) mod frozen {
+    use std::path::{Path, PathBuf};
+
+    /// `path`, frozen until this drops.
+    pub(crate) struct Frozen(PathBuf);
+
+    fn chflags(flag: &str, path: &Path) {
+        let ok = crate::forklock::status(
+            std::process::Command::new("/usr/bin/chflags")
+                .arg(flag)
+                .arg(path),
+        )
+        .is_ok_and(|s| s.success());
+        assert!(ok, "chflags {flag} {}", path.display());
+    }
+
+    impl Frozen {
+        pub(crate) fn at(path: &Path) -> Self {
+            chflags("uchg", path);
+            Self(path.to_path_buf())
+        }
+    }
+
+    impl Drop for Frozen {
+        fn drop(&mut self) {
+            chflags("nouchg", &self.0);
+        }
+    }
+
+    /// What a refused write must say: the file, and never the bare OS error.
+    pub(crate) fn names(e: &std::io::Error, path: &Path) {
+        let said = e.to_string();
+        assert!(said.contains(&path.display().to_string()), "{said}");
+        assert!(!said.contains("os error"), "{said}");
+        assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "{said}");
+        assert_eq!(super::os_cause(e).raw_os_error(), Some(1), "{said}");
     }
 }
 
@@ -582,6 +648,43 @@ mod tests {
         assert_eq!(os_cause(&refused).raw_os_error(), Some(1));
         let plain = io::Error::from_raw_os_error(13);
         assert_eq!(os_cause(&plain).raw_os_error(), Some(13));
+    }
+
+    #[test]
+    fn a_write_site_maps_a_refusal_to_one_naming_its_path() {
+        // #1359: what every append and every folder made ahead of a write maps its error
+        // through. Run on every platform: the sites' own tests need macOS's immutable flag.
+        let path = Path::new("/plane/workspaces/alpha/work/device.jsonl");
+        let refused = refused_at(path)(eperm());
+        let said = refused.to_string();
+        assert!(
+            said.contains("/plane/workspaces/alpha/work/device.jsonl"),
+            "{said}"
+        );
+        assert!(!said.contains("os error"), "{said}");
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(os_cause(&refused).raw_os_error(), Some(1));
+
+        let full = refused_at(path)(io::Error::from_raw_os_error(28));
+        assert_eq!(
+            full.raw_os_error(),
+            Some(28),
+            "a full disk stays a full disk"
+        );
+    }
+
+    #[test]
+    fn a_folder_made_ahead_of_a_write_is_made_and_a_failure_that_is_not_a_refusal_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let deep = dir.path().join("a/b/c");
+        create_dir_all(&deep).unwrap();
+        assert!(deep.is_dir());
+
+        // A file where a folder must go: not EPERM, so the OS's own error comes back.
+        let file = dir.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        let blocked = create_dir_all(&file.join("below")).unwrap_err();
+        assert!(blocked.raw_os_error().is_some(), "{blocked}");
     }
 
     #[test]

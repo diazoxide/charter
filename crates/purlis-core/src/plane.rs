@@ -440,10 +440,11 @@ pub fn private_dir(plane: &Path, dir: &Path) -> std::io::Result<()> {
             .recursive(true)
             .mode(0o700)
             .create(dir)
+            .map_err(crate::rewrite::refused_at(dir))
     }
     #[cfg(not(unix))]
     {
-        std::fs::create_dir_all(dir)
+        crate::rewrite::create_dir_all(dir)
     }
 }
 

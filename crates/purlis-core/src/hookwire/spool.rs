@@ -184,7 +184,9 @@ fn open_spool(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     let mut options = std::fs::OpenOptions::new();
     options.read(true).append(true).create(true).mode(0o600);
-    crate::contain::nofollow(&mut options).open(path)
+    crate::contain::nofollow(&mut options)
+        .open(path)
+        .map_err(crate::rewrite::refused_at(path))
 }
 
 /// Appends `what`, chat `chat`'s line, to its spool in `dir`, under `token`'s key and the next

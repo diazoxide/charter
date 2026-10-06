@@ -210,8 +210,8 @@ pub fn create(
     // The persona is committed: it names the program as the plane spells it (D-RN11a-1).
     let program = crate::names::BINARY.writes_for(root);
     let text = scaffold(name, &role, vault, delegate_when, extends, program);
-    let written = std::fs::create_dir_all(persona.dir())
-        .and_then(|()| std::fs::write(&file, text))
+    let written = crate::rewrite::create_dir_all(persona.dir())
+        .and_then(|()| std::fs::write(&file, text).map_err(crate::rewrite::refused_at(&file)))
         .and_then(|()| persona.scaffold_memory());
     let shared = plane
         .persona(crate::personas::SHARED)

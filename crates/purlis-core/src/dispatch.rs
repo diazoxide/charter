@@ -16,6 +16,7 @@
 //! outside it (ADR 0051) — which commits the plane's own files as one decision.
 
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// The directory under `personas/` the log lives in — `dispatch.DIR_NAME`.
@@ -178,9 +179,22 @@ pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, host: &str) ->
 /// link swapped in at the log between that answer and the open would otherwise be followed.
 /// A log that is a link is refused wherever it points; `std` opens `O_CLOEXEC` already.
 pub fn append(path: &Path, root: &Path, row: &serde_json::Value) -> Option<PathBuf> {
+    try_append(path, root, row).ok()
+}
+
+/// [`append`], answering why a row was not written: what containment refused, or the
+/// filesystem's refusal naming the log ([`crate::rewrite::refused_at`], #1359).
+pub fn try_append(path: &Path, root: &Path, row: &serde_json::Value) -> io::Result<PathBuf> {
     use std::io::Write;
-    crate::contain::writable(root, path).ok()?;
-    std::fs::create_dir_all(path.parent()?).ok()?;
+    crate::contain::writable(root, path)
+        .map_err(|why| io::Error::new(io::ErrorKind::PermissionDenied, why.to_string()))?;
+    let dir = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} has no directory", path.display()),
+        )
+    })?;
+    crate::rewrite::create_dir_all(dir)?;
     let mut options = std::fs::OpenOptions::new();
     options.append(true).create(true);
     #[cfg(unix)]
@@ -188,10 +202,13 @@ pub fn append(path: &Path, root: &Path, row: &serde_json::Value) -> Option<PathB
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o644);
     }
-    let mut file = crate::contain::nofollow(&mut options).open(path).ok()?;
+    let mut file = crate::contain::nofollow(&mut options)
+        .open(path)
+        .map_err(crate::rewrite::refused_at(path))?;
     let line = format!("{}\n", crate::pyjson::dumps_sorted(row));
-    file.write_all(line.as_bytes()).ok()?;
-    Some(path.to_path_buf())
+    file.write_all(line.as_bytes())
+        .map_err(crate::rewrite::refused_at(path))?;
+    Ok(path.to_path_buf())
 }
 
 /// `isoformat(timespec="seconds")` of a UTC instant.
@@ -274,8 +291,8 @@ pub fn record_handoff(
     created: bool,
     when: chrono::DateTime<chrono::Utc>,
     host: &str,
-) -> Option<PathBuf> {
-    append(
+) -> io::Result<PathBuf> {
+    try_append(
         &path_for(root, when, host),
         root,
         &serde_json::json!({
@@ -373,6 +390,23 @@ mod tests {
              \"ts\": \"2026-05-04T11:32:17+00:00\"}\n"
         );
         assert!(tally(dir.path()).is_empty(), "a handoff is not a dispatch");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_row_the_filesystem_refuses_names_the_log_it_was_appending_to() {
+        // #1359: the handoff's warning said only that the row was not added.
+        let dir = tempfile::tempdir().unwrap();
+        let when = chrono::DateTime::parse_from_rfc3339("2026-05-04T11:32:17+00:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let log = path_for(dir.path(), when, "box");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        let _frozen = crate::rewrite::frozen::Frozen::at(log.parent().unwrap());
+
+        let refused = record_handoff(dir.path(), Placement::Here, false, when, "box").unwrap_err();
+
+        crate::rewrite::frozen::names(&refused, &log);
     }
 
     #[cfg(unix)]

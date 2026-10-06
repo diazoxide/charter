@@ -707,11 +707,22 @@ fn a_dispatch_row_that_cannot_be_written_is_said_and_the_chat_stays_open() {
     let out = handoff(&root, Some(&socket));
 
     assert_eq!(out.status.code(), Some(0), "the chat is open");
-    assert_eq!(
-        text(&out.stderr),
-        "! charter handoff: chat 9 is open in 'alpha', but its row could not be added to the \
-         dispatch log (personas/_dispatch).\n"
+    let said = text(&out.stderr);
+    // The chat is open, so nothing is to be run again (#1359): only the row is missing, the
+    // log named once, with the OS's reason.
+    assert!(
+        said.starts_with(
+            "! charter handoff: chat 9 is open in 'alpha'. Only its row in the dispatch log \
+             (personas/_dispatch) is missing ("
+        ),
+        "{said:?}"
     );
+    assert!(
+        said.ends_with("); there is nothing to run again.\n"),
+        "{said:?}"
+    );
+    assert_eq!(said.matches("_dispatch").count(), 1, "{said:?}");
+    assert!(!said.contains("os error"), "{said:?}");
 }
 
 // ---- SI-1b: a handoff from the plane root ---------------------------------------------------

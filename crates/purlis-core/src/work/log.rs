@@ -437,7 +437,7 @@ fn write(root: &Path, ws: &str, device: &str, ts: DateTime<Utc>, op: &Op) -> io:
         ));
     }
     let path = check_writable(root, ws, device)?;
-    std::fs::create_dir_all(dir_for(root, ws))?;
+    crate::rewrite::create_dir_all(&dir_for(root, ws))?;
     // Never dated before the log's last line, so a clock that stepped back cannot reorder this
     // device's own lines in the fold (which sorts by `ts` first).
     let ts = last_ts(&path).map_or(ts, |last| ts.max(last));
@@ -448,10 +448,13 @@ fn write(root: &Path, ws: &str, device: &str, ts: DateTime<Utc>, op: &Op) -> io:
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o644);
     }
-    let mut file = crate::contain::nofollow(&mut options).open(&path)?;
+    let mut file = crate::contain::nofollow(&mut options)
+        .open(&path)
+        .map_err(crate::rewrite::refused_at(&path))?;
     let line = format!("{}\n", op.to_line(ts));
     // One write of one whole line, so the union merge driver always keeps whole lines.
     file.write_all(line.as_bytes())
+        .map_err(crate::rewrite::refused_at(&path))
 }
 
 /// The `ts` of the last line in the log at `path`, where it has one that reads.
