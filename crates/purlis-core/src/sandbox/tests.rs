@@ -963,6 +963,11 @@ fn machine(os: Os) -> Machine {
 
 const ON: &str = "[sandbox]\nmode = \"on\"\n";
 
+/// [`ON`] without the `toolchains` preset, for a test whose machine has no data home to make the
+/// project's package caches in (#1337): a start there is refused, naming the folder.
+const ON_WITHOUT_CACHES: &str =
+    "[sandbox]\nmode = \"on\"\negress = [\"model-providers\", \"forge\"]\n";
+
 #[test]
 fn a_chat_in_a_plane_that_says_nothing_starts_as_it_always_has() {
     let plane = plane_saying("schema = 1\n");
@@ -1319,7 +1324,7 @@ fn a_charter_toml_over_the_cap_starts_no_chat() {
 fn no_sandboxed_chat_starts_in_a_folder_reached_through_a_link() {
     // Ruling of 2026-10-03, every harness: a plane-root chat could swap a workspace folder for
     // a link, and a chat started there would take that folder's rules to the link's target.
-    let plane = plane_saying(ON);
+    let plane = plane_saying(ON_WITHOUT_CACHES);
     let workspaces = plane.path().join("workspaces");
     std::fs::create_dir_all(workspaces.join("real")).expect("a real workspace");
     let elsewhere = tempfile::tempdir().expect("somewhere outside");
@@ -2409,7 +2414,7 @@ fn a_denial_below_or_beside_the_chat_s_ground_is_kept() {
 
 /// A plane with the sandbox on whose `dir` has a Claude Code hook running `command`.
 fn plane_with_hook(dir: &str, command: &str) -> tempfile::TempDir {
-    let plane = plane_saying(ON);
+    let plane = plane_saying(ON_WITHOUT_CACHES);
     let at = plane.path().join(dir);
     std::fs::create_dir_all(at.join(".claude")).expect(".claude");
     let settings = serde_json::json!({"hooks": {"PostToolUse": [{"hooks": [
