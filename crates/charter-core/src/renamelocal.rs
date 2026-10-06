@@ -392,7 +392,7 @@ fn quiet(
     seams: &Seams,
     planes: &[PathBuf],
     again: &str,
-) -> Result<std::fs::File, String> {
+) -> Result<crate::filelock::Held, String> {
     let lock =
         busy::exclusive(&local.config_root).map_err(|why| refused_while_running(&why, again))?;
     if let Some(why) = (seams.busy)(local.own_app.as_deref(), planes) {

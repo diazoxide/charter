@@ -34,6 +34,7 @@ pub mod eventlog;
 pub mod executor;
 pub mod extension;
 pub mod fence;
+pub mod filelock;
 pub mod files;
 pub mod firstrun;
 pub mod firsttask;

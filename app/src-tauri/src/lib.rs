@@ -2110,7 +2110,7 @@ fn without_channel_commands(bindings: &str) -> String {
 }
 
 /// The shared lock this app holds on the config home for its life (`renamelocal::busy::LOCK`).
-struct HoldsTheConfigHome(#[allow(dead_code)] std::fs::File);
+struct HoldsTheConfigHome(#[allow(dead_code)] charter_core::filelock::Held);
 
 /// What the launch's rename-local said, for the app's log.
 #[cfg(not(feature = "e2e"))]

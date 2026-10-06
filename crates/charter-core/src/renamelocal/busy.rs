@@ -15,6 +15,7 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use crate::filelock::Held;
 use crate::names::{BUNDLE_ID, STATE_DIR};
 
 /// The advisory lock in the config root (beside the config home's folder, so it is the same
@@ -38,17 +39,21 @@ fn open_lock(config_root: &Path) -> std::io::Result<File> {
     options.open(config_root.join(LOCK))
 }
 
-/// Hold [`LOCK`] shared for as long as the returned file lives: what the app and `mcp` do, so
+/// Hold [`LOCK`] shared for as long as the returned lock lives: what the app and `mcp` do, so
 /// that no rename-local moves their folders under them. `None` when it could not be taken,
 /// which only means a migration could start; nothing else depends on it.
-pub fn hold_shared(config_root: &Path) -> Option<File> {
+///
+/// Dropping it unlocks [`LOCK`] before closing it ([`Held`]): a program forked meanwhile would
+/// otherwise keep it held until its exec, and a migration then would be refused (#1316).
+pub fn hold_shared(config_root: &Path) -> Option<Held> {
     let file = open_lock(config_root).ok()?;
     file.try_lock_shared().ok()?;
-    Some(file)
+    Some(Held::locked(file))
 }
 
-/// [`LOCK`] taken exclusively for a migration, or why not.
-pub(super) fn exclusive(config_root: &Path) -> Result<File, String> {
+/// [`LOCK`] taken exclusively for a migration, or why not; let go of the same way as
+/// [`hold_shared`]'s, so an undo right after a run is not refused either.
+pub(super) fn exclusive(config_root: &Path) -> Result<Held, String> {
     let file = open_lock(config_root).map_err(|e| {
         format!(
             "{} could not be opened ({e}), so nothing could be moved safely",
@@ -56,7 +61,7 @@ pub(super) fn exclusive(config_root: &Path) -> Result<File, String> {
         )
     })?;
     match file.try_lock() {
-        Ok(()) => Ok(file),
+        Ok(()) => Ok(Held::locked(file)),
         Err(std::fs::TryLockError::WouldBlock) => {
             Err("a running charter holds this machine's config home".to_owned())
         }
@@ -252,7 +257,16 @@ pub fn lock_held(path: &Path) -> bool {
     let Ok(file) = std::fs::OpenOptions::new().read(true).open(path) else {
         return false;
     };
-    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    match file.try_lock() {
+        // Taken, so free: let go at once, through every copy a program forked meanwhile has,
+        // so the app this probe found not running can still take it as it starts (#1316).
+        Ok(()) => {
+            drop(Held::locked(file));
+            false
+        }
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(std::fs::TryLockError::Error(_)) => false,
+    }
 }
 
 /// The processes in `listing` — `ps -A -o pid=,ppid=,uid=,comm=` — of user `uid` whose program

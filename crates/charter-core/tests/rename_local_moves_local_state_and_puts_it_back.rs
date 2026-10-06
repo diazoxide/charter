@@ -457,6 +457,31 @@ fn a_process_holding_the_config_homes_lock_keeps_everything_where_it_is() {
     assert!(renamelocal::run(&m.local, &nobody_running()).changed);
 }
 
+/// #1316: a program forked while the lock is held has a copy of its descriptor until it execs,
+/// and `flock` belongs to the open file description every copy shares. Closing the holder's
+/// descriptor alone would leave the lock held for as long as that child lives. A child that
+/// keeps the copy as its stdin and sleeps is that child, held still.
+#[cfg(unix)]
+#[test]
+fn the_config_homes_lock_is_let_go_while_a_child_still_has_a_copy_of_its_descriptor() {
+    charter_core::unsteered!();
+    let m = machine();
+    let held = renamelocal::busy::hold_shared(&m.local.config_root).expect("held");
+    let mut child = charter_core::forklock::spawn(
+        Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::from(held.try_clone().expect("a copy"))),
+    )
+    .expect("sleep runs");
+
+    drop(held);
+    let moved = renamelocal::run(&m.local, &nobody_running());
+
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(moved.changed, "{:#?}", moved.said);
+}
+
 #[test]
 fn an_older_builds_stop_under_the_old_name_still_stops_after_the_move() {
     charter_core::unsteered!();
