@@ -11,9 +11,8 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 
 use clap::Subcommand;
-use purlis_core::active::Place;
 use purlis_core::hookwire::{self, CHAT_ENV, Report, SOCKET_ENV, SessionSaved};
-use purlis_core::sessionrecord::{self, Facts, New, Refused, Touched, relay};
+use purlis_core::sessionrecord::{self, Facts, New, Refused, relay};
 
 use crate::Here;
 use crate::memory::Code;
@@ -108,7 +107,6 @@ fn record(
     workspace: Option<&str>,
     now: Option<&str>,
 ) -> Result<Code, String> {
-    let root = here.plane.root();
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
         voice::err(
@@ -122,18 +120,81 @@ fn record(
         .lock()
         .read_to_string(&mut body)
         .map_err(|e| format!("could not read the record from standard input: {e}"))?;
-    let place = here.place(workspace);
-    let touched = match touched(root, &here.cwd, &place, pieces) {
-        Ok(touched) => touched,
-        Err(why) => {
-            voice::err(&why);
-            return Ok(2);
+    match write(here, title, &body, pieces, workspace, now) {
+        Ok(saved) => {
+            for warning in &saved.warnings {
+                voice::warn(warning);
+            }
+            voice::ok(&format!("Session record → {}", saved.shown));
+            println!("{}", saved.shown);
+            if saved.tab_warns {
+                voice::warn(&saved.tab);
+            } else {
+                voice::info(&saved.tab);
+            }
+            Ok(0)
         }
-    };
+        Err(NotWritten::Refused(why)) => {
+            voice::err(&why);
+            Ok(2)
+        }
+        Err(NotWritten::Failed(why)) => Err(why),
+    }
+}
+
+/// A session record written, by the app or by this process, and what becomes of the tab.
+pub struct Saved {
+    /// The record, plane-relative.
+    pub shown: String,
+    /// What did not follow it ([`sessionrecord::Recorded::warnings`]).
+    pub warnings: Vec<String>,
+    /// What becomes of the chat's tab, in a sentence the chat relays.
+    pub tab: String,
+    /// Whether that sentence is a warning: the tab is left for the operator because something
+    /// failed, not because nobody asked for it to close.
+    pub tab_warns: bool,
+}
+
+/// Why no record was written.
+pub enum NotWritten {
+    /// The title, body, place or a piece is not a record's: the sentence says what to fix.
+    Refused(String),
+    /// The disk refused, or the clock could not be read.
+    Failed(String),
+}
+
+/// Writes this chat's session record: the one operation `purlis session record` and the MCP
+/// server's `session_record` tool share (ADR 0067 §2, "two entrances, one operation").
+///
+/// **In a chat the app started, the app writes it** ([`forwarded`], #1332): a brokered write,
+/// so the chat's sandbox never has to reach the project's files, and the record's facts are
+/// the app's record of the chat. Where no app takes the ask (none listening, one older than
+/// the ask, or a socket the sandbox refuses), or where `-w` or the test clock names what the
+/// app's record would not, this process writes it, as it always has, and tells the app after.
+pub fn write(
+    here: &Here,
+    title: &str,
+    body: &str,
+    pieces: &[String],
+    workspace: Option<&str>,
+    now: Option<&str>,
+) -> Result<Saved, NotWritten> {
+    if workspace.is_none() && now.is_none() {
+        match forwarded(here, title, body, pieces) {
+            Forwarded::Written(saved) => return Ok(saved),
+            Forwarded::Refused(why) => return Err(NotWritten::Refused(why)),
+            Forwarded::Unsure(why) => return Err(NotWritten::Failed(why)),
+            Forwarded::NotTaken => {}
+        }
+    }
+    let root = here.plane.root();
+    let place = here.place(workspace);
+    let touched = sessionrecord::touched(root, Some(&here.cwd), &place, pieces)
+        .map_err(NotWritten::Refused)?;
     let chat = chat_number();
     let facts = Facts {
         place,
-        at: crate::memory::stamp(now)?,
+        at: crate::memory::stamp(now).map_err(NotWritten::Failed)?,
         chat: chat.map(|n| sessionrecord::chat_facts(root, n)),
         persona: here.active_persona(None),
         pieces: touched,
@@ -142,77 +203,108 @@ fn record(
         root,
         &New {
             title,
-            body: &body,
+            body,
             facts: &facts,
         },
     ) {
         Ok(recorded) => recorded,
-        Err(Refused::Io(e)) => return Err(format!("could not write the session record: {e}")),
-        Err(refused) => {
-            voice::err(&refused.to_string());
-            return Ok(2);
+        Err(Refused::Io(e)) => {
+            return Err(NotWritten::Failed(format!(
+                "could not write the session record: {e}"
+            )));
         }
+        Err(refused) => return Err(NotWritten::Refused(refused.to_string())),
     };
-    for warning in &recorded.warnings {
-        voice::warn(warning);
-    }
-    voice::ok(&format!("Session record → {}", recorded.shown));
-    println!("{}", recorded.shown);
     let conversation = facts.chat.as_ref().and_then(|c| c.conversation.clone());
-    tell_the_app(here, chat, conversation, &recorded.path);
-    Ok(0)
+    let (tab, tab_warns) = tell_the_app(here, chat, conversation, &recorded.path);
+    Ok(Saved {
+        shown: recorded.shown,
+        warnings: recorded.warnings,
+        tab,
+        tab_warns,
+    })
 }
 
-/// The pieces this chat worked in: the one it stands in, and each `--piece`, as git reports
-/// them. A `--piece` git does not report in this workspace is refused, never recorded.
-fn touched(
-    root: &Path,
-    cwd: &Path,
-    place: &Place,
-    pieces: &[String],
-) -> Result<Vec<Touched>, String> {
-    let mut out: Vec<Touched> = Vec::new();
-    let mut add = |ws: &str, repo: &str, piece: &str| -> Result<(), String> {
-        if out.iter().any(|t| t.repo == repo && t.piece == piece) {
-            return Ok(());
+/// What the app made of a record handed to it.
+enum Forwarded {
+    Written(Saved),
+    /// The app read it and will not write it: the sentence says why.
+    Refused(String),
+    /// No app took it, so this process writes it.
+    NotTaken,
+    /// The app took it and did not answer: it may be written, so nothing is written here.
+    Unsure(String),
+}
+
+/// How long the app may take to write a record and answer: a file, an index and a pointer.
+const A_RECORD_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What becomes of the tab when nobody started a smart close for the chat: the sentence the
+/// skill relays to the operator.
+pub const NO_PASS: &str = "No smart close was started for this chat (the tab's Smart close, or \
+                           typing /smart-close), so its tab will not close by itself. Close it \
+                           when you are done.";
+
+/// Hands the record to the app that started this chat, over the chat's hook socket (#1332).
+fn forwarded(here: &Here, title: &str, body: &str, pieces: &[String]) -> Forwarded {
+    let socket = purlis_core::envvar::var_os(SOCKET_ENV).filter(|s| !s.is_empty());
+    let (Some(socket), Some(chat)) = (socket, chat_number()) else {
+        return Forwarded::NotTaken;
+    };
+    let Ok(mut asking) = hookwire::Asking::on(Path::new(&socket), hookwire::ChatToken::from_env())
+    else {
+        return Forwarded::NotTaken;
+    };
+    let ask = hookwire::Ask::SessionRecord(Box::new(hookwire::RecordAsk {
+        chat,
+        title: title.to_owned(),
+        body: body.to_owned(),
+        pieces: pieces.to_vec(),
+        cwd: Some(here.cwd.clone()),
+    }));
+    answered(asking.ask(&ask, A_RECORD_TAKES_AT_MOST))
+}
+
+/// What the app's answer, or the way the asking failed, makes of a record handed to it.
+///
+/// **Only a connection the app ended at once is not taken.** That is an app older than the
+/// ask, which drops a line it cannot read, and then this process writes the record itself. A
+/// connection that went quiet is an app that may be writing it now: writing it here as well
+/// would leave two records, so the command says so and writes nothing (#1332).
+fn answered(answer: std::io::Result<hookwire::Answer>) -> Forwarded {
+    use std::io::ErrorKind;
+    match answer {
+        Ok(hookwire::Answer::Recorded {
+            record,
+            closes,
+            warnings,
+        }) => Forwarded::Written(Saved {
+            shown: record,
+            warnings,
+            tab: if closes {
+                "The app wrote it, and closes this tab when this turn ends.".to_owned()
+            } else {
+                format!("The app wrote it. {NO_PASS}")
+            },
+            tab_warns: false,
+        }),
+        // An app with nothing that answers asks: a test's, or one that is closing.
+        Ok(hookwire::Answer::No { why }) if why == hookwire::NOTHING_ANSWERS => Forwarded::NotTaken,
+        Ok(hookwire::Answer::No { why }) => Forwarded::Refused(why),
+        Ok(_) => Forwarded::NotTaken,
+        Err(e)
+            if matches!(
+                e.kind(),
+                ErrorKind::UnexpectedEof | ErrorKind::BrokenPipe | ErrorKind::ConnectionReset
+            ) =>
+        {
+            Forwarded::NotTaken
         }
-        let listed = purlis_core::worktree::list(root, ws, repo)
-            .map_err(|e| format!("--piece {repo}/{piece}: {e}"))?;
-        let Some(found) = listed.into_iter().find(|p| p.piece == piece) else {
-            return Err(format!(
-                "--piece {repo}/{piece}: git reports no such piece of {repo} in workspace {ws}"
-            ));
-        };
-        out.push(Touched {
-            repo: repo.to_owned(),
-            piece: piece.to_owned(),
-            branch: found.branch,
-        });
-        Ok(())
-    };
-    let ws = match place {
-        Place::Workspace(ws) => Some(ws.as_str()),
-        Place::PlaneRoot => None,
-    };
-    if let (Some(ws), Some((at, repo, Some(piece)))) = (ws, purlis_core::pieces::tree_at(root, cwd))
-        && at == ws
-    {
-        // Where this command runs is a fact; one git will not describe is left out rather
-        // than refused, because nobody named it.
-        let _ = add(ws, &repo, &piece);
+        Err(e) => Forwarded::Unsure(format!(
+            "the app took this record and did not answer ({e}), so it may already be written. \
+             Nothing was written again here: `purlis session list` shows whether it is there."
+        )),
     }
-    for named in pieces {
-        let Some(ws) = ws else {
-            return Err(format!(
-                "--piece {named}: the plane root has no pieces; name the workspace with -w"
-            ));
-        };
-        let Some((repo, piece)) = named.split_once('/') else {
-            return Err(format!("--piece {named}: name it as <repo>/<piece>"));
-        };
-        add(ws, repo, piece)?;
-    }
-    Ok(out)
 }
 
 /// The app's number for the chat this runs in: `$CHARTER_CHAT` where hooks report, else
@@ -225,31 +317,49 @@ fn chat_number() -> Option<u32> {
         .find_map(|n| n.trim().parse::<u32>().ok().filter(|n| *n > 0))
 }
 
-/// Tells the app this chat's record is saved, and says so either way: the record is written
-/// whatever happens here, and a tab that nothing will close is the operator's to close.
+/// Tells the app this chat's record is saved, and answers what becomes of the tab, as a
+/// sentence and whether it is a warning: the record is written whatever happens here, and a
+/// tab that nothing will close is the operator's to close.
 ///
 /// **A line the socket refused is left for the chat's next `Stop` hook** (#517,
 /// `sessionrecord::relay`): a harness can run this command in a sandbox that refuses the
-/// connect — Codex's default one does — and runs its hooks outside it. It is left where the
-/// chat works (`Here::place` with no `-w`), which is where the sandbox lets it write and where
-/// the hook looks.
-fn tell_the_app(here: &Here, chat: Option<u32>, conversation: Option<String>, path: &Path) {
-    let socket = purlis_core::envvar::var_os(SOCKET_ENV).filter(|s| !s.is_empty());
-    let (Some(socket), Some(chat)) = (socket, chat) else {
-        voice::info(
-            "This chat was not started by the app (no $CHARTER_HOOK_SOCKET and $CHARTER_CHAT), \
-             so its tab will not close by itself — close it when you are done.",
+/// connect — Codex's default one does — and runs its hooks outside it. So is one with no
+/// socket to send to in a chat the app started: Codex hands an MCP server the chat's number
+/// and never its socket. It is left where the chat works (`Here::place` with no `-w`), which
+/// is where the sandbox lets it write and where the hook looks.
+fn tell_the_app(
+    here: &Here,
+    chat: Option<u32>,
+    conversation: Option<String>,
+    path: &Path,
+) -> (String, bool) {
+    let Some(chat) = chat else {
+        return (
+            "This chat was not started by the app (no $PURLIS_HOOK_SOCKET and $PURLIS_CHAT), \
+             so its tab will not close by itself — close it when you are done."
+                .to_owned(),
+            false,
         );
-        return;
     };
     let saved = SessionSaved {
         chat,
         session_saved: path.to_path_buf(),
     };
-    let token = hookwire::ChatToken::from_env();
-    let Err(e) = hookwire::tell_saved(Path::new(&socket), token.as_ref(), &saved) else {
-        voice::info("Told the app: a Smart close waiting on this record closes the tab.");
-        return;
+    let not_heard = match purlis_core::envvar::var_os(SOCKET_ENV).filter(|s| !s.is_empty()) {
+        Some(socket) => {
+            let token = hookwire::ChatToken::from_env();
+            match hookwire::tell_saved(Path::new(&socket), token.as_ref(), &saved) {
+                Ok(()) => {
+                    return (
+                        "Told the app: a Smart close waiting on this record closes the tab."
+                            .to_owned(),
+                        false,
+                    );
+                }
+                Err(e) => e.to_string(),
+            }
+        }
+        None => "no socket to tell it on".to_owned(),
     };
     let left = relay::Marker {
         chat,
@@ -258,14 +368,21 @@ fn tell_the_app(here: &Here, chat: Option<u32>, conversation: Option<String>, pa
         at: unix_now(),
     };
     match relay::leave(here.plane.root(), &here.place(None), &left) {
-        Ok(_) => voice::info(&format!(
-            "The app did not hear it ({e}), so this chat's hook tells it when this turn ends. \
-             If the tab is still open after that, close it yourself."
-        )),
-        Err(kept) => voice::warn(&format!(
-            "The app did not hear it ({e}), and purlis could not leave it for this chat's hook \
-             ({kept}), so the tab will not close by itself — close it yourself when you are done."
-        )),
+        Ok(_) => (
+            format!(
+                "The app did not hear it ({not_heard}), so this chat's hook tells it when this \
+                 turn ends. If the tab is still open after that, close it yourself."
+            ),
+            false,
+        ),
+        Err(kept) => (
+            format!(
+                "The app did not hear it ({not_heard}), and purlis could not leave it for this \
+                 chat's hook ({kept}), so the tab will not close by itself — close it yourself \
+                 when you are done."
+            ),
+            true,
+        ),
     }
 }
 
@@ -296,4 +413,48 @@ fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+
+    use super::*;
+
+    #[test]
+    fn an_app_that_went_quiet_may_have_written_the_record_so_it_is_not_written_again() {
+        for kind in [ErrorKind::TimedOut, ErrorKind::WouldBlock] {
+            let Forwarded::Unsure(why) = answered(Err(Error::new(kind, "slow"))) else {
+                panic!("a {kind:?} was taken as no app");
+            };
+            assert!(why.contains("may already be written"), "{why}");
+            assert!(why.contains("purlis session list"), "{why}");
+        }
+    }
+
+    #[test]
+    fn an_app_that_ended_the_connection_at_once_did_not_take_the_record() {
+        for kind in [
+            ErrorKind::UnexpectedEof,
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+        ] {
+            assert!(
+                matches!(answered(Err(Error::new(kind, "gone"))), Forwarded::NotTaken),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_written_record_under_a_pass_says_the_tab_closes_when_the_turn_ends() {
+        let Forwarded::Written(saved) = answered(Ok(hookwire::Answer::Recorded {
+            record: "sessions/r.md".to_owned(),
+            closes: true,
+            warnings: Vec::new(),
+        })) else {
+            panic!("not written");
+        };
+        assert!(saved.tab.contains("when this turn ends"), "{}", saved.tab);
+    }
 }

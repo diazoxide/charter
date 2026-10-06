@@ -438,7 +438,9 @@ fn in_the_app(
     match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
         Ok(Answer::Opened { chat }) => Host::Opened(chat),
         Ok(Answer::No { why }) => Host::Refused(why),
-        Ok(Answer::Ticket { .. } | Answer::Reported { .. }) | Err(_) => Host::None,
+        Ok(Answer::Ticket { .. } | Answer::Reported { .. } | Answer::Recorded { .. }) | Err(_) => {
+            Host::None
+        }
     }
 }
 
@@ -469,7 +471,9 @@ fn ticketed() -> Ticketed {
     match asking.ask(&Ask::Ticket { chat }, A_TICKET_TAKES_AT_MOST) {
         Ok(Answer::Ticket { ticket }) => Ticketed::Yes(asking, chat, ticket),
         Ok(Answer::No { why }) => Ticketed::Refused(why),
-        Ok(Answer::Opened { .. } | Answer::Reported { .. }) | Err(_) => Ticketed::NoApp,
+        Ok(Answer::Opened { .. } | Answer::Reported { .. } | Answer::Recorded { .. }) | Err(_) => {
+            Ticketed::NoApp
+        }
     }
 }
 
@@ -533,7 +537,7 @@ fn report_back(summary: &str) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Answer::No { why }) => report_refused(&why),
-        Ok(Answer::Ticket { .. } | Answer::Opened { .. }) | Err(_) => {
+        Ok(Answer::Ticket { .. } | Answer::Opened { .. } | Answer::Recorded { .. }) | Err(_) => {
             voice::err(
                 "charter handoff report: the purlis app did not answer, so nothing was sent.",
             );

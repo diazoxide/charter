@@ -133,6 +133,9 @@ pub fn answer(
             }
             report_it(held, back.chat, &back.summary).unwrap_or_else(no)
         }
+        // A brokered write, not a handoff: no ticket, because a record is the chat's own to
+        // write and the line can only name the chat whose token it carries (#1332).
+        Ask::SessionRecord(record) => crate::smartclose::record(held, &record),
     }
 }
 

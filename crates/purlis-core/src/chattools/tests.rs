@@ -107,6 +107,7 @@ fn the_tools_are_the_ones_charter_names_and_each_says_what_it_does() {
             "memory_add",
             "session_record_list",
             "session_record_read",
+            "session_record",
             "change_status",
             "ask_operator",
         ]
@@ -332,6 +333,37 @@ fn ask_operator_is_answered_by_the_server_and_not_by_call() {
     )
     .unwrap_err();
     assert!(refused.contains(ASK_OPERATOR), "{refused}");
+}
+
+#[test]
+fn a_session_record_is_handed_to_the_app_by_the_server_and_not_written_by_call() {
+    // A brokered write (#1332): the server hands it to the app over the chat's socket.
+    let p = tempfile::tempdir().unwrap();
+    let before = snapshot(p.path());
+    let refused = call(
+        p.path(),
+        &in_ws("alpha"),
+        SESSION_RECORD,
+        &args(json!({"title": "t", "body": "b"})),
+        at(9, 0),
+    )
+    .unwrap_err();
+    assert!(refused.contains(SESSION_RECORD), "{refused}");
+    assert_eq!(snapshot(p.path()), before, "call wrote something");
+}
+
+#[test]
+fn a_session_record_s_arguments_are_its_title_body_and_pieces() {
+    assert_eq!(
+        record_args(&args(json!({"title": "T", "body": "B", "pieces": ["r/p"]}))),
+        Ok(("T".to_owned(), "B".to_owned(), vec!["r/p".to_owned()]))
+    );
+    assert_eq!(
+        record_args(&args(json!({"title": "T", "body": "B"}))),
+        Ok(("T".to_owned(), "B".to_owned(), Vec::new()))
+    );
+    assert!(record_args(&args(json!({"title": "T"}))).is_err_and(|e| e.contains("body")));
+    assert!(record_args(&args(json!({"title": "T", "body": "B", "pieces": [1]}))).is_err());
 }
 
 #[test]

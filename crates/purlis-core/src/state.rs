@@ -113,7 +113,33 @@ impl Ending {
 pub struct Detail {
     pub started: Started,
     pub ending: Ending,
+    /// On a `UserPromptSubmit`: the prompt was `/smart-close` ([`smart_close_typed`]). Never the
+    /// prompt itself: the app hears one bit of it, and only this bit. Absent from an older hook,
+    /// which reads as no. The app believes it only beside the person's own Enter (#1332).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub smart_close: bool,
 }
+
+/// Whether a prompt a harness hands its `UserPromptSubmit` hook is the person typing purlis's
+/// smart-close skill as a slash command: `/smart-close`, or with the plugin's prefix
+/// (`/purlis:smart-close`, or the old name's), alone or with words after it. Anything else, a
+/// sentence that only mentions it included, is not (#1332).
+pub fn smart_close_typed(prompt: &str) -> bool {
+    let Some(command) = prompt.split_whitespace().next() else {
+        return false;
+    };
+    let Some(command) = command.strip_prefix('/') else {
+        return false;
+    };
+    let skill = std::iter::once(crate::names::SKILL_NAMESPACE.write)
+        .chain(crate::names::SKILL_NAMESPACE.reads.iter().copied())
+        .find_map(|prefix| command.strip_prefix(prefix))
+        .unwrap_or(command);
+    skill == SMART_CLOSE_SKILL
+}
+
+/// The smart-close skill's name, as a person types it after the `/`.
+pub const SMART_CLOSE_SKILL: &str = "smart-close";
 
 /// A state-carrying hook, by the event a harness fires it on.
 ///
