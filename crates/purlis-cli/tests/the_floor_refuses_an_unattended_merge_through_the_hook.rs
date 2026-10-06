@@ -287,12 +287,29 @@ fn nesting_far_past_the_floors_depth_is_answered_and_refused_unattended() {
 
 #[test]
 fn a_shell_script_behind_value_options_or_fed_unquoted_is_refused_unattended() {
-    Plane::new().refused_unattended_only(&[
+    let plane = Plane::new();
+    plane.refused_unattended_only(&[
         "bash -euo pipefail -c 'gh pr merge 12'",
         "echo gh pr merge 12 | sh",
         "gh alias set x '$1 merge'",
-        "git --config-env alias.p=EXP p",
     ]);
+    // An alias whose body comes from a variable the guards cannot see. Run in the project root,
+    // the root's branch guard answers first, in either mode: it cannot tell where `git p` leads,
+    // and `p` may move the root's HEAD (#1358). Whichever guard answers, an unattended run is
+    // refused; attended, only the root's guard may refuse it. The floor's own reading of this
+    // spelling is pinned at the unit seam (`an_unattended_run_cannot_merge_a_request_by_any_route`).
+    let cmd = "git --config-env alias.p=EXP p";
+    let root_guard = "cannot tell what `git p` does: it may be an alias";
+    let unattended = plane
+        .denial(cmd, "bypassPermissions")
+        .unwrap_or_else(|| panic!("not refused unattended: {cmd}"));
+    assert!(
+        unattended.contains("Re-run this step **attended**") || unattended.contains(root_guard),
+        "{unattended}"
+    );
+    if let Some(attended) = plane.denial(cmd, "default") {
+        assert!(attended.contains(root_guard), "attended: {attended}");
+    }
 }
 
 #[test]
