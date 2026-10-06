@@ -1350,7 +1350,7 @@ impl Applied {
         let chain = self.chain(Some(cwd));
         if let Some(refused) = covering(&self.denied, &ground).or_else(|| covering(&chain, &ground))
         {
-            return Err(refused.to_string());
+            return Err(refused.placed_in(&self.root).to_string());
         }
         let mut line = self
             .harness
@@ -1506,14 +1506,14 @@ fn compile_checked(
     }
     let ground = ground(root, machine.home.as_deref());
     if let Some(refused) = covering(&compiled.denied.paths, &ground) {
-        return Err(refused);
+        return Err(refused.placed_in(root));
     }
     let form = compile(compiled).map_err(NotStarted::Uncompilable)?;
     let denied = form
         .denied()
         .map_or_else(|| compiled.denied.paths.clone(), <[Denial]>::to_vec);
     if let Some(refused) = covering(&denied, &ground) {
-        return Err(refused);
+        return Err(refused.placed_in(root));
     }
     Ok((form, denied))
 }
@@ -1648,30 +1648,215 @@ fn ground(root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
 }
 
 /// The refusal for the first of `denied` that covers a folder of `ground` — is it, or is above
-/// it — by the name it is written with or the one the kernel gives it; `None` where none does.
+/// it — by any name either has ([`spellings`]), compared case-folded where the volume the folder
+/// is on folds case ([`folds_case`]); `None` where none does.
 ///
 /// **Fail closed** (#1327). A rule that covers the ground a chat stands on (`/`, the home
 /// directory, the project, or the chat's own folder or one above it) leaves it read-only
 /// everywhere it works. That is never what a class means, so the chat is refused, naming what
 /// named the path, rather than started read-only or started with the rule left out.
 pub fn covering(denied: &[Denial], ground: &[PathBuf]) -> Option<NotStarted> {
-    // Each spelling of `path` a sandbox or a tool may compare: as written, with `..` taken
-    // off, and as the kernel names either.
-    fn names_of(path: &Path) -> [PathBuf; 4] {
-        let lexical = planted::lexical(path);
-        [path.to_path_buf(), real(path), real(&lexical), lexical]
-    }
-    let ground: Vec<PathBuf> = ground.iter().flat_map(|folder| names_of(folder)).collect();
+    let ground: Vec<(PathBuf, bool)> = ground
+        .iter()
+        .flat_map(|folder| {
+            let folds = folds_case(folder);
+            spellings(folder).into_iter().map(move |name| (name, folds))
+        })
+        .collect();
     denied.iter().find_map(|denial| {
-        let covers = names_of(&denial.path)
-            .iter()
-            .any(|name| ground.iter().any(|folder| folder.starts_with(name)));
+        let covers = spellings(&denial.path).iter().any(|name| {
+            ground.iter().any(|(folder, folds)| {
+                folder.starts_with(name) || (*folds && folded(folder).starts_with(folded(name)))
+            })
+        });
         covers.then(|| NotStarted::CoversItsGround {
             path: denial.path.clone(),
             class: denial.class,
             named: denial.named.clone(),
+            within: None,
         })
     })
+}
+
+/// Each spelling of `path` a sandbox or a tool may compare: as written, with `..` taken off,
+/// as the kernel names either, and each of those on the data volume's other side
+/// ([`firmlink_twin`]).
+fn spellings(path: &Path) -> Vec<PathBuf> {
+    let lexical = planted::lexical(path);
+    let mut out = vec![path.to_path_buf(), real(path), real(&lexical), lexical];
+    let twins: Vec<PathBuf> = out.iter().filter_map(|it| firmlink_twin(it)).collect();
+    out.extend(twins);
+    out
+}
+
+/// `path` with every part lower-cased: what a volume that folds case compares.
+fn folded(path: &Path) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().to_lowercase())
+}
+
+/// Whether the volume `path` is on folds case (#1356): whether the deepest folder of it that
+/// exists, with a letter in its name, is found again under that name with its case swapped.
+/// A path that does not exist yet and differs from one that does only in case is that folder
+/// there, which resolving it ([`real`]) cannot tell.
+fn folds_case(path: &Path) -> bool {
+    path.ancestors()
+        .filter(|folder| folder.exists())
+        .find_map(|folder| {
+            let name = folder.file_name()?.to_str()?;
+            let swapped: String = name
+                .chars()
+                .flat_map(|c| {
+                    if c.is_lowercase() {
+                        c.to_uppercase().collect::<Vec<_>>()
+                    } else {
+                        c.to_lowercase().collect()
+                    }
+                })
+                .collect();
+            (swapped != name).then(|| (folder, folder.with_file_name(swapped)))
+        })
+        .is_some_and(|(folder, swapped)| {
+            let id = crate::pypath::file_identity(folder);
+            id.is_some() && id == crate::pypath::file_identity(&swapped)
+        })
+}
+
+/// Where macOS keeps what its firmlinks reach: `/Users` is also `/System/Volumes/Data/Users`.
+const DATA_VOLUME: &str = "/System/Volumes/Data";
+
+/// The firmlinks macOS 26.2 lists in `/usr/share/firmlinks`, for a machine whose list cannot
+/// be read.
+const KNOWN_FIRMLINKS: [&str; 18] = [
+    "/AppleInternal",
+    "/Applications",
+    "/Library",
+    "/System/Library/Caches",
+    "/System/Library/Assets",
+    "/System/Library/PreinstalledAssets",
+    "/System/Library/AssetsV2",
+    "/System/Library/PreinstalledAssetsV2",
+    "/System/Library/CoreServices/CoreTypes.bundle/Contents/Library",
+    "/System/Library/Speech",
+    "/Users",
+    "/Volumes",
+    "/cores",
+    "/opt",
+    "/private",
+    "/usr/local",
+    "/usr/libexec/cups",
+    "/usr/share/snmp",
+];
+
+/// The folders this machine reaches by a firmlink: none but on macOS, where they are those
+/// `/usr/share/firmlinks` lists and those [`KNOWN_FIRMLINKS`] holds, together.
+///
+/// **Fail closed** (#1356). A list that cannot be read, or reads empty, is logged and leaves
+/// the known ones, never none: without them a rule or a ground loses its other name.
+fn firmlinks() -> &'static [PathBuf] {
+    static FIRMLINKS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    FIRMLINKS.get_or_init(|| {
+        if !cfg!(target_os = "macos") {
+            return Vec::new();
+        }
+        let text = std::fs::read_to_string("/usr/share/firmlinks").ok();
+        if text.as_deref().is_none_or(|text| text.trim().is_empty()) {
+            tracing::warn!(
+                "the system's firmlink list could not be read; the sandbox uses the one purlis knows"
+            );
+        }
+        firmlinks_from(text.as_deref())
+    })
+}
+
+/// The firmlinks `text`, a `/usr/share/firmlinks`, lists, with [`KNOWN_FIRMLINKS`]; the known
+/// ones alone where there is no text.
+pub(crate) fn firmlinks_from(text: Option<&str>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = KNOWN_FIRMLINKS.iter().map(PathBuf::from).collect();
+    let listed = text
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.split('\t').next())
+        .map(PathBuf::from)
+        .filter(|it| it.is_absolute() && it.parent().is_some());
+    for link in listed {
+        if !out.contains(&link) {
+            out.push(link);
+        }
+    }
+    out
+}
+
+/// `path` as the kernel names it ([`real`]), and under its other name across a firmlink
+/// ([`firmlink_twin`]) where it has one: each a rule written for the kernel is held to.
+///
+/// The name off the data volume comes first, so either spelling gives one order.
+pub(crate) fn kernel_names(path: &Path) -> Vec<PathBuf> {
+    both_firmlink_names(real(path))
+}
+
+/// `path` as it is spelled, and under its other name across a firmlink ([`firmlink_twin`])
+/// where it has one, the name off the data volume first.
+pub(crate) fn both_firmlink_names(path: PathBuf) -> Vec<PathBuf> {
+    match firmlink_twin(&path) {
+        Some(twin) if path.starts_with(DATA_VOLUME) => vec![twin, path],
+        Some(twin) => vec![path, twin],
+        None => vec![path],
+    }
+}
+
+/// `path`'s other name across a firmlink (#1356): `/Users/x` for `/System/Volumes/Data/Users/x`
+/// and the other way, or `None` where no firmlink reaches it. Resolving either name
+/// ([`real`]) leaves it as it is spelled, so a rule or a ground held to one would miss the
+/// other.
+pub(crate) fn firmlink_twin(path: &Path) -> Option<PathBuf> {
+    let data = Path::new(DATA_VOLUME);
+    let linked = |it: &Path| firmlinks().iter().any(|link| it.starts_with(link));
+    match path.strip_prefix(data) {
+        Ok(below) => {
+            let plain = Path::new("/").join(below);
+            linked(&plain).then_some(plain)
+        }
+        Err(_) => linked(path)
+            .then(|| path.strip_prefix("/").ok().map(|below| data.join(below)))
+            .flatten(),
+    }
+}
+
+/// Where a config that named a refused path sits in the project: its repo, as a path from
+/// the project, and its workspace (#1356).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Within {
+    pub repo: Option<PathBuf>,
+    pub workspace: Option<String>,
+}
+
+impl Within {
+    /// Where `file` sits in the project at `root`: the nearest folder above it, below the
+    /// project, that holds a `.git`, and its workspace; `None` where it is in neither.
+    fn of(file: &Path, root: &Path) -> Option<Self> {
+        let dir = file.parent()?;
+        let repo = dir
+            .ancestors()
+            .take_while(|folder| *folder != root && folder.starts_with(root))
+            .find(|folder| folder.join(".git").exists())
+            .and_then(|folder| folder.strip_prefix(root).ok())
+            .map(Path::to_path_buf);
+        let workspace = crate::active::workspace_of_tree(root, dir);
+        (repo.is_some() || workspace.is_some()).then_some(Self { repo, workspace })
+    }
+}
+
+impl fmt::Display for Within {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (&self.repo, &self.workspace) {
+            (Some(repo), Some(workspace)) => {
+                write!(f, "in the repo {} of workspace {workspace}", repo.display())
+            }
+            (Some(repo), None) => write!(f, "in the repo {}", repo.display()),
+            (None, Some(workspace)) => write!(f, "in workspace {workspace}"),
+            (None, None) => Ok(()),
+        }
+    }
 }
 
 /// Whether a plane manifest above `start`, under either name (`charter.toml` or
@@ -1756,10 +1941,38 @@ pub enum NotStarted {
         path: PathBuf,
         class: Class,
         named: Option<Named>,
+        /// Where the config that named it sits, in a repo or a workspace.
+        within: Option<Within>,
     },
     /// A config's commands change folder or name scripts more often than purlis follows
     /// ([`planted::MOST_MOVES`], [`planted::MOST_NAMED`]), so what they run is not known.
     Unread(Named),
+}
+
+impl NotStarted {
+    /// This refusal with where the config that named its path sits in the project at `root`
+    /// ([`Within`]), for one [`covering`] gave.
+    fn placed_in(self, root: &Path) -> Self {
+        match self {
+            Self::CoversItsGround {
+                path,
+                class,
+                named,
+                within: None,
+            } => {
+                let within = named
+                    .as_ref()
+                    .and_then(|named| Within::of(&named.file, root));
+                Self::CoversItsGround {
+                    path,
+                    class,
+                    named,
+                    within,
+                }
+            }
+            other => other,
+        }
+    }
 }
 
 impl fmt::Display for NotStarted {
@@ -1834,14 +2047,19 @@ impl fmt::Display for NotStarted {
             Self::CoversItsGround {
                 path,
                 named: Some(named),
+                within,
                 ..
             } => write!(
                 f,
-                "{lead}, and `{}` in {} reads as a script purlis keeps this chat from changing, \
-                 which would leave it unable to write {}, so nothing was started. Change that \
-                 word in {}, or start this chat without the sandbox from the new-chat picker.",
+                "{lead}, and `{}` in {}{} reads as a script purlis keeps this chat from \
+                 changing, which would leave it unable to write {}, so nothing was started. \
+                 Change that word in {}, or start this chat without the sandbox from the \
+                 new-chat picker.",
                 named.word,
                 named.file.display(),
+                within
+                    .as_ref()
+                    .map_or_else(String::new, |within| format!(" ({within})")),
                 path.display(),
                 named.file.display()
             ),
@@ -1849,6 +2067,7 @@ impl fmt::Display for NotStarted {
                 path,
                 class,
                 named: None,
+                ..
             } => write!(
                 f,
                 "{lead}, and its {} rules would keep the chat from writing {}, so nothing was \
