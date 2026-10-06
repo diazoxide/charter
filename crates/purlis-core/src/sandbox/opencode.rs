@@ -64,6 +64,8 @@ pub struct Wrap {
     pub denied: Vec<Denial>,
     /// The hosts its proxy carries.
     pub hosts: Vec<String>,
+    /// What its presets widen past the hosts: the package caches and the certificate check.
+    pub widened: Box<super::Widened>,
     /// opencode's data directory, of which only what a turn writes is writable.
     pub data: Option<PathBuf>,
     /// opencode's state directory, which a wrapped chat never writes: it is started with a
@@ -96,6 +98,7 @@ pub fn wrap(compiled: &Compiled) -> Result<Wrap, Uncompilable> {
     Ok(Wrap {
         denied,
         hosts: compiled.hosts.clone(),
+        widened: Box::new(compiled.widened.clone()),
         data: own(&compiled.homes.data),
         state: own(&compiled.homes.state),
         config: own(&compiled.homes.config),
@@ -156,6 +159,7 @@ fn own(wrap: &Wrap) -> Result<Own, &'static str> {
         overlap: OVERLAP,
         ..Own::default()
     };
+    seatbelt::widen(&mut own, &wrap.widened)?;
     if let Some(data) = &wrap.data {
         own.allow.push(format!(
             "(regex {})",

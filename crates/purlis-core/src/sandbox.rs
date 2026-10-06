@@ -61,7 +61,13 @@ impl Preset {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     pub egress: Vec<Preset>,
+    /// `certificate-checks`: whether a chat may ask the system's certificate check, which Go
+    /// programs such as `gh` need to verify a host (D-1337-7). Off unless the file says `true`.
+    pub certificate_checks: bool,
 }
+
+/// The key that lets a chat ask the system's certificate check.
+pub const CERTIFICATE_CHECKS: &str = "certificate-checks";
 
 /// The `[sandbox]` block that turns the sandbox on with the default egress, as charter writes it
 /// into a new project's `charter.toml` and into an existing one whose operator took the offer
@@ -193,6 +199,8 @@ pub enum Refusal {
     EgressNotAList,
     /// A word in `egress` that is not a preset, as written.
     EgressUnknown(String),
+    /// `certificate-checks` that is not `true` or `false`.
+    CertificateChecksNotABool,
 }
 
 impl fmt::Display for Refusal {
@@ -201,12 +209,13 @@ impl fmt::Display for Refusal {
         match self {
             Self::NotATable => write!(
                 f,
-                "{TABLE} in {FILE} is not a table — [{TABLE}] holds mode and egress; {on}"
+                "{TABLE} in {FILE} is not a table — [{TABLE}] holds mode, egress and \
+                 {CERTIFICATE_CHECKS}; {on}"
             ),
             Self::UnknownKey(key) => write!(
                 f,
-                "{TABLE}.{key} in {FILE} is not a key purlis reads — [{TABLE}] holds mode and \
-                 egress"
+                "{TABLE}.{key} in {FILE} is not a key purlis reads — [{TABLE}] holds mode, \
+                 egress and {CERTIFICATE_CHECKS}"
             ),
             Self::ModeOff => write!(
                 f,
@@ -227,6 +236,11 @@ impl fmt::Display for Refusal {
                 f,
                 "{TABLE}.egress in {FILE} names {word}, which is not a preset — one of: {}",
                 Preset::listed()
+            ),
+            Self::CertificateChecksNotABool => write!(
+                f,
+                "{TABLE}.{CERTIFICATE_CHECKS} in {FILE} is not true or false; certificate checks \
+                 stay off"
             ),
         }
     }
@@ -255,6 +269,7 @@ impl Said {
             return Self {
                 policy: Some(Policy {
                     egress: Preset::DEFAULT.to_vec(),
+                    certificate_checks: false,
                 }),
                 refused: vec![Refusal::NotATable],
             };
@@ -273,7 +288,7 @@ impl Said {
             }
         };
         for key in table.keys() {
-            if key != "mode" && key != "egress" {
+            if key != "mode" && key != "egress" && key != CERTIFICATE_CHECKS {
                 refused.push(Refusal::UnknownKey(key.clone()));
             }
         }
@@ -295,8 +310,19 @@ impl Said {
                 Preset::DEFAULT.to_vec()
             }
         };
+        let certificate_checks = match table.get(CERTIFICATE_CHECKS) {
+            None => false,
+            Some(toml::Value::Boolean(on)) => *on,
+            Some(_) => {
+                refused.push(Refusal::CertificateChecksNotABool);
+                false
+            }
+        };
         Self {
-            policy: on.then_some(Policy { egress }),
+            policy: on.then_some(Policy {
+                egress,
+                certificate_checks,
+            }),
             refused,
         }
     }
@@ -823,6 +849,36 @@ pub struct Compiled {
     /// Where a harness keeps its own files on this machine, for a compiler that has to let the
     /// whole harness write them ([`opencode`]).
     pub homes: Homes,
+    /// What the presets widen past the hosts.
+    pub widened: Widened,
+}
+
+/// What a project's sandbox widens past the hosts it lets a chat reach (spec #1330's coupled
+/// widenings, #1337).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Widened {
+    /// The project's own package caches, with [`Preset::Toolchains`] only (D-1337-6): a cache
+    /// home of its sandboxed chats', never the person's caches ([`caches`]).
+    pub caches: Option<caches::CacheHome>,
+    /// Whether a chat may ask the system's certificate check, with `certificate-checks` only
+    /// (D-1337-7): on macOS, Go programs such as `gh` verify a host's certificate by asking
+    /// the `trustd` service, and without it every one of them fails TLS. Off by default: the
+    /// service fetches the addresses a certificate names, past the egress proxy.
+    pub trust: bool,
+}
+
+impl Widened {
+    /// What `policy` widens for a chat in the project at `root` on `machine`, denied `denied`.
+    pub fn of(policy: &Policy, machine: &Machine, root: &Path, denied: &Denied) -> Self {
+        Self {
+            caches: policy
+                .egress
+                .contains(&Preset::Toolchains)
+                .then(|| caches::home_of(machine, root, denied))
+                .flatten(),
+            trust: policy.certificate_checks,
+        }
+    }
 }
 
 /// The directories a harness keeps its own files under, by the XDG base directory rules: each
@@ -871,7 +927,7 @@ impl Homes {
 
     /// charter's data home on `machine` ([`crate::datahome`]'s ladder, read from `machine`): the
     /// variable, else `$XDG_DATA_HOME/charter`, else the system's data directory under its home.
-    fn charter_data(machine: &Machine) -> Option<PathBuf> {
+    pub(crate) fn charter_data(machine: &Machine) -> Option<PathBuf> {
         let named = |name: &str| {
             machine
                 .env
@@ -895,15 +951,24 @@ impl Homes {
     /// The Codex home of the project at `root`'s sandboxed chats on `machine` (D-88q): a folder
     /// named for the project as the kernel names it, under charter's data home.
     pub fn codex_project(machine: &Machine, root: &Path) -> Option<PathBuf> {
+        Some(
+            Self::charter_data(machine)?
+                .join("codex-homes")
+                .join(Self::project_key(root)),
+        )
+    }
+
+    /// The name of the project at `root`'s folders under purlis's data home: a digest of the
+    /// project as the kernel names it.
+    pub(crate) fn project_key(root: &Path) -> String {
         use sha2::Digest;
         let real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let digest = sha2::Sha256::digest(real.as_os_str().as_encoded_bytes());
-        let key: String = digest
+        digest
             .iter()
             .take(16)
             .map(|byte| format!("{byte:02x}"))
-            .collect();
-        Some(Self::charter_data(machine)?.join("codex-homes").join(key))
+            .collect()
     }
 }
 
@@ -932,8 +997,10 @@ impl Compiled {
 
     /// `policy`, for a chat in `plane` at `root`, on `machine`.
     pub fn of(policy: &Policy, plane: &Plane, root: &Path, machine: &Machine) -> Self {
+        let denied = Denied::of(root, machine);
         Self {
-            denied: Denied::of(root, machine),
+            widened: Widened::of(policy, machine, root, &denied),
+            denied,
             hosts: hosts(&policy.egress, plane),
             os: machine.os,
             homes: Homes {
@@ -985,6 +1052,8 @@ pub struct Applied {
     root: PathBuf,
     /// The paths it denies, which must not cover the chat's folder ([`covering`]).
     denied: Vec<Denial>,
+    /// The project's package caches it lets a chat write ([`Widened::caches`]).
+    caches: Option<Box<caches::CacheHome>>,
 }
 
 impl Applied {
@@ -999,13 +1068,16 @@ impl Applied {
     }
 
     /// The folders this sandbox lets a chat write besides its own and the temp directories:
-    /// opencode's own data, or what a Codex turn writes in Codex's home, under charter's wrap.
+    /// opencode's own data, or what a Codex turn writes in Codex's home, under charter's wrap;
+    /// and, for every harness, what the project's package caches let a chat write.
     pub fn writable(&self) -> Vec<PathBuf> {
-        match &self.form {
+        let mut out = match &self.form {
             Form::Opencode(wrap) => wrap.data.iter().cloned().collect(),
             Form::Codex(wrap) => wrap.writable(),
             Form::ClaudeCode(_) => Vec::new(),
-        }
+        };
+        out.extend(self.caches.iter().flat_map(|caches| caches.writable()));
+        out
     }
 
     /// What that harness is handed.
@@ -1037,7 +1109,19 @@ impl Applied {
         if let Some(refused) = covering(&self.denied, &ground) {
             return Err(refused.to_string());
         }
-        self.harness.adapter().sandboxed_line(&self.form, words, at)
+        let mut line = self
+            .harness
+            .adapter()
+            .sandboxed_line(&self.form, words, at)?;
+        // The project's package caches (D-1337-6): made here, outside the sandbox, with any link
+        // a chat planted in them taken out; refused, naming the path, only where one stays.
+        if let Some(caches) = &self.caches {
+            caches.prepare()?;
+            line.env
+                .retain(|(key, _)| !caches.env.iter().any(|(set, _)| set == key));
+            line.env.extend(caches.env.iter().cloned());
+        }
+        Ok(line)
     }
 
     /// What has to run for as long as a chat under this sandbox does, started now: charter's
@@ -1193,6 +1277,7 @@ pub fn never_on(harness: Harness, os: Os) -> Option<String> {
         hosts: Vec::new(),
         os,
         homes: Homes::default(),
+        widened: Widened::default(),
     };
     match compile(&nothing) {
         Err(Uncompilable {
@@ -1201,6 +1286,17 @@ pub fn never_on(harness: Harness, os: Os) -> Option<String> {
         }) => Some("purlis can wrap it on macOS only, so far".to_owned()),
         _ => None,
     }
+}
+
+/// Why a sandboxed chat is not started when `path`, of its project's package caches, is a link
+/// purlis could not take out, as found `when` it made the folders.
+pub fn caches_linked(path: &Path, when: &str) -> String {
+    format!(
+        "this plane runs every chat sandboxed, and {} of the project's package caches is a \
+         link purlis could not take out ({when} making them), so nothing was started. Remove \
+         that link and start the chat again.",
+        path.display()
+    )
 }
 
 /// Why a sandboxed chat with no folder of its own is not started.
@@ -1562,14 +1658,42 @@ pub fn for_start(
     if let Some(missing) = backend::missing(machine.os, has) {
         return Err(NotStarted::NoBackend(missing));
     }
-    let compiled = Compiled::of(&policy, &plane, root, machine);
+    applied(harness, compile, &policy, &plane, root, machine).map(Some)
+}
+
+/// `policy` for a chat of `harness` in `plane` at `root` on `machine`, compiled by `compile`
+/// and checked against the ground the chat stands on.
+fn applied(
+    harness: Harness,
+    compile: Compiler,
+    policy: &Policy,
+    plane: &Plane,
+    root: &Path,
+    machine: &Machine,
+) -> Result<Applied, NotStarted> {
+    let compiled = Compiled::of(policy, plane, root, machine);
     let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
-    Ok(Some(Applied {
+    Ok(Applied {
         harness,
         form,
         root: root.to_path_buf(),
         denied,
-    }))
+        caches: compiled.widened.caches.map(Box::new),
+    })
+}
+
+/// `policy` for a chat of `harness` in `plane` at `root`, with no `charter.toml` written and no
+/// backend asked: for a test of what a compiler makes of a policy.
+#[cfg(test)]
+pub(crate) fn applied_for(
+    harness: Harness,
+    policy: &Policy,
+    plane: &Plane,
+    root: &Path,
+    machine: &Machine,
+) -> Result<Applied, NotStarted> {
+    let compile = compiler(harness).expect("a harness with a compiler");
+    applied(harness, compile, policy, plane, root, machine)
 }
 
 /// [`for_start`] without asking this machine for a backend, for a test of a compiler alone.
@@ -1585,14 +1709,7 @@ pub(crate) fn compiled_anyway(
         .policy
         .expect("a plane that turned the sandbox on");
     let compile = compiler(harness).ok_or(NotStarted::NoCompiler(harness))?;
-    let compiled = Compiled::of(&policy, &plane, root, machine);
-    let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
-    Ok(Applied {
-        harness,
-        form,
-        root: root.to_path_buf(),
-        denied,
-    })
+    applied(harness, compile, &policy, &plane, root, machine)
 }
 
 /// A person's choice, in the window, to start one chat without the sandbox (ADR 0067 §7,
@@ -1875,6 +1992,7 @@ pub fn at_start(
 }
 
 pub mod backend;
+pub mod caches;
 pub mod claude;
 pub mod codex;
 pub mod egress;

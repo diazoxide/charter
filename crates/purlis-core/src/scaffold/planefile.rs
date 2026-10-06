@@ -408,7 +408,8 @@ mod tests {
         assert_eq!(
             said.policy,
             Some(crate::sandbox::Policy {
-                egress: crate::sandbox::Preset::DEFAULT.to_vec()
+                egress: crate::sandbox::Preset::DEFAULT.to_vec(),
+                certificate_checks: false,
             })
         );
         assert!(said.refused.is_empty(), "{:?}", said.refused);
