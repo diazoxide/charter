@@ -193,8 +193,8 @@ pub const RESUMING_ENV: &str = "PURLIS_RESUMING_RECORD";
 /// formatting character but a line feed or a tab, and is exactly the five [`SECTIONS`] as
 /// `## ` headings, in order, each with something under it and nothing before the first. A
 /// heading inside a fenced code block is text. And neither may look like it holds a
-/// credential, by the rule `charter save` refuses a memory with ([`crate::secretshape`]) —
-/// named by its kind and never by its value.
+/// credential, by the rule `charter save` refuses a memory with, as written and through its
+/// escapes ([`crate::secretshape::kind_as_read`]) — named by its kind and never by its value.
 pub fn check(title: &str, body: &str) -> Result<(), String> {
     let title = title.trim();
     if title.is_empty() {
@@ -232,7 +232,7 @@ pub fn check(title: &str, body: &str) -> Result<(), String> {
     }
     sections(body)?;
     for (what, text) in [("title", title), ("body", body)] {
-        if let Some(kind) = crate::secretshape::secret_kind(text) {
+        if let Some(kind) = crate::secretshape::kind_as_read(None, text) {
             return Err(format!(
                 "the {what} looks like it holds a credential ({kind}); a session record is \
                  shared with the workspace, so take the value out — name the vault it lives in \

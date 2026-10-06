@@ -669,6 +669,28 @@ mod tests {
     }
 
     #[test]
+    fn a_credential_spelled_through_its_escapes_never_reaches_the_summary() {
+        let token = crate::secretshape::escaped::token();
+        let tail = &token[1..];
+        for said in [
+            format!("echo \"\\u0067{tail}\""),
+            format!("echo \"x\\n{token}\""),
+        ] {
+            let summary = Summary::of(&said);
+            assert!(
+                !summary.as_str().contains(&tail[4..]),
+                "{}",
+                summary.as_str()
+            );
+            assert!(
+                summary.as_str().starts_with("echo \""),
+                "{}",
+                summary.as_str()
+            );
+        }
+    }
+
+    #[test]
     fn a_summary_is_one_line_and_cut_to_its_width() {
         let summary = Summary::of(&format!("one\ntwo {}", "x".repeat(400)));
 

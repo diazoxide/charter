@@ -374,7 +374,7 @@ fn names_nothing(root: &Path, cfg: &toml::Table) -> Vec<String> {
             .filter(|v| !v.is_empty())
             // Never said back when it is shaped like a secret: the secret's own refusal, by
             // its kind, is the one sentence about it.
-            .filter(|v| crate::secretshape::secret_kind(v).is_none())
+            .filter(|v| crate::secretshape::kind_as_read(None, v).is_none())
     };
     let mut out = Vec::new();
     if let Some(persona) = named("persona")

@@ -160,6 +160,21 @@ fn a_credential_shaped_brief_is_refused_by_its_kind_and_the_value_never_comes_ba
 }
 
 #[test]
+fn a_brief_that_spells_a_credential_through_its_escapes_is_refused_by_its_kind() {
+    let tmp = daily();
+    let root = root(&tmp);
+    let brief = format!(
+        "Deploy with \"\\u0041{}\".\n",
+        ["KIA", "IOSFODNN7EXAMPLE"].concat()
+    );
+    let out = handoff(&root, &brief);
+    let told = said(&out);
+    assert_eq!(out.status.code(), Some(1), "{told}");
+    assert!(told.contains("(AWS access key)"), "{told}");
+    assert!(!told.contains("IOSFODNN7EXAMPLE"), "{told}");
+}
+
+#[test]
 fn a_brief_that_names_where_a_credential_lives_is_not_refused_as_one() {
     // The exemption `secretshape` exists to keep — refusing a vault reference would refuse
     // the remedy the refusal above names. Driven through the real command rather than the

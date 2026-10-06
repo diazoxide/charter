@@ -858,3 +858,27 @@ fn on_a_gitlab_plane_a_memory_waits_on_the_planes_merge_request() {
          opens or updates that merge request, and sets it to merge when its checks pass."
     );
 }
+
+#[test]
+fn a_memory_that_spells_a_secret_through_its_escapes_is_flagged_as_the_save_would_refuse_it() {
+    // The save reads a memory's escapes (#1304); this warning is the first word on it, and
+    // says the same (#1315).
+    let p = Plane::new();
+    for shape in crate::secretshape::escaped::shapes() {
+        let name = shape.path.rsplit('/').next().unwrap();
+        let answer = p.ask(
+            edit_of(&format!("/plane/personas/ops/memory/{name}"), &shape.text),
+            posttooluse,
+        );
+        assert_ne!(answer, Answer::Nothing, "{}", shape.text);
+        let ctx = said(&answer)["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            ctx.contains(&format!("({})", shape.kind)),
+            "{}: {ctx}",
+            shape.text
+        );
+    }
+}

@@ -260,9 +260,11 @@ pub fn save(
         .into_iter()
         .filter(|why| !standing.contains(why))
         .collect();
-    if let Some(kind) =
-        crate::secretshape::secret_kind(&crate::pyjson::dumps_indent2(&Json::Object(settings)))
-    {
+    // As the project save reads the manifest: as written, then through its escapes (#1315).
+    if let Some(kind) = crate::secretshape::kind_as_read(
+        Some(crate::secretshape::Structured::Json),
+        &crate::pyjson::dumps_indent2(&Json::Object(settings)),
+    ) {
         refused.push(format!(
             "{file} looks like it holds a secret ({kind}), so nothing was saved — it is \
              committed with a LIVE workspace, so every clone of this plane would carry the \

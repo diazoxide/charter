@@ -177,10 +177,11 @@ fn harness_of<'d>(
     }
 }
 
-/// A value pasted into `field` that is shaped like a secret (V91m), refused by the secret's
+/// A value pasted into `field` that is shaped like a secret (V91m), as written or through its
+/// escapes, as the project save reads the file it lands in (#1315) — refused by the secret's
 /// KIND and never its text: every other refusal of that field would quote it back.
 fn secret_in(field: &'static str, value: &str) -> Option<FieldRefusal> {
-    crate::secretshape::secret_kind(value).map(|kind| FieldRefusal {
+    crate::secretshape::kind_as_read(None, value).map(|kind| FieldRefusal {
         field,
         why: format!(
             "This looks like a secret ({kind}), and a profile never holds one: anything a \

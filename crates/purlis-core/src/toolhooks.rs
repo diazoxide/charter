@@ -677,7 +677,17 @@ pub fn posttooluse(hook: &Hook) -> Answer {
 
 /// `_posttooluse_secret_scan`: what was written, and the file as it now stands, checked for a
 /// credential's SHAPE. Named by kind, never by the matched text.
+///
+/// Python's question first, of what was written as its repr and the file joined. Then each of
+/// them on its own as the project save reads the file (#1315): as written and through its
+/// escapes, the file parsed when its name says JSON or TOML
+/// ([`crate::secretshape::kind_as_read`]) — so this warning, the first word on a memory, says
+/// what the save that publishes it will refuse.
 fn secret_scan(hook: &Hook, input: &Value, fp: &str) -> Answer {
+    let written: Vec<&Value> = ["content", "new_string", "new_str"]
+        .iter()
+        .filter_map(|k| input.get(*k).filter(|v| truthy(Some(v))))
+        .collect();
     let mut text = ["content", "new_string", "new_str"]
         .iter()
         .map(|k| {
@@ -695,11 +705,20 @@ fn secret_scan(hook: &Hook, input: &Value, fp: &str) -> Answer {
     } else {
         hook.cwd.join(fp)
     };
-    if let Some(now) = crate::memstore::read_text(&on_disk) {
+    let now = crate::memstore::read_text(&on_disk);
+    if let Some(now) = &now {
         text.push('\n');
-        text.push_str(&now);
+        text.push_str(now);
     }
-    let Some(kind) = crate::secretshape::secret_kind(&text) else {
+    let form = crate::secretshape::Structured::of(fp);
+    let as_read = || {
+        written
+            .iter()
+            .filter_map(|v| v.as_str())
+            .chain(now.as_deref())
+            .find_map(|one| crate::secretshape::kind_as_read(form, one))
+    };
+    let Some(kind) = crate::secretshape::secret_kind(&text).or_else(as_read) else {
         return Answer::Nothing;
     };
     let name = Path::new(fp)
