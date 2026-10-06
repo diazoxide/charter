@@ -404,13 +404,23 @@ pub fn not_answered(mut writer: Box<dyn Write + Send>) {
 
 /// The variables of the asker's environment a child never starts with: the chat's hook channel
 /// and its token (the child cannot reach the socket, and needs neither), and the ones the wrap
-/// sets itself.
-const NOT_HANDED_ON: &[&str] = &[
-    crate::hookwire::SOCKET_ENV,
-    crate::hookwire::TOKEN_ENV,
-    "CHARTER_HOOK_SOCKET",
-    "CHARTER_CHAT_TOKEN",
-];
+/// sets itself. Each under its old prefix too ([`not_handed_on`]).
+const NOT_HANDED_ON: &[&str] = &[crate::hookwire::SOCKET_ENV, crate::hookwire::TOKEN_ENV];
+
+/// Whether `key` is one of [`NOT_HANDED_ON`], under the purlis prefix or an old one the window
+/// still reads ([`crate::names::ENV_PREFIX`]).
+fn not_handed_on(key: &str) -> bool {
+    let prefix = &crate::names::ENV_PREFIX;
+    NOT_HANDED_ON.iter().any(|name| {
+        *name == key
+            || name.strip_prefix(prefix.write).is_some_and(|rest| {
+                prefix
+                    .reads
+                    .iter()
+                    .any(|old| key.strip_prefix(old) == Some(rest))
+            })
+    })
+}
 
 pub(crate) fn serve_wrapped(
     asker: &Asker,
@@ -492,7 +502,7 @@ pub(crate) fn serve_wrapped(
     let mut base: Vec<(OsString, OsString)> = wanted
         .environment
         .iter()
-        .filter(|(k, _)| !NOT_HANDED_ON.contains(&k.as_str()))
+        .filter(|(k, _)| !not_handed_on(k))
         .map(|(k, v)| (OsString::from(k), OsString::from(v)))
         .collect();
     for (k, v) in crate::sandbox::seatbelt::env(&beside.proxy_url(), beside.tmp()) {

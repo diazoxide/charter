@@ -105,8 +105,8 @@ fn every_pretooluse_word_that_runs_out_of_its_budget_refuses_the_call() {
             word,
             &payload,
             &[
-                ("CHARTER_TEST_GUARD_DEADLINE_MS", "300"),
-                ("CHARTER_TEST_GUARD_STALLS", "1"),
+                ("PURLIS_TEST_GUARD_DEADLINE_MS", "300"),
+                ("PURLIS_TEST_GUARD_STALLS", "1"),
             ],
         );
         assert_eq!(code, Some(2), "`{word}` out of time did not refuse: {err}");
@@ -122,7 +122,7 @@ fn a_payload_that_does_not_arrive_within_the_budget_is_refused_not_read_as_empty
     let here = Here::new();
     for word in pretooluse_words() {
         let began = Instant::now();
-        let mut child = here.spawn(word, &[("CHARTER_TEST_GUARD_DEADLINE_MS", "300")]);
+        let mut child = here.spawn(word, &[("PURLIS_TEST_GUARD_DEADLINE_MS", "300")]);
         // Half a payload, and the pipe held open: the rest never comes.
         let mut stdin = child.stdin.take().expect("stdin");
         let _ = stdin.write_all(br#"{"tool_name": "Bash", "tool_input": {"comm"#);

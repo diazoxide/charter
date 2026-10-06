@@ -173,12 +173,12 @@ pub(crate) const BUDGET: Duration = Duration::from_secs(2);
 
 /// What sets the budget in milliseconds instead, in a debug build, for the tests that reach it.
 #[cfg(debug_assertions)]
-const BUDGET_ON_PURPOSE_ENV: &str = "CHARTER_TEST_GUARD_DEADLINE_MS";
+const BUDGET_ON_PURPOSE_ENV: &str = "PURLIS_TEST_GUARD_DEADLINE_MS";
 
 /// Set in a debug build, the judging thread stalls before it judges: the tests' way to reach
 /// the budget on every hook word without a command crafted for each.
 #[cfg(debug_assertions)]
-const STALLS_ON_PURPOSE_ENV: &str = "CHARTER_TEST_GUARD_STALLS";
+const STALLS_ON_PURPOSE_ENV: &str = "PURLIS_TEST_GUARD_STALLS";
 
 /// The panic payload that says the hook ran out of its budget, rather than that it crashed.
 const UNANSWERED: &str = "the guard did not answer in time";
