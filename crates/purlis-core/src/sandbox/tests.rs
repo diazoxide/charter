@@ -569,6 +569,7 @@ fn compiled(denied: Denied, os: Os) -> Compiled {
     Compiled {
         denied,
         hosts: vec!["github.com".to_owned()],
+        writable: Vec::new(),
         os,
         homes: Homes::default(),
     }

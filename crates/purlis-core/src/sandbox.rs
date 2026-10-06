@@ -877,6 +877,10 @@ pub fn hosts(presets: &[Preset], plane: &Plane) -> Vec<String> {
 pub struct Compiled {
     pub denied: Denied,
     pub hosts: Vec<String>,
+    /// The folders a person let this chat write besides its own and the temp folders (#1342):
+    /// its own grants and yours ([`grant`]), each judged again as it is compiled. Every compiler
+    /// puts its denials after them, so a class still wins inside one.
+    pub writable: Vec<PathBuf>,
     pub os: Os,
     /// Where a harness keeps its own files on this machine, for a compiler that has to let the
     /// whole harness write them ([`opencode`]).
@@ -991,13 +995,29 @@ impl Compiled {
     /// `policy`, for a chat in `plane` at `root`, on `machine`: its presets' hosts, then the
     /// hosts in force at every level ([`hosts::in_force`]): the project's, then this machine's.
     pub fn of(policy: &Policy, plane: &Plane, root: &Path, machine: &Machine) -> Self {
+        Self::granted(policy, plane, root, machine, &grant::Grants::default())
+    }
+
+    /// [`Self::of`], with what a person let this one chat do besides (#1342): `chat`'s hosts,
+    /// after the project's and this machine's and held to the same locks; and the folders it and
+    /// you may write, each judged again here ([`grant::still_grantable`]), so a grant a denial
+    /// class has since come to cover grants nothing.
+    pub fn granted(
+        policy: &Policy,
+        plane: &Plane,
+        root: &Path,
+        machine: &Machine,
+        chat: &grant::Grants,
+    ) -> Self {
         let mut reached = hosts(&policy.egress, plane);
+        let mut personal = hosts::personal(root);
+        for host in &chat.hosts {
+            if !personal.contains(host) {
+                personal.push(host.clone());
+            }
+        }
         let granted = hosts::off_this_machine(
-            hosts::in_force(
-                &policy.hosts,
-                &hosts::personal(root),
-                &hosts::Locks::of(root),
-            ),
+            hosts::in_force(&policy.hosts, &personal, &hosts::Locks::of(root)),
             &hosts::own_addresses(),
         );
         for one in granted {
@@ -1006,9 +1026,15 @@ impl Compiled {
                 reached.push(spelled);
             }
         }
+        let denied = Denied::of(root, machine);
+        let mut writes = chat.writes.clone();
+        writes.extend(local::granted_writes(root));
+        let writable =
+            grant::still_grantable(&writes, &grant::Ground::of(root, root, machine).place());
         Self {
-            denied: Denied::of(root, machine),
+            denied,
             hosts: reached,
+            writable,
             os: machine.os,
             homes: Homes {
                 codex_project: Homes::codex_project(machine, root),
@@ -1265,6 +1291,7 @@ pub fn never_on(harness: Harness, os: Os) -> Option<String> {
     let nothing = Compiled {
         denied: Denied::default(),
         hosts: Vec::new(),
+        writable: Vec::new(),
         os,
         homes: Homes::default(),
     };
@@ -1679,6 +1706,18 @@ pub fn for_start(
     machine: &Machine,
     has: &dyn Fn(&str) -> bool,
 ) -> Result<Option<Applied>, NotStarted> {
+    for_start_granted(harness, root, machine, has, &grant::Grants::default())
+}
+
+/// [`for_start`], for a chat a person let do `chat` besides (#1342): compiled in by
+/// [`Compiled::granted`].
+pub fn for_start_granted(
+    harness: Harness,
+    root: &Path,
+    machine: &Machine,
+    has: &dyn Fn(&str) -> bool,
+    chat: &grant::Grants,
+) -> Result<Option<Applied>, NotStarted> {
     // One spelling of the plane for every harness: the kernel's.
     let real_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let root = real_root.as_path();
@@ -1700,7 +1739,7 @@ pub fn for_start(
     if let Some(missing) = backend::missing(machine.os, has) {
         return Err(NotStarted::NoBackend(missing));
     }
-    let compiled = Compiled::of(&policy, &plane, root, machine);
+    let compiled = Compiled::granted(&policy, &plane, root, machine, chat);
     let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
     Ok(Some(Applied {
         harness,
@@ -1896,6 +1935,25 @@ pub fn decide(
     has: &dyn Fn(&str) -> bool,
     opt_out: Option<&OptOut>,
 ) -> Result<Option<Decided>, NotStarted> {
+    decide_granted(
+        harness,
+        root,
+        machine,
+        has,
+        opt_out,
+        &grant::Grants::default(),
+    )
+}
+
+/// [`decide`], for a chat a person let do `chat` besides (#1342).
+pub fn decide_granted(
+    harness: Harness,
+    root: &Path,
+    machine: &Machine,
+    has: &dyn Fn(&str) -> bool,
+    opt_out: Option<&OptOut>,
+    chat: &grant::Grants,
+) -> Result<Option<Decided>, NotStarted> {
     // A file that cannot be read may say `[sandbox]`, so it never reads as "not set": it falls
     // through to the refusal below, which the opt-out sits inside.
     let plane = Plane::read(root);
@@ -1914,7 +1972,8 @@ pub fn decide(
             reason: None,
         })));
     }
-    for_start(harness, root, machine, has).map(|applied| applied.map(Decided::Sandboxed))
+    for_start_granted(harness, root, machine, has, chat)
+        .map(|applied| applied.map(Decided::Sandboxed))
 }
 
 /// What the new-chat picker says about the sandbox for a chat of one harness, before anything
@@ -2016,6 +2075,7 @@ pub mod backend;
 pub mod claude;
 pub mod codex;
 pub mod egress;
+pub mod grant;
 pub mod hosts;
 pub mod local;
 pub mod opencode;

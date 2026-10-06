@@ -273,7 +273,24 @@ pub const AT_MOST_PER_RESULT: usize = 8;
 /// command's standard output too, so only their violation block is read. The command itself is
 /// never read.
 pub fn detect(payload: &serde_json::Value, place: &Place<'_>) -> Vec<Block> {
-    let mut found: Vec<Block> = Vec::new();
+    detect_with_targets(payload, place)
+        .into_iter()
+        .map(|(block, _)| block)
+        .collect()
+}
+
+/// **What a grant could name**, beside each block [`detect`] finds (#1342): the host a refused
+/// connection was to, where the report names one, and the whole path of a refused write
+/// outside purlis's own state and the protected files. `None` for every other block, and for a
+/// connection whose report names no host (Claude Code's proxy says none): the person types it.
+///
+/// It goes to the app alone, on the block's line, for the Notice's Allow. It is never kept with
+/// the block ([`record`] keeps a [`Block`]), counted, or put in a Report.
+pub fn detect_with_targets(
+    payload: &serde_json::Value,
+    place: &Place<'_>,
+) -> Vec<(Block, Option<String>)> {
+    let mut found: Vec<(Block, Option<String>)> = Vec::new();
     match &payload["tool_response"] {
         serde_json::Value::String(mixed) => found.extend(violations(mixed, place)),
         response => {
@@ -285,18 +302,35 @@ pub fn detect(payload: &serde_json::Value, place: &Place<'_>) -> Vec<Block> {
     if let Some(mixed) = payload["error"].as_str() {
         found.extend(violations(mixed, place));
     }
-    let mut blocks: Vec<Block> = Vec::new();
-    for block in found {
-        if !blocks.contains(&block) && blocks.len() < AT_MOST_PER_RESULT {
-            blocks.push(block);
+    let mut blocks: Vec<(Block, Option<String>)> = Vec::new();
+    for (block, target) in found {
+        if !blocks.iter().any(|(one, _)| *one == block) && blocks.len() < AT_MOST_PER_RESULT {
+            blocks.push((block, target));
         }
     }
     blocks
 }
 
+/// The target a grant could name for `block`, refused on `named` (a host, or a path read
+/// against `place`), where one may be granted at all.
+fn target_of(block: &Block, named: &str, place: &Place<'_>) -> Option<String> {
+    let named = named.trim();
+    if named.is_empty() {
+        return None;
+    }
+    match (block.operation, block.kind) {
+        (Operation::Connect, Kind::Host) => Some(named.to_owned()),
+        (
+            Operation::Write | Operation::File,
+            Kind::ProjectFiles | Kind::Home | Kind::ToolchainCache | Kind::System,
+        ) => Some(lexical(&place.cwd.join(named)).display().to_string()),
+        _ => None,
+    }
+}
+
 /// What a command's standard error says: its violation block, else a program's own refusals of
 /// paths outside what the chat may write; and any proxy's or certificate check's refusal.
-fn on_stderr(text: &str, place: &Place<'_>) -> Vec<Block> {
+fn on_stderr(text: &str, place: &Place<'_>) -> Vec<(Block, Option<String>)> {
     let mut out = violations(text, place);
     // Claude Code's own lines say exactly what was refused; a program's words for the same
     // refusal would only count it again, less well.
@@ -305,21 +339,29 @@ fn on_stderr(text: &str, place: &Place<'_>) -> Vec<Block> {
         out.extend(
             (0..lines.len())
                 .filter_map(|at| refused_path(&lines, at, place))
-                .filter(|(_, kind)| !matches!(kind, Kind::ChatFolder | Kind::Temp))
-                .map(|(operation, kind)| Block {
-                    operation,
-                    kind,
-                    ours: false,
+                .filter(|(_, kind, _)| !matches!(kind, Kind::ChatFolder | Kind::Temp))
+                .map(|(operation, kind, path)| {
+                    let block = Block {
+                        operation,
+                        kind,
+                        ours: false,
+                    };
+                    let target = target_of(&block, &path, place);
+                    (block, target)
                 }),
         );
     }
     out.extend(
         text.lines()
             .filter_map(network_refusal)
-            .map(|(operation, kind)| Block {
-                operation,
-                kind,
-                ours: false,
+            .map(|(operation, kind, host)| {
+                let block = Block {
+                    operation,
+                    kind,
+                    ours: false,
+                };
+                let target = host.and_then(|host| target_of(&block, &host, place));
+                (block, target)
             }),
     );
     out
@@ -327,7 +369,7 @@ fn on_stderr(text: &str, place: &Place<'_>) -> Vec<Block> {
 
 /// The lines of the `<sandbox_violations>` block Claude Code appended: the last one, and only
 /// when nothing but space follows it.
-fn violations(text: &str, place: &Place<'_>) -> Vec<Block> {
+fn violations(text: &str, place: &Place<'_>) -> Vec<(Block, Option<String>)> {
     const OPEN: &str = "<sandbox_violations>";
     const CLOSE: &str = "</sandbox_violations>";
     let Some(at) = text.rfind(OPEN) else {
@@ -348,7 +390,7 @@ fn violations(text: &str, place: &Place<'_>) -> Vec<Block> {
 
 /// One Seatbelt line, `cargo(123) deny(1) file-write-create /opt/x`, sorted, and purlis's own
 /// only when the process it names is purlis.
-fn violation(line: &str, place: &Place<'_>) -> Option<Block> {
+fn violation(line: &str, place: &Place<'_>) -> Option<(Block, Option<String>)> {
     let at = line.find("deny(")?;
     let ours = process_of(&line[..at]).is_some_and(crate::cliname::is_recognised);
     let after = &line[at..];
@@ -365,11 +407,14 @@ fn violation(line: &str, place: &Place<'_>) -> Option<Block> {
         _ if target.is_empty() => Kind::System,
         _ => kind_of(Path::new(target), place),
     };
-    Some(Block {
+    let block = Block {
         operation,
         kind,
         ours,
-    })
+    };
+    // purlis's own operation is a purlis bug, never something to grant.
+    let target = (!ours).then(|| target_of(&block, target, place)).flatten();
+    Some((block, target))
 }
 
 /// The process a Seatbelt line names before its `deny(`: `cargo` of `Sandbox: cargo(123) `.
@@ -407,7 +452,7 @@ fn writes(program: &str, said: &str) -> bool {
 }
 
 /// A program's own "Operation not permitted" at line `at` of `lines`, naming its path, sorted.
-fn refused_path(lines: &[&str], at: usize, place: &Place<'_>) -> Option<(Operation, Kind)> {
+fn refused_path(lines: &[&str], at: usize, place: &Place<'_>) -> Option<(Operation, Kind, String)> {
     let line = lines[at].trim_end();
     // Node: `EPERM: operation not permitted, mkdir '/opt/x'`.
     if let Some(start) = line.find("EPERM: operation not permitted, ") {
@@ -415,20 +460,24 @@ fn refused_path(lines: &[&str], at: usize, place: &Place<'_>) -> Option<(Operati
         let (call, quoted) = rest.split_once(' ')?;
         let path = quoted.trim().strip_prefix('\'')?.split('\'').next()?;
         let operation = match call {
-            "connect" => return Some((Operation::Connect, Kind::LocalSocket)),
+            "connect" => return Some((Operation::Connect, Kind::LocalSocket, String::new())),
             "mkdir" | "rmdir" | "rename" | "unlink" | "write" | "copyfile" | "symlink" | "link"
             | "utime" | "chmod" => Operation::Write,
             "scandir" | "read" => Operation::Read,
             _ => Operation::File,
         };
-        return Some((operation, kind_of(Path::new(path), place)));
+        return Some((operation, kind_of(Path::new(path), place), path.to_owned()));
     }
     // Python: `PermissionError: [Errno 1] Operation not permitted: '/opt/x'`.
     if let Some(start) = line.find("[Errno 1] Operation not permitted: '") {
         let path = line[start + "[Errno 1] Operation not permitted: '".len()..]
             .split('\'')
             .next()?;
-        return Some((Operation::File, kind_of(Path::new(path), place)));
+        return Some((
+            Operation::File,
+            kind_of(Path::new(path), place),
+            path.to_owned(),
+        ));
     }
     let lower = line.to_ascii_lowercase();
     // Rust's io error on a line of its own, its path on a line before (cargo's `Caused by:`):
@@ -444,7 +493,11 @@ fn refused_path(lines: &[&str], at: usize, place: &Place<'_>) -> Option<(Operati
         } else {
             Operation::File
         };
-        return Some((operation, kind_of(Path::new(named.1), place)));
+        return Some((
+            operation,
+            kind_of(Path::new(named.1), place),
+            named.1.to_owned(),
+        ));
     }
     // A program's own, in any case: `touch: /opt/x: Operation not permitted`,
     // `mkdir: cannot create directory '/opt/x': Operation not permitted`,
@@ -482,7 +535,7 @@ fn refused_path(lines: &[&str], at: usize, place: &Place<'_>) -> Option<(Operati
     } else {
         Operation::File
     };
-    Some((operation, kind_of(Path::new(path), place)))
+    Some((operation, kind_of(Path::new(path), place), path.to_owned()))
 }
 
 /// Whether `word` reads as the program a line begins with: `touch`, `git`, `/usr/bin/cp`, `fatal`.
@@ -494,7 +547,7 @@ fn is_program(word: &str) -> bool {
 }
 
 /// A refusal of a connection or of the certificate check, from whichever program said it.
-fn network_refusal(line: &str) -> Option<(Operation, Kind)> {
+fn network_refusal(line: &str) -> Option<(Operation, Kind, Option<String>)> {
     const REFUSED: [&str; 4] = [
         // purlis's own egress proxy (`sandbox::egress`).
         "purlis's sandbox does not allow ",
@@ -505,10 +558,19 @@ fn network_refusal(line: &str) -> Option<(Operation, Kind)> {
         "CONNECT tunnel failed, response 403",
     ];
     if REFUSED.iter().any(|said| line.contains(said)) {
-        return Some((Operation::Connect, Kind::Host));
+        // purlis's own proxy names the host and port it refused: `… does not allow h:443: …`.
+        let host = line
+            .split_once(REFUSED[0])
+            .and_then(|(_, rest)| rest.split(": ").next())
+            .filter(|host| !host.is_empty() && !host.contains(char::is_whitespace))
+            .map(str::to_owned);
+        return Some((Operation::Connect, Kind::Host, host));
     }
-    (line.contains("x509") && line.contains("-26276"))
-        .then_some((Operation::Lookup, Kind::CertificateCheck))
+    (line.contains("x509") && line.contains("-26276")).then_some((
+        Operation::Lookup,
+        Kind::CertificateCheck,
+        None,
+    ))
 }
 
 /// The kind of `path`, read against `place` and never kept.
@@ -584,7 +646,7 @@ pub fn kind_of(path: &Path, place: &Place<'_>) -> Kind {
 ///
 /// A lock file git writes beside one (`.git/config.lock`) is that file: git is refused there
 /// first.
-fn is_planted(path: &Path) -> bool {
+pub(crate) fn is_planted(path: &Path) -> bool {
     let mut parts: Vec<&str> = path
         .components()
         .filter_map(|part| match part {

@@ -304,6 +304,28 @@ pub struct Chats {
     /// The most chats one record may start: [`MOST_AT_ONCE`], but for a test of the bound,
     /// which would otherwise open that many terminals (#1139).
     most_at_once: usize,
+    /// What a person let each chat do past its project's sandbox, from a block's Notice
+    /// (#1342), by the chat's id: handed to that chat's starts alone, so a restart on its
+    /// conversation keeps it and no other chat ever gets it. **In memory only**: a grant for
+    /// one chat ends with the app.
+    grants: Mutex<HashMap<String, Vec<ChatGrant>>>,
+    /// What each chat is owed once its turn ends (#1342): a restart on its conversation, with
+    /// each sentence it is to be told, in order, as its first message. Queued, so a second
+    /// grant before the restart adds to the first rather than replacing it.
+    owed: Mutex<HashMap<u32, Vec<String>>>,
+    /// The chats being started again in their place right now (#1342): one restart at a time
+    /// per chat, whichever asked for it.
+    restarting: Mutex<std::collections::HashSet<u32>>,
+}
+
+/// One grant a person made for one chat (#1342), as Settings' Granted list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatGrant {
+    pub what: purlis_core::sandbox::grant::What,
+    /// When, in seconds since 1970.
+    pub at: u64,
+    /// The chat's name as its tab showed it then.
+    pub chat: String,
 }
 
 /// The arguments and the environment that arm a chat's harness for that chat alone.
@@ -355,6 +377,9 @@ impl Chats {
             putting_back: AtomicBool::new(false),
             ending: AtomicBool::new(false),
             most_at_once: MOST_AT_ONCE,
+            grants: Mutex::new(HashMap::new()),
+            owed: Mutex::new(HashMap::new()),
+            restarting: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -518,9 +543,15 @@ impl Chats {
     /// With the sandbox, the program the chat then runs: the real file the check asked about
     /// (ruling V87g), never the name it was recorded by.
     ///
-    /// No person picked it in the window, so there is no opt-out here; a system with no backend
-    /// (Windows) starts it unsandboxed, and says why, as it does a chat on a profile.
-    fn sandbox_off_profile(chat: &Chat) -> Result<Decided, String> {
+    /// `opt_out` is a person's choice to run it without the sandbox for this run, made in the
+    /// window on a sandbox block's Notice (#1342), and none for every other start. A system with
+    /// no backend (Windows) starts it unsandboxed, and says why, as it does a chat on a profile.
+    /// `grants` are what a person let this one chat do besides.
+    fn sandbox_off_profile(
+        chat: &Chat,
+        grants: &purlis_core::sandbox::grant::Grants,
+        opt_out: Option<&purlis_core::sandbox::OptOut>,
+    ) -> Result<Decided, String> {
         let Some(harness) = chat.harness() else {
             return Ok((None, None));
         };
@@ -540,12 +571,13 @@ impl Chats {
         else {
             return Ok((None, None));
         };
-        let decided = purlis_core::sandbox::decide(
+        let decided = purlis_core::sandbox::decide_granted(
             harness,
             &root,
             &purlis_core::sandbox::Machine::this(),
             &purlis_core::sandbox::backend::installed,
-            None,
+            opt_out,
+            grants,
         )
         .map_err(|refused| refused.to_string())?;
         let (applied, lifted) = match decided {
@@ -673,8 +705,23 @@ impl Chats {
         size: Size,
         why: Why,
     ) -> Result<u32, String> {
+        self.start_recorded_told(chat, root, size, why, None, None)
+    }
+
+    /// [`Self::start_recorded`], with `told` as the chat's first message where there is one: a
+    /// sentence purlis tells it (#1342), last on its line, where its harness takes one
+    /// (`handoff::first_message_argv`). A chat on no profile is started without it.
+    fn start_recorded_told(
+        &self,
+        chat: &Chat,
+        root: &std::path::Path,
+        size: Size,
+        why: Why,
+        told: Option<&str>,
+        opt_out: Option<purlis_core::sandbox::OptOut>,
+    ) -> Result<u32, String> {
         let Some(profile) = chat.profile.clone() else {
-            return self.start_as(chat, size, false, why);
+            return self.start_as_opted(chat, size, false, why, opt_out.as_ref());
         };
         let ready = purlis_core::start::ready(
             &purlis_core::start::Start {
@@ -688,17 +735,289 @@ impl Chats {
                 // carry it would silently blank a footer the operator had turned on.
                 show_footer: chat.show_footer,
                 resuming: None,
-                without_sandbox: None,
+                without_sandbox: opt_out,
+                grants: self.grants_of(chat),
             },
             root,
         )?;
         // The core's start knows no chat, so it says "nothing recorded"; this chat may know
         // better — a workspace rename left it without its conversation (charter#367).
-        let ready = purlis_core::start::Ready {
+        let mut ready = purlis_core::start::Ready {
             how: chat.told(ready.how.clone()),
             ..ready
         };
+        // Last on the line, as a handoff's brief is: nothing may come after a positional prompt.
+        if let Some(first) = told.and_then(|told| {
+            ready
+                .harness
+                .and_then(|harness| purlis_core::handoff::first_message_argv(harness.name(), told))
+        }) {
+            ready.args.extend(first);
+        }
         self.start_ready_as(chat, &ready, size, why)
+    }
+
+    /// What a person let `chat` do past its sandbox (#1342), by its id: none for a chat with no
+    /// id, which no grant can have been made for.
+    fn grants_of(&self, chat: &Chat) -> purlis_core::sandbox::grant::Grants {
+        let mut grants = purlis_core::sandbox::grant::Grants::default();
+        if let Some(id) = chat.identity.id.as_deref()
+            && let Some(made) = lock(&self.grants).get(id)
+        {
+            for one in made {
+                grants.add(&one.what);
+            }
+        }
+        grants
+    }
+
+    /// **Lets chat `session` do `what`** (#1342), for as long as the app holds it, and owes it a
+    /// restart on its conversation that tells it `told`. A chat that is not open, or one with no
+    /// id, gets nothing, and is told why.
+    pub fn grant(
+        &self,
+        session: u32,
+        what: purlis_core::sandbox::grant::What,
+        at: u64,
+        told: String,
+    ) -> Result<(), String> {
+        let (id, name) = {
+            let open = lock(&self.open);
+            let running = open
+                .get(&session)
+                .ok_or_else(|| format!("chat {session} is not open, so nothing was allowed"))?;
+            let id = running.chat.identity.id.clone().ok_or_else(|| {
+                "that chat has no id yet, so nothing was allowed for it".to_owned()
+            })?;
+            (
+                id,
+                running
+                    .chat
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| running.chat.name.clone()),
+            )
+        };
+        let mut grants = lock(&self.grants);
+        let made = grants.entry(id).or_default();
+        if !made.iter().any(|one| one.what == what) {
+            made.push(ChatGrant {
+                what,
+                at,
+                chat: name,
+            });
+        }
+        drop(grants);
+        self.owe_restart(session, told);
+        Ok(())
+    }
+
+    /// Owes chat `session` a restart on its conversation that tells it `told` (#1342): a grant
+    /// of any level reaches a running chat that way.
+    /// A chat that is not open is owed nothing: what was allowed reaches it at its next start.
+    pub fn owe_restart(&self, session: u32, told: String) {
+        if !lock(&self.open).contains_key(&session) {
+            return;
+        }
+        lock(&self.owed).entry(session).or_default().push(told);
+    }
+
+    /// The folder chat `session` was started in: what a write grant for it is judged against.
+    pub fn folder_of(&self, session: u32) -> Option<std::path::PathBuf> {
+        lock(&self.open).get(&session)?.chat.cwd.clone()
+    }
+
+    /// Every grant made for an open chat, by chat id (#1348).
+    pub fn chat_grants(&self) -> Vec<(String, ChatGrant)> {
+        let open_ids: std::collections::HashSet<String> = lock(&self.open)
+            .values()
+            .filter_map(|running| running.chat.identity.id.clone())
+            .collect();
+        let mut out: Vec<(String, ChatGrant)> = lock(&self.grants)
+            .iter()
+            .filter(|(id, _)| open_ids.contains(*id))
+            .flat_map(|(id, made)| made.iter().map(|one| (id.clone(), one.clone())))
+            .collect();
+        out.sort_by_key(|(_, one)| one.at);
+        out
+    }
+
+    /// Whether chat `id` holds a grant of `what`.
+    pub fn holds(&self, id: &str, what: &purlis_core::sandbox::grant::What) -> bool {
+        lock(&self.grants)
+            .get(id)
+            .is_some_and(|made| made.iter().any(|one| one.what == *what))
+    }
+
+    /// Takes back chat `id`'s grant of `what` (#1348): its next start is compiled without it.
+    /// Answers whether there was one.
+    pub fn revoke(&self, id: &str, what: &purlis_core::sandbox::grant::What) -> bool {
+        let mut grants = lock(&self.grants);
+        let Some(made) = grants.get_mut(id) else {
+            return false;
+        };
+        let before = made.len();
+        made.retain(|one| one.what != *what);
+        made.len() != before
+    }
+
+    /// **Restarts chat `session` on its conversation** (#1342, spike #1347): the same chat,
+    /// under its id, its conversation resumed, so its new start compiles in what it was granted
+    /// and its first message is what it was owed. Refused for a chat owed nothing. The old one
+    /// stays open until the new one has started, as [`Self::start_fresh`]'s does; ending it is
+    /// the caller's next step.
+    pub fn restart_owed(
+        &self,
+        session: u32,
+        root: &std::path::Path,
+        size: Size,
+    ) -> Result<u32, String> {
+        self.claim(session)?;
+        // Taken under the lock, so a grant made while this restart runs queues for the next one
+        // and is never erased by this one.
+        let Some(told) = lock(&self.owed).remove(&session) else {
+            self.unclaim(session);
+            return Err(format!(
+                "purlis did not restart chat {session}: it is owed no restart."
+            ));
+        };
+        let started = self.again_on_its_conversation(session).and_then(|again| {
+            if again.resume.is_none() {
+                return Err(format!(
+                    "purlis did not restart chat {session}: it has no conversation to resume \
+                     yet. What was allowed reaches it when it next starts."
+                ));
+            }
+            self.start_recorded_told(
+                &again,
+                root,
+                size,
+                Why::Relaunch,
+                Some(&told.join("\n\n")),
+                None,
+            )
+        });
+        match started {
+            Ok(started) => self.restarted(session, started, true),
+            Err(why) => {
+                // Owed still: put back ahead of anything queued since.
+                let mut owed = lock(&self.owed);
+                let mut back = told;
+                back.extend(owed.remove(&session).unwrap_or_default());
+                owed.insert(session, back);
+                drop(owed);
+                self.unclaim(session);
+                Err(why)
+            }
+        }
+    }
+
+    /// **Starts chat `session` again without the sandbox** (#1342): the person's own choice, from
+    /// a block's Notice that purlis grants nothing for. It is the picker's opt-out (ADR 0067 §7),
+    /// for this one chat and this one run: audited as `trust.sandbox.off` by the start, never
+    /// recorded, so a later start of the chat is sandboxed again. Its conversation is resumed
+    /// where it has one. It restarts now, mid-turn or not: the person pressed for it.
+    pub fn restart_without_sandbox(
+        &self,
+        session: u32,
+        root: &std::path::Path,
+        size: Size,
+    ) -> Result<u32, String> {
+        self.claim(session)?;
+        let opt_out = purlis_core::sandbox::OptOut {
+            reason: Some(
+                "started again without the sandbox from a sandbox block's Notice".to_owned(),
+            ),
+        };
+        let started = self.again_on_its_conversation(session).and_then(|again| {
+            self.start_recorded_told(&again, root, size, Why::Relaunch, None, Some(opt_out))
+        });
+        match started {
+            // What was allowed and not yet taken is dropped: it means nothing to a chat run
+            // without the sandbox, and would restart it sandboxed once its turn ended.
+            Ok(started) => self.restarted(session, started, false),
+            Err(why) => {
+                self.unclaim(session);
+                Err(why)
+            }
+        }
+    }
+
+    /// Marks chat `session` as restarting, or refuses: one restart at a time, whichever asked.
+    fn claim(&self, session: u32) -> Result<(), String> {
+        if lock(&self.restarting).insert(session) {
+            Ok(())
+        } else {
+            Err(format!(
+                "purlis is already starting chat {session} again, so it was not started twice."
+            ))
+        }
+    }
+
+    fn unclaim(&self, session: u32) {
+        lock(&self.restarting).remove(&session);
+    }
+
+    /// What follows a restart of chat `session` as `started`: if the chat was closed while it
+    /// restarted, the new run is ended (nobody asked for it any more, and it would keep the
+    /// chat's grants alive unseen); otherwise the new run takes its place, and what was queued
+    /// for the old one meanwhile is owed to the new one where `keep_owed`, else dropped.
+    fn restarted(&self, session: u32, started: u32, keep_owed: bool) -> Result<u32, String> {
+        if !lock(&self.open).contains_key(&session) {
+            lock(&self.owed).remove(&session);
+            self.unclaim(session);
+            if let Err(why) = self.close(started) {
+                tracing::warn!("purlis: a restart of a closed chat did not end ({why})");
+            }
+            return Err(format!(
+                "purlis ended the new run of chat {session}: the chat was closed while it \
+                 started again."
+            ));
+        }
+        if let Some(queued) = lock(&self.owed).remove(&session)
+            && keep_owed
+        {
+            lock(&self.owed).insert(started, queued);
+        }
+        self.took_the_place_of(session, started);
+        self.unclaim(session);
+        Ok(started)
+    }
+
+    /// Chat `session` as it would start again on its conversation: the same chat under its id,
+    /// in a new run.
+    fn again_on_its_conversation(&self, session: u32) -> Result<Chat, String> {
+        let was = lock(&self.open)
+            .get(&session)
+            .map(|one| one.chat.clone())
+            .ok_or_else(|| format!("purlis did not restart chat {session}: it is not open."))?;
+        Ok(Chat {
+            identity: purlis_core::reopen::Identity {
+                run: None,
+                ..was.identity.clone()
+            },
+            pid: None,
+            number: None,
+            ..was
+        })
+    }
+
+    /// `started` takes the place of `session` in the strip's order, and the record says so.
+    fn took_the_place_of(&self, session: u32, started: u32) {
+        for placed in lock(&self.order).iter_mut() {
+            if *placed == session {
+                *placed = started;
+            }
+        }
+        self.write_it_down();
+    }
+
+    /// The chats owed a restart to take a grant (#1342): what the window drives once each one's
+    /// turn has ended, read again whenever the window is drawn anew.
+    pub fn owed_restarts(&self) -> Vec<u32> {
+        let mut owed: Vec<u32> = lock(&self.owed).keys().copied().collect();
+        owed.sort_unstable();
+        owed
     }
 
     /// Starts a chat, and remembers what it was started as.
@@ -722,8 +1041,22 @@ impl Chats {
         operator_shell: bool,
         why: Why,
     ) -> Result<u32, String> {
+        self.start_as_opted(chat, size, operator_shell, why, None)
+    }
+
+    /// [`Self::start_as`], with a person's opt-out of the sandbox for this run where there is
+    /// one (#1342's "Start without the sandbox" on a block's Notice).
+    fn start_as_opted(
+        &self,
+        chat: &Chat,
+        size: Size,
+        operator_shell: bool,
+        why: Why,
+        opt_out: Option<&purlis_core::sandbox::OptOut>,
+    ) -> Result<u32, String> {
         // Before anything is resolved or run, as for a chat on a profile.
-        let (sandboxed, unsandboxed) = Self::sandbox_off_profile(chat)?;
+        let (sandboxed, unsandboxed) =
+            Self::sandbox_off_profile(chat, &self.grants_of(chat), opt_out)?;
         let mut launch = chat.launch();
         let sandbox = sandboxed.map(|(applied, program)| {
             launch.program = program;
@@ -1046,7 +1379,19 @@ impl Chats {
 
     /// Ends a chat. It is no longer one a quit would record.
     pub fn close(&self, session: u32) -> Result<(), String> {
-        if let Some(gone) = lock(&self.open).remove(&session) {
+        let gone = lock(&self.open).remove(&session);
+        lock(&self.owed).remove(&session);
+        if let Some(gone) = gone {
+            // A chat's grants end with it (D-1348-1): kept only while a session of that chat is
+            // open, which a restart for a grant is, since it starts before the old one ends.
+            if let Some(id) = gone.chat.identity.id.as_deref() {
+                let still = lock(&self.open)
+                    .values()
+                    .any(|one| one.chat.identity.id.as_deref() == Some(id));
+                if !still {
+                    lock(&self.grants).remove(id);
+                }
+            }
             let mut let_go = lock(&self.let_go);
             if let_go.len() >= LET_GO_HELD {
                 let_go.clear();
@@ -1744,6 +2089,92 @@ mod tests {
         assert!(purlis_core::sandbox::chat_is_sandboxed_in(&|name| of(
             &env, name
         )));
+    }
+
+    #[test]
+    fn a_chats_grants_are_its_own_queue_its_restart_and_end_when_it_closes() {
+        // #1342 and #1348 (D-1348-1).
+        use purlis_core::sandbox::grant::What;
+        let chats = Chats::new();
+        let size = Size {
+            columns: 80,
+            rows: 24,
+        };
+        let chat = Chat {
+            program: "/bin/sleep".to_owned(),
+            args: vec!["5".to_owned()],
+            name: "granted".to_owned(),
+            ..Default::default()
+        };
+        let session = chats.start(&chat, size).expect("started");
+        let other = chats.start(&chat, size).expect("started");
+        let host = What::Host(purlis_core::sandbox::hosts::Host::parse("a.example").unwrap());
+        chats
+            .grant(session, What::Write("/tmp/x".into()), 1, "first".to_owned())
+            .expect("granted");
+        chats
+            .grant(session, host.clone(), 2, "second".to_owned())
+            .expect("granted");
+
+        assert_eq!(chats.chat_grants().len(), 2);
+        assert_eq!(chats.owed_restarts(), [session]);
+        // Queued, not replaced: the restart tells both.
+        assert_eq!(lock(&chats.owed)[&session], ["first", "second"]);
+        // Never another chat's.
+        let id = |n: u32| {
+            lock(&chats.open)[&n]
+                .chat
+                .identity
+                .id
+                .clone()
+                .expect("an id")
+        };
+        assert!(chats.holds(&id(session), &host));
+        assert!(!chats.holds(&id(other), &host));
+        // A chat with no conversation yet is not restarted, and keeps what it is owed.
+        let refused = chats
+            .restart_owed(session, std::path::Path::new("/nonexistent"), size)
+            .unwrap_err();
+        assert!(refused.contains("no conversation to resume"), "{refused}");
+        assert_eq!(chats.owed_restarts(), [session]);
+        assert_eq!(
+            lock(&chats.owed)[&session],
+            ["first", "second"],
+            "put back whole"
+        );
+        assert!(
+            lock(&chats.restarting).is_empty(),
+            "the claim is given back"
+        );
+
+        // One restart at a time: a second, from either way in, is refused while one runs, and
+        // a grant made meanwhile queues rather than being lost.
+        chats.claim(session).expect("claimed");
+        let twice = chats
+            .restart_owed(session, std::path::Path::new("/nonexistent"), size)
+            .unwrap_err();
+        assert!(twice.contains("already starting"), "{twice}");
+        let twice = chats
+            .restart_without_sandbox(session, std::path::Path::new("/nonexistent"), size)
+            .unwrap_err();
+        assert!(twice.contains("already starting"), "{twice}");
+        chats.owe_restart(session, "third".to_owned());
+        assert_eq!(lock(&chats.owed)[&session], ["first", "second", "third"]);
+        chats.unclaim(session);
+
+        let gone = id(session);
+        chats.close(session).ok();
+        assert!(chats.chat_grants().is_empty());
+        assert!(
+            !chats.holds(&gone, &host),
+            "a closed chat's grants end with it"
+        );
+        assert!(chats.owed_restarts().is_empty());
+        // A closed chat is owed nothing (a grant for you made from its Notice reaches its next
+        // start instead).
+        chats.owe_restart(session, "late".to_owned());
+        assert!(chats.owed_restarts().is_empty());
+        chats.close(other).ok();
     }
 
     #[test]
@@ -4869,6 +5300,7 @@ mod tests {
                 show_footer: false,
                 resuming: None,
                 without_sandbox: None,
+                grants: Default::default(),
             },
             &root,
         )

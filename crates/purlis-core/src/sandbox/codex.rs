@@ -74,6 +74,9 @@ pub struct Wrap {
     pub denied: Vec<Denial>,
     /// The hosts its proxy carries.
     pub hosts: Vec<String>,
+    /// The folders a person let this chat write besides its own (#1342), each a root the
+    /// later-code names are denied in, and each under every denial that follows it.
+    pub granted: Vec<PathBuf>,
     /// The project's own Codex home (D-88q), of which only what a turn writes is writable.
     pub home: Option<PathBuf>,
     /// The operator's own Codex home, which the project's is seeded from and a chat never
@@ -130,6 +133,7 @@ pub fn wrap(compiled: &Compiled) -> Result<Wrap, Uncompilable> {
     Ok(Wrap {
         denied,
         hosts: compiled.hosts.clone(),
+        granted: compiled.writable.clone(),
         home: compiled.homes.codex_project.clone(),
         operator: compiled.homes.codex.clone(),
     })
@@ -557,6 +561,7 @@ fn own(wrap: &Wrap) -> Result<Own, &'static str> {
         overlap: OVERLAP,
         ..Own::default()
     };
+    seatbelt::granted(&mut own, &wrap.granted)?;
     own.dirs.extend(wrap.operator.iter().cloned());
     // Codex's installed program, in the operator's home, is read to be run, never written.
     if let Some(operator) = &wrap.operator {

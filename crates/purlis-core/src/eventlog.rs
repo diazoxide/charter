@@ -1369,6 +1369,29 @@ impl Recorder {
         )
     }
 
+    /// The audit of a sandbox grant or revoke (#1342, [`crate::sandbox::grant::Audited`]):
+    /// under chat `number`'s current run where it came from one, with no chat for one taken
+    /// back in Settings. Made durable before it answers, so no grant reaches a chat unrecorded.
+    pub fn sandbox_grant(
+        &mut self,
+        plane: &Path,
+        number: Option<u32>,
+        audited: &crate::sandbox::grant::Audited<'_>,
+    ) -> io::Result<Event> {
+        let who = number
+            .map(|number| self.identity(plane, number))
+            .transpose()?;
+        let event = self.log.append(
+            who.as_ref().map(|who| who.chat.as_str()),
+            who.as_ref().map(|who| who.run.as_str()),
+            None,
+            audited.kind(),
+            audited.body(),
+        )?;
+        self.log.durable().through(event.seq)?;
+        Ok(event)
+    }
+
     /// What makes this recorder's events durable: [`Durable::through`] after each write.
     pub fn durable(&self) -> std::sync::Arc<Durable> {
         self.log.durable()

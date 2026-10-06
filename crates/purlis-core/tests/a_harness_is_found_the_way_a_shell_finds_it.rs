@@ -71,6 +71,7 @@ impl Plane {
             show_footer: false,
             resuming: None,
             without_sandbox: None,
+            grants: Default::default(),
         }
     }
 }

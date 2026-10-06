@@ -12,7 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import App from "./App";
-import type { BlockReport, ChatBlocked } from "./bindings";
+import type { BlockReport, ChatBlocked, Moved } from "./bindings";
 import { AT_MOST_PER_CHAT, blocked, putAway } from "./sandboxBlocks";
 
 /**
@@ -65,6 +65,9 @@ const OURS: ChatBlocked = {
   ours: true,
   harness: "claude",
   said: "a write to the project's own files",
+  offer: "none",
+  target: null,
+  route: null,
 };
 
 /** What `cargo build`'s refused cache write becomes: the chat's own work. */
@@ -75,6 +78,21 @@ const THEIRS: ChatBlocked = {
   said: "a write to a toolchain's package cache",
 };
 
+/** Chat 4 mid-turn, then waiting for you: what the board says as its turn runs and ends. */
+const RUNNING: Moved = {
+  plane: PLANE,
+  session: 4,
+  state: "running",
+  needs_you: false,
+  queue: [],
+  moved_at: 1,
+  reports: [],
+  refusals: [],
+  children: [],
+  sequence: 1,
+};
+const WAITING: Moved = { ...RUNNING, state: "waiting", moved_at: 2, sequence: 2 };
+
 const DRAFT: BlockReport = {
   repository: "purlis/purlis",
   title: "Sandbox blocked purlis's own write (project-files)",
@@ -82,7 +100,7 @@ const DRAFT: BlockReport = {
   digest: "0123456789ab",
 };
 
-function core() {
+function core(restart: { error?: string } = {}) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC(
     (cmd, args) => {
@@ -102,6 +120,16 @@ function core() {
       if (cmd === "running_sessions") return [];
       if (cmd === "sandbox_block_report") return DRAFT;
       if (cmd === "file_sandbox_block_report") return "https://github.com/purlis/purlis/issues/9";
+      if (cmd === "allow_sandbox_block")
+        return {
+          said: "Allowed for this chat. The chat restarts on the same conversation once its turn ends, and is told to retry.",
+        };
+      if (cmd === "restart_chat_for_grant") {
+        if (restart.error !== undefined) throw new Error(restart.error);
+        return { chat: { ...CHAT, session: 9, resumed: "c1" }, not_yet: null };
+      }
+      if (cmd === "restart_chat_without_sandbox") return { ...CHAT, session: 11, resumed: "c1" };
+      if (cmd === "owed_restarts") return [];
       return null;
     },
     { shouldMockEvents: true },
@@ -111,8 +139,8 @@ function core() {
   };
 }
 
-async function aChat() {
-  const said = core();
+async function aChat(restart: { error?: string } = {}) {
+  const said = core(restart);
   render(<App />);
   // The chat is on screen: its pane is drawn.
   await screen.findByTestId("pane");
@@ -199,6 +227,189 @@ describe("a sandbox block on a chat's tab", () => {
     });
 
     expect(screen.queryByRole("status", { name: "Sandbox block" })).toBeNull();
+  });
+});
+
+describe("a block of the chat's own work is never a dead end (#1342)", () => {
+  const HOST: ChatBlocked = {
+    ...THEIRS,
+    operation: "connect",
+    kind: "host",
+    said: "a connection to an internet host this project does not allow",
+    offer: "host",
+    target: "api.example.com:443",
+  };
+
+  it("allows what it shows whole for this chat, then restarts the chat on its conversation", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-moved", WAITING));
+    await act(() => emit("chat-sandbox-blocked", HOST));
+
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(screen.getByText("api.example.com:443")).toBeInTheDocument();
+    expect(asked("allow_sandbox_block")).toEqual([]);
+
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+
+    await waitFor(() =>
+      expect(asked("allow_sandbox_block")).toEqual([
+        { plane: PLANE, session: 4, what: "host", target: "api.example.com:443", level: "chat" },
+      ]),
+    );
+    // Its turn has ended, so it restarts at once, in its own pane.
+    await waitFor(() =>
+      expect(asked("restart_chat_for_grant")).toEqual([
+        { plane: PLANE, session: 4, columns: 80, rows: 24 },
+      ]),
+    );
+    expect(await screen.findByText("session 9")).toBeInTheDocument();
+  });
+
+  it("Keep blocked puts it away and allows nothing", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    await userEvent.click(within(notice).getByRole("button", { name: "Keep blocked" }));
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Sandbox block" })).toBeNull());
+    expect(asked("allow_sandbox_block")).toEqual([]);
+    expect(asked("restart_chat_for_grant")).toEqual([]);
+  });
+
+  it("offers Always for every chat here on this machine, or everyone in the project", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+
+    await userEvent.click(within(notice).getByRole("button", { name: "Always allow…" }));
+    expect(
+      await screen.findByRole("button", { name: "Allow for me on this machine" }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Allow for everyone in this project" }),
+    );
+    await waitFor(() =>
+      expect(asked("allow_sandbox_block")).toEqual([
+        { plane: PLANE, session: 4, what: "host", target: "api.example.com:443", level: "project" },
+      ]),
+    );
+  });
+
+  it("offers a folder for this machine, never for the project, and says it whole", async () => {
+    await aChat();
+    await act(() =>
+      emit("chat-sandbox-blocked", {
+        ...THEIRS,
+        offer: "write",
+        target: "/Users/dev/.cache/cargo",
+      }),
+    );
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(screen.getByText("/Users/dev/.cache/cargo")).toBeInTheDocument();
+    expect(screen.getByText(/and everything in it/)).toBeInTheDocument();
+    await userEvent.click(within(notice).getByRole("button", { name: "Always allow…" }));
+    expect(
+      await screen.findByRole("button", { name: "Allow for me on this machine" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow for everyone in this project" })).toBeNull();
+  });
+
+  it("says the way that works for what is never granted, with no Allow", async () => {
+    await aChat();
+    await act(() =>
+      emit("chat-sandbox-blocked", {
+        ...THEIRS,
+        kind: "project-state",
+        offer: "brokered",
+        route: "Use purlis's own commands.",
+      }),
+    );
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(notice).toHaveTextContent(
+      "purlis never allows that to a chat. Use purlis's own commands.",
+    );
+    expect(within(notice).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
+  });
+
+  it("offers the chat without the sandbox, as your choice, where purlis grants nothing", async () => {
+    const { asked } = await aChat();
+    await act(() =>
+      emit("chat-sandbox-blocked", {
+        ...THEIRS,
+        kind: "home",
+        offer: "unsandboxed",
+        target: "/Users/dev/Library/LaunchAgents",
+        route: "purlis will not let a chat write that folder.",
+      }),
+    );
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(notice).toHaveTextContent(
+      "Only you can choose to start this chat again without the sandbox: it restarts now, even mid-turn",
+    );
+    // The folder is the chat's own word, drawn apart from purlis's sentence.
+    expect(screen.getByText("/Users/dev/Library/LaunchAgents").tagName).toBe("CODE");
+    expect(within(notice).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Start without the sandbox for this chat" }),
+    );
+    await waitFor(() =>
+      expect(asked("restart_chat_without_sandbox")).toEqual([
+        { plane: PLANE, session: 4, columns: 80, rows: 24 },
+      ]),
+    );
+    expect(await screen.findByText("session 11")).toBeInTheDocument();
+    expect(asked("allow_sandbox_block")).toEqual([]);
+  });
+
+  it("restarts a chat owed one only once its turn has ended, even after the Notice is gone", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-moved", RUNNING));
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(1));
+    // Put away while the chat is mid-turn: nothing restarts yet, and nothing is lost.
+    await userEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(asked("restart_chat_for_grant")).toEqual([]);
+
+    await act(() => emit("chat-moved", WAITING));
+    await waitFor(() => expect(asked("restart_chat_for_grant")).toHaveLength(1));
+    expect(await screen.findByText("session 9")).toBeInTheDocument();
+  });
+});
+
+describe("a restart a chat is owed for a grant (#1342)", () => {
+  const HOST: ChatBlocked = {
+    ...THEIRS,
+    operation: "connect",
+    kind: "host",
+    offer: "host",
+    target: "api.example.com:443",
+  };
+
+  it("waits for the person where the harness says nothing of its turns", async () => {
+    const { asked } = await aChat();
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    const restart = await screen.findByRole("status", { name: "Restart" });
+    expect(restart).toHaveTextContent("restart it when you are ready");
+    expect(asked("restart_chat_for_grant")).toEqual([]);
+    await userEvent.click(within(restart).getByRole("button", { name: "Restart now" }));
+    expect(await screen.findByText("session 9")).toBeInTheDocument();
+  });
+
+  it("says a failed restart on the chat's pane, with Restart now", async () => {
+    await aChat({ error: "purlis did not restart chat 4: it has no conversation to resume yet." });
+    await act(() => emit("chat-moved", WAITING));
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
+    const trouble = await screen.findByRole("status", { name: "Restart" });
+    await waitFor(() => expect(trouble).toHaveTextContent("no conversation to resume yet"));
+    expect(within(trouble).getByRole("button", { name: "Restart now" })).toBeInTheDocument();
   });
 });
 

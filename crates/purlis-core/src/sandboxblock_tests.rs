@@ -569,3 +569,90 @@ fn a_file_that_is_not_this_shape_counts_nothing_and_is_started_again() {
     record(dir.path(), &block(Operation::Read, Kind::Home, false), 10).unwrap();
     assert_eq!(counts(dir.path(), 10)[0].blocks, 1);
 }
+
+// ---- what a grant could name (#1342) --------------------------------------------------------
+
+#[test]
+fn a_refused_write_or_host_carries_what_a_grant_would_name_and_nothing_else_does() {
+    let targets = |payload: serde_json::Value| -> Vec<Option<String>> {
+        detect_with_targets(&payload, &place())
+            .into_iter()
+            .map(|(_, target)| target)
+            .collect()
+    };
+    // A write outside the project, as Seatbelt names it, and a relative one read from the cwd.
+    assert_eq!(
+        targets(failed(
+            "x",
+            &appended(
+                "",
+                &[
+                    "cargo(1) deny(1) file-write-create /Users/dev/.cargo/registry/x.lock",
+                    "touch(2) deny(1) file-write-create /opt/tool/cache",
+                ]
+            )
+        )),
+        [
+            Some("/Users/dev/.cargo/registry/x.lock".to_owned()),
+            Some("/opt/tool/cache".to_owned())
+        ]
+    );
+    assert_eq!(
+        targets(came_back(
+            "x",
+            "",
+            "touch: ../../beta/x: Operation not permitted"
+        )),
+        [Some("/Users/dev/plane/workspaces/beta/x".to_owned())]
+    );
+    // A host, where the report names one, and none where it does not.
+    assert_eq!(
+        targets(came_back(
+            "x",
+            "",
+            "purlis's sandbox does not allow example.org:443: no egress preset or host of this \
+             project lists it"
+        )),
+        [Some("example.org:443".to_owned())]
+    );
+    assert_eq!(
+        targets(failed(
+            "x",
+            &appended("", &["curl(10) deny(1) network-outbound 93.184.216.34:443"])
+        )),
+        [Some("93.184.216.34:443".to_owned())]
+    );
+    assert_eq!(
+        targets(came_back(
+            "x",
+            "",
+            "Connection blocked by network allowlist"
+        )),
+        [None]
+    );
+    // Never for purlis's own state, a protected file, a read, a socket, or purlis's own process.
+    for line in [
+        "git(3) deny(1) file-write-create /Users/dev/plane/.purlis/app/x",
+        "git(3) deny(1) file-write-create /Users/dev/plane/workspaces/alpha/repo/.git/config",
+        "cat(4) deny(1) file-read-data /Users/dev/.config/purlis/vaults/x",
+        "nc(5) deny(1) network-outbound /private/tmp/purlis-501/hooks.sock",
+        "purlis(6) deny(1) file-write-create /Users/dev/plane/workspaces/beta/sessions/x.md",
+    ] {
+        assert_eq!(
+            targets(failed("x", &appended("", &[line]))),
+            [None],
+            "{line}"
+        );
+    }
+    // What `detect` keeps is the block alone, as it was.
+    assert_eq!(
+        detect(
+            &failed(
+                "x",
+                &appended("", &["touch(2) deny(1) file-write-create /opt/x"])
+            ),
+            &place()
+        ),
+        [block(Operation::Write, Kind::System, false)]
+    );
+}

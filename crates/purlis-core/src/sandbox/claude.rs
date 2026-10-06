@@ -116,14 +116,27 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
         edit_rules.push(format!("Edit({glob})"));
         edit_rules.push(format!("Edit({glob}/**)"));
     }
+    // Under each granted folder (#1342), every later-code name again, by absolute path: a
+    // relative `**/<name>` is read against the chat's folder, so it is not known to hold in a
+    // folder outside it (D-1342-3). The folder is the kernel's spelling already (D-1342-12).
+    for folder in &compiled.writable {
+        for planted in super::PLANTED
+            .iter()
+            .filter(|planted| planted.reach == super::Reach::AndBelow)
+        {
+            let glob = format!("{}/**/{}", folder.display(), planted.path);
+            edit_rules.push(format!("Edit(/{glob})"));
+            edit_rules.push(format!("Edit(/{glob}/**)"));
+            deny_write.push(glob);
+        }
+    }
     let deny = WEB_TOOLS
         .iter()
         .map(|tool| (*tool).to_owned())
         .chain(read_rules)
         .chain(edit_rules)
         .collect();
-    Ok(Settings {
-        sandbox: json!({
+    let mut sandbox = json!({
             "enabled": true,
             "failIfUnavailable": true,
             "allowUnsandboxedCommands": false,
@@ -136,9 +149,21 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
                 "denyRead": deny_read,
                 "denyWrite": deny_write,
             },
-        }),
-        deny,
-    })
+    });
+    // A person's grants (#1342), each exactly as judged: already the kernel's spelling
+    // (D-1342-12), never resolved again here, so a folder swapped for a link since is not
+    // followed to where it now points. Claude Code holds `denyWrite` over `allowWrite`, so a
+    // class inside one still wins. Left out where there is none, so a chat with no grant is
+    // handed what it always was.
+    let allow_write: Vec<String> = compiled
+        .writable
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    if !allow_write.is_empty() {
+        sandbox["filesystem"]["allowWrite"] = json!(allow_write);
+    }
+    Ok(Settings { sandbox, deny })
 }
 
 impl Settings {

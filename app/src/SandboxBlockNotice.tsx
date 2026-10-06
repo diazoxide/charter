@@ -1,5 +1,12 @@
 import { useId, useState } from "react";
-import { commands, type BlockReport, type ChatBlocked } from "./bindings";
+import {
+  commands,
+  type Allowed,
+  type BlockReport,
+  type ChatBlocked,
+  type GrantLevel,
+  type OpenChat,
+} from "./bindings";
 import { Notice } from "./Notice";
 
 /**
@@ -9,18 +16,31 @@ import { Notice } from "./Notice";
  * A block of **purlis's own** operation is a purlis bug, and says so. It offers **Report…**,
  * which shows the draft the core makes from the block alone — the operation, the kind and the
  * versions — and files it only on **File report**: by the app, under the operator's own `gh`
- * login, never from inside the chat. Nothing is sent before that press. A block of the chat's own
- * work is said and can be put away; what to allow is the Sandbox settings' business.
+ * login, never from inside the chat. Nothing is sent before that press.
+ *
+ * A block of the chat's own work is **never a dead end** (#1342): a host or a folder to write
+ * offers **Allow for this chat**, **Always allow…** (every chat of this project on this machine,
+ * or for a host everyone in the project) and **Keep blocked**, with what it would allow shown
+ * whole first. The core judges it again and audits it; the window then restarts the chat on its
+ * conversation once its turn has ended (`onAllowed`, driven by `PlaneView`), and it is told what
+ * was allowed. What is never granted says the way that works; what purlis grants nothing for
+ * offers **Start without the sandbox for this chat**, the person's own choice.
  */
 export function SandboxBlockNotice({
   block,
   more,
   onDismiss,
+  onAllowed,
+  onRestarted,
 }: {
   block: ChatBlocked;
   /** How many other blocks this chat holds behind this one. */
   more: number;
   onDismiss: () => void;
+  /** Something was allowed: the chat is owed a restart once its turn has ended. */
+  onAllowed: () => void;
+  /** The chat started again in its place, without the sandbox. */
+  onRestarted: (chat: OpenChat) => void;
 }) {
   const id = useId();
   /** The Report's draft once it is open, what filing it answered, and any refusal. */
@@ -34,9 +54,14 @@ export function SandboxBlockNotice({
 
   if (!block.ours)
     return (
-      <Notice cause={cause} at="pane" tone="trouble" label="Sandbox block" onDismiss={onDismiss}>
-        The sandbox blocked {block.said}.{behind}
-      </Notice>
+      <AllowNotice
+        block={block}
+        cause={cause}
+        behind={behind}
+        onDismiss={onDismiss}
+        onAllowed={onAllowed}
+        onRestarted={onRestarted}
+      />
     );
 
   const report = () => {
@@ -107,6 +132,200 @@ export function SandboxBlockNotice({
       The sandbox blocked {block.said} that purlis itself ran. That is a purlis bug.
       {filed !== undefined && ` Reported: ${filed}.`}
       {said !== undefined && ` ${said}`}
+      {behind}
+    </Notice>
+  );
+}
+
+/**
+ * **Allow, Always allow or Keep blocked** for a block of the chat's own work (#1342). Nothing is
+ * allowed until a press, and what a press allows is on screen, whole, before it.
+ */
+function AllowNotice({
+  block,
+  cause,
+  behind,
+  onDismiss,
+  onAllowed,
+  onRestarted,
+}: {
+  block: ChatBlocked;
+  cause: string;
+  behind: string;
+  onDismiss: () => void;
+  onAllowed: () => void;
+  onRestarted: (chat: OpenChat) => void;
+}) {
+  const id = useId();
+  const [typed, setTyped] = useState(block.target ?? "");
+  const [always, setAlways] = useState(false);
+  const [allowed, setAllowed] = useState<Allowed>();
+  const [said, setSaid] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const what = block.offer === "host" ? "host" : "write";
+  const target = block.target ?? typed.trim();
+
+  const allow = (level: GrantLevel) => {
+    setBusy(true);
+    setSaid(undefined);
+    void commands
+      .allowSandboxBlock(block.plane, block.session, what, target, level)
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else {
+          setAllowed(done.data);
+          setAlways(false);
+          onAllowed();
+        }
+      })
+      .catch((err: unknown) => setSaid(`purlis could not allow it: ${String(err)}`))
+      .finally(() => setBusy(false));
+  };
+  const withoutSandbox = () => {
+    setBusy(true);
+    setSaid(undefined);
+    void commands
+      .restartChatWithoutSandbox(block.plane, block.session, 80, 24)
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else onRestarted(done.data);
+      })
+      .catch((err: unknown) => setSaid(`purlis could not start the chat again: ${String(err)}`))
+      .finally(() => setBusy(false));
+  };
+
+  if (block.offer === "brokered")
+    return (
+      <Notice cause={cause} at="pane" tone="trouble" label="Sandbox block" onDismiss={onDismiss}>
+        The sandbox blocked {block.said}. purlis never allows that to a chat. {block.route}
+        {behind}
+      </Notice>
+    );
+  if (block.offer === "unsandboxed")
+    return (
+      <Notice
+        cause={cause}
+        at="pane"
+        tone="trouble"
+        label="Sandbox block"
+        fixes={[
+          {
+            label: "Start without the sandbox for this chat",
+            onPress: () => {
+              if (!busy) withoutSandbox();
+            },
+          },
+        ]}
+        onDismiss={onDismiss}
+      >
+        The sandbox blocked {block.said}
+        {block.target !== null && (
+          <>
+            {" "}
+            in <code className="block-allow-target">{block.target}</code>
+          </>
+        )}
+        . {block.route} Only you can choose to start this chat again without the sandbox: it
+        restarts now, even mid-turn, on the same conversation, and nothing it runs is confined until
+        it next starts. Anything allowed for it that it has not yet taken is dropped.
+        {said !== undefined && ` ${said}`}
+        {behind}
+      </Notice>
+    );
+  if (block.offer !== "host" && block.offer !== "write")
+    return (
+      <Notice cause={cause} at="pane" tone="trouble" label="Sandbox block" onDismiss={onDismiss}>
+        The sandbox blocked {block.said}.{behind}
+      </Notice>
+    );
+  if (allowed !== undefined)
+    return (
+      <Notice
+        cause={`${cause}:allowed`}
+        at="pane"
+        tone="news"
+        label="Sandbox block"
+        onDismiss={onDismiss}
+      >
+        {block.target !== null && (
+          <>
+            <code className="block-allow-target">{block.target}</code>:{" "}
+          </>
+        )}
+        {allowed.said}
+      </Notice>
+    );
+
+  const named =
+    block.target === null ? (
+      <label className="block-allow-host">
+        Host{" "}
+        <input
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          placeholder="api.example.com"
+          aria-label="Host to allow"
+        />
+      </label>
+    ) : (
+      <code className="block-allow-target">{block.target}</code>
+    );
+  const under = (
+    <div className="block-allow" id={id}>
+      <p>
+        {what === "host" ? (
+          <>Allow reaching {named}</>
+        ) : (
+          <>Allow writing {named} and everything in it</>
+        )}
+      </p>
+      {always && (
+        <div className="block-allow-actions">
+          <button
+            type="button"
+            tabIndex={0}
+            disabled={busy || target === ""}
+            onClick={() => allow("you")}
+          >
+            Allow for me on this machine
+          </button>
+          {what === "host" && (
+            <button
+              type="button"
+              tabIndex={0}
+              disabled={busy || target === ""}
+              onClick={() => allow("project")}
+            >
+              Allow for everyone in this project
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+  return (
+    <Notice
+      cause={cause}
+      at="pane"
+      tone="trouble"
+      label="Sandbox block"
+      fixes={[
+        {
+          label: "Allow for this chat",
+          onPress: () => {
+            if (!busy && target !== "") allow("chat");
+          },
+        },
+        {
+          label: "Always allow…",
+          onPress: () => setAlways((was) => !was),
+          opens: { id, open: always },
+        },
+        { label: "Keep blocked", onPress: onDismiss },
+      ]}
+      under={under}
+    >
+      The sandbox blocked {block.said}.{said !== undefined && ` ${said}`}
       {behind}
     </Notice>
   );

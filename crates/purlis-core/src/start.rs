@@ -61,6 +61,9 @@ pub struct Start {
     /// make: a relaunch, a resume, a handoff and the CLI all leave it so, which is what keeps
     /// an opt-out from being inherited by anything.
     pub without_sandbox: Option<crate::sandbox::OptOut>,
+    /// What a person let this one chat do past its project's sandbox, from a block's Notice
+    /// (#1342): held by the app for that chat alone, and empty for every other start.
+    pub grants: crate::sandbox::grant::Grants,
 }
 
 /// Where a chat is told to draw charter's footer rather than a blank line.
@@ -284,12 +287,13 @@ pub fn ready_on(
     // with no backend, starts it unsandboxed instead, and the tab says so for the chat's whole
     // life (§7).
     let (sandbox, unsandboxed) = match harness {
-        Some(harness) => match crate::sandbox::decide(
+        Some(harness) => match crate::sandbox::decide_granted(
             harness,
             root,
             machine,
             has,
             start.without_sandbox.as_ref(),
+            &start.grants,
         )
         .map_err(|refused| refused.to_string())?
         {

@@ -1479,11 +1479,12 @@ fn tell_the_host_about_blocks(word: &str, payload: &str) {
     let data: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
     let token = hookwire::ChatToken::from_env();
     let harness = purlis_core::envvar::var(hookwire::HARNESS_ENV).filter(|it| !it.is_empty());
-    for block in hooks::blocks(&data, &purlis_core::envvar::var) {
+    for (block, target) in hooks::blocks(&data, &purlis_core::envvar::var) {
         let blocked = hookwire::SandboxBlocked {
             chat,
             sandbox_blocked: block,
             harness: harness.clone(),
+            target,
         };
         if let Err(why) =
             hookwire::tell_blocked(std::path::Path::new(&socket), token.as_ref(), &blocked)

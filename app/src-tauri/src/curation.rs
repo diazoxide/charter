@@ -447,6 +447,7 @@ pub fn start_typed_where_it_can_be(
             show_footer: false,
             resuming: None,
             without_sandbox: None,
+            grants: Default::default(),
         },
         &root,
     )?;

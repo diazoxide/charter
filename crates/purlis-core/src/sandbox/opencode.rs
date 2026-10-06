@@ -64,6 +64,9 @@ pub struct Wrap {
     pub denied: Vec<Denial>,
     /// The hosts its proxy carries.
     pub hosts: Vec<String>,
+    /// The folders a person let this chat write besides its own (#1342), each a root the
+    /// later-code names are denied in, and each under every denial that follows it.
+    pub granted: Vec<PathBuf>,
     /// opencode's data directory, of which only what a turn writes is writable.
     pub data: Option<PathBuf>,
     /// opencode's state directory, which a wrapped chat never writes: it is started with a
@@ -96,6 +99,7 @@ pub fn wrap(compiled: &Compiled) -> Result<Wrap, Uncompilable> {
     Ok(Wrap {
         denied,
         hosts: compiled.hosts.clone(),
+        granted: compiled.writable.clone(),
         data: own(&compiled.homes.data),
         state: own(&compiled.homes.state),
         config: own(&compiled.homes.config),
@@ -156,6 +160,7 @@ fn own(wrap: &Wrap) -> Result<Own, &'static str> {
         overlap: OVERLAP,
         ..Own::default()
     };
+    seatbelt::granted(&mut own, &wrap.granted)?;
     if let Some(data) = &wrap.data {
         own.allow.push(format!(
             "(regex {})",
