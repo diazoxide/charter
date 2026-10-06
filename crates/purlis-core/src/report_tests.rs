@@ -279,3 +279,41 @@ fn a_body_too_long_for_a_link_is_left_out_of_it_to_be_pasted() {
         url.len()
     );
 }
+
+#[test]
+fn a_line_that_spells_a_credential_through_its_escapes_is_redacted() {
+    let tail = &a_token()[1..];
+    let (out, used) = known().scrub(&format!("before\n{{\"t\": \"\\u0067{tail}\"}}\nafter"));
+    assert!(!out.contains(tail), "{out}");
+    assert!(out.contains("[redacted: a line that looks like"), "{out}");
+    assert!(
+        out.starts_with("before\n") && out.ends_with("\nafter"),
+        "{out}"
+    );
+    assert!(
+        used.iter()
+            .any(|u| u == "lines that look like a credential")
+    );
+}
+
+#[test]
+fn a_credential_split_across_lines_a_backslash_joins_is_redacted_with_its_lines() {
+    let token = a_token();
+    let text = format!(
+        "before\nnote = \"\"\"{}\\\n    {}\"\"\"\nafter",
+        &token[..8],
+        &token[8..]
+    );
+    let (out, _) = known().scrub(&text);
+    assert!(!out.contains(&token[8..]), "{out}");
+    assert!(!out.contains(&token[..8]), "{out}");
+    assert!(
+        out.starts_with("before\n") && out.ends_with("\nafter"),
+        "{out}"
+    );
+    assert_eq!(
+        out.matches("[redacted: a line that looks like").count(),
+        2,
+        "{out}"
+    );
+}

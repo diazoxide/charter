@@ -183,9 +183,10 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         }
     };
     // The leak guard's own classifier, so the brief a handoff refuses and the command a leak
-    // guard refuses are the same set of shapes. The KIND, never the matched text — a refusal
-    // that quoted the credential would put it in the transcript this exists to keep it out of.
-    if let Some(kind) = purlis_core::secretshape::secret_kind(&brief) {
+    // guard refuses are the same set of shapes — as written and through its escapes (#1315).
+    // The KIND, never the matched text — a refusal that quoted the credential would put it in
+    // the transcript this exists to keep it out of.
+    if let Some(kind) = purlis_core::secretshape::kind_as_read(None, &brief) {
         voice::err(&format!(
             "charter handoff: the brief looks like it carries a secret ({kind}) — nothing was \
              opened. A brief travels to the new chat as a command-line argument any local \

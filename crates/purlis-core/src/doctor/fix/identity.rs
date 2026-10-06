@@ -291,10 +291,11 @@ fn draws(c: char) -> bool {
 }
 
 /// Why `value` cannot be written because it looks like a credential (V91m, D-1250-7), or `None`.
-/// The same check every other writer makes, said by the secret's kind and never by its value: a
-/// git identity is written to a plain file and into the author line of every commit.
+/// The same check every other writer makes, as written and through its escapes, said by the
+/// secret's kind and never by its value: a git identity is written to a plain file and into
+/// the author line of every commit.
 fn secret_refused(value: &str) -> Option<String> {
-    crate::secretshape::secret_kind(value).map(|kind| {
+    crate::secretshape::kind_as_read(None, value).map(|kind| {
         format!(
             "That looks like a secret ({kind}), so nothing was written: an identity is in every \
              commit's author line. Keep the secret in a vault."
@@ -335,5 +336,24 @@ fn email_refused(email: &str) -> Option<String> {
              you@example.com."
                 .into(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_or_email_that_spells_a_secret_through_its_escapes_is_refused() {
+        let tail = &crate::secretshape::escaped::token()[1..];
+        let spelled = format!("\\u0067{tail}");
+        for why in [
+            name_refused(&spelled),
+            email_refused(&format!("{spelled}@x.dev")),
+        ] {
+            let why = why.expect("refused");
+            assert!(why.contains("looks like a secret"), "{why}");
+            assert!(!why.contains(tail), "{why}");
+        }
     }
 }

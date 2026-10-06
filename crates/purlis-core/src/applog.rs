@@ -251,23 +251,29 @@ fn redacted(event: &str) -> Cow<'_, str> {
 /// The kind of secret or personal data `event` looks like it holds, or `None`. Three nets, the
 /// widest charter has:
 ///
-/// - [`crate::secretshape::found`]: what a plane save refuses, a credential assignment
-///   included.
-/// - [`crate::secretshape::leaks`], a line at a time: what an agent's commit is scanned for,
-///   which adds gitleaks' vendor shapes and personal data (an email address, a card number,
-///   an ID number).
+/// - [`crate::secretshape::found_as_read`]: what a plane save refuses, a credential assignment
+///   included, as written and through its escapes (#1315).
+/// - [`crate::secretshape::leaks`] and [`crate::secretshape::escaped_leaks`], a line at a
+///   time: what an agent's commit is scanned for, which adds gitleaks' vendor shapes and
+///   personal data (an email address, a card number, an ID number).
 /// - A field named for a token or a secret (`access_token=`, `client_secret:`, a JSON
 ///   `"auth_token":`). `found`'s assignment rule keeps Python's word boundary, so it does not
 ///   see `token` inside `access_token`, and it has to stay Python's for the plane save. A log
 ///   is not code, so this rule needs no such care.
 fn what_it_holds(event: &str) -> Option<&'static str> {
-    if let Some(found) = crate::secretshape::found(event) {
-        return Some(found.kind);
+    if let Some((_, kind)) = crate::secretshape::found_as_read(None, event) {
+        return Some(kind);
     }
-    if let Some(leak) = event
-        .lines()
-        .find_map(|line| crate::secretshape::leaks(line).into_iter().next())
-    {
+    if let Some(leak) = event.lines().find_map(|line| {
+        crate::secretshape::leaks(line)
+            .into_iter()
+            .chain(
+                crate::secretshape::escaped_leaks(line)
+                    .into_iter()
+                    .map(|(leak, _)| leak),
+            )
+            .next()
+    }) {
         return Some(leak.kind);
     }
     secret_named_field()
@@ -554,5 +560,20 @@ mod tests {
             tracing::warn!("charter: the core noticed something");
         });
         assert_eq!(screen.said(), "charter: the core noticed something\n");
+    }
+
+    #[test]
+    fn an_event_that_spells_a_secret_through_its_escapes_is_redacted() {
+        let tail = &crate::secretshape::escaped::token()[1..];
+        for event in [
+            format!("charter: the forge said {{\"t\": \"\\u0067{tail}\"}}\n"),
+            format!(
+                "charter: {{\"owner\": \"\\u0061{}\"}}\n",
+                ["da", "@", "lovelace.dev"].concat()
+            ),
+        ] {
+            let said = redacted(&event);
+            assert!(said.starts_with("[redacted: "), "{said}");
+        }
     }
 }

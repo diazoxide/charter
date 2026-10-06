@@ -173,14 +173,40 @@ impl Known {
             }
         };
 
-        // A credential's shape, a line at a time: the detector answers WHETHER, never where,
-        // so the line goes whole. Visible, so an over-eager removal can be restored by hand.
+        // A credential's shape, a line at a time, as written and through its escapes (#1315):
+        // the detector answers WHETHER, never where, so the line goes whole. Visible, so an
+        // over-eager removal can be restored by hand.
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut kinds: Vec<Option<&'static str>> = lines
+            .iter()
+            .map(|line| crate::secretshape::kind_as_read(None, line))
+            .collect();
+        // Then lines a backslash joins to the next, which read as one (a TOML `"""` string):
+        // a credential split across them is no line's own. The whole text is asked once
+        // first, so text with nothing in it costs no more; each line is in one run at most.
+        if crate::secretshape::kind_as_read(None, text).is_some() {
+            let mut start = 0;
+            for at in 0..lines.len() {
+                if at + 1 < lines.len() && crate::secretshape::joins_the_next_line(lines[at]) {
+                    continue;
+                }
+                if at > start
+                    && let Some(kind) =
+                        crate::secretshape::kind_as_read(None, &lines[start..=at].join("\n"))
+                {
+                    kinds[start..=at].iter_mut().for_each(|one| {
+                        one.get_or_insert(kind);
+                    });
+                }
+                start = at + 1;
+            }
+        }
         let mut out = String::with_capacity(text.len());
-        for (i, line) in text.split('\n').enumerate() {
+        for (i, (line, kind)) in lines.iter().zip(kinds).enumerate() {
             if i > 0 {
                 out.push('\n');
             }
-            match crate::secretshape::found(line).map(|f| f.kind) {
+            match kind {
                 Some(kind) => {
                     note("lines that look like a credential");
                     let _ = write!(out, "[redacted: a line that looks like {kind}]");

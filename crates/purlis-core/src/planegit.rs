@@ -1765,10 +1765,7 @@ fn remembered(file: &Path, ask: impl FnOnce() -> bool) -> bool {
 /// asked only when the text was clean, and with no line, since the decoded text's lines are
 /// not the file's. The settings editors ask the same of what is typed into them.
 fn secret_in(path: &str, text: &str) -> Option<(Option<usize>, &'static str)> {
-    if let Some(found) = secretshape::found(text) {
-        return Some((Some(found.line), found.kind));
-    }
-    secretshape::decoded_kind(secretshape::Structured::of(path), text).map(|kind| (None, kind))
+    secretshape::found_as_read(secretshape::Structured::of(path), text)
 }
 
 /// How many `git show`s the secret guard runs at once. Each is a process of its own, and a

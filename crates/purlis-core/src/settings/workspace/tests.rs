@@ -252,6 +252,25 @@ fn a_secret_shaped_value_is_refused_by_its_kind_and_never_quoted() {
 }
 
 #[test]
+fn a_secret_typed_through_its_escapes_is_refused_as_the_manifest_reads_it() {
+    let dir = plane(Some(&old()));
+    let typed = format!("\\u0041{}", ["KIA", "IOSFODNN7EXAMPLE"].concat());
+    let refused = save(
+        dir.path(),
+        "alpha",
+        Some(&old()),
+        &[at(
+            &["extensions", "stats", "settings", "note"],
+            Some(Value::Text(typed)),
+        )],
+    )
+    .unwrap_err();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(refused[0].contains("AWS access key"), "{refused:?}");
+    assert_eq!(on_disk(dir.path()), old());
+}
+
+#[test]
 fn a_workspace_that_is_gone_is_said_and_never_made_again_by_a_save() {
     // A settings tab put back at a launch can name a workspace deleted since; its first save
     // must not bring the directory back with one file in it.

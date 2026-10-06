@@ -222,9 +222,9 @@ pub struct Summary(String);
 pub const SUMMARY_WIDTH: usize = 200;
 
 impl Summary {
-    /// `text` on one line, cut to [`SUMMARY_WIDTH`], with each credential shape
-    /// ([`crate::secretshape::leak_spans`], overlapping ones joined) replaced by a mask that
-    /// names its kind.
+    /// `text` on one line, cut to [`SUMMARY_WIDTH`], with each credential shape, as written and
+    /// through its escapes ([`crate::secretshape::leak_spans`], overlapping ones joined),
+    /// replaced by a mask that names its kind.
     pub fn of(text: &str) -> Self {
         let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let mut out = String::with_capacity(line.len());

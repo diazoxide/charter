@@ -14,7 +14,10 @@
 //! escape (`\u0041` is `A`), so each added line is also asked with its escapes decoded
 //! ([`crate::secretshape::escaped_leaks`]) — no parse, so a file of any name and one that
 //! would not parse are read alike. What is found that way is masked, fingerprinted and
-//! allowlisted by the value it spells, so an entry names a value however it is spelled.
+//! allowlisted by the value it spells, so an entry names a value however it is spelled. One
+//! value read both ways is named once, by the value it spells, unless the allowlist lets one
+//! reading through and not the other; and added lines that end in a backslash are read joined
+//! to the next, as a TOML `"""` string reads them (#1315).
 //!
 //! **What is shown is masked** ([`crate::secretshape::masked`]): the kind, where it is, and a
 //! short head of the value. Never the value.
@@ -73,7 +76,7 @@ pub struct Scan {
 /// `HEAD` — never the working tree's or the index's, so an entry written and not yet committed
 /// allows nothing ([`crate::scanallow`]).
 pub fn checked(repo: &Path) -> Result<Scan, String> {
-    let found = staged(repo)?;
+    let found = staged_read(repo)?;
     let at_head = |args: &[&str]| git::run_in_hook(repo, args, git::READ).ok();
     let changed = at_head(&[
         "-c",
@@ -95,7 +98,7 @@ pub fn checked(repo: &Path) -> Result<Scan, String> {
 
 /// `found`, split into what is refused and what an entry lets through: charter's own entries
 /// and the repository's allowlist as it is at `HEAD`.
-fn through_the_allowlist(repo: &Path, found: Vec<Finding>) -> Scan {
+fn through_the_allowlist(repo: &Path, found: Read) -> Scan {
     through(allowlist_at(repo, "HEAD").unwrap_or_default(), found)
 }
 
@@ -111,24 +114,49 @@ fn allowlist_at(repo: &Path, rev: &str) -> Option<String> {
     })
 }
 
+/// What a diff adds that looks like a secret or personal data, with which of its findings are
+/// one value read two ways.
+#[derive(Debug, Default)]
+struct Read {
+    found: Vec<Finding>,
+    /// `twin[i] = Some(j)`: finding `i` is the line as written of the value finding `j` reads
+    /// through its escapes — the same rule, ending where it ends on the line, and one of the
+    /// two values ending the other (a `\n` in front of an email reads as a longer address as
+    /// written).
+    twin: Vec<Option<usize>>,
+}
+
 /// `found` split through charter's own entries and the allowlist file `text`.
-fn through(text: String, found: Vec<Finding>) -> Scan {
+///
+/// A value read two ways ([`Read::twin`]) is named once, by the value its escapes spell, when
+/// the allowlist lets both readings through or neither (#1315). When it lets one through and
+/// not the other, both are kept, so an entry for one spelling never answers for the other.
+fn through(text: String, found: Read) -> Scan {
     let allowlist = Allowlist::of(Allowlist::parse(&text));
     let mut scan = Scan {
         problems: allowlist.problems.clone(),
         ..Scan::default()
     };
-    for finding in found {
-        let seen = Seen {
+    let allowing = |finding: &Finding| {
+        allowlist.allowing(Seen {
             rule: finding.rule,
             path: &finding.path,
             fingerprint: &finding.fingerprint,
-        };
-        match allowlist.allowing(seen) {
-            Some(entry) => {
-                let entry = entry.clone();
-                scan.allowed.push((finding, entry));
-            }
+        })
+    };
+    let entries: Vec<Option<&Entry>> = found.found.iter().map(allowing).collect();
+    for (at, finding) in found.found.into_iter().enumerate() {
+        let joined = found
+            .twin
+            .get(at)
+            .copied()
+            .flatten()
+            .is_some_and(|other| entries[other].is_some() == entries[at].is_some());
+        if joined {
+            continue;
+        }
+        match entries[at] {
+            Some(entry) => scan.allowed.push((finding, entry.clone())),
             None => scan.refused.push(finding),
         }
     }
@@ -274,9 +302,15 @@ pub fn pushed(repo: &Path, remote: &str, url: &str, updates: &str) -> Result<Sca
 }
 
 /// Everything the staged diff in `repo` adds that looks like a secret or personal data, in the
-/// order git lists it. `Err` is git failing to answer, which the caller refuses on: a commit
-/// that could not be read is not a commit that was checked.
+/// order git lists it — a value its escapes spell as well as one written as it is, so one value
+/// can be here twice; [`checked`] names it once. `Err` is git failing to answer, which the
+/// caller refuses on: a commit that could not be read is not a commit that was checked.
 pub fn staged(repo: &Path) -> Result<Vec<Finding>, String> {
+    staged_read(repo).map(|read| read.found)
+}
+
+/// [`staged`], with which findings are one value read two ways.
+fn staged_read(repo: &Path) -> Result<Read, String> {
     let run = git::run_in_hook(
         repo,
         &[
@@ -306,12 +340,28 @@ pub fn staged(repo: &Path) -> Result<Vec<Finding>, String> {
 /// What [`staged`] finds in a unified diff's text, or why the text could not be read — which the
 /// caller refuses the commit on, since a file whose name could not be read is a file nobody
 /// scanned.
-fn in_diff(diff: &str) -> Result<Vec<Finding>, String> {
-    let mut found = Vec::new();
+///
+/// Each added line as written and as it reads ([`on_line`]). Added lines in a row that end in
+/// a backslash are also read as one text (#1315): a TOML `"""` string joins such a line to the
+/// next, so a credential split across them reads whole. Only a value that no single line shows
+/// is taken from the joined text, named on the line it starts on. Each line is joined into one
+/// text at most, what was seen is a set and the line a finding starts on is a binary search,
+/// so the time grows with the diff and not with its square.
+fn in_diff(diff: &str) -> Result<Read, String> {
+    let mut read = Read::default();
     let mut path: Option<String> = None;
     let mut at = 0usize;
     let mut in_hunk = false;
+    let mut run = Joined::default();
     for line in diff.lines() {
+        let added = if in_hunk {
+            line.strip_prefix('+')
+        } else {
+            None
+        };
+        if added.is_none() {
+            run.flush(&mut read);
+        }
         if line.starts_with("diff --git ") {
             path = None;
             in_hunk = false;
@@ -325,35 +375,142 @@ fn in_diff(diff: &str) -> Result<Vec<Finding>, String> {
                 .and_then(|new| new.split(',').next())
                 .and_then(|start| start.parse().ok())
                 .ok_or_else(|| format!("a hunk header git wrote could not be read: {line:?}"))?;
-        } else if in_hunk && let Some(added) = line.strip_prefix('+') {
+        } else if let Some(added) = added {
             let Some(path) = &path else {
                 return Err("git showed added lines with no file named for them".to_owned());
             };
-            // As written, then what the line spells through its escapes (#1304), each where
-            // it sits on the line and named by the value it spells.
-            let mut on_line: Vec<(secretshape::Leak, String)> = secretshape::leaks(added)
-                .into_iter()
-                .map(|leak| {
-                    let value = added[leak.span.clone()].to_owned();
-                    (leak, value)
-                })
-                .chain(secretshape::escaped_leaks(added))
-                .collect();
-            on_line.sort_by_key(|(leak, _)| leak.span.start);
-            found.extend(on_line.into_iter().map(|(leak, value)| Finding {
-                path: path.clone(),
-                line: at,
-                rule: leak.rule,
-                kind: leak.kind,
-                masked: secretshape::masked(&value),
-                fingerprint: scanallow::fingerprint(&value),
-            }));
+            let found = on_line(added);
+            let first = read.found.len();
+            for (leak, value, twin) in &found {
+                read.found.push(Finding {
+                    path: path.clone(),
+                    line: at,
+                    rule: leak.rule,
+                    kind: leak.kind,
+                    masked: secretshape::masked(value),
+                    fingerprint: scanallow::fingerprint(value),
+                });
+                read.twin.push(twin.map(|other| first + other));
+            }
+            run.push(
+                path,
+                at,
+                added,
+                found.into_iter().map(|(leak, value, _)| (leak.rule, value)),
+            );
+            if !secretshape::joins_the_next_line(added) {
+                run.flush(&mut read);
+            }
             at += 1;
         } else if in_hunk && line.starts_with(' ') {
             at += 1;
         }
     }
-    Ok(found)
+    run.flush(&mut read);
+    Ok(read)
+}
+
+/// What `added` holds as written, then what it spells through its escapes, in the order they
+/// stand on the line: each with its value, and — for one read as written — the index of the
+/// finding its escapes make it (see [`Read::twin`]).
+fn on_line(added: &str) -> Vec<(secretshape::Leak, String, Option<usize>)> {
+    let mut found: Vec<(secretshape::Leak, String, bool)> = secretshape::leaks(added)
+        .into_iter()
+        .map(|leak| {
+            let value = added[leak.span.clone()].to_owned();
+            (leak, value, false)
+        })
+        .chain(
+            secretshape::escaped_leaks(added)
+                .into_iter()
+                .map(|(leak, value)| (leak, value, true)),
+        )
+        .collect();
+    found.sort_by_key(|(leak, ..)| leak.span.start);
+    // One value read two ways ends where the line ends it either way: the escape is in front.
+    // Looked up by where each ends, so a line of many findings is still read in one pass.
+    let spelled: std::collections::HashMap<(&str, usize), usize> = found
+        .iter()
+        .enumerate()
+        .filter(|(_, (.., escaped))| *escaped)
+        .map(|(at, (leak, ..))| ((leak.rule, leak.span.end), at))
+        .collect();
+    let twin = |(leak, value, escaped): &(secretshape::Leak, String, bool)| {
+        if *escaped {
+            return None;
+        }
+        spelled
+            .get(&(leak.rule, leak.span.end))
+            .copied()
+            .filter(|at| {
+                let other = &found[*at].1;
+                value.ends_with(other.as_str()) || other.ends_with(value.as_str())
+            })
+    };
+    let twins: Vec<Option<usize>> = found.iter().map(twin).collect();
+    found
+        .into_iter()
+        .zip(twins)
+        .map(|((leak, value, _), twin)| (leak, value, twin))
+        .collect()
+}
+
+/// Added lines in a row, each but the last ending in a backslash, read as one text.
+#[derive(Default)]
+struct Joined {
+    path: String,
+    /// The file line each joined line is, and where it starts in `text`.
+    starts: Vec<(usize, usize)>,
+    text: String,
+    /// What the lines showed one at a time, by rule and value: a set, so many lines of many
+    /// values are still read in one pass.
+    seen: std::collections::HashSet<(&'static str, String)>,
+}
+
+impl Joined {
+    fn push(
+        &mut self,
+        path: &str,
+        line: usize,
+        added: &str,
+        seen: impl Iterator<Item = (&'static str, String)>,
+    ) {
+        if self.starts.is_empty() {
+            self.path = path.to_owned();
+        } else {
+            self.text.push('\n');
+        }
+        self.starts.push((line, self.text.len()));
+        self.text.push_str(added);
+        self.seen.extend(seen);
+    }
+
+    /// What only the joined text shows, into `read`; then start again.
+    fn flush(&mut self, read: &mut Read) {
+        let joined = std::mem::take(self);
+        if joined.starts.len() < 2 {
+            return;
+        }
+        for (leak, value) in secretshape::escaped_leaks(&joined.text) {
+            if joined.seen.contains(&(leak.rule, value.clone())) {
+                continue;
+            }
+            // The last line that starts at or before it: `starts` is in order.
+            let after = joined
+                .starts
+                .partition_point(|(_, start)| *start <= leak.span.start);
+            let line = joined.starts[after.saturating_sub(1)].0;
+            read.found.push(Finding {
+                path: joined.path.clone(),
+                line,
+                rule: leak.rule,
+                kind: leak.kind,
+                masked: secretshape::masked(&value),
+                fingerprint: scanallow::fingerprint(&value),
+            });
+            read.twin.push(None);
+        }
+    }
 }
 
 /// The file a `+++ ` header names: `b/<path>`, or git's C-quoted `"b/<path>"` for a name
@@ -621,6 +778,118 @@ mod tests {
                 "tab\there.txt"
             ]
         );
+    }
+
+    /// A diff that adds `lines` to `path`, one hunk from line 1.
+    fn adding(path: &str, lines: &[&str]) -> String {
+        let mut diff = format!(
+            "diff --git a/{path} b/{path}\n+++ b/{path}\n@@ -0,0 +1,{} @@\n",
+            lines.len()
+        );
+        for line in lines {
+            diff.push('+');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+        diff
+    }
+
+    #[test]
+    fn an_escape_in_front_of_an_email_names_it_once_by_the_value_it_spells() {
+        // `\n` and `\0` are letters to the scan as written, so it reads a longer address than
+        // the one the line spells; both are the same finding (#1315).
+        // Built at run time, so this file carries no address the scan would stop.
+        let address = ["ada", "@", "lovelace.dev"].concat();
+        for line in [
+            format!(r#""owner": "the deploy\n{address}""#),
+            format!(r#""owner": "the deploy\0{address}""#),
+        ] {
+            let found = in_diff(&adding("owners.json", &[&line])).unwrap();
+            assert_eq!(found.found.len(), 2, "{line}: {:?}", found.found);
+            let scan = through(String::new(), found);
+            assert_eq!(scan.refused.len(), 1, "{line}: {:?}", scan.refused);
+            assert_eq!(
+                scan.refused[0].fingerprint,
+                scanallow::fingerprint(&address),
+                "{line}"
+            );
+        }
+        // Only the spelling where the escape is: the same longer address elsewhere on the line
+        // is its own finding.
+        let two = format!(r#""a": "n{address}", "b": "\n{address}""#);
+        let scan = through(
+            String::new(),
+            in_diff(&adding("owners.json", &[&two])).unwrap(),
+        );
+        assert_eq!(scan.refused.len(), 2, "{:?}", scan.refused);
+    }
+
+    #[test]
+    fn one_spelling_an_entry_lets_through_and_one_it_does_not_are_both_kept() {
+        let finding = |value: &str| Finding {
+            path: "fixture.txt".into(),
+            line: 1,
+            rule: "forge-token",
+            kind: "a token by its forge's prefix",
+            masked: secretshape::masked(value),
+            fingerprint: scanallow::fingerprint(value),
+        };
+        let token = crate::secretshape::escaped::token();
+        let longer = format!("{token}AB");
+        let read = Read {
+            found: vec![finding(&longer), finding(&token)],
+            twin: vec![Some(1), None],
+        };
+        let allowing_the_shorter = format!(
+            "[[allow]]\nfingerprint = \"{}\"\nreason = \"a revoked fixture\"\n",
+            scanallow::fingerprint(&token)
+        );
+        let scan = through(allowing_the_shorter, read);
+        assert_eq!(scan.refused.len(), 1, "{:?}", scan.refused);
+        assert_eq!(scan.refused[0].fingerprint, scanallow::fingerprint(&longer));
+        assert_eq!(scan.allowed.len(), 1);
+    }
+
+    #[test]
+    fn a_credential_split_by_a_line_ending_backslash_is_read_across_the_added_lines() {
+        let token = crate::secretshape::escaped::token();
+        let diff = adding(
+            "deploy/settings",
+            &[
+                "[deploy]",
+                &format!("note = \"\"\"{}\\", &token[..8]),
+                &format!("    {}\"\"\"", &token[8..]),
+            ],
+        );
+        let found = in_diff(&diff).unwrap().found;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].line, found[0].rule), (2, "forge-token"));
+        assert_eq!(found[0].fingerprint, scanallow::fingerprint(&token));
+        // A line that does not end in one is not joined to the next.
+        let apart = adding(
+            "deploy/settings",
+            &[&format!("{}\\ x", &token[..8]), &token[8..]],
+        );
+        assert_eq!(in_diff(&apart).unwrap().found, Vec::new());
+    }
+
+    #[test]
+    fn many_escaped_addresses_and_many_joined_lines_read_in_linear_time() {
+        let started = std::time::Instant::now();
+        // Every value its own, so no seen list is short-cut by a repeat.
+        let line: String = (0..1 << 13)
+            .map(|i| format!(r"\na{i}x@lovelace{i}.dev "))
+            .collect();
+        let scan = through(String::new(), in_diff(&adding("a.txt", &[&line])).unwrap());
+        assert_eq!(scan.refused.len(), 1 << 13);
+        let joined: Vec<String> = (0..1 << 14)
+            .map(|i| format!("b{i}x@lovelace{i}.dev a{i}\\"))
+            .collect();
+        let joined: Vec<&str> = joined.iter().map(String::as_str).collect();
+        let found = in_diff(&adding("b.toml", &joined)).unwrap().found;
+        assert!(found.len() >= 1 << 14, "{}", found.len());
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     #[test]
