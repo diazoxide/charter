@@ -1170,3 +1170,236 @@ fn an_alias_chain_past_the_hop_limit_is_refused_with_a_git_directory() {
 fn an_alias_chain_past_the_hop_limit_is_refused_with_a_git_file() {
     an_alias_chain_past_the_hop_limit_is_refused(true);
 }
+
+/// An alias the command defines for itself, from wherever git takes configuration, is followed
+/// as one in the root's config is (#1358): the numbered `GIT_CONFIG_*` pairs (set on the
+/// invocation, exported earlier, or assigned bare), `--config-env`, and
+/// `GIT_CONFIG_PARAMETERS`. From a clone aimed at the root and from a session in the root, a
+/// branch move or reset behind one is refused; one that leads nowhere it judges is allowed.
+fn an_alias_the_command_defines_is_followed(linked: bool) {
+    let s = scratch(linked);
+    let root = &s.root;
+    let parent = &root[..root.rfind('/').unwrap()];
+    let r = std::path::Path::new(root);
+    git(
+        std::path::Path::new(parent),
+        &["init", "-q", "--bare", "-b", "main", "up.git"],
+    );
+    git(r, &["remote", "add", "origin", &format!("{parent}/up.git")]);
+    git(r, &["push", "-q", "-u", "origin", "main"]);
+    git(r, &["commit", "-q", "--allow-empty", "-m", "unpushed"]);
+    let count = |name: &str, body: &str| {
+        format!("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.{name} GIT_CONFIG_VALUE_0='{body}'")
+    };
+    for (cwd, to) in [
+        (&s.clone, format!("-C {root} ")),
+        (&s.session, String::new()),
+    ] {
+        for cmd in [
+            format!("{} git {to}yy -b x", count("yy", "checkout")),
+            format!("V=checkout git --config-env=alias.yy=V {to}yy -b x"),
+            format!("V=switch git --config-env alias.yy=V {to}yy -c x"),
+            format!("GIT_CONFIG_PARAMETERS=\"'alias.yy'='checkout'\" git {to}yy -b x"),
+            format!("GIT_CONFIG_PARAMETERS=\"'alias.yy=switch'\" git {to}yy -c x"),
+        ] {
+            let said = plane_root_branch_reason(&cmd, cwd, root).expect(&cmd);
+            assert!(said.starts_with("would "), "{cmd:?}: {said}");
+        }
+        // Defined by an earlier segment, which may not reach git: unread, and refused (D-1358f).
+        for cmd in [
+            format!("export {} && git {to}yy -b x", count("yy", "checkout")),
+            format!("{}; git {to}yy -b x", count("yy", "checkout")),
+            format!("export {} && git {to}yy", count("yy", "status")),
+        ] {
+            let said = plane_root_branch_reason(&cmd, cwd, root).expect(&cmd);
+            assert!(
+                said.starts_with("cannot tell what `git yy` does"),
+                "{cmd:?}: {said}"
+            );
+        }
+        for cmd in [
+            format!("{} git {to}ww HEAD~1", count("ww", "reset --hard")),
+            format!("V='reset --hard' git --config-env=alias.ww=V {to}ww HEAD~1"),
+        ] {
+            assert!(
+                plane_root_reset_reason(&cmd, cwd, root).is_some(),
+                "{cmd:?}"
+            );
+        }
+        for cmd in [
+            format!("{} git {to}yy", count("yy", "status")),
+            format!("V=status git --config-env=alias.yy=V {to}yy"),
+        ] {
+            assert_eq!(plane_root_branch_reason(&cmd, cwd, root), None, "{cmd:?}");
+        }
+    }
+}
+
+#[test]
+fn an_alias_the_command_defines_is_followed_with_a_git_directory() {
+    an_alias_the_command_defines_is_followed(false);
+}
+
+#[test]
+fn an_alias_the_command_defines_is_followed_with_a_git_file() {
+    an_alias_the_command_defines_is_followed(true);
+}
+
+/// Configuration the guard does not read — a config file the command points git at, an include,
+/// or a value only the shell fills in — may define any alias, so a possible alias after it is
+/// refused with a sentence that says why; git's own commands are not aliases and run (#1358).
+fn configuration_the_guard_does_not_read_keeps_the_refusal(linked: bool) {
+    let s = scratch(linked);
+    let root = &s.root;
+    let unread = "cannot tell what `git yy` does: it may be an alias";
+    for (cwd, to) in [
+        (&s.clone, format!("-C {root} ")),
+        (&s.session, String::new()),
+    ] {
+        for cmd in [
+            format!("GIT_CONFIG_GLOBAL=/tmp/c git {to}yy -b x"),
+            format!("GIT_CONFIG_SYSTEM=/tmp/c git {to}yy -b x"),
+            format!("GIT_CONFIG=/tmp/c git {to}yy -b x"),
+            format!("HOME=/tmp/h git {to}yy -b x"),
+            format!("HOME=/tmp/h; git {to}yy -b x"),
+            format!("XDG_CONFIG_HOME=/tmp/x git {to}yy -b x"),
+            format!("git -c include.path=/tmp/c {to}yy -b x"),
+            format!("git -c includeIf.onbranch:main.path=/tmp/c {to}yy -b x"),
+            format!(
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/c git {to}yy -b x"
+            ),
+            format!(
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.yy GIT_CONFIG_VALUE_0=$V git {to}yy -b x"
+            ),
+            format!("GIT_CONFIG_COUNT=$N git {to}yy -b x"),
+            format!(
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=$K GIT_CONFIG_VALUE_0=checkout git {to}yy -b x"
+            ),
+            format!("git --config-env=alias.yy=NOT_SET_ANYWHERE_1358 {to}yy -b x"),
+            format!("GIT_CONFIG_PARAMETERS=\"$P\" git {to}yy -b x"),
+            format!("git -c alias.yy=$B {to}yy -b x"),
+        ] {
+            let said = plane_root_branch_reason(&cmd, cwd, root).expect(&cmd);
+            assert!(said.starts_with(unread), "{cmd:?}: {said}");
+        }
+        for cmd in [
+            format!("HOME=/tmp/h git {to}status"),
+            format!("GIT_CONFIG_GLOBAL=/tmp/c git {to}log --oneline"),
+        ] {
+            assert_eq!(plane_root_branch_reason(&cmd, cwd, root), None, "{cmd:?}");
+        }
+    }
+    // After a substitution among git's options, the same: followed where it is read, refused
+    // where it is not.
+    let echo = format!("$(echo {root})");
+    for cmd in [
+        format!(
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.yy GIT_CONFIG_VALUE_0=checkout git -C {echo} yy -b x"
+        ),
+        format!("V=checkout git --config-env=alias.yy=V -C {echo} yy -b x"),
+        format!("HOME=/tmp/h git -C {echo} yy -b x"),
+        format!("git -c include.path=/tmp/c -C {echo} yy -b x"),
+        format!("V=$(echo checkout) git --config-env=alias.yy=V -C {root} yy -b x"),
+    ] {
+        let said = plane_root_branch_reason(&cmd, &s.clone, root).expect(&cmd);
+        assert!(said.starts_with("cannot tell "), "{cmd:?}: {said}");
+    }
+}
+
+#[test]
+fn configuration_the_guard_does_not_read_keeps_the_refusal_with_a_git_directory() {
+    configuration_the_guard_does_not_read_keeps_the_refusal(false);
+}
+
+#[test]
+fn configuration_the_guard_does_not_read_keeps_the_refusal_with_a_git_file() {
+    configuration_the_guard_does_not_read_keeps_the_refusal(true);
+}
+
+/// A body the line gives an alias that git may never see — set on another command, exported in
+/// a subshell, after `false &&`, then unset or dropped by `env` — cannot hide the config's own
+/// alias: both readings are followed, and the one that moves HEAD is refused (#1358). The
+/// pairs on git itself are what git sees, and decide alone.
+fn a_line_value_git_may_not_see_only_adds_refusals(linked: bool) {
+    let s = scratch(linked);
+    let root = &s.root;
+    git(
+        std::path::Path::new(root),
+        &["config", "alias.co", "checkout"],
+    );
+    let triple = "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.co GIT_CONFIG_VALUE_0=status";
+    let zz = "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.zz GIT_CONFIG_VALUE_0=co";
+    let params = "GIT_CONFIG_PARAMETERS=\"'alias.co'='status'\"";
+    for cmd in [
+        format!("{triple} true; git -C {root} co -b x"),
+        format!("export {triple}; env -u GIT_CONFIG_COUNT git -C {root} co -b x"),
+        format!("false && export {triple}; git -C {root} co -b x"),
+        format!("(export {triple}); git -C {root} co -b x"),
+        format!("export {triple}; unset GIT_CONFIG_COUNT; git -C {root} co -b x"),
+        format!("export {triple}; env -i PATH=/usr/bin git -C {root} co -b x"),
+        format!("{triple}; git -C {root} co -b x"),
+        format!("{triple} true; git -C $(echo {root}) co -b x"),
+        // A SUBSET of the line's values reaching git: `zz = co` does, `co = status` does not.
+        format!("export {zz} {params}; env -u GIT_CONFIG_PARAMETERS git -C {root} zz -b x"),
+        format!("export {zz} {params}; unset GIT_CONFIG_PARAMETERS; git -C {root} zz -b x"),
+        format!("export {zz}; false && export {params}; git -C {root} zz -b x"),
+        format!("export {zz}; (export {params}); git -C {root} zz -b x"),
+        format!("export {zz} {params}; false && export GIT_CONFIG_COUNT=0; git -C {root} zz -b x"),
+        format!("export {zz} {params}; env -u GIT_CONFIG_PARAMETERS git -C $(echo {root}) zz -b x"),
+    ] {
+        assert!(
+            plane_root_branch_reason(&cmd, &s.clone, root).is_some(),
+            "{cmd:?}"
+        );
+    }
+    assert_eq!(
+        plane_root_branch_reason(&format!("{triple} git -C {root} co -b x"), &s.clone, root),
+        None
+    );
+    // A pair whose value is set nowhere the guard can see is unread, not empty.
+    let mut pairs: Vec<String> = (0..64)
+        .map(|n| format!("GIT_CONFIG_KEY_{n}=x.y{n} GIT_CONFIG_VALUE_{n}=1"))
+        .collect();
+    pairs.push("GIT_CONFIG_KEY_64=alias.yy".to_string());
+    let cmd = format!(
+        "GIT_CONFIG_COUNT=65 {} git -C {root} yy -b x",
+        pairs.join(" ")
+    );
+    let said = plane_root_branch_reason(&cmd, &s.clone, root).unwrap();
+    assert!(said.starts_with("cannot tell what `git yy` does"), "{said}");
+}
+
+#[test]
+fn a_line_value_git_may_not_see_only_adds_refusals_with_a_git_directory() {
+    a_line_value_git_may_not_see_only_adds_refusals(false);
+}
+
+#[test]
+fn a_line_value_git_may_not_see_only_adds_refusals_with_a_git_file() {
+    a_line_value_git_may_not_see_only_adds_refusals(true);
+}
+
+/// A long line of bare assignments before a git command costs what it is long (#1358).
+#[test]
+fn a_long_line_of_assignments_is_read_in_time() {
+    let s = scratch(true);
+    let cmd = format!("{}git -C {} status", "A=1; ".repeat(20_000), s.root);
+    let started = std::time::Instant::now();
+    assert_eq!(plane_root_branch_reason(&cmd, &s.clone, &s.root), None);
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}
+
+/// A long line of exports costs what it is long, in every guard that reads them (#1358).
+#[test]
+fn a_long_line_of_exports_is_read_in_time() {
+    let s = scratch(true);
+    let cmd = format!("{}git -C {} status", "export A=1; ".repeat(20_000), s.root);
+    let started = std::time::Instant::now();
+    assert_eq!(plane_root_branch_reason(&cmd, &s.clone, &s.root), None);
+    assert_eq!(plane_root_reset_reason(&cmd, &s.clone, &s.root), None);
+    assert!(crate::credguard::single_credential_hit(&cmd, &[]).is_none());
+    assert!(crate::commitguard::hook_skip_hit(&cmd, &s.clone).is_none());
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}

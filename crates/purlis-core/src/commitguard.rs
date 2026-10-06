@@ -98,8 +98,14 @@ fn skips_verify(arg: &str) -> bool {
 /// The spelling that would skip a chat's commit hooks, and the refusal, or `None`.
 pub fn hook_skip_hit(cmd: &str, cwd: &str) -> Option<(&'static str, String)> {
     let segments = shellseg::segment_argv(cmd);
-    let exported = shellwrap::exported_env(&segments);
-    for (toks, exported) in segments.iter().zip(exported) {
+    let exported = shellwrap::exported_env_shared(&segments);
+    // The list only grows, so each export is looked at once, in the first segment that
+    // inherits it: a line of exports stays linear.
+    let mut looked = 0usize;
+    for (i, toks) in segments.iter().enumerate() {
+        let inherited = exported.before(i);
+        let fresh = &inherited[looked.min(inherited.len())..];
+        looked = inherited.len();
         let (prog, env, argv) = shellwrap::split_env(toks);
         let base = base_lower(&prog);
         let exports: Vec<&String> = if base == "export" {
@@ -109,7 +115,7 @@ pub fn hook_skip_hit(cmd: &str, cwd: &str) -> Option<(&'static str, String)> {
         };
         if env
             .iter()
-            .chain(exported.iter())
+            .chain(fresh.iter())
             .chain(exports)
             .any(|a| replaces_the_chats_config(a))
         {

@@ -376,19 +376,20 @@ pub fn single_credential_hit(cmd: &str, forges: &[Forge]) -> Option<(String, Str
     }
 
     let segments = shellseg::segment_argv(cmd);
-    let before_each = shellwrap::exported_env(&segments);
-    for (toks, before) in segments.iter().zip(before_each.iter()) {
+    let before_each = shellwrap::exported_env_shared(&segments);
+    for (i, toks) in segments.iter().enumerate() {
         let (prog, seg_env, argv) = shellwrap::split_env(toks);
-        // The environment an EARLIER segment exported reaches this git exactly as an attached
-        // prefix does: `export GIT_SSH_COMMAND=/tmp/k && git push` walked past this guard while
-        // the attached spelling was denied — the same defect as #496, in the guard next door.
-        let mut env = before.clone();
-        env.extend(seg_env);
         // Case-folded for the reason `is_charter` and `_VAULT_PATH_RE` are: APFS and NTFS resolve
         // `GIT` and `git` to the same binary, so a case-sensitive compare here is one Shift key
         // from absent.
         let base = base_lower(&prog);
         if base == "git" {
+            // The environment an EARLIER segment exported reaches this git exactly as an
+            // attached prefix does: `export GIT_SSH_COMMAND=/tmp/k && git push` walked past this
+            // guard while the attached spelling was denied — the same defect as #496, in the
+            // guard next door. Copied only for a git, so a line of exports stays linear.
+            let mut env = before_each.before(i).to_vec();
+            env.extend(seg_env);
             let args: Vec<String> = argv.iter().skip(1).cloned().collect();
             if let Some(hit) = env.iter().find(|e| git_ssh_env_re().is_match(e)) {
                 // The variable NAME only — its value is an arbitrary shell command and may carry
