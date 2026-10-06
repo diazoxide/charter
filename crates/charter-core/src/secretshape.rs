@@ -505,30 +505,67 @@ pub fn kind_as_read(form: Option<Structured>, text: &str) -> Option<&'static str
 
 /// [`secret_kind`] of what `text` spells through its escapes, for a caller that has asked the
 /// text as written already: the parsed document when `form` names one and the text parses
-/// ([`parsed_kind`]), then the text with every escape decoded and no parse ([`unescaped`]).
+/// ([`parsed_kind`]), then each reading of the text with its escapes decoded and no parse
+/// ([`readings`]).
 ///
 /// The parse reads a quoted key as the bare key it is, so a key and its value still form an
 /// assignment; the lexical pass reads what the parse refuses or drops — comments, a trailing
 /// comma, JSON5, JSON lines, a key given twice — and a file of any name (#1304).
 pub fn decoded_kind(form: Option<Structured>, text: &str) -> Option<&'static str> {
     form.and_then(|form| parsed_kind(form, text))
-        .or_else(|| unescaped(text).and_then(|read| secret_kind(&read)))
+        .or_else(|| readings(text).iter().find_map(|read| secret_kind(read)))
 }
 
-/// [`token_kind`] of `text` as written, then with every escape decoded ([`unescaped`]). What a
-/// workspace repo's save refuses a staged file for.
+/// [`token_kind`] of `text` as written, then of each reading with its escapes decoded
+/// ([`readings`]). What a workspace repo's save refuses a staged file for.
 pub fn token_kind_as_read(text: &str) -> Option<&'static str> {
-    token_kind(text).or_else(|| unescaped(text).and_then(|read| token_kind(&read)))
+    token_kind(text).or_else(|| readings(text).iter().find_map(|read| token_kind(read)))
+}
+
+/// How many times the escapes of a text are decoded, each time from the last reading: twice
+/// reads JSON held inside a JSON string — a tool's result in a transcript — whose own escapes
+/// are escaped once more (D-1304-10). Each round is one linear pass.
+const ROUNDS: usize = 2;
+
+/// Each reading of `text` with its escapes decoded ([`unescaped`]), up to [`ROUNDS`] deep,
+/// stopping at the first that decodes nothing more.
+fn readings(text: &str) -> Vec<String> {
+    mapped_readings(text, false)
+        .into_iter()
+        .map(|(read, _)| read)
+        .collect()
+}
+
+/// [`readings`], each with — when `mapped` — where each of its bytes sits in `text` (see
+/// [`decode`]).
+fn mapped_readings(text: &str, mapped: bool) -> Vec<(String, Vec<usize>)> {
+    let mut out: Vec<(String, Vec<usize>)> = Vec::new();
+    for _ in 0..ROUNDS {
+        let last = out.last().map_or(text, |(read, _)| read.as_str());
+        let mut map = Vec::new();
+        let Some(read) = decode(last, mapped.then_some(&mut map)) else {
+            break;
+        };
+        if let Some((_, before)) = out.last() {
+            map = map.into_iter().map(|at| before[at]).collect();
+        }
+        out.push((read, map));
+    }
+    out
 }
 
 /// `text` with every string escape decoded to the character it spells, read lexically — no
 /// parse, so it reads what a parser refuses, and one added line as well as a whole file. `None`
-/// when `text` holds no escape, so a caller asks nothing twice.
+/// when `text` holds no escape, so a caller asks nothing twice. One round: [`readings`] goes
+/// deeper.
 ///
 /// The escapes of JSON and TOML (`\uXXXX` with surrogate pairs, `\UXXXXXXXX`, `\xHH`, `\n`,
-/// `\t`, `\r`, `\b`, `\f`, `\e`, `\"`, `\/`, `\\`) and the `\u{…}` of JavaScript and Rust. An
-/// escaped backslash is one backslash, so `\\u0041` reads as the six characters it shows. A
-/// sequence that spells no character stays as written; a lone surrogate reads as U+FFFD.
+/// `\t`, `\r`, `\b`, `\f`, `\e`, `\"`, `\/`, `\\`), the `\u{…}` of JavaScript and Rust,
+/// and an octal escape. An escaped backslash is one backslash, so `\\u0041` reads as the six
+/// characters it shows; a lone surrogate reads as U+FFFD. A backslash and a letter or digit
+/// that spell no character this knows — YAML's `\v`, `\a`, `\N`, `\L`, a malformed `\u` —
+/// read as one space (D-1304-9): whatever the character, it is not part of the word after it,
+/// so a credential behind it starts a word. Any other backslash stays as written.
 pub fn unescaped(text: &str) -> Option<String> {
     decode(text, None)
 }
@@ -566,10 +603,23 @@ fn decode(text: &str, mut map: Option<&mut Vec<usize>>) -> Option<String> {
     changed.then_some(out)
 }
 
+/// The longest `\u{…}` this reads: six hex digits and the closing brace. Looking no further
+/// for the brace keeps each escape a bounded look, so a text of open `\u{` reads in one
+/// linear pass.
+const BRACED_MAX: usize = 7;
+
 /// The character the escape at the start of `s` spells, and how many bytes it takes; `None`
-/// when `s` does not start with one.
+/// when `s` does not start with one. A backslash and a letter or digit that spell nothing
+/// known read as a space ([`unescaped`]). Every look is a few bytes ahead, never further.
 fn escape_at(s: &str) -> Option<(char, usize)> {
     let rest = s.strip_prefix('\\')?;
+    let first = *rest.as_bytes().first()?;
+    spelled(rest).or_else(|| first.is_ascii_alphanumeric().then_some((' ', 2)))
+}
+
+/// What the escape whose body is `rest` (the text after its backslash) spells, when it spells
+/// a character.
+fn spelled(rest: &str) -> Option<(char, usize)> {
     let hex = |digits: &str| -> Option<u32> {
         (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_hexdigit()))
             .then(|| u32::from_str_radix(digits, 16).ok())
@@ -586,10 +636,23 @@ fn escape_at(s: &str) -> Option<(char, usize)> {
         b'"' => Some(('"', 2)),
         b'/' => Some(('/', 2)),
         b'\\' => Some(('\\', 2)),
+        b'0'..=b'7' => {
+            let digits = rest
+                .bytes()
+                .take(3)
+                .take_while(|b| (b'0'..=b'7').contains(b))
+                .count();
+            let value = u32::from_str_radix(&rest[..digits], 8).ok()?;
+            Some((char::from_u32(value)?, 1 + digits))
+        }
         b'x' => Some((char::from_u32(fixed(2)?)?, 4)),
         b'U' => Some((char::from_u32(fixed(8)?)?, 10)),
         b'u' if rest[1..].starts_with('{') => {
-            let close = rest[2..].find('}').filter(|n| (1..=6).contains(n))?;
+            let close = rest.as_bytes()[2..]
+                .iter()
+                .take(BRACED_MAX)
+                .position(|b| *b == b'}')
+                .filter(|n| (1..=6).contains(n))?;
             Some((char::from_u32(hex(&rest[2..2 + close])?)?, 4 + close))
         }
         b'u' => {
@@ -614,29 +677,34 @@ fn escape_at(s: &str) -> Option<(char, usize)> {
     }
 }
 
-/// What [`leaks`] finds on `line` only once its escapes are decoded ([`unescaped`]): each with
+/// What [`leaks`] finds on `line` only once its escapes are decoded ([`readings`]): each with
 /// the span of `line` it was read from — escapes and all, for a caller that names where it is —
 /// and the value it spells, which is what a caller masks and fingerprints, so an allowlist
-/// entry names a value however it is spelled. A hit whose rule and value the line as written
-/// already shows is that one, and is left to it; one that differs in any character is its
-/// own, so a value read as written never answers for a longer one its escapes spell.
+/// entry names a value however it is spelled. A hit whose rule and value the line as written,
+/// or an earlier reading, already shows is that one, and is left to it; one that differs in
+/// any character is its own, so a value read as written never answers for a longer one its
+/// escapes spell.
 pub fn escaped_leaks(line: &str) -> Vec<(Leak, String)> {
-    let mut map = Vec::new();
-    let Some(read) = decode(line, Some(&mut map)) else {
-        return Vec::new();
-    };
-    let written = leaks(line);
-    leaks(&read)
+    let mut seen: Vec<(&'static str, String)> = leaks(line)
         .into_iter()
-        .filter_map(|leak| {
+        .map(|leak| (leak.rule, line[leak.span].to_owned()))
+        .collect();
+    let mut out = Vec::new();
+    for (read, map) in mapped_readings(line, true) {
+        for leak in leaks(&read) {
             let value = read[leak.span.clone()].to_owned();
-            let shown = written
+            if seen
                 .iter()
-                .any(|w| w.rule == leak.rule && line[w.span.clone()] == value);
+                .any(|(rule, v)| *rule == leak.rule && *v == value)
+            {
+                continue;
+            }
+            seen.push((leak.rule, value.clone()));
             let span = map[leak.span.start]..map[leak.span.end];
-            (!shown).then_some((Leak { span, ..leak }, value))
-        })
-        .collect()
+            out.push((Leak { span, ..leak }, value));
+        }
+    }
+    out
 }
 
 /// A credential [`found`] in a text: its kind, and the 1-based line it starts on. Never the
@@ -1852,6 +1920,62 @@ pub(crate) mod escaped {
                 format!("const note = \"\\u{{67}}{tail}\";\n"),
                 FORGE,
                 true,
+            ), // D-1304-9: an escape the decoder cannot spell — YAML's `\v`, `\a`, `\0`, `\N`,
+            // `\L`, `\_`, an octal escape — still ends the word in front of a credential.
+            one(
+                "deploy.yaml",
+                format!("note: \"the deploy\\v{token}\"\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "deploy.yaml",
+                format!("note: \"the deploy\\a{token}\"\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "deploy.yaml",
+                format!("note: \"the deploy\\N{token}\"\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "deploy.yaml",
+                format!("note: \"the deploy\\L{token}\\_x\"\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "deploy.c",
+                format!("char *note = \"the deploy\\0{token}\";\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "deploy.c",
+                format!("char *note = \"the deploy\\012{token}\";\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "deploy.c",
+                format!("char *note = \"\\147{tail}\";\n"),
+                FORGE,
+                true,
+            ),
+            // D-1304-10: JSON inside a JSON string, its escapes escaped once more.
+            one(
+                "workspaces/alpha/events.jsonl",
+                format!("{{\"tool\": \"{{\\\"a\\\": \\\"x\\\\n{token}\\\"}}\"}}\n"),
+                FORGE,
+                true,
+            ),
+            one(
+                "workspaces/alpha/events.jsonl",
+                format!("{{\"tool\": \"\\\\u0067{tail}\"}}\n"),
+                FORGE,
+                true,
             ),
         ]
     }
@@ -1938,11 +2062,39 @@ mod escaped_tests {
             (r"\ud83d!", "\u{FFFD}!"),
             (r#"\n\t\r\b\f\e\"\/\\"#, "\n\t\r\u{8}\u{c}\u{1b}\"/\\"),
             (r"\\u0041", r"\u0041"),
-            (r"\q \u00zz \U0011FFFF", r"\q \u00zz \U0011FFFF"),
+            (r"\101\0", "A\0"),
+            // What spells no character ends a word, and stays one character wide.
+            (r"a\qb \u00zz \U0011FFFF", "a b  00zz  0011FFFF"),
+            (r"\N{LINE FEED}", " {LINE FEED}"),
+            (r"\% \~", r"\% \~"),
         ] {
             assert_eq!(unescaped(text).as_deref().unwrap_or(text), read, "{text}");
         }
         assert_eq!(unescaped("no escape here"), None);
+    }
+
+    #[test]
+    fn a_long_run_of_open_escapes_reads_in_linear_time() {
+        // `\u{` with no `}` near it: each one looks a few bytes ahead, never to the end.
+        let text = "\\u{".repeat(1 << 18);
+        let started = std::time::Instant::now();
+        assert!(unescaped(&text).is_some());
+        assert_eq!(kind_as_read(None, &text), None);
+        assert_eq!(token_kind_as_read(&text), None);
+        assert_eq!(escaped_leaks(&text), Vec::new());
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn json_inside_a_json_string_is_read_two_levels_down_and_no_further() {
+        let token = escaped::token();
+        let tail = &token[1..];
+        assert_eq!(
+            token_kind_as_read(&format!(r"\\u0067{tail}")),
+            Some("a token by its forge's prefix")
+        );
+        assert_eq!(token_kind_as_read(&format!(r"\\\\u0067{tail}")), None);
     }
 
     #[test]
