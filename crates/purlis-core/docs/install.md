@@ -198,6 +198,12 @@ so the rule is yours alone. An ask rule is written into every workspace's genera
 settings at once, and the command names the workspaces it reached and any whose settings it
 could not rewrite. An allow rule reaches a chat at the plane root only: a
 workspace's and a clone's settings carry ask and deny rules and never allow.
+A harness matches a rule against the command as written, so purlis's guard stands behind your
+ask and deny rules: a program a rule names, run under another spelling the rule would not match
+(a path to it, another case, a variable or wrapper in front, a quote or escape, a subshell, or a
+string a shell runs), is refused and told to spell it as the rule does. A rule on the command
+line itself holds under both its names. A rule whose program is a wildcard
+(`'*kubectl delete*'`) is left to the harness alone.
 `purlis guard handoff` puts back the handoff consent rule that `purlis init` writes.
 `purlis guard` on its own lists the rules, grouped by the file each one is in.
 `purlis doctor`'s `handoff gate` row says whether that rule is in force where you are.
