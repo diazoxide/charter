@@ -89,6 +89,7 @@ fn refused_unless_covered(dir: &Path) -> io::Result<()> {
 fn keys_locked<T>(dir: &Path, act: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     let held = File::open(dir)?;
     held.lock()?;
+    let _held = crate::filelock::Held::locked(held);
     act()
 }
 
@@ -209,11 +210,12 @@ pub fn append(
     let line = serde_json::to_string(what).map_err(io::Error::other)?;
     let path = file_for(dir, chat);
     let new = !path.exists();
-    let mut file = open_spool(&path)?;
+    let file = open_spool(&path)?;
     if new {
         rustix::fs::fsync(File::open(dir)?)?;
     }
     file.lock()?;
+    let mut file = crate::filelock::Held::locked(file);
     let mut text = Vec::new();
     file.read_to_end(&mut text)?;
     let last = lines_of(&text)
@@ -429,8 +431,9 @@ fn drain_one(
     taken: &HashMap<String, Held>,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
 ) -> io::Result<()> {
-    let mut file = open_spool(&file_for(dir, chat))?;
+    let file = open_spool(&file_for(dir, chat))?;
     file.lock()?;
+    let mut file = crate::filelock::Held::locked(file);
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     // Per key, in the order keys first appear: its lines by number.

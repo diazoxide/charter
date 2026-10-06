@@ -84,7 +84,8 @@ fn a_second_writer_on_the_same_log_is_refused() {
 fn a_log_opened_again_while_a_child_still_holds_its_lock_waits_the_child_out() {
     let dir = tempfile::tempdir().unwrap();
     let log = Log::open(dir.path(), DEVICE).unwrap();
-    rustix::io::fcntl_setfd(&log._lock, rustix::io::FdFlags::empty()).unwrap();
+    use std::os::fd::AsFd;
+    rustix::io::fcntl_setfd(log._lock.as_fd(), rustix::io::FdFlags::empty()).unwrap();
     let mut child = crate::forklock::spawn(std::process::Command::new("sleep").arg("0.2")).unwrap();
 
     drop(log);
@@ -94,6 +95,30 @@ fn a_log_opened_again_while_a_child_still_holds_its_lock_waits_the_child_out() {
     assert!(
         again.is_ok(),
         "a child holding the lock a moment is not a second writer: {:?}",
+        again.err()
+    );
+}
+
+/// #1316: a child that keeps a copy of the lock's descriptor for longer than [`LOCK_WAIT`] —
+/// here as its stdin, for as long as it sleeps — does not keep the next writer out once the
+/// log that held the lock is dropped, since the drop unlocks every copy at once.
+#[cfg(unix)]
+#[test]
+fn a_log_dropped_lets_go_of_its_lock_though_a_child_keeps_a_copy_of_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Log::open(dir.path(), DEVICE).unwrap();
+    let copy = std::process::Stdio::from(log._lock.try_clone().unwrap());
+    let mut child =
+        crate::forklock::spawn(std::process::Command::new("sleep").arg("30").stdin(copy)).unwrap();
+
+    drop(log);
+    let again = Log::open(dir.path(), DEVICE);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        again.is_ok(),
+        "the lock outlived its log: {:?}",
         again.err()
     );
 }

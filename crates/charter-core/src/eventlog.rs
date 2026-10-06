@@ -179,8 +179,9 @@ impl Durable {
 
 /// The log of one device, open for appending. Holding it is being the device's one writer.
 pub struct Log {
-    /// Held locked for as long as the `Log` lives.
-    _lock: File,
+    /// Held locked for as long as the `Log` lives, and unlocked when it is dropped, so a
+    /// program forked meanwhile does not keep the next writer out (#1316).
+    _lock: crate::filelock::Held,
     dir: PathBuf,
     /// The segment being written, `events.jsonl`. `None` once a seal renamed it and the next
     /// one could not be opened yet: nothing is written until it is, so no line ever goes into
@@ -252,7 +253,7 @@ impl Log {
             state: std::sync::Mutex::new((next - 1, Some(file.try_clone()?))),
         });
         let mut log = Log {
-            _lock: lock,
+            _lock: crate::filelock::Held::locked(lock),
             dir: dir.to_owned(),
             file: Some(file),
             durable,
@@ -458,10 +459,10 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
 /// How long [`Log::open_with`] waits for a lock someone else holds before refusing (#972).
 ///
 /// A lock is held by an open file, and every process forked while the log is open shares the
-/// log's open files until it execs a program. So the lock outlives a `Log` dropped while another
-/// thread of the same process is spawning a program, and a host that just exited, when one of
-/// its children has not exec'd yet. Neither is a second writer, and both are over in far less
-/// than this.
+/// log's open files until it execs a program. A `Log` that is dropped unlocks first, so that
+/// copy does not keep its lock (#1316); a host that just exited never unlocked, and its lock
+/// outlives it while one of its children has not exec'd yet. That is not a second writer, and
+/// it is over in far less than this.
 pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Locks `lock`, the device's [`LOCK`], waiting up to [`LOCK_WAIT`] for whoever holds it.
