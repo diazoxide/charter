@@ -1303,3 +1303,35 @@ fn a_file_with_escapes_and_no_secret_is_not_refused_for_one() {
         );
     }
 }
+
+/// #1340: a refusal Settings shows names the files the project uses, under their new names too.
+#[test]
+fn a_refusal_names_the_files_the_project_uses() {
+    let said =
+        "sandbox.egress in charter.toml names x; sandbox.mode in charter.local.toml is not read";
+    assert_eq!(
+        named_as(said, "purlis.toml", "purlis.local.toml"),
+        "sandbox.egress in purlis.toml names x; sandbox.mode in purlis.local.toml is not read"
+    );
+    assert_eq!(named_as(said, "charter.toml", "charter.local.toml"), said);
+}
+
+/// #1340: a name a person wrote that only holds a file's name is quoted as they wrote it.
+#[test]
+fn a_host_or_path_that_holds_a_files_name_is_left_as_written() {
+    let said = "sandbox.hosts in charter.toml names charter.toml.example.com, and \
+                /opt/mycharter.toml and x-charter.local.toml are not read. See charter.toml.";
+    assert_eq!(
+        named_as(said, "purlis.toml", "purlis.local.toml"),
+        "sandbox.hosts in purlis.toml names charter.toml.example.com, and \
+         /opt/mycharter.toml and x-charter.local.toml are not read. See purlis.toml."
+    );
+    assert_eq!(
+        named_as(
+            "/home/dev/plane/charter.toml: unreadable",
+            "purlis.toml",
+            "purlis.local.toml"
+        ),
+        "/home/dev/plane/purlis.toml: unreadable"
+    );
+}

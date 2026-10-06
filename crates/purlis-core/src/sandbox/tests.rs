@@ -477,6 +477,81 @@ fn hosts_of(presets: &[Preset], plane: Option<&str>) -> Vec<String> {
 }
 
 #[test]
+fn each_preset_has_the_name_settings_shows_it_by() {
+    let titles: Vec<&str> = Preset::ALL.iter().map(|preset| preset.title()).collect();
+    assert_eq!(
+        titles,
+        ["AI providers", "Code hosting", "Package registries"]
+    );
+}
+
+#[test]
+fn settings_counts_the_hosts_a_chat_is_granted_besides_its_presets() {
+    let host = |written: &str| hosts::Host::parse(written).expect("a host");
+    let counted = counted_hosts(&hosts::off_this_machine(
+        hosts::in_force(
+            &[host("api.example.com"), host("10.0.0.5")],
+            &[host("api.example.com"), host("tools.example.org")],
+            &[],
+            &hosts::Locks::default(),
+        ),
+        &["10.0.0.5".parse().expect("an address")],
+    ));
+    // This machine's own address reaches nothing, and a host yours repeats is the project's.
+    assert_eq!(
+        counted,
+        Besides {
+            project_hosts: 1,
+            your_hosts: 1,
+            folders: 0,
+        }
+    );
+}
+
+/// #1340: what Settings counts is what a chat on no persona is granted as it starts, so the
+/// sentence and a start never drift apart. Both read [`granted_hosts`] and [`granted_folders`];
+/// a folder grant cannot be compiled from a fixture in a temp folder (D-1342-14), so the
+/// folders compare at none here.
+#[test]
+fn settings_counts_what_a_chat_with_no_persona_is_granted() {
+    let project = tempfile::tempdir().expect("a project");
+    let root = project.path().canonicalize().expect("the project");
+    let plane = Plane::of(Some(
+        "[sandbox]\nmode = \"on\"\negress = []\nhosts = [\"api.example.com\", \"tools.example.org\"]\n",
+    ));
+    let policy = plane.said().policy.expect("on");
+    let machine = Machine::this();
+
+    let counted = besides(&root, &plane, &machine);
+    let chat = Compiled::granted(
+        &policy,
+        &plane,
+        &root,
+        &machine,
+        None,
+        &grant::Grants::default(),
+    );
+
+    assert_eq!(
+        counted.project_hosts + counted.your_hosts,
+        chat.hosts.len(),
+        "{:?}",
+        chat.hosts
+    );
+    assert_eq!(counted.project_hosts, 2);
+    assert_eq!(counted.folders, chat.writable.len());
+}
+
+#[test]
+fn a_project_without_the_sandbox_has_nothing_besides_its_presets() {
+    let root = tempfile::tempdir().expect("a project");
+    assert_eq!(
+        besides(root.path(), &Plane::of(None), &Machine::this()),
+        Besides::default()
+    );
+}
+
+#[test]
 fn the_forge_preset_adds_the_self_managed_hosts_the_plane_tracks() {
     let hosts = hosts_of(
         &[Preset::Forge],

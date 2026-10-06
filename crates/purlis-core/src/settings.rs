@@ -274,7 +274,53 @@ fn on_disk(root: &Path, which: Which) -> Result<(bool, String), String> {
 pub fn refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
     let mut out = read_refusals(root, which, text);
     out.extend(writer_refusals(root, which, text));
+    out.into_iter().map(|said| named_at(root, &said)).collect()
+}
+
+/// `said`, a sentence a reader wrote naming the project's files by their old names, naming them
+/// `shared` and `local` instead: the names they have in this project (#1340).
+pub fn named_as(said: &str, shared: &str, local: &str) -> String {
+    // The local name first: the committed name is not part of it, and a new local name never
+    // holds the old committed one.
+    whole_name(&whole_name(said, LOCAL_FILE, local), COMMITTED_FILE, shared)
+}
+
+/// `said` with each `old` that stands as a whole file name replaced by `new`: one no name
+/// character runs into on either side, so a host or a path a person wrote that only holds it
+/// (`charter.toml.example.com`, `mycharter.toml`) is quoted as written. A sentence's own full
+/// stop after it still ends the name, and a folder before it is the file's own.
+fn whole_name(said: &str, old: &str, new: &str) -> String {
+    let part = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_');
+    let mut out = String::with_capacity(said.len());
+    let mut rest = said;
+    while let Some(at) = rest.find(old) {
+        let (before, from) = rest.split_at(at);
+        let after = &from[old.len()..];
+        let led = before
+            .chars()
+            .next_back()
+            .is_some_and(|c| part(c) || c == '.');
+        let mut next = after.chars();
+        let runs_on = match next.next() {
+            Some('.') => next.next().is_some_and(part),
+            Some(c) => part(c),
+            None => false,
+        };
+        out.push_str(before);
+        out.push_str(if led || runs_on { old } else { new });
+        rest = after;
+    }
+    out.push_str(rest);
     out
+}
+
+/// `said`, naming the project's two files as the project at `root` has them (#1340).
+pub fn named_at(root: &Path, said: &str) -> String {
+    named_as(
+        said,
+        Which::Shared.file_at(root),
+        Which::Local.file_at(root),
+    )
 }
 
 /// What the readers of the file refuse in `text`: the doctor's `charter.toml` row for Shared,

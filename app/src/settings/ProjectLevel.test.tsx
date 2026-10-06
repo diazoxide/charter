@@ -230,8 +230,20 @@ function core({
                 said: "No chat started without it",
                 never: [],
                 hosts_changed: null,
+                presets: [],
+                persona_hosts: [],
+                besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
               }
-            : { on: false, offer: false, said: null, never: [], hosts_changed: null };
+            : {
+                on: false,
+                offer: false,
+                said: null,
+                never: [],
+                hosts_changed: null,
+                presets: [],
+                persona_hosts: [],
+                besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+              };
         case "save_project_settings": {
           const which = given.which as SettingsWhich;
           const change = given.change as { kind: "edits"; edits: SettingsEdit[] };
@@ -403,7 +415,10 @@ describe("every project setting there is, at the Project level", () => {
     ],
     ["Harness & profiles", ["Default harness", "Default profile", "Environment passed to chats"]],
     ["work", ["work: kind", "work: command", "work: environment"]],
-    ["Sandbox", ["Sandbox mode", "Hosts it may reach"]],
+    [
+      "Sandbox",
+      ["Internet access", "Certificate checks", "What chats can change", "Always protected"],
+    ],
     ["Forges", ["Forge 1: kind", "Forge 1: owner", "Forge 1: host", "Forge 1: repos never listed"]],
     ["Extensions", ["Linter: enabled"]],
     ["Appearance", ["Theme", "Icons"]],
@@ -515,10 +530,14 @@ describe("a change at the Project level", () => {
     await atProject();
     await open("Sandbox");
 
-    await userEvent.selectOptions(screen.getByLabelText("Sandbox mode"), "on");
+    await userEvent.click(screen.getByRole("button", { name: "Turn the sandbox on" }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
-    await waitFor(() => expect(screen.getByLabelText("Sandbox mode")).toHaveValue("on"));
+    await waitFor(() =>
+      expect(screen.getByRole("group", { name: "Sandbox" })).toHaveTextContent(
+        "On for everyone in this project.",
+      ),
+    );
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
   });
 
@@ -527,36 +546,21 @@ describe("a change at the Project level", () => {
     await atProject();
     await open("Sandbox");
 
-    await userEvent.selectOptions(screen.getByLabelText("Sandbox mode"), "on");
+    await userEvent.click(screen.getByRole("button", { name: "Turn the sandbox on" }));
 
-    const options = within(screen.getByLabelText("Sandbox mode"))
-      .getAllByRole("option")
-      .map((one) => one.textContent);
-    expect(options).toEqual(["on"]);
+    expect(screen.queryByRole("button", { name: "Turn the sandbox on" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
     await waitFor(() => expect(sent).toHaveLength(1));
     await release();
-    await waitFor(() => expect(screen.getByLabelText("Sandbox mode")).toHaveValue("on"));
+    await waitFor(() =>
+      expect(screen.getByRole("group", { name: "Sandbox" })).toHaveTextContent(
+        "On for everyone in this project.",
+      ),
+    );
     expect(sent).toHaveLength(1);
     expect(files.shared.fields).toContainEqual(
       field(["sandbox", "mode"], { kind: "text", value: "on" }),
     );
-  });
-
-  it("writes an emptied list of hosts as no host, never as the default", async () => {
-    const { sent } = core();
-    await atProject();
-    await open("Sandbox");
-
-    await userEvent.clear(screen.getByLabelText("Hosts it may reach"));
-    await userEvent.tab();
-
-    await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]).toMatchObject({
-      which: "shared",
-      edits: [
-        { path: [{ key: "sandbox" }, { key: "egress" }], value: { kind: "list", value: [] } },
-      ],
-    });
   });
 
   it("writes the environment passed to chats to charter.local.toml", async () => {
@@ -644,10 +648,11 @@ describe("a change at the Project level", () => {
       await atProject();
       await open("Sandbox");
 
-      const options = within(screen.getByLabelText("Sandbox mode"))
-        .getAllByRole("option")
-        .map((one) => one.textContent);
-      expect(options).toEqual(["on"]);
+      expect(screen.getByRole("group", { name: "Sandbox" })).toHaveTextContent(
+        "On for everyone in this project.",
+      );
+      expect(screen.queryByRole("button", { name: "Turn the sandbox on" })).toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Sandbox mode" })).toBeNull();
     } finally {
       SHARED.fields.pop();
     }
@@ -912,7 +917,7 @@ describe("one form for Shared and Local (SE-18)", () => {
 
   it.each([
     ["General", "Worktrees folder"],
-    ["Sandbox", "Hosts it may reach"],
+    ["Sandbox", "Internet access"],
     ["Forges", "Forge 1: kind"],
   ])(
     "offers no file choice in %s for %s, which only charter.toml may hold",
@@ -936,9 +941,11 @@ describe("one form for Shared and Local (SE-18)", () => {
     await atProject();
     await open("Sandbox");
 
-    expect(within(rowOf("Sandbox mode")).queryByRole("button", { name: "Reset" })).toBeNull();
-    expect(within(rowOf("Sandbox mode")).queryByRole("radio")).toBeNull();
-    expect(screen.getByLabelText("Sandbox mode")).toHaveAccessibleDescription(/From charter\.toml/);
+    const status = screen.getByRole("group", { name: "Sandbox" });
+    const row = status.closest(".ui-setting-row") as HTMLElement;
+    expect(within(row).queryByRole("button", { name: "Reset" })).toBeNull();
+    expect(within(row).queryByRole("radio")).toBeNull();
+    expect(status).toHaveAccessibleDescription(/From charter\.toml/);
   });
 
   it("shows no group twice, and each setting once", async () => {

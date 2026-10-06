@@ -3686,6 +3686,12 @@ export type Percent = {
 	tone: GaugeTone,
 };
 
+/**  The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`). */
+export type PersonaHosts = {
+	persona: string,
+	hosts: string[],
+};
+
 /**  Where a smart close stands. */
 export type Phase = 
 /**  Waiting for the chat's turn to end before the prompt is sent. */
@@ -4487,6 +4493,16 @@ export type SandboxAhead = {
 	install: string | null,
 };
 
+/**  `sandbox::Besides`, counted for the window. */
+export type SandboxBesides = {
+	/**  The project's own hosts every chat here is granted. */
+	project_hosts: number,
+	/**  Your own hosts every chat here is granted on this machine. */
+	your_hosts: number,
+	/**  The folders you let every chat here write on this machine. */
+	folders: number,
+};
+
 /**  One grant, as Settings' Granted list shows it (#1348). */
 export type SandboxGrant = {
 	/**  What Revoke is sent by. */
@@ -4506,6 +4522,19 @@ export type SandboxGrant = {
 	chat: string | null,
 	/**  Why a policy locks it out, where one does. */
 	locked: string | null,
+};
+
+/**  One Internet access preset (`sandbox::Preset`), as Settings shows it. */
+export type SandboxPreset = {
+	/**  The word the committed file names it by: `model-providers`. */
+	word: string,
+	/**  Its name in the window: `AI providers`. */
+	title: string,
+	/**
+	 *  The hosts it lets a chat in this project reach: its own, and for code hosting the
+	 *  project's forges' too.
+	 */
+	hosts: string[],
 };
 
 /**  What the project view says about the sandbox. */
@@ -4533,6 +4562,18 @@ export type SandboxState = {
 	 *  the one-time Notice each teammate sees. `null` when nothing did.
 	 */
 	hosts_changed: HostsChanged | null,
+	/**
+	 *  Every preset a project may turn on, in the core's order, each with the hosts it lets a
+	 *  chat reach here (#1340): Settings › Sandbox draws them, and lists no host of its own.
+	 */
+	presets: SandboxPreset[],
+	/**  Each persona's own hosts, where the project has the sandbox on (#1362). */
+	persona_hosts: PersonaHosts[],
+	/**
+	 *  What every chat here reaches and writes on this machine besides its presets (#1340), as
+	 *  the core grants it (`sandbox::besides`): none where the sandbox is off.
+	 */
+	besides: SandboxBesides,
 };
 
 /**  One save attempt, as the journal holds it. */

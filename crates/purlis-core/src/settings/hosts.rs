@@ -153,6 +153,10 @@ fn without(which: Which, text: &str, at: usize) -> Result<String, Refusal> {
 /// refusal under the field, one already listed here, or (for yours) one the project already
 /// lets every chat reach.
 pub fn add(root: &Path, which: Which, base: Option<&str>, typed: &str) -> Result<String, Refusal> {
+    added(root, which, base, typed).map_err(|refusal| refusal.named_at(root))
+}
+
+fn added(root: &Path, which: Which, base: Option<&str>, typed: &str) -> Result<String, Refusal> {
     super::unchanged(root, which, base).map_err(Refusal::file)?;
     let text = base.unwrap_or_default();
     let field = |why: String| Refusal {
@@ -207,6 +211,10 @@ pub fn add(root: &Path, which: Which, base: Option<&str>, typed: &str) -> Result
 /// read by the caller as `base`, answering it as written: what an Undo adds back. The key goes
 /// when its last host does, and this machine's `[sandbox]` table with it once it is empty.
 pub fn remove(root: &Path, which: Which, base: Option<&str>, id: &str) -> Result<String, Refusal> {
+    removed(root, which, base, id).map_err(|refusal| refusal.named_at(root))
+}
+
+fn removed(root: &Path, which: Which, base: Option<&str>, id: &str) -> Result<String, Refusal> {
     super::unchanged(root, which, base).map_err(Refusal::file)?;
     let text = base.unwrap_or_default();
     let Some((at, entry)) = listed(text)
@@ -248,6 +256,10 @@ fn here_hosts(text: &str) -> Vec<Host> {
 /// by the caller as `base` (#1341): from now on it reaches your chats here. Only Settings calls
 /// this; a host that is not one is refused with why, and nothing is written to the file.
 pub fn confirm(root: &Path, base: Option<&str>, id: &str) -> Result<String, Refusal> {
+    confirmed(root, base, id).map_err(|refusal| refusal.named_at(root))
+}
+
+fn confirmed(root: &Path, base: Option<&str>, id: &str) -> Result<String, Refusal> {
     super::unchanged(root, Which::Local, base).map_err(Refusal::file)?;
     let text = base.unwrap_or_default();
     let Some(entry) = listed(text).into_iter().find(|one| one.id == id) else {

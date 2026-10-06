@@ -43,6 +43,57 @@ impl Preset {
         }
     }
 
+    /// The name the window shows it by (`CONTEXT.md`, **Internet access**, #1340).
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::ModelProviders => "AI providers",
+            Self::Forge => "Code hosting",
+            Self::Toolchains => "Package registries",
+        }
+    }
+
+    /// The hosts it lists itself, before a project's own forges ([`hosts`]): the one place a
+    /// preset's hosts are written.
+    pub fn own_hosts(self) -> &'static [&'static str] {
+        match self {
+            Self::ModelProviders => &[
+                "api.anthropic.com",
+                "claude.ai",
+                "platform.claude.com",
+                "api.openai.com",
+                "auth.openai.com",
+                "chatgpt.com",
+                "opencode.ai",
+                "models.dev",
+                "openrouter.ai",
+            ],
+            Self::Forge => &[
+                "github.com",
+                "api.github.com",
+                "codeload.github.com",
+                "*.githubusercontent.com",
+                "ghcr.io",
+                "gitlab.com",
+                "registry.gitlab.com",
+            ],
+            Self::Toolchains => &[
+                "registry.npmjs.org",
+                "registry.yarnpkg.com",
+                "pypi.org",
+                "files.pythonhosted.org",
+                "crates.io",
+                "index.crates.io",
+                "static.crates.io",
+                "static.rust-lang.org",
+                "proxy.golang.org",
+                "sum.golang.org",
+                "rubygems.org",
+                "repo.maven.apache.org",
+                "repo1.maven.org",
+            ],
+        }
+    }
+
     fn of_word(word: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|preset| preset.word() == word)
     }
@@ -959,43 +1010,7 @@ pub fn hosts(presets: &[Preset], plane: &Plane) -> Vec<String> {
         }
     };
     for preset in presets {
-        let listed: &[&str] = match preset {
-            Preset::ModelProviders => &[
-                "api.anthropic.com",
-                "claude.ai",
-                "platform.claude.com",
-                "api.openai.com",
-                "auth.openai.com",
-                "chatgpt.com",
-                "opencode.ai",
-                "models.dev",
-                "openrouter.ai",
-            ],
-            Preset::Forge => &[
-                "github.com",
-                "api.github.com",
-                "codeload.github.com",
-                "*.githubusercontent.com",
-                "ghcr.io",
-                "gitlab.com",
-                "registry.gitlab.com",
-            ],
-            Preset::Toolchains => &[
-                "registry.npmjs.org",
-                "registry.yarnpkg.com",
-                "pypi.org",
-                "files.pythonhosted.org",
-                "crates.io",
-                "index.crates.io",
-                "static.crates.io",
-                "static.rust-lang.org",
-                "proxy.golang.org",
-                "sum.golang.org",
-                "rubygems.org",
-                "repo.maven.apache.org",
-                "repo1.maven.org",
-            ],
-        };
+        let listed = preset.own_hosts();
         for host in listed {
             add(host);
         }
@@ -1006,6 +1021,74 @@ pub fn hosts(presets: &[Preset], plane: &Plane) -> Vec<String> {
         }
     }
     out
+}
+
+/// What every chat of a project reaches and writes on this machine besides its presets, its own
+/// folder and its temp folder (#1340): counted as [`Compiled::granted`] grants them, for the
+/// sentence Settings › Sandbox opens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Besides {
+    /// The project's own hosts it is granted: each it takes, none a policy locks out, none an
+    /// address of this machine.
+    pub project_hosts: usize,
+    /// Your own hosts on this machine it is granted besides those: confirmed here, and only
+    /// while the local file is one git ignores ([`hosts::personal`]).
+    pub your_hosts: usize,
+    /// The folders you let every chat of the project write on this machine that still judge
+    /// as grantable ([`local::granted_writes`], [`grant::still_grantable`]).
+    pub folders: usize,
+}
+
+/// [`Besides`] for the project at `root`, read as `plane`, on `machine`: nothing where the
+/// project has not turned the sandbox on.
+pub fn besides(root: &Path, plane: &Plane, machine: &Machine) -> Besides {
+    let Some(policy) = plane.said().policy else {
+        return Besides::default();
+    };
+    Besides {
+        folders: granted_folders(root, machine, &[]).len(),
+        ..counted_hosts(&granted_hosts(&policy, root, &[], &[]))
+    }
+}
+
+/// The hosts every level grants a chat in the project at `root`: the project's, this
+/// machine's with `chat`'s own, then `persona`'s, each held to the locks and none an address of
+/// this machine. The one place a chat's start and Settings' count read them ([`besides`]).
+fn granted_hosts(
+    policy: &Policy,
+    root: &Path,
+    persona: &[hosts::Host],
+    chat: &[hosts::Host],
+) -> Vec<hosts::Granted> {
+    let mut personal = hosts::personal(root);
+    for host in chat {
+        if !personal.contains(host) {
+            personal.push(host.clone());
+        }
+    }
+    hosts::off_this_machine(
+        hosts::in_force(&policy.hosts, &personal, persona, &hosts::Locks::of(root)),
+        &hosts::own_addresses(),
+    )
+}
+
+/// The folders a chat in the project at `root` may write besides its own: `chat`'s and the
+/// ones you let every chat write here, each judged again ([`grant::still_grantable`]). The one
+/// place a chat's start and Settings' count read them ([`besides`]).
+fn granted_folders(root: &Path, machine: &Machine, chat: &[PathBuf]) -> Vec<PathBuf> {
+    let mut writes = chat.to_vec();
+    writes.extend(local::granted_writes(root));
+    grant::still_grantable(&writes, &grant::Ground::of(root, root, machine).place())
+}
+
+/// The project's hosts and yours among `granted`.
+fn counted_hosts(granted: &[hosts::Granted]) -> Besides {
+    let at = |level: hosts::Level| granted.iter().filter(|one| one.level == level).count();
+    Besides {
+        project_hosts: at(hosts::Level::Project),
+        your_hosts: at(hosts::Level::You),
+        folders: 0,
+    }
 }
 
 /// The policy for one chat, resolved to this machine and ready for a harness's compiler: the
@@ -1205,27 +1288,14 @@ impl Compiled {
         let personas = persona::of(&policy.personas, persona)
             .map(|grants| grants.hosts.as_slice())
             .unwrap_or_default();
-        let mut personal = hosts::personal(root);
-        for host in &chat.hosts {
-            if !personal.contains(host) {
-                personal.push(host.clone());
-            }
-        }
-        let granted = hosts::off_this_machine(
-            hosts::in_force(&policy.hosts, &personal, personas, &hosts::Locks::of(root)),
-            &hosts::own_addresses(),
-        );
-        for one in granted {
+        for one in granted_hosts(policy, root, personas, &chat.hosts) {
             let spelled = one.host.to_string();
             if !reached.contains(&spelled) {
                 reached.push(spelled);
             }
         }
         let denied = Denied::of(root, machine);
-        let mut writes = chat.writes.clone();
-        writes.extend(local::granted_writes(root));
-        let writable =
-            grant::still_grantable(&writes, &grant::Ground::of(root, root, machine).place());
+        let writable = granted_folders(root, machine, &chat.writes);
         Self {
             widened: Widened::of(policy, machine, root, &denied),
             denied,
