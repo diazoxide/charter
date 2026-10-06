@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791286676086,
+  "lastUpdate": 1791290131893,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2982,6 +2982,48 @@ window.BENCHMARK_DATA = {
             "value": 104.4774455,
             "unit": "ms",
             "extra": "median of 5 runs: 102.247, 103.486, 104.477, 104.713, 105.719 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "8f295ead543af155b131f9e75e329cb0603445fd",
+          "message": "smart close: the closing Stop is sent, not waited on; the name guard drops session.rs\n\nThe two tests where a Stop closes the chat waited on it with the\n`reported` helper. That helper waits until the board shows the chat\nwaiting, but the Stop closes the chat and takes it off the board, so\nthe wait could never succeed. The Stop is now sent directly, and the\ntests wait for the tab to close.\n\nsession.rs no longer spells an old name, so its STILL_SPELLED entry\nis removed (the guard counts exactly).\n\nRefs #1332\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T16:27:18+04:00",
+          "tree_id": "3c32b46c0c66b569fc8c013312951f9ef4388ff6",
+          "url": "https://github.com/purlis/purlis/commit/8f295ead543af155b131f9e75e329cb0603445fd"
+        },
+        "date": 1791290129251,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5543435,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.502, 0.551, 0.554, 0.564, 0.611 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.013863,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.759, 16.789, 17.014, 17.746, 18.043 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.766386,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.206, 104.583, 105.766, 107.030, 109.012 ms"
           }
         ]
       }
