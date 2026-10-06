@@ -11,6 +11,10 @@
 //!
 //! Held in memory, never written down: every launch copies quietly again and finds what still
 //! waits, so the list is never older than this launch.
+//!
+//! The press is made in one window, and every window draws the Notice: when a finish completes,
+//! every window is told what still waits ([`MOVED`], #1311), so none goes on offering vaults
+//! that already moved.
 
 use std::sync::Mutex;
 
@@ -50,10 +54,12 @@ impl VaultsWaiting {
     }
 
     /// `finish` run over what waits, one press at a time, and what still waits after it kept.
-    /// The list is free to be read meanwhile.
+    /// The list is free to be read meanwhile. Once a finish completes, `tell` is handed what
+    /// still waits, for every window; a refused one changed nothing and tells nothing.
     fn finishing(
         &self,
         finish: impl FnOnce(&[Waiting]) -> renamelocal::Moved,
+        tell: impl FnOnce(Option<&VaultsToMove>),
     ) -> Result<FinishedMoving, String> {
         if !self.holds_the_config_home {
             tracing::warn!(
@@ -77,6 +83,7 @@ impl VaultsWaiting {
         }
         let left = summary(&moved.waiting);
         *self.list() = moved.waiting;
+        tell(left.as_ref());
         Ok(FinishedMoving {
             left,
             failed: u32::try_from(moved.said.iter().filter(|l| l.starts_with('✗')).count())
@@ -84,6 +91,10 @@ impl VaultsWaiting {
         })
     }
 }
+
+/// The event every window hears when a finish completes, carrying what still waits
+/// ([`VaultsToMove`], or nothing): the window that pressed and every other one alike.
+pub(crate) const MOVED: &str = "vaults-to-move";
 
 /// What the window says when a finish moved nothing; the log says why.
 const REFUSED: &str = "Nothing was moved; the app's log says why.";
@@ -131,30 +142,40 @@ pub fn vaults_to_move(waiting: tauri::State<'_, VaultsWaiting>) -> Option<Vaults
 /// Finish moving the vaults that wait, on the person's press: the copy with the Keychain's
 /// dialogs on, so the system asks once for each item. On a blocking thread, because each ask
 /// waits for the person; one press at a time. Refused when this app does not hold the config
-/// home's lock.
+/// home's lock. Every window is told what still waits once it completes ([`MOVED`]).
 #[tauri::command]
 #[specta::specta]
 pub async fn finish_moving_vaults(app: tauri::AppHandle) -> Result<FinishedMoving, String> {
+    use tauri::Emitter;
     let identifier = app.config().identifier.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<VaultsWaiting>().finishing(|waiting| {
-            let Some(mut local) = Local::of_this_machine(&[]) else {
-                return renamelocal::Moved {
-                    refused: Some(
-                        "purlis cannot tell where this machine's config home is, so there is \
-                         nowhere to journal a move"
-                            .to_owned(),
-                    ),
-                    ..renamelocal::Moved::default()
-                };
-            };
-            local.logs = None;
-            local.own_app = Some(identifier);
-            renamelocal::finish(&local, &Seams::real(), waiting)
-        })
+        let told = app.clone();
+        app.state::<VaultsWaiting>().finishing(
+            |waiting| finish_here(identifier, waiting),
+            move |left| {
+                let _ = told.emit(MOVED, left);
+            },
+        )
     })
     .await
     .map_err(|err| format!("moving the vaults did not finish: {err}"))?
+}
+
+/// [`renamelocal::finish`] on this machine, as this app (`identifier`), over what waits.
+fn finish_here(identifier: String, waiting: &[Waiting]) -> renamelocal::Moved {
+    let Some(mut local) = Local::of_this_machine(&[]) else {
+        return renamelocal::Moved {
+            refused: Some(
+                "purlis cannot tell where this machine's config home is, so there is nowhere to \
+                 journal a move"
+                    .to_owned(),
+            ),
+            ..renamelocal::Moved::default()
+        };
+    };
+    local.logs = None;
+    local.own_app = Some(identifier);
+    renamelocal::finish(&local, &Seams::real(), waiting)
 }
 
 #[cfg(test)]
@@ -211,12 +232,15 @@ mod tests {
         let finishing = {
             let waiting = waiting.clone();
             std::thread::spawn(move || {
-                waiting.finishing(|_| {
-                    started.send(()).unwrap();
-                    // The Keychain's dialog, waiting on the person.
-                    answered.recv().unwrap();
-                    renamelocal::Moved::default()
-                })
+                waiting.finishing(
+                    |_| {
+                        started.send(()).unwrap();
+                        // The Keychain's dialog, waiting on the person.
+                        answered.recv().unwrap();
+                        renamelocal::Moved::default()
+                    },
+                    |_| {},
+                )
             })
         };
         has_started.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -247,13 +271,59 @@ mod tests {
         let waiting = VaultsWaiting::of(vec![waits("ops", false, 2)], false);
         let mut ran = false;
 
-        let refused = waiting.finishing(|_| {
-            ran = true;
-            renamelocal::Moved::default()
-        });
+        let mut told = false;
+
+        let refused = waiting.finishing(
+            |_| {
+                ran = true;
+                renamelocal::Moved::default()
+            },
+            |_| told = true,
+        );
 
         assert_eq!(refused, Err(REFUSED.to_owned()));
         assert!(!ran);
+        assert!(
+            !told,
+            "a refused finish changed nothing, so no window is told"
+        );
         assert!(waiting.now().is_some());
+    }
+
+    #[test]
+    fn every_window_is_told_what_still_waits_when_a_finish_completes() {
+        let waiting =
+            VaultsWaiting::of(vec![waits("ops", false, 2), waits("team", false, 1)], true);
+        let mut told = Vec::new();
+
+        let finished = waiting
+            .finishing(
+                |_| renamelocal::Moved {
+                    waiting: vec![waits("team", false, 1)],
+                    ..renamelocal::Moved::default()
+                },
+                |left| told.push(left.cloned()),
+            )
+            .unwrap();
+
+        let left = Some(VaultsToMove {
+            vaults: 1,
+            items: 1,
+        });
+        assert_eq!(told, std::slice::from_ref(&left));
+        assert_eq!(finished.left, left);
+
+        let mut told = Vec::new();
+        waiting
+            .finishing(
+                |_| renamelocal::Moved::default(),
+                |left| told.push(left.cloned()),
+            )
+            .unwrap();
+        assert_eq!(
+            told,
+            [None],
+            "every window hears that nothing waits any more"
+        );
     }
 }

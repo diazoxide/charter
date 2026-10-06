@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { act } from "react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import type { FinishedMoving, VaultsToMove } from "./bindings";
-import { VaultsWaitingNotice } from "./VaultsWaitingNotice";
+import { MOVED, VaultsWaitingNotice } from "./VaultsWaitingNotice";
 
 /**
  * **The launch's keychain copy asks nothing; the person finishes what it left** (#1306).
@@ -18,12 +20,15 @@ const TWO: VaultsToMove = { vaults: 2, items: 5 };
 
 function core(waiting: VaultsToMove | null, finished: FinishedMoving): { asked: string[] } {
   const asked: string[] = [];
-  mockIPC((cmd) => {
-    asked.push(cmd);
-    if (cmd === "vaults_to_move") return waiting;
-    if (cmd === "finish_moving_vaults") return finished;
-    return null;
-  });
+  mockIPC(
+    (cmd) => {
+      asked.push(cmd);
+      if (cmd === "vaults_to_move") return waiting;
+      if (cmd === "finish_moving_vaults") return finished;
+      return null;
+    },
+    { shouldMockEvents: true },
+  );
   return { asked };
 }
 
@@ -91,6 +96,41 @@ describe("the notice about vaults that wait to move", () => {
       expect(screen.getByRole("status").textContent).toContain("Nothing was moved"),
     );
     expect(screen.getByRole("button", { name: "Finish moving 2 vaults" })).toBeTruthy();
+  });
+
+  it("goes when another window's press moved every one", async () => {
+    const { asked } = core(TWO, { left: null, failed: 0 });
+    render(<VaultsWaitingNotice />);
+    await screen.findByRole("status");
+
+    await act(() => emit(MOVED, null));
+
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(asked).not.toContain("finish_moving_vaults");
+  });
+
+  it("says what still waits when another window's press moved only some", async () => {
+    core(TWO, { left: null, failed: 0 });
+    render(<VaultsWaitingNotice />);
+    await screen.findByRole("button", { name: "Finish moving 2 vaults" });
+
+    await act(() => emit(MOVED, { vaults: 1, items: 2 }));
+
+    expect(await screen.findByRole("button", { name: "Finish moving 1 vault" })).toBeTruthy();
+  });
+
+  it("drops its trouble line when another window's press completes", async () => {
+    core(TWO, { left: { vaults: 2, items: 5 }, failed: 1 });
+    render(<VaultsWaitingNotice />);
+    await userEvent.click(await screen.findByRole("button", { name: "Finish moving 2 vaults" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("could not be moved"),
+    );
+
+    await act(() => emit(MOVED, { vaults: 1, items: 2 }));
+
+    await screen.findByRole("button", { name: "Finish moving 1 vault" });
+    expect(screen.getByRole("status").textContent).not.toContain("could not be moved");
   });
 
   it("can be dismissed", async () => {
