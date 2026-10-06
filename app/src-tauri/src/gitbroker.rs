@@ -28,6 +28,7 @@ pub fn answer(held: &Held, ask: &GitAsk) -> Answer {
         persona: open.persona,
         harnessed: open.harness.is_some(),
         unsandboxed: held.chats().unsandboxed(ask.chat),
+        config: held.config().map(std::path::Path::to_path_buf),
     };
     let what = match &ask.work {
         GitWork::Clone { repos } => format!("clone {}", repos.join(" ")),

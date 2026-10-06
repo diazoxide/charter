@@ -7,6 +7,7 @@ fn asker(cwd: Option<&Path>) -> Asker {
         persona: Some("steward".to_owned()),
         harnessed: true,
         unsandboxed: false,
+        config: None,
     }
 }
 

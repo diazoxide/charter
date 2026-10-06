@@ -42,6 +42,9 @@ pub struct Asker {
     pub harnessed: bool,
     /// Whether a person started this run of it without the sandbox (ruling V78 a).
     pub unsandboxed: bool,
+    /// The machine store the app holds, whose device id names the piece log (FD-25), as the
+    /// window's own pieces are named (`worktrees::window`); `None` on a machine that keeps none.
+    pub config: Option<PathBuf>,
 }
 
 /// Runs `ask` for `asker` in the project at `root`, every git call reading `isolation`'s
@@ -176,7 +179,7 @@ pub fn who(asker: &Asker) -> Who {
         session: Some(asker.chat.to_string()),
         persona: asker.persona.clone(),
         host: crate::dispatch::host(),
-        log: crate::dispatch::this_log_name(),
+        log: crate::dispatch::log_name(asker.config.as_deref(), &crate::dispatch::host()),
     }
 }
 

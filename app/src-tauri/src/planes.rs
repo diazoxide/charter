@@ -292,6 +292,12 @@ impl Held {
         &self.root
     }
 
+    /// This machine's store, as the app resolved it at startup, or `None` on a machine that
+    /// keeps none: what names a piece log a chat's brokered git action writes (#1335).
+    pub fn config(&self) -> Option<&Path> {
+        self.records.config.as_deref()
+    }
+
     /// What the sidebar draws, as the model holds it (FD-10b).
     ///
     /// **A plane that is not watched — or not wholly: a folder the platform would not watch —
@@ -6050,8 +6056,9 @@ mod tests {
     /// git, for the test's own setup, with `home`'s config.
     fn git_in(home: &Path, dir: &Path, args: &[&str]) {
         let mut git = std::process::Command::new("git");
-        git.args(args)
-            .current_dir(dir)
+        git.arg("-C")
+            .arg(dir)
+            .args(args)
             .env("HOME", home)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "Tester")
