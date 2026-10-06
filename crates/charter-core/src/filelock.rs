@@ -9,9 +9,11 @@
 //! the next taker to be refused.
 //!
 //! `flock(LOCK_UN)` on any one copy lets go of the lock for all of them, so [`Held`] unlocks
-//! before it closes. Every lock charter takes for longer than a call ([`crate::rewrite::Lock`],
-//! [`crate::held`], [`crate::guest`], [`crate::machine`]'s, the app's single instance) already
-//! unlocks the same way; this is that rule for the locks taken on a plain [`File`].
+//! before it closes. It is that rule for a lock taken on a plain [`File`]: the config home's
+//! (`renamelocal::busy`), the event log's writer and the hook spool's. The locks taken on a
+//! descriptor of their own unlock in their own guards: [`crate::rewrite::Lock`],
+//! `crate::held`'s store locks, [`crate::guest`]'s, [`crate::machine`]'s, and the app's single
+//! instance.
 
 use std::fs::File;
 use std::ops::{Deref, DerefMut};

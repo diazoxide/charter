@@ -125,6 +125,15 @@ impl Drop for Locked<'_> {
     }
 }
 
+/// A store kept locked ([`Store::locked`]), let go when it is dropped.
+pub(crate) struct LockedStore(Store);
+
+impl Drop for LockedStore {
+    fn drop(&mut self) {
+        let _ = rustix::fs::flock(&self.0.fd, FlockOperation::Unlock);
+    }
+}
+
 /// Why a store could not be held: the sentence, and the filesystem's error number when it was
 /// one the store could not be looked at for (a permission), rather than a link on the way.
 #[derive(Debug)]
@@ -348,12 +357,14 @@ impl Store {
         }
     }
 
-    /// This store with its lock taken ([`Store::lock`]) and kept until it is dropped, when its
-    /// descriptor closes.
-    pub(crate) fn locked(self) -> Result<Self, String> {
-        // The guard would let go at once; the descriptor's close lets go instead.
+    /// This store with its lock taken ([`Store::lock`]) and kept until what this returns is
+    /// dropped, which unlocks before the descriptor closes: a program forked meanwhile has a
+    /// copy of it until its exec, and a close alone would leave the lock held by that copy
+    /// (#1316).
+    pub(crate) fn locked(self) -> Result<LockedStore, String> {
+        // The guard would let go at once; the store's own guard lets go when it is dropped.
         std::mem::forget(self.lock()?);
-        Ok(self)
+        Ok(LockedStore(self))
     }
 
     /// Refuse the store whole when it holds a link, a file with more than one name, anything
@@ -727,4 +738,40 @@ fn odd_inside(fd: rustix::fd::BorrowedFd<'_>, below: &str, depth: usize) -> Opti
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1316: a store kept locked ([`Store::locked`]) lets go when it is dropped, though a
+    /// program started meanwhile keeps a copy of its descriptor — here as its stdin, for as
+    /// long as it sleeps — so the next writer is not kept waiting and refused.
+    #[test]
+    fn a_store_kept_locked_lets_go_when_dropped_though_a_child_keeps_a_copy_of_it() {
+        let root = tempfile::tempdir().unwrap();
+        let place = Place::Workspace("alpha".to_owned());
+        let hold = || {
+            Store::hold(root.path(), &place, "memory", Make::All, Who::Operator)
+                .unwrap()
+                .expect("the store")
+        };
+        let store = hold();
+        let copy = rustix::io::fcntl_dupfd_cloexec(&store.fd, 0).unwrap();
+        let locked = store.locked().expect("locked");
+        let mut child = crate::forklock::spawn(
+            std::process::Command::new("sleep")
+                .arg("30")
+                .stdin(std::process::Stdio::from(copy)),
+        )
+        .unwrap();
+
+        drop(locked);
+        let again = hold();
+        let next = again.lock().map(drop);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(next.is_ok(), "the lock outlived its store: {next:?}");
+    }
 }

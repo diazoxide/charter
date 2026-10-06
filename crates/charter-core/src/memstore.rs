@@ -44,7 +44,7 @@ pub(crate) enum StoreLock {
     Path(#[allow(dead_code)] crate::rewrite::Lock),
     /// A workspace's store, held and locked by descriptor for a bounded wait.
     #[cfg(unix)]
-    Held(#[allow(dead_code)] crate::held::Store),
+    Held(#[allow(dead_code)] crate::held::LockedStore),
     /// A workspace's store that is not there yet: nothing to take turns on.
     None,
 }
