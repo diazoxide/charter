@@ -1477,11 +1477,16 @@ impl Chats {
                 }
                 // Kept, not dropped: the next record has to hold it too, or a directory
                 // that has moved deletes the chat for good.
-                Err(why) => lock(&self.would_not_start).push(Waiting {
-                    approval: NeedsApproval::of(chat, root),
-                    chat: chat.clone(),
-                    why,
-                }),
+                Err(why) => {
+                    // Read before the lock is taken, as Retry does: it reads the profile's
+                    // file and runs git, and the list must not wait on either.
+                    let approval = NeedsApproval::of(chat, root);
+                    lock(&self.would_not_start).push(Waiting {
+                        approval,
+                        chat: chat.clone(),
+                        why,
+                    });
+                }
             }
         }
         self.bring_to_front(front);
