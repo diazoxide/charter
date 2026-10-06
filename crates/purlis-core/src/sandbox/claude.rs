@@ -33,6 +33,20 @@
 //! What it does not hold: a command moved a directory holding a `config` into a nested
 //! clone's `.git` (measured), and no glob can deny the `.git` itself without denying what git
 //! writes below it (#1065).
+//!
+//! **The hook socket** (ADR 0067 §2, #1328). A `purlis` command a chat runs is part of the chat
+//! and asks the app over the socket in `$PURLIS_HOOK_SOCKET`; Claude Code's sandbox refuses
+//! every unix socket it is not told to allow. The socket is known only where the chat opens, so
+//! [`Settings::reporting_on`] adds it then, as the one path in `network.allowUnixSockets`.
+//! Read out of Claude Code 2.1.291's own settings schema: `allowUnixSockets` is a list of
+//! paths, *"macOS only … Ignored on Linux (seccomp cannot filter by path)"*, merged across
+//! settings sources, and its macOS profile allows each as a `subpath` for connect **and bind**.
+//! The bind is harmless only while the chat cannot replace the socket, so the socket's folder is
+//! denied to writes beside it: under the project's state folder that is denied already, and the
+//! fallback folder in the temp directory is not. `allowAllUnixSockets` is set `false`, never
+//! left out, so a user's `true` cannot merge in. On Linux a sandboxed chat reaches no socket.
+
+use std::path::Path;
 
 use serde_json::{Value, json};
 
@@ -112,6 +126,7 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
             "network": {
                 "allowedDomains": compiled.hosts,
                 "strictAllowlist": true,
+                "allowAllUnixSockets": false,
             },
             "filesystem": {
                 "denyRead": deny_read,
@@ -120,4 +135,30 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
         }),
         deny,
     })
+}
+
+impl Settings {
+    /// These settings for a chat whose hooks and `purlis` commands report on `socket`: as
+    /// compiled, with that one socket, as the kernel names it, as the only path in
+    /// `network.allowUnixSockets` (ADR 0067 §2: the chat may connect to that socket and
+    /// nothing more), and its folder denied to writes, to the sandbox and to the Edit tool, so
+    /// the bind Claude Code grants with it can never take the app's place. Without a socket it
+    /// is the compiled settings, which allow none.
+    pub fn reporting_on(&self, socket: Option<&Path>) -> Settings {
+        let mut out = self.clone();
+        let Some(socket) = socket else {
+            return out;
+        };
+        let socket = super::real(socket);
+        out.sandbox["network"]["allowUnixSockets"] = json!([socket.display().to_string()]);
+        if let Some(folder) = socket.parent() {
+            let folder = folder.display().to_string();
+            if let Some(denied) = out.sandbox["filesystem"]["denyWrite"].as_array_mut() {
+                denied.push(json!(folder));
+            }
+            out.deny.push(format!("Edit(/{folder})"));
+            out.deny.push(format!("Edit(/{folder}/**)"));
+        }
+        out
+    }
 }
