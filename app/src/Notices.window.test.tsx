@@ -376,7 +376,7 @@ describe("a dismissed Notice", () => {
     // A chat that did not start is an event of this launch; its Dismiss ends that occurrence.
     core([chat(1, "one")], {
       gone: [],
-      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile", approval: null }],
     });
     render(<App />);
     await dismiss(await screen.findByText(/did not start/));
@@ -385,7 +385,7 @@ describe("a dismissed Notice", () => {
     relaunch();
     core([chat(1, "one")], {
       gone: [],
-      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile", approval: null }],
     });
     render(<App />);
     expect(await screen.findByText(/did not start/)).toBeInTheDocument();
@@ -404,7 +404,7 @@ describe("the Notices under the strip", () => {
   const four = () => {
     core([chat(1, "one", { fresh: "its conversation was not found" })], {
       gone: ["able", "baker"],
-      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile", approval: null }],
     });
     render(<App />);
   };
@@ -428,7 +428,7 @@ describe("the Notices under the strip", () => {
     // the focus while another arrives below it.
     core([chat(1, "one", { fresh: "its conversation was not found" })], {
       gone: ["able"],
-      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile", approval: null }],
     });
     render(<App />);
     const trouble = noticeOf(await screen.findByText(/did not start/));
@@ -499,7 +499,7 @@ describe("the status bar", () => {
     forgetThisLaunch();
     core([chat(1, "one", { fresh: "its conversation was not found" })], {
       gone: ["able", "baker"],
-      wouldNotStart: [{ id: "two", name: "two", why: "no profile" }],
+      wouldNotStart: [{ id: "two", name: "two", why: "no profile", approval: null }],
     });
     render(<App />);
     await screen.findByRole("button", { name: "+2 more" });

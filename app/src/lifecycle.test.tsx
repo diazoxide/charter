@@ -334,7 +334,7 @@ describe("what the window does with the chats the core already has", () => {
     // there — and the operator has no way to know it is still coming back.
     core(
       [chat({ session: 7, in_front: true })],
-      [{ id: "c-ide-9", name: "ide.9", why: "no such file or directory" }],
+      [{ id: "c-ide-9", name: "ide.9", why: "no such file or directory", approval: null }],
     );
 
     render(<App />);

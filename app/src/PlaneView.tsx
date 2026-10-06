@@ -43,6 +43,7 @@ import {
   type PlaneSaving,
   type ChatWorktree,
   type HarnessGlance,
+  type NeedsApproval,
   type NotStarted,
   type OpenChat,
   type PlaneId,
@@ -208,6 +209,7 @@ import {
 import { chipSays, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
 import { EndingChat, type SmartAsk } from "./EndingChat";
 import { ChatAsk, focusAfterNoticeGone } from "./ChatAsk";
+import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
 import { DID_NOT_START, saidWhenItEnds, stoppedWhy, useSmartClosing } from "./smartClose";
 import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
@@ -483,6 +485,19 @@ export const PlaneView = memo(function PlaneView({
   const [forgetting, setForgetting] = useState<{
     id: string;
     name: string;
+    busy: boolean;
+    trouble?: string;
+  }>();
+  /**
+   * **Review and approve…** (#1246, D-1246-5): the waiting chat whose profile's command is being
+   * approved, with the approval as the core said it when the question opened. It is never
+   * updated while the question is up: the line approved is the line on screen, and the core
+   * checks it against the file (`approve_profile`).
+   */
+  const [approving, setApproving] = useState<{
+    id: string;
+    name: string;
+    approval: NeedsApproval;
     busy: boolean;
     trouble?: string;
   }>();
@@ -3363,8 +3378,18 @@ export const PlaneView = memo(function PlaneView({
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       retrying.current.delete(id);
       if (said.status === "error") {
+        // The refusal's words now, and what the core read with it: the approval its profile
+        // needs, which the window takes from the record and never from the words (#1246).
+        const now = await commands
+          .chatsThatWouldNotStart(plane)
+          .then((read) =>
+            read.status === "ok" ? read.data.find((one) => one.id === id) : undefined,
+          )
+          .catch(() => undefined);
         setWouldNotStart((was) =>
-          was.map((one) => (one.id === id ? { ...one, why: said.error } : one)),
+          was.map((one) =>
+            one.id === id ? { ...one, why: said.error, approval: now?.approval ?? null } : one,
+          ),
         );
         return;
       }
@@ -3424,6 +3449,52 @@ export const PlaneView = memo(function PlaneView({
       forgetAsked.current.forgot = true;
       setForgetting(undefined);
       setWouldNotStart((was) => was.filter((one) => one.id !== id));
+    },
+    [plane],
+  );
+
+  /**
+   * **Review and approve…** on a waiting chat's Notice (#1246, D-1246-5): the question that
+   * records the approval of its profile's command, with the picker's own sentence and line.
+   *
+   * - **Approved:** the approval is recorded and nothing starts. The Notice stays, without the
+   *   offer, and the keyboard goes to its Retry now, which runs the whole start again.
+   * - **Cancelled**, after a refusal too: nothing is recorded, and the keyboard goes back to
+   *   Review and approve….
+   */
+  const approveAsked = useRef<{ id?: string; approved: boolean }>({ approved: false });
+  const askApprove = useCallback((id: string, name: string, approval: NeedsApproval) => {
+    approveAsked.current = { id, approved: false };
+    setApproving({ id, name, approval, busy: false });
+  }, []);
+  const afterApproveAsk = useCallback((event: Event) => {
+    event.preventDefault();
+    const { id, approved } = approveAsked.current;
+    const notice = [...document.querySelectorAll("[data-cause]")].find(
+      (one) => one.getAttribute("data-cause") === `chat-did-not-start:${id}`,
+    );
+    const to = approved ? "Retry now" : REVIEW_AND_APPROVE;
+    [...(notice?.querySelectorAll<HTMLElement>("button") ?? [])]
+      .find((button) => button.textContent === to)
+      ?.focus();
+  }, []);
+  const approveWaiting = useCallback(
+    async (asked: { id: string; name: string; approval: NeedsApproval }) => {
+      setApproving({ ...asked, busy: true });
+      // The line on screen, which the core checks against the file again: a profile changed
+      // since the question opened is refused there, and nothing is recorded.
+      const said = await commands
+        .approveProfile(plane, asked.approval.profile, asked.approval.shown)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") {
+        setApproving({ ...asked, busy: false, trouble: said.error });
+        return;
+      }
+      approveAsked.current.approved = true;
+      setApproving(undefined);
+      setWouldNotStart((was) =>
+        was.map((one) => (one.id === asked.id ? { ...one, approval: null } : one)),
+      );
     },
     [plane],
   );
@@ -4866,13 +4937,18 @@ export const PlaneView = memo(function PlaneView({
 
         {/* By the chat's id, never its name: two waiting chats can share a name (a split's chat
             takes its tab's), and each Notice acts on its own chat alone. */}
-        {wouldNotStart.map(({ id, name, why }) => (
+        {wouldNotStart.map(({ id, name, why, approval }) => (
           <Notice
             key={id}
             cause={`chat-did-not-start:${id}`}
             tone="trouble"
             fixes={[
-              { label: "Retry now", onPress: () => void retryChat(id) },
+              // Never a one-press Approve here (D-1246-5): the press opens the question that
+              // shows what would run, and the approval is that question's answer.
+              approval
+                ? { label: REVIEW_AND_APPROVE, onPress: () => askApprove(id, name, approval) }
+                : { label: "Retry now", onPress: () => void retryChat(id) },
+              ...(approval ? [{ label: "Retry now", onPress: () => void retryChat(id) }] : []),
               {
                 label: FORGET_THIS_CHAT,
                 onPress: () => askForget(id, name),
@@ -5249,6 +5325,22 @@ export const PlaneView = memo(function PlaneView({
           onCancel={() => setForgetting(undefined)}
           onCloseAutoFocus={afterForgetAsk}
         />
+      )}
+      {approving && (
+        <ChatAsk
+          title={`Approve ${approving.approval.profile}?`}
+          says={`${approving.name} starts on the profile ${approving.approval.profile}. Approving records that purlis may run its command on this machine, and starts nothing: Retry now starts the chat.`}
+          answer="Approve"
+          trouble={approving.trouble}
+          busy={approving.busy}
+          onAnswer={() => void approveWaiting(approving)}
+          onCancel={() => setApproving(undefined)}
+          onCloseAutoFocus={afterApproveAsk}
+        >
+          {/* The picker's own sentence, line and mark (`ProfileApproval.tsx`, ruling V69). */}
+          <ApprovalSentence row={approving.approval} />
+          <ProfileMeta row={approving.approval} />
+        </ChatAsk>
       )}
       {freshening && (
         <ChatAsk
@@ -6444,3 +6536,6 @@ function PaneDoing({
 
 /** The waiting chat's Notice's way out that asks first (NO-3), and where a Cancel goes back to. */
 const FORGET_THIS_CHAT = "Forget this chat…";
+/** The waiting chat's Notice's way to its profile's approval question (#1246), and where a
+ *  Cancel goes back to. */
+const REVIEW_AND_APPROVE = "Review and approve…";

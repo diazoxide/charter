@@ -1,4 +1,5 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import type { ReactNode } from "react";
 
 /**
  * **The question a chat Notice asks before it does what cannot be taken back** (NO-3): Forget
@@ -20,10 +21,15 @@ export function ChatAsk({
   onAnswer,
   onCancel,
   onCloseAutoFocus,
+  children,
 }: {
   title: string;
   /** What happens, said plainly. */
   says: string;
+  /** What the answer is about, drawn under `says` as part of the description: the profile
+   *  approval's own sentence and line (`ProfileApproval.tsx`, #1246), so the question shows
+   *  exactly what the picker shows. */
+  children?: ReactNode;
   /** The button that does it: its verb. */
   answer: string;
   /** What the answer would interrupt (`oneChatMidTurn`), said as part of the description, so it
@@ -55,6 +61,7 @@ export function ChatAsk({
             <div>
               <p className="honest">{says}</p>
               {warns && <p className="honest mid-turn">{warns}</p>}
+              {children}
             </div>
           </AlertDialog.Description>
           {trouble && (
