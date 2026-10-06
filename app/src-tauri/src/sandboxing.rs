@@ -4,10 +4,10 @@
 //!
 //! **The window names nothing that runs.** The install action sends a session number and no
 //! text: the line typed is built here from charter's own table and what this machine is
-//! missing ([`charter_core::sandbox::backend::install_command`]), and it is typed without a
+//! missing ([`purlis_core::sandbox::backend::install_command`]), and it is typed without a
 //! newline, so the person reads it and presses Return. It needs `sudo` (ruling V78 c).
 
-use charter_core::sandbox::{self, Ahead, backend};
+use purlis_core::sandbox::{self, Ahead, backend};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -50,7 +50,7 @@ fn os_release() -> String {
 
 /// What the picker says beside a profile whose program it has not checked: nobody approved
 /// it yet, so it is not run, not even to ask its `--version`.
-pub const CHECKED_ONCE_APPROVED: &str = "charter checks this profile's program before it \
+pub const CHECKED_ONCE_APPROVED: &str = "purlis checks this profile's program before it \
                                          starts sandboxed, once the profile may start: approved, \
                                          and declared in a file git does not carry.";
 
@@ -61,29 +61,29 @@ pub const CHECKED_ONCE_APPROVED: &str = "charter checks this profile's program b
 ///
 /// **Only a profile the start would run has its program run.** The V87g check asks the
 /// program its `--version`, which runs it, outside any sandbox. So it is asked only past the
-/// start's own gate ([`charter_core::start::may_check_program`], which is
+/// start's own gate ([`purlis_core::start::may_check_program`], which is
 /// `wiring::refusal`): a startable kind, a `charter.local.toml` git would not carry, an
 /// approved command. Any other row says the program is checked once the profile may start.
 pub fn ahead_here(
-    profile: &charter_core::profiles::Profile,
+    profile: &purlis_core::profiles::Profile,
     root: &std::path::Path,
 ) -> Option<SandboxAhead> {
     ahead_with(
         profile,
         root,
-        charter_core::start::may_check_program(profile, root),
+        purlis_core::start::may_check_program(profile, root),
     )
 }
 
 /// [`ahead_here`], told whether the start's gate lets the program be checked: the start's own
-/// check ([`charter_core::start::sandbox_ahead`]), which asks the same gate itself and runs
+/// check ([`purlis_core::start::sandbox_ahead`]), which asks the same gate itself and runs
 /// the program only past it. `approved` only phrases the row.
 fn ahead_with(
-    profile: &charter_core::profiles::Profile,
+    profile: &purlis_core::profiles::Profile,
     root: &std::path::Path,
     approved: bool,
 ) -> Option<SandboxAhead> {
-    let row = SandboxAhead::of(charter_core::start::sandbox_ahead(
+    let row = SandboxAhead::of(purlis_core::start::sandbox_ahead(
         profile,
         root,
         &sandbox::Machine::this(),
@@ -135,7 +135,7 @@ fn state_on(root: &std::path::Path, os: sandbox::Os) -> SandboxState {
 
 /// Each harness that never starts sandboxed on `os`, as "<title>: <why>".
 fn never_here(os: sandbox::Os) -> Vec<String> {
-    charter_core::harness::Harness::ALL
+    purlis_core::harness::Harness::ALL
         .into_iter()
         .filter_map(|harness| {
             sandbox::never_on(harness, os).map(|why| format!("{}: {why}", harness.title()))
@@ -182,7 +182,7 @@ fn install_line(missing: Option<&backend::Missing>, os_release: &str) -> Result<
     missing
         .and_then(|missing| backend::install_command(missing, os_release))
         .ok_or_else(|| {
-            "charter has nothing to install for the sandbox on this machine, so nothing was \
+            "purlis has nothing to install for the sandbox on this machine, so nothing was \
              typed."
                 .to_owned()
         })
@@ -264,7 +264,7 @@ mod tests {
         );
         assert!(
             install_line(missing.as_ref(), "ID=nixos\n").is_err(),
-            "a distribution charter does not know"
+            "a distribution purlis does not know"
         );
     }
 
@@ -341,14 +341,14 @@ mod tests {
         let script = outside.path().join("claude");
         std::fs::write(&script, "echo 'not claude'\n").expect("the script");
         std::fs::write(
-            project.path().join(charter_core::profiles::LOCAL_FILE),
+            project.path().join(purlis_core::profiles::LOCAL_FILE),
             format!(
                 "[harness.work]\nkind = \"claude\"\ncommand = [\"/bin/sh\", {:?}]\n",
                 script.display().to_string()
             ),
         )
         .expect("a profile");
-        let set = charter_core::profiles::current(project.path());
+        let set = purlis_core::profiles::current(project.path());
         let profile = set.get("work").expect("declared");
 
         let row = ahead_here(profile, project.path()).expect("a row");
@@ -361,10 +361,10 @@ mod tests {
                 row.said, CHECKED_ONCE_APPROVED,
                 "an unapproved program was run"
             );
-            charter_core::profiletrust::record_launched(
+            purlis_core::profiletrust::record_launched(
                 project.path(),
                 "work",
-                &charter_core::profiletrust::fingerprint(profile),
+                &purlis_core::profiletrust::fingerprint(profile),
             )
             .expect("approved");
             let approved = ahead_here(profile, project.path()).expect("a row");
@@ -385,8 +385,8 @@ mod tests {
         assert_eq!(
             never_here(sandbox::Os::Linux),
             [
-                "Codex: charter can wrap it on macOS only, so far",
-                "opencode: charter can wrap it on macOS only, so far",
+                "Codex: purlis can wrap it on macOS only, so far",
+                "opencode: purlis can wrap it on macOS only, so far",
             ]
         );
     }

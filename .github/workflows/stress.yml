@@ -74,34 +74,34 @@ on:
       - crates/fake-harness/**
       # The session lifecycle — starting, probing, the pty, reaping, the record — and the
       # rest of the core the app links.
-      - crates/charter-core/**
-      - '!crates/charter-core/tests/**'
-      - '!crates/charter-core/examples/**'
-      - '!crates/charter-core/docs/**'
-      - '!crates/charter-core/proptest-regressions/**'
-      - '!crates/charter-core/src/**/tests.rs'
+      - crates/purlis-core/**
+      - '!crates/purlis-core/tests/**'
+      - '!crates/purlis-core/examples/**'
+      - '!crates/purlis-core/docs/**'
+      - '!crates/purlis-core/proptest-regressions/**'
+      - '!crates/purlis-core/src/**/tests.rs'
       # The sixteen core modules the app crate cannot reach, by a walk of every
-      # `charter_core::` and `crate::` path from `app/src-tauri/src` on 2026-09-23: the Bash
+      # `purlis_core::` and `crate::` path from `app/src-tauri/src` on 2026-09-23: the Bash
       # guard and the readers it refuses with, which only `charter hook pretooluse` calls
       # (they have the recorded behaviour, ADR 0046), and three CLI-only verbs. A PR that
       # makes one of them reachable touches a watched file to do it.
-      - '!crates/charter-core/src/credguard.rs'
-      - '!crates/charter-core/src/curate.rs'
-      - '!crates/charter-core/src/docsrc.rs'
-      - '!crates/charter-core/src/floorguard.rs'
-      - '!crates/charter-core/src/gitconfig.rs'
-      - '!crates/charter-core/src/handoffguard.rs'
-      - '!crates/charter-core/src/heredoc.rs'
-      - '!crates/charter-core/src/leakguard.rs'
-      - '!crates/charter-core/src/livesub.rs'
-      - '!crates/charter-core/src/personacmd.rs'
-      - '!crates/charter-core/src/planeroot.rs'
-      - '!crates/charter-core/src/planeroot/**'
-      - '!crates/charter-core/src/proseguard.rs'
-      - '!crates/charter-core/src/pypath.rs'
-      - '!crates/charter-core/src/shellseg.rs'
-      - '!crates/charter-core/src/shellwrap.rs'
-      - '!crates/charter-core/src/toolgate.rs'
+      - '!crates/purlis-core/src/credguard.rs'
+      - '!crates/purlis-core/src/curate.rs'
+      - '!crates/purlis-core/src/docsrc.rs'
+      - '!crates/purlis-core/src/floorguard.rs'
+      - '!crates/purlis-core/src/gitconfig.rs'
+      - '!crates/purlis-core/src/handoffguard.rs'
+      - '!crates/purlis-core/src/heredoc.rs'
+      - '!crates/purlis-core/src/leakguard.rs'
+      - '!crates/purlis-core/src/livesub.rs'
+      - '!crates/purlis-core/src/personacmd.rs'
+      - '!crates/purlis-core/src/planeroot.rs'
+      - '!crates/purlis-core/src/planeroot/**'
+      - '!crates/purlis-core/src/proseguard.rs'
+      - '!crates/purlis-core/src/pypath.rs'
+      - '!crates/purlis-core/src/shellseg.rs'
+      - '!crates/purlis-core/src/shellwrap.rs'
+      - '!crates/purlis-core/src/toolgate.rs'
       # Every dependency's version and the toolchain: a tokio, portable-pty or Tauri bump
       # moves the thread count directly.
       - Cargo.toml
@@ -110,10 +110,10 @@ on:
       - .nvmrc
       # The shared standing job's own tests (FD-11), which the `tests.rs` line above leaves
       # out: last, so it puts back the one file the job runs.
-      - crates/charter-core/src/planegit/tests.rs
-      # NOT `crates/charter-cli`. The job builds it, because other specs in the same run
+      - crates/purlis-core/src/planegit/tests.rs
+      # NOT `crates/purlis-cli`. The job builds it, because other specs in the same run
       # start it, but no pane in this spec does: `writeShell` starts the fake harness with
-      # no `--hook`, and the fake harness runs no `statusLine`. A charter-cli that does not
+      # no `--hook`, and the fake harness runs no `statusLine`. A purlis-cli that does not
       # compile is the required `rust` job's red, not this one's.
   # Nightly, for `fifty tabs`, which no pull request runs any more (V70, as in `ci.yml`).
   schedule:
@@ -179,7 +179,7 @@ jobs:
       - run: npm ci
         working-directory: app
       - name: The harness the scenario tests run in every pane, and the binary its hooks run
-        run: cargo build -p fake-harness -p charter-cli
+        run: cargo build -p fake-harness -p purlis-cli
       # The `e2e` feature puts WebdriverIO's embedded WebDriver server inside the app, which is
       # what drives it on macOS as well as Linux. It is in no build anyone is given.
       - name: Build the app for the scenario tests
@@ -224,7 +224,7 @@ jobs:
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Pollers at once on a 300,000-file plane, with and without the shared standing
-        run: cargo test -p charter-core --lib -- planegit::tests::pollers_at_once --test-threads 1 --nocapture
+        run: cargo test -p purlis-core --lib -- planegit::tests::pollers_at_once --test-threads 1 --nocapture
         env:
           CHARTER_STANDING_FILES: "300000"
 
@@ -259,7 +259,7 @@ jobs:
       # `shell: bash` for `pipefail`, so the test's own failure is the step's.
       - name: ⌘P, ⌘⇧F and status on a generated repo
         shell: bash
-        run: cargo test --release -p charter-core --test search_is_measured_on_large_repos -- --ignored --nocapture --test-threads=1 2>&1 | tee fm-12.log
+        run: cargo test --release -p purlis-core --test search_is_measured_on_large_repos -- --ignored --nocapture --test-threads=1 2>&1 | tee fm-12.log
         env:
           CHARTER_MEASURE_FILES: ${{ matrix.files }}
           CHARTER_MEASURE_BUDGETS: report

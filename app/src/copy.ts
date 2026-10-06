@@ -29,10 +29,10 @@ const NAMES =
 const CHORD = /\b[A-Za-z]+(\+[A-Za-z0-9,.]+)+/g;
 
 /**
- * **charter is lowercase** (`productName`), so it is not a name the case rule takes out. The
- * one capitalised form is the About dialog's title, a label of its own.
+ * **purlis is lowercase** everywhere, the About dialog's title too (V93a), so a capital
+ * Charter or Purlis is a fault of its own. The title is still a label of its own.
  */
-const ABOUT = "About Charter";
+const ABOUT = "About purlis";
 
 /** The labels a string holds: `·` and `—` split "Stopped · Re-arm" into a state and an action. */
 function labels(text: string): string[] {
@@ -50,8 +50,8 @@ function titleCased(text: string): boolean {
     const words = label
       .replace(CHORD, " ")
       .replace(NAMES, " ")
-      // A capital Charter is its own fault, below, and is said once.
-      .replace(/\bCharter\b/g, " ")
+      // A capital Charter or Purlis is its own fault, below, and is said once.
+      .replace(/\b(Charter|Purlis)\b/g, " ")
       .replace(/[^A-Za-z'-]+/g, " ")
       .split(" ")
       .filter((word) => word.length >= 4);
@@ -67,8 +67,8 @@ export function copyFaults(text: string, seen: Seen = "source"): string[] {
   if (seen === "shown") {
     if (/[A-Za-z]!$/.test(said)) faults.push("an exclamation mark: say it plainly");
     if (titleCased(said)) faults.push("title case: write labels in sentence case");
-    if (labels(said).some((label) => label.trim() !== ABOUT && /\bCharter\b/.test(label)))
-      faults.push("a capital Charter: charter is lowercase outside the About title");
+    if (/\b(Charter|Purlis)\b/.test(said))
+      faults.push("a capital product name: purlis is lowercase, the About title too");
   }
   return faults;
 }

@@ -7,7 +7,7 @@
 
 use std::os::unix::fs::PermissionsExt;
 
-use charter_session_protocol::auth::{Credential, Credentials, Scope};
+use purlis_session_protocol::auth::{Credential, Credentials, Scope};
 
 fn mode(path: &std::path::Path) -> u32 {
     std::fs::symlink_metadata(path)

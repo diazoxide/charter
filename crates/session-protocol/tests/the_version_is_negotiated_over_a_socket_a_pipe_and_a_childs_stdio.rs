@@ -26,7 +26,7 @@
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
-use charter_session_protocol::version::{
+use purlis_session_protocol::version::{
     HANDSHAKE_TIMEOUT, MAGIC, Refused, Speaks, Version, answer, offer,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Join, join};
@@ -458,7 +458,7 @@ async fn a_child_refuses_a_bad_hello_and_closes_its_end() {
     for (first, says) in [
         (
             NOT_A_HELLO.to_vec(),
-            "not speaking charter's session protocol",
+            "not speaking purlis's session protocol",
         ),
         (garbled(), "cannot be read"),
         (too_long(), "longer than"),

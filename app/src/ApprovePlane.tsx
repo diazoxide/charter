@@ -98,7 +98,7 @@ export function ApprovePlane({
           <h3>{ask.first ? "What this project contributes" : "What it contributes now"}</h3>
           {nothing && (
             <p className="came-back">
-              Nothing charter can enumerate: it enables no plugins, sets no environment, grants no
+              Nothing purlis can enumerate: it enables no plugins, sets no environment, grants no
               persona a tool, and its record names no chat to start.
             </p>
           )}
@@ -176,8 +176,8 @@ export function ApprovePlane({
           )}
 
           <p className="came-back">
-            charter can only list what it can read. A project&rsquo;s persona charters, memory and
-            todos are text a model will read and act on, and charter makes no judgement about them.
+            purlis can only list what it can read. A project&rsquo;s persona charters, memory and
+            todos are text a model will read and act on, and purlis makes no judgement about them.
           </p>
 
           {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186): WebKit

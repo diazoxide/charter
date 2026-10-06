@@ -33,7 +33,7 @@ Two things were edited on the way in, both mechanically. Links to ADRs numbered 
 at those files in `diazoxide/charter-plane` at a fixed commit. The spec and the plane format
 each carry a short note saying where they came from and where a path they name that is not here lives.
 
-The pages `charter docs show` serves (`crates/charter-core/docs/`) are part of the same move.
+The pages `charter docs show` serves (`crates/purlis-core/docs/`) are part of the same move.
 They began as a byte-for-byte copy of the Python charter's `docs/*.md`, pinned to a commit and
 compared against it on every CI run. They now describe this app and are written here, so the pin
 and the comparison are gone.

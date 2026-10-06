@@ -12,9 +12,9 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link;
-use charter_session_protocol::version::{Speaks, Version};
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link;
+use purlis_session_protocol::version::{Speaks, Version};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{Instant, sleep};
 

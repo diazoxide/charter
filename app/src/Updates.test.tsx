@@ -199,7 +199,7 @@ describe("the update button", () => {
 
     const asking = await screen.findByRole("alertdialog");
     expect(asking.textContent).toContain(
-      "shell.1 reports no state, so charter cannot tell whether it is mid-turn.",
+      "shell.1 reports no state, so purlis cannot tell whether it is mid-turn.",
     );
     expect(restarted).toBe(0);
   });

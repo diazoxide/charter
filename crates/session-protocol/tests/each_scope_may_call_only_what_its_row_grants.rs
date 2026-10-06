@@ -4,9 +4,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link;
-use charter_session_protocol::session::{
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link;
+use purlis_session_protocol::session::{
     self, Answer, Chat, Client, Command, Host, Peer, Refusal, Start,
 };
 use tokio::io::duplex;

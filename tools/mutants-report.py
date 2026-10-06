@@ -143,7 +143,7 @@ def read_shard(out_dir: pathlib.Path, shard: str) -> dict:
         # shard is about a tree that was already red and none of them mean anything.
         verdict["status"] = "broken"
         verdict["why"] = (
-            f"the unmutated baseline came back {baseline_failed}: charter-core's own tests do "
+            f"the unmutated baseline came back {baseline_failed}: purlis-core's own tests do "
             "not pass, so nothing this shard says about a mutant is evidence"
         )
         return verdict
@@ -362,7 +362,7 @@ def cmd_gather(args: argparse.Namespace) -> int:
         summary("")
         summary(
             "No shard reported a single tested mutant, so this run says nothing at all about "
-            "charter-core. The `baseline` and `core` jobs above say why."
+            "purlis-core. The `baseline` and `core` jobs above say why."
         )
         return 0
 
@@ -372,7 +372,7 @@ def cmd_gather(args: argparse.Namespace) -> int:
         summary(
             f"Every survivor this run found is already written down in `{args.known}`. That "
             "file is a backlog, not an absolution: it was seeded from a run that covered 38% "
-            "of the crate, and each line in it is still a change to charter-core no test "
+            "of the crate, and each line in it is still a change to purlis-core no test "
             "notices."
         )
         return 0
@@ -380,9 +380,9 @@ def cmd_gather(args: argparse.Namespace) -> int:
     summary(f"## {len(fresh)} NEW surviving mutants")
     summary("")
     summary(
-        "Each line is a change to charter-core that **no test noticed**, and that was not "
+        "Each line is a change to purlis-core that **no test noticed**, and that was not "
         "there before. That is either a test worth writing or an equivalent mutation worth "
-        "writing down as one — `realpath` in `crates/charter-core/src/pypath.rs` is what the "
+        "writing down as one — `realpath` in `crates/purlis-core/src/pypath.rs` is what the "
         "second looks like when it is done honestly, including the part where the mutation "
         "turned out to be catchable after all.\n\n"
         f"Accepting one into the backlog means adding its line to `{args.known}`, with a "
@@ -456,7 +456,7 @@ def night_report(args: argparse.Namespace) -> list[str] | None:
         # never ran, so `core` and `survivors` are `skipped`, and saying they failed would
         # send the reader after the wrong thing.
         return [
-            f"- **charter-core's own tests do not pass** (`baseline`: {args.baseline}). "
+            f"- **purlis-core's own tests do not pass** (`baseline`: {args.baseline}). "
             "Mutation testing says nothing about a tree that is already red, so nothing else "
             "ran. Fix this first."
         ]
@@ -472,7 +472,7 @@ def night_report(args: argparse.Namespace) -> list[str] | None:
         lines.append(
             f"- **There are surviving mutants that were not there before** (`survivors`: "
             f"{args.survivors}). The table is on the run summary: each row is a change to "
-            "charter-core that no test noticed. Accepting one means adding its line to "
+            "purlis-core that no test noticed. Accepting one means adding its line to "
             "`.github/mutants-survivors.txt`, with a reason."
         )
     return lines
@@ -482,6 +482,18 @@ def night_report(args: argparse.Namespace) -> list[str] | None:
 # paths, or "*" for the whole crate. An HTML comment, so the issue reads as prose.
 MARKER = "<!-- mutants-report dirty: "
 WHOLE = "*"
+
+# The crate's folder before the purlis rename (RN-13, #1272). A record written before it names
+# files under the old folder; they are the same files, so they are read under the new one, or
+# the next run would drop every one of them as deleted and close the issue on nothing.
+RENAMED = {"crates/charter-core/": "crates/purlis-core/"}
+
+
+def renamed(path: str) -> str:
+    for old, new in RENAMED.items():
+        if path.startswith(old):
+            return new + path[len(old) :]
+    return path
 
 
 def read_list(path: str | None) -> set[str] | None:
@@ -516,7 +528,7 @@ def recorded(body: str | None, is_open: bool) -> set[str] | str:
             if isinstance(value, list) and all(
                 isinstance(item, str) and item != WHOLE for item in value
             ):
-                return set(value)
+                return {renamed(item) for item in value}
             return WHOLE
     return WHOLE
 
@@ -525,12 +537,12 @@ def state_section(dirty: set[str] | str, files: set[str] | None) -> str:
     record = WHOLE if dirty == WHOLE else sorted(dirty)
     if dirty == WHOLE:
         said = (
-            "**None of charter-core's files is known clean**: the last run could not list them."
+            "**None of purlis-core's files is known clean**: the last run could not list them."
         )
     else:
         verb = "is" if len(dirty) == 1 else "are"
         of = len(files or dirty)
-        said = f"**{len(dirty)} of charter-core's {of} files {verb} not known clean.**"
+        said = f"**{len(dirty)} of purlis-core's {of} files {verb} not known clean.**"
     return (
         f"{MARKER}{json.dumps(record)} -->\n"
         f"{said} Sunday tests one weekly slice of the crate, and a slice that runs clean clears "
@@ -548,7 +560,7 @@ def cmd_notice(args: argparse.Namespace) -> int:
     #480 rather than telling it. Matched on the exact title, never `--search`, whose relevance
     matching would happily return somebody else's issue and get it edited.
 
-    The issue keeps, in its body, the files of charter-core that are not known clean, because
+    The issue keeps, in its body, the files of purlis-core that are not known clean, because
     Sunday tests a slice of the crate and not all of it (#1200):
 
     * a night that is not clean adds what it tested: a slice its files, a diff night the files
@@ -576,7 +588,7 @@ def cmd_notice(args: argparse.Namespace) -> int:
 
     wrong = night_report(args)
     if wrong is None:
-        print("nothing in charter-core changed since the last green run", file=sys.stderr)
+        print("nothing in purlis-core changed since the last green run", file=sys.stderr)
         return 0
     clean = not wrong
     files = read_list(args.files)

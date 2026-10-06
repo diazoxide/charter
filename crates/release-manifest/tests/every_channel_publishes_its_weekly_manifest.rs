@@ -4,7 +4,7 @@
 //! after every asset they name, so the first update check of a week never reads a manifest
 //! that is missing or one that names a bundle not uploaded yet.
 
-use charter_core::updates::{Channel, DEV_TAG};
+use purlis_core::updates::{Channel, DEV_TAG};
 
 fn release_yml() -> String {
     let path = concat!(

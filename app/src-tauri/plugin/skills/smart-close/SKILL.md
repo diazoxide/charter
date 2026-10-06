@@ -29,16 +29,16 @@ it belongs to:
 
 - a decision every later chat should act on → `## Context & decisions`;
 - a term this work coined → `## Glossary`;
-- a changed goal → `charter workspace vision "<the goal>"`.
+- a changed goal → `purlis workspace vision "<the goal>"`.
 
-Leave `## Sessions` alone; that line is charter's. At the plane root there is no `workspace.md`; a
-lesson for every persona goes to `charter persona remember <persona> --shared "<fact>"`. Done when
+Leave `## Sessions` alone; that line is purlis's. At the plane root there is no `workspace.md`; a
+lesson for every persona goes to `purlis persona remember <persona> --shared "<fact>"`. Done when
 each lasting decision, term or goal change is in its section, or there was none.
 
 ## 3. Write the record
 
 Title it in one line. Pass the pieces this session worked in that you are not standing in, as
-`--piece <repo>/<piece>`; charter reads their branches from git. The body is exactly these five
+`--piece <repo>/<piece>`; purlis reads their branches from git. The body is exactly these five
 sections, in this order, each with at least one line:
 
 ```bash

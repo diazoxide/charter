@@ -118,9 +118,9 @@ describe("loading a theme's motion never leaves the window without any", () => {
     ]);
   });
 
-  it("names a motion token charter does not have rather than ignoring it", () => {
+  it("names a motion token purlis does not have rather than ignoring it", () => {
     const { complaints } = load({ name: "x", appearance: "dark", motion: { "duration.200": 200 } });
-    expect(complaints.map((c) => c.said)).toContain("duration.200 is not a charter motion token");
+    expect(complaints.map((c) => c.said)).toContain("duration.200 is not a purlis motion token");
   });
 
   it("complains about motion that is not an object, and still moves", () => {

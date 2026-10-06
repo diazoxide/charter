@@ -46,7 +46,7 @@ describe("the new-vault dialog", () => {
   });
 
   it("says the core's refusal where the name is typed", () => {
-    const { dialog } = draw({ trouble: "'../x' is not a vault name charter accepts" });
+    const { dialog } = draw({ trouble: "'../x' is not a vault name purlis accepts" });
     expect(within(dialog).getByRole("alert")).toHaveTextContent("not a vault name");
   });
 
@@ -69,7 +69,7 @@ describe("the new-vault dialog", () => {
 
     await userEvent.click(within(dialog).getByRole("radio", { name: /1Password/ }));
     expect(within(dialog).getByLabelText("1Password vault")).toHaveAccessibleDescription(
-      "Where charter creates this vault's items.",
+      "Where purlis creates this vault's items.",
     );
   });
 

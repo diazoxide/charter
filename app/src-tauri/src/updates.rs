@@ -1,6 +1,6 @@
 //! The app moving itself: which channel, whether it may, and what it says while it does.
 //!
-//! [`charter_core::updates`] holds the rules — the two channels, their endpoints, and whether
+//! [`purlis_core::updates`] holds the rules — the two channels, their endpoints, and whether
 //! the key this build carries is a key at all. This file is the part that needs a runner: it
 //! points Tauri's updater at the channel's manifest, refuses before it asks when the build
 //! cannot verify what it would be given, and runs the one background timer that makes the
@@ -32,7 +32,7 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use charter_core::updates::{Channel, NotAKey, pubkey_usable};
+use purlis_core::updates::{Channel, NotAKey, pubkey_usable};
 use tauri::{Emitter, Manager, Runtime};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -87,20 +87,20 @@ pub struct Offer {
 /// Read fresh rather than cached, and that is what makes a channel change take effect without
 /// a relaunch: the endpoint is chosen at the moment of the check and never at startup.
 pub fn channel_now() -> Channel {
-    charter_core::machine::config_root()
-        .map(|root| charter_core::machine::read(&root).store.channel)
+    purlis_core::machine::config_root()
+        .map(|root| purlis_core::machine::read(&root).store.channel)
         .unwrap_or_default()
 }
 
 /// Put this machine on `channel`.
 ///
-/// Through [`charter_core::machine::update`], which holds the store's lock across the read and
+/// Through [`purlis_core::machine::update`], which holds the store's lock across the read and
 /// the write — the app and a `charter` in a terminal are two processes writing one file, and
 /// this is the field they are most likely to write at the same time.
 pub fn set_channel(channel: Channel) -> Result<(), String> {
-    let root = charter_core::machine::config_root()
-        .ok_or("this machine has no config home, so charter has nowhere to keep the channel")?;
-    charter_core::machine::update(&root, |store| store.channel = channel)
+    let root = purlis_core::machine::config_root()
+        .ok_or("this machine has no config home, so purlis has nowhere to keep the channel")?;
+    purlis_core::machine::update(&root, |store| store.channel = channel)
         .map(|_| ())
         .map_err(|why| format!("the channel could not be recorded: {why}"))
 }
@@ -130,7 +130,7 @@ fn configured_pubkey<R: Runtime>(app: &tauri::AppHandle<R>) -> String {
 /// "charter looks like it updates".
 ///
 /// It cannot tell the operator's key from anyone else's — see
-/// [`charter_core::updates::pubkey_usable`], which says so at length. What it catches is this
+/// [`purlis_core::updates::pubkey_usable`], which says so at length. What it catches is this
 /// repository's own placeholder and a key pasted in wrong.
 fn may_update<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
     pubkey_usable(&configured_pubkey(app)).map_err(|not: NotAKey| not.why().to_owned())
@@ -199,7 +199,7 @@ async fn offer_from<R: Runtime>(
     };
     let found = found.map_err(|why| {
         format!(
-            "charter could not reach the {} channel: {why}",
+            "purlis could not reach the {} channel: {why}",
             channel.name()
         )
     })?;
@@ -219,41 +219,41 @@ async fn ask<R: Runtime>(
 ) -> Result<Result<Option<tauri_plugin_updater::Update>, tauri_plugin_updater::Error>, String> {
     let url = endpoint
         .parse()
-        .map_err(|why| format!("charter's update endpoint is not a url: {why}"))?;
+        .map_err(|why| format!("purlis's update endpoint is not a url: {why}"))?;
     let updater = app
         .updater_builder()
         // **The endpoint, every time.** `tauri.conf.json` names the stable one so a build can
         // never be pointed at nothing, and this replaces it with the channel's — which is why
         // switching channels takes effect at the next check rather than at the next launch.
         .endpoints(vec![url])
-        .map_err(|why| format!("charter's update endpoint was refused: {why}"))?
+        .map_err(|why| format!("purlis's update endpoint was refused: {why}"))?
         .build()
-        .map_err(|why| format!("charter's updater could not be built: {why}"))?;
+        .map_err(|why| format!("purlis's updater could not be built: {why}"))?;
     let started = std::time::Instant::now();
     let found = updater.check().await;
-    charter_core::netlog::updater_read(endpoint, came_back(&found), started.elapsed());
+    purlis_core::netlog::updater_read(endpoint, came_back(&found), started.elapsed());
     Ok(found)
 }
 
 /// This ISO week's weekly count, claimed in the machine store (OB-17).
 struct WeeklyClaim {
     root: std::path::PathBuf,
-    week: charter_core::updates::IsoWeek,
-    before: Option<charter_core::updates::IsoWeek>,
+    week: purlis_core::updates::IsoWeek,
+    before: Option<purlis_core::updates::IsoWeek>,
 }
 
 impl WeeklyClaim {
     /// The claim, when this check is the machine's first of the week and the week could be
     /// noted; `None` otherwise, and always under `DO_NOT_TRACK`.
     fn take() -> Option<WeeklyClaim> {
-        use charter_core::updates::{DO_NOT_TRACK, IsoWeek, do_not_track, weekly_due};
+        use purlis_core::updates::{DO_NOT_TRACK, IsoWeek, do_not_track, weekly_due};
         if do_not_track(std::env::var_os(DO_NOT_TRACK).as_deref()) {
             return None;
         }
-        let root = charter_core::machine::config_root()?;
+        let root = purlis_core::machine::config_root()?;
         let week = IsoWeek::now();
         let mut claimed = None;
-        charter_core::machine::update(&root, |store| {
+        purlis_core::machine::update(&root, |store| {
             if weekly_due(store.weekly, week, false) {
                 claimed = Some(store.weekly);
                 store.weekly = Some(week);
@@ -265,7 +265,7 @@ impl WeeklyClaim {
 
     /// The request got no answer: the week was not counted, so the next check may count it.
     fn give_back(self) {
-        let _ = charter_core::machine::update(&self.root, |store| {
+        let _ = purlis_core::machine::update(&self.root, |store| {
             if store.weekly == Some(self.week) {
                 store.weekly = self.before;
             }
@@ -295,9 +295,9 @@ fn tell_the_operator<R: Runtime>(app: &tauri::AppHandle<R>, offer: &Offer) {
     let _ = app
         .notification()
         .builder()
-        .title(format!("charter {} is available", offer.version))
+        .title(format!("purlis {} is available", offer.version))
         .body(format!(
-            "on the {} channel. Install it from charter, and charter will restart.",
+            "on the {} channel. Install it from purlis, and purlis will restart.",
             offer.channel
         ))
         .show();
@@ -317,12 +317,12 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
         let endpoint = channel
             .endpoint()
             .parse()
-            .map_err(|why| format!("charter's update endpoint is not a url: {why}"))?;
+            .map_err(|why| format!("purlis's update endpoint is not a url: {why}"))?;
         let leaving = app.clone();
         let updater = app
             .updater_builder()
             .endpoints(vec![endpoint])
-            .map_err(|why| format!("charter's update endpoint was refused: {why}"))?
+            .map_err(|why| format!("purlis's update endpoint was refused: {why}"))?
             // **Windows only**: there the plugin runs the installer and ends this process with
             // `std::process::exit`, which runs no exit event — so the install IS the restart,
             // and what Restart to update writes is written here instead (charter-app#251). The
@@ -334,22 +334,22 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
                     .let_go_of_all_to_update();
             })
             .build()
-            .map_err(|why| format!("charter's updater could not be built: {why}"))?;
+            .map_err(|why| format!("purlis's updater could not be built: {why}"))?;
         let started = std::time::Instant::now();
         let found = updater.check().await;
-        charter_core::netlog::updater_read(
+        purlis_core::netlog::updater_read(
             &channel.endpoint(),
             came_back(&found),
             started.elapsed(),
         );
         let Some(update) = found.map_err(|why| {
             format!(
-                "charter could not reach the {} channel: {why}",
+                "purlis could not reach the {} channel: {why}",
                 channel.name()
             )
         })?
         else {
-            return Err("there is no newer charter on this channel any more".to_owned());
+            return Err("there is no newer purlis on this channel any more".to_owned());
         };
         // The signature is verified inside this call, over the bytes that were downloaded,
         // before anything is unpacked. Nothing here can turn that off and nothing here tries.
@@ -357,13 +357,13 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
         let installed = update.download_and_install(|_, _| {}, || {}).await;
         // The signed bundle the manifest named. A bundle refused for its signature was
         // still downloaded, so it is listed as answered.
-        charter_core::netlog::updater_read(
+        purlis_core::netlog::updater_read(
             update.download_url.as_str(),
             came_back(&installed),
             started.elapsed(),
         );
         installed
-            .map_err(|why| format!("charter {} could not be installed: {why}", update.version))?;
+            .map_err(|why| format!("purlis {} could not be installed: {why}", update.version))?;
         Ok::<String, String>(update.version.clone())
     }
     .await;
@@ -385,20 +385,18 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
 /// the timer fired is the ordinary case and not a fault worth remembering.
 ///
 /// **A test build and a development build never start it** —
-/// [`charter_core::updates::checks_on_its_own`] is the rule and its note is why.
+/// [`purlis_core::updates::checks_on_its_own`] is the rule and its note is why.
 pub fn watch<R: Runtime>(app: &tauri::AppHandle<R>) {
-    if !charter_core::updates::checks_on_its_own(
-        charter_core::fence::FENCED,
-        cfg!(debug_assertions),
-    ) {
+    if !purlis_core::updates::checks_on_its_own(purlis_core::fence::FENCED, cfg!(debug_assertions))
+    {
         return;
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(charter_core::updates::FIRST_CHECK_AFTER).await;
+        tokio::time::sleep(purlis_core::updates::FIRST_CHECK_AFTER).await;
         loop {
             look(app.clone()).await;
-            tokio::time::sleep(charter_core::updates::CHECK_EVERY).await;
+            tokio::time::sleep(purlis_core::updates::CHECK_EVERY).await;
         }
     });
 }
@@ -518,18 +516,18 @@ mod tests {
     fn the_real_check_lists_its_read_in_the_network_log() {
         if std::env::var_os(NETLOG_CHILD).is_none() {
             let store = tempfile::tempdir().expect("a machine store");
-            charter_core::testrun::rerun(
+            purlis_core::testrun::rerun(
                 &["updates::tests::the_real_check_lists_its_read_in_the_network_log"],
                 &[
                     (NETLOG_CHILD, std::ffi::OsStr::new("1")),
-                    (charter_core::machine::HOME_VAR, store.path().as_os_str()),
+                    (purlis_core::machine::HOME_VAR, store.path().as_os_str()),
                     ("XDG_CONFIG_HOME", std::ffi::OsStr::new("")),
                 ],
             );
-            let lines = charter_core::netlog::entries(store.path());
+            let lines = purlis_core::netlog::entries(store.path());
             assert_eq!(lines.len(), 1, "{lines:?}");
             let line = &lines[0];
-            assert_eq!(line.feature, charter_core::netlog::Feature::Updater);
+            assert_eq!(line.feature, purlis_core::netlog::Feature::Updater);
             assert!(line.host.starts_with("127.0.0.1:"), "{line:?}");
             assert_eq!((line.method.as_str(), line.answered), ("GET", true));
             return;
@@ -596,23 +594,23 @@ mod tests {
             let mut devices = Vec::new();
             for opted_out in ["", "", "1"] {
                 let store = tempfile::tempdir().expect("a machine store");
-                devices.push(charter_core::machine::device_id(store.path()).expect("a device id"));
-                charter_core::testrun::rerun(
+                devices.push(purlis_core::machine::device_id(store.path()).expect("a device id"));
+                purlis_core::testrun::rerun(
                     &["updates::tests::no_machine_sends_anything_of_its_own_in_the_weekly_check"],
                     &[
                         (WEEKLY_CHILD, std::ffi::OsStr::new("1")),
                         (WEEKLY_SERVER, std::ffi::OsStr::new(&base)),
                         (
-                            charter_core::updates::DO_NOT_TRACK,
+                            purlis_core::updates::DO_NOT_TRACK,
                             std::ffi::OsStr::new(opted_out),
                         ),
-                        (charter_core::machine::HOME_VAR, store.path().as_os_str()),
+                        (purlis_core::machine::HOME_VAR, store.path().as_os_str()),
                         ("XDG_CONFIG_HOME", std::ffi::OsStr::new("")),
                     ],
                 );
-                let kept = charter_core::machine::read(store.path()).store.weekly;
+                let kept = purlis_core::machine::read(store.path()).store.weekly;
                 if opted_out.is_empty() {
-                    assert_eq!(kept, Some(charter_core::updates::IsoWeek::now()));
+                    assert_eq!(kept, Some(purlis_core::updates::IsoWeek::now()));
                 } else {
                     assert_eq!(kept, None, "an opted-out machine noted a count");
                 }
@@ -680,7 +678,7 @@ mod tests {
     /// The machine's hostname, for the test above to look for.
     fn gethostname() -> String {
         let mut command = std::process::Command::new("hostname");
-        charter_core::forklock::output(&mut command)
+        purlis_core::forklock::output(&mut command)
             .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
             .unwrap_or_default()
     }
@@ -691,19 +689,16 @@ mod tests {
     fn a_release_without_a_weekly_manifest_still_answers_the_check() {
         if std::env::var_os(WEEKLY_CHILD).is_none() {
             let store = tempfile::tempdir().expect("a machine store");
-            charter_core::testrun::rerun(
+            purlis_core::testrun::rerun(
                 &["updates::tests::a_release_without_a_weekly_manifest_still_answers_the_check"],
                 &[
                     (WEEKLY_CHILD, std::ffi::OsStr::new("1")),
-                    (
-                        charter_core::updates::DO_NOT_TRACK,
-                        std::ffi::OsStr::new(""),
-                    ),
-                    (charter_core::machine::HOME_VAR, store.path().as_os_str()),
+                    (purlis_core::updates::DO_NOT_TRACK, std::ffi::OsStr::new("")),
+                    (purlis_core::machine::HOME_VAR, store.path().as_os_str()),
                     ("XDG_CONFIG_HOME", std::ffi::OsStr::new("")),
                 ],
             );
-            assert_eq!(charter_core::machine::read(store.path()).store.weekly, None);
+            assert_eq!(purlis_core::machine::read(store.path()).store.weekly, None);
             return;
         }
         let (url, served) = manifest_server();
@@ -748,19 +743,16 @@ mod tests {
     fn a_weekly_request_that_was_never_sent_gives_the_week_back() {
         if std::env::var_os(WEEKLY_CHILD).is_none() {
             let store = tempfile::tempdir().expect("a machine store");
-            charter_core::testrun::rerun(
+            purlis_core::testrun::rerun(
                 &["updates::tests::a_weekly_request_that_was_never_sent_gives_the_week_back"],
                 &[
                     (WEEKLY_CHILD, std::ffi::OsStr::new("1")),
-                    (
-                        charter_core::updates::DO_NOT_TRACK,
-                        std::ffi::OsStr::new(""),
-                    ),
-                    (charter_core::machine::HOME_VAR, store.path().as_os_str()),
+                    (purlis_core::updates::DO_NOT_TRACK, std::ffi::OsStr::new("")),
+                    (purlis_core::machine::HOME_VAR, store.path().as_os_str()),
                     ("XDG_CONFIG_HOME", std::ffi::OsStr::new("")),
                 ],
             );
-            assert_eq!(charter_core::machine::read(store.path()).store.weekly, None);
+            assert_eq!(purlis_core::machine::read(store.path()).store.weekly, None);
             return;
         }
         let (url, _) = manifest_server();
@@ -808,7 +800,7 @@ mod tests {
         let config = dir.path().join("config");
         let root = dir.path().join("plane");
         std::fs::create_dir_all(&root).expect("the plane's directory");
-        std::fs::write(root.join(charter_core::plane::MANIFEST), "").expect("its charter.toml");
+        std::fs::write(root.join(purlis_core::plane::MANIFEST), "").expect("its charter.toml");
         let planes = crate::planes::Planes::telling(
             std::sync::Arc::new(|_: crate::hooks::Moved| {}),
             crate::Shipped::default(),
@@ -825,7 +817,7 @@ mod tests {
             "a refused restart let go of a plane"
         );
         assert!(
-            !charter_core::reopen::take_restart_to_update(&config),
+            !purlis_core::reopen::take_restart_to_update(&config),
             "a refused restart left word of a restart"
         );
 
@@ -841,7 +833,7 @@ mod tests {
             Some(0),
             "the restart was asked for before every plane was written and let go of"
         );
-        assert!(charter_core::reopen::take_restart_to_update(&config));
+        assert!(purlis_core::reopen::take_restart_to_update(&config));
     }
 
     #[test]
@@ -901,7 +893,7 @@ mod tests {
         match pubkey_usable(pubkey) {
             // Before the operator generates the keypair: the placeholder, refused by name.
             Err(NotAKey::Unset) => {
-                assert_eq!(pubkey, charter_core::updates::PUBKEY_UNSET);
+                assert_eq!(pubkey, purlis_core::updates::PUBKEY_UNSET);
             }
             // After: a real key, and nothing in between is a state this repository may be in.
             Ok(()) => {}

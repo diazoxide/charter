@@ -11,14 +11,14 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use charter_core::executor::Executor;
-use charter_core::panel::{Block, Shape};
-use charter_core::{extension, handed};
+use purlis_core::executor::Executor;
+use purlis_core::panel::{Block, Shape};
+use purlis_core::{extension, handed};
 
 /// How long the program is given by every executor here but the measurement's (#422): the
 /// program is copied in fresh for each test, and macOS assesses a program file the first time
 /// it runs — under a loaded machine, for longer than the real five seconds. No test here is
-/// about the deadline; `charter-core`'s executor tests hold it to account.
+/// about the deadline; `purlis-core`'s executor tests hold it to account.
 const PATIENT: Duration = Duration::from_secs(30);
 
 /// An executor that gives its program [`PATIENT`].
@@ -94,12 +94,12 @@ impl Installed {
         &self,
         executor: &Executor,
         focus: Option<&str>,
-    ) -> Result<charter_core::executor::Answer, String> {
+    ) -> Result<purlis_core::executor::Answer, String> {
         let plane = self.plane();
         executor.ask(
             &self.config(),
             // What the plane's own files say about extensions, as the window reads them.
-            &charter_core::extension::project::Choices::read(&plane),
+            &purlis_core::extension::project::Choices::read(&plane),
             "persona-statistics",
             "statistics",
             focus,
@@ -114,7 +114,7 @@ fn noon() -> chrono::NaiveDateTime {
         .expect("a time")
 }
 
-fn charts(blocks: &[Block]) -> Vec<&charter_core::panel::Chart> {
+fn charts(blocks: &[Block]) -> Vec<&purlis_core::panel::Chart> {
     blocks
         .iter()
         .filter_map(|block| match block {
@@ -131,12 +131,12 @@ fn charts(blocks: &[Block]) -> Vec<&charter_core::panel::Chart> {
 #[test]
 fn a_charter_that_speaks_a_later_protocol_asks_it_in_protocol_1_and_it_stays_approved() {
     let installed = Installed::new();
-    const { assert!(charter_core::executor::PROTOCOL > 1) };
+    const { assert!(purlis_core::executor::PROTOCOL > 1) };
 
-    let survey = charter_core::extension::survey(&installed.config(), &extension::BuiltIn::none());
+    let survey = purlis_core::extension::survey(&installed.config(), &extension::BuiltIn::none());
     let row = &survey.installed[0];
     assert_eq!(row.found.as_ref().expect("read").manifest.protocol, 1);
-    assert_eq!(row.standing, charter_core::extension::Standing::Approved);
+    assert_eq!(row.standing, purlis_core::extension::Standing::Approved);
 
     installed
         .ask(&patient(), None)

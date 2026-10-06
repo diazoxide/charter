@@ -9,10 +9,10 @@
 
 use std::path::Path;
 
-use charter_core::planegit::{self, Trigger};
-use charter_core::planesave;
-use charter_core::repocmd::Say;
-use charter_core::reposave;
+use purlis_core::planegit::{self, Trigger};
+use purlis_core::planesave;
+use purlis_core::repocmd::Say;
+use purlis_core::reposave;
 
 use crate::planes::{PlaneId, Planes};
 
@@ -114,7 +114,7 @@ pub async fn save_plane(
             &app,
             plane,
             root,
-            charter_core::extension::events::Event::PlaneSaved,
+            purlis_core::extension::events::Event::PlaneSaved,
         );
     }
     saved
@@ -138,7 +138,7 @@ pub async fn choose_plane_mode(
 
 /// [`choose_plane_mode`], without a runtime.
 pub fn choose_mode(root: &Path, mode: &str) -> Result<PlaneSaving, String> {
-    use charter_core::settings::{self, Edit, Step, Value, Which};
+    use purlis_core::settings::{self, Edit, Step, Value, Which};
     if planesave::Mode::parse(mode).is_none() {
         return Err(format!(
             "{mode} is not a mode — one of off, commit, push, pr, pr-merge"
@@ -186,7 +186,7 @@ pub fn saving_of(root: &Path) -> PlaneSaving {
         changed: standing.changed,
         ahead: standing.ahead,
         pr: standing.pr,
-        request: charter_core::forge::request_words_of(root, root)
+        request: purlis_core::forge::request_words_of(root, root)
             .request_noun()
             .to_owned(),
         blocked: standing.blocked,
@@ -194,7 +194,7 @@ pub fn saving_of(root: &Path) -> PlaneSaving {
         pushes: standing.pushes,
         behind: standing.behind,
         push_failed: standing.push_failed,
-        live: charter_core::wscmd::live_workspaces(root)
+        live: purlis_core::wscmd::live_workspaces(root)
             .into_iter()
             .collect(),
         conflicts: standing.conflicts,
@@ -317,7 +317,7 @@ pub async fn save_repo(
 
 /// [`workspace_saving`], without a runtime.
 pub fn repos_saving(root: &Path, workspace: &str) -> Result<Vec<RepoSaving>, String> {
-    let found = charter_core::repos::clones(root, workspace).map_err(|why| why.to_string())?;
+    let found = purlis_core::repos::clones(root, workspace).map_err(|why| why.to_string())?;
     let settings = planesave::Settings::read(root);
     Ok(found
         .repos
@@ -355,7 +355,7 @@ pub fn repos_saving(root: &Path, workspace: &str) -> Result<Vec<RepoSaving>, Str
                 changed: standing.changed,
                 ahead: standing.ahead,
                 pr: standing.pr,
-                request: charter_core::forge::request_words_of(root, &repo.path)
+                request: purlis_core::forge::request_words_of(root, &repo.path)
                     .request_noun()
                     .to_owned(),
                 blocked: standing.blocked,
@@ -373,7 +373,7 @@ pub fn save_repo_in(
     message: Option<&str>,
     mid_turn: &dyn Fn() -> Vec<String>,
 ) -> Result<Vec<String>, String> {
-    let found = charter_core::repos::clones(root, workspace).map_err(|why| why.to_string())?;
+    let found = purlis_core::repos::clones(root, workspace).map_err(|why| why.to_string())?;
     let repo = found
         .repos
         .iter()
@@ -440,7 +440,7 @@ mod tests {
             .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
             .env("GIT_COMMITTER_NAME", "t")
             .env("GIT_COMMITTER_EMAIL", "t@example.invalid");
-        let out = charter_core::forklock::output(&mut command).expect("git runs");
+        let out = purlis_core::forklock::output(&mut command).expect("git runs");
         assert!(
             out.status.success(),
             "git {args:?}: {}",

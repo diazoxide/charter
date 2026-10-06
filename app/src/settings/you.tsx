@@ -35,7 +35,7 @@ export function youGroups(): SettingsGroup[] {
     {
       id: "you.editor",
       label: "Editor",
-      help: "The editor charter hands a file to.",
+      help: "The editor purlis hands a file to.",
       settings: [editor],
     },
     thisMachineGroup(),

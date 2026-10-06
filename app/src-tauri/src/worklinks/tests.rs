@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use charter_core::engine::Size;
-use charter_core::reopen::Chat;
-use charter_core::work::log::{Cause, append_alias, dir_for, fold};
+use purlis_core::engine::Size;
+use purlis_core::reopen::Chat;
+use purlis_core::work::log::{Cause, append_alias, dir_for, fold};
 
 use super::*;
 use crate::host::pretend::Pretend;

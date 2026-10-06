@@ -8,7 +8,7 @@ import { BUILT_IN } from "./theme";
 /**
  * The registry's answer to "what has contributed what to this window" has to include the themes
  * charter itself ships, and those live in two places that cannot import each other: the window's
- * bundle (`BUILT_IN` here) and `charter_core::extension::BUILT_IN_THEMES`, which is what the
+ * bundle (`BUILT_IN` here) and `purlis_core::extension::BUILT_IN_THEMES`, which is what the
  * survey hands back.
  *
  * Two lists that must agree, with the agreement tested rather than remembered. Without this, a
@@ -18,7 +18,7 @@ import { BUILT_IN } from "./theme";
  */
 /// From `app`, which is vitest's working directory here — the same anchor
 /// `literals.test.ts` uses to read the real source tree rather than a fixture.
-const CORE = join(process.cwd(), "..", "crates", "charter-core", "src", "extension.rs");
+const CORE = join(process.cwd(), "..", "crates", "purlis-core", "src", "extension.rs");
 
 describe("charter's own themes", () => {
   it("are the same two the core's registry names", () => {

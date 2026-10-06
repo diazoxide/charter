@@ -5,13 +5,13 @@
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link;
-use charter_session_protocol::link::Acceptor;
-use charter_session_protocol::session::{
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link;
+use purlis_session_protocol::link::Acceptor;
+use purlis_session_protocol::session::{
     self, Answer, Attached, Client, Command, Event, Events, Host, Peer, Pushed, Refusal, Since,
 };
-use charter_session_protocol::view::{Attacher, Chunk, Feed, Limits, ViewId, Viewer};
+use purlis_session_protocol::view::{Attacher, Chunk, Feed, Limits, ViewId, Viewer};
 use tokio::io::duplex;
 use tokio::sync::mpsc;
 

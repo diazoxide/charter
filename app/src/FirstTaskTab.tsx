@@ -9,7 +9,7 @@ import {
   type StartOptions,
 } from "./bindings";
 
-/** The runs the script has (`charter_core::firsttask::RUNS`). */
+/** The runs the script has (`purlis_core::firsttask::RUNS`). */
 const RUNS = [1, 2] as const;
 
 /** What each chat is called on the tab: ADR 0072's first-hour words, so "chat" and not "run". */
@@ -39,7 +39,7 @@ export interface FirstTaskDoes {
  * The same task twice, on two harnesses or on two profiles of one, each a chat **on a branch of
  * its own** in charter's copy of the repo, with the task **typed and never sent** (ADR 0061): the
  * operator reads it and presses Enter. The task's text, each run's name and the diff command are
- * the core's (`charter_core::firsttask`), which the CI run of the script uses too.
+ * the core's (`purlis_core::firsttask`), which the CI run of the script uses too.
  *
  * **The month-two moment is the second run's briefing**: the task asks each run to record what it
  * learned, and the second run starts with that lesson in its briefing, whichever harness it is on,
@@ -137,7 +137,7 @@ export function FirstTaskTab({
     <div className="first-task">
       <p className="came-back">
         Give one small, real task to two chats, each started with something different below, and
-        compare what each did. Each chat works on a branch of its own in charter&apos;s copy of your
+        compare what each did. Each chat works on a branch of its own in purlis&apos;s copy of your
         repo, and the task is typed in for you to read before you send it.
       </p>
       {RUNS.map((run) => {
@@ -179,7 +179,7 @@ export function FirstTaskTab({
                       <ProfileMeta row={one}>
                         {!one.ready_to_type && (
                           <span className="what">
-                            {one.harness?.cannot_type ?? "charter cannot type the task into it"}
+                            {one.harness?.cannot_type ?? "purlis cannot type the task into it"}
                           </span>
                         )}
                       </ProfileMeta>

@@ -2,7 +2,7 @@
 //! chat opened with the action's prompt typed into it and never sent (ADR 0061, SI-2).
 //!
 //! **What a subject is offered is the core's answer, asked again every time.**
-//! `charter_core::curation::resolve` says which actions there are, who runs each, where and with
+//! `purlis_core::curation::resolve` says which actions there are, who runs each, where and with
 //! what text; this layer converts it for the window and never decides any of it. The window
 //! names an action by its id and nothing else, and [`curate`] resolves the subject again before
 //! it opens anything, so the prompt typed into the chat is the one the core renders now — never
@@ -38,17 +38,17 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use charter_core::curation::{self, Resolved, Source, Subject};
-use charter_core::harness::{Harness, ReadyToType};
-use charter_core::hookwire::Report;
-use charter_core::state::Event;
+use purlis_core::curation::{self, Resolved, Source, Subject};
+use purlis_core::harness::{Harness, ReadyToType};
+use purlis_core::hookwire::Report;
+use purlis_core::state::Event;
 
 use crate::planes::{Held, PlaneId, Planes};
-use charter_core::engine::Size;
-use charter_core::reopen::Chat;
+use purlis_core::engine::Size;
+use purlis_core::reopen::Chat;
 
 #[cfg(test)]
-use charter_core::curation::{PASTE_BEGINS, PASTE_ENDS};
+use purlis_core::curation::{PASTE_BEGINS, PASTE_ENDS};
 
 /// One curation action a subject is offered, as the window draws it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
@@ -238,7 +238,7 @@ fn launch_profile(root: &Path) -> Result<String, String> {
     when_typed(
         &profile,
         Harness::of_kind(&kind),
-        charter_core::harness_card::named(root, &kind).as_ref(),
+        purlis_core::harness_card::named(root, &kind).as_ref(),
     )?;
     Ok(profile)
 }
@@ -247,7 +247,7 @@ fn launch_profile(root: &Path) -> Result<String, String> {
 /// project's default, or — with none named — the first the picker lists. A default that
 /// cannot start refuses, ending in `so <outcome>.`, and never falls back.
 pub(crate) fn default_profile(root: &Path, outcome: &str) -> Result<(String, String), String> {
-    let (set, check) = charter_core::profiles::for_launch(root);
+    let (set, check) = purlis_core::profiles::for_launch(root);
     if let Some(wanted) = &set.default_refused {
         let why = set
             .refused
@@ -275,7 +275,7 @@ pub(crate) fn default_profile(root: &Path, outcome: &str) -> Result<(String, Str
 fn when_typed(
     profile: &str,
     harness: Option<Harness>,
-    card: Option<&charter_core::harness_card::Card>,
+    card: Option<&purlis_core::harness_card::Card>,
 ) -> Result<ReadyToType, String> {
     harness
         .and_then(Harness::ready_to_type)
@@ -285,7 +285,7 @@ fn when_typed(
                  another profile the default to curate from here."
             ),
             None => format!(
-                "The default profile '{profile}' runs a program charter has not measured, so it \
+                "The default profile '{profile}' runs a program purlis has not measured, so it \
                  cannot tell when to type a curation prompt into it."
             ),
         })
@@ -294,15 +294,15 @@ fn when_typed(
 /// What a harness's card says while a prompt cannot be typed into it: its line and its label,
 /// or none where there is no card to say it — a program no declaration describes.
 pub(crate) fn cannot_be_typed_into(
-    card: Option<&charter_core::harness_card::Card>,
+    card: Option<&purlis_core::harness_card::Card>,
 ) -> Option<String> {
-    card.and_then(|card| card.lacks(charter_core::harness_card::READY_TO_TYPE))
+    card.and_then(|card| card.lacks(purlis_core::harness_card::READY_TO_TYPE))
 }
 
 /// What a curation chat's tab says: `<label> · <subject>`, held to a chat name's length.
 fn tab_label(label: &str, subject: &str) -> String {
     let whole = format!("{label} · {subject}");
-    let most = charter_core::reopen::MOST_LABEL;
+    let most = purlis_core::reopen::MOST_LABEL;
     if whole.chars().count() <= most {
         return whole;
     }
@@ -357,7 +357,7 @@ fn open(held: &Arc<Held>, spec: &str, action: &str, size: Size) -> Result<Curati
         // The one question the window files every chat by, and the one `start::ready` tells
         // the chat its workspace by: a chat at the plane root, or in a persona's directory, is
         // in none.
-        workspace: charter_core::workspaces::Plane::open(&root).workspace_of(&chosen.cwd),
+        workspace: purlis_core::workspaces::Plane::open(&root).workspace_of(&chosen.cwd),
     })
 }
 
@@ -384,7 +384,7 @@ pub struct StartedTyped {
     /// Its name, which is its number.
     pub name: String,
     /// What `start::ready` answered for it: its harness and its directory.
-    pub ready: charter_core::start::Ready,
+    pub ready: purlis_core::start::Ready,
     /// Whether its prompt is held to be typed: false only from
     /// [`start_typed_where_it_can_be`], on a harness it cannot be typed into.
     pub typed: bool,
@@ -404,7 +404,7 @@ pub fn start_typed(
     cannot_type: impl FnOnce(
         &str,
         Option<Harness>,
-        Option<&charter_core::harness_card::Card>,
+        Option<&purlis_core::harness_card::Card>,
     ) -> Result<ReadyToType, String>,
     not_drawn: impl FnOnce(String) -> String,
 ) -> Result<StartedTyped, String> {
@@ -428,15 +428,15 @@ pub fn start_typed_where_it_can_be(
     when: impl FnOnce(
         &str,
         Option<Harness>,
-        Option<&charter_core::harness_card::Card>,
+        Option<&purlis_core::harness_card::Card>,
     ) -> Result<Option<ReadyToType>, String>,
     not_drawn: impl FnOnce(String) -> String,
 ) -> Result<StartedTyped, String> {
     let root = held.root().to_path_buf();
     let number = held.chats().sessions().deal();
     let name = number.to_string();
-    let ready = charter_core::start::ready(
-        &charter_core::start::Start {
+    let ready = purlis_core::start::ready(
+        &purlis_core::start::Start {
             profile: Some(chat.profile.clone()),
             persona: chat.persona.clone(),
             name: name.clone(),
@@ -452,10 +452,10 @@ pub fn start_typed_where_it_can_be(
     )?;
     // The same question the caller's menu asked, of the harness this start actually resolved.
     // Its harness's card, built-in or declared, for the line a refusal says (HP-19).
-    let card = charter_core::profiles::for_launch(&root)
+    let card = purlis_core::profiles::for_launch(&root)
         .0
         .get(&chat.profile)
-        .and_then(|profile| charter_core::harness_card::named(&root, &profile.kind));
+        .and_then(|profile| purlis_core::harness_card::named(&root, &profile.kind));
     let when = when(&chat.profile, ready.harness, card.as_ref())?;
     let inside = if chat.then_a_space {
         format!("{} ", curation::pasted(&chat.prompt))
@@ -547,8 +547,8 @@ impl Typed {
         );
     }
 
-    /// Holds `paste`, already one bracketed paste ([`charter_core::curation::bracketed`] or
-    /// [`charter_core::curation::bracketed_then_a_space`]), for chat `session` until `until`.
+    /// Holds `paste`, already one bracketed paste ([`purlis_core::curation::bracketed`] or
+    /// [`purlis_core::curation::bracketed_then_a_space`]), for chat `session` until `until`.
     pub fn hold_paste(&self, session: u32, paste: String, until: ReadyToType) {
         self.held().insert(
             session,
@@ -745,7 +745,7 @@ pub fn type_once_it_reads_keys(chat: &impl Waiting, within: Duration) {
             Ok(Some(true)) => {
                 chat.let_go();
                 tracing::warn!(
-                    "charter: a curation chat's terminal was still editing lines {}s after its \
+                    "purlis: a curation chat's terminal was still editing lines {}s after its \
                      harness started, so its prompt was not typed",
                     within.as_secs()
                 );
@@ -836,7 +836,7 @@ pub fn type_once_raw_and_quiet(chat: &impl Waiting, wait: Wait) {
         if Instant::now() >= until {
             chat.let_go();
             tracing::warn!(
-                "charter: a curation chat's terminal was not raw and quiet {}s after it \
+                "purlis: a curation chat's terminal was not raw and quiet {}s after it \
                  started, so its prompt was not typed",
                 wait.within.as_secs()
             );
@@ -954,8 +954,8 @@ fn submits(bytes: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use charter_core::hookwire::Conversation;
-    use charter_core::state::{Detail, Started};
+    use purlis_core::hookwire::Conversation;
+    use purlis_core::state::{Detail, Started};
 
     use super::*;
 
@@ -1428,15 +1428,15 @@ mod tests {
             "Safe remove · smart-ide"
         );
         let long = tab_label("Compact & improve", &"w".repeat(80));
-        assert_eq!(long.chars().count(), charter_core::reopen::MOST_LABEL);
+        assert_eq!(long.chars().count(), purlis_core::reopen::MOST_LABEL);
         assert!(long.ends_with('…'));
-        assert!(charter_core::reopen::label(&long).is_ok());
+        assert!(purlis_core::reopen::label(&long).is_ok());
     }
 
     #[test]
     fn a_warning_names_the_file_it_left_out() {
         let said = left_out(
-            "personas/ops/curation/bad.md is not offered: no label. `charter persona lint \
+            "personas/ops/curation/bad.md is not offered: no label. `purlis persona lint \
              ops` lists every problem"
                 .to_owned(),
         );
@@ -1463,7 +1463,7 @@ mod tests {
             let alpha = root.join("workspaces").join("alpha");
             std::fs::create_dir_all(&alpha).unwrap();
             std::fs::write(alpha.join("workspace.md"), "# alpha\n").unwrap();
-            std::fs::write(root.join(charter_core::plane::MANIFEST), "").unwrap();
+            std::fs::write(root.join(purlis_core::plane::MANIFEST), "").unwrap();
             let ops = root.join("personas").join("ops");
             std::fs::create_dir_all(ops.join("curation")).unwrap();
             std::fs::write(
@@ -1502,7 +1502,7 @@ mod tests {
                 ),
             );
             std::fs::write(
-                root.join(charter_core::profiles::LOCAL_FILE),
+                root.join(purlis_core::profiles::LOCAL_FILE),
                 format!(
                     "[harness]\ndefault = \"work\"\n\n[harness.work]\nkind = {kind:?}\n\
                      command = [{:?}]\n",
@@ -1510,12 +1510,12 @@ mod tests {
                 ),
             )
             .unwrap();
-            let set = charter_core::profiles::current(&root);
+            let set = purlis_core::profiles::current(&root);
             let work = set.get("work").expect("the profile reads");
-            charter_core::profiletrust::record_launched(
+            purlis_core::profiletrust::record_launched(
                 &root,
                 "work",
-                &charter_core::profiletrust::fingerprint(work),
+                &purlis_core::profiletrust::fingerprint(work),
             )
             .expect("approved");
             Self { _dir: dir, root }
@@ -1658,7 +1658,7 @@ mod tests {
         while !ready.exists() && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        charter_core::hookwire::send(
+        purlis_core::hookwire::send(
             held.hooks().socket().expect("listening"),
             Some(&held.hooks().token_for(curating.session)),
             &Report {
@@ -1691,7 +1691,7 @@ mod tests {
     fn a_default_profile_that_cannot_start_refuses_rather_than_falling_back() {
         let plane = Plane::new("claude");
         std::fs::write(
-            plane.root.join(charter_core::profiles::LOCAL_FILE),
+            plane.root.join(purlis_core::profiles::LOCAL_FILE),
             "[harness]\ndefault = \"gone\"\n",
         )
         .unwrap();
@@ -1797,7 +1797,7 @@ mod tests {
 
         // What Codex 0.147.0 reports inside its first turn, before the quiet period is up.
         for event in [Event::SessionStart, Event::UserPromptSubmit] {
-            charter_core::hookwire::send(
+            purlis_core::hookwire::send(
                 held.hooks().socket().expect("listening"),
                 Some(&held.hooks().token_for(curating.session)),
                 &Report {
@@ -1858,7 +1858,7 @@ mod tests {
 
     #[test]
     fn claude_code_is_typed_into_on_its_start_codex_once_raw_and_quiet_and_opencode_never() {
-        let card = |harness| Some(charter_core::harness_card::built_in_card(harness));
+        let card = |harness| Some(purlis_core::harness_card::built_in_card(harness));
         assert_eq!(
             when_typed(
                 "claude",
@@ -1881,7 +1881,7 @@ mod tests {
         assert!(
             opencode.contains("'work'")
                 && opencode.contains(
-                    "opencode cannot have a prompt typed in for you, because charter cannot tell \
+                    "opencode cannot have a prompt typed in for you, because purlis cannot tell \
                      when it has finished starting. See What opencode can do here."
                 ),
             "{opencode}"
@@ -1894,19 +1894,19 @@ mod tests {
     fn a_harness_the_project_declares_is_refused_in_its_cards_line() {
         // HP-19's review, M1: charter types into a harness only through an adapter it ships,
         // so a declared harness is refused whatever its terminal says — in its card's words.
-        let declared = charter_core::harness_declaration::parse(
+        let declared = purlis_core::harness_declaration::parse(
             "name = \"eager\"\nprogram = \"eager\"\n[terminal]\nready_to_type = \"raw-and-quiet\"\n",
-            charter_core::harness_declaration::Origin::Project,
+            purlis_core::harness_declaration::Origin::Project,
             "harnesses/eager.toml",
         )
         .expect("a declaration");
-        let card = charter_core::harness_card::of(&declared);
+        let card = purlis_core::harness_card::of(&declared);
 
         let refused = when_typed("work", None, Some(&card)).unwrap_err();
 
         assert!(
             refused.contains(
-                "eager cannot have a prompt typed in for you, because charter cannot tell when it \
+                "eager cannot have a prompt typed in for you, because purlis cannot tell when it \
                  has finished starting. See What eager can do here."
             ),
             "{refused}"

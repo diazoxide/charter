@@ -82,7 +82,7 @@ reason the record, and not the whole core, gets a fix in this milestone.
 ## What was measured
 
 **By the shipped gates themselves**, in
-`the_window_each_gate_leaves` (`crates/charter-core/tests/nothing_escapes_while_a_writer_races.rs`
+`the_window_each_gate_leaves` (`crates/purlis-core/tests/nothing_escapes_while_a_writer_races.rs`
 in charter-app), on CI's `ubuntu-24.04` runner. One thread runs a gate and then the caller's own
 open, 20,000 rounds; a second plants and removes a symlink at the path. It is committed and
 `#[ignore]`d, so it can be run again rather than believed:

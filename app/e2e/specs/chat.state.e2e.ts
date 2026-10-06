@@ -103,7 +103,7 @@ describe("what a chat is doing", () => {
     // needs you nor shows a count: a faint hand with no number, named for the chat (the
     // operator's ruling on #249).
     const faint = await untilTheHandSays(
-      /^Nothing has asked for you, but .+ can't tell charter it's waiting$/,
+      /^Nothing has asked for you, but .+ can't tell purlis it's waiting$/,
     );
     await expect(faint).toHaveElementClass("muted");
     await expect(faint).toHaveAttribute("tabindex", "0");

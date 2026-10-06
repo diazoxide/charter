@@ -86,8 +86,8 @@ export function AboutCharter() {
           tabIndex={0}
           className="title-about"
           data-testid="title-about"
-          aria-label="About Charter — what this version brought"
-          title="About Charter — what this version brought"
+          aria-label="About purlis — what this version brought"
+          title="About purlis — what this version brought"
         >
           <Info aria-hidden="true" /> <span>About</span>
         </button>
@@ -95,11 +95,11 @@ export function AboutCharter() {
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content className="warning update about" aria-describedby="about-what">
-          <Dialog.Title>About Charter</Dialog.Title>
+          <Dialog.Title>About purlis</Dialog.Title>
           <div id="about-what">
             {trouble !== undefined ? (
               <p className="honest doctor-trouble" role="alert">
-                charter could not read what this version brought: {trouble}
+                purlis could not read what this version brought: {trouble}
               </p>
             ) : about === undefined ? (
               <p className="pending">reading what this version brought…</p>
@@ -138,15 +138,15 @@ function Said({ about }: { about: About }) {
     <div className="about-body">
       {build.kind === "release" ? (
         <p>
-          This is charter {version}
+          This is purlis {version}
           {notes?.date ? `, released ${notes.date}` : ""}.
         </p>
       ) : build.kind === "dev" ? (
         <p>
-          This is charter {version}, a dev build of {build.of}.
+          This is purlis {version}, a dev build of {build.of}.
         </p>
       ) : (
-        <p>This is charter {version}. The changelog this build carries has no section for it.</p>
+        <p>This is purlis {version}. The changelog this build carries has no section for it.</p>
       )}
       {notes === null ? (
         // An unlisted version has already been told so, one line up.

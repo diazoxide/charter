@@ -129,7 +129,7 @@ export function NewProject({
         >
           <Dialog.Title id="new-project">New project</Dialog.Title>
           <p className="came-back">
-            Pick a repo. charter opens it in a workspace of its own, in the project it keeps on this
+            Pick a repo. purlis opens it in a workspace of its own, in the project it keeps on this
             machine. Nothing is written into your repo.
           </p>
 
@@ -200,7 +200,7 @@ export function NewProject({
             >
               <SettingRow
                 label="Folder"
-                help="It does not have to exist yet. charter makes it, and writes the plane into it."
+                help="It does not have to exist yet. purlis makes it, and writes the plane into it."
                 control={(ids) => (
                   <>
                     <Field
@@ -277,9 +277,9 @@ export function NewProject({
                   <>
                     Only for a folder that is the top of a git repository, and only when you mean
                     it: it writes <code>charter.toml</code>, <code>personas/</code>,{" "}
-                    <code>workspaces/</code> and charter&rsquo;s rules into that repository&rsquo;s
-                    tracked <code>.gitignore</code>. charter&rsquo;s own plane is one of these. Left
-                    unticked, charter writes nothing into a repository and says how to make a plane
+                    <code>workspaces/</code> and purlis&rsquo;s rules into that repository&rsquo;s
+                    tracked <code>.gitignore</code>. purlis&rsquo;s own plane is one of these. Left
+                    unticked, purlis writes nothing into a repository and says how to make a plane
                     beside it.
                   </>
                 }

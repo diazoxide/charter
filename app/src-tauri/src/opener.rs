@@ -27,18 +27,18 @@
 
 use std::collections::BTreeMap;
 
-use charter_core::machine;
+use purlis_core::machine;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
-use charter_core::firstrun::NotMade;
+use purlis_core::firstrun::NotMade;
 
 use crate::planes::{Asking, Holding, Opening, PlaneId, Planes, Restoring, Showing, restorable};
 
 /// What a plane would contribute, as the trust prompt draws it — **and the exact value the
 /// operator's approval is checked against.**
 ///
-/// A mirror of [`machine::Contribution`] rather than the thing itself, because `charter-core`
+/// A mirror of [`machine::Contribution`] rather than the thing itself, because `purlis-core`
 /// never depends on the app and the app's wire types are generated into TypeScript. Each of
 /// the four maps travels as pairs in the map's own order, which is `BTreeMap`'s and therefore
 /// sorted, so a value that comes back from the window compares against one taken from disk
@@ -179,7 +179,7 @@ impl GoneProject {
     pub fn of(plane: &std::path::Path, why: &str) -> Self {
         let path = plane.display().to_string();
         Self {
-            said: format!("{} {why}", charter_core::shown::short(&path)),
+            said: format!("{} {why}", purlis_core::shown::short(&path)),
             path,
         }
     }
@@ -470,7 +470,7 @@ pub enum RelaunchChoice {
     StartFresh,
 }
 
-impl From<RelaunchChoice> for charter_core::reopen::Choice {
+impl From<RelaunchChoice> for purlis_core::reopen::Choice {
     fn from(choice: RelaunchChoice) -> Self {
         match choice {
             RelaunchChoice::ReopenAll => Self::ReopenAll,
@@ -614,7 +614,7 @@ pub fn create_project(
     adopt: Option<String>,
     forge: Option<crate::firstrun::ForgeWord>,
 ) -> Result<ProjectAnswer, String> {
-    let forge = forge.map(charter_core::forge::Kind::from);
+    let forge = forge.map(purlis_core::forge::Kind::from);
     match scaffold_at(
         std::path::Path::new(&path),
         plane_is_this_repo,
@@ -649,11 +649,11 @@ fn scaffold_at(
     at: &std::path::Path,
     plane_is_this_repo: bool,
     adopt: Option<String>,
-    forge: Option<charter_core::forge::Kind>,
+    forge: Option<purlis_core::forge::Kind>,
 ) -> Result<std::path::PathBuf, NotMade> {
     if !at.is_absolute() {
         return Err(NotMade::Refused(format!(
-            "'{}' is not a full path, so charter cannot tell which directory it means. Pick a \
+            "'{}' is not a full path, so purlis cannot tell which directory it means. Pick a \
              folder, or type the whole path.",
             at.display()
         )));
@@ -669,19 +669,19 @@ fn scaffold_at(
     // nothing, not even the directory (#848 review).
     let made_here = !at.exists();
     std::fs::create_dir_all(at).map_err(|why| {
-        NotMade::Refused(format!("charter could not make {} ({why}).", at.display()))
+        NotMade::Refused(format!("purlis could not make {} ({why}).", at.display()))
     })?;
     // Resolved before anything reads it, so a path with a link in it names the tree by the
     // route everything downstream will use.
     let root = at.canonicalize().unwrap_or_else(|_| at.to_path_buf());
-    match charter_core::plane::find_root(&root) {
+    match purlis_core::plane::find_root(&root) {
         // It is already a plane. Nothing is written, and the gate below opens it — which is
         // exactly what pointing the opener at it would have done.
         Ok(found) if found == root => return Ok(root),
         Ok(found) => {
             return Err(NotMade::Refused(format!(
                 "{} is inside the project {}. A project is a plane of its own, and a plane \
-                 inside another one is a workspace's clone — charter wrote nothing. Pick a \
+                 inside another one is a workspace's clone — purlis wrote nothing. Pick a \
                  directory outside it.",
                 root.display(),
                 found.display()
@@ -689,13 +689,13 @@ fn scaffold_at(
         }
         Err(_) => {}
     }
-    let place = charter_core::plane::Place {
+    let place = purlis_core::plane::Place {
         root: root.clone(),
         is_plane: false,
     };
-    let outcome = charter_core::scaffold::init(
+    let outcome = purlis_core::scaffold::init(
         &place,
-        &charter_core::scaffold::InitArgs::for_the_app(
+        &purlis_core::scaffold::InitArgs::for_the_app(
             plane_is_this_repo,
             adopt
                 .as_deref()
@@ -705,7 +705,7 @@ fn scaffold_at(
             forge,
         ),
     );
-    if outcome.code == charter_core::scaffold::ASKS_FOR_FORGE {
+    if outcome.code == purlis_core::scaffold::ASKS_FOR_FORGE {
         // The core's sentence names `--forge`, a flag nobody types here: the window asks with
         // two buttons, and says only why the remote did not answer.
         if made_here {
@@ -721,7 +721,7 @@ fn scaffold_at(
         // will not do, the three commands that make a plane beside the repo, what asking for
         // the old shape by name would write, and where the decision is recorded. An operator
         // shown a summary of that can follow none of it.
-        return Err(NotMade::Refused(charter_core::scaffold::Say::in_full(
+        return Err(NotMade::Refused(purlis_core::scaffold::Say::in_full(
             &outcome.said,
         )));
     }
@@ -733,7 +733,7 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    const GITHUB: Option<charter_core::forge::Kind> = Some(charter_core::forge::Kind::GitHub);
+    const GITHUB: Option<purlis_core::forge::Kind> = Some(purlis_core::forge::Kind::GitHub);
 
     /// #839: the New project dialog's Advanced form follows `charter init`'s rule. A
     /// directory with no repo to read asks for the forge, and the question says only why;
@@ -750,7 +750,7 @@ mod tests {
             NotMade::AsksForForge("no repo was named to read it from".to_owned())
         );
         assert!(!at.exists(), "asking made the project's directory");
-        let root = scaffold_at(&at, false, None, Some(charter_core::forge::Kind::GitLab))
+        let root = scaffold_at(&at, false, None, Some(purlis_core::forge::Kind::GitLab))
             .expect("the answer makes it");
         let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
         assert!(manifest.contains("kind = \"gitlab\""), "{manifest}");
@@ -773,7 +773,7 @@ mod tests {
     /// A plane on disk, with nothing in it but the marker that makes it one.
     fn a_plane(at: &Path) -> PathBuf {
         std::fs::create_dir_all(at).expect("the plane's directory");
-        std::fs::write(at.join(charter_core::plane::MANIFEST), "").expect("its charter.toml");
+        std::fs::write(at.join(purlis_core::plane::MANIFEST), "").expect("its charter.toml");
         at.to_path_buf()
     }
 
@@ -786,7 +786,7 @@ mod tests {
             vec!["config", "user.email", "t@e.invalid"],
             vec!["config", "user.name", "t"],
         ] {
-            charter_core::forklock::output(
+            purlis_core::forklock::output(
                 std::process::Command::new("git")
                     .arg("-C")
                     .arg(at)
@@ -804,8 +804,8 @@ mod tests {
 
         let root = scaffold_at(&at, false, None, GITHUB).expect("an empty directory is scaffolded");
 
-        assert!(root.join(charter_core::plane::MANIFEST).is_file());
-        for baseline in charter_core::scaffold::BASELINE_DIRS {
+        assert!(root.join(purlis_core::plane::MANIFEST).is_file());
+        for baseline in purlis_core::scaffold::BASELINE_DIRS {
             assert!(root.join(baseline).is_dir(), "{baseline} is missing");
         }
     }
@@ -831,7 +831,7 @@ mod tests {
             "the refusal names how to ask for the old shape: {refused}"
         );
         assert!(
-            !repo.join(charter_core::plane::MANIFEST).exists(),
+            !repo.join(purlis_core::plane::MANIFEST).exists(),
             "nothing was written into the repository"
         );
         assert!(!repo.join(".gitignore").exists());
@@ -854,12 +854,12 @@ mod tests {
         )
         .expect("a repository is adopted, not refused");
 
-        assert!(root.join(charter_core::plane::MANIFEST).is_file());
+        assert!(root.join(purlis_core::plane::MANIFEST).is_file());
         assert!(
             root.join("workspaces/default/svc/.git").exists(),
             "the repository was not cloned into the plane's first workspace"
         );
-        assert!(!repo.join(charter_core::plane::MANIFEST).exists());
+        assert!(!repo.join(purlis_core::plane::MANIFEST).exists());
         assert_eq!(
             std::fs::read_dir(&repo).expect("the repository").count(),
             before,
@@ -898,7 +898,7 @@ mod tests {
         let root =
             scaffold_at(&repo, true, None, GITHUB).expect("the operator asked for it by name");
 
-        assert!(root.join(charter_core::plane::MANIFEST).is_file());
+        assert!(root.join(purlis_core::plane::MANIFEST).is_file());
     }
 
     #[test]
@@ -915,7 +915,7 @@ mod tests {
             .to_string();
 
         assert!(refused.contains("is inside the project"), "{refused}");
-        assert!(!inside.join(charter_core::plane::MANIFEST).exists());
+        assert!(!inside.join(purlis_core::plane::MANIFEST).exists());
     }
 
     /// **The refusal names exactly the directory `charter init` would have written into**, so
@@ -933,7 +933,7 @@ mod tests {
         // `place` answer about a plane that has nothing to do with this temp directory — so
         // the identity is asserted where it is the walk that answers, which is every ordinary
         // run, CI's included.
-        if charter_core::envvar::var_os("PURLIS_ROOT").is_some_and(|it| !it.is_empty()) {
+        if purlis_core::envvar::var_os("PURLIS_ROOT").is_some_and(|it| !it.is_empty()) {
             return;
         }
         let dir = tempfile::tempdir().expect("a directory");
@@ -944,7 +944,7 @@ mod tests {
             .expect_err("a plane inside a plane")
             .to_string();
 
-        let cli_would_write_into = charter_core::plane::place(&inside).root;
+        let cli_would_write_into = purlis_core::plane::place(&inside).root;
         assert_ne!(
             cli_would_write_into, inside,
             "this directory has to be one the CLI's walk leads away from, or the test proves \
@@ -975,7 +975,7 @@ mod tests {
 
         assert_eq!(root, plane.canonicalize().expect("it resolves"));
         assert_eq!(
-            std::fs::read_to_string(plane.join(charter_core::plane::MANIFEST)).expect("readable"),
+            std::fs::read_to_string(plane.join(purlis_core::plane::MANIFEST)).expect("readable"),
             "",
             "its charter.toml is the one that was there"
         );
@@ -1043,13 +1043,13 @@ mod tests {
     fn a_remembered_directory_that_stopped_being_a_plane_is_dropped_and_says_so() {
         let dir = tempfile::tempdir().expect("a directory");
         let was = a_plane(&dir.path().join("was"));
-        std::fs::remove_file(was.join(charter_core::plane::MANIFEST)).expect("the manifest goes");
+        std::fs::remove_file(was.join(purlis_core::plane::MANIFEST)).expect("the manifest goes");
 
         let offered = offer(remembering(&[&was]));
 
         assert!(offered.planes.is_empty());
         assert!(
-            offered.gone[0].said.contains(charter_core::plane::MANIFEST),
+            offered.gone[0].said.contains(purlis_core::plane::MANIFEST),
             "{}",
             offered.gone[0].said
         );
@@ -1087,7 +1087,7 @@ mod tests {
         // Windows has no store at all (ADR 0031), and the app there must be a working app
         // that simply cannot remember planes — never an opener that refuses to draw.
         let offered = offer(machine::Loaded {
-            unreadable: Some("charter keeps no machine store on this platform".to_owned()),
+            unreadable: Some("purlis keeps no machine store on this platform".to_owned()),
             ..machine::Loaded::default()
         });
 

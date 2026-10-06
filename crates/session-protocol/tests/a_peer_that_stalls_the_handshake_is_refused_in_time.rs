@@ -1,9 +1,9 @@
 //! A peer that opens a stream and then says nothing, or says half a hello, is refused when the
 //! handshake's deadline passes, instead of holding the host's task forever (#817 review).
 
-use charter_session_protocol::auth::{self, Scope};
-use charter_session_protocol::link::{self, LinkError};
-use charter_session_protocol::version::{self, HANDSHAKE_TIMEOUT, Refused, Speaks, Version};
+use purlis_session_protocol::auth::{self, Scope};
+use purlis_session_protocol::link::{self, LinkError};
+use purlis_session_protocol::version::{self, HANDSHAKE_TIMEOUT, Refused, Speaks, Version};
 use tokio::io::{AsyncWriteExt, duplex};
 use tokio::time::Instant;
 

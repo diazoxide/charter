@@ -24,9 +24,9 @@
 
 use std::sync::Arc;
 
-use charter_core::engine::Size;
-use charter_core::session::Exit;
-use charter_core::state::State;
+use purlis_core::engine::Size;
+use purlis_core::session::Exit;
+use purlis_core::state::State;
 
 use crate::hooks::Moved;
 
@@ -45,10 +45,10 @@ pub struct Opening {
     /// (#271 review, U6). Removed from both the set env and the inherited one.
     pub env_strip: Vec<String>,
     /// The harness the chat runs, whose own declared variables it is also started with
-    /// ([`charter_core::harness::Harness::env_passed`]). None is a shell.
-    pub harness: Option<charter_core::harness::Harness>,
+    /// ([`purlis_core::harness::Harness::env_passed`]). None is a shell.
+    pub harness: Option<purlis_core::harness::Harness>,
     /// The operator's own additions to what a chat is started with, from the chat's plane
-    /// (`[chat_env] pass`, [`charter_core::chatenv::read`]).
+    /// (`[chat_env] pass`, [`purlis_core::chatenv::read`]).
     pub env_pass: Vec<String>,
     /// Whether this is a shell the operator opened from the window, which the kill switch lets
     /// through: looking at what the agents did is a human act (OV-1, ADR 0071). Every other
@@ -58,7 +58,7 @@ pub struct Opening {
     /// charter's git hooks, for a chat that runs a harness (SQ-16, ADR 0074): the chat's git is
     /// armed with them after every other variable is settled, so a `GIT_CONFIG_COUNT` the
     /// operator passes or a profile sets keeps its pairs. None for a shell.
-    pub git_hooks: Option<charter_core::githooks::GitHooks>,
+    pub git_hooks: Option<purlis_core::githooks::GitHooks>,
 }
 
 /// Where a view's text goes. It is called on the view's own thread, one batch at a time.
@@ -80,10 +80,10 @@ pub struct Watching {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Readiness {
     /// Whether the terminal is still in the kernel's line editing rather than handing keys to
-    /// the program (`charter_core::session::Session::edits_lines`), or none where the platform
+    /// the program (`purlis_core::session::Session::edits_lines`), or none where the platform
     /// cannot say.
     pub edits_lines: Option<bool>,
-    /// How long the program has written nothing (`charter_core::session::Session::quiet_for`):
+    /// How long the program has written nothing (`purlis_core::session::Session::quiet_for`):
     /// when bytes last arrived, never what they were.
     pub quiet_for: std::time::Duration,
 }
@@ -193,7 +193,7 @@ pub trait SessionHost: Send + Sync {
     fn already_dealt(&self, dealt: u32);
 
     /// The socket the sessions' hooks report on, where this host listens on one: a sandbox
-    /// charter wraps a chat in lets the chat reach it ([`charter_core::sandbox::At`]).
+    /// charter wraps a chat in lets the chat reach it ([`purlis_core::sandbox::At`]).
     fn reports_to(&self) -> Option<std::path::PathBuf> {
         None
     }
@@ -245,8 +245,8 @@ pub(crate) mod pretend {
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
     use std::time::Duration;
 
-    use charter_core::engine::Size;
-    use charter_core::session::Exit;
+    use purlis_core::engine::Size;
+    use purlis_core::session::Exit;
 
     use super::{Ends, Opening, Readiness, SessionHost, Sink, Watching};
 

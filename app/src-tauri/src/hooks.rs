@@ -1,6 +1,6 @@
 //! The app's side of the hook channel: what a chat is doing, and which one needs you.
 //!
-//! A hook writes one line on a socket this owns (`charter_core::hookwire`), which moves a
+//! A hook writes one line on a socket this owns (`purlis_core::hookwire`), which moves a
 //! chat on the board and, if a reader would see a difference, tells the window. There is no
 //! polling anywhere: the listener blocks on `accept`, and the window is pushed to.
 
@@ -8,15 +8,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use charter_core::hookwire::{
+use purlis_core::hookwire::{
     Answer, Ask, ChatTokens, Hearing, Listener, NOTHING_ANSWERS, Reading, Report, SessionSaved,
     StartedByHand,
 };
-use charter_core::session::Exit;
-use charter_core::state::{Board, State};
+use purlis_core::session::Exit;
+use purlis_core::state::{Board, State};
 
-use charter_core::harness::asks::Asks;
-use charter_core::harness::hooked::HookAsks;
+use purlis_core::harness::asks::Asks;
+use purlis_core::harness::hooked::HookAsks;
 
 use crate::host::{ChatBoard, Glance};
 use crate::planes::{PlaneId, Teller};
@@ -37,7 +37,7 @@ pub struct Moved {
     pub queue: Vec<u32>,
     /// When this chat last moved, as a count of moves on every plane's board in this process
     /// — bigger is more recent, within a plane and across planes.
-    /// `charter_core::state::Board::moved_at` is the whole definition.
+    /// `purlis_core::state::Board::moved_at` is the whole definition.
     ///
     /// **The window cannot work this out for itself, which is why it rides an event that
     /// already fires.** Charter ADR 0039 sorts the chat strip's overflow menu by last
@@ -114,7 +114,7 @@ pub type ByHandTeller = Arc<dyn Fn(ByHand) + Send + Sync + 'static>;
 /// harness this app does not start. A word charter has no chat for would put a button on the
 /// tab that could only be refused.
 fn by_hand(plane: &PlaneId, notice: StartedByHand) -> Option<ByHand> {
-    let harness = charter_core::harness::Harness::of_kind(&notice.started_by_hand)?;
+    let harness = purlis_core::harness::Harness::of_kind(&notice.started_by_hand)?;
     Some(ByHand {
         plane: plane.clone(),
         session: notice.chat,
@@ -179,7 +179,7 @@ pub struct Hooks {
 }
 
 /// What is told each path a chat's file tool touched, unconfined.
-pub type Touches = Arc<dyn Fn(charter_core::hookwire::Touching) + Send + Sync + 'static>;
+pub type Touches = Arc<dyn Fn(purlis_core::hookwire::Touching) + Send + Sync + 'static>;
 
 /// The event the window is sent when a chat's file tool touches a file (FM-6).
 pub const TOUCHING: &str = "chat-touching";
@@ -191,7 +191,7 @@ pub struct ChatTouching {
     pub plane: PlaneId,
     pub session: u32,
     /// The path inside the chat's own folder, `/`-separated, with no `..` and no `.git`:
-    /// confined by `charter_core::touching::confine` before it is sent.
+    /// confined by `purlis_core::touching::confine` before it is sent.
     pub path: String,
 }
 
@@ -207,11 +207,11 @@ pub type TouchTeller = Arc<dyn Fn(ChatTouching) + Send + Sync + 'static>;
 pub fn touched(
     plane: &PlaneId,
     folder: Option<&Path>,
-    gate: &Mutex<charter_core::touching::Gate>,
-    touched: &charter_core::hookwire::Touching,
+    gate: &Mutex<purlis_core::touching::Gate>,
+    touched: &purlis_core::hookwire::Touching,
     now: std::time::Instant,
 ) -> Option<ChatTouching> {
-    let path = charter_core::touching::confine(folder?, &touched.touching)?;
+    let path = purlis_core::touching::confine(folder?, &touched.touching)?;
     gate.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .lets(touched.chat, &path, now)
@@ -237,7 +237,7 @@ pub type Following = Arc<dyn Fn(u32, &str, Option<&str>) + Send + Sync + 'static
 pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
 
 /// The host's event log, shared by every project this process holds: one writer per device.
-pub type Events = Arc<Mutex<charter_core::eventlog::Recorder>>;
+pub type Events = Arc<Mutex<purlis_core::eventlog::Recorder>>;
 
 /// Where this app listens, and where containment of that path begins.
 ///
@@ -268,7 +268,7 @@ pub struct Where {
 /// session in its environment, so nothing ever has to guess it.
 pub fn socket_for(plane: Option<&Path>) -> Where {
     if let Some(plane) = plane {
-        let beside_the_record = charter_core::names::state(plane)
+        let beside_the_record = purlis_core::names::state(plane)
             .join("app")
             .join("hooks.sock");
         // macOS allows 104 bytes for a unix socket path including the terminator
@@ -420,8 +420,8 @@ impl Hooks {
                     let followed = applied.followed();
                     // The run a `/clear` begins is the host's, minted here, so the record
                     // names it whether or not this machine keeps an event log (ADR 0066).
-                    let begun = (followed == charter_core::eventlog::Followed::Moved)
-                        .then(charter_core::reopen::mint);
+                    let begun = (followed == purlis_core::eventlog::Followed::Moved)
+                        .then(purlis_core::reopen::mint);
                     let recorded = record(&events, |log| {
                         log.report_with(plane.root(), &report, followed, begun.as_deref())
                     });
@@ -491,7 +491,7 @@ impl Hooks {
                     match listener {
                         Some(listener) => listener(record),
                         None => tracing::warn!(
-                            "charter: chat {} saved a session record before this project could \
+                            "purlis: chat {} saved a session record before this project could \
                              hear it, so nothing was closed",
                             record.chat
                         ),
@@ -579,7 +579,7 @@ impl Hooks {
     /// Answers chat `session`'s ask `ask` with `option`, as the operator in the window, on the
     /// hook that waits on it; then tells the window the asks as they now are, answered or not.
     pub fn answer(&self, session: u32, ask: &str, option: &str) -> Result<(), String> {
-        let id: charter_core::harness::asks::AskId = ask.parse()?;
+        let id: purlis_core::harness::asks::AskId = ask.parse()?;
         let answered = self.asks.answer(
             &session.to_string(),
             &id,
@@ -616,8 +616,8 @@ impl Hooks {
         };
         let root = self.plane.root();
         let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
-        if charter_core::reopen::path(root).is_file()
-            && let Ok(record) = charter_core::reopen::read_or_refusal(root)
+        if purlis_core::reopen::path(root).is_file()
+            && let Ok(record) = purlis_core::reopen::read_or_refusal(root)
         {
             for chat in record.chats {
                 if let (Some(number), Some(id), Some(run)) =
@@ -626,7 +626,7 @@ impl Hooks {
                     log.knows(
                         root,
                         number,
-                        charter_core::eventlog::RunOf {
+                        purlis_core::eventlog::RunOf {
                             chat: &id,
                             run: &run,
                         },
@@ -635,8 +635,8 @@ impl Hooks {
             }
         }
         let durable = log.durable();
-        let drained = charter_core::hookwire::spool::drain(
-            &charter_core::hookwire::spool::dir_for(socket),
+        let drained = purlis_core::hookwire::spool::drain(
+            &purlis_core::hookwire::spool::dir_for(socket),
             &mut |item| {
                 let event = log.spooled(root, item)?;
                 durable.through(event.seq)
@@ -644,7 +644,7 @@ impl Hooks {
         );
         if let Err(why) = drained {
             tracing::warn!(
-                "charter: the hook spool was not drained ({why}); it is drained at the next start"
+                "purlis: the hook spool was not drained ({why}); it is drained at the next start"
             );
         }
     }
@@ -713,8 +713,8 @@ impl Hooks {
     /// refused (a nested harness's, [`Conversation::Contradicted`], a
     /// [`Conversation::Foreign`] after adoption) is told to nobody, because it moved nothing.
     ///
-    /// [`Conversation::Contradicted`]: charter_core::hookwire::Conversation::Contradicted
-    /// [`Conversation::Foreign`]: charter_core::hookwire::Conversation::Foreign
+    /// [`Conversation::Contradicted`]: purlis_core::hookwire::Conversation::Contradicted
+    /// [`Conversation::Foreign`]: purlis_core::hookwire::Conversation::Foreign
     pub fn when_it_follows(&self, following: Following) {
         *self
             .following
@@ -740,7 +740,7 @@ impl Hooks {
     /// A fresh token for chat `chat`, as the app issues one when the chat starts: what a test
     /// standing in for that chat's hook sends with.
     #[cfg(test)]
-    pub fn token_for(&self, chat: u32) -> charter_core::hookwire::ChatToken {
+    pub fn token_for(&self, chat: u32) -> purlis_core::hookwire::ChatToken {
         self.tokens
             .as_ref()
             .expect("the plane is listening")
@@ -868,8 +868,8 @@ struct Applied {
 
 impl Applied {
     /// What the board did with the chat's conversation, as the event log reads a new run.
-    fn followed(&self) -> charter_core::eventlog::Followed {
-        use charter_core::eventlog::Followed;
+    fn followed(&self) -> purlis_core::eventlog::Followed {
+        use purlis_core::eventlog::Followed;
         match (&self.followed, &self.was) {
             (None, _) => Followed::No,
             (Some(_), None) => Followed::FirstNamed,
@@ -917,8 +917,8 @@ fn apply(board: &Mutex<Board>, plane: &PlaneId, report: &Report) -> Applied {
 fn record(
     events: &Mutex<Option<Events>>,
     write: impl FnOnce(
-        &mut charter_core::eventlog::Recorder,
-    ) -> std::io::Result<charter_core::eventlog::Event>,
+        &mut purlis_core::eventlog::Recorder,
+    ) -> std::io::Result<purlis_core::eventlog::Event>,
 ) -> std::io::Result<()> {
     let Some(held) = events
         .lock()
@@ -934,7 +934,7 @@ fn record(
     event
         .and_then(|event| durable.through(event.seq))
         .inspect_err(|why| {
-            tracing::warn!("charter: a hook call was not recorded durably ({why})");
+            tracing::warn!("purlis: a hook call was not recorded durably ({why})");
         })
 }
 
@@ -990,11 +990,11 @@ mod tests {
     fn stop(session: u32) -> Report {
         Report {
             chat: session,
-            event: charter_core::state::Event::Stop,
-            conversation: charter_core::hookwire::Conversation::Unknown,
+            event: purlis_core::state::Event::Stop,
+            conversation: purlis_core::hookwire::Conversation::Unknown,
             pid: None,
             agent: None,
-            detail: charter_core::state::Detail::default(),
+            detail: purlis_core::state::Detail::default(),
         }
     }
 
@@ -1132,7 +1132,7 @@ mod tests {
         )
         .expect("listening");
 
-        charter_core::hookwire::tell(
+        purlis_core::hookwire::tell(
             hooks.socket().expect("a socket"),
             Some(&hooks.token_for(3)),
             &StartedByHand {
@@ -1179,12 +1179,12 @@ mod tests {
             std::thread::spawn(move || {
                 // In the host's own process, which no ancestry check could admit: the
                 // exchange alone, as a hook makes it once it has admitted its host.
-                charter_core::hookwire::permission::ask_permission_of_an_admitted_host(
+                purlis_core::hookwire::permission::ask_permission_of_an_admitted_host(
                     std::os::unix::net::UnixStream::connect(&socket).expect("connects"),
                     Some(&token),
-                    &charter_core::hookwire::PermissionAsked {
+                    &purlis_core::hookwire::PermissionAsked {
                         chat: 3,
-                        permission_request: charter_core::harness::hooked::Source::ClaudeCode,
+                        permission_request: purlis_core::harness::hooked::Source::ClaudeCode,
                         payload: serde_json::json!({"tool_name": "Bash",
                             "tool_input": {"command": "npm test"}}),
                     },
@@ -1222,7 +1222,7 @@ mod tests {
 
     #[test]
     fn every_hook_call_the_channel_hears_is_one_event_in_the_hosts_log() {
-        use charter_core::eventlog::{self, ArgsKey, Log, Recorder};
+        use purlis_core::eventlog::{self, ArgsKey, Log, Recorder};
         let dir = tempfile::tempdir().expect("a directory");
         let at = Where {
             within: dir.path().to_path_buf(),
@@ -1240,12 +1240,12 @@ mod tests {
         let socket = hooks.socket().expect("a socket");
         let token = hooks.token_for(3);
 
-        charter_core::hookwire::send(
+        purlis_core::hookwire::send(
             socket,
             Some(&token),
             &Report {
                 chat: 3,
-                event: charter_core::state::Event::UserPromptSubmit,
+                event: purlis_core::state::Event::UserPromptSubmit,
                 conversation: Default::default(),
                 pid: None,
                 agent: None,
@@ -1269,16 +1269,16 @@ mod tests {
             }
         };
         assert_eq!(logged(2).len(), 2, "the report is in the log");
-        charter_core::hookwire::deliver_tool(
+        purlis_core::hookwire::deliver_tool(
             socket,
             Some(&token),
-            &charter_core::hookwire::ToolCall {
+            &purlis_core::hookwire::ToolCall {
                 chat: 3,
                 tool_hook: "pretooluse".to_owned(),
                 tool: Some("Bash".to_owned()),
                 call: Some("toolu_1".to_owned()),
                 args: Some(eventlog::args_hash(&serde_json::json!({"command": "ls"}))),
-                decision: charter_core::hookwire::Decision::None,
+                decision: purlis_core::hookwire::Decision::None,
                 rule: None,
                 hook_ms: 1,
                 agent: None,
@@ -1297,9 +1297,9 @@ mod tests {
 
     #[test]
     fn a_touched_file_reaches_the_window_only_inside_the_chats_folder_and_rated() {
-        use charter_core::hookwire::Touching;
+        use purlis_core::hookwire::Touching;
         let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
-        let gate = Mutex::new(charter_core::touching::Gate::default());
+        let gate = Mutex::new(purlis_core::touching::Gate::default());
         let folder = Path::new("/w/branch");
         let now = std::time::Instant::now();
         let said = |path: &str| Touching {
@@ -1348,7 +1348,7 @@ mod tests {
 
     #[test]
     fn a_touched_path_reaches_the_window_and_no_file_the_host_writes() {
-        use charter_core::eventlog::{self, ArgsKey, Log, Recorder};
+        use purlis_core::eventlog::{self, ArgsKey, Log, Recorder};
         const CANARY: &str = "CANARY-touched-9e1b";
         let dir = tempfile::tempdir().expect("a directory");
         let at = Where {
@@ -1374,16 +1374,16 @@ mod tests {
         let file = format!("/w/branch/{CANARY}.rs");
         let input = serde_json::json!({"file_path": file});
 
-        charter_core::hookwire::deliver_tool(
+        purlis_core::hookwire::deliver_tool(
             socket,
             Some(&token),
-            &charter_core::hookwire::ToolCall {
+            &purlis_core::hookwire::ToolCall {
                 chat: 3,
                 tool_hook: "pretooluse-read".to_owned(),
                 tool: Some("Read".to_owned()),
                 call: Some("toolu_1".to_owned()),
                 args: Some(eventlog::args_hash(&input)),
-                decision: charter_core::hookwire::Decision::None,
+                decision: purlis_core::hookwire::Decision::None,
                 rule: None,
                 hook_ms: 1,
                 agent: None,
@@ -1391,10 +1391,10 @@ mod tests {
             },
         )
         .expect("told");
-        charter_core::hookwire::touch(
+        purlis_core::hookwire::touch(
             socket,
             Some(&token),
-            &charter_core::hookwire::Touching {
+            &purlis_core::hookwire::Touching {
                 chat: 3,
                 touching: file.clone(),
             },
@@ -1453,10 +1453,10 @@ mod tests {
         hooks.board().opened(3, Some(Harness::ClaudeCode), None);
         let said = "commit refused in app: a.py:2  an email address  ad**";
 
-        charter_core::hookwire::deliver_refused(
+        purlis_core::hookwire::deliver_refused(
             hooks.socket().expect("a socket"),
             Some(&hooks.token_for(3)),
-            &charter_core::hookwire::CommitRefused {
+            &purlis_core::hookwire::CommitRefused {
                 chat: 3,
                 commit_refused: said.to_owned(),
             },
@@ -1488,8 +1488,8 @@ mod tests {
         assert_eq!(told, None);
     }
 
-    use charter_core::harness::Harness;
-    use charter_core::hookwire::Conversation;
+    use purlis_core::harness::Harness;
+    use purlis_core::hookwire::Conversation;
 
     /// A board holding chat 7 running `harness`, under `conversation` where charter chose one.
     fn running(harness: Harness, conversation: Option<&str>) -> Hooks {
@@ -1510,10 +1510,10 @@ mod tests {
         let report = Report {
             agent: None,
             chat: 7,
-            event: charter_core::state::Event::UserPromptSubmit,
+            event: purlis_core::state::Event::UserPromptSubmit,
             conversation,
             pid,
-            detail: charter_core::state::Detail::default(),
+            detail: purlis_core::state::Detail::default(),
         };
         apply(&hooks.board, &hooks.plane, &report).followed
     }
@@ -1602,7 +1602,7 @@ mod tests {
 
     #[test]
     fn a_line_spooled_while_no_host_listened_is_recorded_when_the_project_is_opened_again() {
-        use charter_core::eventlog::{self, ArgsKey, Log, Recorder};
+        use purlis_core::eventlog::{self, ArgsKey, Log, Recorder};
         let dir = tempfile::tempdir().expect("a directory");
         let at = Where {
             within: dir.path().to_path_buf(),
@@ -1610,13 +1610,13 @@ mod tests {
         };
         let plane: PlaneId =
             serde_json::from_value(serde_json::json!(dir.path())).expect("a plane id");
-        let call = charter_core::hookwire::ToolCall {
+        let call = purlis_core::hookwire::ToolCall {
             chat: 7,
             tool_hook: "posttooluse".to_owned(),
             tool: Some("Read".to_owned()),
             call: Some("toolu_1".to_owned()),
             args: None,
-            decision: charter_core::hookwire::Decision::None,
+            decision: purlis_core::hookwire::Decision::None,
             rule: None,
             hook_ms: 1,
             agent: None,
@@ -1628,9 +1628,9 @@ mod tests {
                 .expect("listening");
             let token = gone.token_for(7);
             gone.stop();
-            let delivered = charter_core::hookwire::deliver_tool(&at.socket, Some(&token), &call)
+            let delivered = purlis_core::hookwire::deliver_tool(&at.socket, Some(&token), &call)
                 .expect("spooled");
-            assert_eq!(delivered, charter_core::hookwire::Delivered::Spooled(1));
+            assert_eq!(delivered, purlis_core::hookwire::Delivered::Spooled(1));
         }
 
         let hooks =
@@ -1654,7 +1654,7 @@ mod tests {
     fn the_run_a_clear_begins_is_told_with_the_conversation_it_moved_to() {
         // ADR 0066's `clear`: the event log begins the run, and the record has to hold it as
         // the chat's current run, so it is told beside the conversation.
-        use charter_core::eventlog::{self, ArgsKey, Log, Recorder};
+        use purlis_core::eventlog::{self, ArgsKey, Log, Recorder};
         let dir = tempfile::tempdir().expect("a directory");
         let at = Where {
             within: dir.path().to_path_buf(),
@@ -1682,12 +1682,12 @@ mod tests {
         let socket = hooks.socket().expect("a socket");
         let token = hooks.token_for(7);
         let say = |conversation: &str| {
-            charter_core::hookwire::send(
+            purlis_core::hookwire::send(
                 socket,
                 Some(&token),
                 &Report {
                     chat: 7,
-                    event: charter_core::state::Event::UserPromptSubmit,
+                    event: purlis_core::state::Event::UserPromptSubmit,
                     conversation: named(conversation),
                     pid: Some(10),
                     agent: None,
@@ -1737,12 +1737,12 @@ mod tests {
             .opened(7, Some(Harness::ClaudeCode), Some("chosen".to_owned()));
         let token = hooks.token_for(7);
         for conversation in ["chosen", "cleared"] {
-            charter_core::hookwire::send(
+            purlis_core::hookwire::send(
                 hooks.socket().expect("a socket"),
                 Some(&token),
                 &Report {
                     chat: 7,
-                    event: charter_core::state::Event::UserPromptSubmit,
+                    event: purlis_core::state::Event::UserPromptSubmit,
                     conversation: named(conversation),
                     pid: Some(10),
                     agent: None,
@@ -1758,7 +1758,7 @@ mod tests {
         assert_eq!(id, "cleared");
         assert!(
             run.as_deref()
-                .and_then(charter_core::reopen::a_ulid)
+                .and_then(purlis_core::reopen::a_ulid)
                 .is_some(),
             "{run:?}"
         );

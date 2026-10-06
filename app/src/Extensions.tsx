@@ -46,7 +46,7 @@ import { forgetTheirTheme, theirThemeOnce } from "./windowprefs";
  * stopped being read (ADR 0041).
  *
  * **The honest sentence is not written here.** {@link ExtensionAsk.runs_as_you} comes out of
- * `charter_core::extension::RUNS_AS_YOU` and is rendered as given. A dialog that composed its
+ * `purlis_core::extension::RUNS_AS_YOU` and is rendered as given. A dialog that composed its
  * own words about what an extension can reach would drift kinder than the truth one edit at a
  * time — and the truth is that a subprocess runs as the operator does, so what is listed is a
  * declaration and never a limit. A prompt that implied a cage would be worse than no prompt: it
@@ -150,18 +150,18 @@ export function Extensions({ onClose }: { onClose: () => void }) {
 
           {listed?.unreadable && (
             <p className="came-back">
-              charter could not read this machine&rsquo;s extension record, so nothing an extension
+              purlis could not read this machine&rsquo;s extension record, so nothing an extension
               declares is in force: {listed.unreadable}{" "}
               {/* The sentence names the file; once it is mended, one press reads it again
                   rather than closing and reopening the dialog (NO-8, #1233). Approving writes
-                  nothing over a record charter could not read, so reading is the only fix. */}
+                  nothing over a record purlis could not read, so reading is the only fix. */}
               <button type="button" tabIndex={0} onClick={() => void reread()}>
                 Read again
               </button>
             </p>
           )}
 
-          <h3>charter&rsquo;s own themes</h3>
+          <h3>purlis&rsquo;s own themes</h3>
           <ul className="contributes">
             {(listed?.built_in_themes ?? []).map((name) => (
               <li key={name}>
@@ -172,7 +172,7 @@ export function Extensions({ onClose }: { onClose: () => void }) {
 
           <h3>Installed</h3>
           {listed && listed.extensions.length === 0 && (
-            <p className="came-back">None. An extension is a directory you point charter at.</p>
+            <p className="came-back">None. An extension is a directory you point purlis at.</p>
           )}
           <ul className="extension-rows">
             {(listed?.extensions ?? []).map((row) => (

@@ -13,20 +13,20 @@
 //! it, and the window draws "reading…" in the meantime.
 //!
 //! **Nothing here crosses a network, at all.** The CI cell is read out of
-//! `.charter/cache/glstate.json`, which some other process writes; `charter_core::cistate`
+//! `.charter/cache/glstate.json`, which some other process writes; `purlis_core::cistate`
 //! says why in full. A panel that fetched would put a forge token in the process that draws
 //! the window and hold that window for as long as `gh` takes.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use charter_core::active::Place;
-use charter_core::cistate::{self, Reading};
-use charter_core::panel;
-use charter_core::planemodel::Sections;
-use charter_core::repos::{self, Head};
-use charter_core::sessionrecord;
-use charter_core::workspaces::Plane;
+use purlis_core::active::Place;
+use purlis_core::cistate::{self, Reading};
+use purlis_core::panel;
+use purlis_core::planemodel::Sections;
+use purlis_core::repos::{self, Head};
+use purlis_core::sessionrecord;
+use purlis_core::workspaces::Plane;
 
 // ---------------------------------------------------------------------------------------
 // The contribution contract, on the wire
@@ -35,7 +35,7 @@ use charter_core::workspaces::Plane;
 /// What opens when a row is opened, as the window receives it.
 ///
 /// A mirror of [`panel::Detail`] rather than the thing itself, for the reason
-/// [`crate::extensions::ExtensionAsk`] is one: `charter-core` never depends on the app, and the
+/// [`crate::extensions::ExtensionAsk`] is one: `purlis-core` never depends on the app, and the
 /// app's wire types are what generate `app/src/bindings.ts`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -62,7 +62,7 @@ pub(crate) struct PanelRow {
     pub detail: Option<PanelDetail>,
     /// The catalogue row this runs when pressed (`app/src/actions.ts`), or nothing.
     ///
-    /// **Never set from a manifest** — `charter_core::panel`'s header has the whole of why, and
+    /// **Never set from a manifest** — `purlis_core::panel`'s header has the whole of why, and
     /// `panel::NO_VERB` is the sentence an extension that tried gets. What is here comes from
     /// charter's own contributions, below, and the window looks the id up in the catalogue: a
     /// row cannot invent a verb even here.
@@ -79,14 +79,14 @@ pub(crate) struct RowAction {
     pub id: String,
     pub title: String,
     /// Whether the window asks the operator before running it: the manifest's `confirm`, and
-    /// always for one that deletes (`charter_core::extension::Action::asks_first`).
+    /// always for one that deletes (`purlis_core::extension::Action::asks_first`).
     pub asks_first: bool,
     /// Whether it says it deletes, so the question the window asks can say so.
     pub deletes: bool,
 }
 
-impl From<&charter_core::extension::Action> for RowAction {
-    fn from(it: &charter_core::extension::Action) -> Self {
+impl From<&purlis_core::extension::Action> for RowAction {
+    fn from(it: &purlis_core::extension::Action) -> Self {
         Self {
             id: it.id.clone(),
             title: it.title.clone(),
@@ -102,7 +102,7 @@ impl PanelBlock {
     /// whole answer — and would be dropped rather than drawn as a button with no title.
     pub(crate) fn answered(
         blocks: &[panel::Block],
-        declared: &[charter_core::extension::Action],
+        declared: &[purlis_core::extension::Action],
     ) -> Vec<Self> {
         blocks
             .iter()
@@ -153,7 +153,7 @@ pub(crate) enum PanelBlock {
         tone: String,
     },
     /// Magnitudes charter draws — only ever in an answer from an extension's program
-    /// (`panel::answered`), never declared. See `charter_core::panel`'s header for why.
+    /// (`panel::answered`), never declared. See `purlis_core::panel`'s header for why.
     Chart {
         title: String,
         /// `bars` or `columns` (`panel::Shape`).
@@ -324,7 +324,7 @@ pub(crate) struct Panels {
     /// `session.open` and `session.resume` rows, beside the Sessions panel that draws them.
     sessions: Vec<SessionRecordRow>,
     /// **The same facts again, as contributions** — charter's own two panels, in the shape a
-    /// stranger's extension contributes one in (`charter_core::panel`).
+    /// stranger's extension contributes one in (`purlis_core::panel`).
     ///
     /// # Why the fields above survived, which is a decision and not an oversight
     ///
@@ -354,7 +354,7 @@ pub(crate) struct Panels {
 
 /// The persona view's `Vault` line: the vault's NAME and where it came from, or why there is
 /// none — the answer `charter persona list` gives, from the same resolution
-/// (`charter_core::personaverbs::vault`), in words that keep apart what charter-app#185 was
+/// (`purlis_core::personaverbs::vault`), in words that keep apart what charter-app#185 was
 /// about.
 ///
 /// **The vault is a NAME and nothing else.** charter refuses a secret by kind and never echoes
@@ -365,8 +365,8 @@ pub(crate) struct Panels {
 /// "Holds no credentials" is said only where the definition says `vault: none`. A persona
 /// neither the definition nor the registry names a vault for has none, which is a different
 /// fact, and a registry that does not read is a third: no answer, and charter's sentence why.
-fn vault_line(vault: charter_core::personas::Vault) -> String {
-    use charter_core::personas::Vault;
+fn vault_line(vault: purlis_core::personas::Vault) -> String {
+    use purlis_core::personas::Vault;
     match vault {
         Vault::Named(vault) => format!("{vault} — the name; what is in it is never shown here"),
         Vault::Registered(vault) => format!(
@@ -438,7 +438,7 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
         sections,
         personas,
         plane.default_persona(),
-        &mut |persona| charter_core::personas::memory_count(root, persona),
+        &mut |persona| purlis_core::personas::memory_count(root, persona),
     ))
 }
 
@@ -688,7 +688,7 @@ pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRe
 /// first is *this extension may offer this catalogue row*, consented per extension per row —
 /// and nobody has asked for it yet, which under ADR 0041 is the reason it does not exist.
 fn charters_own(
-    todos: &[charter_core::workspaces::Entry],
+    todos: &[purlis_core::workspaces::Entry],
     todos_refused: Option<&str>,
     personas: &[String],
     default: Option<&str>,
@@ -775,7 +775,7 @@ fn charters_own(
             actions: Vec::new(),
         })
         .collect();
-    if let Some(shared) = shared_row(count(charter_core::personas::SHARED), personas) {
+    if let Some(shared) = shared_row(count(purlis_core::personas::SHARED), personas) {
         rows.push(shared);
     }
     panels.push(panel::Panel {
@@ -823,7 +823,7 @@ fn note_for(held: usize, is_default: bool) -> String {
 
 /// The Personas panel's row key for the shared store: `_shared`, which no persona can be
 /// called (`personas::valid_name`), so it never collides with a persona's row.
-pub(crate) const SHARED_ROW: &str = charter_core::personas::SHARED;
+pub(crate) const SHARED_ROW: &str = purlis_core::personas::SHARED;
 
 /// **The "shared" row at the foot of the Personas panel** (ADR 0065 Q6): `shared · N memories`,
 /// opening the shared store's own list (`memory.shared`, [`shared_memory_view`]).
@@ -859,7 +859,7 @@ fn shared_row(held: usize, personas: &[String]) -> Option<panel::Row> {
 /// read is said, never drawn as an empty list — `todos`' rule for the same question.
 fn memory_panel(
     workspace: &str,
-    read: Result<Vec<charter_core::workspaces::Entry>, String>,
+    read: Result<Vec<purlis_core::workspaces::Entry>, String>,
 ) -> panel::Panel {
     let mut blocks = Vec::new();
     let mut entries = match read {
@@ -883,7 +883,7 @@ fn memory_panel(
         ),
         empty: panel::Empty {
             headline: "Nothing remembered yet".into(),
-            body: Some("The + above, or `charter workspace remember`, records one.".into()),
+            body: Some("The + above, or `purlis workspace remember`, records one.".into()),
             offer: None,
         },
     });
@@ -903,7 +903,7 @@ fn memory_panel(
 /// memories as rows opening `shared/<slug>` tabs. A plane with no shared store has an empty one.
 pub(crate) fn shared_memory_view(root: &Path) -> Result<Vec<panel::Block>, String> {
     let store = Plane::open(root)
-        .persona(charter_core::personas::SHARED)
+        .persona(purlis_core::personas::SHARED)
         .map_err(|why| why.to_string())?;
     let mut blocks = vec![panel::Block::Note {
         text: "What every persona on this plane reads, whoever is asked.".into(),
@@ -928,7 +928,7 @@ pub(crate) fn shared_memory_view(root: &Path) -> Result<Vec<panel::Block>, Strin
                 empty: panel::Empty {
                     headline: "Nothing shared yet".into(),
                     body: Some(
-                        "The + above, or `charter persona remember --shared`, records one.".into(),
+                        "The + above, or `purlis persona remember --shared`, records one.".into(),
                     ),
                     offer: None,
                 },
@@ -951,7 +951,7 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
         &crate::memories::MemoryScope::Persona {
             name: persona.to_owned(),
         },
-        &charter_core::personas::memories(root, persona)?,
+        &purlis_core::personas::memories(root, persona)?,
     ))
 }
 
@@ -959,7 +959,7 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
 /// section, the shared list: one function, so the three cannot drift apart in style or verb.
 fn memory_rows_of(
     scope: &crate::memories::MemoryScope,
-    entries: &[charter_core::workspaces::Entry],
+    entries: &[purlis_core::workspaces::Entry],
 ) -> Vec<panel::Row> {
     entries
         .iter()
@@ -983,7 +983,7 @@ fn memory_rows_of(
             // slug, the name `memories::view_key` gives every memory's tab.
             // Only for a slug the core acts on (SI-9d): any other opens a tab every operation
             // refuses, and one of them is the key a new memory's tab is (`memories::DRAFT`).
-            runs: charter_core::memstore::slug_ok(&memory.slug).then(|| {
+            runs: purlis_core::memstore::slug_ok(&memory.slug).then(|| {
                 format!(
                     "memory.open:{}",
                     crate::memories::view_key(scope, &memory.slug)
@@ -998,7 +998,7 @@ fn memory_rows_of(
 ///
 /// A tab can hold a view (ADR 0043, as amended), and this is the first built-in one —
 /// what the persona card was, as a sheet over the centre, until the operator ruled on
-/// 2026-09-23 that it is a tab. It is produced HERE, in Rust, as `charter_core::panel` blocks,
+/// 2026-09-23 that it is a tab. It is produced HERE, in Rust, as `purlis_core::panel` blocks,
 /// and the window draws it with exactly the code that draws persona statistics' answer
 /// (`app/src/Views.tsx`). That is the test the operator set — *"100% pluggable"*, with the
 /// personas as a pure example of a plugin: nothing the window does for this view is something
@@ -1019,8 +1019,8 @@ pub(crate) fn persona_view(
     state: &Path,
     name: &str,
 ) -> Result<Option<Vec<panel::Block>>, String> {
-    if !charter_core::personas::valid_name(name) {
-        return Err(format!("{name:?} is not a persona name charter would read"));
+    if !purlis_core::personas::valid_name(name) {
+        return Err(format!("{name:?} is not a persona name purlis would read"));
     }
     let on_plane = Plane::open(root)
         .personas()
@@ -1033,7 +1033,7 @@ pub(crate) fn persona_view(
         tone: panel::Tone::Plain,
     };
     let mut blocks = Vec::new();
-    match charter_core::personas::details(root, state, name) {
+    match purlis_core::personas::details(root, state, name) {
         // charter's own sentence, which names the fix. Drawn rather than swallowed: a view that
         // came up empty reads as a persona with nothing in it.
         Err(why) => blocks.push(panel::Block::Note {
@@ -1097,7 +1097,7 @@ pub(crate) fn persona_view(
                 rows,
                 empty: panel::Empty {
                     headline: "Nothing remembered yet".into(),
-                    body: Some("`charter persona remember` is how a fact arrives.".into()),
+                    body: Some("`purlis persona remember` is how a fact arrives.".into()),
                     offer: None,
                 },
             });
@@ -1145,7 +1145,7 @@ fn states_of(root: &Path, workspace: &str, binary: Option<&Path>) -> Result<Repo
 ///
 /// **This is the trigger, and it is a user action rather than a timer.** Focusing a workspace
 /// is what runs this panel, and no daemon runs anywhere in charter-app: an app nobody touches
-/// makes no forge call, ever. `charter_core::glstate` holds the decision — the refresh window,
+/// makes no forge call, ever. `purlis_core::glstate` holds the decision — the refresh window,
 /// the cooldown, the stuck window, and the lock that names the refresh in flight — so that two
 /// panels in quick succession are one refresh and a wedged one is not replaced every two
 /// minutes, each replacement holding the forge credential.
@@ -1157,7 +1157,7 @@ fn states_of(root: &Path, workspace: &str, binary: Option<&Path>) -> Result<Repo
 /// loud where it is not, because a CI column that never fills over a `charter` binary that
 /// went missing would otherwise look exactly like one nobody has refreshed.
 fn refresh_if_it_is_due(root: &Path, workspace: &str, binary: Option<&Path>) {
-    use charter_core::glstate::Refreshing;
+    use purlis_core::glstate::Refreshing;
 
     let Some(binary) = binary else {
         // Already said once, at startup, by the launch that could not find it. Saying it again
@@ -1165,15 +1165,15 @@ fn refresh_if_it_is_due(root: &Path, workspace: &str, binary: Option<&Path>) {
         return;
     };
     // The same list the refresher itself walks, and the same one the panel draws.
-    let Ok(targets) = charter_core::glrefresh::trees(root, workspace) else {
+    let Ok(targets) = purlis_core::glrefresh::trees(root, workspace) else {
         return;
     };
-    match charter_core::glstate::maybe_spawn(root, workspace, &targets.trees, binary) {
+    match purlis_core::glstate::maybe_spawn(root, workspace, &targets.trees, binary) {
         // Cooling down, one already in flight, nothing stale, or the operator's own brake:
         // every one of these is the policy working, and none of them is news.
         Refreshing::Started { .. } | Refreshing::Declined(_) => {}
         Refreshing::NotStarted { why } => {
-            tracing::warn!("charter: a forge refresh for '{workspace}' would not start ({why})");
+            tracing::warn!("purlis: a forge refresh for '{workspace}' would not start ({why})");
         }
     }
 }
@@ -1190,7 +1190,7 @@ fn one(repo: &repos::Repo, cache: Option<&cistate::Cache>) -> RepoState {
             row.unreadable = Some(why.to_string());
             // The cache is keyed by branch, and charter does not know which branch this is.
             row.not_fetched = Some(
-                "charter could not read the checkout, so it cannot say which branch to ask \
+                "purlis could not read the checkout, so it cannot say which branch to ask \
                  about"
                     .into(),
             );
@@ -1486,7 +1486,7 @@ mod tests {
     #[test]
     fn charters_own_panels_come_through_the_same_seam_an_extension_would_use() {
         // **The claim the whole change rests on.** Todos and personas used to be named fields
-        // that hardcoded React read. They are `charter_core::panel` values now, produced here
+        // that hardcoded React read. They are `purlis_core::panel` values now, produced here
         // and drawn by the loop in `Panels.tsx` that draws a stranger's declared panel — so
         // what the window knows about a todo it learned from the vocabulary.
         let (_plane, root) = plane_with_a_todo_and_two_personas();
@@ -1509,7 +1509,7 @@ mod tests {
         );
         assert!(
             drawn.contributed.iter().all(|panel| panel.from.is_none()),
-            "charter's own panels named an extension as their contributor"
+            "purlis's own panels named an extension as their contributor"
         );
     }
 
@@ -1567,7 +1567,7 @@ mod tests {
     #[test]
     fn a_contributed_row_could_never_carry_the_verb_a_persona_row_does() {
         // The asymmetry, pinned where it is created rather than only where it is refused.
-        // `charter_core::panel::declared` refuses `runs` from a manifest; this is the other
+        // `purlis_core::panel::declared` refuses `runs` from a manifest; this is the other
         // half — charter's own producer is the only thing that sets it, and it sets it to a
         // catalogue id the window looks up rather than to anything it made up.
         let (_plane, root) = plane_with_a_todo_and_two_personas();
@@ -1912,7 +1912,7 @@ mod tests {
         let binary = stand_in(beside.path());
         // The refresh is detached into a group of its own: killed with the test by the pid
         // the lock names, however the assertions below end (#923).
-        let _ends = stand_in::Ends::named_in(charter_core::glrefresh::lock(&root));
+        let _ends = stand_in::Ends::named_in(purlis_core::glrefresh::lock(&root));
 
         let drawn = states_of(&root, "alpha", Some(&binary)).expect("the panel draws");
 
@@ -1933,7 +1933,7 @@ mod tests {
         let binary = stand_in(beside.path());
         // The refresh is detached into a group of its own: killed with the test by the pid
         // the lock names, however the assertions below end (#923).
-        let _ends = stand_in::Ends::named_in(charter_core::glrefresh::lock(&root));
+        let _ends = stand_in::Ends::named_in(purlis_core::glrefresh::lock(&root));
 
         states_of(&root, "alpha", Some(&binary)).expect("the panel draws");
         let once = ran(beside.path());

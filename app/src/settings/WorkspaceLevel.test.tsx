@@ -32,7 +32,7 @@ const HELD = BUILT_IN["charter-dark"].values["accent.base"];
  * said beside it, as the Project level's are. It replaces the Workspace settings page
  * (charter-app#280), and everything that page reached is held here: what is in force and which
  * layer decided it, the theme and the colour, the harness plugins, LIVE and LOCAL, and the
- * repos. What the core keeps and refuses is `charter_core::settings::workspace`'s tests.
+ * repos. What the core keeps and refuses is `purlis_core::settings::workspace`'s tests.
  */
 
 afterEach(() => {
@@ -73,7 +73,7 @@ const EXTENSIONS: ProjectExtension[] = [
     ignored: [
       {
         file: "workspaces/alpha/workspace.json",
-        why: "workspaces/alpha/workspace.json sets extensions.stats.settings.nope, which stats does not declare — charter hands it nothing",
+        why: "workspaces/alpha/workspace.json sets extensions.stats.settings.nope, which stats does not declare — purlis hands it nothing",
       },
       {
         file: "charter.local.toml",
@@ -101,7 +101,7 @@ const NO_THEME: ProjectTheme = {
 };
 
 const OWN_WHY =
-  "charter@inline is always on: it is charter's own plugin, and it carries charter's hooks and the Bash guard";
+  "charter@inline is always on: it is purlis's own plugin, and it carries purlis's hooks and the Bash guard";
 
 /** What the core says is in force for each harness in this workspace (charter-app#282). */
 const HARNESSES: HarnessPlugins[] = [
@@ -380,7 +380,7 @@ describe("the Workspace level", () => {
     );
   });
 
-  it("says what charter does not take from the settings as they stand", async () => {
+  it("says what purlis does not take from the settings as they stand", async () => {
     core({
       ...ALPHA,
       refusals: ["settings.colour in workspaces/alpha/workspace.json is not read"],
@@ -878,7 +878,7 @@ describe("Plugins (charter-app#282)", () => {
     expect(group).toHaveTextContent("on in this workspace — from charter.toml");
     expect(group).toHaveTextContent("not set — Claude Code decides, from its own settings");
     expect(within(group).getByLabelText("Claude Code: figma@official")).toHaveValue("");
-    // charter's own plugin is a line, never a control.
+    // purlis's own plugin is a line, never a control.
     expect(group).toHaveTextContent(OWN_WHY);
     expect(within(group).queryByLabelText("Claude Code: charter@inline")).toBeNull();
     expect(group).toHaveTextContent(
@@ -913,7 +913,7 @@ describe("Plugins (charter-app#282)", () => {
 /** The ignore check's sentence for a `charter.local.toml` git would commit, as the core says it
  *  (charter-app#308). */
 const LEFT_OUT =
-  "git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter doctor --fix local-ignore adds /charter.local.toml to .gitignore.";
+  "git would commit charter.local.toml, so purlis reads nothing in it until it is ignored — purlis doctor --fix local-ignore adds /charter.local.toml to .gitignore.";
 
 describe("a charter.local.toml git would carry (charter-app#319)", () => {
   it("is said in each group that shows what is in force, once per old group", async () => {
@@ -1075,7 +1075,7 @@ describe("Edit as JSON (NO-7, #1232)", () => {
       parsed: false,
       fields: [],
       refusals: [
-        "workspaces/alpha/workspace.json is not a JSON object, so charter reads no settings from it — mend it by hand",
+        "workspaces/alpha/workspace.json is not a JSON object, so purlis reads no settings from it — mend it by hand",
       ],
     });
     await at();

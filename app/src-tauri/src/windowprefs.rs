@@ -1,5 +1,5 @@
 //! The window's layout and the operator's theme, **handed to the page as it is created** and
-//! written back when the layout changes (`charter_core::windowprefs` holds the files and the
+//! written back when the layout changes (`purlis_core::windowprefs` holds the files and the
 //! reasons).
 //!
 //! **Injected, never fetched.** A command is asynchronous, so a layout the window asked for
@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use charter_core::windowprefs::{self, Reading};
+use purlis_core::windowprefs::{self, Reading};
 
 /// The global the page reads both readings from. `app/src/windowprefs.ts` names it too; the
 /// test below holds the script to it, and `windowprefs.test.ts` holds the page to it.
@@ -117,8 +117,8 @@ pub async fn set_dismissed(
 
 /// The config home, or the reason charter keeps no layout on this machine.
 fn config_root() -> Result<std::path::PathBuf, String> {
-    charter_core::machine::config_root().ok_or_else(|| {
-        "this machine has no config home, so charter cannot keep the layout".to_owned()
+    purlis_core::machine::config_root().ok_or_else(|| {
+        "this machine has no config home, so purlis cannot keep the layout".to_owned()
     })
 }
 
@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn the_page_is_handed_the_layout_and_the_theme_on_disk() {
         let home = tempfile::tempdir().unwrap();
-        let dir = charter_core::machine::dir(home.path());
+        let dir = purlis_core::machine::dir(home.path());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(windowprefs::LAYOUT),
@@ -158,7 +158,7 @@ mod tests {
         // Whatever the operator — or anybody who can write the file — puts in a string, it is a
         // string when it arrives.
         let home = tempfile::tempdir().unwrap();
-        let dir = charter_core::machine::dir(home.path());
+        let dir = purlis_core::machine::dir(home.path());
         std::fs::create_dir_all(&dir).unwrap();
         let hostile = r#"\"}); alert(1); ({\" </script>"#;
         std::fs::write(
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn a_broken_layout_reaches_the_page_as_a_reason_and_no_document() {
         let home = tempfile::tempdir().unwrap();
-        let dir = charter_core::machine::dir(home.path());
+        let dir = purlis_core::machine::dir(home.path());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(windowprefs::LAYOUT), "{ nope").unwrap();
         let at = defined(&creation_script(Some(home.path())));

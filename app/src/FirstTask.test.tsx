@@ -10,8 +10,8 @@ import App from "./App";
  * The first task (FR-28, #621): the guided task FR-1 measures, offered beside the first chat.
  *
  * What a run is — its branch, the task typed and unsent, the diff command — is the core's
- * (`charter_core::firsttask`, `firsttask.rs`), and the CI run of the script is
- * `crates/charter-cli/tests/first_task_script.rs`. This is about the window: that the tab is
+ * (`purlis_core::firsttask`, `firsttask.rs`), and the CI run of the script is
+ * `crates/purlis-cli/tests/first_task_script.rs`. This is about the window: that the tab is
  * offered without asking anything, which profile each run starts on, and that a run's diff is
  * one press away.
  */
@@ -45,7 +45,7 @@ const SIDEBAR = {
 
 /** What the core says of opencode's missing capability: its card's line and label (HP-19). */
 const OPENCODE_CANNOT_TYPE =
-  "opencode cannot have a prompt typed in for you, because charter cannot tell when it has finished starting. See What opencode can do here.";
+  "opencode cannot have a prompt typed in for you, because purlis cannot tell when it has finished starting. See What opencode can do here.";
 
 const profile = (name: string, kind: string, approval: string | null, isDefault = false) => ({
   name,
@@ -245,7 +245,7 @@ describe("the first task", () => {
     // (V69).
     const sentence = within(pane).getByRole("alert");
     expect(sentence).toHaveTextContent(
-      "charter has not run this profile before. It would run: codex",
+      "purlis has not run this profile before. It would run: codex",
     );
     expect(within(sentence).getByText("codex").tagName).toBe("CODE");
     expect(within(run2).getByText("new")).toHaveClass("needs-approval");
@@ -308,7 +308,7 @@ describe("the first task", () => {
 
     const sentence = await within(pane).findByText(/as it now stands/);
     expect(sentence).toHaveTextContent(
-      "charter has not run this profile as it now stands. It would run: codex",
+      "purlis has not run this profile as it now stands. It would run: codex",
     );
     expect(within(run1).getByText("changed")).toHaveClass("needs-approval");
     expect(
@@ -316,7 +316,7 @@ describe("the first task", () => {
     ).toBeEnabled();
   });
 
-  it("never offers a profile charter cannot type the task into", async () => {
+  it("never offers a profile purlis cannot type the task into", async () => {
     core();
     render(<App />);
     const { pane } = await openTheFirstTask();
@@ -352,7 +352,7 @@ describe("the first task", () => {
   });
 
   it("says in full why a run did not start", async () => {
-    const why = "Profile 'claude' runs a program charter has not measured.";
+    const why = "Profile 'claude' runs a program purlis has not measured.";
     core((cmd) => {
       if (cmd === "first_task_run") throw why;
       return undefined;

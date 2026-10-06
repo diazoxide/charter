@@ -1,5 +1,5 @@
 [package]
-name = "charter-session-protocol"
+name = "purlis-session-protocol"
 version.workspace = true
 description = "charter's session protocol: versioned, multiplexed, flow-controlled, over any ordered byte stream"
 edition.workspace = true
@@ -23,7 +23,7 @@ base64 = "0.23"
 yamux = "0.14"
 # Each scope's credential (FD-6): minted from the OS generator, proved by an HMAC-SHA256 over
 # a fresh challenge, compared in constant time, written by a rename from a `0600` temporary
-# file. The same crates charter-core mints and checks a chat's token and keys its MACs with.
+# file. The same crates purlis-core mints and checks a chat's token and keys its MACs with.
 getrandom = "0.4"
 subtle = "2"
 hmac = "0.13"
@@ -33,7 +33,7 @@ tempfile.workspace = true
 [target."cfg(unix)".dependencies]
 # Whether a connection's peer, and the credentials' directory and files, are this user's alone
 # (FD-6): the same checks as each plane's hook socket.
-charter-same-user.workspace = true
+purlis-same-user.workspace = true
 
 [features]
 # `link::serve_any`: serve a link over any stream, skipping the uid check. For this crate's own
@@ -48,7 +48,7 @@ name = "charter-session-bench"
 required-features = ["bench"]
 
 [dev-dependencies]
-charter-session-protocol = { path = ".", features = ["any-stream"] }
+purlis-session-protocol = { path = ".", features = ["any-stream"] }
 # The heap of the test process, measured, so a memory bound is a measured one.
 dhat = "0.3"
 # The multiplexer's own constants, for the bounds the tests compute.

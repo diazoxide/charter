@@ -99,7 +99,7 @@ which the app binds and no document mentioned, and the keys that `charter plugin
 writes into `~/.claude/settings.json`. The document said charter never writes that file, and
 that is still true of the Python charter.
 
-`crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` reads the document's
+`crates/purlis-core/tests/every_store_the_plane_format_names_has_a_tier.rs` reads the document's
 file sections, from "Finding the plane" to the appendix, and fails when:
 
 - a `###` or `####` heading has no tier and is not listed in the test as something other than
@@ -337,7 +337,7 @@ the rulings.
 |---|---|
 | `docs/adr/0034-…` | An amendment: the machine store is in the config home, not the application-data directory |
 | `docs/plane-format.md` | A section defining the tiers and marks. A `**Tier:**` line on every store entry (136 of them), a Tier column in the pointers table, a table of what charter-app keeps outside the plane, an entry for `.charter/app/hooks.sock`, a correction to "Claude Code's own files", which `charter plugin install` does write into, and a correction to the `CHARTER_HOME` row (#750) |
-| `crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` | New. In the file sections, it fails on a heading with no tier unless the test lists it as not a store, on a table of paths with no Tier column, on a tier it cannot read, and when the section it checks cannot be found. It does not see a store named only in the prose under another heading |
+| `crates/purlis-core/tests/every_store_the_plane_format_names_has_a_tier.rs` | New. In the file sections, it fails on a heading with no tier unless the test lists it as not a store, on a table of paths with no Tier column, on a tier it cannot read, and when the section it checks cannot be found. It does not see a store named only in the prose under another heading |
 | `AGENTS.md` (`CLAUDE.md`) | The rule that a new store names its tier, as part of the definition of done |
 | `CONTEXT.md` | **Tier** (of a store) |
 | FR-10 (#608) | Built from §2 and §5 |

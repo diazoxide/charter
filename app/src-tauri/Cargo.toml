@@ -1,5 +1,5 @@
 [package]
-name = "charter-app"
+name = "purlis-app"
 version.workspace = true
 description = "charter, the desktop app"
 authors = ["Aaron Yordanyan"]
@@ -15,8 +15,14 @@ publish = false
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "charter_app_lib"
+name = "purlis_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# The app's program keeps its name: the keyring writer (`secrets::keyhold::APP_BINARY`), the
+# e2e runs and the release steps find it by it. Renaming the program is not the crate's rename.
+[[bin]]
+name = "charter-app"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -25,14 +31,14 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
-charter-core.workspace = true
+purlis-core.workspace = true
 # A file tab's image preview crosses to the window as base64 (FM-2).
 base64 = "0.23"
 # About Charter: the running version's section of the repository's CHANGELOG.md.
 changelog.workspace = true
 # `wscmd::create` is handed the moment the workspace was made, because `charter workspace
 # create` stamps it into the manifest and the two implementations must stamp the same field.
-# The same spelling `charter-cli` uses, so one version of chrono is in the tree.
+# The same spelling `purlis-cli` uses, so one version of chrono is in the tree.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -50,8 +56,8 @@ rfd = { version = "0.16", default-features = false }
 # of the plugin, not a feature, so there is no build of it that skips verification.
 tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["time", "rt"] }
-# What the app notices goes to the diagnostic log `charter_core::applog` installs (#647): a
-# file that rotates daily, and standard error. The version charter-core uses.
+# What the app notices goes to the diagnostic log `purlis_core::applog` installs (#647): a
+# file that rotates daily, and standard error. The version purlis-core uses.
 tracing = "0.1"
 # A file row's Copy absolute path (FM-10) says a Windows path without the `\\?\` prefix
 # `canonicalize` gives it. The version tauri-plugin-opener already brings in.
@@ -60,7 +66,7 @@ dunce = "1.0.5"
 # it never reaches the window, and marks it for clipboard histories to leave out. Text only.
 arboard = { version = "3.6.1", default-features = false }
 # What that Copy remembers instead of the value: a digest, to clear the clipboard a minute later
-# only while it still holds what was copied. The version charter-core already uses.
+# only while it still holds what was copied. The version purlis-core already uses.
 sha2 = "0.11"
 # The plane changing under the window (charter-app#264): the todos a terminal closed, a workspace
 # another process made. notify is the standard cross-platform watcher (FSEvents, inotify,
@@ -75,7 +81,7 @@ notify = "8.2"
 # rfd's GTK backend on Linux, as the dialog plugin enables it.
 rfd = { version = "0.16", default-features = false, features = ["gtk3"] }
 zbus = "5.19"
-# Whose charter the instance lock is (`instance.rs`), by user id. The version charter-core
+# Whose charter the instance lock is (`instance.rs`), by user id. The version purlis-core
 # already uses.
 rustix = { version = "1", features = ["process"] }
 
@@ -90,18 +96,18 @@ workspace = true
 # starts this binary from a checkout that sits inside the operator's own plane, so a config
 # that forgets to pin `$CHARTER_ROOT` resolves that plane and records into it — which is
 # charter-app#129. A fenced app dies at the first touch instead of quietly succeeding.
-e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver", "charter-core/fenced"]
+e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver", "purlis-core/fenced"]
 
 [dev-dependencies]
 # Tauri's mock runtime, to invoke commands through the app's real ACL (`ipc.rs`, ADR 0052).
 tauri = { version = "2", features = ["test", "tray-icon"] }
 # Fenced for `cargo test --workspace`, which is the invocation that compiles and runs this
 # crate's tests — and the one named in charter-app#129.
-charter-core = { workspace = true, features = ["fenced", "test-support"] }
+purlis-core = { workspace = true, features = ["fenced", "test-support"] }
 stand-in.workspace = true
 # The UI RPC's list of commands no link serves (`session_protocol::ui::WINDOW_ONLY`, HP-6), so
 # the client generated for the link leaves out the same ones.
-charter-session-protocol = { path = "../../crates/session-protocol" }
+purlis-session-protocol = { path = "../../crates/session-protocol" }
 tempfile.workspace = true
 # A vault's clipboard clear is tested on tokio's paused clock, not a real minute.
 tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }

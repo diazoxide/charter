@@ -17,7 +17,7 @@ import { endChat, harnessRowsDrawn, pressOnly } from "../opening.js";
  * `charter statusline`'s, made from `$CHARTER_FOOTER`, and the fake harness never runs that
  * command. So the profile's own wrapper writes the variable it was started with into the
  * plane (`harness.ts`), which is the same thing a real Claude Code's `statusLine` command
- * would have inherited. `crates/charter-cli/tests/statusline.rs` holds the other half: what
+ * would have inherited. `crates/purlis-cli/tests/statusline.rs` holds the other half: what
  * the command does with that word.
  *
  * **Nothing this file opens outlives it.** WebdriverIO's Tauri service keeps one app process

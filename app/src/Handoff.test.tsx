@@ -12,7 +12,7 @@ import type { OpenChat } from "./bindings";
  * The core starts the chat and says so on `handoff-arrived`; the window's whole part is where
  * the tab goes. **Not in front**: a handoff is work sent away from the chat on screen, and a
  * tab that took the front would interrupt it. Visibility is the control a handoff from inside
- * the app rests on (`charter_core::hookwire::OpenChat`), so the tab has to be there, and it
+ * the app rests on (`purlis_core::hookwire::OpenChat`), so the tab has to be there, and it
  * has to be there without taking the screen.
  */
 

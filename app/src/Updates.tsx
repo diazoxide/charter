@@ -181,7 +181,7 @@ export function useUpdates(): Updates {
       .restartToUpdate()
       .then((done) => (done.status === "error" ? done.error : undefined))
       // A command that never reached the core is a refusal too, and says so in the same place.
-      .catch((why: unknown) => `charter could not ask to restart: ${String(why)}`)
+      .catch((why: unknown) => `purlis could not ask to restart: ${String(why)}`)
       .then((refused) => {
         // On success nothing comes back: the process is on its way out.
         if (refused !== undefined)
@@ -219,9 +219,9 @@ function channels(current: string | undefined) {
 
 /** The sentence that has to be read before Install is pressed. */
 export const INSTALL_ENDS_SESSIONS =
-  "Installing ends every running chat. On Windows charter closes at once to install; on macOS " +
+  "Installing ends every running chat. On Windows purlis closes at once to install; on macOS " +
   "and Linux the new version is put in place, and Restart to update ends every chat and offers " +
-  "to reopen them all when charter starts again.";
+  "to reopen them all when purlis starts again.";
 
 /**
  * The status line's update button, and the dialog it opens.
@@ -317,7 +317,7 @@ export function UpdateItem({
               {state.kind === "offered" || state.kind === "installing" ? (
                 <>
                   <p>
-                    charter <strong>{state.offer.version}</strong> is available on the{" "}
+                    purlis <strong>{state.offer.version}</strong> is available on the{" "}
                     {state.offer.channel} channel. This is {state.offer.current}.
                   </p>
                   {/* A stable release's notes are its CHANGELOG.md section, in Markdown. */}
@@ -333,8 +333,8 @@ export function UpdateItem({
               ) : state.kind === "installed" ? (
                 <>
                   <p className="honest">
-                    charter {state.version} is installed. Restart to update ends every chat, starts
-                    charter {state.version}, and asks whether to reopen them — Reopen all puts each
+                    purlis {state.version} is installed. Restart to update ends every chat, starts
+                    purlis {state.version}, and asks whether to reopen them — Reopen all puts each
                     one back, resuming its conversation where its harness can.
                   </p>
                   {state.refused && (
@@ -349,7 +349,7 @@ export function UpdateItem({
                 </p>
               ) : (
                 <p className="honest">
-                  No newer charter is known. charter checks on its own every few hours.
+                  No newer purlis is known. purlis checks on its own every few hours.
                 </p>
               )}
             </div>
@@ -454,7 +454,7 @@ export function usePin(plane: PlaneId): { pin?: PinReport; again: () => void } {
 /** The pin item: nothing unless `charter version` says the pin drifts. */
 export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) {
   if (!pin?.drift) return null;
-  const label = `The plane pins charter ${pin.pinned ?? "(unreadable)"}; this charter is ${pin.brought}`;
+  const label = `The plane pins purlis ${pin.pinned ?? "(unreadable)"}; this purlis is ${pin.brought}`;
   return (
     <Dialog.Root onOpenChange={(now) => now && again()}>
       <Dialog.Trigger asChild>

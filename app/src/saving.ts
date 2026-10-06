@@ -204,7 +204,7 @@ export function requestOf(repos: readonly RepoSaving[]): string {
 export function repoStageText(repo: RepoSaving): string {
   switch (repo.stage) {
     case "off":
-      return "Off — charter does not save this repo";
+      return "Off — purlis does not save this repo";
     case "blocked":
       return `Blocked: ${repo.blocked ?? "the last save could not finish"}`;
     case "changed":
@@ -226,10 +226,10 @@ export function repoStageText(repo: RepoSaving): string {
  * the branch itself.
  */
 export function repoSaveGoesTo(repo: RepoSaving, workspace: string): string {
-  if (repo.mode === "off") return "Nowhere — charter does not save it";
+  if (repo.mode === "off") return "Nowhere — purlis does not save it";
   const on = repo.branch;
   if (on === null) return "Nowhere — the clone is not on a branch; check one out first";
-  const noForge = "its origin is not on a forge charter knows";
+  const noForge = "its origin is not on a forge purlis knows";
   switch (repo.mode) {
     case "commit":
       return `Commits on ${on} — nothing is pushed`;
@@ -241,7 +241,7 @@ export function repoSaveGoesTo(repo: RepoSaving, workspace: string): string {
     case "pr-merge": {
       if (!repo.pushes) return `Commits on ${on}, then stops: ${noForge}`;
       if (repo.target === null)
-        return `Commits on ${on}, then stops: charter does not know where a ${repo.request} goes — set [repos.${repo.name}] branch`;
+        return `Commits on ${on}, then stops: purlis does not know where a ${repo.request} goes — set [repos.${repo.name}] branch`;
       const pushed = repo.ownBranch
         ? `pushes that commit as charter/${workspace}/… (never to ${on})`
         : `pushes ${on}`;

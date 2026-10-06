@@ -72,7 +72,7 @@ a second machine and a deletion do to it
 - **Machine** — outside every plane: the machine store (ADR 0034's directory,
   `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), charter's
   data home (`<data>`: `$CHARTER_DATA_HOME`, else `$XDG_DATA_HOME/charter`, else the OS data
-  directory's `charter/`; ADR 0075, `crates/charter-core/src/datahome.rs`), the app's OS
+  directory's `charter/`; ADR 0075, `crates/purlis-core/src/datahome.rs`), the app's OS
   directories, and the lines charter writes into a harness's global config. Each one is
   **syncable** (a preference of the operator's that could follow them to another machine) or
   **device-bound** (true of this machine only: an absolute path, a consent, an identity).
@@ -92,7 +92,7 @@ and charter-app at most keeps it consistent). Clone state or Machine with none o
 marks is what FR-10 backs up.
 
 **Three transient stores are collected** (SC-7). When the app opens a plane that is not already
-open in it, `charter_core::retention::on_open` removes, from that plane's own `.charter/` only
+open in it, `purlis_core::retention::on_open` removes, from that plane's own `.charter/` only
 (`<plane>/.charter/…`, never a `$CHARTER_HOME` that several planes may share):
 
 - a `.charter/sessions/<sid>.<ending>` marker last written 30 days or more before
@@ -126,7 +126,7 @@ A tier line is `**Tier:** <tier>[, <mark>…]`, optionally followed by ` — ` a
 and marks carry no punctuation of their own: a line with no reason has no full stop. A new
 store lands in this document with its tier, under its own heading or as a row of a table whose
 first column is `Path`.
-`crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` fails until it
+`crates/purlis-core/tests/every_store_the_plane_format_names_has_a_tier.rs` fails until it
 has one, and it fails on any new heading in the file sections that has no tier and is not
 listed in the test as something other than a store. It does not see a store named only in the
 prose under another heading, which is why every store gets a heading or a row.
@@ -423,9 +423,9 @@ read-only to it:
   those files; nothing else does. A charter without the feature opens the project read-only and
   says which version has it, so it never writes charter's names beside purlis's.
 
-Read by `crates/charter-core/src/compat.rs` (`read`, `SCHEMA`), and checked by the `charter`
-command before it runs a command that could write (`crates/charter-cli/src/main.rs`) and by
-`charter doctor`'s `schema` row (`crates/charter-core/src/doctor/config.rs`).
+Read by `crates/purlis-core/src/compat.rs` (`read`, `SCHEMA`), and checked by the `charter`
+command before it runs a command that could write (`crates/purlis-cli/src/main.rs`) and by
+`charter doctor`'s `schema` row (`crates/purlis-core/src/doctor/config.rs`).
 
 ## Finding the plane, and the plane root
 
@@ -449,7 +449,7 @@ scaffold, `inventory/repos.json`, `docs/topology.md`, and the generated README r
   otherwise it is `.charter/` (RN-2a). A name held under both spellings is named by the doctor's
   `renamed leftovers` row: `rename-plane` reconciles the committed files; `rename-local` moves
   `.charter/` and `charter.local.toml` only where the purlis name is not there yet, and never
-  merges two. Every name the rename moves, with its old spellings, is in `crates/charter-core/src/names.rs`.
+  merges two. Every name the rename moves, with its old spellings, is in `crates/purlis-core/src/names.rs`.
 - **Resolution order** (`charter/root.py:32`, `find_root`):
   1. `$CHARTER_ROOT` wins outright; it is `expanduser`'d and `resolve`'d, and a value with no
      `charter.toml` under it **raises** rather than falling back to the walk
@@ -502,7 +502,7 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   (`charter/instance.py:331`), `declare_default_persona` (`:342`) and
   `clear_default_persona` (`:355`). `charter version bump` also commits it
   (`charter/commands.py:3842`).
-  **In charter-app, also the Settings tab's Project level** (`charter_core::settings::save`,
+  **In charter-app, also the Settings tab's Project level** (`purlis_core::settings::save`,
   charter-app#252, SE-17, SE-19): a setting's change, or the whole text from its Edit as TOML
   link, written whole or not at all (a temp file beside it, then one
   rename), keeping the existing file's mode. A form's change is applied with `toml_edit`, so
@@ -522,14 +522,14 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   `charter/statusline.py:2123`, `charter/statusline.py:2141`, `charter/doctor.py:343`,
   `charter/persona.py:1031`, `charter/profiles.py:432`, `charter/forge/registry.py:96`,
   `charter/forge/registry.py:140`, `charter/commands_update.py:604`. In charter-app, its
-  `[extensions]` table is read by `crates/charter-core/src/extension/project.rs`
+  `[extensions]` table is read by `crates/purlis-core/src/extension/project.rs`
   (`Choices::read`) for the Settings tab, the window's filter on extension panels,
   views and themes, and the executor's gate (charter-app#253); its `[theme]` table by
-  `crates/charter-core/src/extension/project/theme.rs` (`Said::read`) for the Settings
+  `crates/purlis-core/src/extension/project/theme.rs` (`Said::read`) for the Settings
   tab and the window's theme (charter-app#273). Its `[harness_plugins]` table is
-  read by `crates/charter-core/src/harness_plugin.rs` (`Choices::read`) for the Settings
+  read by `crates/purlis-core/src/harness_plugin.rs` (`Choices::read`) for the Settings
   tab and for every chat `start::ready` launches (charter-app#274). Its `[sandbox]` table is read
-  by `crates/charter-core/src/sandbox.rs` (`Said::read`) for every chat `start::ready` launches
+  by `crates/purlis-core/src/sandbox.rs` (`Said::read`) for every chat `start::ready` launches
   and for the Settings tab's save (ADR 0067).
 - **Git:** committed (nothing ignores it; `_GITIGNORE_BASELINE` ignores its *local* sibling
   only, `charter/commands.py:1104`).
@@ -545,7 +545,7 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
     edit is written whole or not at all: a temp file beside `charter.toml`, flushed, then one
     rename, keeping the file's mode and refusing a read-only file. The read, the edit and the
     rename happen under an advisory `flock` on the plane root directory
-    (`crates/charter-core/src/rewrite.rs`), which the settings tab's save takes too, so two
+    (`crates/purlis-core/src/rewrite.rs`), which the settings tab's save takes too, so two
     writers at once both land.
     - Section located by `^[ \t]*\[<section>\][ \t]*$`; the edit is confined to that section's
       span, ending at the next line matching `^[ \t]*\[` (`charter/instance.py:416`,
@@ -584,8 +584,8 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|
 | `schema` | int (top level) | optional; absent = 1 | Project format version. charter-app understands 2, and a higher one makes the project read-only to it (V37a). `init` writes 1. A bump follows [Compatibility across charter versions](#compatibility-across-charter-versions-fr-24). | stable | `charter/instance.py:98` |
-| `requires` | array of tables (top level) | optional; absent = none. Declared with `schema = 2` (V37a) | Features a charter must have to write this project, each `{ feature, since }` (V37b). A charter that lacks one opens the project read-only and names `since` ([Compatibility across charter versions](#compatibility-across-charter-versions-fr-24)). | **stable**, a public format commitment (V37b): read by charter-app from FR-24; written only by the `rename-plane` fix, which adds `purlis-names` (RN-7) | `crates/charter-core/src/compat.rs` |
-| `[project].id` | str, a ULID | optional; absent = none yet, minted at the first ask | **charter-app only** (V76, ADR 0068 as amended by FD-26). The project's stable id: what the session protocol names a project by, in `start` and in each listed chat's `project`, never its path, which differs on every clone and device. Minted once, as a ULID like a chat's and a device's (ADR 0066), by `planefile::ensure_project_id` the first time something asks for it, and written into this file with `toml_edit`, as the Settings tab's save writes, under the plane root's lock, so two processes asking at once get one id. A `project` table written any way TOML allows (a header with a comment, spaces or quotes, an inline table, a dotted key, a subtable) gets the id inside it; a `project` that is not a table is refused. The result is parsed again before it is written and must read as holding exactly the new id, or nothing is written. **Tier:** Plane, as the whole file: committed, so every clone and device of the project names it the same. Never written over: a value that is not a ULID is reported and left as it is, and the reader treats it as none. Read in its canonical (upper-case) spelling. | stable, a public format commitment (V76) | `crates/charter-core/src/scaffold/planefile.rs` `project_id`, `ensure_project_id` |
+| `requires` | array of tables (top level) | optional; absent = none. Declared with `schema = 2` (V37a) | Features a charter must have to write this project, each `{ feature, since }` (V37b). A charter that lacks one opens the project read-only and names `since` ([Compatibility across charter versions](#compatibility-across-charter-versions-fr-24)). | **stable**, a public format commitment (V37b): read by charter-app from FR-24; written only by the `rename-plane` fix, which adds `purlis-names` (RN-7) | `crates/purlis-core/src/compat.rs` |
+| `[project].id` | str, a ULID | optional; absent = none yet, minted at the first ask | **charter-app only** (V76, ADR 0068 as amended by FD-26). The project's stable id: what the session protocol names a project by, in `start` and in each listed chat's `project`, never its path, which differs on every clone and device. Minted once, as a ULID like a chat's and a device's (ADR 0066), by `planefile::ensure_project_id` the first time something asks for it, and written into this file with `toml_edit`, as the Settings tab's save writes, under the plane root's lock, so two processes asking at once get one id. A `project` table written any way TOML allows (a header with a comment, spaces or quotes, an inline table, a dotted key, a subtable) gets the id inside it; a `project` that is not a table is refused. The result is parsed again before it is written and must read as holding exactly the new id, or nothing is written. **Tier:** Plane, as the whole file: committed, so every clone and device of the project names it the same. Never written over: a value that is not a ULID is reported and left as it is, and the reader treats it as none. Read in its canonical (upper-case) spelling. | stable, a public format commitment (V76) | `crates/purlis-core/src/scaffold/planefile.rs` `project_id`, `ensure_project_id` |
 | `[[forge]]` | array of tables | optional; none = one default GitLab forge | One block per forge tracked. Index 0 is `config.GROUP`/`EXCLUDE`. | stable | `charter/instance.py:143` |
 | `[[forge]].kind` | str | default `"gitlab"`; one of `gitlab`, `github` | Backend class. Unknown kind = that block skipped + reported. | stable | `charter/forge/registry.py:69`, `charter/forge/registry.py:15` |
 | `[[forge]].group` / `.owner` | str | optional; `group` wins, else `owner`, else `""` | Org/group whose repos are discovered. | stable | `charter/instance.py:162` |
@@ -595,30 +595,30 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[workspace].default` | str | default `"default"` | Workspace used when nothing else selected. Validated by `workspace_name_ok` (`^[A-Za-z0-9][A-Za-z0-9._-]*$` + `contain.segment_ok`); invalid → fallback. | stable | `charter/instance.py:243`, `charter/instance.py:181` |
 | `[persona].default` | str | optional; blank = absent = `None` | The plane's front door persona. Written by `charter persona default`. | stable | `charter/instance.py:259` |
 | `[plane].worktrees` | str | optional; `None` = `workspaces/<ws>/.worktrees/` | Relocated worktree root. Relative resolves against ROOT; a committed value must satisfy `contain.plane_adjacent` or it is ignored (doctor warns). `$CHARTER_WORKTREES` overrides and is unrestricted. | stable | `charter/instance.py:488`, `charter/config.py:82` |
-| `[plane].mode` | str | optional; closed set `off`,`commit`,`push`,`pr`,`pr-merge`; absent = `[memory].share`'s alias when that is `commit` or `push`, else **ask once** (the Saving view asks before anything is pushed); a new plane is written with `push` | **charter-app only.** How far a save of the plane goes, as a ladder: `off` never commits; `commit` commits locally; `push` also pushes to `branch`; `pr` pushes to `save_branch` and opens or updates one PR/MR into `branch`; `pr-merge` also sets that PR to auto-merge. `pr`/`pr-merge` on an origin that is not a GitHub or GitLab forge charter knows is a config error (doctor, the settings tab): saves stop at a local commit, shown as a notice, and the plane is not blocked. Unknown value → refused by the settings tab, read as absent. | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/planegit/prsave.rs` |
-| `[plane].branch` | str | optional; default the branch the plane has checked out | **charter-app only.** The *target* branch the plane is saved into. A save whose plane has another branch checked out commits and does not push: pushing would rebase that branch onto this one (ADR 0051). | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/planegit.rs` |
-| `[plane].save_branch` | str | optional; default `purlis/save/<host>-<clone>` (`charter/save/<host>-<clone>` before the rename, which a clone whose PR is still open from it keeps using until a save sees that PR merged or closed, V93j): `<host>` is the machine's short hostname, by the rule the dispatch log used before FD-25 (`dispatch::host`); a branch name is something the operator reads, so it stays a name (ADR 0066), `<clone>` the first six hex digits of the SHA-256 of the plane's absolute path, so two clones, or two machines with one name, never share one | **charter-app only.** The one rolling branch per clone that `pr`/`pr-merge` push to; one PR from it is kept open and updated by every save. Replaces the per-push `purlis/<sha>` branch (`charter/<sha>` before the rename, still advanced while its request waits) for the request modes. Only this branch is ever force-pushed, with `--force-with-lease` against the commit this clone last pushed there (`save-branch.json`); with none kept it is leased as absent, and an existing branch is pushed over only when its tip is already in HEAD's history — otherwise the plane is blocked. Must not be the target branch (a config error, and the plane is blocked). A value shared in `charter.toml` is one branch for every clone, and the lease then blocks all but the first. | stable | ADR 0051; `crates/charter-core/src/planegit/prsave.rs` (charter-app#298) |
-| `[plane].sign` | bool | optional; default `false` | **charter-app only.** Sign save commits. (ADR 0051 also has a push refused for an unsigned commit tell the operator to set this; that hint is not built.) | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/planegit.rs` |
-| `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051; `crates/charter-core/src/autosave.rs`, `app/src-tauri/src/autosave.rs` |
-| `[plane].autosave_after` | str | optional; default `"30s"`; a whole number followed by `s` or `m` | **charter-app only.** The quiet period after the last change before an auto-save. | stable | ADR 0051; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/autosave.rs` |
-| `[plane].assisted_by` | str | optional; default `"full"`; one of `full`, `llm`, in any case; a `[repos.<name>]` that does not set it follows this one | How a commit an agent run made spells its `Assisted-by` trailer: `full` is `<harness>:<model>`, `llm` is the kernel's bare `LLM`. See *Provenance trailers* below. | stable | V67; `crates/charter-core/src/planesave.rs`, `crates/charter-core/src/provenance.rs` |
-| `[repos.<name>]` | table | optional, one per repo | **charter-app only.** How a workspace repo is saved. `<name>` is the repo's `name` in `inventory/repos.json`, so one table governs every workspace's clone of it. Takes the same keys as `[plane]` (`mode`, `branch`, `sign`, `autosave`, `autosave_after`, `assisted_by`) except `save_branch`, with the defaults `mode = "off"` (charter never commits, pushes or opens a PR for a repo until its mode says how — ADR 0051, amended 2026-09-25) and `autosave = false`. A save commits on the branch the clone is on and `pr` opens its PR from that branch into `branch` (default: the repo's `default_branch`); on that default branch, a request mode first creates `purlis/<workspace>/<short-sha>`, or carries on a `charter/<workspace>/…` branch an earlier save made, while HEAD descends from it. It never runs while a session in that workspace is mid-turn. | stable | ADR 0051; `crates/charter-core/src/reposave.rs` |
-| any other key in `[plane]` or `[repos.<name>]` | — | — | Refused by the Settings tab's save, ignored by readers. | stable | ADR 0051; `crates/charter-core/src/planesave.rs` `refusals` |
+| `[plane].mode` | str | optional; closed set `off`,`commit`,`push`,`pr`,`pr-merge`; absent = `[memory].share`'s alias when that is `commit` or `push`, else **ask once** (the Saving view asks before anything is pushed); a new plane is written with `push` | **charter-app only.** How far a save of the plane goes, as a ladder: `off` never commits; `commit` commits locally; `push` also pushes to `branch`; `pr` pushes to `save_branch` and opens or updates one PR/MR into `branch`; `pr-merge` also sets that PR to auto-merge. `pr`/`pr-merge` on an origin that is not a GitHub or GitLab forge charter knows is a config error (doctor, the settings tab): saves stop at a local commit, shown as a notice, and the plane is not blocked. Unknown value → refused by the settings tab, read as absent. | stable | ADR 0051; `crates/purlis-core/src/planesave.rs`, `crates/purlis-core/src/planegit/prsave.rs` |
+| `[plane].branch` | str | optional; default the branch the plane has checked out | **charter-app only.** The *target* branch the plane is saved into. A save whose plane has another branch checked out commits and does not push: pushing would rebase that branch onto this one (ADR 0051). | stable | ADR 0051; `crates/purlis-core/src/planesave.rs`, `crates/purlis-core/src/planegit.rs` |
+| `[plane].save_branch` | str | optional; default `purlis/save/<host>-<clone>` (`charter/save/<host>-<clone>` before the rename, which a clone whose PR is still open from it keeps using until a save sees that PR merged or closed, V93j): `<host>` is the machine's short hostname, by the rule the dispatch log used before FD-25 (`dispatch::host`); a branch name is something the operator reads, so it stays a name (ADR 0066), `<clone>` the first six hex digits of the SHA-256 of the plane's absolute path, so two clones, or two machines with one name, never share one | **charter-app only.** The one rolling branch per clone that `pr`/`pr-merge` push to; one PR from it is kept open and updated by every save. Replaces the per-push `purlis/<sha>` branch (`charter/<sha>` before the rename, still advanced while its request waits) for the request modes. Only this branch is ever force-pushed, with `--force-with-lease` against the commit this clone last pushed there (`save-branch.json`); with none kept it is leased as absent, and an existing branch is pushed over only when its tip is already in HEAD's history — otherwise the plane is blocked. Must not be the target branch (a config error, and the plane is blocked). A value shared in `charter.toml` is one branch for every clone, and the lease then blocks all but the first. | stable | ADR 0051; `crates/purlis-core/src/planegit/prsave.rs` (charter-app#298) |
+| `[plane].sign` | bool | optional; default `false` | **charter-app only.** Sign save commits. (ADR 0051 also has a push refused for an unsigned commit tell the operator to set this; that hint is not built.) | stable | ADR 0051; `crates/purlis-core/src/planesave.rs`, `crates/purlis-core/src/planegit.rs` |
+| `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051; `crates/purlis-core/src/autosave.rs`, `app/src-tauri/src/autosave.rs` |
+| `[plane].autosave_after` | str | optional; default `"30s"`; a whole number followed by `s` or `m` | **charter-app only.** The quiet period after the last change before an auto-save. | stable | ADR 0051; `crates/purlis-core/src/planesave.rs`, `crates/purlis-core/src/autosave.rs` |
+| `[plane].assisted_by` | str | optional; default `"full"`; one of `full`, `llm`, in any case; a `[repos.<name>]` that does not set it follows this one | How a commit an agent run made spells its `Assisted-by` trailer: `full` is `<harness>:<model>`, `llm` is the kernel's bare `LLM`. See *Provenance trailers* below. | stable | V67; `crates/purlis-core/src/planesave.rs`, `crates/purlis-core/src/provenance.rs` |
+| `[repos.<name>]` | table | optional, one per repo | **charter-app only.** How a workspace repo is saved. `<name>` is the repo's `name` in `inventory/repos.json`, so one table governs every workspace's clone of it. Takes the same keys as `[plane]` (`mode`, `branch`, `sign`, `autosave`, `autosave_after`, `assisted_by`) except `save_branch`, with the defaults `mode = "off"` (charter never commits, pushes or opens a PR for a repo until its mode says how — ADR 0051, amended 2026-09-25) and `autosave = false`. A save commits on the branch the clone is on and `pr` opens its PR from that branch into `branch` (default: the repo's `default_branch`); on that default branch, a request mode first creates `purlis/<workspace>/<short-sha>`, or carries on a `charter/<workspace>/…` branch an earlier save made, while HEAD descends from it. It never runs while a session in that workspace is mid-turn. | stable | ADR 0051; `crates/purlis-core/src/reposave.rs` |
+| any other key in `[plane]` or `[repos.<name>]` | — | — | Refused by the Settings tab's save, ignored by readers. | stable | ADR 0051; `crates/purlis-core/src/planesave.rs` `refusals` |
 | `[charter].version` | str | optional | The version lock. Reported **as written** (even if malformed); must match `^\d+\.\d+\.\d+$` before it is acted on. | stable | `charter/instance.py:321`, `charter/instance.py:290` |
 | `[update].channel` | str | default `"stable"`; closed set `stable`,`dev` | Which charter this plane tracks. Unknown → `stable`; the matched **constant** is stored, never the file's string. | stable | `charter/instance.py:2948`, `charter/instance.py:2936` |
 | `[harness].default` | str | default `None` | What bare `charter` launches. Matched against the harness registry's `cli_name`s; a non-match is recorded as `refused` (contained) rather than ignored. | stable | `charter/instance.py:3000`, `charter/instance.py:3088` |
 | `[harness.<name>]` | table | — | **Refused here**: profiles live in `charter.local.toml`. Reported by name. | stable | `charter/profiles.py:316`, `charter/profiles.py:132` |
-| `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one, and in a workspace, that workspace's `settings.extensions.<id>.enabled` in `workspace.json` comes between the two (charter-app#280). `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
-| `[extensions.<id>.settings].<key>` | bool or str | optional; absent = the extension's declared default | **charter-app only.** A value for a setting the extension's manifest declares (`bool`, `text` of at most 200 bytes, or one of a `choice`'s words), handed to its program with each question as `settings`. A key it does not declare, or a value it would not accept, is ignored with a sentence and the next file down is used. Overridden key by key by `charter.local.toml`. | stable | `crates/charter-core/src/extension/project.rs` `resolve`, `crates/charter-core/src/extension.rs` `Setting::accepts` |
-| any other key in `[extensions.<id>]` | — | — | Refused by the Settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/extension/project.rs` `refusals` |
-| `[harness_plugins.<harness>]."<plugin id>"` | bool | optional; absent = not set (the harness decides, from its own settings) | **charter-app only** (charter-app#274, ADR 0050). Whether the chats charter starts in this project have that harness plugin on (`true`) or off (`false`). `<harness>` is a profile `kind`: `claude`, `opencode` or `codex`. `<plugin id>` is the harness's own id (`<name>@<marketplace>` for Claude Code and Codex), one line of at most 200 bytes. Only a plugin this machine has installed is handed on. `charter.local.toml`'s value overrides this one plugin by plugin, and for a chat in a workspace, that workspace's `settings.harness_plugins.<harness>."<plugin id>"` in `workspace.json` comes between the two (charter-app#282). For Claude Code the value goes into the chat's `--settings` `enabledPlugins`. For Codex and opencode it is read, shown as *not supported yet*, and handed to nothing. `charter-app@inline` cannot be `false` and `charter@charter` cannot be `true` under `claude`: a save that says so is refused, and the reader ignores it with a sentence. | stable | `crates/charter-core/src/harness_plugin.rs` `resolve`, `chosen` |
-| any other shape under `[harness_plugins]` | — | — | A harness charter does not know, a value that is not a bool, or a `[harness_plugins]` or `[harness_plugins.<harness>]` that is not a table is refused by the Settings tab's save and ignored by the reader. | stable | `crates/charter-core/src/harness_plugin.rs` `refusals` |
-| `[sandbox].mode` | str | optional; absent = **not set**: the plane's chats run as they did before the sandbox existed | **charter-app only** (ADR 0067, program map SD-2). `"on"` is the one value a plane may give it: every chat charter starts in the plane runs in a sandbox charter compiles for its harness, or does not start. **A project `charter init` or the app makes writes `[sandbox]` with `mode = "on"` and the default `egress`** (ADR 0067 §1, ruling V21 1 and 5); a project made before that is offered it once in the window, and taking the offer writes the same block (`sandbox::local::answer`). A person may start **one chat** without it, from the window's new-chat picker only ("Start without the sandbox", ruling V78 a; no CLI word); a system with no sandbox backend (Windows) starts every chat without it (V21 3). Each such start, and the sandbox coming back on for that chat's next run, is a `trust.sandbox.off` or `trust.sandbox.on` event in the host's event log. **A plane can never carry `"off"`**: a committed file may restrict what a chat is confined to and never loosen it, so `"off"`, or any value that is not `"on"` (a typo included), is refused by the Settings tab's save and **read as `"on"`**, with a sentence. So is a `sandbox` that is not a table. A `[sandbox]` with no `mode` is not set. Only a person turns the sandbox off, for one chat. What a chat may write (its own directory and a temp directory, and for a harness charter wraps whole, that harness's own data) and the denial classes (ADR 0067 §5) are not keys: no file can widen them. Read from this file only; `charter.local.toml` refuses the table. What it covers and what it does not is in `SECURITY.md`. | stable | `crates/charter-core/src/sandbox.rs` `Said::of` |
-| `[sandbox].egress` | array of str | optional; absent = `["model-providers", "forge", "toolchains"]` | **charter-app only** (ADR 0067 §3). The named presets whose hosts a sandboxed chat may reach; a host none of them lists is refused. `forge` also holds the hosts of this file's `[[forge]]` blocks. `[]` reaches no host. A word that is not a preset is refused with a sentence and the rest are kept. SD-4 and SD-31 add presets. | stable | `crates/charter-core/src/sandbox.rs` `Said::of`, `hosts` |
-| any other key in `[sandbox]`, or `sandbox` that is not a table | — | — | Refused by the Settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/sandbox.rs` `Said::of` |
-| `[theme].use` | str | optional; absent = the window's own theme (the operator's `theme.json`, else the first theme from an extension the project has on, else `charter-dark`) | **charter-app only** (charter-app#273, ADR 0048). The theme the window and its terminals draw while this project is in front: `charter-dark`, `charter-light`, `system` (the built-in matching the operating system's appearance, followed live), or `<extension-id>/<theme name>` — split at the first `/`. An extension's theme is drawn only while the extension is on in this project and approved on this machine, and contributes that theme; otherwise the built-in `charter-dark` is drawn and the Settings tab says why. A value of none of those shapes is ignored with a sentence and the next file down is used. `charter.local.toml`'s value overrides this one, and in a workspace, that workspace's `settings.theme.use` in `workspace.json` comes between the two (charter-app#281). | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
-| `[theme].icons` | str | optional; absent = `charter-icons` | **charter-app only** (FM-3, #1106). The icon theme the file trees draw while this project is in front: `charter-icons` (charter's own, from Material Icon Theme, MIT), or `<extension-id>/<icon theme name>`, one an extension contributes as `contributes.icon_themes` — an object per icon theme with a `name` and a `file`, as `contributes.themes` has. Picked apart from `use`, in the same order (`charter.local.toml` over the workspace's `settings.theme.icons` over this file). An extension's icon theme is drawn only while the extension is on and approved; otherwise `charter-icons` is drawn. The file is data — symbols of path outlines coloured by the `icon.*` tokens, mapped from extensions, file names and folder names — read by `app/src/theme/icons.ts`, which keeps nothing that could run or fetch. | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve_icons` |
-| any other key in `[theme]`, or `theme` that is not a table | — | — | Refused by the Settings tab's save, and ignored by the reader: `[theme]` holds `use` and `icons`. `colour` included: a colour is a workspace's (`settings.theme.colour`, charter-app#281). | stable | `crates/charter-core/src/extension/project/theme.rs` `refusals` |
+| `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one, and in a workspace, that workspace's `settings.extensions.<id>.enabled` in `workspace.json` comes between the two (charter-app#280). `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/purlis-core/src/extension/project.rs` `resolve` |
+| `[extensions.<id>.settings].<key>` | bool or str | optional; absent = the extension's declared default | **charter-app only.** A value for a setting the extension's manifest declares (`bool`, `text` of at most 200 bytes, or one of a `choice`'s words), handed to its program with each question as `settings`. A key it does not declare, or a value it would not accept, is ignored with a sentence and the next file down is used. Overridden key by key by `charter.local.toml`. | stable | `crates/purlis-core/src/extension/project.rs` `resolve`, `crates/purlis-core/src/extension.rs` `Setting::accepts` |
+| any other key in `[extensions.<id>]` | — | — | Refused by the Settings tab's save, and ignored by the reader. | stable | `crates/purlis-core/src/extension/project.rs` `refusals` |
+| `[harness_plugins.<harness>]."<plugin id>"` | bool | optional; absent = not set (the harness decides, from its own settings) | **charter-app only** (charter-app#274, ADR 0050). Whether the chats charter starts in this project have that harness plugin on (`true`) or off (`false`). `<harness>` is a profile `kind`: `claude`, `opencode` or `codex`. `<plugin id>` is the harness's own id (`<name>@<marketplace>` for Claude Code and Codex), one line of at most 200 bytes. Only a plugin this machine has installed is handed on. `charter.local.toml`'s value overrides this one plugin by plugin, and for a chat in a workspace, that workspace's `settings.harness_plugins.<harness>."<plugin id>"` in `workspace.json` comes between the two (charter-app#282). For Claude Code the value goes into the chat's `--settings` `enabledPlugins`. For Codex and opencode it is read, shown as *not supported yet*, and handed to nothing. `charter-app@inline` cannot be `false` and `charter@charter` cannot be `true` under `claude`: a save that says so is refused, and the reader ignores it with a sentence. | stable | `crates/purlis-core/src/harness_plugin.rs` `resolve`, `chosen` |
+| any other shape under `[harness_plugins]` | — | — | A harness charter does not know, a value that is not a bool, or a `[harness_plugins]` or `[harness_plugins.<harness>]` that is not a table is refused by the Settings tab's save and ignored by the reader. | stable | `crates/purlis-core/src/harness_plugin.rs` `refusals` |
+| `[sandbox].mode` | str | optional; absent = **not set**: the plane's chats run as they did before the sandbox existed | **charter-app only** (ADR 0067, program map SD-2). `"on"` is the one value a plane may give it: every chat charter starts in the plane runs in a sandbox charter compiles for its harness, or does not start. **A project `charter init` or the app makes writes `[sandbox]` with `mode = "on"` and the default `egress`** (ADR 0067 §1, ruling V21 1 and 5); a project made before that is offered it once in the window, and taking the offer writes the same block (`sandbox::local::answer`). A person may start **one chat** without it, from the window's new-chat picker only ("Start without the sandbox", ruling V78 a; no CLI word); a system with no sandbox backend (Windows) starts every chat without it (V21 3). Each such start, and the sandbox coming back on for that chat's next run, is a `trust.sandbox.off` or `trust.sandbox.on` event in the host's event log. **A plane can never carry `"off"`**: a committed file may restrict what a chat is confined to and never loosen it, so `"off"`, or any value that is not `"on"` (a typo included), is refused by the Settings tab's save and **read as `"on"`**, with a sentence. So is a `sandbox` that is not a table. A `[sandbox]` with no `mode` is not set. Only a person turns the sandbox off, for one chat. What a chat may write (its own directory and a temp directory, and for a harness charter wraps whole, that harness's own data) and the denial classes (ADR 0067 §5) are not keys: no file can widen them. Read from this file only; `charter.local.toml` refuses the table. What it covers and what it does not is in `SECURITY.md`. | stable | `crates/purlis-core/src/sandbox.rs` `Said::of` |
+| `[sandbox].egress` | array of str | optional; absent = `["model-providers", "forge", "toolchains"]` | **charter-app only** (ADR 0067 §3). The named presets whose hosts a sandboxed chat may reach; a host none of them lists is refused. `forge` also holds the hosts of this file's `[[forge]]` blocks. `[]` reaches no host. A word that is not a preset is refused with a sentence and the rest are kept. SD-4 and SD-31 add presets. | stable | `crates/purlis-core/src/sandbox.rs` `Said::of`, `hosts` |
+| any other key in `[sandbox]`, or `sandbox` that is not a table | — | — | Refused by the Settings tab's save, and ignored by the reader. | stable | `crates/purlis-core/src/sandbox.rs` `Said::of` |
+| `[theme].use` | str | optional; absent = the window's own theme (the operator's `theme.json`, else the first theme from an extension the project has on, else `charter-dark`) | **charter-app only** (charter-app#273, ADR 0048). The theme the window and its terminals draw while this project is in front: `charter-dark`, `charter-light`, `system` (the built-in matching the operating system's appearance, followed live), or `<extension-id>/<theme name>` — split at the first `/`. An extension's theme is drawn only while the extension is on in this project and approved on this machine, and contributes that theme; otherwise the built-in `charter-dark` is drawn and the Settings tab says why. A value of none of those shapes is ignored with a sentence and the next file down is used. `charter.local.toml`'s value overrides this one, and in a workspace, that workspace's `settings.theme.use` in `workspace.json` comes between the two (charter-app#281). | stable | `crates/purlis-core/src/extension/project/theme.rs` `resolve` |
+| `[theme].icons` | str | optional; absent = `charter-icons` | **charter-app only** (FM-3, #1106). The icon theme the file trees draw while this project is in front: `charter-icons` (charter's own, from Material Icon Theme, MIT), or `<extension-id>/<icon theme name>`, one an extension contributes as `contributes.icon_themes` — an object per icon theme with a `name` and a `file`, as `contributes.themes` has. Picked apart from `use`, in the same order (`charter.local.toml` over the workspace's `settings.theme.icons` over this file). An extension's icon theme is drawn only while the extension is on and approved; otherwise `charter-icons` is drawn. The file is data — symbols of path outlines coloured by the `icon.*` tokens, mapped from extensions, file names and folder names — read by `app/src/theme/icons.ts`, which keeps nothing that could run or fetch. | stable | `crates/purlis-core/src/extension/project/theme.rs` `resolve_icons` |
+| any other key in `[theme]`, or `theme` that is not a table | — | — | Refused by the Settings tab's save, and ignored by the reader: `[theme]` holds `use` and `icons`. `colour` included: a colour is a workspace's (`settings.theme.colour`, charter-app#281). | stable | `crates/purlis-core/src/extension/project/theme.rs` `refusals` |
 
 #### `[frame]` — every key, via `FRAME_FIELDS` (`charter/instance.py:1652`)
 
@@ -675,7 +675,7 @@ key refuses.
 - **Tier:** Clone state — the operator's per-clone profiles and overrides, gitignored and hand-edited, so nothing can rebuild it.
 - **Written by:** nothing in the Python charter — `charter init`/`reinit` only add the
   `.gitignore` line for it (`charter/commands.py:1803`, `charter/commands.py:1806`).
-  charter-app's Settings tab (`charter_core::settings::save`, charter-app#252) writes it
+  charter-app's Settings tab (`purlis_core::settings::save`, charter-app#252) writes it
   as it writes `charter.toml` (above), and **creates it on the first save**, at mode 0600. It
   refuses to create or write the file where git would commit it — asked before the file exists
   with `git check-ignore -q -- charter.local.toml` (exit 1 is "would commit", and is also git's
@@ -687,12 +687,12 @@ key refuses.
   `charter harness list` (`charter/commands_harness.py:62`), `charter doctor`
   (`charter/doctor.py:755`), the launcher/selector (`charter/frame/launcher.py:478`,
   `charter/frame/selector.py:25`). In charter-app, its `[extensions]` table is read by
-  `crates/charter-core/src/extension/project.rs` as `charter.toml`'s is (charter-app#253), and
-  its `[theme]` by `crates/charter-core/src/extension/project/theme.rs` (charter-app#273), and
-  its `[harness_plugins]` table by `crates/charter-core/src/harness_plugin.rs` as
+  `crates/purlis-core/src/extension/project.rs` as `charter.toml`'s is (charter-app#253), and
+  its `[theme]` by `crates/purlis-core/src/extension/project/theme.rs` (charter-app#273), and
+  its `[harness_plugins]` table by `crates/purlis-core/src/harness_plugin.rs` as
   `charter.toml`'s is (charter-app#274), and its `[plane]` and `[repos.<name>]` tables by
-  `crates/charter-core/src/planesave.rs` as `charter.toml`'s are (charter-app#292), and its
-  `[chat_env]` table by `crates/charter-core/src/chatenv.rs` on every chat start.
+  `crates/purlis-core/src/planesave.rs` as `charter.toml`'s are (charter-app#292), and its
+  `[chat_env]` table by `crates/purlis-core/src/chatenv.rs` on every chat start.
 - **Git:** gitignored — the baseline writes `/charter.local.toml`
   (`charter/commands.py:1104`), and `reinit` backfills it
   (`charter/commands.py:1821`). If git *would* carry it (tracked, committable, or git cannot
@@ -701,7 +701,7 @@ key refuses.
   then: its `[extensions]`, `[theme]`, `[harness_plugins]`, `[plane]`, `[repos.<name>]` and
   `[chat_env]` are left out too, and the other
   layers decide (charter-app#308, ADR 0048). Every reader takes the file through
-  `crates/charter-core/src/settings.rs` `layer_text`, which applies the same check.
+  `crates/purlis-core/src/settings.rs` `layer_text`, which applies the same check.
 - **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
   since charter-app#253 — `[extensions]` by `extension::project` and, since charter-app#273,
   `[theme]` by `extension::project::theme` (ADR 0048), and, since charter-app#274,
@@ -710,7 +710,7 @@ key refuses.
   **key by key** on ADR 0048's overlay, every surface that shows one naming the file that
   decided it, and `[chat_env]` by `chatenv` (ADR 0047, amendment of 2026-09-29), which has no
   counterpart in `charter.toml`; any other top-level key is refused with a sentence
-  (`charter/profiles.py:325`, and in charter-app `crates/charter-core/src/profiles.rs`
+  (`charter/profiles.py:325`, and in charter-app `crates/purlis-core/src/profiles.rs`
   `derive_from`, whose sentence names all seven tables). A missing file declares nothing and is not a refusal
   (`charter/profiles.py:241`). Profile `env` is stored **sorted by name**
   (`charter/profiles.py:363`), and `~` in `command[0]` and in every `env` value is expanded
@@ -721,15 +721,15 @@ key refuses.
 |---|---|---|---|---|---|
 | `[harness].default` | str | optional | Which profile the selector starts on; wins over `charter.toml`'s. Kept only if it names a profile that survived validation, else recorded as `default_refused`. | stable | `charter/profiles.py:76`, `charter/profiles.py:336`, `charter/profiles.py:366` |
 | `[harness.<name>]` | table | one per profile | A profile. Name must match `^[A-Za-z0-9][A-Za-z0-9_-]*$` (no dot), may not be `default`, may not collide with a `charter` command word, and replaces a built-in of the same name (a *refused* one takes the name with it). | stable | `charter/profiles.py:69`, `charter/profiles.py:255`, `charter/profiles.py:443`, `charter/profiles.py:359` |
-| `…​.kind` | str | required | The word typed after `charter`: `claude`/`codex`/`opencode` (registry `cli_name`s), or in charter-app the name of a harness the project declares in [`harnesses/<name>.toml`](#harnessesnametoml--a-harness-declaration) (ADR 0073), which a profile then also asks approval for. | stable | `charter/profiles.py:257`; `crates/charter-core/src/profiles.rs` `refusal` |
+| `…​.kind` | str | required | The word typed after `charter`: `claude`/`codex`/`opencode` (registry `cli_name`s), or in charter-app the name of a harness the project declares in [`harnesses/<name>.toml`](#harnessesnametoml--a-harness-declaration) (ADR 0073), which a profile then also asks approval for. | stable | `charter/profiles.py:257`; `crates/purlis-core/src/profiles.rs` `refusal` |
 | `…​.command` | list[str] | required, non-empty, all non-empty strings | argv. Never a shell string — no shell runs it. Refused if its first word is charter itself. | stable | `charter/profiles.py:261`, `charter/profiles.py:445` |
 | `…​.env` | table of str→str | optional, default `{}` | Environment for the harness process. A name starting `CHARTER_` is refused; a name containing `KEY`/`TOKEN`/`SECRET`/`PASSWORD` (case-insensitive) is refused. | stable | `charter/profiles.py:265`, `charter/profiles.py:89`, `charter/profiles.py:58` |
 | any other key in a profile table | — | — | Refuses that profile (e.g. `enviroment`). | stable | `charter/profiles.py:86`, `charter/profiles.py:278` |
-| `[extensions.<id>].enabled` | bool | optional | **charter-app only** (charter-app#253, ADR 0048). This machine's choice for this project, over `charter.toml`'s. Same shape and rules as there; still cannot reach past this machine's approval. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
-| `[extensions.<id>.settings].<key>` | bool or str | optional | **charter-app only.** Overrides `charter.toml`'s value for the same key, key by key; falls through to it (then to the declared default) when the extension would not accept this one. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
-| `[theme].use` | str | optional | **charter-app only** (charter-app#273, ADR 0048). This machine's pick of the project's theme, over `charter.toml`'s and over a workspace's `settings.theme.use` (charter-app#281). Same values and rules as there; falls through to the next layer's pick when it is none of the shapes. | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
-| `[plane].<key>`, `[repos.<name>].<key>` | as in `charter.toml` | optional | **charter-app only.** This machine's value, over `charter.toml`'s, key by key. Same shapes and refusals. | stable | ADR 0051; `crates/charter-core/src/planesave.rs` `Settings::from_text` |
-| `[chat_env].pass` | list[str] | optional, default `[]` | **charter-app only** (ADR 0047, amendment of 2026-09-29). More of this machine's own environment every chat started in this plane is given, beyond the built-in keep-list and what the chat's harness declares (`crates/charter-core/src/chatenv.rs` `PASSED`, `Harness::env_passed`). Each entry is a variable's name (letters, digits and `_`, not starting with a digit), or such a name ending in `*` for a prefix. A credential-class name (forge, cloud, model-provider or registry credential, or a name holding `KEY`/`TOKEN`/`SECRET`/`PASSWORD`) passes only by its exact name, never by a prefix. `OP_*`, a vault's declared identity variables, a harness's identity, `CHARTER_WORKSPACE`, `CHARTER_PLANE_ROOT_SESSION` and `TERM` are never passed, whatever is listed. An entry of another shape, a `pass` that is not a list, or another key in the table is refused with a sentence and passes nothing. No counterpart in `charter.toml`. | stable | `crates/charter-core/src/chatenv.rs` `from_text`, `refusals`, `inherited` |
+| `[extensions.<id>].enabled` | bool | optional | **charter-app only** (charter-app#253, ADR 0048). This machine's choice for this project, over `charter.toml`'s. Same shape and rules as there; still cannot reach past this machine's approval. | stable | `crates/purlis-core/src/extension/project.rs` `resolve` |
+| `[extensions.<id>.settings].<key>` | bool or str | optional | **charter-app only.** Overrides `charter.toml`'s value for the same key, key by key; falls through to it (then to the declared default) when the extension would not accept this one. | stable | `crates/purlis-core/src/extension/project.rs` `resolve` |
+| `[theme].use` | str | optional | **charter-app only** (charter-app#273, ADR 0048). This machine's pick of the project's theme, over `charter.toml`'s and over a workspace's `settings.theme.use` (charter-app#281). Same values and rules as there; falls through to the next layer's pick when it is none of the shapes. | stable | `crates/purlis-core/src/extension/project/theme.rs` `resolve` |
+| `[plane].<key>`, `[repos.<name>].<key>` | as in `charter.toml` | optional | **charter-app only.** This machine's value, over `charter.toml`'s, key by key. Same shapes and refusals. | stable | ADR 0051; `crates/purlis-core/src/planesave.rs` `Settings::from_text` |
+| `[chat_env].pass` | list[str] | optional, default `[]` | **charter-app only** (ADR 0047, amendment of 2026-09-29). More of this machine's own environment every chat started in this plane is given, beyond the built-in keep-list and what the chat's harness declares (`crates/purlis-core/src/chatenv.rs` `PASSED`, `Harness::env_passed`). Each entry is a variable's name (letters, digits and `_`, not starting with a digit), or such a name ending in `*` for a prefix. A credential-class name (forge, cloud, model-provider or registry credential, or a name holding `KEY`/`TOKEN`/`SECRET`/`PASSWORD`) passes only by its exact name, never by a prefix. `OP_*`, a vault's declared identity variables, a harness's identity, `CHARTER_WORKSPACE`, `CHARTER_PLANE_ROOT_SESSION` and `TERM` are never passed, whatever is listed. An entry of another shape, a `pass` that is not a list, or another key in the table is refused with a sentence and passes nothing. No counterpart in `charter.toml`. | stable | `crates/purlis-core/src/chatenv.rs` `from_text`, `refusals`, `inherited` |
 
 ---
 
@@ -772,7 +772,7 @@ key refuses.
 - **Tier:** Plane — a harness this project runs that charter does not ship, committed so every clone has it.
 - **Written by:** nothing in charter. The operator writes it, or a chat does, and every clone
   approves it before it runs (below).
-- **Read by:** `crates/charter-core/src/harness_declaration.rs` `read`, which every launch,
+- **Read by:** `crates/purlis-core/src/harness_declaration.rs` `read`, which every launch,
   `charter harness list`, `charter harness show <name>`, `charter doctor` and the app's
   new-chat picker go through (`profiles::derive`). Each file is opened with no link on the
   way, must be a plain file of at most 64 KiB, and is read whole. A file whose name does not
@@ -796,7 +796,7 @@ key refuses.
   `charter.local.toml` of a declared kind asks for both its own command and the declaration.
 - **Built-ins:** Claude Code (`claude`), opencode (`opencode`) and Codex (`codex`) are
   declarations in this format that charter ships
-  (`crates/charter-core/src/harness_declaration/claude.toml`, `opencode.toml`, `codex.toml`),
+  (`crates/purlis-core/src/harness_declaration/claude.toml`, `opencode.toml`, `codex.toml`),
   read by the same reader. They are not files in the project, and **a project never takes a
   built-in's name**: a built-in's declaration decides how its chats are armed (ADR 0073 §3).
   `charter harness show <name>` prints any of them, under a comment line naming its file and
@@ -810,7 +810,7 @@ key refuses.
 
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|
-| `name` | str | required | The word a profile's `kind` names. Letters, digits, `_` and `-`, starting with a letter or digit, and the file's own name. Not a built-in's. | stable | `crates/charter-core/src/harness_declaration.rs` `parse`, `read` |
+| `name` | str | required | The word a profile's `kind` names. Letters, digits, `_` and `-`, starting with a letter or digit, and the file's own name. Not a built-in's. | stable | `crates/purlis-core/src/harness_declaration.rs` `parse`, `read` |
 | `title` | str | default `name` | What the operator calls it: the harness card's label, *What <title> can do here* (HP-19). **One line of at most 60 characters with no control, bidi or zero-width character**, and in a project's declaration never the title of a harness charter ships (ignoring case). | stable | same, `MOST_TITLE`, `drawn_refusal` |
 | `program` | str | required | **A bare program name found on `PATH`**: letters, digits, `.`, `_`, `+` and `-`, starting with a letter or digit, at most 128 characters. Never a path, `~`, a flag or a shell string. **Never a shell, an interpreter or a launcher** (`sh`, `bash`, `env`, `node`, `python3`, `npx`, `osascript`, `arch`, `xcrun`, `tmux`, `git`, `vim`, version managers such as `mise` and `pyenv`, and the like, matched without case; V66, V66c). A renamed or linked interpreter is not caught by its name; the approval dialog, which shows every word, is the control for that case. **Never a program of a harness charter ships** either, which runs only armed, through its adapter. A profile in `charter.local.toml` can point a chat at a path on this machine. | stable | same, `bare_word`, `launcher` |
 | `env` | list[str] | default `[]` | The harness's own environment namespace: a variable's name in capitals, digits and `_`, or a prefix ending `_*` (`AIDER_*`). Refused: anything reaching `CHARTER_*`; a name holding `KEY`/`TOKEN`/`SECRET`/`PASSWORD`; anything that could reach a credential family `chatenv::CREDENTIALS` lists (a forge's, a cloud's, a model provider's or a registry's: `AWS_*`, `GITHUB_*`, `OPENAI_*`, `ANTHROPIC_*`, `GEMINI_*`, …), in either direction of a prefix; and anything reaching what changes how a process loads, runs or finds programs (`LD_*`, `DYLD_*`, `NODE_OPTIONS`, `PYTHONPATH`, `PATH`, `GIT_*`, …). **Decided, not yet read** at launch: a chat on a declared harness is started with the built-in keep-list and `[chat_env] pass` until [#967](https://github.com/diazoxide/charter/issues/967) passes it. | stable | same, `env_ok` |
@@ -825,7 +825,7 @@ key refuses.
 | `[terminal].ready_to_type` | `"on-start"`, `"raw-and-quiet"` or `"never"` | default `"never"` | When a curation prompt may be typed into a new chat (ADR 0061). `"on-start"` waits for a hook, so only a harness with hooks may say it. | stable | same |
 | `[levels].terminal` | bool | default `true` | Level 1. Every declaration offers it; `false` is refused. | stable | same |
 | `[levels].hooks` | bool | default `false` | Level 2. `true` only in a built-in: a project declaration that says it is refused (V24c). | stable | same |
-| `[levels].acp` | list[str] | optional | Level 3 over ACP: the argv that starts the harness's ACP agent. Its first word follows `program`'s rules and the rest `new`'s shapes. The built-in opencode declaration names `["opencode", "acp"]`, which HP-2's client (`charter_core::acp`) runs; a chat starts at level 3 from a declaration once #1076 wires it in. | stable | same |
+| `[levels].acp` | list[str] | optional | Level 3 over ACP: the argv that starts the harness's ACP agent. Its first word follows `program`'s rules and the rest `new`'s shapes. The built-in opencode declaration names `["opencode", "acp"]`, which HP-2's client (`purlis_core::acp`) runs; a chat starts at level 3 from a declaration once #1076 wires it in. | stable | same |
 | `[capabilities].<name>` | str | optional | A harness capability (ADR 0073 §6): `"yes"`, `"no: <the reason>"` or `"unknown"`; the reason is drawn on the harness card, so it is **one line of at most 200 characters with no control, bidi or zero-width character**. One left out is unknown, which charter treats as no. The names: `reports_its_process`, `reports_its_start_before_the_first_prompt`, `keeps_conversations_by_directory`, `reports_waiting`, `resumes_by_id` (`"yes"` needs `[session].resume`), `per_chat_plugins`. A ticket that reads a new one adds it here. | stable | same, `CAPABILITIES` |
 
 ---
@@ -837,7 +837,7 @@ key refuses.
 - **Status:** **stable** — it records an operator's consent to run a committed declaration's
   program on this clone, and it decides whether a chat starts.
 - **Tier:** Clone state — the operator's consent to run a project's harness declaration on this clone. Deleting it makes every declaration ask again.
-- **Written by:** `crates/charter-core/src/profiletrust.rs` `approve`, from the new-chat
+- **Written by:** `crates/purlis-core/src/profiletrust.rs` `approve`, from the new-chat
   picker's approval, through the same gated write as
   [`.charter/harness-profiles-launched.json`](#charterharness-profiles-launchedjson):
   `rewrite::replace` at `0600`, refusing a record that is a link or resolves outside the
@@ -925,7 +925,7 @@ key refuses.
 - **Status:** **stable**. It is committed, and git reads it.
 - **Tier:** Plane — committed.
 - **Written by:** charter-app's `init` and `reinit`, through
-  `crates/charter-core/src/scaffold/mod.rs` `ensure_gitattributes` (charter-app#295, ADR 0051):
+  `crates/purlis-core/src/scaffold/mod.rs` `ensure_gitattributes` (charter-app#295, ADR 0051):
   the block is replaced where it is, or added at the end, and every other line is kept.
 - **Read by:** git, on every merge and rebase a save makes.
 - **Git:** committed.
@@ -1279,7 +1279,7 @@ Two rules hold for the whole area and are not repeated per file:
   rewrites `name` and keeps the owner: a manifest charter stamped is stamped again, one a hand
   wrote stays unstamped),
   `workspace reinit` (backfill, `charter/workspace.py:4645`).
-  **In charter-app, also the Settings tab's Workspace level** (`charter_core::settings::workspace`,
+  **In charter-app, also the Settings tab's Workspace level** (`purlis_core::settings::workspace`,
   charter-app#280, NO-7 #1232): a setting's change to `settings` (`save`), or the whole text
   from its Edit as JSON link (`save_text`). Both refuse to write over a manifest that changed on
   disk since the tab read it, refuse what the settings readers would refuse that the manifest did
@@ -1291,12 +1291,12 @@ Two rules hold for the whole area and are not repeated per file:
   (`charter/workspace.py:1556`), `restore` (`charter/commands_workspace.py:955`), `fork`
   (`charter/commands_workspace.py:1709`), `merge_repo_rows` (`charter/workspace.py:1739`),
   `last_active` (`charter/workspace.py:4421`). In charter-app, its `settings` are read by
-  `crates/charter-core/src/extension/project.rs` (`Choices::read_in`) for Settings at the
+  `crates/purlis-core/src/extension/project.rs` (`Choices::read_in`) for Settings at the
   Workspace level, the window's filter on extension panels and views for the focused workspace, and
   the executor's gate for a view on that workspace's strip (charter-app#280); by
-  `crates/charter-core/src/harness_plugin.rs` (`Choices::read_in`) for Settings at the Workspace
+  `crates/purlis-core/src/harness_plugin.rs` (`Choices::read_in`) for Settings at the Workspace
   level and for every chat started in the workspace (charter-app#282); and its `settings.theme`
-  by `crates/charter-core/src/extension/project/theme.rs` (`Said::read_in`, `colour_of`) for
+  by `crates/purlis-core/src/extension/project/theme.rs` (`Said::read_in`, `colour_of`) for
   Settings at the Workspace level, the theme the window draws while the workspace is in front, and
   every workspace tab's colour (charter-app#281).
 - **Git:** gitignored unless LIVE (`!/workspaces/<ws>/workspace.json`,
@@ -1328,8 +1328,8 @@ Two rules hold for the whole area and are not repeated per file:
 | `updated_at` | string | required | UTC ISO-8601, `timespec="seconds"`, e.g. `2026-09-17T14:01:35+00:00` | stable | `charter/workspace.py:1616`, `charter/commands_workspace.py:940` |
 | `updated_by` | string | required | `$USER` or `"unknown"` for automatic writes (`charter/workspace.py:1633`); `git config user.name` for `snapshot`/`fork` (`charter/commands_workspace.py:860`) | stable | `charter/workspace.py:1679` |
 | `forked_from` | string | present only on a fork | the source workspace | stable | `charter/commands_workspace.py:1714` |
-| `settings` | object | **absent** in every manifest written before charter-app#280, and in one whose workspace sets nothing; absent = the project's answer | **charter-app only** (charter-app#280, ADR 0048). The workspace's layer of the project's settings, read between `charter.toml` and `charter.local.toml`. Its keys mirror those files' tables — see [`settings`](#settings--a-workspaces-layer) below. Every writer keeps it: `snapshot`, `fork` (which inherits it) and a clone's `record_members` mutate the document they read. | stable | `crates/charter-core/src/settings/workspace.rs` |
-| `charter_generated` | string | written on every charter write | sha256 of the rest of the document, canonically serialised. In a project migrated to purlis names the key is `purlis_generated`, and a stamp renames `charter_generated` in place; either is read, `purlis_generated` first (V93g, V93i) | stable | `crates/charter-core/src/manifest.rs` |
+| `settings` | object | **absent** in every manifest written before charter-app#280, and in one whose workspace sets nothing; absent = the project's answer | **charter-app only** (charter-app#280, ADR 0048). The workspace's layer of the project's settings, read between `charter.toml` and `charter.local.toml`. Its keys mirror those files' tables — see [`settings`](#settings--a-workspaces-layer) below. Every writer keeps it: `snapshot`, `fork` (which inherits it) and a clone's `record_members` mutate the document they read. | stable | `crates/purlis-core/src/settings/workspace.rs` |
+| `charter_generated` | string | written on every charter write | sha256 of the rest of the document, canonically serialised. In a project migrated to purlis names the key is `purlis_generated`, and a stamp renames `charter_generated` in place; either is read, `purlis_generated` first (V93g, V93i) | stable | `crates/purlis-core/src/manifest.rs` |
 
 **`charter_generated` computation** (a Rust writer must match it byte for byte), the same over
 either key name, so a digest moved to `purlis_generated` still matches:
@@ -1355,16 +1355,16 @@ next layer down answers.
 
 | Key | Type | Meaning | Source |
 |---|---|---|---|
-| `settings.extensions.<id>.enabled` | bool | Whether this workspace has the extension on, over `charter.toml`'s `[extensions.<id>] enabled` and under `charter.local.toml`'s. It cannot reach past this machine's approval. | `crates/charter-core/src/extension/project.rs` `resolve` |
-| `settings.extensions.<id>.settings.<key>` | bool or str | A value for a setting the extension declares, over Shared's and under Local's, key by key. A value it would not accept is ignored with a sentence and the next layer down is used. | `crates/charter-core/src/extension/project.rs` `resolve` |
-| any other key in `settings.extensions.<id>` | — | Refused by the Workspace level's save, and ignored by the reader, in the words it refuses `[extensions]` in a TOML file. | `crates/charter-core/src/extension/project.rs` `refusals_in` |
-| `settings.harness_plugins.<harness>."<plugin id>"` | bool | **charter-app#282, ADR 0050.** Whether the chats charter starts in this workspace have that harness plugin on or off, over `charter.toml`'s `[harness_plugins.<harness>]` and under `charter.local.toml`'s, plugin by plugin. A chat is in the workspace when its directory is under `workspaces/<ws>/`. Everything the TOML key says holds here: only a plugin this machine has installed is handed on, Codex and opencode show it as *not supported yet* and hand it to nothing, and `charter-app@inline` cannot be `false` nor `charter@charter` `true` under `claude`. | `crates/charter-core/src/harness_plugin.rs` `resolve`, `for_start` |
-| any other shape under `settings.harness_plugins` | — | Refused by the Workspace level's save, and ignored by the reader, in the words it refuses `[harness_plugins]` in a TOML file, with the key named at `settings.harness_plugins…`. | `crates/charter-core/src/harness_plugin.rs` `refusals_in` |
-| `settings.theme.use` | str | The theme the window and its terminals draw while this workspace is in front (charter-app#281): the same values as `charter.toml`'s `[theme].use`, over it and under `charter.local.toml`'s. An extension's theme is drawn only while that extension is on in this workspace, so a workspace that turns it off draws the built-in `charter-dark` and says why. A value of none of the shapes is ignored with a sentence and the next layer down is used. | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
-| `settings.theme.icons` | str | The icon theme the file trees draw while this workspace is in front (FM-3, #1106): the same values as `charter.toml`'s `[theme].icons`, over it and under `charter.local.toml`'s. | `crates/charter-core/src/extension/project/theme.rs` `resolve_icons` |
-| `settings.theme.colour` | str | The workspace's colour (charter-app#281): one of `red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`, or `#rrggbb`, whose hue is taken. **A workspace's alone**: the project's files cannot set one, and no other layer overrides it. It picks no theme; the window tints the accent, the focus ring and this workspace's tab and chat strip shades of the theme it draws with the hue, at the same luminance, and leaves text and the terminal as they are. Any other value is ignored with a sentence, and the workspace has no colour. | `crates/charter-core/src/extension/project/theme.rs` `resolve`, `colour_of`; the tint, `app/src/theme/tint.ts` |
-| any other key in `settings.theme`, or `settings.theme` that is not an object | — | Refused by the Workspace level's save, and ignored by the reader: a workspace's theme holds `use`, `icons` and `colour`. | `crates/charter-core/src/extension/project/theme.rs` `refusals_in_workspace` |
-| any other key in `settings`, or `settings` that is not an object | — | Refused by the save, and ignored by the reader: a workspace's settings hold `extensions`, `harness_plugins` and `theme` and nothing else. | `crates/charter-core/src/settings/workspace.rs` `refusals` |
+| `settings.extensions.<id>.enabled` | bool | Whether this workspace has the extension on, over `charter.toml`'s `[extensions.<id>] enabled` and under `charter.local.toml`'s. It cannot reach past this machine's approval. | `crates/purlis-core/src/extension/project.rs` `resolve` |
+| `settings.extensions.<id>.settings.<key>` | bool or str | A value for a setting the extension declares, over Shared's and under Local's, key by key. A value it would not accept is ignored with a sentence and the next layer down is used. | `crates/purlis-core/src/extension/project.rs` `resolve` |
+| any other key in `settings.extensions.<id>` | — | Refused by the Workspace level's save, and ignored by the reader, in the words it refuses `[extensions]` in a TOML file. | `crates/purlis-core/src/extension/project.rs` `refusals_in` |
+| `settings.harness_plugins.<harness>."<plugin id>"` | bool | **charter-app#282, ADR 0050.** Whether the chats charter starts in this workspace have that harness plugin on or off, over `charter.toml`'s `[harness_plugins.<harness>]` and under `charter.local.toml`'s, plugin by plugin. A chat is in the workspace when its directory is under `workspaces/<ws>/`. Everything the TOML key says holds here: only a plugin this machine has installed is handed on, Codex and opencode show it as *not supported yet* and hand it to nothing, and `charter-app@inline` cannot be `false` nor `charter@charter` `true` under `claude`. | `crates/purlis-core/src/harness_plugin.rs` `resolve`, `for_start` |
+| any other shape under `settings.harness_plugins` | — | Refused by the Workspace level's save, and ignored by the reader, in the words it refuses `[harness_plugins]` in a TOML file, with the key named at `settings.harness_plugins…`. | `crates/purlis-core/src/harness_plugin.rs` `refusals_in` |
+| `settings.theme.use` | str | The theme the window and its terminals draw while this workspace is in front (charter-app#281): the same values as `charter.toml`'s `[theme].use`, over it and under `charter.local.toml`'s. An extension's theme is drawn only while that extension is on in this workspace, so a workspace that turns it off draws the built-in `charter-dark` and says why. A value of none of the shapes is ignored with a sentence and the next layer down is used. | `crates/purlis-core/src/extension/project/theme.rs` `resolve` |
+| `settings.theme.icons` | str | The icon theme the file trees draw while this workspace is in front (FM-3, #1106): the same values as `charter.toml`'s `[theme].icons`, over it and under `charter.local.toml`'s. | `crates/purlis-core/src/extension/project/theme.rs` `resolve_icons` |
+| `settings.theme.colour` | str | The workspace's colour (charter-app#281): one of `red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`, or `#rrggbb`, whose hue is taken. **A workspace's alone**: the project's files cannot set one, and no other layer overrides it. It picks no theme; the window tints the accent, the focus ring and this workspace's tab and chat strip shades of the theme it draws with the hue, at the same luminance, and leaves text and the terminal as they are. Any other value is ignored with a sentence, and the workspace has no colour. | `crates/purlis-core/src/extension/project/theme.rs` `resolve`, `colour_of`; the tint, `app/src/theme/tint.ts` |
+| any other key in `settings.theme`, or `settings.theme` that is not an object | — | Refused by the Workspace level's save, and ignored by the reader: a workspace's theme holds `use`, `icons` and `colour`. | `crates/purlis-core/src/extension/project/theme.rs` `refusals_in_workspace` |
+| any other key in `settings`, or `settings` that is not an object | — | Refused by the save, and ignored by the reader: a workspace's settings hold `extensions`, `harness_plugins` and `theme` and nothing else. | `crates/purlis-core/src/settings/workspace.rs` `refusals` |
 
 **Written by** Settings at the Workspace level (`settings::workspace::save`, SE-20), which changes only
 `settings`: every other key keeps its place and value, a key removed takes every object it
@@ -1395,7 +1395,7 @@ excepted), and for a secret-shaped value, named by its kind.
   `workspace archive|unarchive <slug>` (`memstore::archive_one`, `memstore::unarchive`),
   and the window's memory tab, which calls the same functions (ADR 0065). **In charter-app,
   also** the first run's *Memory from the repo* tab (FR-18a,
-  `charter_core::repoinstructions::import`): a clone's `CLAUDE.md`, `AGENTS.md` and
+  `purlis_core::repoinstructions::import`): a clone's `CLAUDE.md`, `AGENTS.md` and
   `.cursor/rules/**/*.{md,mdc}`, one memory each through `remember_titled`, titled
   `<file> from <repo>` with the file's text as it is, and only on the tab's press. It keeps no
   store of its own: a file is already imported when a memory's body holds its text.
@@ -1583,9 +1583,9 @@ file `memstore.write` could have written in its new store.
   0088](adr/0088-a-work-items-identity-is-its-tracker-key-and-the-project-records-its-links.md),
   V40, FW-5 #732). Absent in a workspace nothing has linked or promoted.
 - **Tier:** Plane when LIVE, Clone state when LOCAL — committed with a LIVE workspace, as its todos are, because FI6's links must reach the operator's other devices; unlike the piece claim log and the landing log, which stay in their clone.
-- **Written by:** `charter_core::work::log` (`append`, and `append_alias`, which refuses an
+- **Written by:** `purlis_core::work::log` (`append`, and `append_alias`, which refuses an
   alias that would close a cycle). Its writers today:
-  - `charter ws todo promote`: a `promoted` alias (`charter_core::work::promote`);
+  - `charter ws todo promote`: a `promoted` alias (`purlis_core::work::promote`);
   - the app's host, for the window: a chat's link and unlink (`log::link_chat` and
     `log::unlink_chat`, called by `chat_work_link` and `chat_work_unlink` in
     `app/src-tauri/src/worklinks.rs`), which the window offers as **Link to work item…** and
@@ -1609,7 +1609,7 @@ file `memstore.write` could have written in its new store.
 
   The Work list's workspace links, `workspace rename`'s `renamed` aliases and the item cache's
   `moved` aliases (FW-7) are **decided, not yet written**.
-- **Read by:** `charter_core::work::log::fold`, for the Work list (`work::list::of`, which the
+- **Read by:** `purlis_core::work::log::fold`, for the Work list (`work::list::of`, which the
   board, FW-9, will draw), `charter ws todo` (which finishes closing a promoted todo whose
   close a crash cut short), and `charter doctor`'s `work links` row, shown only when there is
   something to report: a todo a promote aliased but did not close, skipped lines (named by
@@ -1852,7 +1852,7 @@ file `memstore.write` could have written in its new store.
   `charter change land` (`charter/commands_change.py:1501`), after the merge is read back.
   `change.record_landing` (`charter/change.py:156`) is a second writer with the same shape
   — see the Appendix. In this app: `change::landing::append`, from `charter change land`
-  (`crates/charter-core/src/change/land.rs`) once the read-back confirms the merge at the head
+  (`crates/purlis-core/src/change/land.rs`) once the read-back confirms the merge at the head
   the checks passed on, or from a later `charter change land` that finds merged, at that head,
   a request charter's pending landing (below) says it asked for: one queued, or one whose
   read-back failed.
@@ -1872,7 +1872,7 @@ file `memstore.write` could have written in its new store.
   the short hostname the Python charter used: `socket.gethostname().split(".")[0]` with every
   character outside `[A-Za-z0-9_-]` removed, truncated to 32, `"unknown"` when empty
   (`charter/change.py:142`, `charter/pieces.py:71`). Writing a line never mints the id
-  (`charter_core::dispatch::log_name`). A file named by a hostname that an earlier version
+  (`purlis_core::dispatch::log_name`). A file named by a hostname that an earlier version
   wrote is still read beside the new one, since every reader reads every file in the
   directory; FR-9 renames those (#607). The line is
   `contain.json_line(line, sort_keys=True) + "\n"` — **keys sorted, `ensure_ascii=True`**
@@ -1900,7 +1900,7 @@ file `memstore.write` could have written in its new store.
   charter started a landing. Deleting it costs only that: a merge charter queued and has not
   yet recorded is then never recorded as charter's.
 - **Written by:** `change::pending::append`, from `charter change land`
-  (`crates/charter-core/src/change/land.rs`): `asked` before it asks the forge to merge or to
+  (`crates/purlis-core/src/change/land.rs`): `asked` before it asks the forge to merge or to
   queue, `refused` when the forge refused, `merge-later` when GitLab set the request to merge
   later and charter could not undo it.
 - **Read by:** `change::pending::pendings`, for `charter change land` (its own member, and
@@ -2126,8 +2126,8 @@ beside a purlis one is removed when the record is published (V93i).
 - **Read by:** `charter workspace fork`, which copies it into the fork after the charter, the
   memory and the todos — whether or not the extension is on in the project, and only for an
   extension this machine approved whose bytes are unchanged
-  (`crates/charter-core/src/extension/events.rs` `carried`,
-  `crates/charter-core/src/wscmd/fork.rs`). A folder of that name that is a clone (it holds
+  (`crates/purlis-core/src/extension/events.rs` `carried`,
+  `crates/purlis-core/src/wscmd/fork.rs`). A folder of that name that is a clone (it holds
   `.git`) is never copied.
 
 ### `<clone>/.git/info/exclude` — charter's managed block
@@ -2186,7 +2186,7 @@ beside a purlis one is removed when the record is published (V93i).
   repository and reviewed like its code, and that repository as a whole stays tier None.
 - **Written by:** the operator, by hand, in a commit made outside a chat. charter never writes
   it. `charter scan --explain` prints the entry that would let a finding through.
-- **Read by:** `charter_core::diffscan::checked` and `charter scan`, **as it is at `HEAD`**
+- **Read by:** `purlis_core::diffscan::checked` and `charter scan`, **as it is at `HEAD`**
   (`git show HEAD:.charter-scan-allow.toml`), never from the working tree or the index.
 - **Git:** committed. A chat's `pre-commit` refuses a commit that changes it, including a move
   (`--no-renames`). The Bash guard refuses a chat's `git revert` of a commit that changed it, and
@@ -2250,10 +2250,10 @@ beside a purlis one is removed when the record is published (V93i).
 - **Written by:**
   - a chat's `commit-msg` hook, for every commit the agent makes itself in a chat whose git runs
     charter's hooks (ADR 0074 as amended by V67). `charter git-hook commit-msg` reads the chat
-    from `$CHARTER_SESSION_ID` and the app's record (`charter_core::provenance::stamp`). It
+    from `$CHARTER_SESSION_ID` and the app's record (`purlis_core::provenance::stamp`). It
     never refuses a commit, and a `charter` that has gone leaves the message as written;
   - `charter save`, when it is run inside a chat, for the project save it commits
-    (`charter_core::planegit`).
+    (`purlis_core::planegit`).
 - **Never written** on a commit the operator makes by hand: their terminal is not armed, a
   save from the window's button or from auto-save is the app's, and a shell tab is no harness.
 - **Spelled per repo:** `[plane].assisted_by` and `[repos.<name>].assisted_by`, `"full"` (the
@@ -2357,7 +2357,7 @@ a command acts on, or record workspace state.
 | `.charter/workspace-tab-order` | Clone state, legacy | one workspace name per line, the tab strip's order | stable — the frame and the palette read the order another process wrote; deleting it costs the order, which the next launch recomputes (`charter/workspace.py:1066`) | `charter/workspace.py:978`, written `charter/workspace.py:1023` |
 | `.charter/workspace-arrivals/<name>` | Clone state, transient, legacy | empty file; its existence marks "a handoff landed here" | stable — one process records the arrival, another reads it; deleting it clears the mark only | `charter/workspace.py:1113`, `charter/workspace.py:1127` |
 | `.charter/unrecorded/<sha256(realpath(tree))[:32]>.json` | Clone state, rebuildable | `{"errno": …, "says": …}` for a marker publish that failed | stable — `doctor` reads it in another process; recomputed on the next failed publish | `charter/workspace.py:2960`, written `charter/workspace.py:2977` |
-| `.charter/workspace-rename.json` | Clone state, transient | **charter-app only** (charter#367). `{"from": <old>, "to": <new>, "moved": <bool>}`, JSON, 0600, replaced whole by `rewrite::replace`: the journal of a `charter workspace rename` in progress. Written before `workspaces/<old>` is renamed, marked `moved` right after (the commit point), and removed once every record that names the workspace has followed. While one that got past the commit point is there, every other rename is refused and the same rename finishes it. One that never moved is stale and the next rename replaces it | stable — a second process (the next rename) reads what the first wrote; deleting it after the move leaves the records the rename had not reached yet naming the old name | `crates/charter-core/src/wscmd/rename.rs` |
+| `.charter/workspace-rename.json` | Clone state, transient | **charter-app only** (charter#367). `{"from": <old>, "to": <new>, "moved": <bool>}`, JSON, 0600, replaced whole by `rewrite::replace`: the journal of a `charter workspace rename` in progress. Written before `workspaces/<old>` is renamed, marked `moved` right after (the commit point), and removed once every record that names the workspace has followed. While one that got past the commit point is there, every other rename is refused and the same rename finishes it. One that never moved is stale and the next rename replaces it | stable — a second process (the next rename) reads what the first wrote; deleting it after the move leaves the records the rename had not reached yet naming the old name | `crates/purlis-core/src/wscmd/rename.rs` |
 | `.charter/ws-autosave/<ws>` | Clone state, transient, legacy | debounce marker (mtime + a float) for the Stop-hook autosave | internal — deleting it costs one extra commit attempt | `charter/commands_workspace.py:1171`, written `charter/commands_workspace.py:1179` |
 
 Resolution order (`workspace.chosen`, `charter/workspace.py:615`–`649`, and `resolve`
@@ -2433,7 +2433,7 @@ A persona name is `[a-z0-9][a-z0-9._-]*`, matched with `fullmatch`
 own namespaces (`_shared`, `_dispatch`, `_skills`) and `list_personas` skips any directory
 starting with `_` (`charter/persona.py:234`).
 
-**In charter-app** the name `charter` is reserved too (`crates/charter-core/src/personas.rs`,
+**In charter-app** the name `charter` is reserved too (`crates/purlis-core/src/personas.rs`,
 `RESERVED`), because `charter/<id>` names charter's own curation actions (ADR 0061).
 `charter persona create charter` is refused. A persona that already has the name still loads,
 runs and can be removed, but `charter persona lint` reports it as an error and none of its
@@ -2473,7 +2473,7 @@ curation actions is offered.
   `:36`/`:57`), `charter/commands.py:2677` (`_ensure_front_door`, template at
   `charter/commands.py:2597`), `charter/persona.py:2504` (`migrate` renames the legacy flat
   file here). Plain `Path.write_text` — no atomic rename, no lock. **In charter-app, also a
-  project template** (FR-17, `crates/charter-core/src/template.rs` `apply`): each template's
+  project template** (FR-17, `crates/purlis-core/src/template.rs` `apply`): each template's
   two personas (`<stack>-engineer` and `<stack>-reviewer`; `docs-writer` and `docs-reviewer`
   for docs only), with `memory/.gitkeep` and `refs/.gitkeep`, only when the persona's
   directory is not there at all, and each file only when it is absent, then its sub-agent in
@@ -2779,7 +2779,7 @@ typed into it and never sent. This file declares one, and the persona it sits un
 that runs it.
 
 - **Format:** Markdown with the same line-based frontmatter as
-  [`persona.md`](#personasnamepersonamd) (`crates/charter-core/src/personas.rs`,
+  [`persona.md`](#personasnamepersonamd) (`crates/purlis-core/src/personas.rs`,
   `frontmatter` and `charter_body`: not YAML, quotes kept, a key matched exactly). The body
   below the frontmatter is the prompt template.
 - **Status:** stable — hand-edited, committed, and read by the app's menus and by
@@ -2789,7 +2789,7 @@ that runs it.
   writes it only when it would read back without an error and never over an existing file.
   Removed by `charter persona curation remove <name> <id>`, and with the whole persona by
   `charter persona remove`.
-- **Read by:** `crates/charter-core/src/curation.rs` (`declared`, `resolve`, `lint`), which
+- **Read by:** `crates/purlis-core/src/curation.rs` (`declared`, `resolve`, `lint`), which
   `charter persona curation list`, `charter curation show` and `charter persona lint` all
   call.
 - **Git:** committed, like everything else under `personas/<name>/`.
@@ -2831,7 +2831,7 @@ that runs it.
 
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|
-| `label` | string (one line) | required, non-empty | What the menu and the palette show | stable | `crates/charter-core/src/curation.rs` |
+| `label` | string (one line) | required, non-empty | What the menu and the palette show | stable | `crates/purlis-core/src/curation.rs` |
 | `on` | CSV of `workspace`, `persona`, `plane` | required, at least one; an unknown kind is an error | The kinds of subject the action is offered on | stable | same |
 | `runs-in` | `subject` \| `plane` | absent → a workspace subject runs in its directory, a persona or the plane at the plane root; an unknown value is an error | The directory the chat starts in. `subject` is the subject's own directory (the workspace's, `personas/<name>/`, or the plane root) | stable | same |
 
@@ -3141,7 +3141,7 @@ before it is stored.
   A report waits here from the moment a handed-off chat sends it (`charter handoff report`)
   until the turn it is handed to.
 - **Tier:** Clone state, transient — a report waiting to be taken by one chat's hook.
-- **Written by:** `charter_core::handback::leave` (charter-app#259), from the app's answer to a
+- **Written by:** `purlis_core::handback::leave` (charter-app#259), from the app's answer to a
   report, and from `handback::orphan` when a chat with reports waiting is closed.
 - **Read by:** `charter hook userpromptsubmit` (`chat-<n>/`, `<n>` from `$CHARTER_SESSION_ID`)
   and `charter hook sessionstart` (`workspace-<ws>/`, the session's workspace, or `plane-root/`
@@ -3307,7 +3307,7 @@ literal `fixture-not-a-secret`.
 |---|---|---|---|---|---|
 | `vaults` | object | defaulted to `{}` on read | name → entry | stable | `charter/secrets/registry.py:60` |
 | `vaults.<name>` | object | — | one vault. A non-object entry is dropped from the merged view and reported | stable | `charter/secrets/registry.py:92` |
-| `vaults.<name>.provider` | string | required | `keyring` \| `plain-file` \| `reference` \| `1password`. `keyring` is charter-app's (ADR 0047), the default `vault add` writes; a Python charter reads it as an unknown provider | stable | `charter/secrets/registry.py:39`, `:245`; `crates/charter-core/src/secrets/registry.rs` (`PROVIDERS`) |
+| `vaults.<name>.provider` | string | required | `keyring` \| `plain-file` \| `reference` \| `1password`. `keyring` is charter-app's (ADR 0047), the default `vault add` writes; a Python charter reads it as an unknown provider | stable | `charter/secrets/registry.py:39`, `:245`; `crates/purlis-core/src/secrets/registry.rs` (`PROVIDERS`) |
 | `vaults.<name>.persona` | string \| null | written always, `null` when no `--persona` | persona tag | stable | `charter/secrets/registry.py:299` |
 | `vaults.<name>.config` | object | written always (may be `{}`) | provider config, merged per key over the local half | stable | `charter/secrets/registry.py:113` |
 
@@ -3321,7 +3321,7 @@ literal `fixture-not-a-secret`.
 | `account` | string | `--account` | 1Password account pin — **LOCAL_ONLY, never written to the shared half** | stable | `charter/secrets/registry.py:50`, `:298`, `:317` |
 | `env` | object `{TARGET: SOURCE}` | `--env TARGET=SOURCE` / `--token-env X` | env var NAMES only (e.g. `{"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_TOKEN"}`); never a value | stable | `charter/commands_secrets.py:188`, `charter/commands_secrets.py:80`; read `charter/secrets/base.py:291` |
 | `version` | string | hand-written only | `browser://` resolver's npx package version | stable | `charter/secrets/reference.py:104` |
-| `identity` | object | the vault tab's token box / *Move…*, into the **local half only** | The moved-token record: `{"held":"keyring","base":"purlis","bindings":{TARGET:SOURCE},"op_vault":…,"account":…,"op_cmd":…,"op_team":…,"ids":{SOURCE:<id>}}`. Each source is read from the keyring item `<base>/@identity/<id>` (account the source name) first and the environment second. **`base` says which base, and only that one is read:** a move made now writes `"base":"purlis"` and its item under `purlis/@identity/<id>`; a record without the field was made before the rename and is read only from `charter/@identity/<id>` during the rename window (#1261). `rename-local`'s keychain copy switches a record to `purlis` only after every item of it read back the same from `purlis/@identity/<id>`, and `purlis migrate --undo` removes the field again (RN-6); a `base` charter does not know is an error. A read happens **only while the vault's effective `env`/op-vault/account still equal `bindings`/`op_vault`/`account`** and the pinned `op_cmd`/`op_team` verify. **Read from `.charter/vaults.json` alone**; a committed one is ignored, so a commit cannot mark or redirect (#271 review, U2/U5). charter-app only (#237, ADR 0047 as amended); a Python charter ignores the key | stable | `crates/charter-core/src/secrets/identity.rs` (`MARK`, `BASE`, `READ_BASES`, `record`, `record_matches`, `pinned_op`) |
+| `identity` | object | the vault tab's token box / *Move…*, into the **local half only** | The moved-token record: `{"held":"keyring","base":"purlis","bindings":{TARGET:SOURCE},"op_vault":…,"account":…,"op_cmd":…,"op_team":…,"ids":{SOURCE:<id>}}`. Each source is read from the keyring item `<base>/@identity/<id>` (account the source name) first and the environment second. **`base` says which base, and only that one is read:** a move made now writes `"base":"purlis"` and its item under `purlis/@identity/<id>`; a record without the field was made before the rename and is read only from `charter/@identity/<id>` during the rename window (#1261). `rename-local`'s keychain copy switches a record to `purlis` only after every item of it read back the same from `purlis/@identity/<id>`, and `purlis migrate --undo` removes the field again (RN-6); a `base` charter does not know is an error. A read happens **only while the vault's effective `env`/op-vault/account still equal `bindings`/`op_vault`/`account`** and the pinned `op_cmd`/`op_team` verify. **Read from `.charter/vaults.json` alone**; a committed one is ignored, so a commit cannot mark or redirect (#271 review, U2/U5). charter-app only (#237, ADR 0047 as amended); a Python charter ignores the key | stable | `crates/purlis-core/src/secrets/identity.rs` (`MARK`, `BASE`, `READ_BASES`, `record`, `record_matches`, `pinned_op`) |
 
 Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepassword.py:134`,
 `:149`) and never written.
@@ -3453,7 +3453,7 @@ charter-app only (ADR 0047); the Python charter has no keyring provider and neve
   the service its items live under: the keyring cannot be enumerated through the `keyring`
   crate. Deleting it strands the vault's items in the keyring, still there and unnamed.
 - **Tier:** Clone state — the only record of which keys a keyring vault holds; the values are in the Keyring tier.
-- **Written by:** `crates/charter-core/src/secrets/keyring.rs` (`set_with`, `delete_with`, and
+- **Written by:** `crates/purlis-core/src/secrets/keyring.rs` (`set_with`, `delete_with`, and
   `get_with` and `take_note` for `held` and `held_note`), after the keyring write succeeded, through the plain-file provider's `write_private` (0600,
   settled on the descriptor first). Commands: `charter secret set`, `charter secret rm`.
 - **Read by:** the same module — `keys`, `listed`, `get`, `ages`, `health`. `secret list`,
@@ -3483,7 +3483,7 @@ charter-app only (ADR 0047); the Python charter has no keyring provider and neve
 **Tier:** Clone state, transient — test builds only; it stands in for the Keyring tier.
 
 In the state directory (`.charter/`, or `$CHARTER_HOME` when set). Written **only** by a fenced
-build (every `cargo test` build, and the app's `e2e` build — `crates/charter-core/src/fence.rs`),
+build (every `cargo test` build, and the app's `e2e` build — `crates/purlis-core/src/fence.rs`),
 which keeps a keyring vault's values here instead of in the
 operating system's store, so no test can reach the operator's keychain. JSON object
 `"<service>\n<account>" → value`, 0600. **It holds values in plaintext**; a build anyone is
@@ -3671,7 +3671,7 @@ through `charter guard ask`'s writer (every harness with command permissions or 
 every workspace layer). Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which charter does not write, so charter's own guard applies there:
 the commands that publish or deploy, such as `Bash(cargo publish *)` for Rust or
 `Bash(twine upload *)` for Python. The list is each template's `[guard] ask` in
-`crates/charter-core/templates/<stack>/template.toml`, and a monorepo's is its own and every
+`crates/purlis-core/templates/<stack>/template.toml`, and a monorepo's is its own and every
 stack's.
 
 Measured after `init` + `guard ask 'terraform apply *'`:
@@ -3724,7 +3724,7 @@ Measured after `init` + `guard ask 'terraform apply *'`:
 - **Never weaker than a deny (charter-app, FR-17's review).** opencode decides a command by
   the **last** rule in `permission.bash` that matches it ("Rules are evaluated by pattern
   match, with the last matching rule winning", opencode.ai/docs/permissions), so where Python
-  appends, `crates/charter-core/src/scaffold/settings.rs` `ensure_opencode_rule` leaves an exact
+  appends, `crates/purlis-core/src/scaffold/settings.rs` `ensure_opencode_rule` leaves an exact
   `"deny"` for the glob as it is (answered `denied`, said by `charter guard ask`, and listed in
   a template's `denied`), and puts a **new** glob before the first `"deny"` entry, so every deny
   that matches the same command still comes after it and still decides, **except** that it
@@ -3809,7 +3809,7 @@ writes is the next heading's `AGENTS.md`, in a piece only (ADR 0085).
 
 **Tier:** Clone state, rebuildable — rendered from persona files when a chat starts.
 
-- **Written by:** `charter_core::start::layered_or_refusal` → `guest::wire_for_chat`, when a
+- **Written by:** `purlis_core::start::layered_or_refusal` → `guest::wire_for_chat`, when a
   chat starts in a piece (`workspaces/<ws>/.worktrees/<repo>/<piece>`). Never in a clone, a
   workspace directory or the project root (ADR 0085).
 - **Format:** Markdown with no frontmatter. The first line is `<!-- GENERATED by charter for
@@ -3990,7 +3990,7 @@ set = { CHARTER_HARNESS = "codex" }
 **Tier:** None — Claude Code's files. The one exception is charter-app's `charter plugin install`
 (ADR 0057), which does write `~/.claude/settings.json`: `extraKnownMarketplaces.charter-app` and
 `enabledPlugins["charter@charter-app"]`, and it removes its entry from
-`plugins/known_marketplaces.json` on uninstall (`crates/charter-core/src/plugin_install.rs`,
+`plugins/known_marketplaces.json` on uninstall (`crates/purlis-core/src/plugin_install.rs`,
 `ClaudeCode`). Those keys are Machine, device-bound and rebuildable, like its opencode and Codex
 lines above; the rest of this section is the Python charter's.
 
@@ -4127,7 +4127,7 @@ does not re-tighten a pre-existing directory but does tighten a pre-existing fil
 
 **In charter-app** (#430) the whole-file replaces — `replace_for`'s equivalent here (the
 profile trust record, the push and save journals, hook state), and the plane's committed files,
-`workspace.json`, the generated harness layer and the vaults — go through one writer, `charter_core::rewrite::replace`. Its temp is
+`workspace.json`, the generated harness layer and the vaults — go through one writer, `purlis_core::rewrite::replace`. Its temp is
 `.charter-generated.<name>.<pid>.<12 hex>.tmp` (the prefix a guest checkout's exclude block
 already hides); it is flushed before the rename and the directory after it; a target that is a
 symlink is refused rather than replaced; and the mode is one of four: kept (committed files),
@@ -4543,10 +4543,10 @@ down rather than read off the code.
   operator has answered it and the record is put back (charter-app#250). **Nothing it names
   starts before that answer.** "Start fresh" rewrites it holding no chat and no view tab, and
   keeps `dealt`; Esc, closing the question, or a window that never answers all mean "Reopen
-  all", and the file is left as it was until then. Also by `charter_core::reopen::conversation_of`,
+  all", and the file is left as it was until then. Also by `purlis_core::reopen::conversation_of`,
   which answers the conversation one chat is in by its `number` — how a chat asks which
   conversation it is, keyed by the `$CHARTER_SESSION_ID` the app gave it, and
-  `charter_core::reopen::identity_of`, which answers its id and current run the same way. Those
+  `purlis_core::reopen::identity_of`, which answers its id and current run the same way. Those
   readers ship in the same build as the writer, so the file stays internal. Each of `id`,
   `device`, `run` and `resumed_from` is held to a ULID on the way in, and anything else reads as
   absent. **A launch also reads other clones' `reopen.json`**: the root its `clone` names and the
@@ -4570,7 +4570,7 @@ down rather than read off the code.
 | `chats[].profile` | str | default `""` (absent) | the harness profile the chat started on, by NAME — never its command or its environment, so an edit to `charter.local.toml` takes effect at the reopen and the account it names never reaches this file (ADR 0022). Held to a name charter would mint; anything else reads as empty |
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
-| `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
+| `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`purlis_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
 | `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone — a workspace's name, or `plane root` for a chat that handed off from the plane root (SI-1b); `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that is neither a workspace's name nor `plane root` reads as the whole key absent — the note is not drawn and no report is owed |
 | `chats[].renamed_from` | str | default `""` (absent) | the workspace `charter workspace rename` moved this chat away from, where the rename left it with no conversation its harness can find (charter#367, D10). Claude Code keeps a conversation under the folder it ran in, so the rename clears such a chat's `resume` and writes this instead; a Codex or opencode chat keeps its `resume`. The next start is a new conversation whose pane says why, and the chat is written without this key from then on. Held to the workspace-name rule on the way in; anything else reads as absent |
 | `chats[].number` | int | default `0` (not known) | the chat's display number in this plane (charter-app#90): what `$CHARTER_CHAT` and `$CHARTER_SESSION_ID` carry, and what `.charter/sessions/<n>.*` and `handbacks/chat-<n>/` are keyed on. `0` is a record written before the field, whose chats are dealt numbers in order at the next launch. Unique in this plane on this machine only, and so never what a committed file or an event names a chat by ([ADR 0066](adr/0066-a-chat-is-a-ulid-a-run-is-a-stretch-of-its-conversation-and-a-device-is-random.md)) |
@@ -4600,7 +4600,7 @@ down rather than read off the code.
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
 record cannot disagree with what is about to be started. Only a harness charter has
-measured a resume for is resumed (`crates/charter-core/src/harness.rs`, which carries the
+measured a resume for is resumed (`crates/purlis-core/src/harness.rs`, which carries the
 same values as `charter/harness/`). A Codex or opencode chat has no `resume` until its first
 turn, because each reports its id only through a hook, inside that turn (ADR 0024, ADR 0058);
 from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencode -s <id>`.
@@ -4617,7 +4617,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   reads it but the connection it serves. **charter-app only.**
 - **Tier:** Clone state, transient — it lives as long as the app has the plane open.
 - **Written by:** `hooks::socket_for` names it and `hookwire::Listener::bind` binds it
-  (`app/src-tauri/src/hooks.rs`, `crates/charter-core/src/hookwire.rs`). When
+  (`app/src-tauri/src/hooks.rs`, `crates/purlis-core/src/hookwire.rs`). When
   `<plane>/.charter/app/hooks.sock` would be longer than a socket path may be (104 bytes on
   macOS), it is `charter-<user>-<16 hex>/hooks.sock` under `$XDG_RUNTIME_DIR`, else the per-user
   temp directory, instead. The path is handed to each chat as `$CHARTER_HOOK_SOCKET`.
@@ -4632,13 +4632,13 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Status:** **internal** — appended by `charter hook` and `charter git-hook` of the same build,
   read by the app.
 - **Tier:** Clone state, transient — emptied by the drain at the next open of the project.
-- **Written by:** `charter_core::hookwire::spool::append`, under an exclusive lock on the file,
+- **Written by:** `purlis_core::hookwire::spool::append`, under an exclusive lock on the file,
   `fsync`ed (and a new file's directory too) before the hook answers its harness. That survives
   a host crash. It is the ordinary `fsync`, so on macOS a power loss can still lose the line.
   Mode 0600, opened with `O_NOFOLLOW`. **Only in a project's `.charter/app/spool/`** (V63): beside
   a fallback socket (`charter-<user>-<16 hex>/`) nothing is spooled, and the hook says the line is
   lost.
-- **Read by:** `charter_core::hookwire::spool::drain`, from `Hooks::drain_spool` in the app,
+- **Read by:** `purlis_core::hookwire::spool::drain`, from `Hooks::drain_spool` in the app,
   when a project is opened and before any chat starts. Each line is checked: its key must be one
   `keys.json` holds for this chat, its MAC must be its own, and its line must name this chat. A
   number missing below the file's own highest one is a gap. Lines removed from the end, or
@@ -4657,7 +4657,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Tier:** Clone state, transient — what lets a later app check a spooled line. Deleting it,
   or a file that does not read as keys, makes every line spooled since the last drain `no-key`.
   The drain still finishes.
-- **Written by:** `charter_core::hookwire::ChatTokens::issue`, through `spool::remember`, before
+- **Written by:** `purlis_core::hookwire::ChatTokens::issue`, through `spool::remember`, before
   the token reaches the chat (`rewrite::replace`, mode 0600, under an exclusive lock on the
   `spool/` directory). The drain removes the keys it drained. Only in a project's
   `.charter/app/spool/`, and a sandboxed chat neither reads nor writes it (V63): it is a verifier
@@ -4775,15 +4775,15 @@ Only the **latest** sighting is kept (whole-file overwrite).
 
 | Field | Type | Meaning | Status | Source |
 |---|---|---|---|---|
-| `outcome` | str, one of `pushed`/`branched`/`stranded`/`failed`/`conflict`/`unreachable`, and in charter-app `pr-open`/`blocked` | what the push did; a record without it reads as absent. `pr-open`: a request mode pushed `head` to the save branch (`landed`) and its PR into `branch` is open (`url`, `number`). `blocked`: a request mode cannot go further without a person — its PR was closed without merging, the merged target no longer matches what was pushed, or somebody else pushed to the save branch (`detail` says which) | stable | `charter/planegit.py:190`–`:195`, `:300`; `crates/charter-core/src/planegit/prsave.rs` |
+| `outcome` | str, one of `pushed`/`branched`/`stranded`/`failed`/`conflict`/`unreachable`, and in charter-app `pr-open`/`blocked` | what the push did; a record without it reads as absent. `pr-open`: a request mode pushed `head` to the save branch (`landed`) and its PR into `branch` is open (`url`, `number`). `blocked`: a request mode cannot go further without a person — its PR was closed without merging, the merged target no longer matches what was pushed, or somebody else pushed to the save branch (`detail` says which) | stable | `charter/planegit.py:190`–`:195`, `:300`; `crates/purlis-core/src/planegit/prsave.rs` |
 | `branch` | str | branch charter tried to advance | stable | `charter/planegit.py:281` |
 | `landed` | str \| null | the branch it actually reached | stable | `charter/planegit.py:281` |
 | `url` | str \| null | PR/MR url | stable | `charter/planegit.py:282` |
-| `number` | int \| null | **charter-app only.** The PR's number (a GitLab MR's `iid`), written with `pr-open` and `blocked`; what the next save or fetch asks the forge about | stable | `crates/charter-core/src/planegit.rs` `record_push` |
+| `number` | int \| null | **charter-app only.** The PR's number (a GitLab MR's `iid`), written with `pr-open` and `blocked`; what the next save or fetch asks the forge about | stable | `crates/purlis-core/src/planegit.rs` `record_push` |
 | `detail` | str | git's own words | stable | `charter/planegit.py:282` |
 | `head` | str | the sha being pushed | stable | `charter/planegit.py:282` |
 | `at` | float epoch | when | stable | `charter/planegit.py:282` |
-| `conflicts` | array of str, optional | **charter-app only.** The files a rebase onto the remote conflicted in, read before the rebase was undone; present only when there were some (charter-app#295). | stable | `crates/charter-core/src/planegit.rs` `record_push` |
+| `conflicts` | array of str, optional | **charter-app only.** The files a rebase onto the remote conflicted in, read before the rebase was undone; present only when there were some (charter-app#295). | stable | `crates/purlis-core/src/planegit.rs` `record_push` |
 
 In charter-app the save journal (below) takes over this record's job for saves made by
 charter-app. `charter save` keeps writing this record until its contract moves (ADR 0051).
@@ -4802,7 +4802,7 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
   if the remote has one whose tip HEAD does not contain), and a PR opened before is not
   settled by charter: the plane stays on its commits until moved by hand.
 - **Tier:** Clone state — part of the save journal.
-- **Written by:** `crates/charter-core/src/planegit/prsave.rs` `Kept::write`, with
+- **Written by:** `crates/purlis-core/src/planegit/prsave.rs` `Kept::write`, with
   `profiletrust::write_private`: after each push to the save branch, after each PR opened or
   updated, and when a PR is settled (merged and moved onto, or closed).
 - **Read by:** the same module, on every request-mode save and fetch; `standing` for the PR's link.
@@ -4819,8 +4819,8 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Status:** **internal**. Only the app and `charter save` write it, and only the Saving view
   reads it. Deleted ⇒ the Saving view's history starts empty.
 - **Tier:** Clone state — the save journal V2 names.
-- **Written by:** `crates/charter-core/src/planegit.rs` `save_as`, the one save function
-  (charter-app#293, ADR 0051), and `crates/charter-core/src/reposave.rs` `save_as` for a
+- **Written by:** `crates/purlis-core/src/planegit.rs` `save_as`, the one save function
+  (charter-app#293, ADR 0051), and `crates/purlis-core/src/reposave.rs` `save_as` for a
   workspace repo (charter-app#299), once per attempt, with `profiletrust::write_private`.
 - **Read by:** the Saving view (its last 50 entries).
 - **Git:** gitignored (under `/.charter/`).
@@ -5058,7 +5058,7 @@ semantics below.
   started on this machine is stopped; and `charter/kill-switch.jsonl`, JSON Lines, 0600, one
   object per event — `at` (epoch seconds), `event` (`stop`, `rearm` or `tamper`), `by`
   (`window`, `cli` or `app`; on a runner also `link`, **decided, not yet written**, ADR 0078) — capped at the newest 1000 lines. Written by
-  `crates/charter-core/src/halt.rs`. The machine is stopped when the marker is there **or**
+  `crates/purlis-core/src/halt.rs`. The machine is stopped when the marker is there **or**
   the journal's last event is not a `rearm`, so removing the marker alone re-arms nothing; a
   running app puts a removed marker back and journals a `tamper`. Only the app's window writes
   a `rearm`. While stopped, the app starts no chat and a relaunch puts no chat back. **stable**
@@ -5073,7 +5073,7 @@ semantics below.
 
 **What charter-app keeps outside the plane** (ADR 0034, ADR 0069). `<config>` is the machine
 store's directory: `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then
-`charter/`, `0700`, and every file in it `0600` (`crates/charter-core/src/machine.rs`). On a
+`charter/`, `0700`, and every file in it `0600` (`crates/purlis-core/src/machine.rs`). On a
 platform that is not unix none of it is written (ADR 0031). **Rename window (RN-5):** the
 folder is `purlis/` once `rename-local` has moved it (or it is the one there), else `charter/`;
 the same rule holds for the session host's `purlisd/`/`charterd/` in it, for `<data>`'s folder and
@@ -5093,7 +5093,7 @@ never moves the folders under them. The Tauri directories are the app's, identif
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
 `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
 Support/charter` on macOS, `~/.local/share/charter` on Linux). The host's event log is written
-there (FD-9, `charter_core::datahome`). The other rows are **decided, not yet written**: AU-3
+there (FD-9, `purlis_core::datahome`). The other rows are **decided, not yet written**: AU-3
 writes the audit's, RR-16 a runner's bare repos (ADR 0078), KN-32 the search index's
 (ADR 0079), RC-7 the reviews (ADR 0084) and OB-2 the telemetry store (ADR 0083). Every writer
 refuses a `<data>` under a project or inside any git work tree.
@@ -5112,21 +5112,21 @@ refuses a `<data>` under a project or inside any git work tree.
 | `<config>/extensions.json` | Machine, device-bound | each installed extension: its absolute path, the fingerprint the operator approved, and whether it is on; for a runner provider, also whether the operator marked its machines as the user's own (**decided, not yet written**, ADR 0089; default not owned, changed only on `local-ui`, never by the provider's own claim) | `extension::install`, `approve`, `set_on`, `forget` |
 | `<config>/forge-etags/native-<account>/<sha256>.json` | Machine, device-bound, rebuildable | the native forge transport's ETag store (ADR 0070 §3, FW-2a): per forge account (`<kind>-<host>-<login>`), one file per request path and query, named by its SHA-256, holding the answer's ETag, its `Link` header and its body, so that a `304 Not Modified` is answered from here. Never a credential. **A chat is denied it, to read and to write**: its sandbox denies the directory under ADR 0067's human-powers class (`sandbox::Denied`), and in charter only the native transport reads or writes it, which only a human in the window resolves to. A CLI call never shares an entry with it. Separate from FW-7's item cache; deleting it costs one full answer per request | `forge::etag::EtagDir`, from `forge::http::Http` |
 | `<config>/forge-budget/<account>.json` | Machine, device-bound, transient | the request budget per forge account (FI14, FW-4): this hour's start, the requests sent as the account, those its forge counts, the `304`s, the background requests held back, and the forge's last stated limits. Never a request, an answer or a credential. Written by the process that sends (`forge::budget::Meter`), read by `charter doctor`'s `forge budget` rows; a chat cannot write it (the machine store is denied to a chat's writes). Deleting it starts a fresh hour | `forge::budget::Meter` |
-| `<config>/network-log/<YYYY-MM-DD>.jsonl` | Machine, device-bound | the network log (OB-15, X50, ADR 0083 §9): one JSON line per forge call, `charter report` filing and updater read charter made on this machine, a file a UTC day, the newest 30 kept, so it is retained rather than transient and FR-10 may back it up. A line holds the time, the feature (`forge`, `updater`, `report`), the route (`https`, `gh`, `glab`), the host, the method, the path as a template (no query; the names after `repos`, `orgs` and the like, and everything after `branches`, `contents` and the like, shown as `{}`, and any other segment that is not a word of a forge's API too), the status or that no answer came, the time it took, and whether it went to Charter or to a third party. **Never** a body, a header value or token, a query, a name from a path, the account, or a chat's content. A Charter line keeps its path whole, because Charter's addresses are public. Nothing sends it anywhere and nothing reads it but a person (`netlog::entries`). A sandboxed chat's own process cannot write it, as it cannot write anything under `<config>` | `charter_core::netlog`, from the forge transports, `charter report` and the app's updater |
+| `<config>/network-log/<YYYY-MM-DD>.jsonl` | Machine, device-bound | the network log (OB-15, X50, ADR 0083 §9): one JSON line per forge call, `charter report` filing and updater read charter made on this machine, a file a UTC day, the newest 30 kept, so it is retained rather than transient and FR-10 may back it up. A line holds the time, the feature (`forge`, `updater`, `report`), the route (`https`, `gh`, `glab`), the host, the method, the path as a template (no query; the names after `repos`, `orgs` and the like, and everything after `branches`, `contents` and the like, shown as `{}`, and any other segment that is not a word of a forge's API too), the status or that no answer came, the time it took, and whether it went to Charter or to a third party. **Never** a body, a header value or token, a query, a name from a path, the account, or a chat's content. A Charter line keeps its path whole, because Charter's addresses are public. Nothing sends it anywhere and nothing reads it but a person (`netlog::entries`). A sandboxed chat's own process cannot write it, as it cannot write anything under `<config>` | `purlis_core::netlog`, from the forge transports, `charter report` and the app's updater |
 | `<config>/plugin/` | Machine, device-bound, rebuildable | the copy of the bundled plugin that chats started outside the app load (ADR 0057). Its hooks name this binary by absolute path | `plugin_install`, refreshed at launch |
-| `<config>/local-plane/` | Plane | the **local project** the first run makes on a machine that has none (FR-4, #603), so nobody is asked where it goes. An ordinary plane in every respect this document records — its own `charter.toml`, its own git — opened through the same trust gate as any other; only its location is fixed. It has **no remote**, so the Plane tier's backup (the remote) does not exist for it until the operator shares it: **FR-10 must cover it** or it has no backup at all. A repo opened from the first run or from New project is cloned into its `workspaces/<name>/<name>/`, `<name>` being the repo's, with `-2`, `-3`… when a different repo already holds that name | `firstrun::ensure_local_plane`, `firstrun::take_in` (`crates/charter-core/src/firstrun.rs`) |
+| `<config>/local-plane/` | Plane | the **local project** the first run makes on a machine that has none (FR-4, #603), so nobody is asked where it goes. An ordinary plane in every respect this document records — its own `charter.toml`, its own git — opened through the same trust gate as any other; only its location is fixed. It has **no remote**, so the Plane tier's backup (the remote) does not exist for it until the operator shares it: **FR-10 must cover it** or it has no backup at all. A repo opened from the first run or from New project is cloned into its `workspaces/<name>/<name>/`, `<name>` being the repo's, with `-2`, `-3`… when a different repo already holds that name | `firstrun::ensure_local_plane`, `firstrun::take_in` (`crates/purlis-core/src/firstrun.rs`) |
 | `<app data>/shims/` | Machine, device-bound, rebuildable | the `PATH` shims that warn when a harness is started by hand in a shell tab (ADR 0062) | `shellguard`, rewritten at every launch |
 | `<app data>/git-hooks/` | Machine, device-bound, rebuildable | the git hooks a harness chat's git runs through `core.hooksPath`: charter's scan of a commit and of what a push sends, then the repository's own hook of each name (ADR 0074) | `githooks`, rewritten at every launch |
 | `<app log>/panics.log` | Machine, device-bound, transient | panic records: thread, place, message, backtrace, version. `$CHARTER_PANIC_LOG` moves it | `app/src-tauri/src/panics.rs`; `charter report` reads it |
-| `<app log>/charter.<YYYY-MM-DD>.log` | Machine, device-bound, transient | the app's diagnostic log (#647): one line per thing the app or the core noticed and nobody asked to see, with its time, level and source, from charter's own code at `info` and up and from its libraries at `warn` and up. A new file each day, the newest seven kept. An event that looks like it holds a credential or personal data (`secretshape::found`, `secretshape::leaks` per line, or a field named for a token or a secret) is replaced whole by a line naming its kind. The same messages, without time or level, also go to standard error. Not the audit and not telemetry (O1, ADR 0075): nothing reads it but a person. `$CHARTER_LOG_DIR` moves it | `charter_core::applog`, installed first thing by the app |
+| `<app log>/charter.<YYYY-MM-DD>.log` | Machine, device-bound, transient | the app's diagnostic log (#647): one line per thing the app or the core noticed and nobody asked to see, with its time, level and source, from charter's own code at `info` and up and from its libraries at `warn` and up. A new file each day, the newest seven kept. An event that looks like it holds a credential or personal data (`secretshape::found`, `secretshape::leaks` per line, or a field named for a token or a secret) is replaced whole by a line naming its kind. The same messages, without time or level, also go to standard error. Not the audit and not telemetry (O1, ADR 0075): nothing reads it but a person. `$CHARTER_LOG_DIR` moves it | `purlis_core::applog`, installed first thing by the app |
 | `<extension dir>/<state>/facts.json` | None | an extension's footer facts, written by the extension's own program wherever the operator installed it; charter only reads it | the extension |
 | keyring `purlis/<vault>/<8 hex>` (written now), or `charter/<vault>/<8 hex>` (still read during the rename window, #1261), account = the key | Keyring | a keyring vault's values. The random service name is recorded only in `.charter/vaults/<name>.keys.json` | `secrets::keyring` |
 | keyring `purlis/@identity/<16 hex>` (written now), or `charter/@identity/<16 hex>` (still read during the rename window for a record without `base`, #1261), account = the variable's name | Keyring | a vault provider's identity, such as a 1Password service-account token | `secrets::identity` |
 | `<config>/forge-accounts.json` | Machine, device-bound | **decided, not yet written** (ADR 0077). Each forge account: its id (a ULID), kind, host, login, how it was signed in (`device`, `pkce`, `pat` or `import`), the client id of a registration made on a host charter has none compiled in for, whether it is signed in and the scopes last read; and each repo's or owner's binding to one account. Nothing secret. Device-bound because each entry points into this machine's keyring. Backed up by FR-10 and restored only onto a machine that replaces the old one (ADR 0069 §5), with every account signed out, since no token is backed up | the process holding the human scope: the window, then `charterd` on `local-ui` (FW-3a, FW-3b) |
 | keyring `charter/@forge/<host>/<id>`, `<id>` = the forge account's id | Keyring | **decided, not yet written** (ADR 0070, ADR 0077). A forge account's token: the access token, and the refresh token and expiry where the flow gives them. The human's; only a `local-ui` caller reads or refreshes it, and a chat's sandbox denies it. The `@` keeps it apart from any vault's items | FW-3a, FW-3b |
-| `<data>/events/<device>/events.jsonl` | Machine, device-bound | the host's event log (FD-9, ADR 0066, ADR 0068): one JSON line per event in ADR 0066's envelope (`v`, `device_id`, `seq`, `ulid`, `chat`, `run`, `parent_run`, `kind`, `body`), `seq` from 1 and never reused, one writer per device holding a lock on `events.lock` beside it. This file is the segment being written; at 16 MiB it is sealed as `events.<first seq>.jsonl` and a new one begun. A line a crash tore is cut off when the log is next opened, and a file with lines but no readable `seq` is refused rather than counted from 1 again. Kinds written today: `run.started` (body `cause`: `start`, `clear`, `reopen` for a chat a relaunch put back in its conversation, `fresh` for one started again without it, or `child` for a sub-agent's run, whose `parent_run` is the run that was current; `wake` and `switch` are named and not yet written), `hook.<word>` for every state hook (`sessionstart` adds `started`), `hook.<word>` for every tool hook charter answers, `hook.commit_refused` for each commit charter's git hook refused (no text, only the chat), `trust.sandbox.off` and `trust.sandbox.on` (ADR 0067 §7, ADR 0075 §4) under the run a start just began and before its program runs — `off` for a chat in a sandboxed project that starts without the sandbox (`actor_kind` `human`, `actor` `operator`, `scope` `local-ui` for a person's opt-out from the picker; `actor_kind` `host`, `actor` `charter (no backend on this OS)` and `os` for a system with no backend, ruling V78 b), with `harness`, `persona`, the `reason` typed (one line, at most 200 characters, or null) and the classes `lifted`; `on` (`actor_kind` `host`, `actor` `charter`, `harness`, `persona`, `restored`) for a chat whose last run was unsandboxed starting sandboxed — and `hook.unknown` (with the `word`, shortened) for a tool hook word it does not. A tool event has `tool`, `call`, `args` (the HMAC of the arguments' SHA-256, never the arguments), `decision` (`allow`, `ask`, `deny` or `none`), `rule` for a denial (`guard-crashed`, `guard-unanswered` and `unknown-hook` among them), `hook_ms`, and `tool_ms` on whichever of a call's pre and post hooks is heard second, within the hour, by the hooks' own clocks. Lines are written in the order their hooks connected, best effort: ordered unless recording a line takes longer than 50 ms. Chat and run ids are ULIDs. A chat's id is the one `app/reopen.json` keeps for it, so it is the same across a relaunch, and the host writes a chat's `run.started` as it starts the chat, before its program can send a line; a chat the host was never told of is given ids at its first line. Each event is `fsync`ed (the operating system's ordinary `fsync`; on macOS not `F_FULLFSYNC`) before the host tells the hook its line is taken, and the hook answers its harness only after that or after spooling the line (FD-30, `app/spool/`). What a drain of the hook spool finds is recorded at the project's open: each line that checked as it would have been live, with `spooled` its number, under the chat and run the reopen record names (with no chat or run, and `chat_number`, for a chat it does not), `hook.spool.gap` (`from`, `to`), `hook.spool.rejected` (`seq`, `why`: `unreadable`, `no-key`, `another-chats-key`, `mac`, `not-this-chats` or `repeated`) and `hook.spool.drained` (`from`, `to`), each with `chat_number`. A line the host took after the hook stopped waiting and that was spooled too is recorded twice. Never committed and never sent. The audit (ADR 0075) and OTel logs (ADR 0083) are written from it. Retention (FD-24): every event of the last 30 days is kept, and more; a sealed segment is deleted, when the log is opened or a segment sealed, once its newest event is older than that, and the segment being written and the newest sealed one never are. A client reads it with `subscribe(since)` from the last `seq` it holds and gets every later event in order and once, across segments and across a host killed and started again; a cursor older than what is kept, or one that falls in a segment no longer kept, gets a `missed` marker and carries on from the next event kept. Backed up by FR-10 (ADR 0069 row 63) | `charter_core::eventlog::Recorder`, held by the app, its only writer; the app's doctor has an `event log` row |
-| `<data>/events/<device>/events.<first seq>.jsonl` | Machine, device-bound | a sealed segment of the event log above: the same lines, from the `seq` its name gives (20 digits, so names sort as numbers), `fsync`ed before it is renamed, and the directory after the rename, never written again (while the next segment cannot be made, appends fail rather than go into this one), deleted by the event log's retention. Backed up by FR-10 with the log | `charter_core::eventlog::Log`, which seals and deletes them; `eventlog::read` and `eventlog::subscribe` read them |
-| `<data>/events/<device>/events.lock` | Machine, device-bound, rebuildable | empty; the event log's one writer holds a lock on it for as long as it writes, so a second host is refused (ADR 0068). A file of its own so the lock outlives each sealed segment | `charter_core::eventlog::Log` |
+| `<data>/events/<device>/events.jsonl` | Machine, device-bound | the host's event log (FD-9, ADR 0066, ADR 0068): one JSON line per event in ADR 0066's envelope (`v`, `device_id`, `seq`, `ulid`, `chat`, `run`, `parent_run`, `kind`, `body`), `seq` from 1 and never reused, one writer per device holding a lock on `events.lock` beside it. This file is the segment being written; at 16 MiB it is sealed as `events.<first seq>.jsonl` and a new one begun. A line a crash tore is cut off when the log is next opened, and a file with lines but no readable `seq` is refused rather than counted from 1 again. Kinds written today: `run.started` (body `cause`: `start`, `clear`, `reopen` for a chat a relaunch put back in its conversation, `fresh` for one started again without it, or `child` for a sub-agent's run, whose `parent_run` is the run that was current; `wake` and `switch` are named and not yet written), `hook.<word>` for every state hook (`sessionstart` adds `started`), `hook.<word>` for every tool hook charter answers, `hook.commit_refused` for each commit charter's git hook refused (no text, only the chat), `trust.sandbox.off` and `trust.sandbox.on` (ADR 0067 §7, ADR 0075 §4) under the run a start just began and before its program runs — `off` for a chat in a sandboxed project that starts without the sandbox (`actor_kind` `human`, `actor` `operator`, `scope` `local-ui` for a person's opt-out from the picker; `actor_kind` `host`, `actor` `charter (no backend on this OS)` and `os` for a system with no backend, ruling V78 b), with `harness`, `persona`, the `reason` typed (one line, at most 200 characters, or null) and the classes `lifted`; `on` (`actor_kind` `host`, `actor` `charter`, `harness`, `persona`, `restored`) for a chat whose last run was unsandboxed starting sandboxed — and `hook.unknown` (with the `word`, shortened) for a tool hook word it does not. A tool event has `tool`, `call`, `args` (the HMAC of the arguments' SHA-256, never the arguments), `decision` (`allow`, `ask`, `deny` or `none`), `rule` for a denial (`guard-crashed`, `guard-unanswered` and `unknown-hook` among them), `hook_ms`, and `tool_ms` on whichever of a call's pre and post hooks is heard second, within the hour, by the hooks' own clocks. Lines are written in the order their hooks connected, best effort: ordered unless recording a line takes longer than 50 ms. Chat and run ids are ULIDs. A chat's id is the one `app/reopen.json` keeps for it, so it is the same across a relaunch, and the host writes a chat's `run.started` as it starts the chat, before its program can send a line; a chat the host was never told of is given ids at its first line. Each event is `fsync`ed (the operating system's ordinary `fsync`; on macOS not `F_FULLFSYNC`) before the host tells the hook its line is taken, and the hook answers its harness only after that or after spooling the line (FD-30, `app/spool/`). What a drain of the hook spool finds is recorded at the project's open: each line that checked as it would have been live, with `spooled` its number, under the chat and run the reopen record names (with no chat or run, and `chat_number`, for a chat it does not), `hook.spool.gap` (`from`, `to`), `hook.spool.rejected` (`seq`, `why`: `unreadable`, `no-key`, `another-chats-key`, `mac`, `not-this-chats` or `repeated`) and `hook.spool.drained` (`from`, `to`), each with `chat_number`. A line the host took after the hook stopped waiting and that was spooled too is recorded twice. Never committed and never sent. The audit (ADR 0075) and OTel logs (ADR 0083) are written from it. Retention (FD-24): every event of the last 30 days is kept, and more; a sealed segment is deleted, when the log is opened or a segment sealed, once its newest event is older than that, and the segment being written and the newest sealed one never are. A client reads it with `subscribe(since)` from the last `seq` it holds and gets every later event in order and once, across segments and across a host killed and started again; a cursor older than what is kept, or one that falls in a segment no longer kept, gets a `missed` marker and carries on from the next event kept. Backed up by FR-10 (ADR 0069 row 63) | `purlis_core::eventlog::Recorder`, held by the app, its only writer; the app's doctor has an `event log` row |
+| `<data>/events/<device>/events.<first seq>.jsonl` | Machine, device-bound | a sealed segment of the event log above: the same lines, from the `seq` its name gives (20 digits, so names sort as numbers), `fsync`ed before it is renamed, and the directory after the rename, never written again (while the next segment cannot be made, appends fail rather than go into this one), deleted by the event log's retention. Backed up by FR-10 with the log | `purlis_core::eventlog::Log`, which seals and deletes them; `eventlog::read` and `eventlog::subscribe` read them |
+| `<data>/events/<device>/events.lock` | Machine, device-bound, rebuildable | empty; the event log's one writer holds a lock on it for as long as it writes, so a second host is refused (ADR 0068). A file of its own so the lock outlives each sealed segment | `purlis_core::eventlog::Log` |
 | `<data>/events/<device>/args.key` | Machine, device-bound | 32 random bytes, `0600`, that key the event log's args digests, so a digest of `ls -la` cannot be matched by anyone who lacks the key and stays comparable from one launch to the next. Anything running as the same OS user can read it, and so can whoever holds a backup that carries it; the key protects the digests from everyone else. The hook sends the host the arguments' *unkeyed* SHA-256 on the chat's hook channel, which only the same user can reach. Backed up with the log, which it is useless without (AU-19 may move it into the keyring) | `eventlog::ArgsKey`, made on first use |
 | `<data>/audit/<device>/active.jsonl` | Machine, device-bound | **decided, not yet written** (ADR 0075). The audit segment being written: one JSON line per audit entry, metadata only, people as keyed pseudonyms. Chats are denied it. Backed up by FR-10 | `charterd`, its only writer (AU-3) |
 | `<data>/audit/<device>/<first>-<last>.jsonl.zst` | Machine, device-bound | **decided, not yet written** (ADR 0075). A sealed audit segment, zstd, named by its first and last entry numbers; pruned only whole, oldest first, and only once a checkpoint covers it. Backed up by FR-10 | `charterd` (AU-3) |
@@ -5155,13 +5155,13 @@ refuses a `<data>` under a project or inside any git work tree.
 
 | Variable | Effect | Source |
 |---|---|---|
-| `CHARTER_HOME` | **In the Python charter, replaces the state directory outright**: every file in this section moves, verbatim, with no migration. **In charter-app only part of it moves** ([#750](https://github.com/diazoxide/charter/issues/750)). The local vault registry, `vaults/`, `fingerprint.key`, the push and save journals, the gate files (`sessions/<sid>.tools`, `.gate`, `commit-gate/`), `sessions/<sid>.memnudge`, `dispatch-inflight/`, `ws-edit-nudge/`, `agent-personas.json`, `mcp-approved.json` and `unrecorded/` move, because their writers call `plane::state_dir`. The session and terminal pointers, `active-persona`, `sessions/<sid>.usage`, `sessions/<chat>.saved`, `persona-state/`, `handbacks/`, `cache/glstate.json`, `harness-profiles-launched.json`, `app/` and `workspace-rename.json` stay in `<plane>/.charter`, because their writers join `.charter` to the root themselves. **Decided, not yet written** (ADR 0079): the project's search index, `index/<clone-key>/`, moves with the state directory (V22b), keyed by clone so that clones sharing one directory never share an index | `charter/config.py:42`, `charter/config.py:110`; `crates/charter-core/src/plane.rs` (`state_dir`) |
+| `CHARTER_HOME` | **In the Python charter, replaces the state directory outright**: every file in this section moves, verbatim, with no migration. **In charter-app only part of it moves** ([#750](https://github.com/diazoxide/charter/issues/750)). The local vault registry, `vaults/`, `fingerprint.key`, the push and save journals, the gate files (`sessions/<sid>.tools`, `.gate`, `commit-gate/`), `sessions/<sid>.memnudge`, `dispatch-inflight/`, `ws-edit-nudge/`, `agent-personas.json`, `mcp-approved.json` and `unrecorded/` move, because their writers call `plane::state_dir`. The session and terminal pointers, `active-persona`, `sessions/<sid>.usage`, `sessions/<chat>.saved`, `persona-state/`, `handbacks/`, `cache/glstate.json`, `harness-profiles-launched.json`, `app/` and `workspace-rename.json` stay in `<plane>/.charter`, because their writers join `.charter` to the root themselves. **Decided, not yet written** (ADR 0079): the project's search index, `index/<clone-key>/`, moves with the state directory (V22b), keyed by clone so that clones sharing one directory never share an index | `charter/config.py:42`, `charter/config.py:110`; `crates/purlis-core/src/plane.rs` (`state_dir`) |
 | `CHARTER_ROOT` | Picks the plane (hence `<root>/.charter`); a bad value raises rather than falling back | `charter/root.py:20` |
 | `CHARTER_SESSION_ID` | Names `sessions/<sid>.*`, `commit-gate/<sid>`, `ws-edit-nudge/<sid>-…`, the trace bucket, and inside a frame it is the **chat id** that names `frame/<chat>/` and `chat-turns/<chat>` | `charter/session.py:65`, shadowing explained `charter/session.py:46` |
 | `CLAUDE_CODE_SESSION_ID` | Fallback for the above | `charter/session.py:66` |
 | `TERM_SESSION_ID` / `TMUX_PANE` / `STY` / `SSH_TTY` (then `ttyname`) | Name `terminals/<tid>.*` | `charter/session.py:75`–`:79`, `charter/session.py:111` |
-| `CHARTER_WORKSPACE` | Overrides the resolved workspace **without writing anything**; also the `identity` pin read per chat. **charter-app sets it on every chat it starts in a workspace** (SI-1), and never lets a chat inherit the app's own | `charter/workspace.py:550`, `charter/frame/state.py:1616`; `crates/charter-core/src/start.rs` |
-| `CHARTER_PLANE_ROOT_SESSION` | **charter-app only** (SI-1). `1` on a chat the app started at the plane root — the plane's own directory or anywhere under it that is no workspace's (SI-1b) — so the session is in no workspace (see the workspace resolution order). Any other value is ignored. A variable of its own rather than a value of `CHARTER_WORKSPACE`, so nothing that reads that one as a name ever sees it; set by the app, never inherited, and refused in a profile's `env` like every `CHARTER_` name | `crates/charter-core/src/active.rs` (`PLANE_ROOT_ENV`, `at_plane_root`) |
+| `CHARTER_WORKSPACE` | Overrides the resolved workspace **without writing anything**; also the `identity` pin read per chat. **charter-app sets it on every chat it starts in a workspace** (SI-1), and never lets a chat inherit the app's own | `charter/workspace.py:550`, `charter/frame/state.py:1616`; `crates/purlis-core/src/start.rs` |
+| `CHARTER_PLANE_ROOT_SESSION` | **charter-app only** (SI-1). `1` on a chat the app started at the plane root — the plane's own directory or anywhere under it that is no workspace's (SI-1b) — so the session is in no workspace (see the workspace resolution order). Any other value is ignored. A variable of its own rather than a value of `CHARTER_WORKSPACE`, so nothing that reads that one as a name ever sees it; set by the app, never inherited, and refused in a profile's `env` like every `CHARTER_` name | `crates/purlis-core/src/active.rs` (`PLANE_ROOT_ENV`, `at_plane_root`) |
 | `CHARTER_PERSONA` | Same, for personas | `charter/persona.py:1260` |
 | `CHARTER_HARNESS` | Which harness the registry reports; stored per chat in `frame/<chat>/identity` | `charter/harness/registry.py:46`, `charter/commands_frame.py:3058` |
 | `CHARTER_WORKTREES` | Moves worktrees (not state) | `charter/config.py:82` |
@@ -5170,7 +5170,7 @@ refuses a `<data>` under a project or inside any git work tree.
 | `CLAUDE_PLUGIN_ROOT` | Decides `guard-seen.json`'s `source` field (`plugin` vs `settings`) | `charter/guardseen.py:55` |
 | `CLAUDE_PID` | Adopting a harness pid into `frame/<chat>/harness.pid` | `charter/hooks.py:6084` |
 | `CHARTER_CONFIG_HOME` / `XDG_CONFIG_HOME` | Move `reporting-consent` | `charter/report.py:462` |
-| `CHARTER_DATA_HOME` / `XDG_DATA_HOME` | Move `<data>`, charter's data home: the event log in it today (FD-9), and the audit once it is written (ADR 0075). A value under a plane or inside a git work tree is refused | ADR 0075, `crates/charter-core/src/datahome.rs` |
+| `CHARTER_DATA_HOME` / `XDG_DATA_HOME` | Move `<data>`, charter's data home: the event log in it today (FD-9), and the audit once it is written (ADR 0075). A value under a plane or inside a git work tree is refused | ADR 0075, `crates/purlis-core/src/datahome.rs` |
 | `EDM_HOME` / `EDM_WORKSPACE` / `EDM_PERSONA` | Legacy names, warned about only | `charter/legacyenv.py:39` |
 
 ---

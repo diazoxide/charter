@@ -13,9 +13,9 @@ spec decision 13).
 Python charter (pinned at `50d31dc`) wrote when `generate.py` ran it; on 2026-09-23 the Python
 oracle was retired (ADR 0046) and the generator with it, so these planes are DATA now — the
 starting point every recorded scenario in `tests/fixtures/recorded/` is replayed from, and what
-`crates/charter-core/tests/fixture_planes.rs` reads. Change one only on purpose, in a PR that
+`crates/purlis-core/tests/fixture_planes.rs` reads. Change one only on purpose, in a PR that
 says why, and re-record the scenarios that start from it
-(`CHARTER_RECORDED_BLESS=1 cargo test -p charter-cli --test recorded_behaviour`): every
+(`CHARTER_RECORDED_BLESS=1 cargo test -p purlis-cli --test recorded_behaviour`): every
 recorded answer assumes these exact bytes.
 
 ```bash

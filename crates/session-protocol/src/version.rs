@@ -90,7 +90,7 @@ pub enum Refused {
     #[error("the host answered with major version {major}, which this client never offered")]
     NotOffered { major: u16 },
     /// The stream does not open with [`MAGIC`].
-    #[error("the other end is not speaking charter's session protocol")]
+    #[error("the other end is not speaking purlis's session protocol")]
     NotThisProtocol,
     /// A hello or an answer longer than [`MOST_HELLO_BYTES`].
     #[error("a negotiation message longer than {most} bytes")]

@@ -7,7 +7,7 @@ import { TitleBar } from "./TitleBar";
 
 /**
  * **The kill switch on the title bar** (OV-1, ADR 0071): one control that stops every chat and
- * shell charter started, in every project and window, and, once thrown, the one that re-arms.
+ * shell purlis started, in every project and window, and, once thrown, the one that re-arms.
  * What stopping does is the core's and is tested there (`planes.rs`, `killswitch.rs`); this is
  * that the bar sends it, draws what the CORE says the switch is — never what it hoped — says a
  * stop that was not kept, and hears `charter stop --all` throw it from a terminal.
@@ -68,7 +68,7 @@ describe("the kill switch", () => {
 
     expect(await stopControl()).toHaveAttribute(
       "title",
-      expect.stringMatching(/every chat and shell charter started/),
+      expect.stringMatching(/every chat and shell purlis started/),
     );
   });
 

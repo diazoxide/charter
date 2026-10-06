@@ -228,7 +228,7 @@ describe("the opener", () => {
 
     expect(asked.find((one) => one.cmd === "open_plane")?.args).toEqual({ path: "/home/dev/one" });
     // The row for a project nobody has approved says so, and the approved one does not.
-    expect(screen.queryAllByText("charter will ask about this one")).toHaveLength(0);
+    expect(screen.queryAllByText("purlis will ask about this one")).toHaveLength(0);
   });
 
   it("drops a project that has moved with a line saying so, and never an error", async () => {
@@ -260,7 +260,7 @@ describe("the opener", () => {
         return {
           planes: [],
           dropped: [],
-          forgetful: "charter keeps no machine store on this platform",
+          forgetful: "purlis keeps no machine store on this platform",
         };
       return undefined;
     });
@@ -274,7 +274,7 @@ describe("the opener", () => {
   it("says why an open did not happen, in the core's own words, and stays open", async () => {
     core((cmd) => {
       if (cmd === "open_plane")
-        throw new Error("/home/dev/notes is not a plane: charter found no charter.toml");
+        throw new Error("/home/dev/notes is not a plane: purlis found no charter.toml");
       return undefined;
     });
 

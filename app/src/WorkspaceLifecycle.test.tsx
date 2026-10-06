@@ -257,7 +257,7 @@ describe("deleting a workspace", () => {
     ]);
   });
 
-  it("shows what charter would discard before anything is pressed", async () => {
+  it("shows what purlis would discard before anything is pressed", async () => {
     // The preview is `workspace_at_risk`, which is the core's own guard read for drawing. The
     // sentences are charter's, not the window's.
     const { calls } = core();
@@ -366,7 +366,7 @@ describe("deleting a workspace", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
 
-    // The refusal, verbatim, and the list under "What charter would discard" is now ITS list.
+    // The refusal, verbatim, and the list under "What purlis would discard" is now ITS list.
     const refusal = await within(dialog).findByRole("alert");
     expect(refusal).toHaveTextContent(refusalOver(dirtied));
     expect(
@@ -379,7 +379,7 @@ describe("deleting a workspace", () => {
       name: "Delete it anyway, discarding the work in 2: svc, lib",
     });
     // The preview's own line about the earlier reading is gone with it: a dialog cannot say
-    // "charter found no uncommitted work" above a refusal listing two dirty clones.
+    // "purlis found no uncommitted work" above a refusal listing two dirty clones.
     expect(calls("workspace_at_risk")).toHaveLength(1);
   });
 
@@ -658,7 +658,7 @@ describe("picking a new workspace's repos (ADR 0055)", () => {
     await createWithRepos(["api"]);
 
     expect(await screen.findByText(/Could not clone api into gamma/)).toHaveTextContent(
-      "api was cloned, but charter does not see it in gamma. charter said: ✓ api cloned",
+      "api was cloned, but purlis does not see it in gamma. purlis said: ✓ api cloned",
     );
   });
 
@@ -784,7 +784,7 @@ describe("renaming a workspace (charter#367)", () => {
   it("names the chats that will start a fresh conversation before the rename is answered", async () => {
     const said =
       "These chats will start a fresh conversation after the rename: steward 1, billing bug. " +
-      "Claude Code keeps their conversations under the folder it ran in, and charter does not " +
+      "Claude Code keeps their conversations under the folder it ran in, and purlis does not " +
       "move that folder.";
     const { calls } = core({ startsFresh: said });
     render(<App />);

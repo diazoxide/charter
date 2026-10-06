@@ -4,8 +4,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use charter_core::engine::{AlacrittyEngine, Screen, Size};
-use charter_core::session::{Exit, Session, Spec};
+use purlis_core::engine::{AlacrittyEngine, Screen, Size};
+use purlis_core::session::{Exit, Session, Spec};
 
 const SIZE: Size = Size {
     columns: 100,
@@ -187,7 +187,7 @@ fn a_corpus_that_does_not_exist_is_an_error_not_silence() {
 fn the_host_leaves_its_controlling_terminal_and_a_terminal_it_opens_after_is_not_one() {
     // V77: a level-3 agent shares the host's session, so the host has no terminal to share.
     // A program in a pane leads its session and its group, so `setsid` is refused and the
-    // host starts again as its own child, which leaves (`charter_core::noterminal`).
+    // host starts again as its own child, which leaves (`purlis_core::noterminal`).
     let session = harness(&["--leave-terminal"]);
     let screen = screen_until(&session, "terminal after a pair:");
     let said: Vec<&str> = screen

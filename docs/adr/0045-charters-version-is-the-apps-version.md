@@ -91,7 +91,7 @@ asks for.
 *Superseded by the amendment of 2026-09-26 below: the corpus is gone, and `charter news` prints
 the app's CHANGELOG.md.*
 
-`crates/charter-core/news/` holds the Python charter's notes about its own releases, 0.44.0 to
+`crates/purlis-core/news/` holds the Python charter's notes about its own releases, 0.44.0 to
 0.62.1, and the few it had staged when it stopped. None of them is news about this app, whose
 release notes are `CHANGELOG.md`. Nothing is added to the corpus.
 
@@ -159,7 +159,7 @@ view; `charter news` shows the app's own CHANGELOG.md sections.**
   exit 1, with what to run instead, because an agent reading an older skill will type them.
   `--pending` had nothing left to probe: every `check:` in the corpus named a command this
   binary does not have, so every entry reported *unchecked*.
-- Section 4 is void. `crates/charter-core/news/` (339 files), its `build.rs` inclusion,
+- Section 4 is void. `crates/purlis-core/news/` (339 files), its `build.rs` inclusion,
   `news::HISTORY_REPO`, `news::history_ends`, the probe machinery (`PROBEABLE`,
   `CHARTER_NEWS_PROBE`) and the release-body renderer are deleted. `adopt::PYTHON_LINE_LAST`
   stays a constant, as section 3 argued, and no test ties it to a corpus any more.

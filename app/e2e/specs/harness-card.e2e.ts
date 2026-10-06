@@ -6,7 +6,7 @@ import { endEveryChat, pressAndStart } from "../opening.js";
 /**
  * **The harness capability card** (HP-19, W10), in the built app: what each harness can do,
  * read by the core off the harness's declaration and the adapter charter ships for it
- * (`charter_core::harness_card`).
+ * (`purlis_core::harness_card`).
  *
  * - A chat's header names its harness, and opens the harness's card as a view tab — a tab, not
  *   a dialog (the operator's 2026-09-23 ruling: new surfaces are view tabs).
@@ -24,7 +24,7 @@ const TABS = '[role="tablist"][aria-label="Tabs"]';
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
 /** The line opencode's card says for what it lacks, and the card's label after it. */
 const TYPED_INTO =
-  "opencode cannot have a prompt typed in for you, because charter cannot tell when it has finished starting. See What opencode can do here.";
+  "opencode cannot have a prompt typed in for you, because purlis cannot tell when it has finished starting. See What opencode can do here.";
 /** What the Claude Code card's row for it says. */
 const TYPED_INTO_ROW = "Can have a prompt typed in for you when it starts";
 
@@ -85,7 +85,7 @@ describe("a harness's capability card", function () {
     });
     const said = await card.getText();
     expect(said).toContain("What Claude Code can do here");
-    expect(said).toContain("Tells charter when it is waiting for you");
+    expect(said).toContain("Tells purlis when it is waiting for you");
     expect(await tabNames()).toContain("What Claude Code can do here");
 
     await $(`${TABS} button[aria-label="Close What Claude Code can do here"]`).click();

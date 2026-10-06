@@ -296,7 +296,7 @@ mod tests {
         let dir = a_plane();
         let root = dir.path();
         let stamp: chrono::NaiveDateTime = "2026-10-02T09:00:00".parse().expect("a stamp");
-        let plane = charter_core::workspaces::Plane::open(root);
+        let plane = purlis_core::workspaces::Plane::open(root);
         for w in 0..workspaces {
             let name = format!("ws{w:03}");
             std::fs::create_dir_all(root.join("workspaces").join(&name)).expect("a workspace");
@@ -334,7 +334,7 @@ mod tests {
     }
 
     /// How long each command holds the thread that asked, on a large plane. The numbers are
-    /// for the PR, not a gate: `cargo test -p charter-app off_the_main_thread -- --ignored
+    /// for the PR, not a gate: `cargo test -p purlis-app off_the_main_thread -- --ignored
     /// --nocapture`.
     #[test]
     #[ignore = "a measurement, printed; run it by hand"]
@@ -381,7 +381,7 @@ mod tests {
         }
         // And `chat_usage`'s read for an open chat, which stays synchronous: its usage file, a
         // ring of sixteen rows.
-        let sessions = charter_core::usage::sessions_dir(dir.path());
+        let sessions = purlis_core::usage::sessions_dir(dir.path());
         std::fs::create_dir_all(&sessions).expect("its sessions");
         let rows: String = (0..16)
             .map(|n| format!("{},{},90,{}\n", 1000 * n, 100 * n, n))

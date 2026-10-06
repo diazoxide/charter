@@ -99,7 +99,7 @@ export function QuitWarning({
               Cancel
             </button>
             <button className="ends-it" tabIndex={0} onClick={onQuit}>
-              Quit charter
+              Quit purlis
             </button>
           </div>
         </Dialog.Content>
@@ -152,11 +152,11 @@ export function MidTurnSaid({ chats }: { chats: readonly Ending[] }) {
       {unknown.length > 0 && (
         <p className="honest">
           {/* Named, not counted into the reassuring number. A harness that reports nothing
-            could be mid-turn and charter would never know — saying "nothing is running"
+            could be mid-turn and purlis would never know — saying "nothing is running"
             over the top of it would be the app claiming something it cannot see. */}
           {unknown.length === 1
-            ? `${unknown[0].name} reports no state, so charter cannot tell whether it is mid-turn.`
-            : `${unknown.length} sessions report no state, so charter cannot tell whether they are mid-turn.`}
+            ? `${unknown[0].name} reports no state, so purlis cannot tell whether it is mid-turn.`
+            : `${unknown.length} sessions report no state, so purlis cannot tell whether they are mid-turn.`}
         </p>
       )}
       {running.length === 0 && unknown.length === 0 && (
@@ -210,7 +210,7 @@ export function MidTurn({
             <div id="restart-mid-turn-said">
               <MidTurnSaid chats={chats} />
               <p className="honest">
-                Every chat is offered back when charter starts again. Wait to let a turn finish, or
+                Every chat is offered back when purlis starts again. Wait to let a turn finish, or
                 restart now.
               </p>
             </div>

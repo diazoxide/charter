@@ -240,7 +240,7 @@ export const BUILT_IN: Record<string, Theme> = {
 export const DEFAULT_THEME: Theme = BUILT_IN["charter-dark"];
 
 /** The pick that follows the operating system's appearance, as a project's `[theme] use` holds it
- *  (charter-app#273; `charter_core::extension::project::theme::SYSTEM`). */
+ *  (charter-app#273; `purlis_core::extension::project::theme::SYSTEM`). */
 export const SYSTEM = "system";
 
 /** The media query the operating system answers with its appearance: true when it is light. */
@@ -411,7 +411,7 @@ export function load(raw: unknown): Loaded {
   const known = new Set<string>(TOKENS);
   for (const given of Object.keys(tokens)) {
     if (!known.has(given)) {
-      complaints.push({ said: `${given} is not a charter token`, token: given });
+      complaints.push({ said: `${given} is not a purlis token`, token: given });
     }
   }
 

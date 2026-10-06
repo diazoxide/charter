@@ -502,7 +502,7 @@ function ModeQuestion({ plane, branch }: { plane: PlaneId; branch: string }) {
       label: "Commit only",
       says: "Saves stay on this machine until you push them yourself.",
     },
-    { value: "off", label: "Off", says: "charter commits nothing here; you use git yourself." },
+    { value: "off", label: "Off", says: "purlis commits nothing here; you use git yourself." },
   ];
   return (
     <>

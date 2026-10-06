@@ -11,9 +11,9 @@
 
 use std::path::PathBuf;
 
-use charter_core::executor::{Acted, Executor, On, Ran};
-use charter_core::panel::Block;
-use charter_core::{extension, handed};
+use purlis_core::executor::{Acted, Executor, On, Ran};
+use purlis_core::panel::Block;
+use purlis_core::{extension, handed};
 
 /// How long a program is given by every executor here but the ones whose subject is a deadline
 /// (#422, as charter-app#303 found of the executor's own tests).
@@ -116,7 +116,7 @@ impl Probe {
         std::fs::read_dir(self.plane().join("notes")).map_or(0, |dir| dir.flatten().count())
     }
 
-    fn ask(&self) -> Result<charter_core::executor::Answer, String> {
+    fn ask(&self) -> Result<purlis_core::executor::Answer, String> {
         let plane = self.plane();
         patient().ask(
             &self.config(),
@@ -378,8 +378,8 @@ fn the_approval_prompt_shows_its_actions_commands_and_write_paths() {
         .expect("installed");
     let asked = extension::prompt(&found, extension::Standing::New).declares;
     for line in [
-        "an action on its rows, “Forget the notes” — it deletes, so charter always asks you first",
-        "an action on its rows, “Careful” — charter asks you first",
+        "an action on its rows, “Forget the notes” — it deletes, so purlis always asks you first",
+        "an action on its rows, “Careful” — purlis asks you first",
         "a palette command, “Extension probe: Jot a note” — runs its action “Jot a note”",
         "plane paths it writes: notes/",
     ] {
@@ -429,7 +429,7 @@ fn the_approval_prompt_names_every_capability_the_probe_asks_for() {
     // same sentence).
     assert_eq!(
         asked.declares[0],
-        "the capability “probe” — charter's test capability, which grants nothing"
+        "the capability “probe” — purlis's test capability, which grants nothing"
     );
     for (at, word) in [(3, "palette"), (4, "actions"), (5, "writes")] {
         assert!(
@@ -478,7 +478,7 @@ fn a_capability_this_charter_does_not_know_is_refused_by_name_and_nothing_is_loa
         .expect_err("an unknown capability was installed");
     let said = refused.to_string();
     assert!(
-        said.contains("asks for the capability \"teleport\", which this charter does not know"),
+        said.contains("asks for the capability \"teleport\", which this purlis does not know"),
         "{said}"
     );
     // Never partly loaded: nothing was recorded, so there is nothing to approve and nothing runs.
@@ -512,7 +512,7 @@ fn an_installed_extension_that_later_asks_for_an_unknown_capability_contributes_
 // The facts file: badges and repo columns (charter-app#340)
 // ---------------------------------------------------------------------------------------
 
-use charter_core::extension::facts::{self, Reading, Surface};
+use purlis_core::extension::facts::{self, Reading, Surface};
 
 impl Probe {
     /// What the one core reader says for this probe's plane, as the window asks it.
@@ -562,14 +562,14 @@ fn the_probe_declares_a_badge_and_a_repo_column_and_the_prompt_lists_both() {
     assert!(
         asked.declares.iter().any(|line| line
             == "a badge, “asked” — shown in the status bar and the terminal footer, read from \
-                its facts file and fresh for 1h; charter never starts its program to draw it"),
+                its facts file and fresh for 1h; purlis never starts its program to draw it"),
         "{:#?}",
         asked.declares
     );
     assert!(
         asked.declares.iter().any(|line| line
             == "a repo column, “Asked” — a column in the repo table, read from its facts file \
-                and fresh for 1h; charter never starts its program to draw it"),
+                and fresh for 1h; purlis never starts its program to draw it"),
         "{:#?}",
         asked.declares
     );
@@ -623,10 +623,10 @@ fn the_footer_draws_the_probes_badge_from_the_same_reader() {
     assert!(footer.columns.is_empty(), "the footer has no repo table");
 
     let config = probe.config();
-    let drawn = charter_core::footer::render(
+    let drawn = purlis_core::footer::render(
         &probe.plane(),
         &serde_json::Value::Null,
-        &charter_core::footer::Ambient {
+        &purlis_core::footer::Ambient {
             env: &|name| (name == "COLUMNS").then(|| "120".to_owned()),
             cwd: &probe.plane(),
             now: now(),
@@ -691,7 +691,7 @@ fn an_oversized_facts_file_contributes_nothing_and_says_why() {
     assert!(
         read.notes
             .iter()
-            .any(|it| it.contains("charter reads no more than")),
+            .any(|it| it.contains("purlis reads no more than")),
         "{:#?}",
         read.notes
     );
@@ -823,7 +823,7 @@ fn a_badges_section_charter_cannot_read_leaves_the_columns_filled() {
 // Events, and a section in the session-start briefing (charter-app#343)
 // ---------------------------------------------------------------------------------------
 
-use charter_core::extension::events::{self, Event};
+use purlis_core::extension::events::{self, Event};
 
 impl Probe {
     /// Tell every extension that hears it about `event`, as a core action does once it is done.
@@ -1006,13 +1006,13 @@ fn the_approval_prompt_names_the_events_the_folder_and_the_briefing_section() {
         .expect("installed");
     let asked = extension::prompt(&found, extension::Standing::New);
     for line in [
-        "the capability “events” — charter starts its program once after each thing it hears \
+        "the capability “events” — purlis starts its program once after each thing it hears \
          about, when that thing is already done",
         "the capability “briefing” — adds text to every chat's first message, quoted as data \
          under its name",
         "events it hears: a workspace being focused, a workspace being created, a workspace \
          being forked, a workspace being removed, a handoff being created, a chat starting, the \
-         plane being saved — charter starts its program once for each, after it has happened; \
+         plane being saved — purlis starts its program once for each, after it has happened; \
          what it answers never changes what happened",
         "a folder in each workspace, “probe/” — a fork copies it into the new workspace, \
          whether or not this extension is on there",
@@ -1080,7 +1080,7 @@ fn an_event_nobody_declared_is_refused_by_name() {
         .expect_err("an unknown event was installed")
         .to_string();
     assert!(
-        refused.contains("hears the event \"repo-cloned\", which charter does not have"),
+        refused.contains("hears the event \"repo-cloned\", which purlis does not have"),
         "{refused}"
     );
 }
@@ -1116,14 +1116,14 @@ fn a_workspace_folder_that_is_one_of_charters_own_is_refused() {
     doc["contributes"]["events"]["workspace_folder"] = serde_json::json!("memory");
     std::fs::write(&at, doc.to_string()).expect("written");
     let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
-        .expect_err("a workspace folder of charter's own was installed")
+        .expect_err("a workspace folder of purlis's own was installed")
         .to_string();
-    assert!(refused.contains("one of charter's own"), "{refused}");
+    assert!(refused.contains("one of purlis's own"), "{refused}");
 }
 
 // ---- the briefing section ----------------------------------------------------------------
 
-use charter_core::extension::briefing::{self, Asked, AtSessionStart, Bounds};
+use purlis_core::extension::briefing::{self, Asked, AtSessionStart, Bounds};
 
 /// Bounds for a test whose subject is not the bound: a program copied in fresh for each test is
 /// one macOS assesses before its first run, which on a busy machine takes longer than
@@ -1190,7 +1190,7 @@ fn every_line_of_a_section_is_quoted_and_it_is_cut_at_its_limit() {
     assert_eq!(quoted + 1, briefing::MOST_SECTION_CHARS, "{part}");
     assert!(
         part.ends_with(&format!(
-            "⟨charter cut it at {} characters; the extension wrote {}.⟩",
+            "⟨purlis cut it at {} characters; the extension wrote {}.⟩",
             briefing::MOST_SECTION_CHARS,
             long.chars().count()
         )),
@@ -1341,7 +1341,7 @@ fn the_approval_prompt_lists_the_commands_that_write_and_not_the_ones_that_read(
     let asked = extension::prompt(&found, extension::Standing::New).declares;
     assert!(
         asked.iter().any(|it| it
-            == "a command that writes, `charter extension-probe stamp` — Stamp a note; it \
+            == "a command that writes, `purlis extension-probe stamp` — Stamp a note; it \
                 writes to the plane paths listed here"),
         "{asked:#?}"
     );
@@ -1472,7 +1472,7 @@ fn an_extension_whose_id_is_a_core_command_word_is_refused_and_never_installed()
                 .to_string();
         assert!(
             refused.contains(&format!(
-                "has the id \"{word}\", which is one of charter's own commands"
+                "has the id \"{word}\", which is one of purlis's own commands"
             )),
             "{refused}"
         );
@@ -1505,7 +1505,7 @@ fn the_prompt_says_a_program_with_only_commands_is_started_when_a_command_is_run
         .expect("the program's line");
     assert!(
         program.contains(
-            "when you or a chat run one of its commands (`charter extension-probe <command>`)"
+            "when you or a chat run one of its commands (`purlis extension-probe <command>`)"
         ) && !program.contains("nothing ever asks"),
         "{program}"
     );

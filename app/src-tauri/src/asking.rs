@@ -1,26 +1,26 @@
 //! A chat's permission prompt in the window's needs-you list, answered there (HP-6).
 //!
 //! A Claude Code chat's `PermissionRequest` hook hands its ask to this project's hook channel
-//! and waits (`charter_core::hookwire::permission`). The ask is held in the project's
+//! and waits (`purlis_core::hookwire::permission`). The ask is held in the project's
 //! [`HookAsks`], the window is told the asks it now has ([`EVENT`]), and the operator's choice
 //! goes back on that hook ([`answer_ask`]), so the harness carries it out without its pane
 //! having focus. Unanswered, the hook decides nothing and the pane asks as it always did.
 //!
 //! **The window answers, and nothing else does.** [`answer_ask`] is a Tauri command the
 //! window invokes, admitted as `local-ui`; it is never served on the link to `charterd`
-//! (`charter_session_protocol::ui::WINDOW_ONLY`), and the session protocol refuses its own
+//! (`purlis_session_protocol::ui::WINDOW_ONLY`), and the session protocol refuses its own
 //! `answer`. On the hook channel the host reads asks and writes back only the window's choice,
 //! and the hook believes a reply only from a listener that is its own ancestor
-//! (`charter_same_user::admit_host`). An answer names its project, chat and ask, and lands only
+//! (`purlis_same_user::admit_host`). An answer names its project, chat and ask, and lands only
 //! on that chat's ask, once.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use charter_core::harness::asks::{Admitted, Answerer, Raised};
-use charter_core::harness::hooked::HookAsks;
-use charter_core::harness::model::{Action, ChoiceKind};
-use charter_core::hookwire::Permitting;
+use purlis_core::harness::asks::{Admitted, Answerer, Raised};
+use purlis_core::harness::hooked::HookAsks;
+use purlis_core::harness::model::{Action, ChoiceKind};
+use purlis_core::hookwire::Permitting;
 
 use crate::planes::{PlaneId, Planes};
 
@@ -94,7 +94,7 @@ fn shown(raised: Raised) -> Option<Shown> {
     Some(Shown {
         session,
         ask: raised.id.to_string(),
-        says: charter_core::harness::model::Summary::of(&says)
+        says: purlis_core::harness::model::Summary::of(&says)
             .as_str()
             .to_owned(),
         options: ask
@@ -124,7 +124,7 @@ pub fn tell(plane: &PlaneId, hooks: &HookAsks, telling: &Telling) {
 /// answered, its hook goes away, or its deadline passes, and the window told each change.
 pub fn permitting(plane: PlaneId, hooks: Arc<HookAsks>, telling: Telling) -> Permitting {
     let told = Arc::clone(&hooks);
-    charter_core::hookwire::permission::held_in(
+    purlis_core::hookwire::permission::held_in(
         hooks,
         Arc::new(move || tell(&plane, &told, &telling)),
     )

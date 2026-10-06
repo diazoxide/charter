@@ -18,7 +18,7 @@
 //! `DBUS_SESSION_BUS_ADDRESS` pointing at nothing. A machine with no session bus starts in
 //! under 0.6 s, because every bus call fails at once. The bus itself is healthy, so the
 //! address it had is kept in [`SESSION_BUS_KEPT`] and every chat gets that one
-//! (`charter_core::chatenv`), as does every program the app starts (`forklock::spawn`). What
+//! (`purlis_core::chatenv`), as does every program the app starts (`forklock::spawn`). What
 //! the run loses — the tray, notifications, a keyring vault from the window, and handing a
 //! second launch over — is said on standard error and in the window ([`SessionBus`]);
 //! `instance.rs` is what keeps two apps off one plane without the bus. After the launch the
@@ -40,7 +40,7 @@
 
 use std::time::Duration;
 
-pub use charter_core::chatenv::{NO_SESSION_BUS, SESSION_BUS, SESSION_BUS_KEPT};
+pub use purlis_core::chatenv::{NO_SESSION_BUS, SESSION_BUS, SESSION_BUS_KEPT};
 
 /// How long the bus is given to answer. For a running portal it answers in milliseconds;
 /// the ticket (FR-8) and ADR 0026's 2 s cold-start limit leave room for this much and no more.
@@ -120,8 +120,8 @@ pub fn decide(
             Some((bus, Heard::Silence)) => silent(&bus),
             Some((_, Heard::NoBus)) | None => Start::WithoutTheBus {
                 say: format!(
-                    "charter: there is no session bus to be had (none named, none at \
-                     $XDG_RUNTIME_DIR/bus, and none on the X display), so charter is starting \
+                    "purlis: there is no session bus to be had (none named, none at \
+                     $XDG_RUNTIME_DIR/bus, and none on the X display), so purlis is starting \
                      without one. {WHAT_IS_OFF}"
                 ),
                 kept: String::new(),
@@ -133,8 +133,8 @@ pub fn decide(
 fn silent(kept: &str) -> Start {
     Start::WithoutTheBus {
         say: format!(
-            "charter: the desktop portal ({PORTAL}) did not answer on the session bus within \
-             {} ms, so charter is starting without the session bus instead of waiting out \
+            "purlis: the desktop portal ({PORTAL}) did not answer on the session bus within \
+             {} ms, so purlis is starting without the session bus instead of waiting out \
              D-Bus's 25 s. {WHAT_IS_OFF}",
             BUDGET.as_millis()
         ),
@@ -252,7 +252,7 @@ fn the_x_sessions_bus() -> Option<(String, Heard)> {
         std::path::Path::new("/var/lib/dbus/machine-id"),
     ])?;
     let Asked::Answered(Ok(printed)) = in_time(BUDGET, move || {
-        charter_core::forklock::output(
+        purlis_core::forklock::output(
             std::process::Command::new("dbus-launch")
                 .arg(format!("--autolaunch={machine}"))
                 .args(["--sh-syntax", "--close-stderr"])
@@ -299,7 +299,7 @@ pub fn start_clear_of_a_silent_portal() {
         Ok(mut command) => command.exec(),
         Err(err) => err,
     };
-    tracing::warn!("charter: could not start again ({failed}); going on with the bus as it was.");
+    tracing::warn!("purlis: could not start again ({failed}); going on with the bus as it was.");
 }
 
 /// Which session bus a launch of this binary is started on.
@@ -354,7 +354,7 @@ fn launch_on(
     // The kept bus under either of its names (V93k): an app started by an older one may
     // have inherited it as `CHARTER_SESSION_BUS_KEPT`.
     let forget_the_kept = |again: &mut std::process::Command| {
-        for kept in charter_core::envvar::spellings(SESSION_BUS_KEPT) {
+        for kept in purlis_core::envvar::spellings(SESSION_BUS_KEPT) {
             again.env_remove(kept);
         }
     };
@@ -427,12 +427,12 @@ impl SessionBus {
         };
         let why = if back.is_some() {
             format!(
-                "charter started without the session bus: the desktop portal did not answer \
+                "purlis started without the session bus: the desktop portal did not answer \
                  on it within {} ms, and waiting would have cost half a minute.",
                 BUDGET.as_millis()
             )
         } else {
-            "charter found no session bus to start on.".to_owned()
+            "purlis found no session bus to start on.".to_owned()
         };
         Self {
             says: Some(format!("{why} {WHAT_IS_OFF}")),
@@ -520,7 +520,7 @@ pub fn listen_again(app: &tauri::AppHandle) {
                 return;
             }
             tracing::info!(
-                "charter: the desktop portal answers on the session bus now; the window offers \
+                "purlis: the desktop portal answers on the session bus now; the window offers \
                  to restart on it."
             );
             let bus = app.state::<SessionBus>();
@@ -569,7 +569,7 @@ pub fn ask_until_answered(
 pub fn restart_if_asked(bus: &SessionBus) {
     restart_if_asked_with(bus, &mut |onto| {
         this_launch_again(onto)
-            .and_then(|mut again| charter_core::forklock::spawn(&mut again).map(drop))
+            .and_then(|mut again| purlis_core::forklock::spawn(&mut again).map(drop))
     });
 }
 
@@ -580,7 +580,7 @@ fn restart_if_asked_with(bus: &SessionBus, start: &mut dyn FnMut(&Bus) -> std::i
     };
     if let Err(why) = start(&onto) {
         tracing::warn!(
-            "charter: could not start again on the session bus ({why}); start charter again"
+            "purlis: could not start again on the session bus ({why}); start purlis again"
         );
     }
 }
@@ -1009,7 +1009,7 @@ mod tests {
                 ),
             )
             .expect("a bus config");
-            let mut daemon = charter_core::forklock::spawn(
+            let mut daemon = purlis_core::forklock::spawn(
                 std::process::Command::new("dbus-daemon")
                     .arg(format!("--config-file={}", config.display()))
                     .args(["--nofork", "--print-address"])

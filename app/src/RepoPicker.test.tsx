@@ -87,7 +87,7 @@ describe("the repo picker", () => {
     });
 
     it("offers no login where logging in would not help", async () => {
-      answering([{ said: "charter could not find gh on PATH", login: null }]);
+      answering([{ said: "purlis could not find gh on PATH", login: null }]);
       render(<RepoPicker plane={"p1" as PlaneId} picked={new Set()} onPicked={() => {}} />);
 
       expect(await screen.findByRole("status")).toHaveTextContent("could not find gh");

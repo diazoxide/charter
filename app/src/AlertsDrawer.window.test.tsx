@@ -163,7 +163,7 @@ describe("each row of the Alerts drawer", () => {
     expect(ways("alert:plane root")).toEqual(["Go to Saving"]);
     expect(ways("alert:save")).toEqual(["Go to Saving"]);
     expect(project(open).querySelector("code")).toBeNull();
-    expect(project(open)).not.toHaveTextContent("charter persona default");
+    expect(project(open)).not.toHaveTextContent("purlis persona default");
   });
 
   it("opens the project's General settings, where the default persona's picker is, for the front door", async () => {
@@ -207,7 +207,7 @@ describe("each row of the Alerts drawer", () => {
     rows = [REINIT];
     fixAnswer = {
       fix: "workspace-reinit",
-      refused: "this charter may not write the project",
+      refused: "this purlis may not write the project",
       said: [],
       complete: false,
     };
@@ -219,7 +219,7 @@ describe("each row of the Alerts drawer", () => {
 
     await waitFor(() =>
       expect(row(open, "alert:reinit")).toHaveTextContent(
-        "charter could not reinit: this charter may not write the project",
+        "purlis could not reinit: this purlis may not write the project",
       ),
     );
   });

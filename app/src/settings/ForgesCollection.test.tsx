@@ -22,7 +22,7 @@ import type {
  * The core is a model here, as small as the window's contract with it: the blocks, the text
  * they are written as, an identity per block that changes once it moves, and a write refused
  * when the text it is sent against is not the text on disk. What it checks beyond that is
- * `charter_core::settings::forges`'s tests; held here is what the person sees and what the
+ * `purlis_core::settings::forges`'s tests; held here is what the person sees and what the
  * window sends.
  */
 

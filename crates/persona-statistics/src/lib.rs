@@ -5,7 +5,7 @@
 //! charter-app#339). The app ships it inside its bundle. It does not read the plane: it knows
 //! what the protocol hands it — one line of JSON on stdin, one line back on stdout — and it
 //! links charter's core for one thing, the stats code `charter persona stats` counts with
-//! ([`charter_core::personaverbs::stats`]), so that the view and the CLI give the same numbers.
+//! ([`purlis_core::personaverbs::stats`]), so that the view and the CLI give the same numbers.
 //! Run it in a terminal and paste a request in to see what it answers.
 //!
 //! # What it shows, and why these three
@@ -35,8 +35,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use charter_core::personaverbs::stats;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
+use purlis_core::personaverbs::stats;
 use serde_json::{Value, json};
 
 /// The protocol this program speaks. charter refuses an answer in any other.
@@ -116,7 +116,7 @@ fn statistics(request: &Value) -> Result<Vec<Value>, String> {
     }
     if given.get("truncated").and_then(Value::as_bool) == Some(true) {
         blocks.push(note(
-            "charter stopped handing dates at its limit, so the counts below are a floor.",
+            "purlis stopped handing dates at its limit, so the counts below are a floor.",
         ));
     }
     for persona in personas.iter().filter(|it| it.refused.is_some()) {
@@ -124,7 +124,7 @@ fn statistics(request: &Value) -> Result<Vec<Value>, String> {
             "kind": "note",
             "tone": "trouble",
             "text": format!(
-                "charter could not read {}'s memories: {}",
+                "purlis could not read {}'s memories: {}",
                 persona.name,
                 persona.refused.as_deref().unwrap_or_default()
             ),

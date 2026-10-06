@@ -430,7 +430,7 @@ describe("SavingView, with the workspace's repos (charter-app#299)", () => {
       within(rows[1]).getByRole("link", { name: "https://github.com/acme/web/pull/7" }),
     ).toBeTruthy();
     expect(rows[1].textContent).toContain("waiting on its pull request");
-    expect(rows[2].textContent).toContain("Off — charter does not save this repo");
+    expect(rows[2].textContent).toContain("Off — purlis does not save this repo");
     expect(
       (within(rows[2]).getByRole("button", { name: "Save docs" }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -519,10 +519,10 @@ describe("SavingView, with the workspace's repos (charter-app#299)", () => {
       "Commits on fix/y, pushes fix/y, and opens a pull request into develop, and asks it to merge itself once its checks pass",
       "Commits on feature/z and pushes feature/z",
       "Commits on main — nothing is pushed",
-      "Nowhere — charter does not save it",
-      "Commits on main — nothing is pushed: its origin is not on a forge charter knows",
-      "Commits on feature/g, then stops: its origin is not on a forge charter knows",
-      "Commits on feature/w, then stops: charter does not know where a pull request goes — set [repos.who] branch",
+      "Nowhere — purlis does not save it",
+      "Commits on main — nothing is pushed: its origin is not on a forge purlis knows",
+      "Commits on feature/g, then stops: its origin is not on a forge purlis knows",
+      "Commits on feature/w, then stops: purlis does not know where a pull request goes — set [repos.who] branch",
       "Nowhere — the clone is not on a branch; check one out first",
     ]);
   });

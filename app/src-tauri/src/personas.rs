@@ -3,7 +3,7 @@
 //!
 //! Thin, as `workspaces.rs` is: what a persona may be called, what its scaffold holds, which
 //! personas still depend on it and what a removal takes with it all live in
-//! `charter_core::personaverbs::define`, which is `charter persona create` and `charter persona
+//! `purlis_core::personaverbs::define`, which is `charter persona create` and `charter persona
 //! remove`. This layer converts. A rule written here as well would be a second rule.
 //!
 //! **The window never overwrites and never forces.** `create` is asked without `--force`, so a
@@ -17,8 +17,8 @@
 
 use std::path::{Path, PathBuf};
 
-use charter_core::personaverbs::define;
-use charter_core::repocmd::Say;
+use purlis_core::personaverbs::define;
+use purlis_core::repocmd::Say;
 
 use crate::planes::{PlaneId, Planes};
 use crate::workspaces::ran;
@@ -77,7 +77,7 @@ fn create_in(
     delegate_when: Option<&str>,
     extends: Option<&str>,
 ) -> Result<Vec<String>, String> {
-    let state = charter_core::personaverbs::state_dir(root);
+    let state = purlis_core::personaverbs::state_dir(root);
     let ask = define::Create {
         name: name.trim(),
         role: given(role),
@@ -119,8 +119,8 @@ pub async fn persona_remove(
 
 /// The removal itself, against a root the registry has already vouched for.
 fn remove_in(root: &Path, name: &str) -> Result<Vec<String>, String> {
-    let ids = charter_core::active::Ids::default();
-    let selection = charter_core::active::persona(&charter_core::active::Asking {
+    let ids = purlis_core::active::Ids::default();
+    let selection = purlis_core::active::persona(&purlis_core::active::Asking {
         root,
         cwd: root,
         flag: None,
@@ -158,14 +158,14 @@ pub fn persona_edit(
 /// a definition that is there, and no link on the way out of the plane. A definition that does
 /// not load is still returned — it is the one most in need of an editor.
 fn definition_of(root: &Path, name: &str) -> Result<PathBuf, String> {
-    if let Some(refused) = charter_core::personas::shape_refusal(name) {
+    if let Some(refused) = purlis_core::personas::shape_refusal(name) {
         return Err(refused);
     }
-    let file = charter_core::personas::def_path(root, name);
+    let file = purlis_core::personas::def_path(root, name);
     if !file.exists() {
         return Err(format!("no persona '{name}' on this plane"));
     }
-    charter_core::contain::readable(root, &file).map_err(|refused| refused.to_string())?;
+    purlis_core::contain::readable(root, &file).map_err(|refused| refused.to_string())?;
     Ok(file)
 }
 
@@ -263,7 +263,7 @@ mod tests {
     fn removing_the_plane_wide_selection_clears_it() {
         let dir = plane();
         create_in(dir.path(), "qa", None, Some("tests"), None).unwrap();
-        let active = charter_core::active::active_persona_file(dir.path());
+        let active = purlis_core::active::active_persona_file(dir.path());
         std::fs::create_dir_all(active.parent().unwrap()).unwrap();
         std::fs::write(&active, "qa\n").unwrap();
 

@@ -22,12 +22,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use charter_core::engine::Size;
-use charter_core::instructions::Stamp;
-use charter_core::machine;
-use charter_core::planemodel::Model;
-use charter_core::reopen;
-use charter_core::reopen::Choice;
+use purlis_core::engine::Size;
+use purlis_core::instructions::Stamp;
+use purlis_core::machine;
+use purlis_core::planemodel::Model;
+use purlis_core::reopen;
+use purlis_core::reopen::Choice;
 
 use crate::chats::Chats;
 use crate::hooks::{self, Hooks, Moved};
@@ -142,7 +142,7 @@ impl Records {
         };
         if let Err(why) = reopen::write(&self.root, &record) {
             tracing::warn!(
-                "charter: what is open in {} was not recorded ({why})",
+                "purlis: what is open in {} was not recorded ({why})",
                 self.root.display()
             );
             // Not vouched for: the fingerprint would then describe a record charter did not
@@ -186,7 +186,7 @@ impl Records {
         }) && why.kind() != std::io::ErrorKind::Unsupported
         {
             tracing::warn!(
-                "charter: the record of {} was written but not vouched for ({why}); charter                  may ask about this plane again at the next launch",
+                "purlis: the record of {} was written but not vouched for ({why}); purlis                  may ask about this plane again at the next launch",
                 self.root.display()
             );
         }
@@ -221,7 +221,7 @@ pub struct Held {
     /// platform would not watch; the panels then read the plane when focused, as they did.
     watch: Mutex<Option<crate::planewatch::Watch>>,
     /// What the sidebar draws, kept current by what the watch and auto-save say moved
-    /// (FD-10b, [`charter_core::planemodel`]). In memory only.
+    /// (FD-10b, [`purlis_core::planemodel`]). In memory only.
     model: Arc<Mutex<Model>>,
     /// The plane's auto-save worker (charter-app#296): saves it after a quiet period and when
     /// a chat ends, and fetches what comes in. Stopped when the plane is let go of.
@@ -343,7 +343,7 @@ impl Held {
     pub fn wrote(&self, stores: &[String]) {
         let paths: Vec<PathBuf> = stores.iter().map(|store| self.root.join(store)).collect();
         let changes =
-            charter_core::planechange::of_batch(&self.root, paths.iter().map(PathBuf::as_path));
+            purlis_core::planechange::of_batch(&self.root, paths.iter().map(PathBuf::as_path));
         self.model
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -498,7 +498,7 @@ impl Held {
                 reopen::arrive(record, &self.records.clone_seat, || self.records.known());
             if arrival == reopen::Arrival::Copied {
                 tracing::info!(
-                    "charter: plane {} is a copy of another clone; its chats get new ids",
+                    "purlis: plane {} is a copy of another clone; its chats get new ids",
                     self.root.display()
                 );
             }
@@ -509,7 +509,7 @@ impl Held {
                 let fresh = record.chosen(Choice::StartFresh);
                 self.records.write(&fresh);
                 tracing::info!(
-                    "charter: plane {}, started fresh as asked; nothing is reopened",
+                    "purlis: plane {}, started fresh as asked; nothing is reopened",
                     self.root.display()
                 );
                 fresh
@@ -519,7 +519,7 @@ impl Held {
                 // Not the same thing as an empty plane, and an operator told "nothing to
                 // reopen" would go looking in the wrong place.
                 tracing::warn!(
-                    "charter: the record of what was open in {} was refused ({why}); nothing \
+                    "purlis: the record of what was open in {} was refused ({why}); nothing \
                      is reopened and nothing will be recorded until it is repaired",
                     self.root.display()
                 );
@@ -530,14 +530,14 @@ impl Held {
         let back = self.chats.put_back(&record, &self.root, size).len();
         if wanted > 0 {
             tracing::info!(
-                "charter: plane {}, {back} of {wanted} chats back",
+                "purlis: plane {}, {back} of {wanted} chats back",
                 self.root.display()
             );
             for crate::chats::NotStarted { name, why, .. } in self.chats.would_not_start() {
-                tracing::warn!("charter: {name} did not start ({why}); it is still recorded");
+                tracing::warn!("purlis: {name} did not start ({why}); it is still recorded");
             }
         } else {
-            tracing::info!("charter: plane {}, nothing to reopen", self.root.display());
+            tracing::info!("purlis: plane {}, nothing to reopen", self.root.display());
         }
     }
 
@@ -565,7 +565,7 @@ impl Held {
         let closed = self.chats.close(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
-        charter_core::handback::orphan(&self.root, session);
+        purlis_core::handback::orphan(&self.root, session);
         (self.tell)(gone);
         closed
     }
@@ -581,7 +581,7 @@ impl Held {
         // program that had already ended answers its close with an error, and the new chat
         // must still reach the window.
         if let Err(why) = self.close_chat(session) {
-            tracing::warn!("charter: chat {session}, started fresh, did not end cleanly ({why})");
+            tracing::warn!("purlis: chat {session}, started fresh, did not end cleanly ({why})");
         }
         if in_front {
             self.chats.bring_to_front(Some(started));
@@ -670,7 +670,7 @@ impl Held {
     /// workspace — the plane root, where working in a clone is done from a steward's chat. Only
     /// a chat that is plainly in another workspace is left out.
     pub fn mid_turn_in(&self, workspace: &str) -> Vec<String> {
-        let on_disk = charter_core::workspaces::Plane::open(&self.root);
+        let on_disk = purlis_core::workspaces::Plane::open(&self.root);
         self.chats
             .open_now()
             .into_iter()
@@ -681,7 +681,7 @@ impl Held {
                     .is_none_or(|there| there == workspace)
             })
             .filter(|open| {
-                self.board().glance(open.session).state == charter_core::state::State::Running
+                self.board().glance(open.session).state == purlis_core::state::State::Running
             })
             .map(|open| open.label.clone().unwrap_or(open.name))
             .collect()
@@ -690,7 +690,7 @@ impl Held {
     /// [`Held::mid_turn_in`] for every workspace of the plane, keyed by workspace — asked
     /// before a quit ends the chats, so the turns it cuts off are known (ADR 0051).
     pub fn mid_turn_everywhere(&self) -> HashMap<String, Vec<String>> {
-        charter_core::workspaces::Plane::open(&self.root)
+        purlis_core::workspaces::Plane::open(&self.root)
             .workspaces()
             .unwrap_or_default()
             .into_iter()
@@ -719,12 +719,12 @@ impl Held {
 /// for a linked worktree anywhere on disk — the one its main clone is in. `None` for a
 /// directory in no workspace at all.
 pub(crate) fn workspace_working_in(
-    plane: &charter_core::workspaces::Plane,
+    plane: &purlis_core::workspaces::Plane,
     cwd: &Path,
 ) -> Option<String> {
     plane.workspace_of(cwd).or_else(|| {
         cwd.ancestors()
-            .find_map(charter_core::plane::main_worktree_of)
+            .find_map(purlis_core::plane::main_worktree_of)
             .and_then(|main| plane.workspace_of(&main))
     })
 }
@@ -971,7 +971,7 @@ impl Planes {
         // `PlaneId` is minted here alone. So a fenced build that must not touch a plane has
         // exactly one place to say so, and a caller that reached a root some other way than
         // `plane::resolve` is held all the same.
-        charter_core::fence::hold(charter_core::fence::Act::Open, &root);
+        purlis_core::fence::hold(purlis_core::fence::Act::Open, &root);
         let id = PlaneId::of(&root);
         // Remembered HERE, and therefore under the spelling the line above settled on. Done
         // in the caller instead, it would be done against whatever path that caller happened
@@ -982,11 +982,11 @@ impl Planes {
         self.remember(&root);
         // Temps an older charter was killed in front of, which nothing writing today will
         // ever rename away (#440). Only its own old names, and only stale ones.
-        charter_core::leftovers::sweep_plane(&root);
+        purlis_core::leftovers::sweep_plane(&root);
         // And the persona tool gate's per-session ceilings, which nothing else removes.
-        charter_core::personagate::sweep_ceilings(&root, std::time::SystemTime::now());
+        purlis_core::personagate::sweep_ceilings(&root, std::time::SystemTime::now());
         if let Some(config) = self.config.as_deref() {
-            charter_core::leftovers::sweep_config(config);
+            purlis_core::leftovers::sweep_config(config);
         }
 
         let mut open = self.map();
@@ -996,7 +996,7 @@ impl Planes {
         // The per-session files no chat has written for a month (SC-7). Below the line above,
         // so it runs only when no chat of this plane is running in this app — the chats its
         // reopen record will bring back are what it keeps.
-        charter_core::retention::on_open(&root, std::time::SystemTime::now());
+        purlis_core::retention::on_open(&root, std::time::SystemTime::now());
         let held = Arc::new(self.hold(id.clone(), root));
         let _ = held.me.set(Arc::downgrade(&held));
         // A handoff from one of this plane's chats is answered by this plane, which is the
@@ -1005,13 +1005,13 @@ impl Planes {
         held.hooks.answer_with({
             let held = Arc::downgrade(&held);
             let plane = id.clone();
-            let tickets = charter_core::hookwire::Tickets::default();
+            let tickets = purlis_core::hookwire::Tickets::default();
             let arrivals = Arc::clone(&self.arrivals);
             Arc::new(move |connection, ask| match held.upgrade() {
                 Some(held) => {
                     crate::handoff::answer(&held, &plane, &tickets, connection, ask, &*arrivals)
                 }
-                None => charter_core::hookwire::Answer::No {
+                None => purlis_core::hookwire::Answer::No {
                     why: "this project has been closed".to_owned(),
                 },
             })
@@ -1052,7 +1052,7 @@ impl Planes {
             let held = Arc::downgrade(&held);
             let plane = id.clone();
             let touches = Arc::clone(&self.touches);
-            let gate = Mutex::new(charter_core::touching::Gate::default());
+            let gate = Mutex::new(purlis_core::touching::Gate::default());
             Arc::new(move |touching| {
                 let Some(strong) = held.upgrade() else { return };
                 let folder = strong
@@ -1342,7 +1342,7 @@ impl Planes {
             return Err(format!(
                 "{} changed while you were reading it, so nothing was approved and nothing was \
                  opened. Open it again to see what it contributes now.",
-                charter_core::shown::short(&root.display().to_string())
+                purlis_core::shown::short(&root.display().to_string())
             ));
         }
         between();
@@ -1410,7 +1410,7 @@ impl Planes {
         }) && why.kind() != std::io::ErrorKind::Unsupported
         {
             tracing::warn!(
-                "charter: {} was opened but not added to the list of recent planes ({why})",
+                "purlis: {} was opened but not added to the list of recent planes ({why})",
                 root.display()
             );
         }
@@ -1434,8 +1434,8 @@ impl Planes {
         }) && why.kind() != std::io::ErrorKind::Unsupported
         {
             tracing::warn!(
-                "charter: {} was opened, but your approval of it was not recorded ({why}); \
-                 charter will ask about it again",
+                "purlis: {} was opened, but your approval of it was not recorded ({why}); \
+                 purlis will ask about it again",
                 root.display()
             );
         }
@@ -1494,7 +1494,7 @@ impl Planes {
             && why.kind() != std::io::ErrorKind::Unsupported
         {
             tracing::warn!(
-                "charter: the projects this window holds were not written down ({why}); the \
+                "purlis: the projects this window holds were not written down ({why}); the \
                  next launch will not put them back"
             );
         }
@@ -1553,7 +1553,7 @@ impl Planes {
         let config = self.store_home("forget a project")?;
         machine::forget_project(config, root)
             .map(drop)
-            .map_err(|why| format!("charter could not forget that project: {why}"))
+            .map_err(|why| format!("purlis could not forget that project: {why}"))
     }
 
     /// Revokes this machine's approval of a project (ST-2): the next open asks again.
@@ -1561,13 +1561,13 @@ impl Planes {
         let config = self.store_home("revoke an approval")?;
         machine::revoke_approval(config, root)
             .map(drop)
-            .map_err(|why| format!("charter could not revoke that approval: {why}"))
+            .map_err(|why| format!("purlis could not revoke that approval: {why}"))
     }
 
     /// The config home the machine store is in, or why there is none to `act` in.
     fn store_home(&self, act: &str) -> Result<&Path, String> {
         self.config.as_deref().ok_or_else(|| {
-            format!("charter has no config home on this machine, so it cannot {act}.")
+            format!("purlis has no config home on this machine, so it cannot {act}.")
         })
     }
 
@@ -1580,7 +1580,7 @@ impl Planes {
     ) -> Result<(), String> {
         let Some(config) = self.config.as_deref() else {
             return Err(
-                "charter has no config home on this machine, so it cannot remember a pin."
+                "purlis has no config home on this machine, so it cannot remember a pin."
                     .to_owned(),
             );
         };
@@ -1589,7 +1589,7 @@ impl Planes {
         // sentence they can follow into a sentence about a file.
         let mut refused = None;
         machine::update(config, |store| refused = act(store).err())
-            .map_err(|why| format!("charter could not write the pin down: {why}"))?;
+            .map_err(|why| format!("purlis could not write the pin down: {why}"))?;
         match refused {
             Some(why) => Err(why),
             None => Ok(()),
@@ -1624,7 +1624,7 @@ impl Planes {
         )
         .unwrap_or_else(|why| {
             tracing::warn!(
-                "charter: no hook channel at {} ({why}); every chat in {} will show as \
+                "purlis: no hook channel at {} ({why}); every chat in {} will show as \
                      unknown",
                 at.socket.display(),
                 root.display()
@@ -1645,7 +1645,7 @@ impl Planes {
         let device = self
             .config
             .as_deref()
-            .and_then(|config| charter_core::machine::device_id(config).ok());
+            .and_then(|config| purlis_core::machine::device_id(config).ok());
         let records = Arc::new(Records {
             root: root.clone(),
             config: self.config.clone(),
@@ -1670,7 +1670,7 @@ impl Planes {
             chats.when_a_run_begins(Box::new(move |session, run, cause| {
                 let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
                 if let Err(why) = log.begin(&root, session, run, cause) {
-                    tracing::warn!("charter: a run was not written to the event log ({why})");
+                    tracing::warn!("purlis: a run was not written to the event log ({why})");
                 }
             }));
         }
@@ -1685,7 +1685,7 @@ impl Planes {
             chats.when_the_sandbox_is_decided(Box::new(move |decided| {
                 if let Some(change) = decided.change {
                     let (Some(events), Some(run)) = (&events, decided.run) else {
-                        return Err("charter's event log is not open on this machine".to_owned());
+                        return Err("purlis's event log is not open on this machine".to_owned());
                     };
                     let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
                     let event = log
@@ -1696,7 +1696,7 @@ impl Planes {
                         .map_err(|why| format!("the event log could not keep it: {why}"))?;
                 }
                 if let Some(counted) = decided.counted {
-                    charter_core::sandbox::local::count(&project, counted)
+                    purlis_core::sandbox::local::count(&project, counted)
                         .map_err(|why| why.to_string())?;
                 }
                 Ok(())
@@ -1797,7 +1797,7 @@ impl Planes {
             crate::planewatch::Watch::start(id.clone(), &root, changes)
                 .map_err(|why| {
                     tracing::warn!(
-                        "charter: {} is not watched ({why}); its panels will not follow changes \
+                        "purlis: {} is not watched ({why}); its panels will not follow changes \
                          made outside this window",
                         root.display()
                     );
@@ -1847,7 +1847,7 @@ impl Planes {
     /// second the ending takes; see [`crate::host::SessionHost::open`] for the start that was
     /// already under way. A switch that could not be kept on disk still stops everything here,
     /// and the error is the sentence saying so.
-    pub fn stop_every_agent(&self, by: charter_core::halt::Actor) -> Result<usize, String> {
+    pub fn stop_every_agent(&self, by: purlis_core::halt::Actor) -> Result<usize, String> {
         let kept = self.kill_switch.stop(by);
         let stopped = self.end_every_chat();
         kept.map(|()| stopped)
@@ -1931,7 +1931,7 @@ impl Planes {
             && let Err(why) = reopen::mark_restart_to_update(config)
         {
             tracing::warn!(
-                "charter: the launch after this restart will not say it followed an update \
+                "purlis: the launch after this restart will not say it followed an update \
                  ({why}); what was open is recorded all the same"
             );
         }
@@ -1969,8 +1969,8 @@ impl Planes {
 /// about which one went.
 fn no_such(plane: &PlaneId, doing: &str) -> String {
     format!(
-        "charter has no plane open at {}, so there is nothing to {doing}",
-        charter_core::shown::short(plane.as_str())
+        "purlis has no plane open at {}, so there is nothing to {doing}",
+        purlis_core::shown::short(plane.as_str())
     )
 }
 
@@ -2023,16 +2023,16 @@ impl Asking {
 /// an approval already exists for whatever it pointed at before, and charter cannot tell the
 /// two apart, so that one is dropped.
 fn plane_at(root: &Path) -> Result<PathBuf, String> {
-    let shown = charter_core::shown::short(&root.display().to_string());
+    let shown = purlis_core::shown::short(&root.display().to_string());
     let here = root
         .canonicalize()
-        .map_err(|why| format!("charter cannot open {shown}: {why}"))?;
-    charter_core::plane::find_root(&here).map_err(|_| {
+        .map_err(|why| format!("purlis cannot open {shown}: {why}"))?;
+    purlis_core::plane::find_root(&here).map_err(|_| {
         format!(
-            "{shown} is not a plane: charter found no {} or {} there or in any directory above \
+            "{shown} is not a plane: purlis found no {} or {} there or in any directory above \
              it",
-            charter_core::names::PLANE_MANIFEST.reads[0],
-            charter_core::names::PLANE_MANIFEST.write,
+            purlis_core::names::PLANE_MANIFEST.reads[0],
+            purlis_core::names::PLANE_MANIFEST.write,
         )
     })
 }
@@ -2463,7 +2463,7 @@ pub struct Launch {
 
 /// Resolves the launch's working directory to a plane, and opens it.
 ///
-/// **One rule, one answer, and this line is the whole of it.** `charter_core::plane::resolve`
+/// **One rule, one answer, and this line is the whole of it.** `purlis_core::plane::resolve`
 /// is the resolver the CLI asks and the one every command in this app used to ask — except
 /// the launch, which asked `find_root`. The two disagree about `$CHARTER_ROOT`, so under the
 /// scenario tests the app bound its hook socket and wrote its record against one plane while
@@ -2474,7 +2474,7 @@ pub struct Launch {
 /// from here on.
 pub fn at_launch(planes: &Planes, cwd: std::io::Result<PathBuf>) -> Launch {
     resolving_with(planes, cwd, |cwd| {
-        charter_core::plane::resolve(cwd).map_err(|why| why.to_string())
+        purlis_core::plane::resolve(cwd).map_err(|why| why.to_string())
     })
 }
 
@@ -2501,7 +2501,7 @@ fn resolving_with(
             return Launch {
                 plane: None,
                 from: None,
-                why: Some(format!("charter cannot read the current directory: {err}")),
+                why: Some(format!("purlis cannot read the current directory: {err}")),
             };
         }
     };
@@ -2536,7 +2536,7 @@ fn resolving_with(
         }
         Err(why) => {
             tracing::warn!(
-                "charter: no plane here, so nothing is reopened and nothing is recorded \
+                "purlis: no plane here, so nothing is reopened and nothing is recorded \
                  (a plane is the nearest directory at or above this one with a charter.toml)"
             );
             Launch {
@@ -2550,7 +2550,7 @@ fn resolving_with(
 
 #[cfg(test)]
 mod tests {
-    use charter_core::state::State;
+    use purlis_core::state::State;
 
     #[test]
     fn a_write_between_the_models_read_and_the_watch_starting_still_reaches_the_sidebar() {
@@ -2603,8 +2603,7 @@ mod tests {
         });
         std::fs::write(store.join("b1.md"), "# Beta one\n").expect("a todo");
 
-        let todo =
-            charter_core::planechange::classify(&root, &store.join("b1.md")).expect("placed");
+        let todo = purlis_core::planechange::classify(&root, &store.join("b1.md")).expect("placed");
         changed(
             serde_json::from_value(serde_json::json!(root.display().to_string())).expect("an id"),
             Some(vec![todo]),
@@ -2623,7 +2622,7 @@ mod tests {
     /// A plane on disk, with nothing in it but the marker that makes it one.
     fn a_plane(at: &Path) -> PathBuf {
         std::fs::create_dir_all(at).expect("the plane's directory");
-        std::fs::write(at.join(charter_core::plane::MANIFEST), "").expect("its charter.toml");
+        std::fs::write(at.join(purlis_core::plane::MANIFEST), "").expect("its charter.toml");
         at.to_path_buf()
     }
 
@@ -2843,7 +2842,7 @@ mod tests {
             .open(&stale)
             .and_then(|file| {
                 file.set_modified(
-                    std::time::SystemTime::now() - 2 * charter_core::leftovers::STALE_AFTER,
+                    std::time::SystemTime::now() - 2 * purlis_core::leftovers::STALE_AFTER,
                 )
             })
             .expect("made old");
@@ -2868,7 +2867,7 @@ mod tests {
                 .open(path)
                 .and_then(|file| {
                     file.set_modified(
-                        std::time::SystemTime::now() - 2 * charter_core::retention::KEEP_FOR,
+                        std::time::SystemTime::now() - 2 * purlis_core::retention::KEEP_FOR,
                     )
                 })
                 .expect("made old");
@@ -2938,7 +2937,7 @@ mod tests {
     fn one_chat_on(program: &str) -> reopen::Record {
         reopen::Record {
             views: Vec::new(),
-            chats: vec![charter_core::reopen::Chat {
+            chats: vec![purlis_core::reopen::Chat {
                 program: program.to_owned(),
                 args: Vec::new(),
                 cwd: None,
@@ -2974,7 +2973,7 @@ mod tests {
         let chats = programs
             .iter()
             .enumerate()
-            .map(|(which, program)| charter_core::reopen::Chat {
+            .map(|(which, program)| purlis_core::reopen::Chat {
                 program: (*program).to_owned(),
                 args: Vec::new(),
                 cwd: None,
@@ -3083,7 +3082,7 @@ mod tests {
 
         assert!(
             behind_its_back,
-            "a record charter did not write must still be asked about"
+            "a record purlis did not write must still be asked about"
         );
         assert!(
             !charter_s_own,
@@ -3180,7 +3179,7 @@ mod tests {
             !socket.exists(),
             "the socket outlived the plane that bound it"
         );
-        assert!(root.join(charter_core::plane::MANIFEST).is_file());
+        assert!(root.join(purlis_core::plane::MANIFEST).is_file());
     }
 
     #[test]
@@ -3350,7 +3349,7 @@ mod tests {
     // ----- the kill switch (OV-1) -----
 
     use crate::sessions::alive;
-    use charter_core::halt::Actor;
+    use purlis_core::halt::Actor;
 
     /// A chat whose program ignores an interrupt and a hangup, so only the kill can end it —
     /// and which ends on its own after [`stand_in::FIXTURE_LIFETIME_SECS`] if no kill comes,
@@ -3433,7 +3432,7 @@ mod tests {
         assert_eq!(stopped, 20);
         assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
         assert_eq!(outlived(&programs), Vec::<u32>::new());
-        assert_eq!(charter_core::halt::journal(&config).len(), 1, "one entry");
+        assert_eq!(purlis_core::halt::journal(&config).len(), 1, "one entry");
         // Stopped, not closed: every tab is still there to read and to reopen once re-armed.
         let still_open: usize = projects
             .iter()
@@ -3550,7 +3549,7 @@ mod tests {
         .expect("a directory to watch")
         .expect("watching");
 
-        charter_core::halt::stop(&config, Actor::Cli, 1).expect("stopped from a terminal");
+        purlis_core::halt::stop(&config, Actor::Cli, 1).expect("stopped from a terminal");
 
         let stopped = heard
             .recv_timeout(std::time::Duration::from_secs(10))
@@ -3559,7 +3558,7 @@ mod tests {
         assert_eq!(outlived(&programs), Vec::<u32>::new());
         assert!(planes.is_stopped());
         assert_eq!(
-            charter_core::halt::journal(&config).len(),
+            purlis_core::halt::journal(&config).len(),
             1,
             "the command line's stop is the one entry; the app hearing it adds none"
         );
@@ -3632,30 +3631,30 @@ mod tests {
 
         // A Claude Code sub-agent's ask comes on its parent's hooks, carrying its `agent_id`.
         a_prompt_to(&held, session);
-        charter_core::hookwire::send(
+        purlis_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
-            &charter_core::hookwire::Report {
+            &purlis_core::hookwire::Report {
                 chat: session,
-                event: charter_core::state::Event::Notification,
-                conversation: charter_core::hookwire::Conversation::Unknown,
+                event: purlis_core::state::Event::Notification,
+                conversation: purlis_core::hookwire::Conversation::Unknown,
                 pid: None,
                 agent: Some("sub-1".to_owned()),
-                detail: charter_core::state::Detail::default(),
+                detail: purlis_core::state::Detail::default(),
             },
         )
         .expect("the hook reaches the plane");
         // A Codex child is first heard on a tool call.
-        charter_core::hookwire::deliver_tool(
+        purlis_core::hookwire::deliver_tool(
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
-            &charter_core::hookwire::ToolCall {
+            &purlis_core::hookwire::ToolCall {
                 chat: session,
                 tool_hook: "pretooluse".to_owned(),
                 tool: Some("Bash".to_owned()),
                 call: None,
                 args: None,
-                decision: charter_core::hookwire::Decision::None,
+                decision: purlis_core::hookwire::Decision::None,
                 rule: None,
                 hook_ms: 1,
                 agent: Some("thread-2".to_owned()),
@@ -4397,7 +4396,7 @@ mod tests {
             .map(|_| ())
             .expect_err("nothing there is a plane");
 
-        assert!(refused.contains(charter_core::plane::MANIFEST), "{refused}");
+        assert!(refused.contains(purlis_core::plane::MANIFEST), "{refused}");
     }
 
     #[test]
@@ -4986,16 +4985,16 @@ mod tests {
 
     /// The `Stop` a harness's hook sends when its turn ends.
     fn a_stop_from(held: &Held, session: u32) {
-        charter_core::hookwire::send(
+        purlis_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
-            &charter_core::hookwire::Report {
+            &purlis_core::hookwire::Report {
                 chat: session,
-                event: charter_core::state::Event::Stop,
-                conversation: charter_core::hookwire::Conversation::Unknown,
+                event: purlis_core::state::Event::Stop,
+                conversation: purlis_core::hookwire::Conversation::Unknown,
                 pid: None,
                 agent: None,
-                detail: charter_core::state::Detail::default(),
+                detail: purlis_core::state::Detail::default(),
             },
         )
         .expect("the hook reaches the plane");
@@ -5003,33 +5002,33 @@ mod tests {
 
     /// The hook a harness sends when the operator's prompt starts a turn.
     fn a_prompt_to(held: &Held, session: u32) {
-        charter_core::hookwire::send(
+        purlis_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
-            &charter_core::hookwire::Report {
+            &purlis_core::hookwire::Report {
                 chat: session,
-                event: charter_core::state::Event::UserPromptSubmit,
-                conversation: charter_core::hookwire::Conversation::Unknown,
+                event: purlis_core::state::Event::UserPromptSubmit,
+                conversation: purlis_core::hookwire::Conversation::Unknown,
                 pid: None,
                 agent: None,
-                detail: charter_core::state::Detail::default(),
+                detail: purlis_core::state::Detail::default(),
             },
         )
         .expect("the hook reaches the plane");
     }
 
     /// A report of `event` from chat `session`'s harness, over the plane's real socket.
-    fn a_report_from(held: &Held, session: u32, event: charter_core::state::Event) {
-        charter_core::hookwire::send(
+    fn a_report_from(held: &Held, session: u32, event: purlis_core::state::Event) {
+        purlis_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
-            &charter_core::hookwire::Report {
+            &purlis_core::hookwire::Report {
                 chat: session,
                 event,
-                conversation: charter_core::hookwire::Conversation::Unknown,
+                conversation: purlis_core::hookwire::Conversation::Unknown,
                 pid: None,
                 agent: None,
-                detail: charter_core::state::Detail::default(),
+                detail: purlis_core::state::Detail::default(),
             },
         )
         .expect("the hook reaches the plane");
@@ -5088,7 +5087,7 @@ mod tests {
         assert!(becomes(|| ready.exists()), "the stand-in never started");
         assert!(!typed.exists() || std::fs::read(&typed).unwrap().is_empty());
 
-        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+        a_report_from(&held, session, purlis_core::state::Event::SessionStart);
 
         let wanted = b"\x1b[200~Retire smart-ide.\nAudit it first.\n\nThen remove it.\x1b[201~";
         assert!(
@@ -5096,7 +5095,7 @@ mod tests {
             "nothing was typed"
         );
         // A second start, and a moment for anything that would follow, types nothing more.
-        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+        a_report_from(&held, session, purlis_core::state::Event::SessionStart);
         std::thread::sleep(std::time::Duration::from_millis(200));
         let bytes = std::fs::read(&typed).unwrap();
         assert_eq!(
@@ -5157,7 +5156,7 @@ mod tests {
             .hold(session, "Retire alpha.\nAudit it first.".to_owned());
         assert!(becomes(|| running.exists()), "the stand-in never started");
 
-        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+        a_report_from(&held, session, purlis_core::state::Event::SessionStart);
 
         let wanted = "\x1b[200~Retire alpha.\nAudit it first.\x1b[201~";
         assert!(
@@ -5192,7 +5191,7 @@ mod tests {
         assert!(becomes(|| ready.exists()), "the stand-in never started");
 
         held.operator_input(session, b"hi").expect("sent");
-        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+        a_report_from(&held, session, purlis_core::state::Event::SessionStart);
 
         assert!(
             !held.typed().waiting(session),
@@ -5235,7 +5234,7 @@ mod tests {
             )
             .expect("the chat starts");
         held.typed().hold(session, "Retire alpha.".to_owned());
-        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+        a_report_from(&held, session, purlis_core::state::Event::SessionStart);
         std::thread::sleep(std::time::Duration::from_millis(200));
 
         held.operator_input(session, b"q").expect("sent");
@@ -5271,7 +5270,7 @@ mod tests {
         assert!(becomes(|| ready.exists()), "the stand-in never started");
 
         held.operator_input(session, b"\x1b[12;1R").expect("sent");
-        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+        a_report_from(&held, session, purlis_core::state::Event::SessionStart);
 
         let wanted = "\x1b[12;1R\x1b[200~Compact steward.\x1b[201~";
         assert!(becomes(
@@ -5354,8 +5353,8 @@ mod tests {
     /// Reports `events` from chat `session` one at a time, each waited for until the board has
     /// taken it: every report is a connection of its own, and two in flight at once land in
     /// either order.
-    fn reported(held: &Held, session: u32, events: &[charter_core::state::Event]) {
-        use charter_core::state::{Event, State};
+    fn reported(held: &Held, session: u32, events: &[purlis_core::state::Event]) {
+        use purlis_core::state::{Event, State};
         for event in events {
             let turns = held.hooks().board().turns(session);
             a_report_from(held, session, *event);
@@ -5378,7 +5377,7 @@ mod tests {
 
     /// A chat that has had two turns and is waiting on the operator.
     fn has_had_two_turns(held: &Held, session: u32) {
-        use charter_core::state::Event::{SessionStart, Stop, UserPromptSubmit};
+        use purlis_core::state::Event::{SessionStart, Stop, UserPromptSubmit};
         reported(
             held,
             session,
@@ -5388,10 +5387,10 @@ mod tests {
 
     /// What `charter session record` sends once chat `session`'s record is on disk.
     fn a_record_saved_by(held: &Held, session: u32) {
-        charter_core::hookwire::tell_saved(
+        purlis_core::hookwire::tell_saved(
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
-            &charter_core::hookwire::SessionSaved {
+            &purlis_core::hookwire::SessionSaved {
                 chat: session,
                 session_saved: PathBuf::from("/plane/workspaces/alpha/sessions/record.md"),
             },
@@ -5406,7 +5405,7 @@ mod tests {
             .any(|open| open.session == session)
     }
 
-    const SENT_AS: &str = "\x1b[200~Use charter's smart-close skill to write this session's \
+    const SENT_AS: &str = "\x1b[200~Use purlis's smart-close skill to write this session's \
                            record and close the chat.\x1b[201~\r";
 
     #[cfg(unix)]
@@ -5439,7 +5438,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn smart_close_waits_for_a_running_chat_s_turn_to_end_before_it_sends() {
-        use charter_core::state::Event::{Stop, UserPromptSubmit};
+        use purlis_core::state::Event::{Stop, UserPromptSubmit};
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane(&dir.path().join("plane"));
         let (planes, told) = planes_telling_smart_closes();
@@ -5476,7 +5475,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn smart_close_is_refused_to_a_chat_asking_you_something_and_sends_nothing() {
-        use charter_core::state::Event::{Notification, UserPromptSubmit};
+        use purlis_core::state::Event::{Notification, UserPromptSubmit};
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane(&dir.path().join("plane"));
         let (planes, told) = planes_telling_smart_closes();
@@ -5505,7 +5504,7 @@ mod tests {
         let (planes, _told) = planes_telling_smart_closes();
         let held = planes.held(&planes.open(&root)).expect("it is held");
         let (session, _typed) = a_smart_closable_chat(&held, dir.path(), "fresh-stand-in");
-        reported(&held, session, &[charter_core::state::Event::SessionStart]);
+        reported(&held, session, &[purlis_core::state::Event::SessionStart]);
 
         let offered = crate::smartclose::offer_for(&held, session).expect("an answer");
 
@@ -5557,7 +5556,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_saved_record_s_closed_step_names_the_record_and_the_same_line_again_closes_nothing() {
-        use charter_core::sessionrecord::{Facts, New};
+        use purlis_core::sessionrecord::{Facts, New};
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane(&dir.path().join("plane"));
         let (planes, told) = planes_telling_smart_closes();
@@ -5565,14 +5564,14 @@ mod tests {
         let (session, _) = a_smart_closable_chat(&held, dir.path(), "saving-stand-in");
         has_had_two_turns(&held, session);
         crate::smartclose::begin(&held, session).expect("smart close begins");
-        let recorded = charter_core::sessionrecord::record(
+        let recorded = purlis_core::sessionrecord::record(
             &root,
             &New {
                 title: "Ship the record",
                 body: "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\no\n\n\
                        ## How to resume\n\nr\n",
                 facts: &Facts {
-                    place: charter_core::active::Place::PlaneRoot,
+                    place: purlis_core::active::Place::PlaneRoot,
                     at: chrono::NaiveDate::from_ymd_opt(2026, 9, 28)
                         .and_then(|day| day.and_hms_opt(16, 0, 0))
                         .expect("a time"),
@@ -5583,7 +5582,7 @@ mod tests {
             },
         )
         .expect("the record is written");
-        let line = charter_core::hookwire::SessionSaved {
+        let line = purlis_core::hookwire::SessionSaved {
             chat: session,
             session_saved: recorded.path.clone(),
         };
@@ -5595,8 +5594,8 @@ mod tests {
 
         // The command's own line, and the same line passed on by the chat's Stop (#517).
         let token = held.hooks().token_for(session);
-        charter_core::hookwire::tell_saved(&socket, Some(&token), &line).expect("the line");
-        charter_core::hookwire::tell_saved(&socket, Some(&token), &line).expect("the line again");
+        purlis_core::hookwire::tell_saved(&socket, Some(&token), &line).expect("the line");
+        purlis_core::hookwire::tell_saved(&socket, Some(&token), &line).expect("the line again");
 
         assert!(becomes(|| !is_open(&held, session)), "the chat stayed open");
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -5696,7 +5695,7 @@ mod tests {
     fn answering_a_question_the_chat_asks_while_it_wraps_up_does_not_cancel_it() {
         // The skill runs `charter session record`, and a harness may ask the operator's leave
         // first. Answering that is not taking the chat back.
-        use charter_core::state::Event::{Notification, UserPromptSubmit};
+        use purlis_core::state::Event::{Notification, UserPromptSubmit};
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane(&dir.path().join("plane"));
         let (planes, _told) = planes_telling_smart_closes();
@@ -5784,7 +5783,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_queued_prompt_that_cannot_be_written_ends_the_smart_close_and_says_so() {
-        use charter_core::state::Event::{Stop, UserPromptSubmit};
+        use purlis_core::state::Event::{Stop, UserPromptSubmit};
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane(&dir.path().join("plane"));
         let (planes, told) = planes_telling_smart_closes();
@@ -5798,13 +5797,13 @@ mod tests {
         );
         // The turn's end, on the board only: the plane's own listener would write the prompt,
         // and this test is the write that fails.
-        let stop = charter_core::hookwire::Report {
+        let stop = purlis_core::hookwire::Report {
             chat: session,
             event: Stop,
-            conversation: charter_core::hookwire::Conversation::Unknown,
+            conversation: purlis_core::hookwire::Conversation::Unknown,
             pid: None,
             agent: None,
-            detail: charter_core::state::Detail::default(),
+            detail: purlis_core::state::Detail::default(),
         };
         held.hooks().board().reported(&stop);
 
@@ -5917,7 +5916,7 @@ mod tests {
             .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
             .env("GIT_COMMITTER_NAME", "t")
             .env("GIT_COMMITTER_EMAIL", "t@example.invalid");
-        let out = charter_core::forklock::output(&mut command).expect("git runs");
+        let out = purlis_core::forklock::output(&mut command).expect("git runs");
         assert!(
             out.status.success(),
             "git {args:?}: {}",
@@ -5986,7 +5985,7 @@ mod tests {
         assert!(root.join("workspaces/alpha").is_dir());
 
         held.chats().close(session).expect("it closes");
-        held.chats().hold_views(vec![charter_core::reopen::View {
+        held.chats().hold_views(vec![purlis_core::reopen::View {
             from: None,
             view: "persona".to_owned(),
             key: "steward".to_owned(),
@@ -6034,14 +6033,14 @@ mod tests {
         // The plane as the registry holds it, which is how the app spells a chat's directory.
         chat.cwd = Some(held.root().join("workspaces/alpha"));
         chat.resume = Some(
-            charter_core::harness::SessionId::new("11111111-2222-4333-8444-555555555555").unwrap(),
+            purlis_core::harness::SessionId::new("11111111-2222-4333-8444-555555555555").unwrap(),
         );
         let session = held
             .chats()
             .start(&chat, STARTING)
             .expect("the chat starts");
         assert_eq!(
-            charter_core::wscmd::rename::starts_fresh(held.root(), "alpha", &held.chats().record())
+            purlis_core::wscmd::rename::starts_fresh(held.root(), "alpha", &held.chats().record())
                 .len(),
             1,
             "the premise: the record would name it"
@@ -6095,7 +6094,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane(&dir.path().join("plane"));
         std::fs::write(
-            root.join(charter_core::plane::MANIFEST),
+            root.join(purlis_core::plane::MANIFEST),
             "[repos.widget]\nmode = \"commit\"\nautosave = true\n",
         )
         .unwrap();
@@ -6110,7 +6109,7 @@ mod tests {
 
         planes.let_go_of_all();
 
-        let skipped = charter_core::planegit::journal(&root)
+        let skipped = purlis_core::planegit::journal(&root)
             .into_iter()
             .find(|line| line["target"] == "repo:alpha/widget")
             .expect("the repo's quit is in the journal");
@@ -6123,7 +6122,7 @@ mod tests {
             "{skipped}"
         );
         assert!(
-            charter_core::repos::state_of(&clone).unwrap().untracked > 0,
+            purlis_core::repos::state_of(&clone).unwrap().untracked > 0,
             "the cut-off turn's file was committed"
         );
     }
@@ -6198,7 +6197,7 @@ mod tests {
         );
         assert_ne!(held.board().glance(session).state, State::Failed);
 
-        host.program_ends(session, charter_core::session::Exit::Code(3));
+        host.program_ends(session, purlis_core::session::Exit::Code(3));
 
         assert_eq!(held.board().glance(session).state, State::Failed);
         let last = told
@@ -6319,7 +6318,7 @@ mod tests {
         assert_ne!(id, CHAT_ID, "the copy's chat has an id of its own");
         assert_eq!(
             back.clone_seat.map(|seat| seat.key),
-            Some(charter_core::plane::CloneKey::of(&copy))
+            Some(purlis_core::plane::CloneKey::of(&copy))
         );
         assert_eq!(
             on_disk(&original).chats[0].identity.id.as_deref(),
@@ -6348,7 +6347,7 @@ mod tests {
         assert_eq!(back.chats[0].identity.id.as_deref(), Some(CHAT_ID));
         assert_eq!(
             back.clone_seat.map(|seat| seat.key),
-            Some(charter_core::plane::CloneKey::of(&after))
+            Some(purlis_core::plane::CloneKey::of(&after))
         );
     }
 
@@ -6695,27 +6694,27 @@ mod tests {
     fn a_report_naming(
         held: &Held,
         session: u32,
-        event: charter_core::state::Event,
-        conversation: charter_core::hookwire::Conversation,
+        event: purlis_core::state::Event,
+        conversation: purlis_core::hookwire::Conversation,
         pid: Option<u32>,
     ) {
-        charter_core::hookwire::send(
+        purlis_core::hookwire::send(
             held.hooks().socket().expect("the plane is listening"),
             Some(&held.hooks().token_for(session)),
-            &charter_core::hookwire::Report {
+            &purlis_core::hookwire::Report {
                 agent: None,
                 chat: session,
                 event,
                 conversation,
                 pid,
-                detail: charter_core::state::Detail::default(),
+                detail: purlis_core::state::Detail::default(),
             },
         )
         .expect("the hook reaches the plane");
     }
 
-    fn named(id: &str) -> charter_core::hookwire::Conversation {
-        charter_core::hookwire::Conversation::Named(id.to_owned())
+    fn named(id: &str) -> purlis_core::hookwire::Conversation {
+        purlis_core::hookwire::Conversation::Named(id.to_owned())
     }
 
     /// The conversation the record on disk would resume the plane's one chat by.
@@ -6810,7 +6809,7 @@ mod tests {
         a_report_naming(
             &held,
             session,
-            charter_core::state::Event::UserPromptSubmit,
+            purlis_core::state::Event::UserPromptSubmit,
             named(id),
             None,
         );
@@ -6840,7 +6839,7 @@ mod tests {
         a_report_naming(
             &held,
             session,
-            charter_core::state::Event::UserPromptSubmit,
+            purlis_core::state::Event::UserPromptSubmit,
             named(id),
             None,
         );
@@ -6868,14 +6867,14 @@ mod tests {
         a_report_naming(
             &held,
             session,
-            charter_core::state::Event::SessionStart,
+            purlis_core::state::Event::SessionStart,
             named(&started),
             Some(4242),
         );
         // Adopted before the next report is sent: each report is its own connection, and one
         // naming another id before adoption is, rightly, not this chat's.
         assert!(
-            becomes(|| held.hooks().board().state(session) != charter_core::state::State::Unknown),
+            becomes(|| held.hooks().board().state(session) != purlis_core::state::State::Unknown),
             "the chat's own start was never taken"
         );
 
@@ -6883,7 +6882,7 @@ mod tests {
         a_report_naming(
             &held,
             session,
-            charter_core::state::Event::SessionStart,
+            purlis_core::state::Event::SessionStart,
             named(cleared),
             Some(4242),
         );

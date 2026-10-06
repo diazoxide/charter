@@ -12,12 +12,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use charter_core::engine::Size;
-use charter_core::eventlog::{Began, RunOf};
-use charter_core::harness::{Harness, SessionId};
-use charter_core::reopen::{Chat, Focus, Record, Reopened, View};
+use purlis_core::engine::Size;
+use purlis_core::eventlog::{Began, RunOf};
+use purlis_core::harness::{Harness, SessionId};
+use purlis_core::reopen::{Chat, Focus, Record, Reopened, View};
 
-use charter_core::harness::StateHooks;
+use purlis_core::harness::StateHooks;
 
 use crate::host::{Opening, SessionHost};
 use crate::sessions::{Reporting, Sessions};
@@ -29,21 +29,21 @@ use crate::sessions::{Reporting, Sessions};
 ///
 /// **Skipped in a fenced build.** Resolving the plane walks up from `cwd` and, in a fenced test
 /// build, that walk aborts the moment it names a plane outside the fixture fence
-/// (`charter_core::fence`, charter-app#129) — which a unit test's `cwd` routinely does. A test
+/// (`purlis_core::fence`, charter-app#129) — which a unit test's `cwd` routinely does. A test
 /// build therefore strips only by the `OP_` prefix; the declared-name strip is exercised at the
 /// session builder ([`crate::sessions`] tests pass `env_strip` directly) and in the core.
 fn declared_identity_vars(cwd: Option<&std::path::Path>) -> Vec<String> {
-    if charter_core::fence::FENCED {
+    if purlis_core::fence::FENCED {
         return Vec::new();
     }
-    let Some(root) = cwd.and_then(|c| charter_core::plane::find_root(c).ok()) else {
+    let Some(root) = cwd.and_then(|c| purlis_core::plane::find_root(c).ok()) else {
         return Vec::new();
     };
-    let ctx = charter_core::secrets::Ctx::new(&root, charter_core::secrets::Env::from_process());
-    let Ok(doc) = charter_core::secrets::registry::load_registry(&ctx) else {
+    let ctx = purlis_core::secrets::Ctx::new(&root, purlis_core::secrets::Env::from_process());
+    let Ok(doc) = purlis_core::secrets::registry::load_registry(&ctx) else {
         return Vec::new();
     };
-    let mut names: Vec<String> = charter_core::secrets::registry::identity_vars(&doc)
+    let mut names: Vec<String> = purlis_core::secrets::registry::identity_vars(&doc)
         .into_iter()
         .flat_map(|(_, vars)| vars)
         .collect();
@@ -55,8 +55,8 @@ fn declared_identity_vars(cwd: Option<&std::path::Path>) -> Vec<String> {
 /// What more of this machine's environment the operator lets a chat started in `cwd` have:
 /// the `[chat_env] pass` of that plane's `charter.local.toml`. A chat outside a plane has none.
 fn operator_env_pass(cwd: Option<&std::path::Path>) -> Vec<String> {
-    cwd.and_then(|c| charter_core::plane::find_root(c).ok())
-        .map(|root| charter_core::chatenv::read(&root))
+    cwd.and_then(|c| purlis_core::plane::find_root(c).ok())
+        .map(|root| purlis_core::chatenv::read(&root))
         .unwrap_or_default()
 }
 
@@ -79,14 +79,14 @@ pub struct Open {
     /// is where the UI says it.
     pub how: Reopened,
     /// Whether the operator pinned it (ADR 0039). It rides the record, so a pinned
-    /// chat comes back pinned; see [`charter_core::reopen::Chat::pinned`].
+    /// chat comes back pinned; see [`purlis_core::reopen::Chat::pinned`].
     pub pinned: bool,
     /// The name the operator gave it, where they gave one (charter-app#254). It rides the
-    /// record too; see [`charter_core::reopen::Chat::label`].
+    /// record too; see [`purlis_core::reopen::Chat::label`].
     pub label: Option<String>,
     /// The chat a handoff opened it from, where one did (charter-app#258). It rides the
-    /// record; see [`charter_core::reopen::Chat::from`].
-    pub from: Option<charter_core::reopen::HandedFrom>,
+    /// record; see [`purlis_core::reopen::Chat::from`].
+    pub from: Option<purlis_core::reopen::HandedFrom>,
 }
 
 /// Who an open chat is beyond this launch, and the directory it works in.
@@ -120,10 +120,10 @@ pub type Beginning = Box<dyn Fn(u32, RunOf<'_>, Began) + Send + Sync>;
 /// chat has started, how it counts towards this machine's opt-out rate (ruling V78 d). Each
 /// call carries one of the two.
 pub struct Sandboxing<'a> {
-    pub change: Option<&'a charter_core::sandbox::Change>,
+    pub change: Option<&'a purlis_core::sandbox::Change>,
     /// The chat's id and the run it begins, for `change`.
     pub run: Option<RunOf<'a>>,
-    pub counted: Option<charter_core::sandbox::local::Started>,
+    pub counted: Option<purlis_core::sandbox::local::Started>,
     pub harness: Option<Harness>,
     pub persona: Option<&'a str>,
 }
@@ -153,7 +153,7 @@ enum Why {
 /// [`Chats::start_ready_instead_of`]. That asks about a chat the window closed a moment ago.
 const LET_GO_HELD: usize = 256;
 
-use charter_core::reopen::mint as minted;
+use purlis_core::reopen::mint as minted;
 
 /// One chat the app has open: what it was started as, how it came back, and the harness it
 /// actually runs.
@@ -171,7 +171,7 @@ struct Running {
     /// What runs beside a chat charter wraps — its egress proxy and its own temp directory —
     /// for as long as the chat is open (ADR 0067 §2). Dropped with it.
     #[allow(dead_code)]
-    confinement: Option<charter_core::sandbox::Confinement>,
+    confinement: Option<purlis_core::sandbox::Confinement>,
 }
 
 /// A chat a launch could not start, as the window lists it (NO-3): by its id, which Retry now
@@ -204,7 +204,7 @@ pub struct Chats {
     /// store has none to give (ADR 0031), which a chat records as `unknown`.
     device: Option<String>,
     /// The ids of the chats closed this launch, by number, for a start in one's place.
-    let_go: Mutex<HashMap<u32, charter_core::reopen::Identity>>,
+    let_go: Mutex<HashMap<u32, purlis_core::reopen::Identity>>,
     /// Told when a chat that was announced turned out not to start.
     #[allow(clippy::type_complexity)]
     never_started: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
@@ -259,8 +259,8 @@ type Armed = (Vec<String>, Vec<(String, String)>);
 /// then runs (ruling V87g), or lifted and why — never both, and neither where its project has
 /// not turned the sandbox on.
 type Decided = (
-    Option<(charter_core::sandbox::Applied, String)>,
-    Option<charter_core::sandbox::Lifted>,
+    Option<(purlis_core::sandbox::Applied, String)>,
+    Option<purlis_core::sandbox::Lifted>,
 );
 
 impl Chats {
@@ -411,11 +411,11 @@ impl Chats {
     /// The arguments and the environment that arm this harness on this session alone, if any.
     ///
     /// `cwd` is the chat's own directory, which decides whether charter may also fill Claude
-    /// Code's status line for it (`charter_core::footerclaim`): project settings are read from
+    /// Code's status line for it (`purlis_core::footerclaim`): project settings are read from
     /// the session's own directory, so that is the directory the question is asked about.
     ///
     /// `plugins` is the harness's own plugins the project chose for this chat
-    /// (`charter_core::start::Ready::plugins`, charter-app#274); empty for a chat on no profile.
+    /// (`purlis_core::start::Ready::plugins`, charter-app#274); empty for a chat on no profile.
     ///
     /// `sandbox` is the sandbox the core compiled for this chat (ADR 0067), or none.
     ///
@@ -426,8 +426,8 @@ impl Chats {
         &self,
         harness: Option<Harness>,
         cwd: Option<&std::path::Path>,
-        plugins: &charter_core::harness_plugin::Chosen,
-        sandbox: Option<&charter_core::sandbox::Applied>,
+        plugins: &purlis_core::harness_plugin::Chosen,
+        sandbox: Option<&purlis_core::sandbox::Applied>,
     ) -> Result<Armed, String> {
         let not_carried = "this plane runs every chat sandboxed, and this app cannot hand the \
                            sandbox to this chat's harness, so nothing was started";
@@ -438,20 +438,18 @@ impl Chats {
         }
         let (Some(harness), Some(binary)) = (harness, self.shipped.binary.as_deref()) else {
             return match sandbox {
-                Some(_) => Err(format!(
-                    "{not_carried}: charter's own binary was not found."
-                )),
+                Some(_) => Err(format!("{not_carried}: purlis's own binary was not found.")),
                 None => Ok((Vec::new(), Vec::new())),
             };
         };
-        let kit = charter_core::harness::Kit {
+        let kit = purlis_core::harness::Kit {
             binary,
             plugin: self.shipped.plugin.as_deref(),
         };
         match harness.state_hooks(kit, cwd, plugins, sandbox) {
             StateHooks::ThisSessionOnly { args, env, .. } => Ok((args, env)),
             StateHooks::None if sandbox.is_some() => Err(format!(
-                "{not_carried}: charter's plugin, which carries it, was not found."
+                "{not_carried}: purlis's plugin, which carries it, was not found."
             )),
             // Nothing is added to the command line, and nothing of the operator's is written
             // behind their back. The chat shows `unknown`.
@@ -460,7 +458,7 @@ impl Chats {
     }
 
     /// The sandbox a chat that is not on a profile starts under: the same decision
-    /// `charter_core::start::ready` makes for one that is (ADR 0067). A chat whose program is a
+    /// `purlis_core::start::ready` makes for one that is (ADR 0067). A chat whose program is a
     /// harness, in a plane that turned the sandbox on, is sandboxed or refused. A shell, or a
     /// chat outside any plane, is the operator's own and is left as it was.
     /// With the sandbox, the program the chat then runs: the real file the check asked about
@@ -477,28 +475,28 @@ impl Chats {
         if chat
             .cwd
             .as_deref()
-            .is_some_and(charter_core::sandbox::marker_unreadable)
+            .is_some_and(purlis_core::sandbox::marker_unreadable)
         {
-            return Err(charter_core::sandbox::NotStarted::PlaneUnreadable.to_string());
+            return Err(purlis_core::sandbox::NotStarted::PlaneUnreadable.to_string());
         }
         let Some(root) = chat
             .cwd
             .as_deref()
-            .and_then(|cwd| charter_core::plane::find_root(cwd).ok())
+            .and_then(|cwd| purlis_core::plane::find_root(cwd).ok())
         else {
             return Ok((None, None));
         };
-        let decided = charter_core::sandbox::decide(
+        let decided = purlis_core::sandbox::decide(
             harness,
             &root,
-            &charter_core::sandbox::Machine::this(),
-            &charter_core::sandbox::backend::installed,
+            &purlis_core::sandbox::Machine::this(),
+            &purlis_core::sandbox::backend::installed,
             None,
         )
         .map_err(|refused| refused.to_string())?;
         let (applied, lifted) = match decided {
-            Some(charter_core::sandbox::Decided::Sandboxed(applied)) => (Some(applied), None),
-            Some(charter_core::sandbox::Decided::Unsandboxed(lifted)) => (None, Some(lifted)),
+            Some(purlis_core::sandbox::Decided::Sandboxed(applied)) => (Some(applied), None),
+            Some(purlis_core::sandbox::Decided::Unsandboxed(lifted)) => (None, Some(lifted)),
             None => (None, None),
         };
         // Ruling V87g: the program is the harness the sandbox was compiled for, and not a file
@@ -507,16 +505,16 @@ impl Chats {
         // that starts without the sandbox is bound to none.
         if let Some(applied) = &applied {
             let launch = chat.launch();
-            let words = charter_core::programs::resolve_argv(std::slice::from_ref(&launch.program))
+            let words = purlis_core::programs::resolve_argv(std::slice::from_ref(&launch.program))
                 .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
             let cwd = chat.cwd.clone().unwrap_or_else(|| root.clone());
             let mut writable = applied.writable();
-            writable.extend(charter_core::sandbox::program::temp_roots(&[]));
-            let checked = charter_core::sandbox::program::checked(
+            writable.extend(purlis_core::sandbox::program::temp_roots(&[]));
+            let checked = purlis_core::sandbox::program::checked(
                 harness,
                 &words,
                 applied.root(),
-                charter_core::sandbox::program::Chat {
+                purlis_core::sandbox::program::Chat {
                     cwd: &cwd,
                     writable: &writable,
                     env: &[],
@@ -537,7 +535,7 @@ impl Chats {
     pub fn start_ready(
         &self,
         chat: &Chat,
-        ready: &charter_core::start::Ready,
+        ready: &purlis_core::start::Ready,
         size: Size,
     ) -> Result<u32, String> {
         self.start_ready_as(chat, ready, size, Why::New)
@@ -551,7 +549,7 @@ impl Chats {
         &self,
         instead_of: u32,
         chat: &Chat,
-        ready: &charter_core::start::Ready,
+        ready: &purlis_core::start::Ready,
         size: Size,
     ) -> Result<u32, String> {
         // Taken out of what is recorded here, whether or not the window's close has arrived
@@ -568,7 +566,7 @@ impl Chats {
             return self.start_ready(chat, ready, size);
         };
         let again = Chat {
-            identity: charter_core::reopen::Identity { run: None, ..was },
+            identity: purlis_core::reopen::Identity { run: None, ..was },
             ..chat.clone()
         };
         self.start_ready_as(&again, ready, size, Why::Again)
@@ -577,7 +575,7 @@ impl Chats {
     fn start_ready_as(
         &self,
         chat: &Chat,
-        ready: &charter_core::start::Ready,
+        ready: &purlis_core::start::Ready,
         size: Size,
         why: Why,
     ) -> Result<u32, String> {
@@ -624,8 +622,8 @@ impl Chats {
         let Some(profile) = chat.profile.clone() else {
             return self.start_as(chat, size, false, why);
         };
-        let ready = charter_core::start::ready(
-            &charter_core::start::Start {
+        let ready = purlis_core::start::ready(
+            &purlis_core::start::Start {
                 profile: Some(profile),
                 persona: chat.persona.clone(),
                 name: chat.name.clone(),
@@ -642,7 +640,7 @@ impl Chats {
         )?;
         // The core's start knows no chat, so it says "nothing recorded"; this chat may know
         // better — a workspace rename left it without its conversation (charter#367).
-        let ready = charter_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             how: chat.told(ready.how.clone()),
             ..ready
         };
@@ -724,7 +722,7 @@ impl Chats {
         // The `PATH` every chat gets, worked out by the one function that works it out, with
         // the shims put in front of it.
         let chat_env =
-            charter_core::start::with_chat_path(Vec::new(), self.shipped.binary.as_deref());
+            purlis_core::start::with_chat_path(Vec::new(), self.shipped.binary.as_deref());
         let start = shims.shell_start(
             program,
             chat_env,
@@ -744,7 +742,7 @@ impl Chats {
     pub(crate) fn git_hooks_for(
         &self,
         harness: Option<Harness>,
-    ) -> Option<charter_core::githooks::GitHooks> {
+    ) -> Option<purlis_core::githooks::GitHooks> {
         harness.and(self.shipped.git_hooks.clone())
     }
 
@@ -763,10 +761,10 @@ impl Chats {
         env: Vec<(String, String)>,
         harness: Option<Harness>,
         conversation: Option<String>,
-        how: charter_core::reopen::Reopened,
-        plugins: &charter_core::harness_plugin::Chosen,
-        sandbox: Option<&charter_core::sandbox::Applied>,
-        unsandboxed: Option<&charter_core::sandbox::Lifted>,
+        how: purlis_core::reopen::Reopened,
+        plugins: &purlis_core::harness_plugin::Chosen,
+        sandbox: Option<&purlis_core::sandbox::Applied>,
+        unsandboxed: Option<&purlis_core::sandbox::Lifted>,
         size: Size,
         operator_shell: bool,
         why: Why,
@@ -776,11 +774,11 @@ impl Chats {
         // when no record holds one, on this device, and a chat put back or started again keeps
         // the one it had, with its origin device. Every start begins a run of its own.
         let identity = match &chat.identity.id {
-            Some(_) => charter_core::reopen::Identity {
+            Some(_) => purlis_core::reopen::Identity {
                 run: Some(minted()),
                 ..chat.identity.clone()
             },
-            None => charter_core::reopen::Identity {
+            None => purlis_core::reopen::Identity {
                 id: Some(minted()),
                 device: self.device.clone(),
                 run: Some(minted()),
@@ -796,7 +794,7 @@ impl Chats {
         // What this start means for the sandbox's audit and its count (ADR 0067 §7): off where
         // it starts without the sandbox, back on where its last run did and this one does not,
         // and one more new chat towards the opt-out rate.
-        let (trust, counted) = charter_core::sandbox::at_start(
+        let (trust, counted) = purlis_core::sandbox::at_start(
             unsandboxed,
             sandbox.is_some(),
             chat.unsandboxed,
@@ -820,26 +818,26 @@ impl Chats {
                     harness,
                     persona: chat.persona.as_deref(),
                 }),
-                _ => Err("charter's event log is not open".to_owned()),
+                _ => Err("purlis's event log is not open".to_owned()),
             };
             if let Err(why) = written {
-                use charter_core::sandbox::{By, Change, Lifted};
+                use purlis_core::sandbox::{By, Change, Lifted};
                 match change {
                     Change::Off(Lifted { by: By::Person, .. }) => {
                         return Err(format!(
-                            "charter could not record that this chat would run without the \
+                            "purlis could not record that this chat would run without the \
                              sandbox ({why}), so it was not started. An opt-out is always \
                              recorded; start it sandboxed, or try again once the event log is \
                              back."
                         ));
                     }
                     Change::Off(_) => late.push(format!(
-                        "charter could not record that this chat runs without the sandbox \
+                        "purlis could not record that this chat runs without the sandbox \
                          ({why}), so the event log has no record of it."
                     )),
                     // Back on: the chat is sandboxed, and the record that it is can be missing.
                     Change::On => tracing::warn!(
-                        "charter: a chat's sandbox came back on and was not recorded ({why})"
+                        "purlis: a chat's sandbox came back on and was not recorded ({why})"
                     ),
                 }
             }
@@ -847,14 +845,14 @@ impl Chats {
         // The profile's own command first — a wrapper reads its own words before it hands the
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
-        // `charter_core::start::Ready::command_line` is the one place that order is decided.
+        // `purlis_core::start::Ready::command_line` is the one place that order is decided.
         let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins, sandbox)?;
         // What a wrapped chat needs running beside it, started before it and kept for as long
         // as it is open: charter's egress proxy and its own temp directory (ADR 0067 §2).
         let confinement = match sandbox {
             Some(applied) => applied.confine().map_err(|err| {
                 format!(
-                    "this plane runs every chat sandboxed, and charter could not start what the \
+                    "this plane runs every chat sandboxed, and purlis could not start what the \
                      sandbox needs beside this chat ({err}), so nothing was started."
                 )
             })?,
@@ -868,13 +866,13 @@ impl Chats {
         let (program, all, wrapped) = match sandbox {
             Some(applied) => {
                 let line = applied.line(
-                    charter_core::sandbox::Words {
+                    purlis_core::sandbox::Words {
                         program,
                         command,
                         armed: hooks,
                         charters: args,
                     },
-                    &charter_core::sandbox::At {
+                    &purlis_core::sandbox::At {
                         cwd: chat.cwd.as_deref(),
                         hook_socket: socket.as_deref(),
                         confinement: confinement.as_ref(),
@@ -884,7 +882,7 @@ impl Chats {
             }
             None => (
                 program,
-                charter_core::start::Ready::line(command, hooks, args),
+                purlis_core::start::Ready::line(command, hooks, args),
                 Vec::new(),
             ),
         };
@@ -899,7 +897,7 @@ impl Chats {
         // The app's own `charter` first, then the directories charter searched for the
         // harness — so a hook the plane spells as the bare word `charter`, or a skill's
         // command, finds the one this app shipped, from a Finder launch too (charter-app#136).
-        let env = charter_core::start::with_chat_path(env, self.shipped.binary.as_deref());
+        let env = purlis_core::start::with_chat_path(env, self.shipped.binary.as_deref());
         // What the announcement below said, so a start that fails can take it back.
         let announced = std::sync::atomic::AtomicU32::new(0);
         let session = self
@@ -954,7 +952,7 @@ impl Chats {
         let under = Chat {
             resume: conversation
                 .as_deref()
-                .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
+                .and_then(|id| purlis_core::harness::SessionId::new(id).ok()),
             renamed_from: None,
             // What this run started under, for the next run's audit and the session record —
             // never read as an opt-out by any start.
@@ -973,7 +971,7 @@ impl Chats {
                 persona: chat.persona.as_deref(),
             })
         {
-            tracing::warn!("charter: a chat was not counted for the sandbox ({why})");
+            tracing::warn!("purlis: a chat was not counted for the sandbox ({why})");
         }
         if !late.is_empty() {
             lock(&self.late_notes).insert(session, late);
@@ -1029,7 +1027,7 @@ impl Chats {
     pub fn pin(&self, session: u32, pinned: bool) -> Result<(), String> {
         let mut open = lock(&self.open);
         let Some(one) = open.get_mut(&session) else {
-            return Err(format!("charter has no chat {session} open to pin."));
+            return Err(format!("purlis has no chat {session} open to pin."));
         };
         if one.chat.pinned == pinned {
             return Ok(());
@@ -1045,14 +1043,14 @@ impl Chats {
     ///
     /// **Charter's label and nothing else**: the harness keeps the name it was started with
     /// (`Chat::name`), so a rename never reaches a program that is running. The name is held to
-    /// [`charter_core::reopen::label`], and a refusal changes nothing and says why.
+    /// [`purlis_core::reopen::label`], and a refusal changes nothing and says why.
     ///
     /// Nothing is written when nothing changed, for [`Self::pin`]'s reason.
     pub fn rename(&self, session: u32, raw: &str) -> Result<Option<String>, String> {
-        let label = charter_core::reopen::label(raw)?;
+        let label = purlis_core::reopen::label(raw)?;
         let mut open = lock(&self.open);
         let Some(one) = open.get_mut(&session) else {
-            return Err(format!("charter has no chat {session} open to rename."));
+            return Err(format!("purlis has no chat {session} open to rename."));
         };
         if one.chat.label == label {
             return Ok(label);
@@ -1068,7 +1066,7 @@ impl Chats {
     pub fn shown_name(&self, session: u32) -> Option<String> {
         let open = lock(&self.open);
         let one = open.get(&session)?;
-        Some(charter_core::reopen::shown_name(
+        Some(purlis_core::reopen::shown_name(
             &one.chat,
             one.harness.map(Harness::name),
         ))
@@ -1082,13 +1080,13 @@ impl Chats {
     }
 
     /// The handoff `session` was opened by, where one opened it.
-    pub fn handed_from(&self, session: u32) -> Option<charter_core::reopen::HandedFrom> {
+    pub fn handed_from(&self, session: u32) -> Option<purlis_core::reopen::HandedFrom> {
         lock(&self.open).get(&session)?.chat.from.clone()
     }
 
     /// Records what `session` owes the chat that handed it off, and writes the record so it
     /// holds across a relaunch (charter-app#259). Nothing for a chat no handoff opened.
-    pub fn owes(&self, session: u32, owed: charter_core::reopen::Owed) {
+    pub fn owes(&self, session: u32, owed: purlis_core::reopen::Owed) {
         let mut open = lock(&self.open);
         let Some(from) = open
             .get_mut(&session)
@@ -1183,7 +1181,7 @@ impl Chats {
     ///
     /// The core has already rewritten the record on disk; without this the next write would put
     /// the old name back, because this is what the record is written from.
-    pub fn follow(&self, moved: &charter_core::wscmd::rename::Move) {
+    pub fn follow(&self, moved: &purlis_core::wscmd::rename::Move) {
         let mut changed = false;
         for one in lock(&self.open).values_mut() {
             changed |= moved.chat(&mut one.chat);
@@ -1391,7 +1389,7 @@ impl Chats {
                 Some(id) if seen.insert(id.clone()) => (chat.clone(), Why::Relaunch),
                 _ => (
                     Chat {
-                        identity: charter_core::reopen::Identity {
+                        identity: purlis_core::reopen::Identity {
                             id: Some(minted()),
                             device: self.device.clone(),
                             ..chat.identity.clone()
@@ -1572,7 +1570,7 @@ impl Chats {
             .map(|one| one.chat.clone())
             .ok_or_else(|| format!("chat {session} is not open"))?;
         let again = Chat {
-            identity: charter_core::reopen::Identity {
+            identity: purlis_core::reopen::Identity {
                 run: None,
                 ..was.identity.clone()
             },
@@ -1841,8 +1839,8 @@ mod tests {
             "the chosen conversation was not passed on"
         );
     }
-    use charter_core::harness::SessionId;
-    use charter_core::reopen::Fresh;
+    use purlis_core::harness::SessionId;
+    use purlis_core::reopen::Fresh;
 
     use super::*;
     use crate::host::pretend::Pretend;
@@ -2076,8 +2074,8 @@ mod tests {
         (chats, wrote)
     }
 
-    fn a_view(key: &str) -> charter_core::reopen::View {
-        charter_core::reopen::View {
+    fn a_view(key: &str) -> purlis_core::reopen::View {
+        purlis_core::reopen::View {
             from: None,
             view: "persona".into(),
             key: key.into(),
@@ -2268,7 +2266,7 @@ mod tests {
         // charter writes, reaching the network through charter's proxy alone (ADR 0067 §2).
         let plane = a_sandboxed_plane();
         let plugin = plane.path().join("plugin");
-        let shim = charter_core::opencode::shim_in(&plugin);
+        let shim = purlis_core::opencode::shim_in(&plugin);
         std::fs::create_dir_all(shim.parent().expect("a parent")).expect("the bundle");
         std::fs::write(&shim, "export default {}\n").expect("the shim");
         let socket = plane.path().join(".charter/app/hooks.sock");
@@ -2283,7 +2281,7 @@ mod tests {
         });
         // A profile that names its own proxy and temp directory: the wrap's win, or the chat's
         // traffic and temp files would go where the profile says.
-        let ready = charter_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             env: vec![
                 ("ZZ_KEPT".to_owned(), "yes".to_owned()),
                 ("HTTPS_PROXY".to_owned(), "http://zz.example:1".to_owned()),
@@ -2346,7 +2344,7 @@ mod tests {
     fn a_sandboxed_plane() -> tempfile::TempDir {
         let plane = tempfile::tempdir().expect("a plane");
         std::fs::write(
-            plane.path().join(charter_core::plane::MANIFEST),
+            plane.path().join(purlis_core::plane::MANIFEST),
             "[sandbox]\nmode = \"on\"\n",
         )
         .expect("charter.toml");
@@ -2429,9 +2427,9 @@ mod tests {
         // would otherwise read as no plane at all and start the chat unsandboxed.
         for kind in ["fifo", "dangling"] {
             let plane = tempfile::tempdir().expect("a plane");
-            let marker = plane.path().join(charter_core::plane::MANIFEST);
+            let marker = plane.path().join(purlis_core::plane::MANIFEST);
             if kind == "fifo" {
-                let made = charter_core::forklock::status(
+                let made = purlis_core::forklock::status(
                     std::process::Command::new("mkfifo").arg(&marker),
                 )
                 .expect("mkfifo runs");
@@ -2473,27 +2471,27 @@ mod tests {
 
     /// The sandbox the core compiles for a `harness` chat in `plane`, on a machine that has
     /// every backend program — so the answer does not depend on the machine the test runs on.
-    fn a_sandbox_for(harness: Harness, plane: &std::path::Path) -> charter_core::sandbox::Applied {
-        let machine = charter_core::sandbox::Machine {
-            env: charter_core::secrets::Env::of(&[]),
+    fn a_sandbox_for(harness: Harness, plane: &std::path::Path) -> purlis_core::sandbox::Applied {
+        let machine = purlis_core::sandbox::Machine {
+            env: purlis_core::secrets::Env::of(&[]),
             home: None,
             // Where every harness has a sandbox charter compiles.
-            os: charter_core::sandbox::Os::MacOs,
+            os: purlis_core::sandbox::Os::MacOs,
         };
-        charter_core::sandbox::for_start(harness, plane, &machine, &|_| true)
+        purlis_core::sandbox::for_start(harness, plane, &machine, &|_| true)
             .expect("compiles")
             .expect("sandboxed")
     }
 
-    fn a_claude_sandbox(plane: &std::path::Path) -> charter_core::sandbox::Applied {
+    fn a_claude_sandbox(plane: &std::path::Path) -> purlis_core::sandbox::Applied {
         a_sandbox_for(Harness::ClaudeCode, plane)
     }
 
     fn ready_under(
         harness: Harness,
-        sandbox: charter_core::sandbox::Applied,
-    ) -> charter_core::start::Ready {
-        charter_core::start::Ready {
+        sandbox: purlis_core::sandbox::Applied,
+    ) -> purlis_core::start::Ready {
+        purlis_core::start::Ready {
             program: "/bin/sh".to_owned(),
             command: vec!["-c".to_owned(), "sleep 30".to_owned()],
             args: Vec::new(),
@@ -2501,7 +2499,7 @@ mod tests {
             cwd: None,
             harness: Some(harness),
             session: None,
-            how: charter_core::reopen::Reopened::Fresh(Fresh::NoConversationRecorded),
+            how: purlis_core::reopen::Reopened::Fresh(Fresh::NoConversationRecorded),
             plugins: std::collections::BTreeMap::new(),
             sandbox: Some(sandbox),
             unsandboxed: None,
@@ -2528,7 +2526,7 @@ mod tests {
             .start_ready(&chat("/bin/sh", "c", None), &ready, SIZE)
             .expect_err("not started");
 
-        assert!(refused.contains("charter's plugin"), "{refused}");
+        assert!(refused.contains("purlis's plugin"), "{refused}");
     }
 
     #[test]
@@ -3063,7 +3061,7 @@ mod tests {
         };
         // What `charter workspace rename alpha beta` does to the record.
         assert!(
-            charter_core::wscmd::rename::Move::in_plane(&root, "alpha", "beta").record(&mut record)
+            purlis_core::wscmd::rename::Move::in_plane(&root, "alpha", "beta").record(&mut record)
         );
         let chats = Chats::new();
 
@@ -3368,7 +3366,7 @@ mod tests {
         let shared = |name: &str| {
             let one = chat(&claude, name, None);
             Chat {
-                identity: charter_core::reopen::Identity {
+                identity: purlis_core::reopen::Identity {
                     id: Some(ID.to_owned()),
                     ..one.identity.clone()
                 },
@@ -3533,18 +3531,18 @@ mod tests {
     /// No pane id and no tty, which is the app's own case: a chat gets a pty of its own and
     /// none of `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/`$SSH_TTY`, so the per-session pointer
     /// is the only one there is and nothing catches a wrong key by accident.
-    fn who_it_is(session: u32) -> charter_core::active::Ids {
+    fn who_it_is(session: u32) -> purlis_core::active::Ids {
         let held = HashMap::from([(
-            charter_core::active::SESSION_ID_ENV.to_owned(),
+            purlis_core::active::SESSION_ID_ENV.to_owned(),
             session.to_string(),
         )]);
-        charter_core::active::Ids::of(&|name| held.get(name).cloned())
+        purlis_core::active::Ids::of(&|name| held.get(name).cloned())
     }
 
     /// `charter ws use <name>` from inside chat `session`, through the writer the command
     /// itself uses.
     fn picks(root: &std::path::Path, session: u32, name: &str) {
-        use charter_core::wscmd::select::{Scope, set_active};
+        use purlis_core::wscmd::select::{Scope, set_active};
         assert_eq!(
             set_active(root, name, &who_it_is(session), false),
             Scope::Session,
@@ -3553,8 +3551,8 @@ mod tests {
     }
 
     /// The workspace a `charter` inside chat `session` resolves, and the rung that answered.
-    fn workspace_of(root: &std::path::Path, session: u32) -> charter_core::active::ActiveWorkspace {
-        charter_core::active::workspace(&charter_core::active::Asking {
+    fn workspace_of(root: &std::path::Path, session: u32) -> purlis_core::active::ActiveWorkspace {
+        purlis_core::active::workspace(&purlis_core::active::Asking {
             root,
             // Not inside any tree, so the cwd rung cannot answer and the pointers decide.
             cwd: root,
@@ -3606,7 +3604,7 @@ mod tests {
         );
         assert_eq!(
             found.rung,
-            charter_core::active::WorkspaceRung::SessionPointer,
+            purlis_core::active::WorkspaceRung::SessionPointer,
             "it landed on 'ops' by some other rung, which proves nothing about the key"
         );
         relaunched.end_all();
@@ -3647,7 +3645,7 @@ mod tests {
             "a chat the operator just started was handed number {fresh}, which a closed chat \
              had already selected a workspace under"
         );
-        assert_eq!(found.rung, charter_core::active::WorkspaceRung::BuiltIn);
+        assert_eq!(found.rung, purlis_core::active::WorkspaceRung::BuiltIn);
         relaunched.end_all();
     }
 
@@ -3824,12 +3822,12 @@ mod tests {
     }
 
     fn a_ulid(id: Option<&String>) -> bool {
-        id.and_then(|id| charter_core::reopen::a_ulid(id)).is_some()
+        id.and_then(|id| purlis_core::reopen::a_ulid(id)).is_some()
     }
 
     /// What the core's start answers for a shell on no profile.
-    fn a_shell_ready() -> charter_core::start::Ready {
-        charter_core::start::Ready {
+    fn a_shell_ready() -> purlis_core::start::Ready {
+        purlis_core::start::Ready {
             program: "/bin/sh".to_owned(),
             command: Vec::new(),
             args: Vec::new(),
@@ -3874,7 +3872,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut chats = Chats::new();
         let begun = beginning(&mut chats);
-        let was = charter_core::reopen::Identity {
+        let was = purlis_core::reopen::Identity {
             id: Some(CHAT_ID.to_owned()),
             device: Some(ELSEWHERE.to_owned()),
             run: Some(OLD_RUN.to_owned()),
@@ -3941,7 +3939,7 @@ mod tests {
             &Record {
                 chats: vec![Chat {
                     renamed_from: Some("alpha".to_owned()),
-                    identity: charter_core::reopen::Identity {
+                    identity: purlis_core::reopen::Identity {
                         id: Some(CHAT_ID.to_owned()),
                         ..Default::default()
                     },
@@ -4330,7 +4328,7 @@ mod tests {
             None,
             "the premise: the program is not a harness"
         );
-        let ready = charter_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             program: "/bin/sh".to_owned(),
             command: vec!["-c".to_owned(), "sleep 30".to_owned()],
             args: Vec::new(),
@@ -4338,8 +4336,8 @@ mod tests {
             cwd: None,
             harness: Some(Harness::ClaudeCode),
             session: None,
-            how: charter_core::reopen::Reopened::Fresh(
-                charter_core::reopen::Fresh::NoConversationRecorded,
+            how: purlis_core::reopen::Reopened::Fresh(
+                purlis_core::reopen::Fresh::NoConversationRecorded,
             ),
             plugins: std::collections::BTreeMap::new(),
             sandbox: None,
@@ -4405,16 +4403,16 @@ mod tests {
             None,
             "the premise: the program is not a harness"
         );
-        let ready = charter_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             program: "/bin/sh".to_owned(),
             command: vec!["-c".to_owned(), "sleep 30".to_owned()],
             args: Vec::new(),
             env: Vec::new(),
             cwd: None,
             harness: Some(Harness::ClaudeCode),
-            session: charter_core::harness::SessionId::new(ID).ok(),
-            how: charter_core::reopen::Reopened::Fresh(
-                charter_core::reopen::Fresh::NoConversationRecorded,
+            session: purlis_core::harness::SessionId::new(ID).ok(),
+            how: purlis_core::reopen::Reopened::Fresh(
+                purlis_core::reopen::Fresh::NoConversationRecorded,
             ),
             plugins: std::collections::BTreeMap::new(),
             sandbox: None,
@@ -4451,7 +4449,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let root = dir.path().join("plane");
         std::fs::create_dir_all(&root).expect("the plane");
-        std::fs::write(root.join(charter_core::plane::MANIFEST), shared).expect("charter.toml");
+        std::fs::write(root.join(purlis_core::plane::MANIFEST), shared).expect("charter.toml");
         let argv = root.join("argv");
         let running = root.join("running");
         let program = stand_in::program(
@@ -4466,7 +4464,7 @@ mod tests {
         let mut words = vec![format!("{:?}", program.display().to_string())];
         words.extend(command[1..].iter().map(|w| format!("{w:?}")));
         std::fs::write(
-            root.join(charter_core::profiles::LOCAL_FILE),
+            root.join(purlis_core::profiles::LOCAL_FILE),
             format!(
                 "[harness.work]\nkind = \"claude\"\ncommand = [{}]\n{}",
                 words.join(", "),
@@ -4474,11 +4472,11 @@ mod tests {
             ),
         )
         .expect("the profile");
-        let set = charter_core::profiles::current(&root);
-        charter_core::profiletrust::record_launched(
+        let set = purlis_core::profiles::current(&root);
+        purlis_core::profiletrust::record_launched(
             &root,
             "work",
-            &charter_core::profiletrust::fingerprint(set.get("work").expect("it reads")),
+            &purlis_core::profiletrust::fingerprint(set.get("work").expect("it reads")),
         )
         .expect("approved");
 
@@ -4490,8 +4488,8 @@ mod tests {
             shims: None,
             git_hooks: None,
         });
-        let ready = charter_core::start::ready(
-            &charter_core::start::Start {
+        let ready = purlis_core::start::ready(
+            &purlis_core::start::Start {
                 profile: Some("work".to_owned()),
                 persona: None,
                 name: "ide.7".to_owned(),
@@ -4615,7 +4613,7 @@ mod tests {
     fn armed_with_git_hooks() -> Chats {
         let mut chats = Chats::new();
         chats.arming_with(crate::Shipped {
-            git_hooks: Some(charter_core::githooks::GitHooks::at("/app/data/git-hooks")),
+            git_hooks: Some(purlis_core::githooks::GitHooks::at("/app/data/git-hooks")),
             ..crate::Shipped::default()
         });
         chats
@@ -4625,7 +4623,7 @@ mod tests {
     fn a_harness_chat_commits_through_charters_git_hooks() {
         assert_eq!(
             armed_with_git_hooks().git_hooks_for(Some(Harness::ClaudeCode)),
-            Some(charter_core::githooks::GitHooks::at("/app/data/git-hooks"))
+            Some(purlis_core::githooks::GitHooks::at("/app/data/git-hooks"))
         );
     }
 
@@ -4642,7 +4640,7 @@ mod tests {
         chats.arming_with(crate::Shipped {
             binary: None,
             plugin: None,
-            shims: Some(charter_core::shellguard::Shims::at("/app/data/shims")),
+            shims: Some(purlis_core::shellguard::Shims::at("/app/data/shims")),
             git_hooks: None,
         });
         chats
@@ -4788,9 +4786,9 @@ mod tests {
         said
     }
 
-    fn a_person_lifted_it() -> charter_core::sandbox::Lifted {
-        charter_core::sandbox::Lifted {
-            by: charter_core::sandbox::By::Person,
+    fn a_person_lifted_it() -> purlis_core::sandbox::Lifted {
+        purlis_core::sandbox::Lifted {
+            by: purlis_core::sandbox::By::Person,
             reason: Some("needs the network".to_owned()),
         }
     }
@@ -4799,7 +4797,7 @@ mod tests {
     fn a_chat_started_without_the_sandbox_is_audited_off_as_its_run_begins_and_counted_once_up() {
         let mut chats = Chats::new();
         let said = saying(&mut chats);
-        let ready = charter_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             harness: Some(Harness::ClaudeCode),
             unsandboxed: Some(a_person_lifted_it()),
             ..a_shell_ready()
@@ -4907,7 +4905,7 @@ mod tests {
         let host = Pretend::default();
         let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
         let said = saying_or(&mut chats, Some("the disk is full"));
-        let ready = charter_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             harness: Some(Harness::ClaudeCode),
             unsandboxed: Some(a_person_lifted_it()),
             ..a_shell_ready()
@@ -4928,7 +4926,7 @@ mod tests {
     fn a_persons_opt_out_with_no_event_log_at_all_is_not_started() {
         let host = Pretend::default();
         let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
-        let ready = charter_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             harness: Some(Harness::ClaudeCode),
             unsandboxed: Some(a_person_lifted_it()),
             ..a_shell_ready()
@@ -4949,10 +4947,10 @@ mod tests {
         let host = Pretend::default();
         let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
         let _said = saying_or(&mut chats, Some("the disk is full"));
-        let ready = charter_core::start::Ready {
+        let ready = purlis_core::start::Ready {
             harness: Some(Harness::ClaudeCode),
-            unsandboxed: Some(charter_core::sandbox::Lifted {
-                by: charter_core::sandbox::By::NoBackend(charter_core::sandbox::Os::Windows),
+            unsandboxed: Some(purlis_core::sandbox::Lifted {
+                by: purlis_core::sandbox::By::NoBackend(purlis_core::sandbox::Os::Windows),
                 reason: None,
             }),
             ..a_shell_ready()
@@ -4993,7 +4991,7 @@ mod tests {
                     cwd: Some(root.path().to_path_buf()),
                     ..chat("/bin/sh", "c", None)
                 },
-                &charter_core::start::Ready {
+                &purlis_core::start::Ready {
                     harness: Some(Harness::ClaudeCode),
                     ..a_shell_ready()
                 },

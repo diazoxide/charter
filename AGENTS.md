@@ -15,7 +15,7 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
 
 ## Rules that are easy to break
 
-- **The core never depends on Tauri or the UI.** `charter-core` is plain Rust. The app and the
+- **The core never depends on Tauri or the UI.** `purlis-core` is plain Rust. The app and the
   CLI call into it.
 - **Nothing parses harness output to decide anything.** A run's state moves only by a named cause (ADR 0076): its hooks, or, for a chat at level 3, its structured protocol (ADR 0073); its program's exit; an act of the host, the operator or a policy; or, for a remote chat, what its vendor reports.
 - **The plane on disk has the format `docs/plane-format.md` records.** Never change it here
@@ -24,7 +24,7 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
   (syncable or device-bound) or Keyring, and rebuildable when it is derived. It goes in
   `docs/plane-format.md`, under its own heading or as a row of a table of paths, with a
   `**Tier:**` line, and
-  `crates/charter-core/tests/every_store_the_plane_format_names_has_a_tier.rs` fails until it
+  `crates/purlis-core/tests/every_store_the_plane_format_names_has_a_tier.rs` fails until it
   has one. This is part of every feature's definition of done.
 - **Nothing depends on the Python charter, shipped or not.** No message, doc page or code path in
   the app or the `charter` binary tells anyone to install or run it, and nothing in CI or the
@@ -32,17 +32,17 @@ in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next n
   fixtures (ADR 0044, ADR 0045, ADR 0046). No Python in the shipped path.
 - **A recorded answer changes only on purpose.** `tests/fixtures/recorded/behaviour.jsonl` is
   what the Python charter answered for 404 scenarios, replayed against every build by
-  `cargo test -p charter-cli --test recorded_behaviour` (add scenario names after `--` for
+  `cargo test -p purlis-cli --test recorded_behaviour` (add scenario names after `--` for
   fewer). When a change is meant to move one, re-record it with
-  `CHARTER_RECORDED_BLESS=1 cargo test -p charter-cli --test recorded_behaviour -- <name>`, read
+  `CHARTER_RECORDED_BLESS=1 cargo test -p purlis-cli --test recorded_behaviour -- <name>`, read
   the fixture's diff, and say in the PR which contract moved and why. Never re-record to make a
   red run green without that sentence (ADR 0046).
 - **No `unsafe`, with one audited exception** (`unsafe_code = "deny"` workspace-wide). The
-  exception is `charter_core::executor::inherit_nothing_else`: the `pre_exec` hook that closes
+  exception is `purlis_core::executor::inherit_nothing_else`: the `pre_exec` hook that closes
   every descriptor above 2 in an extension's program, because nothing but code run between
   `fork` and `exec` can. The operator's ruling, 2026-09-23: *"Allow one audited block."* It has
   a `// SAFETY:` comment (clippy's `undocumented_unsafe_blocks` is denied), and
-  `crates/charter-core/tests/one_unsafe_block.rs` fails if `unsafe` or an allow of the lint
+  `crates/purlis-core/tests/one_unsafe_block.rs` fails if `unsafe` or an allow of the lint
   appears anywhere else. A second block is a new ruling, not an edit.
 - **UI is built from Radix primitives, never hand-rolled markup**, and never behind a charter API
   of our own — no `<Modal>`, no `<Field>`. A shadcn/ui component's source **copied into the repo
@@ -88,14 +88,14 @@ Two that have each cost a red `main`:
   get, and it survives whatever draws it. `e2e/opening.ts` holds the picker's selectors so
   there is one copy to change.
 
-Mutation testing runs nightly on `charter-core` only (`.github/workflows/mutants.yml`) and never
+Mutation testing runs nightly on `purlis-core` only (`.github/workflows/mutants.yml`) and never
 gates a PR. It is a report, so the only thing that matters about it is that its red is readable:
 
-- **`baseline` red** — charter-core's own tests do not pass. Nothing else in the run is evidence.
+- **`baseline` red** — purlis-core's own tests do not pass. Nothing else in the run is evidence.
 - **`core (N)` red** — shard N did not finish. Its verdict says whether the budget was too small
   (add shards; the crate went from 3,640 mutants to 6,555 in a day in September) or the runner
   went away.
-- **`survivors` red** — a change to charter-core that no test notices, and that was NOT there
+- **`survivors` red** — a change to purlis-core that no test notices, and that was NOT there
   before. This is the one to read. The table is on the run's summary page.
 
 `.github/mutants-survivors.txt` is the backlog of survivors already known, and only a survivor

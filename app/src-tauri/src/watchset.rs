@@ -196,7 +196,7 @@ pub(crate) fn follow(
             // next batch lists again.
             Err(_) if !is_a_dir(&path) => {}
             Err(why) => {
-                tracing::warn!("charter: {} is not watched ({why})", path.display());
+                tracing::warn!("purlis: {} is not watched ({why})", path.display());
                 unwatched.insert(path);
             }
         }

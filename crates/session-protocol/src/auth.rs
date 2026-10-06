@@ -62,12 +62,12 @@ use crate::version::{self, Negotiated, Refused};
 
 /// What the client's proof is made over first, so it can only ever be a client's proof of this
 /// exchange, in this version of it, and never a MAC the credential made for anything else.
-pub const CLIENT_LABEL: &[u8] = b"charter session protocol 1: the client proves its scope";
+pub const CLIENT_LABEL: &[u8] = b"purlis session protocol 1: the client proves its scope";
 
 /// What the host's proof is made over first. Distinct from [`CLIENT_LABEL`], so a client's
 /// proof can never be reflected back to it as the host's.
 pub const HOST_LABEL: &[u8] =
-    b"charter session protocol 1: the host proves it minted the credential";
+    b"purlis session protocol 1: the host proves it minted the credential";
 
 /// How many random bytes a credential is: 256 bits from the operating system's generator,
 /// the size of a chat's token.
@@ -182,7 +182,7 @@ impl Credential {
 
     /// `scope`'s credential, as the host that is running minted it into `dir`. The file must be
     /// a regular file of this user's that nobody else may read or write, never a link
-    /// (`charter_same_user::read_private_file`). A missing file, and one that does not hold a
+    /// (`purlis_same_user::read_private_file`). A missing file, and one that does not hold a
     /// credential, are errors, never an empty credential.
     #[cfg(unix)]
     pub fn read(dir: &Path, scope: Scope) -> std::io::Result<Self> {
@@ -192,7 +192,7 @@ impl Credential {
                 format!("{scope} is proved by a device's link key, never by a credential file"),
             ));
         }
-        let text = charter_same_user::read_private_file(&dir.join(scope.word()))?;
+        let text = purlis_same_user::read_private_file(&dir.join(scope.word()))?;
         text.trim_end_matches('\n')
             .parse()
             .map_err(|_: NotACredential| {
@@ -256,13 +256,13 @@ impl Credentials {
 
     /// A fresh credential for every scope, each written to its own `0600` file in `dir`, which
     /// is made `0700` and must be a directory of this user's, never a link
-    /// (`charter_same_user::private_directory`). A file already
+    /// (`purlis_same_user::private_directory`). A file already
     /// there is replaced whole, by a rename, so a client never reads half of one.
     #[cfg(unix)]
     pub fn mint_into(dir: &Path) -> std::io::Result<Self> {
         use std::io::Write;
 
-        charter_same_user::private_directory(dir)?;
+        purlis_same_user::private_directory(dir)?;
         let held = Credentials::mint()?;
         for scope in Scope::WITH_A_CREDENTIAL {
             let mut file = tempfile::Builder::new()

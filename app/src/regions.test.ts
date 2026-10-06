@@ -359,7 +359,7 @@ describe("the layout file", () => {
     await settleLayout();
 
     expect(aboutThisMachine()).toHaveLength(1);
-    expect(aboutThisMachine()[0].detail).toContain('"minimap" is not a region this charter has');
+    expect(aboutThisMachine()[0].detail).toContain('"minimap" is not a region this purlis has');
   });
 
   it("says nothing when there is nothing wrong with it", async () => {
@@ -372,7 +372,7 @@ describe("the layout file", () => {
 
   it("that the core would not write is said, and the window keeps what the operator did", async () => {
     answer = (cmd) => {
-      if (cmd === "write_layout") throw "charter will not overwrite a layout it could not read";
+      if (cmd === "write_layout") throw "purlis will not overwrite a layout it could not read";
       return null;
     };
     const { result } = renderHook(() => useArrangement());

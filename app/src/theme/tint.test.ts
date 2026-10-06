@@ -43,7 +43,7 @@ describe("the palette", () => {
       process.cwd(),
       "..",
       "crates",
-      "charter-core",
+      "purlis-core",
       "src",
       "extension",
       "project",
@@ -109,7 +109,7 @@ describe("a tint", () => {
     expect(hueOf(tinted(DEFAULT_THEME, "green").values["layer.chat"])).toBeDefined();
   });
 
-  it("is nothing without a colour, or with one charter does not read", () => {
+  it("is nothing without a colour, or with one purlis does not read", () => {
     expect(tinted(DEFAULT_THEME, null)).toBe(DEFAULT_THEME);
     expect(tinted(DEFAULT_THEME, "mauve")).toBe(DEFAULT_THEME);
     expect(tintVariables(DEFAULT_THEME, null, TINTED_TABS)).toEqual({});

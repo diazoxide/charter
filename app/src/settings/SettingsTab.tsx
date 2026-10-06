@@ -449,7 +449,7 @@ function Shown({
         <>
           {standing.length + mend.length > 0 && (
             <div className="ui-settings-standing">
-              <p className="note">charter does not take this from the files as they stand:</p>
+              <p className="note">purlis does not take this from the files as they stand:</p>
               <ul>
                 {standing.map(({ why, to }, at) => (
                   <li key={at} className="trouble">

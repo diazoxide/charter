@@ -632,7 +632,7 @@ function shareMarker(file: Shown, saving: SavingInForce | undefined): string {
 export function reposGroup(section: Section): Group {
   return {
     title: "Repos",
-    note: "How each workspace repo is saved, by its name in inventory/repos.json. A repo's defaults are mode off and auto-save off: charter saves no repo until its mode says how.",
+    note: "How each workspace repo is saved, by its name in inventory/repos.json. A repo's defaults are mode off and auto-save off: purlis saves no repo until its mode says how.",
     empty: (saving) =>
       saving !== undefined && "trouble" in saving
         ? `The repos and how each is saved could not be read: ${saving.trouble}`
@@ -682,7 +682,7 @@ export const SHARED: Group[] = [
         choices: ["stable", "dev"],
       }),
       textAt(key("charter", "version"), "Version lock", {
-        hint: "The charter version this project is pinned to, as 1.2.3. Empty pins nothing.",
+        hint: "The purlis version this project is pinned to, as 1.2.3. Empty pins nothing.",
       }),
       textAt(key("plane", "worktrees"), "Worktrees folder", {
         hint: "Under the project or one folder beside it, such as ../charter.worktrees.",

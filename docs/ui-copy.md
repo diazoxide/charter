@@ -11,11 +11,10 @@ empty state and error copy follow it.
 
 ## The voice
 
-- **charter is lowercase**, at the start of a sentence too. It is the program's name
-  (`productName`), and it does the acting: *charter could not read the alerts*, *charter checks
-  on its own every few hours*, *This is charter {version}*. The one capitalised form is the
-  About dialog's title, *About Charter*, because there it is a title. Whether to keep even that
-  exception is still open (#1156).
+- **purlis is lowercase**, at the start of a sentence too, and in the About dialog's title
+  (V93a). It is the program's name, and it does the acting: *purlis could not read the alerts*,
+  *purlis checks on its own every few hours*, *This is purlis {version}*, *About purlis*. A
+  capital Charter or Purlis in the window's text is a fault the copy guard names.
 - **The reader is "you".** *You have not opened a project yet.* *Nothing is written into your
   repo.*
 - **Active and present.** Say who does what: *It checks again when you press Delete*, not

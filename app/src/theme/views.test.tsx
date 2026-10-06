@@ -303,11 +303,11 @@ function row(key: string, over: Partial<PanelRow> = {}): PanelRow {
   };
 }
 
-/** Every mark `charter_core::panel::Mark` has, and a word it does not (drawn as the plain
+/** Every mark `purlis_core::panel::Mark` has, and a word it does not (drawn as the plain
  *  circle), each on a row of its own. */
 const MARKS = ["todo", "persona", "repo", "piece", "note", "trouble", "vault", "dot", "unknown"];
 
-/** Every tone `charter_core::panel::Tone` has: plain, default and trouble. */
+/** Every tone `purlis_core::panel::Tone` has: plain, default and trouble. */
 const TONES = ["plain", "default", "trouble"];
 
 /**
@@ -397,7 +397,7 @@ const CHANGES_ANSWER: ViewAnswer = {
   ],
 };
 
-/** A harness's card (HP-19), as `charter_core::harness_card::Card::blocks` answers it. */
+/** A harness's card (HP-19), as `purlis_core::harness_card::Card::blocks` answers it. */
 const HARNESS_CARD_ANSWER: ViewAnswer = {
   kind: "answered",
   blocks: [
@@ -413,7 +413,7 @@ const HARNESS_CARD_ANSWER: ViewAnswer = {
       kind: "list",
       rows: [
         row("reports_waiting", {
-          text: "Tells charter when it is waiting for you",
+          text: "Tells purlis when it is waiting for you",
           note: "yes",
           detail: null,
         }),
@@ -423,7 +423,7 @@ const HARNESS_CARD_ANSWER: ViewAnswer = {
           mark: "note",
           detail: {
             kind: "text",
-            text: "opencode cannot have a prompt typed in for you, because charter cannot tell when it has finished starting.",
+            text: "opencode cannot have a prompt typed in for you, because purlis cannot tell when it has finished starting.",
           },
         }),
       ],
@@ -523,7 +523,7 @@ const VAULT: VaultContents = {
   identity_in_app_env: [],
 };
 
-/** A vault that cannot be read, read through an identity still in charter's environment. */
+/** A vault that cannot be read, read through an identity still in purlis's environment. */
 const VAULT_TROUBLED: VaultContents = {
   ...VAULT,
   health: { ok: false, detail: "the keyring is locked" },
@@ -848,7 +848,7 @@ const STATES: State[] = [
     drawn: /not open any more/,
   },
   {
-    name: "a todo charter could not read",
+    name: "a todo purlis could not read",
     view: TODO_REF,
     answers: { todo_read: new Error("todos/ is a link out of the plane") },
     drawn: /link out of the plane/,
@@ -1024,7 +1024,7 @@ const STATES: State[] = [
     name: "an extension's view waiting to be asked",
     view: EXTENSION,
     waits: true,
-    drawn: /was open when charter last quit/,
+    drawn: /was open when purlis last quit/,
   },
   {
     name: "an extension's view that could not answer",

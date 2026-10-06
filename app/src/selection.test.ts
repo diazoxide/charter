@@ -111,7 +111,7 @@ describe("text selection", () => {
   });
 
   it("selects an error wherever it is said", () => {
-    draw(`<aside class="panel"><p class="trouble">charter could not read it</p>
+    draw(`<aside class="panel"><p class="trouble">purlis could not read it</p>
         <p class="honest" role="alert">the core went away</p></aside>
       <span class="alert-detail">git said no</span>`);
     for (const at of [".trouble", "[role=alert]", ".alert-detail"]) {

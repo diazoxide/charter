@@ -121,7 +121,7 @@ GitHub, an OAuth application on GitLab. Each is identified by its **client id**,
   instance. A person on a self-managed GitLab whose admin never registers one can still use PKCE,
   instead of a long-lived PAT, because GitLab lets any user register an application of their own.
 - **charter's own two registrations are compiled into the binary** as a table of host, kind,
-  client id and flow, in `crates/charter-core/src/forge/registration.rs`. A changed client id is a
+  client id and flow, in `crates/purlis-core/src/forge/registration.rs`. A changed client id is a
   release. A registration made on another host is part of the account record (0077 §6), keyed
   by host.
 - **charter's GitHub App is registered with device flow on, user-token expiry on, webhooks off, no

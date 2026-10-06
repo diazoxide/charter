@@ -44,11 +44,11 @@ mod bench {
     use std::time::{Duration, Instant};
 
     use bytes::Bytes;
-    use charter_session_protocol::auth::{Credentials, Scope};
-    use charter_session_protocol::link::{self, Link};
-    use charter_session_protocol::local;
-    use charter_session_protocol::version::{Speaks, Version};
-    use charter_session_protocol::view::{Attacher, Chunk, Limits, Reader, ViewId, Viewer};
+    use purlis_session_protocol::auth::{Credentials, Scope};
+    use purlis_session_protocol::link::{self, Link};
+    use purlis_session_protocol::local;
+    use purlis_session_protocol::version::{Speaks, Version};
+    use purlis_session_protocol::view::{Attacher, Chunk, Limits, Reader, ViewId, Viewer};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
 
@@ -235,7 +235,7 @@ mod bench {
                 stream,
                 v1(),
                 &held,
-                &std::sync::Arc::new(charter_session_protocol::local::NoChats),
+                &std::sync::Arc::new(purlis_session_protocol::local::NoChats),
             )
             .await
             .expect("a host link")

@@ -157,12 +157,12 @@ describe("a branch's files in the explorer", () => {
     );
   });
 
-  it("draws a file charter will not open with its reason, and pressing it opens nothing", async () => {
+  it("draws a file purlis will not open with its reason, and pressing it opens nothing", async () => {
     core({
       "one:": [
         entry("away.txt", {
           kind: "link",
-          refused: "a link out of the branch's folder, so charter does not follow it",
+          refused: "a link out of the branch's folder, so purlis does not follow it",
         }),
       ],
     });
@@ -181,7 +181,7 @@ describe("a branch's files in the explorer", () => {
     core({
       "one:": [
         entry("target", { kind: "folder", ignored: true }),
-        entry(".env", { ignored: true, refused: "ignored by git, so charter does not open it" }),
+        entry(".env", { ignored: true, refused: "ignored by git, so purlis does not open it" }),
         entry("README.md"),
       ],
     });
@@ -281,14 +281,14 @@ describe("a branch's files in the explorer", () => {
   it("says beside an ignored file why it does not open, once ignored files are shown", async () => {
     core({
       "one:": [
-        entry(".env", { ignored: true, refused: "ignored by git, so charter does not open it" }),
+        entry(".env", { ignored: true, refused: "ignored by git, so purlis does not open it" }),
       ],
     });
     draw();
     await userEvent.click(row("file:svc/one:"));
     await userEvent.click(await screen.findByRole("button", { name: "Show ignored files" }));
 
-    expect(await named("^\\.env")).toHaveTextContent("ignored by git, so charter does not open it");
+    expect(await named("^\\.env")).toHaveTextContent("ignored by git, so purlis does not open it");
   });
 
   it("moves through files with the arrows and opens one with Enter", async () => {

@@ -1,0 +1,62 @@
+[package]
+name = "purlis-cli"
+description = "The charter command line, called by hooks, scripts and agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# The command line ships as `purlis` (RN-3, #1255). `charter` is the name it had before, kept as
+# an alias for the rename's window (V93k): a small program that runs the `purlis` beside it with
+# the same invocation, so the bundle carries one copy of the CLI rather than two.
+[[bin]]
+name = "purlis"
+path = "src/main.rs"
+
+[[bin]]
+name = "charter"
+path = "src/alias.rs"
+
+[dependencies]
+purlis-core.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap.workspace = true
+# charter's MCP server (HP-7): the official Rust SDK, Apache-2.0, serving stdio only. No HTTP
+# transport and no auth features, so it pulls no HTTP client and no TLS. Its `build.rs` runs
+# `git config core.hooksPath .githooks` only when `$CARGO_MANIFEST_DIR/../../.githooks` and
+# `../../.git` both exist, which is rmcp's own checkout. Built from the registry that is
+# `~/.cargo/registry/src/`, where neither does, so it is inert here. It would fire only if charter
+# vendored the crate at `<repo>/vendor/rmcp-*` and this repo grew a `.githooks/`: never vendor it.
+rmcp = { version = "3.5", default-features = false, features = ["server", "transport-io", "elicitation"] }
+serde_json.workspace = true
+# The runtime `rmcp` serves on: one thread, for one chat's server.
+tokio = { version = "1", default-features = false, features = ["rt"] }
+
+[dev-dependencies]
+# Fenced, so the `charter` binary these tests spawn cannot act on a plane the run did not
+# make (charter-app#129). Cargo unifies a dependency's features across the unit graph a test
+# build needs, so naming it here fences the binary as well as the tests that run it.
+purlis-core = { workspace = true, features = ["fenced"] }
+# The changelog parser, so `charter news --for` is checked against the section it should print.
+changelog.workspace = true
+stand-in.workspace = true
+tempfile.workspace = true
+# The recorded-behaviour replay (ADR 0046): the scenarios' masks, and the file contents they
+# carry compressed and by hash.
+base64 = "0.23"
+flate2 = "1"
+regex = "1"
+sha2 = "0.11"
+
+# Every scenario the Python differential ran, replayed against this build's `charter` and
+# compared with what was recorded (ADR 0046). Its own runner rather than libtest's, so one
+# failure names its scenario and the run can be narrowed to one by name.
+[[test]]
+name = "recorded_behaviour"
+path = "tests/recorded_behaviour/main.rs"
+harness = false
+
+[lints]
+workspace = true

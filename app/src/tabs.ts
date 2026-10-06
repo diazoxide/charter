@@ -46,7 +46,7 @@ export type Direction = "row" | "column";
  * A view, named by data: **who draws it, which of theirs, and what it is about.**
  *
  * `from` is `null` for a view charter draws itself and an approved extension's id for one it
- * offers, which is `charter_core::panel::By` on the wire; `view` is which of theirs; `key` is
+ * offers, which is `purlis_core::panel::By` on the wire; `view` is which of theirs; `key` is
  * what it is about inside that — a persona's name, or `""` for the whole plane. The persona view
  * is `{ from: null, view: "persona", key: "steward" }` and persona statistics is
  * `{ from: "persona-statistics", view: "statistics", key: "" }`: **the same shape, the same
@@ -137,7 +137,7 @@ export function harnessSetupTitle(workspace: string): string {
 /**
  * **A harness's capability card** (HP-19, W10): what one harness can do here, each thing it lacks
  * said in a line, drawn by the core off the harness's declaration and adapter
- * (`charter_core::harness_card`). Keyed by the harness's name, so there is one tab per harness,
+ * (`purlis_core::harness_card`). Keyed by the harness's name, so there is one tab per harness,
  * opened from a chat's header and called what the card is labelled, *What Codex can do here*.
  */
 export function harnessCardView(harness: string): ViewRef {
@@ -385,7 +385,7 @@ function withTab(
 
 /** What one view is called as a key: unique per plane, and the same for the same view. */
 export function viewKey(view: ViewRef): string {
-  // Namespaced as `charter_core::panel::Panel::key` is, so an extension that calls itself
+  // Namespaced as `purlis_core::panel::Panel::key` is, so an extension that calls itself
   // `charter` cannot answer to charter's own view's name.
   return view.from === null
     ? `charter/${view.view}/${view.key}`

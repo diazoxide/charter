@@ -49,7 +49,7 @@ and is answered with `section`, a string. Both carry `writes` like every protoco
 charter watches the plane while each is answered. `events` and `briefing` need protocol 2.
 
 **The vocabulary grows one capability per change.** Each change adds the capability to
-`crates/charter-core/src/extension/capability.rs`. The same change adds it to the
+`crates/purlis-core/src/extension/capability.rs`. The same change adds it to the
 `extension-probe` crate's manifest and proves it through the real registry and executor:
 declared, fingerprinted, approved, run, answered, and refused when asked for wrongly. It also
 writes the capability's own amendment to ADR 0041 in that change. Until the first real

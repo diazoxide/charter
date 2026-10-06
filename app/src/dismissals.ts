@@ -124,7 +124,7 @@ function change(project: string, next: ReadonlySet<string>) {
       kept.status === "error"
         ? {
             severity: "warn",
-            detail: `charter could not keep what you dismissed: ${kept.error}`,
+            detail: `purlis could not keep what you dismissed: ${kept.error}`,
             remedy: "it stays hidden until you quit; after a relaunch those Notices show again",
           }
         : undefined,

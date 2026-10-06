@@ -1,6 +1,6 @@
 ---
 name: add-curation-action
-description: Add a curation action to a charter persona — a chat the operator can open on a workspace, a persona or the plane with a prompt already typed. Use when asked to add, write or change a persona's curation action, or to give a persona a new entry in the Curate menu.
+description: Add a curation action to a purlis persona — a chat the operator can open on a workspace, a persona or the plane with a prompt already typed. Use when asked to add, write or change a persona's curation action, or to give a persona a new entry in the Curate menu.
 ---
 
 # Adding a curation action
@@ -40,14 +40,14 @@ skill and name the skill in words in that line — never as a `/slash` command, 
 harness reads.
 
 Keep it short because the harness shows a long paste as a placeholder nobody can read, and
-charter then opens no chat for it: Claude Code over 800 characters or at 4 lines, Codex over
-1,000 characters. `charter persona lint` warns when a prompt, filled in for a long subject name,
+purlis then opens no chat for it: Claude Code over 800 characters or at 4 lines, Codex over
+1,000 characters. `purlis persona lint` warns when a prompt, filled in for a long subject name,
 would be shown that way. Done when the operator approves the label, the kinds and the prompt.
 
 ## 2. Write it
 
 ```bash
-charter persona curation add <persona> <id> --label "<label>" --on workspace,persona [--runs-in plane] <<'PROMPT'
+purlis persona curation add <persona> <id> --label "<label>" --on workspace,persona [--runs-in plane] <<'PROMPT'
 <the prompt>
 PROMPT
 ```
@@ -57,19 +57,19 @@ reads back with no error, and never over one that is there: to change an action,
 add it again.
 
 ```bash
-charter persona curation remove <persona> <id>
+purlis persona curation remove <persona> <id>
 ```
 
-charter's own actions are `charter/safe-remove`, `charter/compact` and
+purlis's own actions are `charter/safe-remove`, `charter/compact` and
 `charter/add-curation-action`. A persona's action with one of their ids or labels is refused,
 so choose another.
 
 ## 3. Check it
 
 ```bash
-charter persona curation list <persona>
-charter curation show workspace:<name>     # or persona:<name>, or plane
-charter persona lint <persona>
+purlis persona curation list <persona>
+purlis curation show workspace:<name>     # or persona:<name>, or plane
+purlis persona lint <persona>
 ```
 
 `curation show` prints what a subject is offered, in order, each with who runs it, where, and

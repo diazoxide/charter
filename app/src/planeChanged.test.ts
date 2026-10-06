@@ -13,7 +13,7 @@ import {
 } from "./planeChanged";
 
 /**
- * Which answer a change concerns is the core's question (`charter_core::planechange::answers`,
+ * Which answer a change concerns is the core's question (`purlis_core::planechange::answers`,
  * whose tests hold the mapping). The window only names the answer it holds, and these say how a
  * name is matched against what the core sent.
  */

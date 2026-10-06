@@ -1,5 +1,5 @@
 //! The Settings tab's wire (charter-app#252): a plane's `charter.toml` and
-//! `charter.local.toml`, read and written through [`charter_core::settings`].
+//! `charter.local.toml`, read and written through [`purlis_core::settings`].
 //!
 //! Thin by design, as `doctor.rs` is. Every refusal is the core's sentence — the same one the
 //! next read of the file would say — and every write goes through the core's `toml_edit`
@@ -7,7 +7,7 @@
 //! and every value in it by path for the forms, so the window needs no TOML parser of its own
 //! and a key the forms do not know yet (#253's `[extensions]`) is already on the wire.
 
-use charter_core::settings::{self, Edit, Found, Step, Value, Which};
+use purlis_core::settings::{self, Edit, Found, Step, Value, Which};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -83,7 +83,7 @@ pub struct SettingsFile {
     pub entries: Option<Vec<SettingsEntry>>,
 }
 
-/// One entry of a collection, as the core lists it (`charter_core::settings::collection::Listed`).
+/// One entry of a collection, as the core lists it (`purlis_core::settings::collection::Listed`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct SettingsEntry {
     /// Which collection: `forges` or `profiles`.
@@ -213,7 +213,7 @@ pub enum SettingsMoved {
 
 /// Move the values at `paths` into `to`, out of the other file: the Settings tab's "Shared /
 /// Only on this machine" choice (SE-18). Both files are written or neither is
-/// (`charter_core::settings::move_keys`).
+/// (`purlis_core::settings::move_keys`).
 ///
 /// `shared_base` and `local_base` are the texts the window read (`null`: not there), so a file
 /// changed on disk since is refused rather than overwritten.
@@ -289,7 +289,7 @@ pub struct EntryReferrer {
 
 /// What adding or removing a collection entry answered: the file as it now stands, or every
 /// reason nothing was written — by field, by what uses the entry, and for the whole write
-/// (`charter_core::settings::collection::Refusal`).
+/// (`purlis_core::settings::collection::Refusal`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EntryWritten {
@@ -318,7 +318,7 @@ pub struct ForgeEntry {
 }
 
 /// Add a `[[forge]]` block to `charter.toml`, checked whole by the core
-/// (`charter_core::settings::forges::add`).
+/// (`purlis_core::settings::forges::add`).
 ///
 /// `base` is the text the window read (`null`: not there), so a file changed on disk since is
 /// refused rather than overwritten.
@@ -359,7 +359,7 @@ pub(crate) fn add_forge(
 }
 
 /// Remove the `[[forge]]` block called `id` (as `charter.toml`'s `entries` list it) — refused,
-/// naming them, while a repo or a setting uses it (`charter_core::settings::forges::remove`).
+/// naming them, while a repo or a setting uses it (`purlis_core::settings::forges::remove`).
 ///
 /// `base` is the text the entries were drawn from, so an entry that moved or changed since is
 /// refused rather than another removed.
@@ -408,7 +408,7 @@ pub struct ProfileEntry {
 }
 
 /// Add a `[harness.<name>]` profile to the project's local settings file, checked whole by the
-/// core's profile rules (`charter_core::settings::harness_profiles::add`). Its first run still
+/// core's profile rules (`purlis_core::settings::harness_profiles::add`). Its first run still
 /// asks for approval.
 ///
 /// `base` is the text the window read (`null`: not there), so a file changed on disk since is
@@ -450,7 +450,7 @@ pub(crate) fn add_profile(
 
 /// Remove the profile called `id` (as the local file's `entries` list it) — refused, naming
 /// them, while a `[harness] default` uses it
-/// (`charter_core::settings::harness_profiles::remove`).
+/// (`purlis_core::settings::harness_profiles::remove`).
 #[tauri::command]
 #[specta::specta]
 pub async fn remove_project_profile(
@@ -486,7 +486,7 @@ pub(crate) fn remove_profile(
 }
 
 /// Rename the profile called `id` to `to`, only while nothing uses it — refused, naming them,
-/// otherwise (`charter_core::settings::harness_profiles::rename`). Answers the renamed entry's
+/// otherwise (`purlis_core::settings::harness_profiles::rename`). Answers the renamed entry's
 /// identity as `added`: what its Undo renames back.
 #[tauri::command]
 #[specta::specta]
@@ -665,7 +665,7 @@ pub async fn project_saving_in_force(
 
 /// [`project_saving_in_force`], without a runtime.
 pub(crate) fn saving_in_force(root: &std::path::Path) -> SavingInForce {
-    use charter_core::planesave::{Mode, Resolved, Settings};
+    use purlis_core::planesave::{Mode, Resolved, Settings};
 
     fn said<T>(resolved: &Resolved<T>, value: Option<String>) -> InForce {
         InForce {
@@ -771,7 +771,7 @@ pub async fn workspace_settings(
 
 /// Change one workspace's `workspace.json`: a form's changes to its settings, written with every
 /// other key kept, or Edit as JSON's whole text (NO-7, #1232) — each checked by the readers of
-/// the project's files (`charter_core::settings::workspace`).
+/// the project's files (`purlis_core::settings::workspace`).
 ///
 /// `base` is the text the window read (`null`: the file was not there), so a file changed on
 /// disk since is refused rather than overwritten.
@@ -1170,7 +1170,7 @@ mod tests {
             .args(["init", "-q"])
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1");
-        let out = charter_core::forklock::output(&mut git).expect("git runs");
+        let out = purlis_core::forklock::output(&mut git).expect("git runs");
         assert!(out.status.success());
         dir
     }

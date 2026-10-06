@@ -3,12 +3,12 @@
 //!
 //! **The window names a branch and a path; the core builds the text.** Every command here
 //! takes the branch by its names and the path inside it, places it with
-//! `charter_core::reference::of` (confined by `files::place`), and has the chat's harness
+//! `purlis_core::reference::of` (confined by `files::place`), and has the chat's harness
 //! adapter render it. Nothing the window sends is typed as it was sent.
 //!
 //! **Typed the way a curation prompt is** (ADR 0061): one bracketed paste with nothing after
-//! it ([`charter_core::reference::pasted`]). Into a running chat only at its prompt
-//! ([`charter_core::reference::may_type_into`]: never mid-turn, never while it asks the
+//! it ([`purlis_core::reference::pasted`]). Into a running chat only at its prompt
+//! ([`purlis_core::reference::may_type_into`]: never mid-turn, never while it asks the
 //! operator something); as the first prompt of a chat "Start a chat here" opens, through
 //! `curation::start_typed_where_it_can_be`, held until its harness is ready exactly as a
 //! curation prompt is.
@@ -20,9 +20,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use charter_core::engine::Size;
-use charter_core::harness::Harness;
-use charter_core::reference::{self, Lines, Now, Reference};
+use purlis_core::engine::Size;
+use purlis_core::harness::Harness;
+use purlis_core::reference::{self, Lines, Now, Reference};
 
 use crate::curation::{self, ChatTyped};
 use crate::planes::{Held, PlaneId, Planes};
@@ -83,7 +83,7 @@ pub fn reference_into_chat(
 /// clipboard as `copy`.
 pub fn into_chat(
     held: &Arc<Held>,
-    at: charter_core::files::Branch<'_>,
+    at: purlis_core::files::Branch<'_>,
     path: &str,
     lines: Option<Lines>,
     session: u32,
@@ -104,7 +104,7 @@ pub fn into_chat(
     };
     let Some(harness) = harness else {
         return copied(
-            "charter types a reference only into a chat on a harness it knows, so it is on \
+            "purlis types a reference only into a chat on a harness it knows, so it is on \
              the clipboard"
                 .to_owned(),
         );
@@ -193,14 +193,14 @@ pub fn start_chat_here(
 /// [`start_chat_here`], against a project the registry has already vouched for.
 pub fn here(
     held: &Arc<Held>,
-    at: charter_core::files::Branch<'_>,
+    at: purlis_core::files::Branch<'_>,
     path: &str,
     lines: Option<Lines>,
     size: Size,
     copy: &dyn Fn(&str) -> Result<(), String>,
 ) -> Result<StartedHere, String> {
     let root = held.root().to_path_buf();
-    let folder = charter_core::files::folder(&root, at, "").map_err(|why| why.to_string())?;
+    let folder = purlis_core::files::folder(&root, at, "").map_err(|why| why.to_string())?;
     let made =
         reference::of(&root, at, path, lines, Some(&folder)).map_err(|why| why.to_string())?;
     let (profile, kind) = curation::default_profile(&root, "no chat was started")?;
@@ -229,7 +229,7 @@ pub fn here(
             .harness
             .map_or("this profile's program", Harness::title);
         Some(format!(
-            "charter cannot type into {harness} yet, so the reference is on the clipboard"
+            "purlis cannot type into {harness} yet, so the reference is on the clipboard"
         ))
     };
     Ok(StartedHere {
@@ -237,7 +237,7 @@ pub fn here(
         name: started.name,
         label,
         harness: started.ready.harness.map(|h| h.name().to_owned()),
-        workspace: charter_core::workspaces::Plane::open(&root)
+        workspace: purlis_core::workspaces::Plane::open(&root)
             .workspace_of(started.ready.cwd.as_deref().unwrap_or(&folder)),
         text,
         copied,
@@ -251,7 +251,7 @@ fn label_for(path: &str) -> String {
         |name| name.to_string_lossy().into_owned(),
     );
     let whole = format!("About {leaf}");
-    let most = charter_core::reopen::MOST_LABEL;
+    let most = purlis_core::reopen::MOST_LABEL;
     if whole.chars().count() <= most {
         return whole;
     }
@@ -281,7 +281,7 @@ mod tests {
         fn new(kind: &str) -> Self {
             let dir = tempfile::tempdir().expect("a directory");
             let root = std::fs::canonicalize(dir.path()).expect("it resolves");
-            std::fs::write(root.join(charter_core::plane::MANIFEST), "schema = 1\n").unwrap();
+            std::fs::write(root.join(purlis_core::plane::MANIFEST), "schema = 1\n").unwrap();
             let clone = root.join("workspaces/shop/shop");
             std::fs::create_dir_all(&clone).unwrap();
             std::fs::write(root.join("workspaces/shop/workspace.md"), "# shop\n").unwrap();
@@ -294,7 +294,7 @@ mod tests {
                 "#!/bin/sh\nstty raw -echo\nexec cat > /dev/null\n",
             );
             std::fs::write(
-                root.join(charter_core::profiles::LOCAL_FILE),
+                root.join(purlis_core::profiles::LOCAL_FILE),
                 format!(
                     "[harness]\ndefault = \"work\"\n\n[harness.work]\nkind = {kind:?}\n\
                      command = [{:?}]\n",
@@ -302,12 +302,12 @@ mod tests {
                 ),
             )
             .unwrap();
-            let set = charter_core::profiles::current(&root);
+            let set = purlis_core::profiles::current(&root);
             let work = set.get("work").expect("the profile reads");
-            charter_core::profiletrust::record_launched(
+            purlis_core::profiletrust::record_launched(
                 &root,
                 "work",
-                &charter_core::profiletrust::fingerprint(work),
+                &purlis_core::profiletrust::fingerprint(work),
             )
             .expect("approved");
             Self { _dir: dir, root }
@@ -315,7 +315,7 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let ran = charter_core::forklock::output(
+        let ran = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
@@ -330,8 +330,8 @@ mod tests {
         Planes::telling(Arc::new(|_| {}), crate::Shipped::default(), None)
     }
 
-    fn shop() -> charter_core::files::Branch<'static> {
-        charter_core::files::Branch::repo("shop", "shop")
+    fn shop() -> purlis_core::files::Branch<'static> {
+        purlis_core::files::Branch::repo("shop", "shop")
     }
 
     #[cfg(unix)]
@@ -420,6 +420,6 @@ mod tests {
     fn a_tab_is_labelled_by_the_file_it_is_about() {
         assert_eq!(label_for("src/main.rs"), "About main.rs");
         assert_eq!(label_for("src"), "About src");
-        assert!(label_for(&"x".repeat(500)).chars().count() <= charter_core::reopen::MOST_LABEL);
+        assert!(label_for(&"x".repeat(500)).chars().count() <= purlis_core::reopen::MOST_LABEL);
     }
 }

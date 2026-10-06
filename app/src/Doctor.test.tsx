@@ -188,7 +188,7 @@ describe("the doctor's dialog", () => {
 
   it("says the unported rows' shared hint once, not once a row", async () => {
     // Seen on the real app: twenty-four rows each repeating the same two sentences.
-    const same = { hint: "This charter does not run this check yet." };
+    const same = { hint: "This purlis does not run this check yet." };
     const rows = [
       row("vaults", "warn", { ...same, checked: false }),
       row("mcp", "warn", { ...same, checked: false }),
@@ -199,9 +199,7 @@ describe("the doctor's dialog", () => {
     await userEvent.click(button());
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getAllByText("This charter does not run this check yet.")).toHaveLength(
-      1,
-    );
+    expect(within(dialog).getAllByText("This purlis does not run this check yet.")).toHaveLength(1);
   });
 
   it("shows the PATH the app was answered with, which is what a Finder launch gets wrong", async () => {
@@ -354,7 +352,7 @@ describe("the Fix button", () => {
     const dialog = await screen.findByRole("dialog");
 
     const fix = await within(dialog).findByRole("button", { name: /^Fix schema$/ });
-    expect(fix).toHaveAttribute("title", "charter doctor --fix reinit");
+    expect(fix).toHaveAttribute("title", "purlis doctor --fix reinit");
   });
 
   it("draws Fix on each row the first wave of fixes covers", async () => {
@@ -378,7 +376,7 @@ describe("the Fix button", () => {
 
     for (const [name, fix] of fixable) {
       const pressable = await within(dialog).findByRole("button", { name: `Fix ${name}` });
-      expect(pressable).toHaveAttribute("title", `charter doctor --fix ${fix}`);
+      expect(pressable).toHaveAttribute("title", `purlis doctor --fix ${fix}`);
     }
   });
 

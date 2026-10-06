@@ -7,13 +7,13 @@ import type { HarnessGlance } from "./bindings";
  * opens the whole card as a view tab (`tabs.harnessCardView`), drawn by the core in the panel
  * vocabulary.
  *
- * **Every word comes from the core** (`charter_core::harness_card`), which reads it off the
+ * **Every word comes from the core** (`purlis_core::harness_card`), which reads it off the
  * harness's declaration and the adapter charter ships for it, in the first hour's words. Nothing
  * here knows a harness by name: one this window has never heard of is drawn the same way.
  */
 
 /** What a card with nothing missing says in place of its lines. */
-const NOTHING_LACKING = "Everything charter asks of it.";
+const NOTHING_LACKING = "Everything purlis asks of it.";
 
 /** The card's lines as one run of sentences: a tooltip's words. */
 export function glanceSaid(glance: HarnessGlance): string {

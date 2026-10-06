@@ -825,14 +825,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "charter-app"
+name = "purlis-app"
 version = "0.4.2"
 dependencies = [
  "arboard",
  "base64 0.23.1",
  "changelog",
- "charter-core",
- "charter-session-protocol",
+ "purlis-core",
+ "purlis-session-protocol",
  "chrono",
  "dunce",
  "notify",
@@ -861,12 +861,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "charter-cli"
+name = "purlis-cli"
 version = "0.4.2"
 dependencies = [
  "base64 0.23.1",
  "changelog",
- "charter-core",
+ "purlis-core",
  "chrono",
  "clap",
  "flate2",
@@ -880,15 +880,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "charter-core"
+name = "purlis-core"
 version = "0.4.2"
 dependencies = [
  "agent-client-protocol",
  "alacritty_terminal",
  "blocking",
  "changelog",
- "charter-core",
- "charter-same-user",
+ "purlis-core",
+ "purlis-same-user",
  "chrono",
  "dirs",
  "flate2",
@@ -944,7 +944,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "charter-same-user"
+name = "purlis-same-user"
 version = "0.4.2"
 dependencies = [
  "nix 0.31.3",
@@ -953,13 +953,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "charter-session-protocol"
+name = "purlis-session-protocol"
 version = "0.4.2"
 dependencies = [
  "base64 0.23.1",
  "bytes",
- "charter-same-user",
- "charter-session-protocol",
+ "purlis-same-user",
+ "purlis-session-protocol",
  "dhat",
  "futures",
  "getrandom 0.4.3",
@@ -1797,7 +1797,7 @@ dependencies = [
 name = "extension-probe"
 version = "0.4.2"
 dependencies = [
- "charter-core",
+ "purlis-core",
  "chrono",
  "serde_json",
  "tempfile",
@@ -1807,7 +1807,7 @@ dependencies = [
 name = "fake-harness"
 version = "0.4.2"
 dependencies = [
- "charter-core",
+ "purlis-core",
  "clap",
  "portable-pty",
  "serde_json",
@@ -5038,7 +5038,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 name = "persona-statistics"
 version = "0.4.2"
 dependencies = [
- "charter-core",
+ "purlis-core",
  "chrono",
  "serde_json",
  "tempfile",
@@ -5518,7 +5518,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "release-manifest"
 version = "0.4.2"
 dependencies = [
- "charter-core",
+ "purlis-core",
  "minisign",
  "minisign-verify",
  "serde_json",

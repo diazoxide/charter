@@ -8,8 +8,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use charter_core::acp::{Chat, Event, Launch, Stop, TurnFailed};
-use charter_core::harness::asks::Asks;
+use purlis_core::acp::{Chat, Event, Launch, Stop, TurnFailed};
+use purlis_core::harness::asks::Asks;
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -59,7 +59,7 @@ fn resident_kib() -> u64 {
 fn launch(dir: &Path) -> Launch {
     static LEFT: std::sync::Once = std::sync::Once::new();
     LEFT.call_once(|| {
-        use charter_core::noterminal::{Left, leave};
+        use purlis_core::noterminal::{Left, leave};
         if let Left::Relaunched(code) = leave().expect("the tests leave their terminal") {
             std::process::exit(code);
         }

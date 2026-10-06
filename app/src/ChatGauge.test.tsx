@@ -10,7 +10,7 @@ import type { ChatUsage } from "./bindings";
 /**
  * **A chat's gauge**: what it draws from the core's answer, and when it asks again.
  *
- * The numbers and their tones are the core's (`charter_core::usage::gauge`, pinned against the
+ * The numbers and their tones are the core's (`purlis_core::usage::gauge`, pinned against the
  * Python charter's own helpers); what is here is the window's half.
  */
 

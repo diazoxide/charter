@@ -415,7 +415,7 @@ describe("open in your editor (RC-20)", () => {
     setYourEditor("variable");
     core(
       { "a.txt": { kind: "text", text: "hello\n" } },
-      "neither $VISUAL nor $EDITOR is set where charter was started",
+      "neither $VISUAL nor $EDITOR is set where purlis was started",
     );
     render(<PieceFileTab plane={PLANE} cut={CUT} path="a.txt" />);
 

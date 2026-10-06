@@ -6,7 +6,7 @@
 //! (`charter ws todo` resolves it from a session lock and the environment) and would let a
 //! todo typed in one workspace's panel land in another.
 //!
-//! Thin, as `workspaces.rs` is. The rules are `charter_core::workspaces::Workspace`'s, which is
+//! Thin, as `workspaces.rs` is. The rules are `purlis_core::workspaces::Workspace`'s, which is
 //! what `charter ws todo` calls too: a todo with no words or about work already on the list is
 //! refused ([`Workspace::record_todo`]), a close writes the journal first and then deletes
 //! ([`Workspace::close_todo`]), and a forget journals nothing and refuses a slug that is not one
@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use charter_core::workspaces::{Plane, Workspace};
+use purlis_core::workspaces::{Plane, Workspace};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -160,7 +160,7 @@ fn done_in(
     ws.close_todo(slug, stamp).map_err(|e| e.to_string())?;
     Ok(format!(
         "Closed '{}' in '{name}' — the journal has the trace.",
-        charter_core::personas::one_line(&title)
+        purlis_core::personas::one_line(&title)
     ))
 }
 
@@ -188,7 +188,7 @@ fn forget_in(root: &Path, name: &str, slug: &str) -> Result<String, String> {
     ws.forget_todo(slug).map_err(|e| e.to_string())?;
     Ok(format!(
         "Dropped '{}' from '{name}' — abandoned, so nothing was journalled.",
-        charter_core::personas::one_line(&title)
+        purlis_core::personas::one_line(&title)
     ))
 }
 

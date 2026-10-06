@@ -565,7 +565,7 @@ describe("the one list of actions", () => {
     const offers = catalogue(now({ tabs, plane: "/plane" }));
 
     expect(by(offers, "worktree.remove")?.reason).toBe(
-      "The chat in front is not working in a branch charter cut.",
+      "The chat in front is not working in a branch purlis cut.",
     );
   });
 
@@ -703,7 +703,7 @@ describe("the one list of actions", () => {
     );
 
     expect(by(offers, "worktree.remove:svc/fix-it")?.reason).toBe(
-      "charter found no plane, so it cannot reach a branch.",
+      "purlis found no plane, so it cannot reach a branch.",
     );
   });
 

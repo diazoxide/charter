@@ -425,7 +425,7 @@ describe("the stylesheet and the vocabulary agree", () => {
 
   it("every token Tailwind offers as a colour is a token, and every token is offered", () => {
     // The bridge is hand-written, so this is what keeps it from drifting from the vocabulary
-    // in either direction — a Tailwind colour charter does not have, or a charter token no
+    // in either direction — a Tailwind colour purlis does not have, or a charter token no
     // utility can reach.
     const offered = new Set(
       [...bridge.matchAll(/--color-([a-z0-9-]+):\s*var\((--[a-z0-9-]+)\)/g)].map((hit) => hit[2]),

@@ -27,7 +27,7 @@
 //!   plainly, with `## [Unreleased]` beside it as what the build is ahead by.
 //!
 //! **`charter news` reads the same file.** It prints every section, or one with `--for`, out of
-//! the copy compiled into `charter_core::news` (#352). The Python charter's news corpus it read
+//! the copy compiled into `purlis_core::news` (#352). The Python charter's news corpus it read
 //! before is gone.
 //!
 //! **Nothing here is about a plane.** This is a fact about the binary, so it lives on the
