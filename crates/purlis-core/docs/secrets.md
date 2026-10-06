@@ -27,6 +27,32 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   (`base64`, a JSON re-encode) prints it unrecognised. `--stream` runs a long-lived command
   with its stdio attached and still removes its files; `--exec` replaces purlis with the
   command and cannot take `--file` or `--dotenv`. Neither captures, so neither redacts.
+- **In a sandboxed chat, the app runs it** (#1407). A sandboxed chat may not read any vault
+  (ADR 0067 §5 class 1), so `secret exec` there reads nothing itself. It asks the app that
+  started the chat, over the chat's hook channel, and the app reads that line only from a
+  process inside that chat. One from a process outside it (tmux, `nohup` after its shell ended,
+  `docker exec`) is refused with a sentence saying so, and nothing runs. The app checks that the vault registry tags the vault with the
+  chat's persona: the persona the app started the chat as. A persona's own `vault:` line does
+  not count, because a chat can edit that file. It then resolves the values and runs the
+  command in a sandbox built from what the chat's own sandbox was compiled to when the chat
+  started: the same denials (its harness's own among them), the chat's folder and a temp
+  directory of its own as the only places it writes, and the network only through a proxy
+  carrying the chat's hosts. A `--file` or `--dotenv` file is kept in the vaults folder, which
+  every chat is denied, and only that command is given back a read of it. The command leads a
+  process group of its own: everything it started that stayed in that group is killed when it
+  ends or when the chat goes away. A process that leaves the group on purpose, such as a daemon,
+  is not. A chat may
+  have four such runs at once. Output streams back with each value's literal text masked, even
+  under `--stream` and `--exec`, then the exit status. stdin is passed through when it is not a
+  terminal.
+
+  **What it keeps from the chat, and what it does not.** It keeps out the vault's storage and its
+  provider's session, every vault not tagged for the chat's persona, and the credential file. It
+  does not keep the values out: the command is the chat's own choice, so a chat can obtain any
+  key of a vault tagged for its persona, for example by encoding it before printing. Masking
+  matches a value's literal text only. Prefer `--file` to `--env` for a command that can read
+  its credential from a file: an environment variable is readable by the same user through `ps
+  eww` while the command runs. Linux has no such sandbox yet (#1040), so there the app refuses.
 - **`secret list <vault>`** prints the key names.
 - **`secret get <vault> <key>`** prints a size band and a keyed fingerprint —
   `devops/API_TOKEN: present · 16–31 bytes · fp:9c41a0b7e5d2` — never the value. The

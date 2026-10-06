@@ -280,6 +280,10 @@ impl Io for Console {
     fn read_hidden(&mut self, prompt: &str) -> String {
         purlis_core::secrets::tty::read_hidden(prompt).unwrap_or_default()
     }
+
+    fn stdin_stream(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        Some(Box::new(std::io::stdin()))
+    }
 }
 
 /// The prefixes whose trailing `-- <command…>` is the child's, untouched —

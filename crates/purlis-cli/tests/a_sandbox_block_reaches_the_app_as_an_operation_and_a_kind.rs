@@ -36,12 +36,13 @@ fn hook_in(word: &str, payload: &serde_json::Value, sandboxed: bool) -> Heard {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(7).expect("a token");
+    let token = listener.tokens().issue_to_this_process(7).expect("a token");
     let (tools, heard_tool) = mpsc::channel();
     let tools = Mutex::new(tools);
     let (blocks, heard_block) = mpsc::channel();
     let blocks = Mutex::new(blocks);
     let _reading = listener.hear(Hearing {
+        secret_exec: Box::new(|_, _, writer| purlis_core::secrets::brokered::not_answered(writer)),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
         noticed: Box::new(|_| {}),

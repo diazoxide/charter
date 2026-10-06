@@ -40,10 +40,13 @@ impl Chat {
         hooks.write(Path::new(CHARTER)).unwrap();
         let socket = root.join("app").join("hooks.sock");
         let listener = Listener::bind(&root, &socket).expect("a socket");
-        let token = listener.tokens().issue(7).expect("a token");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
         let (tx, heard) = mpsc::channel();
         let tx = Mutex::new(tx);
         let reading = listener.hear(Hearing {
+            secret_exec: Box::new(|_, _, writer| {
+                purlis_core::secrets::brokered::not_answered(writer)
+            }),
             blocked: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             each: Box::new(|_| Ok(())),

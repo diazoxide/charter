@@ -24,6 +24,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+pub mod brokered;
 pub mod cmd;
 pub mod dotenv;
 pub mod exec;

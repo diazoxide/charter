@@ -235,11 +235,38 @@ impl SessionHost for Sessions {
             self.forget_token(id);
             err.to_string()
         })?;
+        // Its program, which every line for the chat must come from or from inside
+        // (D-1407-6): its token alone can be read by any process of this user on macOS. Recorded
+        // by pid and by when that process started, so a later process given the number speaks
+        // for nothing. A program that cannot be read so has no line read.
+        let pid = session.program().process_id();
+        if let (Some(reporting), Some(pid)) = (&self.reporting, pid) {
+            match confirmed(pid) {
+                Some(program) => reporting.tokens.bind(id, program),
+                None => tracing::warn!(
+                    "purlis: chat {id}'s program (pid {pid}) could not be confirmed as it \
+                     started, so none of its lines will be read until it is restarted"
+                ),
+            }
+        }
 
         // No hook reports a program dying, and none can — the process is gone. This is the
-        // operating system telling the app, not charter reading a screen (ADR 0018).
-        if let Some(tell) = lock(&self.ended).clone() {
-            session.when_it_ends(Box::new(move |exit| tell(id, exit)));
+        // operating system telling the app, not charter reading a screen (ADR 0018). Its token
+        // and its program are forgotten with it: the tab stays, and nothing speaks for it.
+        let tell = lock(&self.ended).clone();
+        let tokens = self
+            .reporting
+            .as_ref()
+            .map(|reporting| Arc::clone(&reporting.tokens));
+        if tell.is_some() || tokens.is_some() {
+            session.when_it_ends(Box::new(move |exit| {
+                if let (Some(tokens), Some(pid)) = (&tokens, pid) {
+                    tokens.program_ended(id, pid);
+                }
+                if let Some(tell) = &tell {
+                    tell(id, exit);
+                }
+            }));
         }
         lock(&self.running).insert(
             id,
@@ -491,6 +518,23 @@ pub(crate) fn alive(pid: u32) -> bool {
 /// still the sessions that are running.
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The program `pid`, read with when it started, retried a few times with a short backoff:
+/// a process table read once is a read that can fail, and an unconfirmed program leaves its
+/// chat's lines unread until it is restarted (D-1407-6).
+fn confirmed(pid: u32) -> Option<purlis_core::hookwire::Program> {
+    for (attempt, wait) in [0u64, 25, 100, 250].into_iter().enumerate() {
+        std::thread::sleep(std::time::Duration::from_millis(wait));
+        if let Some(program) = purlis_core::hookwire::Program::of(pid) {
+            return Some(program);
+        }
+        tracing::warn!(
+            "purlis: chat program {pid} could not be confirmed (attempt {})",
+            attempt + 1
+        );
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1453,15 +1497,25 @@ mod tests {
 
         assert_eq!(one.len(), 64, "{one:?}");
         assert_ne!(one, two, "two chats were given one token");
-        assert!(tokens.admits(first, Some(&one)));
-        assert!(tokens.admits(second, Some(&two)));
+        assert!(tokens.admits(first, Some(&one), sessions.process_id(first)));
+        assert!(tokens.admits(second, Some(&two), sessions.process_id(second)));
         assert!(
-            !tokens.admits(first, Some(&two)),
+            !tokens.admits(first, Some(&two), sessions.process_id(first)),
             "one chat's token spoke for another"
         );
         assert!(
-            !tokens.admits(second, Some(&one)),
+            !tokens.admits(second, Some(&one), sessions.process_id(second)),
             "one chat's token spoke for another"
+        );
+        // D-1407-6: the token alone is not enough. The app's own process holds it (as any
+        // process of this user on macOS can read it) and is not inside the chat.
+        assert!(
+            !tokens.admits(first, Some(&one), Some(std::process::id())),
+            "a chat's token, sent from outside the chat"
+        );
+        assert!(
+            !tokens.admits(first, Some(&one), sessions.process_id(second)),
+            "a chat's token, sent from inside another chat"
         );
     }
 
@@ -1469,10 +1523,12 @@ mod tests {
     fn a_closed_chats_token_is_no_longer_admitted() {
         let (sessions, tokens) = reporting();
         let (id, token) = token_of_a_chat(&sessions);
+        let program = sessions.process_id(id);
+        assert!(tokens.admits(id, Some(&token), program));
 
         sessions.close(id).expect("it closes");
 
-        assert!(!tokens.admits(id, Some(&token)));
+        assert!(!tokens.admits(id, Some(&token), program));
     }
 
     #[test]
@@ -1499,8 +1555,8 @@ mod tests {
 
         assert_eq!(again, id);
         assert_ne!(before, after);
-        assert!(tokens.admits(id, Some(&after)));
-        assert!(!tokens.admits(id, Some(&before)));
+        assert!(tokens.admits(id, Some(&after), sessions.process_id(id)));
+        assert!(!tokens.admits(id, Some(&before), sessions.process_id(id)));
     }
 
     #[test]

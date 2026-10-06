@@ -179,7 +179,22 @@ pub struct Hooks {
     /// Told each sandbox block a chat's hook found (#1338), once it is kept for `purlis doctor`
     /// — a slot filled after the fact, for `answering`'s reason.
     blocked: Arc<Mutex<Option<Blocks>>>,
+    /// Runs each brokered `secret exec` a sandboxed chat asks for (#1407) — a slot filled after
+    /// the fact, for `answering`'s reason: it needs the chat's record. Empty, the asker is told
+    /// nothing answers and runs the command itself.
+    secret_exec: Arc<Mutex<Option<SecretExecs>>>,
 }
+
+/// What runs a brokered `secret exec` (#1407): the ask, and the connection it is held on.
+pub type SecretExecs = Arc<
+    dyn Fn(
+            purlis_core::secrets::brokered::Ask,
+            Box<dyn std::io::BufRead + Send>,
+            Box<dyn std::io::Write + Send>,
+        ) + Send
+        + Sync
+        + 'static,
+>;
 
 /// What is told each sandbox block a chat's hook found, as the hook sent it.
 pub type Blocks = Arc<dyn Fn(purlis_core::hookwire::SandboxBlocked) + Send + Sync + 'static>;
@@ -444,6 +459,7 @@ impl Hooks {
             asks_told: Arc::new(Mutex::new(None)),
             touching: Arc::new(Mutex::new(None)),
             blocked: Arc::new(Mutex::new(None)),
+            secret_exec: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -472,7 +488,23 @@ impl Hooks {
         let asks_told: crate::asking::Telling = Arc::new(Mutex::new(None));
         let touching: Arc<Mutex<Option<Touches>>> = Arc::new(Mutex::new(None));
         let blocked: Arc<Mutex<Option<Blocks>>> = Arc::new(Mutex::new(None));
+        let secret_exec: Arc<Mutex<Option<SecretExecs>>> = Arc::new(Mutex::new(None));
         let reading = listener.hear(Hearing {
+            // A brokered `secret exec` (#1407), held on its connection while the command runs.
+            // Taken out of the lock before it runs, as an answer is.
+            secret_exec: {
+                let secret_exec = Arc::clone(&secret_exec);
+                Box::new(move |ask, reader, writer| {
+                    let runs = secret_exec
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone();
+                    match runs {
+                        Some(runs) => runs(ask, reader, writer),
+                        None => purlis_core::secrets::brokered::not_answered(writer),
+                    }
+                })
+            },
             // A sandbox block (#1338): kept for `purlis doctor`'s count, then handed on for the
             // chat's Notice. It holds an operation and a kind only, so keeping it keeps nothing
             // of what the chat ran. Taken out of the lock before it runs, as an answer is.
@@ -666,6 +698,7 @@ impl Hooks {
             asks_told,
             touching,
             blocked,
+            secret_exec,
         })
     }
 
@@ -811,6 +844,14 @@ impl Hooks {
         *self.blocked.lock().unwrap_or_else(PoisonError::into_inner) = Some(blocks);
     }
 
+    /// Who runs, from now on, each brokered `secret exec` a chat asks for (#1407).
+    pub fn exec_secrets_with(&self, runs: SecretExecs) {
+        *self
+            .secret_exec
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(runs);
+    }
+
     /// Who is told, from now on, each session record a chat says it saved (ADR 0064).
     pub fn when_saved(&self, saved: SavedHeard) {
         *self.saved.lock().unwrap_or_else(PoisonError::into_inner) = Some(saved);
@@ -855,7 +896,7 @@ impl Hooks {
         self.tokens
             .as_ref()
             .expect("the plane is listening")
-            .issue(chat)
+            .issue_to_this_process(chat)
             .expect("a token")
     }
 

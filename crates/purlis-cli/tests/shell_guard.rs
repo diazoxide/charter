@@ -135,7 +135,10 @@ fn a_harness_started_in_a_chats_shell_tells_the_app_where_it_was_started() {
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     let listener = Listener::bind(tab.dir.path(), &socket).expect("a socket");
-    let token = listener.tokens().issue(12).expect("a token");
+    let token = listener
+        .tokens()
+        .issue_to_this_process(12)
+        .expect("a token");
     let _reading = listener.each_answering_and_noticing(
         Box::new(|_| panic!("a harness started by hand is not a report")),
         Box::new(|_, _| panic!("a harness started by hand is not an ask")),

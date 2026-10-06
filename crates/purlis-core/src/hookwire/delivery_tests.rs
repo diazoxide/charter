@@ -23,6 +23,7 @@ fn call(chat: u32, id: &str) -> ToolCall {
 
 fn hearing(tool: Tooled) -> Hearing {
     Hearing {
+        secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
         blocked: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
@@ -56,7 +57,7 @@ fn a_line_the_host_takes_is_answered_only_once_its_hearer_has_recorded_it() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join(".charter/app/hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(1).expect("a token");
+    let token = listener.tokens().issue_to_this_process(1).expect("a token");
     let recorded = Arc::new(AtomicBool::new(false));
     let _reading = listener.hear(hearing({
         let recorded = Arc::clone(&recorded);
@@ -84,7 +85,7 @@ fn a_line_no_host_takes_is_spooled_under_the_next_number() {
     let token = {
         // A host issued the token and has gone, as an app that quit has.
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        listener.tokens().issue(2).expect("a token")
+        listener.tokens().issue_to_this_process(2).expect("a token")
     };
 
     let first = deliver_tool(&path, Some(&token), &call(2, "a")).expect("spooled");
@@ -102,7 +103,7 @@ fn a_host_that_does_not_say_it_took_the_line_in_time_has_it_spooled() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join(".charter/app/hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(3).expect("a token");
+    let token = listener.tokens().issue_to_this_process(3).expect("a token");
     let _reading = listener.hear(hearing(Box::new(|_| {
         std::thread::sleep(Duration::from_secs(1));
         Ok(())
@@ -124,7 +125,7 @@ fn a_line_the_host_could_not_record_is_spooled() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join(".charter/app/hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(6).expect("a token");
+    let token = listener.tokens().issue_to_this_process(6).expect("a token");
     // The event log's disk is full.
     let _reading = listener.hear(hearing(Box::new(|_| {
         Err(std::io::Error::other("no space left on the device"))
@@ -146,7 +147,7 @@ fn a_line_no_host_takes_outside_the_sandboxs_denial_is_lost_and_says_so() {
         .join("hooks.sock");
     let token = {
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        listener.tokens().issue(7).expect("a token")
+        listener.tokens().issue_to_this_process(7).expect("a token")
     };
 
     let lost = deliver_tool(&path, Some(&token), &call(7, "a"));
@@ -169,7 +170,7 @@ fn a_host_restart_during_a_busy_turn_loses_no_event() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join(".charter/app/hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
-    let token = listener.tokens().issue(5).expect("a token");
+    let token = listener.tokens().issue_to_this_process(5).expect("a token");
     let heard = Arc::new(Mutex::new(Vec::new()));
     let reading = listener.hear(hearing({
         let heard = Arc::clone(&heard);

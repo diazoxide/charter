@@ -188,6 +188,9 @@ struct Running {
     /// for as long as the chat is open (ADR 0067 §2). Dropped with it.
     #[allow(dead_code)]
     confinement: Option<purlis_core::sandbox::Confinement>,
+    /// What its sandbox was compiled to as it started, which a command run on its behalf is
+    /// held to (#1407); `None` for a chat started without one.
+    confines: Option<purlis_core::sandbox::Confines>,
 }
 
 /// A chat a launch could not start, as the window lists it (NO-3): by its id, which Retry now
@@ -1071,6 +1074,7 @@ impl Chats {
                 harness,
                 workspace,
                 confinement,
+                confines: sandbox.map(|applied| applied.confines().clone()),
             },
         );
         self.write_it_down();
@@ -1371,6 +1375,14 @@ impl Chats {
         if changed {
             self.write_it_down();
         }
+    }
+
+    /// What chat `session`'s sandbox was compiled to as it started (#1407), while it is open:
+    /// `None` for a chat that is not open or was started without a sandbox.
+    pub fn confines_of(&self, session: u32) -> Option<purlis_core::sandbox::Confines> {
+        lock(&self.open)
+            .get(&session)
+            .and_then(|running| running.confines.clone())
     }
 
     /// What is open, in the strip's order.
