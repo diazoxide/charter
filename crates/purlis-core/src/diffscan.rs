@@ -398,7 +398,10 @@ fn in_diff(diff: &str) -> Result<Read, String> {
                 added,
                 found.into_iter().map(|(leak, value, _)| (leak.rule, value)),
             );
-            if !secretshape::joins_the_next_line(added) {
+            // A blank added line inside a join is swallowed by it too, as TOML's line-ending
+            // backslash swallows every blank line up to the next that is not.
+            let blank = added.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\r'));
+            if !secretshape::joins_the_next_line(added) && !(blank && run.is_joining()) {
                 run.flush(&mut read);
             }
             at += 1;
@@ -483,6 +486,11 @@ impl Joined {
         self.starts.push((line, self.text.len()));
         self.text.push_str(added);
         self.seen.extend(seen);
+    }
+
+    /// Whether a line before the last one pushed joined it: the run is still open.
+    fn is_joining(&self) -> bool {
+        self.starts.len() > 1
     }
 
     /// What only the joined text shows, into `read`; then start again.
@@ -871,6 +879,26 @@ mod tests {
             &[&format!("{}\\ x", &token[..8]), &token[8..]],
         );
         assert_eq!(in_diff(&apart).unwrap().found, Vec::new());
+    }
+
+    #[test]
+    fn a_line_ending_backslash_with_blanks_after_it_joins_across_blank_lines() {
+        // TOML's line-ending backslash swallows the blanks after it on its line and every
+        // blank line up to the next that is not: the shape the train's CI found (#1315).
+        let token = crate::secretshape::escaped::token();
+        let first = format!("note = \"\"\"{}\\  ", &token[..8]);
+        let last = format!("    {}\"\"\"", &token[8..]);
+        let found = in_diff(&adding("deploy", &[&first, "", " \t", &last, "note = 1"]))
+            .unwrap()
+            .found;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].line, found[0].rule), (1, "forge-token"));
+        assert_eq!(found[0].fingerprint, scanallow::fingerprint(&token));
+        // A blank line with no join before it starts nothing.
+        let apart = in_diff(&adding("deploy", &["", &token[..8], &token[8..]]))
+            .unwrap()
+            .found;
+        assert_eq!(apart, Vec::new());
     }
 
     #[test]

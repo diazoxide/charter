@@ -694,7 +694,9 @@ fn joined_line_at(s: &str) -> Option<usize> {
 /// joins to the next line ([`joined_line_at`]). For a caller that reads a text a line at a
 /// time and has to know which lines read as one.
 pub fn joins_the_next_line(line: &str) -> bool {
-    line.trim_end_matches([' ', '\t', '\r']).ends_with('\\')
+    // The blanks [`joined_line_at`] passes over, then the `\r` of a `\r\n` break.
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    line.trim_end_matches([' ', '\t']).ends_with('\\')
 }
 
 /// The longest `\u{…}` this reads: six hex digits and the closing brace. Looking no further
