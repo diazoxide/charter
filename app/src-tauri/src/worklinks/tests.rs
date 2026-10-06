@@ -34,7 +34,11 @@ fn project() -> (tempfile::TempDir, PathBuf) {
 
 /// Chats on device `device`, on a host that runs nothing.
 fn chats_on(device: Option<&str>) -> Chats {
-    let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()));
+    let mut chats = Chats::on_host(
+        Box::new(|_| {}),
+        Box::new(Pretend::default()),
+        crate::chats::tests::no_project(),
+    );
     chats.on_device(device.map(str::to_owned));
     chats
 }

@@ -1505,9 +1505,7 @@ async fn retry_chat_that_did_not_start(
 ) -> Result<OpenChat, String> {
     let held = planes.held(&plane)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let session = held
-            .chats()
-            .retry(&id, held.root(), Size { columns, rows })?;
+        let session = held.chats().retry(&id, Size { columns, rows })?;
         drawn(&held, session)
     })
     .await

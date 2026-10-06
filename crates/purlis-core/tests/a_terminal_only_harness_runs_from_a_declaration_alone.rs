@@ -289,6 +289,34 @@ fn a_declared_harness_in_a_sandboxed_project_is_not_started_unconfined() {
 }
 
 #[test]
+fn a_declared_harness_in_a_project_whose_manifest_has_gone_or_is_unreadable_is_not_started() {
+    purlis_core::unsteered!();
+    // D-1410e: a manifest that has gone, or cannot be read, may have turned the sandbox on, so
+    // a harness with no compiled sandbox is refused there too, never started unconfined.
+    for (case, manifest, said) in [
+        ("gone", None, "is missing"),
+        (
+            "unreadable",
+            Some("[sandbox\nmode = "),
+            "cannot be read as TOML",
+        ),
+    ] {
+        let project = Project::new();
+        project.declares("shelly", SHELLY);
+        project.approve("shelly");
+        match manifest {
+            None => fs::remove_file(project.root().join("charter.toml")).unwrap(),
+            Some(text) => fs::write(project.root().join("charter.toml"), text).unwrap(),
+        }
+
+        let refused = start::ready(&project.start("shelly"), project.root())
+            .expect_err("not started unconfined");
+
+        assert!(refused.contains(said), "{case}: {refused}");
+    }
+}
+
+#[test]
 fn the_approval_dialog_shows_every_word_that_will_run_and_the_whole_digest() {
     purlis_core::unsteered!();
     let project = Project::new();

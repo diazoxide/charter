@@ -998,6 +998,22 @@ fn a_chat_in_a_plane_that_says_nothing_of_the_sandbox_starts_unsandboxed_as_befo
     assert_eq!(ready.sandbox, None);
 }
 
+#[test]
+fn a_chat_on_a_profile_in_a_project_whose_manifest_has_gone_is_not_started() {
+    purlis_core::unsteered!();
+    // D-1410e: a project with no manifest at its root cannot say whether it runs chats
+    // sandboxed, so the chat is refused rather than started unsandboxed.
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+    fs::remove_file(plane.root().join("charter.toml")).unwrap();
+
+    let refused = start::ready(&plane.start("work"), plane.root()).expect_err("not started");
+
+    assert!(refused.contains("is missing"), "{refused}");
+    assert!(!plane.root().join("ran").exists(), "the harness ran");
+}
+
 /// The plane's own stand-in harness, in a folder no chat may write. A sandboxed start refuses a
 /// program anywhere a chat can write, the system temp folders included (ruling V87g).
 fn harness_outside(plane: &Plane, outside: &stand_in::NoChatWrites, program: &str) -> PathBuf {
