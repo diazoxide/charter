@@ -366,9 +366,8 @@ impl Held {
             .apply(&self.root, None);
     }
 
-    /// The plane's hook channel itself. Only a test asks: the app reads a chat's hook state
-    /// through [`Self::board`], and nothing else of the channel is its business.
-    #[cfg(test)]
+    /// The plane's hook channel itself. The app reads a chat's hook state through
+    /// [`Self::board`]; this is for a test, and for a sandbox grant's audit (#1342).
     pub fn hooks(&self) -> &Hooks {
         &self.hooks
     }
@@ -625,6 +624,46 @@ impl Held {
             self.chats.bring_to_front(Some(started));
         }
         Ok(started)
+    }
+
+    /// **Restarts chat `session` on its conversation to take a sandbox grant** (#1342, spike
+    /// #1347): the window asks once the chat's turn has ended. The new session takes the old
+    /// one's place, as [`Self::start_chat_fresh`]'s does, and the old one is ended once it has
+    /// started; a refused start leaves the old one running.
+    ///
+    /// Not while the chat waits on a permission prompt: its turn has not ended, and a restart
+    /// would answer the prompt for the person. `None` then, and the window asks again at the
+    /// chat's next move.
+    pub fn restart_chat_owed(&self, session: u32, size: Size) -> Result<Option<u32>, String> {
+        if self.asks().asks.iter().any(|ask| ask.session == session) {
+            return Ok(None);
+        }
+        let started = self.chats.restart_owed(session, size)?;
+        self.in_its_place(session, started);
+        Ok(Some(started))
+    }
+
+    /// **Starts chat `session` again without the sandbox** (#1342): the person's own choice on a
+    /// block's Notice that purlis grants nothing for, for this chat's next run only, and audited
+    /// as any opt-out is. In the old one's place, as [`Self::restart_chat_owed`]'s is.
+    pub fn restart_chat_without_sandbox(&self, session: u32, size: Size) -> Result<u32, String> {
+        let started = self.chats.restart_without_sandbox(session, size)?;
+        self.in_its_place(session, started);
+        Ok(started)
+    }
+
+    /// `started` takes chat `session`'s place: the old one ends, and the new one is in front
+    /// where the old one was.
+    fn in_its_place(&self, session: u32, started: u32) {
+        let in_front = self.chats.front() == Some(session);
+        if let Err(why) = self.close_chat(session) {
+            tracing::warn!(
+                "purlis: chat {session}, started again in its place, did not end cleanly ({why})"
+            );
+        }
+        if in_front {
+            self.chats.bring_to_front(Some(started));
+        }
     }
 
     /// A chat `session` handed work to, shown as `from`, has reported back to it — a needs-you

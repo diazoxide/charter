@@ -370,6 +370,38 @@ export const commands = {
 	 */
 	fileSandboxBlockReport: (operation: string, kind: string, harness: string | null, digest: string) => typedError<string, string>(__TAURI_INVOKE("file_sandbox_block_report", { operation, kind, harness, digest })),
 	/**
+	 *  **Allow** on a block's Notice (#1342): `target` is the host or folder the Notice showed whole
+	 *  (or the person typed). The window then restarts the chat once its turn has ended
+	 *  (`restart_chat_for_grant`).
+	 */
+	allowSandboxBlock: (plane: PlaneId, session: number, what: GrantWhat, target: string, level: GrantLevel) => typedError<Allowed, string>(__TAURI_INVOKE("allow_sandbox_block", { plane, session, what, target, level })),
+	/**  Every grant in force here, for Settings' Granted list (#1348). */
+	sandboxGrants: (plane: PlaneId) => typedError<SandboxGrant[], string>(__TAURI_INVOKE("sandbox_grants", { plane })),
+	/**
+	 *  **Revoke** on Settings' Granted list (#1348): the grant called `id` is taken out of every
+	 *  later start, and audited. Answers the list as it is now.
+	 */
+	revokeSandboxGrant: (plane: PlaneId, id: string) => typedError<SandboxGrant[], string>(__TAURI_INVOKE("revoke_sandbox_grant", { plane, id })),
+	/**
+	 *  The chats of this project owed a restart to take a grant (#1342), for the window that drives
+	 *  it once each one's turn has ended.
+	 */
+	owedRestarts: (plane: PlaneId) => typedError<number[], string>(__TAURI_INVOKE("owed_restarts", { plane })),
+	/**
+	 *  The folders you listed as ones chats in this project may be granted (D-1342-10), each as it
+	 *  was resolved; and each one dropped from the list now because it no longer resolves to itself
+	 *  (it, or a folder above it, was swapped for a link since: R8), for Settings to say.
+	 */
+	grantableFolders: (plane: PlaneId) => typedError<GrantableFolders, string>(__TAURI_INVOKE("grantable_folders", { plane })),
+	/**
+	 *  Lists `folder` as one chats here may be granted (D-1342-10), this machine only: every refusal
+	 *  a write grant makes, but the allowlist it adds to. Answers the list as it is now, and what
+	 *  the folder holds that later code is loaded from, for the warning Settings shows.
+	 */
+	listGrantableFolder: (plane: PlaneId, folder: string) => typedError<GrantableListed, string>(__TAURI_INVOKE("list_grantable_folder", { plane, folder })),
+	/**  Takes `folder` off the folders chats here may be granted. Answers the list as it is now. */
+	unlistGrantableFolder: (plane: PlaneId, folder: string) => typedError<string[], string>(__TAURI_INVOKE("unlist_grantable_folder", { plane, folder })),
+	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
 	 *  a workspace named after it, and the plane is opened **through the trust gate**, exactly as
@@ -500,6 +532,21 @@ export const commands = {
 	 *  as the window draws it; the old one is ended once the new one has started.
 	 */
 	restartChat: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("restart_chat", { plane, session, columns, rows })),
+	/**
+	 *  **Restarts chat `session` to take a sandbox grant** (#1342): the same chat on its
+	 *  conversation, started again with what it was granted compiled in and told, as its first
+	 *  message, what was allowed. The window asks once the chat's turn has ended; a chat owed
+	 *  nothing is refused, and one waiting on a permission prompt is not restarted yet. The answer
+	 *  is the new one as the window draws it, in the old one's place.
+	 */
+	restartChatForGrant: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<GrantRestart, string>(__TAURI_INVOKE("restart_chat_for_grant", { plane, session, columns, rows })),
+	/**
+	 *  **Starts chat `session` again without the sandbox** (#1342): the person's choice on a block's
+	 *  Notice that purlis grants nothing for, for this one chat's next run, on its conversation.
+	 *  Audited as any opt-out is (`trust.sandbox.off`) and never inherited: a later start of the
+	 *  chat is sandboxed again.
+	 */
+	restartChatWithoutSandbox: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("restart_chat_without_sandbox", { plane, session, columns, rows })),
 	/**
 	 *  Every chat this plane has open that is running on instructions the plane has changed since
 	 *  it started (charter#369): its tab is marked, and the mark names the files. The window asks
@@ -1794,6 +1841,14 @@ export type AlertWay =
 { kind: "saving" };
 
 /**
+ *  What allowing a block answered (#1342): the sentence the Notice says. The chat is then owed
+ *  a restart on its conversation, which the window asks for once its turn has ended.
+ */
+export type Allowed = {
+	said: string,
+};
+
+/**
  *  One memory in a store's `archive/`, as the window's archive tab lists it and reads it
  *  (KN-4): read-only, so it carries no text to check a save against.
  */
@@ -1862,6 +1917,25 @@ export type AtRisk = {
 	/**  charter's own sentence about it, name included: `svc: 2 unpushed commit(s)`. */
 	said: string,
 };
+
+/**  What a block's Notice offers (#1342). */
+export type BlockOffer = 
+/**  Allow a host. */
+"host" | 
+/**  Allow a folder to write. */
+"write" | 
+/**  Never granted, and there is a way that works: [`ChatBlocked::route`] says it. */
+"brokered" | 
+/**
+ *  Not something purlis grants a chat (off the allowlist, a local socket): the person may
+ *  start this chat again without the sandbox; [`ChatBlocked::route`] says why.
+ */
+"unsandboxed" | 
+/**
+ *  Nothing to allow: purlis's own operation (a bug to report), or a block with nothing a
+ *  grant could name.
+ */
+"none";
 
 /**
  *  **A Report of a sandbox block of purlis's own** (#1338), as the window shows it before
@@ -2000,8 +2074,9 @@ export type ChangeMember = {
 
 /**
  *  A sandbox block, as the window shows it on the chat's tab (#1338): an operation and the kind
- *  of path or host, by their fixed words, and the sentence purlis says about them. **No path,
- *  argument, host or output**: the hook kept none of it.
+ *  of path or host, by their fixed words, and the sentence purlis says about them; and what the
+ *  Notice can offer for it (#1342): Allow for a host or a folder, with what it would name, or
+ *  the way that works for what is never granted. **No argument or output**.
  */
 export type ChatBlocked = {
 	plane: PlaneId,
@@ -2019,6 +2094,19 @@ export type ChatBlocked = {
 	harness: string | null,
 	/**  What was blocked, as a sentence names it: "a write to the project's own files". */
 	said: string,
+	/**  What the Notice offers (#1342). */
+	offer: BlockOffer,
+	/**
+	 *  What Allow would name, shown whole before anyone presses it: the host the report named,
+	 *  or the folder a refused write was in. Null for a host the report did not name, which the
+	 *  person types. The app checks it again before anything is granted.
+	 */
+	target: string | null,
+	/**
+	 *  For [`BlockOffer::Brokered`], the way that works instead; for
+	 *  [`BlockOffer::Unsandboxed`], why purlis grants nothing here.
+	 */
+	route: string | null,
 };
 
 /**
@@ -2682,6 +2770,46 @@ export type GoneProject = {
 	path: string,
 	/**  The line the window draws: the path, short, and why it is gone. */
 	said: string,
+};
+
+/**  Who a grant is for, as the window sends it ([`sandbox::grant::Level`]). */
+export type GrantLevel = 
+/**  This chat, while the app holds it. */
+"chat" | 
+/**  Every chat of this project on this machine. */
+"you" | 
+/**  Everyone in the project: committed. A host only. */
+"project";
+
+/**
+ *  What a restart for a sandbox grant answered (#1342): the chat in its new run, or, while it
+ *  waits on a permission prompt, why it is not restarted yet.
+ */
+export type GrantRestart = {
+	chat: OpenChat | null,
+	not_yet: string | null,
+};
+
+/**  What a grant names, as the window sends it. */
+export type GrantWhat = 
+/**  A host to reach. */
+"host" | 
+/**  A folder to write, and everything in it. */
+"write";
+
+/**  The folders chats may be granted, and those just dropped from the list. */
+export type GrantableFolders = {
+	folders: string[],
+	dropped: string[],
+};
+
+/**
+ *  The folders chats may be granted once one was listed, and what the one listed holds that
+ *  later code is loaded from, outside any sandbox: what Settings warns of.
+ */
+export type GrantableListed = {
+	folders: string[],
+	holds: string[],
 };
 
 /**
@@ -4357,6 +4485,27 @@ export type SandboxAhead = {
 	 *  refusal is a program this machine is missing and charter knows its distribution.
 	 */
 	install: string | null,
+};
+
+/**  One grant, as Settings' Granted list shows it (#1348). */
+export type SandboxGrant = {
+	/**  What Revoke is sent by. */
+	id: string,
+	what: GrantWhat,
+	/**  The host or the folder. */
+	target: string,
+	level: GrantLevel,
+	/**
+	 *  Who committed it, for one the project carries; null for one you granted, or one the
+	 *  project's file holds that is not committed yet.
+	 */
+	by: string | null,
+	/**  When, in seconds since 1970, where that is known. */
+	at: number | null,
+	/**  The chat it was granted from, where it came from one. */
+	chat: string | null,
+	/**  Why a policy locks it out, where one does. */
+	locked: string | null,
 };
 
 /**  What the project view says about the sandbox. */

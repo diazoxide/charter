@@ -65,6 +65,9 @@ pub struct Start {
     /// them (#1362, D-1362-5): the app's record of the asking chat, never the request. `None`
     /// for every other start, which holds its own persona's.
     pub held: Option<crate::reopen::HeldGrants>,
+    /// What a person let this one chat do past its project's sandbox, from a block's Notice
+    /// (#1342): held by the app for that chat alone, and empty for every other start.
+    pub grants: crate::sandbox::grant::Grants,
 }
 
 /// **The persona grants the recorded chat `chat` runs with** in the project at `root`: what
@@ -313,7 +316,7 @@ pub fn ready_on(
     // with no backend, starts it unsandboxed instead, and the tab says so for the chat's whole
     // life (§7).
     let (sandbox, unsandboxed) = match harness {
-        Some(harness) => match crate::sandbox::decide(
+        Some(harness) => match crate::sandbox::decide_granted(
             harness,
             root,
             machine,
@@ -324,6 +327,7 @@ pub fn ready_on(
                 persona_for_a_new_chat(root)
             })
             .as_deref(),
+            &start.grants,
         )
         .map_err(|refused| refused.to_string())?
         {

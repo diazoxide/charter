@@ -1014,6 +1014,10 @@ pub fn hosts(presets: &[Preset], plane: &Plane) -> Vec<String> {
 pub struct Compiled {
     pub denied: Denied,
     pub hosts: Vec<String>,
+    /// The folders a person let this chat write besides its own and the temp folders (#1342):
+    /// its own grants and yours ([`grant`]), each judged again as it is compiled. Every compiler
+    /// puts its denials after them, so a class still wins inside one.
+    pub writable: Vec<PathBuf>,
     pub os: Os,
     /// Where a harness keeps its own files on this machine, for a compiler that has to let the
     /// whole harness write them ([`opencode`]).
@@ -1175,18 +1179,40 @@ impl Compiled {
         machine: &Machine,
         persona: Option<&str>,
     ) -> Self {
-        let denied = Denied::of(root, machine);
+        Self::granted(
+            policy,
+            plane,
+            root,
+            machine,
+            persona,
+            &grant::Grants::default(),
+        )
+    }
+
+    /// [`Self::of`], with what a person let this one chat do besides (#1342): `chat`'s hosts,
+    /// after the project's and this machine's and held to the same locks; and the folders it and
+    /// you may write, each judged again here ([`grant::still_grantable`]), so a grant a denial
+    /// class has since come to cover grants nothing.
+    pub fn granted(
+        policy: &Policy,
+        plane: &Plane,
+        root: &Path,
+        machine: &Machine,
+        persona: Option<&str>,
+        chat: &grant::Grants,
+    ) -> Self {
         let mut reached = hosts(&policy.egress, plane);
         let personas = persona::of(&policy.personas, persona)
             .map(|grants| grants.hosts.as_slice())
             .unwrap_or_default();
+        let mut personal = hosts::personal(root);
+        for host in &chat.hosts {
+            if !personal.contains(host) {
+                personal.push(host.clone());
+            }
+        }
         let granted = hosts::off_this_machine(
-            hosts::in_force(
-                &policy.hosts,
-                &hosts::personal(root),
-                personas,
-                &hosts::Locks::of(root),
-            ),
+            hosts::in_force(&policy.hosts, &personal, personas, &hosts::Locks::of(root)),
             &hosts::own_addresses(),
         );
         for one in granted {
@@ -1195,10 +1221,16 @@ impl Compiled {
                 reached.push(spelled);
             }
         }
+        let denied = Denied::of(root, machine);
+        let mut writes = chat.writes.clone();
+        writes.extend(local::granted_writes(root));
+        let writable =
+            grant::still_grantable(&writes, &grant::Ground::of(root, root, machine).place());
         Self {
             widened: Widened::of(policy, machine, root, &denied),
             denied,
             hosts: reached,
+            writable,
             os: machine.os,
             homes: Homes {
                 codex_project: Homes::codex_project(machine, root),
@@ -1510,6 +1542,7 @@ pub fn never_on(harness: Harness, os: Os) -> Option<String> {
     let nothing = Compiled {
         denied: Denied::default(),
         hosts: Vec::new(),
+        writable: Vec::new(),
         os,
         homes: Homes::default(),
         widened: Widened::default(),
@@ -1951,7 +1984,7 @@ pub fn for_start(
     machine: &Machine,
     has: &dyn Fn(&str) -> bool,
 ) -> Result<Option<Applied>, NotStarted> {
-    for_start_as(harness, root, machine, has, None)
+    for_start_granted(harness, root, machine, has, None, &grant::Grants::default())
 }
 
 /// [`for_start`] for a chat running as `persona`, which adds the persona's own grants (#1362).
@@ -1961,6 +1994,26 @@ pub fn for_start_as(
     machine: &Machine,
     has: &dyn Fn(&str) -> bool,
     persona: Option<&str>,
+) -> Result<Option<Applied>, NotStarted> {
+    for_start_granted(
+        harness,
+        root,
+        machine,
+        has,
+        persona,
+        &grant::Grants::default(),
+    )
+}
+
+/// [`for_start_as`], for a chat a person let do `chat` besides (#1342): compiled in by
+/// [`Compiled::granted`].
+pub fn for_start_granted(
+    harness: Harness,
+    root: &Path,
+    machine: &Machine,
+    has: &dyn Fn(&str) -> bool,
+    persona: Option<&str>,
+    chat: &grant::Grants,
 ) -> Result<Option<Applied>, NotStarted> {
     // One spelling of the plane for every harness: the kernel's.
     let real_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -1983,7 +2036,7 @@ pub fn for_start_as(
     if let Some(missing) = backend::missing(machine.os, has) {
         return Err(NotStarted::NoBackend(missing));
     }
-    let compiled = Compiled::of(&policy, &plane, root, machine, persona);
+    let compiled = Compiled::granted(&policy, &plane, root, machine, persona, chat);
     applied_of(harness, compile, &compiled, root, machine).map(Some)
 }
 
@@ -2228,6 +2281,27 @@ pub fn decide(
     opt_out: Option<&OptOut>,
     persona: Option<&str>,
 ) -> Result<Option<Decided>, NotStarted> {
+    decide_granted(
+        harness,
+        root,
+        machine,
+        has,
+        opt_out,
+        persona,
+        &grant::Grants::default(),
+    )
+}
+
+/// [`decide`], for a chat a person let do `chat` besides (#1342).
+pub fn decide_granted(
+    harness: Harness,
+    root: &Path,
+    machine: &Machine,
+    has: &dyn Fn(&str) -> bool,
+    opt_out: Option<&OptOut>,
+    persona: Option<&str>,
+    chat: &grant::Grants,
+) -> Result<Option<Decided>, NotStarted> {
     // A file that cannot be read may say `[sandbox]`, so it never reads as "not set", and nor
     // does one that has gone (D-1410e): each falls through to a refusal below, which the
     // opt-out sits inside.
@@ -2250,7 +2324,7 @@ pub fn decide(
     if plane.missing() {
         return Err(NotStarted::PlaneMissing);
     }
-    for_start_as(harness, root, machine, has, persona)
+    for_start_granted(harness, root, machine, has, persona, chat)
         .map(|applied| applied.map(Decided::Sandboxed))
 }
 
@@ -2355,6 +2429,7 @@ pub mod caches;
 pub mod claude;
 pub mod codex;
 pub mod egress;
+pub mod grant;
 pub mod hosts;
 pub mod local;
 pub mod opencode;

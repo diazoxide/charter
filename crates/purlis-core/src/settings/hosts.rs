@@ -310,6 +310,50 @@ fn seen_by_you(root: &Path, which: Which, pending: bool) {
     }
 }
 
+/// One refusal as a sentence: each field's, then the file's.
+fn said(refusal: Refusal) -> String {
+    refusal
+        .fields
+        .into_iter()
+        .map(|one| one.why)
+        .chain(refusal.file)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The text of `which` at `root` as it is on disk now: what a grant from a Notice writes
+/// against (`None`: not there).
+fn now(root: &Path, which: Which) -> Result<Option<String>, String> {
+    super::on_disk(root, which).map(|(there, text)| there.then_some(text))
+}
+
+/// **Grants `host` from a block's Notice** (#1342): [`add`] against `which` as it is on disk
+/// now, so the project's hosts or yours gain it by the same rules Settings' Add keeps (yours
+/// confirmed on this machine as it is added). Answers why not, in a sentence.
+pub fn grant(root: &Path, which: Which, host: &Host) -> Result<(), String> {
+    let base = now(root, which)?;
+    add(root, which, base.as_deref(), &host.to_string())
+        .map(|_| ())
+        .map_err(said)
+}
+
+/// **Revokes `host`** at `which`'s level (#1348): [`remove`] of every entry naming it, against
+/// the file as it is on disk now. Answers why not, in a sentence.
+pub fn revoke(root: &Path, which: Which, host: &Host) -> Result<(), String> {
+    loop {
+        let base = now(root, which)?;
+        let text = base.clone().unwrap_or_default();
+        let Some(entry) = listed(&text).into_iter().find(|one| {
+            one.values.iter().any(|(field, value)| {
+                *field == "host" && Host::parse(value).ok().as_ref() == Some(host)
+            })
+        }) else {
+            return Ok(());
+        };
+        remove(root, which, base.as_deref(), &entry.id).map_err(said)?;
+    }
+}
+
 #[cfg(test)]
 #[path = "hosts_tests.rs"]
 mod tests;

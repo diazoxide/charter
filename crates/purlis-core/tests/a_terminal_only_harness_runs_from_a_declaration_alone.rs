@@ -74,6 +74,7 @@ impl Project {
             resuming: None,
             without_sandbox: None,
             held: None,
+            grants: Default::default(),
         }
     }
 }

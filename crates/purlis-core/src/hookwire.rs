@@ -1179,8 +1179,8 @@ pub type Touched = Box<dyn Fn(Touching) + Send + Sync + 'static>;
 /// **Neither a report nor an ask, and it moves no chat.** A tool hook that runs outside the
 /// sandbox read the block in the harness's own report of the tool's result and sorted it
 /// ([`crate::sandboxblock::detect`]); this carries only that sort: an operation, a kind, and
-/// whether it was purlis's own. No path, argument, host or output is on the line, so there is
-/// nothing on it to keep out of a record.
+/// whether it was purlis's own; and, for a block a person could grant (#1342), the host or
+/// path it would name ([`Self::target`]). No argument or output is on the line.
 ///
 /// Sent once, and never spooled ([`tell_blocked`]): a block the app did not take is one nobody
 /// was shown, and the count is of what the app heard. Anything holding the chat's token can send
@@ -1195,6 +1195,13 @@ pub struct SandboxBlocked {
     /// The harness, by the word the project calls it ([`HARNESS_ENV`]), when the chat says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// What a grant would name, for the Notice's Allow (#1342,
+    /// [`crate::sandboxblock::detect_with_targets`]): a host, or a whole path. Held by the app in
+    /// memory for the Notice and checked again before anything is granted; never kept with the
+    /// block, counted or reported. A chat can send any, which buys only a Notice asking the
+    /// person on its own tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 /// What hears a brokered `secret exec` ([`crate::secrets::brokered`]): the ask, and its
@@ -4122,6 +4129,7 @@ mod tests {
                 ours: true,
             },
             harness: Some("claude".to_owned()),
+            target: None,
         };
         let line = serde_json::to_string(&blocked).unwrap();
         assert_eq!(

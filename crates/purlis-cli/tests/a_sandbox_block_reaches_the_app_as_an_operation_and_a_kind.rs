@@ -97,7 +97,15 @@ fn holds_nothing_of_the_call(heard: &Heard) {
     let mut lines: Vec<String> = heard
         .blocked
         .iter()
-        .map(|one| serde_json::to_string(one).unwrap())
+        // What a grant would name is the one thing a block carries of the call (#1342), and
+        // only for the Notice's Allow: everything else on the line names nothing.
+        .map(|one| {
+            serde_json::to_string(&SandboxBlocked {
+                target: None,
+                ..one.clone()
+            })
+            .unwrap()
+        })
         .collect();
     lines.extend(
         heard
@@ -147,6 +155,7 @@ fn a_violation_of_the_purlis_process_is_purlis_own_and_one_of_gh_is_not() {
                     ours: true,
                 },
                 harness: Some("claude".to_owned()),
+                target: None,
             },
             SandboxBlocked {
                 chat: 7,
@@ -157,6 +166,7 @@ fn a_violation_of_the_purlis_process_is_purlis_own_and_one_of_gh_is_not() {
                     ours: false,
                 },
                 harness: Some("claude".to_owned()),
+                target: None,
             },
         ]
     );
@@ -189,6 +199,11 @@ fn a_command_that_came_back_with_a_refusal_on_stderr_is_a_block_of_the_chats_own
             kind: Kind::ToolchainCache,
             ours: false,
         }]
+    );
+    // A write a person could grant carries its path, for the Notice's Allow (#1342).
+    assert_eq!(
+        heard.blocked[0].target.as_deref(),
+        Some(format!("/Users/dev/.cargo/registry/{CANARY}").as_str())
     );
     holds_nothing_of_the_call(&heard);
 }
