@@ -50,6 +50,9 @@ pub const TOKEN_ENV: &str = "PURLIS_CHAT_TOKEN";
 /// Set to `1` in the environment of a chat the app actually started under a sandbox, and in no
 /// other (#1338, #1345). Read through [`crate::sandbox::chat_is_sandboxed`]. The app sets it at
 /// the launch, so a chat's own shell cannot claim it for the harness the hooks run under.
+/// Never inherited ([`NOT_INHERITED`]), and nor is the chat's folder
+/// ([`crate::sandboxblock::CHAT_DIR_ENV`]): an app started from a chat's shell does not hand
+/// either on to the chats it starts.
 pub const SANDBOXED_ENV: &str = "PURLIS_SANDBOXED";
 
 /// Where Claude Code puts the conversation a hook is running in.
@@ -100,6 +103,8 @@ pub const NOT_INHERITED: &[&str] = &[
     crate::active::PLANE_ROOT_ENV,
     TOKEN_ENV,
     crate::noterminal::RELAUNCHED_ENV,
+    SANDBOXED_ENV,
+    crate::sandboxblock::CHAT_DIR_ENV,
 ];
 
 /// Which conversation a report is of, and how well that is known.
@@ -2019,6 +2024,8 @@ mod tests {
         assert!(NOT_INHERITED.contains(&crate::active::PLANE_ROOT_ENV));
         // Nor the launcher's own chat token: a chat is given its own at the `exec`.
         assert!(NOT_INHERITED.contains(&TOKEN_ENV));
+        assert!(NOT_INHERITED.contains(&SANDBOXED_ENV));
+        assert!(NOT_INHERITED.contains(&crate::sandboxblock::CHAT_DIR_ENV));
         assert!(NOT_INHERITED.contains(&crate::noterminal::RELAUNCHED_ENV));
         // charter's own two are set per session, after these are removed, so they are not
         // here — removing them would remove what the app just put in.

@@ -2451,6 +2451,8 @@ mod tests {
         };
         assert_eq!(named("NO_PROXY"), [""]);
         assert_eq!(named("ZZ_KEPT"), ["yes"]);
+        // The word the chat's own processes read for "this chat was given a sandbox" (#1345).
+        assert_eq!(named(purlis_core::hookwire::SANDBOXED_ENV), ["1"]);
         let tmp = named("TMPDIR");
         assert!(tmp.len() == 1 && tmp[0] != "/zz", "{tmp:?}");
         let proxy = match named("HTTPS_PROXY").as_slice() {
@@ -2470,6 +2472,40 @@ mod tests {
             std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
             "the proxy outlived its chat"
         );
+    }
+
+    #[test]
+    fn a_chat_started_without_a_sandbox_is_never_told_it_has_one() {
+        // #1345: what a chat says about "this chat's sandbox" is read from this word, so a
+        // chat the app started unsandboxed must not carry it, even in a sandboxed project.
+        let plane = a_sandboxed_plane();
+        let host = Pretend::default();
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let ready = purlis_core::start::Ready {
+            sandbox: None,
+            env: vec![(
+                purlis_core::hookwire::SANDBOXED_ENV.to_owned(),
+                "1".to_owned(),
+            )],
+            ..ready_under(Harness::ClaudeCode, a_claude_sandbox(plane.path()))
+        };
+        let chat = Chat {
+            cwd: Some(plane.path().to_path_buf()),
+            ..chat("/bin/sh", "c", None)
+        };
+
+        let session = chats.start_ready(&chat, &ready, SIZE).expect("starts");
+
+        let opening = host.openings().pop().expect("opened");
+        assert!(
+            !opening
+                .env
+                .iter()
+                .any(|(key, _)| key == purlis_core::hookwire::SANDBOXED_ENV),
+            "{:?}",
+            opening.env
+        );
+        chats.close(session).expect("closed");
     }
 
     /// A plane that turned the sandbox on.

@@ -1579,7 +1579,8 @@ pub fn unrecorded_fix(plane: &Path, tree: &Path, where_: &str) -> String {
 /// operator. Anything else is its number, which is what charter prints for an errno its own
 /// table does not hold.
 fn errno_name(e: &std::io::Error) -> String {
-    let Some(code) = e.raw_os_error() else {
+    // Under a write's rewording, the errno it failed with (#1345).
+    let Some(code) = crate::rewrite::os_cause(e).raw_os_error() else {
         return "None".to_owned();
     };
     match code {
@@ -1610,7 +1611,7 @@ fn errno_name(e: &std::io::Error) -> String {
 /// what charter does not do. The suffix is Rust's own fixed format, so taking it off is
 /// reading this crate's output rather than guessing at the OS's.
 fn strerror(e: &std::io::Error) -> String {
-    let said = e.to_string();
+    let said = crate::rewrite::os_cause(e).to_string();
     match said.rfind(" (os error ") {
         Some(at) if said.ends_with(')') => said[..at].to_owned(),
         _ => said,
@@ -2350,6 +2351,29 @@ mod tests {
         note_unrecorded(plane, &tree, None);
         assert_eq!(unrecorded_fix(plane, &tree, "that checkout"), "");
         assert_eq!(unrecorded_reason(plane, &tree), "");
+    }
+
+    #[test]
+    fn a_publish_a_sandbox_refused_is_still_recorded_as_eperm() {
+        // #1345 rewords an EPERM write to name its file; the note keeps the errno under it.
+        let dir = tempfile::tempdir().unwrap();
+        let plane = dir.path();
+        let tree = plane.join("workspaces").join("beta").join("svc");
+        std::fs::create_dir_all(&tree).unwrap();
+        let refused = crate::rewrite::refused_write(
+            std::io::Error::from_raw_os_error(1),
+            &tree.join(".git/info/exclude"),
+            true,
+        );
+
+        note_unrecorded(plane, &tree, Some(&refused));
+
+        let reason = unrecorded_reason(plane, &tree);
+        assert!(reason.starts_with("EPERM: "), "{reason}");
+        assert!(
+            !reason.contains("sandbox"),
+            "the OS's own sentence: {reason}"
+        );
     }
 
     #[test]

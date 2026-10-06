@@ -1071,3 +1071,51 @@ fn a_keyring_vaults_note_that_its_items_were_moved_is_said_by_the_next_read_and_
     assert_eq!(get(&plane.ctx, "k", "tok", false, false, &mut again), 0);
     assert_eq!(again.said(), "");
 }
+
+#[test]
+fn a_list_that_names_no_vault_lists_the_vaults_and_says_how_to_list_one() {
+    // #1345: `purlis secret list` with no vault was a usage error.
+    let plane = Plane::new(&[]);
+    plane.plain("devops", json!({"API_TOKEN": "never-printed-3f9a"}));
+    let mut io = Rec::default();
+
+    assert_eq!(
+        list_or_vaults(&plane.ctx, None, &mut io),
+        0,
+        "{}",
+        io.said()
+    );
+
+    assert!(io.out().contains("devops"), "the vaults: {}", io.out());
+    assert!(
+        !io.out().contains("API_TOKEN"),
+        "keys only once a vault is named"
+    );
+    assert!(
+        io.said().contains("purlis secret list <vault>"),
+        "{}",
+        io.said()
+    );
+    assert!(!io.out().contains("never-printed-3f9a") && !io.said().contains("never-printed-3f9a"));
+}
+
+#[test]
+fn a_list_that_names_a_vault_lists_its_keys_as_before() {
+    let plane = Plane::new(&[]);
+    plane.plain("devops", json!({"API_TOKEN": "never-printed-3f9a"}));
+    let mut io = Rec::default();
+    assert_eq!(list_or_vaults(&plane.ctx, Some("devops"), &mut io), 0);
+    assert_eq!(io.out(), "API_TOKEN\n");
+}
+
+#[test]
+fn a_list_that_names_no_vault_where_there_are_none_says_one_sentence() {
+    let plane = Plane::new(&[]);
+    let mut io = Rec::default();
+    assert_eq!(list_or_vaults(&plane.ctx, None, &mut io), 0);
+    assert_eq!(
+        io.said(),
+        "info: No vaults configured. Add one: purlis vault add <name>"
+    );
+    assert_eq!(io.out(), "");
+}
