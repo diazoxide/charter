@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791280677205,
+  "lastUpdate": 1791286676086,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2940,6 +2940,48 @@ window.BENCHMARK_DATA = {
             "value": 105.736081,
             "unit": "ms",
             "extra": "median of 5 runs: 103.591, 104.126, 105.736, 106.055, 106.078 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d7721362c2c1d2a60c5aa7c3d9d0c4f8ff80a182",
+          "message": "tests: the sandbox block's Report may name the tracker it files on\n\nThe address guard (ADR 0083 §9) refused app/src-tauri/src/sandboxing.rs, which\n#1338 added: the Report dialog shows the repository it would file on and files\nthere through report::file on the person's press, as `purlis report` does\n(ADR 0059). It gains its allowance with that reason.\n\nRefs #1338\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T15:24:52+04:00",
+          "tree_id": "b75597403e636b8ad224b2d0a7283341d1631ef9",
+          "url": "https://github.com/purlis/purlis/commit/d7721362c2c1d2a60c5aa7c3d9d0c4f8ff80a182"
+        },
+        "date": 1791286675359,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.528253,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.512, 0.524, 0.528, 0.533, 0.552 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.198847,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.321, 17.015, 17.199, 17.319, 17.361 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.4774455,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.247, 103.486, 104.477, 104.713, 105.719 ms"
           }
         ]
       }
