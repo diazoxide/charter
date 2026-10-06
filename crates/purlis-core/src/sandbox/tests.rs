@@ -1178,6 +1178,71 @@ fn what_a_hooks_path_or_a_project_config_names_is_denied_to_every_harness_from_t
     }
 }
 
+/// Whether `denied` holds `path` as later code a chat may not write.
+fn denies_later_code(denied: &Denied, path: &std::path::Path) -> bool {
+    denied
+        .paths
+        .iter()
+        .any(|it| it.path == path && it.class == Class::LaterCode && it.access == Access::Write)
+}
+
+/// Gives the project at `plane` its own hook that runs `command`.
+fn hook_runs(plane: &std::path::Path, command: &str) {
+    std::fs::create_dir_all(plane.join(".claude")).expect(".claude");
+    let settings = serde_json::json!({"hooks": {"PreToolUse": [{"hooks": [
+        {"type": "command", "command": command}
+    ]}]}});
+    std::fs::write(
+        plane.join(".claude/settings.local.json"),
+        settings.to_string(),
+    )
+    .expect("settings");
+}
+
+#[test]
+fn a_later_letter_s_value_in_a_folder_chats_may_be_granted_is_denied() {
+    // D-T56-1: a folder you list as one chats may be granted (D-1342-10), outside the project
+    // and the home folder, is one a chat could be given to write; `-xI<there>` names it.
+    let plane = tempfile::tempdir().expect("a plane");
+    hook_runs(plane.path(), "cc -xI/opt/granted/inc/x.h a.c");
+    let want = std::path::Path::new("/opt/granted/inc/x.h");
+    assert!(!denies_later_code(
+        &Denied::of(plane.path(), &machine(Os::Linux)),
+        want
+    ));
+    local::list_grantable(plane.path(), std::path::Path::new("/opt/granted")).expect("listed");
+    let denied = Denied::of(plane.path(), &machine(Os::Linux));
+    assert!(denies_later_code(&denied, want), "{:?}", denied.paths);
+}
+
+#[test]
+fn a_later_letter_s_value_in_the_project_s_cache_home_is_denied() {
+    // D-T56-1: the project's cache home (#1337) is under purlis's data home, which
+    // `XDG_DATA_HOME` can move out of the home folder; a chat writes it.
+    let machine = Machine {
+        env: crate::secrets::Env::of(&[("XDG_DATA_HOME", "/srv/data")]),
+        home: Some(std::path::PathBuf::from("/home/op")),
+        os: Os::Linux,
+    };
+    let plane = tempfile::tempdir().expect("a plane");
+    let cache = caches::root_of(&machine, plane.path()).expect("a data home");
+    assert!(cache.starts_with("/srv/data"), "{cache:?}");
+    let want = cache.join("npm/x.awk");
+    hook_runs(plane.path(), &format!("gawk -bf{} data", want.display()));
+    assert!(!denies_later_code(
+        &Denied::of(
+            plane.path(),
+            &Machine {
+                env: crate::secrets::Env::of(&[]),
+                ..machine.clone()
+            }
+        ),
+        &want
+    ));
+    let denied = Denied::of(plane.path(), &machine);
+    assert!(denies_later_code(&denied, &want), "{:?}", denied.paths);
+}
+
 #[test]
 fn a_charter_toml_that_cannot_be_read_starts_no_chat_rather_than_one_unsandboxed() {
     // Absent `[sandbox]` is "not set", so a file charter cannot parse must not read as that.

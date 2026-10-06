@@ -880,11 +880,23 @@ impl Denied {
             .map(PathBuf::from)
             .filter(|dir| dir.is_absolute())
             .or_else(|| machine.home.as_ref().map(|home| home.join(".config")));
-        let (resolved, unread) =
-            match planted::resolved(root, machine.home.as_deref(), xdg_config.as_deref()) {
-                Ok(resolved) => (resolved, None),
-                Err(unread) => (Vec::new(), Some(unread)),
-            };
+        // Where else a chat could write, so a value split off a later letter there is still
+        // named (D-T56-1): every folder you list as one chats may be granted, which with the
+        // project holds every grant (D-1342-10), and the project's cache home (#1337), whether
+        // or not this chat is given it. Counting too many only names more, which fails closed.
+        let writable: Vec<PathBuf> = local::grantable_folders(root)
+            .into_iter()
+            .chain(caches::root_of(machine, root))
+            .collect();
+        let (resolved, unread) = match planted::resolved(
+            root,
+            machine.home.as_deref(),
+            xdg_config.as_deref(),
+            &writable,
+        ) {
+            Ok(resolved) => (resolved, None),
+            Err(unread) => (Vec::new(), Some(unread)),
+        };
         for it in resolved {
             paths.push(Denial {
                 class: Class::LaterCode,

@@ -266,11 +266,12 @@ pub fn scripts_named(
     project: &Path,
     dir: &Path,
     home: Option<&Path>,
+    writable: &[PathBuf],
 ) -> Result<Vec<Resolved>, Unread> {
     let mut found = Vec::new();
     for name in COMMAND_CONFIGS {
         if let Ok(text) = std::fs::read_to_string(dir.join(name)) {
-            found.extend(scripts_in(project, dir, name, &text, home)?);
+            found.extend(scripts_in(project, dir, name, &text, home, writable)?);
         }
     }
     Ok(found)
@@ -315,6 +316,7 @@ pub fn scripts_in(
     name: &str,
     text: &str,
     home: Option<&Path>,
+    writable: &[PathBuf],
 ) -> Result<Vec<Resolved>, Unread> {
     let value: Option<serde_json::Value> = if name.ends_with(".toml") {
         text.parse::<toml::Table>()
@@ -331,6 +333,7 @@ pub fn scripts_in(
         project,
         dir,
         home,
+        writable,
         file: dir.join(name),
         dir_text: dir.display().to_string(),
         found: Vec::new(),
@@ -403,6 +406,9 @@ struct Scan<'a> {
     project: &'a Path,
     dir: &'a Path,
     home: Option<&'a Path>,
+    /// The folders outside the project and the home folder a chat could still write: those
+    /// you list as ones chats may be granted, and the project's cache home (D-T56-1).
+    writable: &'a [PathBuf],
     file: PathBuf,
     dir_text: String,
     found: Vec<Resolved>,
@@ -599,11 +605,14 @@ impl Scan<'_> {
         out
     }
 
-    /// Whether the absolute `path` is in the project or the home folder: where a chat could
-    /// write it.
+    /// Whether the absolute `path` is where a chat could write it: in the project, the home
+    /// folder, a folder you list as one chats may be granted, or the project's cache home
+    /// (D-1356-7, D-T56-1). Counting too many only names more files, which fails closed.
     fn holds(&self, path: &str) -> bool {
         let path = lexical(Path::new(path));
-        path.starts_with(self.project) || self.home.is_some_and(|home| path.starts_with(home))
+        path.starts_with(self.project)
+            || self.home.is_some_and(|home| path.starts_with(home))
+            || self.writable.iter().any(|dir| path.starts_with(dir))
     }
 }
 
@@ -618,8 +627,8 @@ const COLON_OPTIONS: [&str; 3] = ["-javaagent:", "-agentpath:", "-agentlib:"];
 /// every split is read. A relative split that is no value names a file below the config's
 /// folder that nobody runs, and denies a chat nothing it needs. An absolute split after a
 /// later letter could name a real folder elsewhere (`-Ivendor/tmp` names `/tmp`), so
-/// [`Scan::values`] keeps one only where a chat could write it, in the project or the home
-/// folder (D-1356-7).
+/// [`Scan::values`] keeps one only where a chat could write it, in the project, the home
+/// folder, a folder chats may be granted or the project's cache home (D-1356-7, D-T56-1).
 fn attached_values(word: &str) -> Vec<(String, bool)> {
     let Some(short) = word
         .strip_prefix('-')
@@ -1004,16 +1013,19 @@ fn without_comments(text: &str) -> String {
 
 /// Everything resolved for the plane at `root` at a chat's start: what `core.hooksPath` names
 /// and every script a harness's project config runs, in the plane and the clones in it.
+/// `writable` is where a chat could write outside the project and the home folder
+/// ([`Scan::holds`]).
 pub fn resolved(
     root: &Path,
     home: Option<&Path>,
     xdg_config: Option<&Path>,
+    writable: &[PathBuf],
 ) -> Result<Vec<Resolved>, Unread> {
     let dirs = directories(root);
     let clones = clones(&dirs);
     let mut found = hooks_paths(&clones, home, xdg_config);
     for dir in &dirs {
-        found.extend(scripts_named(root, dir, home)?);
+        found.extend(scripts_named(root, dir, home, writable)?);
     }
     let mut seen = std::collections::HashSet::new();
     found.retain(|it| seen.insert(it.path.clone()));
@@ -1055,7 +1067,7 @@ mod tests {
             "[core]\n\thooksPath = ~/my-hooks\n",
         )
         .expect("a global config");
-        let found: Vec<PathBuf> = resolved(plane.path(), Some(home.path()), None)
+        let found: Vec<PathBuf> = resolved(plane.path(), Some(home.path()), None, &[])
             .expect("read")
             .into_iter()
             .map(|it| it.path)
@@ -1117,7 +1129,7 @@ mod tests {
             "[mcp_servers.z]\ncommand = \"/opt/z/run\"\nargs = [\"-c\", \"scripts/z.py\"]\n",
         )
         .expect("config.toml");
-        let found: Vec<PathBuf> = scripts_named(dir.path(), dir.path(), None)
+        let found: Vec<PathBuf> = scripts_named(dir.path(), dir.path(), None, &[])
             .expect("read")
             .into_iter()
             .map(|it| it.path)
@@ -1152,6 +1164,7 @@ mod tests {
             ".claude/settings.json",
             &settings.to_string(),
             None,
+            &[],
         )
         .expect("read")
         .into_iter()
@@ -1169,6 +1182,7 @@ mod tests {
             ".mcp.json",
             &text,
             None,
+            &[],
         )
         .expect("read")
         .into_iter()
@@ -1315,6 +1329,7 @@ mod tests {
             "opencode.json",
             r#"{"mcp": {"y": {"command": ["bash", "-c", "./scripts/oc.sh --x"]}}}"#,
             None,
+            &[],
         )
         .expect("read");
         assert_eq!(
@@ -1338,7 +1353,7 @@ mod tests {
             dir,
             ".mcp.json",
             r#"{"mcpServers": {"x": {"command": "node", "args": ["--inspect", "tools/my server.js"]}}}"#,
-            None,
+            None, &[]
         )
         .expect("read");
         let want = Resolved {
@@ -1398,6 +1413,7 @@ mod tests {
             ".claude/settings.json",
             &settings.to_string(),
             None,
+            &[],
         )
         .expect("every hook read");
         assert_eq!(found.len(), 100);
@@ -1417,7 +1433,8 @@ mod tests {
                 dir,
                 ".claude/settings.json",
                 &settings.to_string(),
-                None
+                None,
+                &[]
             ),
             Err(Unread {
                 file: dir.join(".claude/settings.json"),
@@ -1470,6 +1487,11 @@ mod tests {
     /// What a hook running `command` in `/plane/ws/repo` names, for an operator whose home is
     /// `/home/op`.
     fn named_at_home(command: &str) -> Vec<PathBuf> {
+        named_writing(command, &[])
+    }
+
+    /// [`named_at_home`] for a chat that could also write `writable`.
+    fn named_writing(command: &str, writable: &[PathBuf]) -> Vec<PathBuf> {
         let settings = serde_json::json!({"hooks": {"PostToolUse": [{"hooks": [
             {"type": "command", "command": command}
         ]}]}});
@@ -1479,11 +1501,44 @@ mod tests {
             ".claude/settings.json",
             &settings.to_string(),
             Some(Path::new("/home/op")),
+            writable,
         )
         .expect("read")
         .into_iter()
         .map(|named| named.path)
         .collect()
+    }
+
+    #[test]
+    fn an_absolute_split_of_a_cluster_is_named_in_a_folder_chats_may_be_granted() {
+        // D-T56-1: a folder you list as one chats may be granted, outside the project and the
+        // home folder, is one a chat could write, so a later letter's value there is named.
+        let granted = [PathBuf::from("/opt/granted")];
+        let command = "cc -xI/opt/granted/inc/x.h a.c";
+        assert!(!named_at_home(command).contains(&PathBuf::from("/opt/granted/inc/x.h")));
+        let found = named_writing(command, &granted);
+        assert!(
+            found.contains(&PathBuf::from("/opt/granted/inc/x.h")),
+            "{found:?}"
+        );
+        // Only below it: a folder beside it is still no value.
+        let found = named_writing("cc -xI/opt/grantedx/y a.c", &granted);
+        assert!(
+            !found.contains(&PathBuf::from("/opt/grantedx/y")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn an_absolute_split_of_a_cluster_is_named_in_the_project_s_cache_home() {
+        // D-T56-1: the project's cache home (#1337) can sit outside the home folder, where
+        // `XDG_DATA_HOME` moves purlis's data home; a chat writes it, so a value there is named.
+        let cache = PathBuf::from("/srv/data/purlis/cache-homes/0123abcd");
+        let command = "gawk -bf/srv/data/purlis/cache-homes/0123abcd/npm/x.awk data";
+        let want = cache.join("npm/x.awk");
+        assert!(!named_at_home(command).contains(&want));
+        let found = named_writing(command, std::slice::from_ref(&cache));
+        assert!(found.contains(&want), "{found:?}");
     }
 
     #[test]
