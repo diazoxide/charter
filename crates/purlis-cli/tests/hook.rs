@@ -696,7 +696,8 @@ fn text_that_mentions_a_handoff_is_not_one_and_a_real_one_is_still_refused() {
 fn the_guard_survives_every_payload_a_harness_could_send() {
     // A hook that crashed on one of these would take the tool call with it, and a non-zero
     // exit that is not 2 is a NON-blocking error — so the failure would be silent. `""` is
-    // what the deadline in `payload()` produces when a harness opens stdin and never writes.
+    // what a harness that closes stdin without writing sends; one that never closes it is
+    // refused instead (`a_guard_decides_within_its_budget.rs`).
     let plane = a_plane();
     for payload in [
         "",

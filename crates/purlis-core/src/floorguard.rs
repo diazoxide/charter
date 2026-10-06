@@ -164,7 +164,7 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
 /// and without a bound a line nested thousands deep would exhaust the stack: a hook that dies
 /// without answering is an allow. The bound also keeps the cost linear in the line, since each
 /// level reads a shorter string than the one around it.
-pub const MAX_DEPTH: usize = 16;
+pub const MAX_DEPTH: usize = crate::guardcaps::MAX_COMMAND_DEPTH;
 
 /// [`release_floor_reason`] at `depth` commands in.
 pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String> {
@@ -191,8 +191,12 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
         }
     }
     for toks in &segments {
+        // Each segment is split once, and every reading below shares it: at every level the
+        // floor reads, a segment is as long as the line, so a second split is a second line
+        // (#1355).
+        let (prog, env, argv) = shellwrap::split_env(toks);
         // A string a shell runs is read as the command it is (#866).
-        let scripts = shellwrap::shell_scripts(toks)
+        let scripts = shellwrap::shell_scripts_of(&prog, &argv)
             .into_iter()
             .chain(shellwrap::here_string_script(toks));
         let fed = if a_shell_reads_stdin && !shellwrap::reads_script_from_stdin(toks) {
@@ -205,22 +209,17 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
                 return Some(said);
             }
         }
-        if let Some(why) = token::keychain_read_reason(toks) {
+        if let Some(why) = token::keychain_read_reason(&prog, &argv) {
             return Some(format!("{fix}{why}"));
         }
-        let (prog, env, argv) = shellwrap::split_env(toks);
         // `GIT tag v1` is a tag — see A2's fold.
         let base = base_lower(&prog);
-        let args: Vec<String> = argv.iter().skip(1).cloned().collect();
-        let words: Vec<String> = args
-            .iter()
-            .filter(|a| !a.starts_with('-'))
-            .cloned()
-            .collect();
+        let args: &[String] = argv.get(1..).unwrap_or(&[]);
+        let words: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
         if base == "git" || base.starts_with("git-credential-") {
-            let sub = git_subcommand(&args);
+            let sub = git_subcommand(args);
             // A git alias defined on the line is read as what it stands for (#866).
-            match merge::git_alias(&args, &env, sub.as_deref()) {
+            match merge::git_alias(args, &env, sub.as_deref()) {
                 merge::GitAlias::Resolved(inner) => {
                     if let Some(said) = inner_floor(&inner) {
                         return Some(said);
@@ -258,12 +257,12 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
             }
             // A push option that sets auto-merge, an alias that would publish, or a command that
             // prints the forge token (#866).
-            let why = token::git_reason(&base, &args, sub.as_deref())
-                .or_else(|| merge::git_reason(&args, &env, sub.as_deref(), unattended, depth));
+            let why = token::git_reason(&base, args, sub.as_deref())
+                .or_else(|| merge::git_reason(args, &env, sub.as_deref(), unattended, depth));
             if let Some(why) = why {
                 return Some(format!("{fix}{why}"));
             }
-        } else if base == "gh" || base == "glab" || leakguard::is_charter(&prog, &args) {
+        } else if base == "gh" || base == "glab" || leakguard::is_charter(&prog, args) {
             // **The reader had to widen with the set.** `PUBLISH_FORGE`'s charter row would be a
             // tuple nothing could reach if this branch were still `base in ("gh", "glab")`.
             let forge = base == "gh" || base == "glab";
@@ -279,14 +278,14 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
             // pair sits one place further along and is put back on the same footing here. A
             // forge CLI's words are read past its repository flag (#866).
             let words: Vec<&str> = if forge {
-                merge::forge_words(&args).into_iter().map(|w| w.1).collect()
+                merge::forge_words(args).into_iter().map(|w| w.1).collect()
             } else {
                 match words.first() {
                     Some(w) if CHARTER_PROGS.contains(&w.to_lowercase().as_str()) => &words[1..],
                     _ => &words[..],
                 }
                 .iter()
-                .map(String::as_str)
+                .map(|w| w.as_str())
                 .collect()
             };
             if let [noun, verb, ..] = words[..] {
@@ -299,8 +298,8 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
                 }
             }
             if forge {
-                let why = token::forge_reason(&args)
-                    .or_else(|| merge::forge_reason(&name, &args, cmd, unattended, depth));
+                let why = token::forge_reason(args)
+                    .or_else(|| merge::forge_reason(&name, args, cmd, unattended, depth));
                 if let Some(why) = why {
                     return Some(format!("{fix}{why}"));
                 }
