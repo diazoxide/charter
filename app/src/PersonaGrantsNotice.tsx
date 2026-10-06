@@ -12,6 +12,9 @@ import { Notice } from "./Notice";
  * the persona's hosts reach it from its next start; **Restart now** starts it again resuming its
  * conversation (`restart_chat`), once its turn has ended, so a turn is never cut off. **Keep**
  * puts the Notice away and changes nothing: it is shown again when the tab opens again.
+ *
+ * **Where an administrator's policy forbids a persona's own hosts** (#1343), allowing them would
+ * reach nothing: the Notice says so, naming the policy and who set it, and offers no Allow.
  */
 export function PersonaGrantsNotice({
   plane,
@@ -78,6 +81,18 @@ export function PersonaGrantsNotice({
         if (said.status === "ok") setAllowed(true);
       })
       .catch(() => {});
+
+  if (held.locked !== null)
+    return (
+      <Notice
+        cause={`persona-grants:${session}`}
+        at="pane"
+        label="Persona's hosts held"
+        fixes={[{ label: "Keep", onPress: () => setKept(true) }]}
+      >
+        This chat can't reach {persona}'s hosts. {held.locked}
+      </Notice>
+    );
 
   const how =
     held.from === null

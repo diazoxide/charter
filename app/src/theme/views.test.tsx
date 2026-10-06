@@ -586,6 +586,7 @@ const RECORD: SessionRecordView = {
   body: "# Tokens for every view\n\n## What happened\n\nThe guard ran.\n",
   persona_hosts: [],
   resume_holds: false,
+  persona_hosts_locked: null,
 };
 
 const MEMORY: MemoryView = {

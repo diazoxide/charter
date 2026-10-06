@@ -7,7 +7,7 @@ import {
   type GrantLevel,
   type OpenChat,
 } from "./bindings";
-import { Notice } from "./Notice";
+import { Notice, type NoticeAction } from "./Notice";
 
 /**
  * **What a chat's sandbox blocked, on its tab** (#1338): the operation and the kind of path or
@@ -25,6 +25,11 @@ import { Notice } from "./Notice";
  * conversation once its turn has ended (`onAllowed`, driven by `PlaneView`), and it is told what
  * was allowed. What is never granted says the way that works; what purlis grants nothing for
  * offers **Start without the sandbox for this chat**, the person's own choice.
+ *
+ * **Policy has the last word** (#1343): Allow is offered only at the levels an administrator's
+ * policy leaves open (`block.levels`), and where policy forbids every Allow and starting the
+ * chat without the sandbox too, nothing is offered — the Notice still says what was blocked,
+ * what policy forbids, and who set it, so the person knows whom to ask.
  */
 export function SandboxBlockNotice({
   block,
@@ -158,12 +163,15 @@ function AllowNotice({
 }) {
   const id = useId();
   const [typed, setTyped] = useState(block.target ?? "");
-  const [always, setAlways] = useState(false);
+  const [alwaysOpen, setAlways] = useState(false);
   const [allowed, setAllowed] = useState<Allowed>();
   const [said, setSaid] = useState<string>();
   const [busy, setBusy] = useState(false);
   const what = block.offer === "host" ? "host" : "write";
   const target = block.target ?? typed.trim();
+  /** Whether policy leaves Allow at `level` open (#1343). */
+  const allowsAt = (level: GrantLevel) => block.levels.includes(level);
+  const always = allowsAt("you") || (what === "host" && allowsAt("project"));
 
   const allow = (level: GrantLevel) => {
     setBusy(true);
@@ -198,6 +206,20 @@ function AllowNotice({
     return (
       <Notice cause={cause} at="pane" tone="trouble" label="Sandbox block" onDismiss={onDismiss}>
         The sandbox blocked {block.said}. purlis never allows that to a chat. {block.route}
+        {behind}
+      </Notice>
+    );
+  if (block.offer === "policy")
+    return (
+      <Notice cause={cause} at="pane" tone="trouble" label="Sandbox block" onDismiss={onDismiss}>
+        The sandbox blocked {block.said}
+        {block.target !== null && (
+          <>
+            {" "}
+            in <code className="block-allow-target">{block.target}</code>
+          </>
+        )}
+        . {block.route}
         {behind}
       </Notice>
     );
@@ -279,17 +301,19 @@ function AllowNotice({
           <>Allow writing {named} and everything in it</>
         )}
       </p>
-      {always && (
+      {alwaysOpen && (
         <div className="block-allow-actions">
-          <button
-            type="button"
-            tabIndex={0}
-            disabled={busy || target === ""}
-            onClick={() => allow("you")}
-          >
-            Allow for me on this machine
-          </button>
-          {what === "host" && (
+          {allowsAt("you") && (
+            <button
+              type="button"
+              tabIndex={0}
+              disabled={busy || target === ""}
+              onClick={() => allow("you")}
+            >
+              Allow for me on this machine
+            </button>
+          )}
+          {what === "host" && allowsAt("project") && (
             <button
               type="button"
               tabIndex={0}
@@ -303,26 +327,38 @@ function AllowNotice({
       )}
     </div>
   );
+  // Only the levels policy leaves open (#1343); Keep blocked always.
+  const keep: NoticeAction = { label: "Keep blocked", onPress: onDismiss };
+  const allows: NoticeAction[] = [
+    ...(allowsAt("chat")
+      ? [
+          {
+            label: "Allow for this chat",
+            onPress: () => {
+              if (!busy && target !== "") allow("chat");
+            },
+          },
+        ]
+      : []),
+    ...(always
+      ? [
+          {
+            label: "Always allow…",
+            onPress: () => setAlways((was) => !was),
+            opens: { id, open: alwaysOpen },
+          },
+        ]
+      : []),
+  ];
+  const [first, ...rest] = [...allows, keep];
+  const fixes: readonly [NoticeAction, ...NoticeAction[]] = [first ?? keep, ...rest];
   return (
     <Notice
       cause={cause}
       at="pane"
       tone="trouble"
       label="Sandbox block"
-      fixes={[
-        {
-          label: "Allow for this chat",
-          onPress: () => {
-            if (!busy && target !== "") allow("chat");
-          },
-        },
-        {
-          label: "Always allow…",
-          onPress: () => setAlways((was) => !was),
-          opens: { id, open: always },
-        },
-        { label: "Keep blocked", onPress: onDismiss },
-      ]}
+      fixes={fixes}
       under={under}
     >
       The sandbox blocked {block.said}.{said !== undefined && ` ${said}`}

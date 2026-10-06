@@ -82,9 +82,11 @@ export function SessionRecordTab({ plane, path }: { plane: PlaneId; path: string
               value:
                 record.persona_hosts.length === 0
                   ? "none of its own"
-                  : record.resume_holds
-                    ? `${record.persona_hosts.join(", ")}; Resume holds them back until you allow them on the new chat's tab`
-                    : record.persona_hosts.join(", "),
+                  : record.persona_hosts_locked !== null
+                    ? `${record.persona_hosts.join(", ")}; no chat as this persona reaches them. ${record.persona_hosts_locked}`
+                    : record.resume_holds
+                      ? `${record.persona_hosts.join(", ")}; Resume holds them back until you allow them on the new chat's tab`
+                      : record.persona_hosts.join(", "),
             },
             { label: "Harness", value: row.harness ?? "not recorded" },
             {

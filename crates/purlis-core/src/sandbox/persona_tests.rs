@@ -116,7 +116,10 @@ fn a_persona_host_the_project_already_grants_is_the_project_s() {
 #[test]
 fn policy_can_forbid_persona_hosts_and_leaves_the_project_s() {
     let one = |typed: &str| Host::parse(typed).unwrap();
-    let locks = Locks::forbidding_persona_grants();
+    let locks = Locks::parse(
+        r#"{"sandbox": {"persona-hosts": false}}"#,
+        std::path::Path::new("/etc/purlis/policy.json"),
+    );
     assert_eq!(
         in_force(&[one("a.example")], &[], &[one("10.0.0.5:6443")], &locks),
         [Granted {
@@ -130,7 +133,7 @@ fn policy_can_forbid_persona_hosts_and_leaves_the_project_s() {
             level: Level::Persona,
         })
         .expect("locked");
-    assert!(why.ends_with("locked by policy"), "{why}");
+    assert!(why.contains("Locked by policy"), "{why}");
 }
 
 #[test]

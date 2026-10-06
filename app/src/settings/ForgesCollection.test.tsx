@@ -168,6 +168,7 @@ function core({
             presets: [],
             persona_hosts: [],
             besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+            policy: null,
           };
         case "add_project_forge": {
           const entry = given.entry as ForgeEntry;

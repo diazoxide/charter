@@ -64,7 +64,9 @@ const NO_PERSONA = "";
  * distribution's install command (SD-30), or a system with no backend. Where it cannot be
  * applied, the one way on is to start without it, said on the button itself. Not remembered
  * between chats, for the footer box's reason, and never offered by anything but this picker:
- * no CLI word, file or chat makes one, and charter records who turned it off and why.
+ * no CLI word, file or chat makes one, and charter records who turned it off and why. Where an
+ * administrator's policy forbids the opt-out (#1343), no box is drawn and the picker says who
+ * locked it; a chat the sandbox cannot hold here then does not start.
  *
  * **Every control here is a row of the settings set** (`settings/components.tsx`, DS-3d #1176),
  * so the picker reads as Settings does. It was hand-rolled markup once, and the hand-rolling is
@@ -178,10 +180,14 @@ export function StartChat({
   // Where the sandbox cannot be applied, the start IS the opt-out, and the button says so.
   const refused = sandbox?.state === "refused";
   const [reason, setReason] = useState("");
+  // Policy may forbid the opt-out (#1343): then no box, and a chat the sandbox cannot hold
+  // here does not start at all, saying who locked it.
+  const locked = sandbox?.locked ?? null;
   const withoutSandbox: WithoutSandbox | null =
-    (sandbox?.state === "sandboxed" && optedOut) || refused
+    locked === null && ((sandbox?.state === "sandboxed" && optedOut) || refused)
       ? { reason: reason.trim() === "" ? null : reason }
       : null;
+  const blockedByPolicy = refused && locked !== null;
   const startWord = withoutSandbox !== null ? "Start without the sandbox" : "Start";
   // Cancel, so the dialog can put the keyboard on it itself. React's `autoFocus` and the
   // focus trap's own opening move both aim at mount, and which of them lands last is not
@@ -343,7 +349,7 @@ export function StartChat({
               or cannot be applied is not a stray line under the Name box. */}
           {sandbox !== null && (
             <SettingGroup label="Sandbox">
-              {sandbox.state === "sandboxed" && (
+              {sandbox.state === "sandboxed" && locked === null && (
                 <SettingRow
                   label="start without the sandbox"
                   help={
@@ -386,6 +392,7 @@ export function StartChat({
                   )}
                 </>
               )}
+              {locked !== null && <p className="honest">{locked}</p>}
               {withoutSandbox !== null && (
                 <SettingRow
                   label="Why, if you want it recorded"
@@ -454,7 +461,7 @@ export function StartChat({
                     withoutSandbox,
                   )
                 }
-                disabled={!picked || starting}
+                disabled={!picked || starting || blockedByPolicy}
               >
                 {starting ? "Starting…" : `Approve and ${startWord.toLowerCase()}`}
               </button>
@@ -464,7 +471,7 @@ export function StartChat({
                 onClick={() =>
                   profile && onStart(profile, persona, showFooter, label, newBranch, withoutSandbox)
                 }
-                disabled={!profile || starting}
+                disabled={!profile || starting || blockedByPolicy}
               >
                 {starting ? "Starting…" : startWord}
               </button>

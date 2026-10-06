@@ -400,9 +400,11 @@ fn a_chat_never_writes_the_approvals_a_person_gave() {
     assert_eq!(
         paths(&denied, Class::HumanPowers, Access::Write),
         // Under both names, there or not: whichever is there is the config home (RN-5).
+        // …and this machine's policy (#1343), as the kernel names it.
         [
             std::path::PathBuf::from("/home/op/.config/purlis"),
             std::path::PathBuf::from("/home/op/.config/charter"),
+            super::real(&super::policy::machine_folder()),
         ]
     );
 }
@@ -473,7 +475,7 @@ fn off_a_runner_there_are_no_runner_internals_to_deny() {
 // -------------------------------------------------------------------------------------
 
 fn hosts_of(presets: &[Preset], plane: Option<&str>) -> Vec<String> {
-    hosts(presets, &Plane::of(plane))
+    hosts(presets, &Plane::of(plane), &policy::Locks::none())
 }
 
 #[test]
