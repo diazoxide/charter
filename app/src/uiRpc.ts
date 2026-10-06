@@ -54,7 +54,7 @@ export const commands = {
 	 *  Finish moving the vaults that wait, on the person's press: the copy with the Keychain's
 	 *  dialogs on, so the system asks once for each item. On a blocking thread, because each ask
 	 *  waits for the person; one press at a time. Refused when this app does not hold the config
-	 *  home's lock.
+	 *  home's lock. Every window is told what still waits once it completes ([`MOVED`]).
 	 */
 	finishMovingVaults: () => typedError<FinishedMoving, string>(__TAURI_INVOKE("finish_moving_vaults")),
 	/**
