@@ -82,12 +82,11 @@ pub(crate) struct Store {
 }
 
 /// The sentence for a store reached through a link, or holding one at `inside`. Never the
-/// absolute path. A store held from the project's root also says where a link may land
-/// (D-T55-1), as the path guard's refusal did before the brokered writes held it (#1333).
+/// absolute path. The persona store held from the project's root, as a persona's memory is
+/// written (#1333), also says why (D-T55-1): it is written only through real folders.
 fn reaches_outside(said: &str, within: &str, below: &str, inside: Option<&str>) -> String {
-    let where_links_land = if within == "the project" {
-        "; purlis follows a link only when it lands inside persona-state, personas or \
-         workspaces"
+    let where_links_land = if said == "personas" && within == "the project" {
+        "; purlis writes a persona's memory only through real folders, never through a link"
     } else {
         ""
     };
