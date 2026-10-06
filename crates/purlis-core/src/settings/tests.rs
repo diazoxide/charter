@@ -501,13 +501,14 @@ fn the_shared_file_may_turn_the_sandbox_on_and_never_off() {
 
 #[test]
 fn the_local_file_says_nothing_about_the_sandbox() {
-    // An ignored file must not change plane policy with no trace in git, and a plane's
-    // sandbox is plane policy: it is refused there like any table that file does not carry.
+    // An ignored file must not change plane policy with no trace in git, and whether chats run
+    // sandboxed is plane policy: the local file's `[sandbox]` holds this machine's hosts and
+    // only those (#1341), so a mode there is refused.
     let dir = plane(COMMENTED);
     let why = refusals(dir.path(), Which::Local, "[sandbox]\nmode = \"on\"\n");
     assert_eq!(why.len(), 1, "{why:?}");
     assert!(
-        why[0].starts_with("[sandbox] in charter.local.toml is not read"),
+        why[0].starts_with("sandbox.mode in charter.local.toml is not read"),
         "{why:?}"
     );
 }
@@ -1020,8 +1021,8 @@ fn moving_a_value_over_one_the_other_file_holds_replaces_it() {
 
 #[test]
 fn a_move_the_other_file_would_refuse_writes_neither_file() {
-    // [sandbox] is only the Shared file's: moving it to this machine is refused, and the
-    // sandbox stays on in charter.toml.
+    // [sandbox] mode is only the Shared file's (the local file's [sandbox] holds hosts alone,
+    // #1341): moving it to this machine is refused, and the sandbox stays on in charter.toml.
     let shared = "[sandbox]\nmode = \"on\"\n";
     let dir = plane(shared);
     let err = move_keys(
@@ -1033,7 +1034,7 @@ fn a_move_the_other_file_would_refuse_writes_neither_file() {
     )
     .unwrap_err();
     assert!(
-        err[0].starts_with("[sandbox] in charter.local.toml is not read"),
+        err[0].starts_with("sandbox.mode in charter.local.toml is not read"),
         "{err:?}"
     );
     assert_eq!(text(dir.path(), "charter.toml"), shared);
