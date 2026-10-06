@@ -2311,7 +2311,8 @@ h2.sidebar-title .node-icon {
   margin: 0 0 0.25rem;
 }
 
-.notice-band button {
+/* Only the line's own ways out: a form a fix opened under the line (#1250) keeps its buttons. */
+.notice-band > button {
   margin-left: 0.4rem;
   padding: 0;
   font: inherit;
@@ -6118,4 +6119,21 @@ textarea.ui-field {
 .doctor-form {
   grid-column: 2 / -1;
   margin-top: 0.4rem;
+}
+
+/* The same form opened from a Notice (#1250): right under the line, outside its live region
+   (`Notice`'s `under`), in the page's own colours. */
+.notice-under-band {
+  padding: 0.35rem 0.75rem;
+  background: var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.notice-under-band .doctor-form {
+  max-width: 36rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
 }

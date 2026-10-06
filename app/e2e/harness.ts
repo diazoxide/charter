@@ -77,6 +77,8 @@ export function theRunsEnvironment(
   plane: string,
   extra: Record<string, string> = {},
 ): Record<string, string> {
+  // A launch that names a `$HOME` of its own (`wdio.finder.conf.ts`) has its git config there.
+  const home = extra.HOME ?? aHomeOfTheRunsOwn();
   return {
     CHARTER_ROOT: plane,
     CHARTER_CONFIG_HOME: aConfigHomeOfItsOwn(),
@@ -85,8 +87,50 @@ export function theRunsEnvironment(
     // The app's diagnostic log (#647) goes with the rest of the run's evidence, never into the
     // runner's own log directory.
     CHARTER_LOG_DIR: LOGS,
+    // A `$HOME` of the run's own, holding a git identity (#1250): see `THE_RUNS_HOME`.
+    HOME: home,
+    GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
     ...extra,
   };
+}
+
+/** The identity every app this run launches commits with (`THE_RUNS_HOME`). */
+export const THE_RUNS_GIT_IDENTITY = { name: "charter e2e", email: "e2e@charter.invalid" };
+
+/**
+ * The `$HOME` every app this run launches is given, in place of the runner's own: it holds a
+ * `.gitconfig` with a git identity, and nothing else until the app writes something.
+ *
+ * **A scenario never depends on the runner's git config** (#1250, D-1250-8). A Linux CI runner
+ * has no identity, so the doctor's `git identity` finding stood as a trouble Notice at the top
+ * of every project's band and pushed the Notice a spec was looking for behind "+N more"; a Mac
+ * with one never showed it. A home of the run's own makes both the same.
+ *
+ * **`$HOME`, not only `GIT_CONFIG_GLOBAL`**: the doctor asks git through charter's hardened
+ * runner, which clears the environment and keeps `HOME` alone, so the global config git reads
+ * there is `$HOME/.gitconfig`. `GIT_CONFIG_GLOBAL` names the same file for the gits a session
+ * runs, which are passed it, so an inherited one cannot point them somewhere else. A fix the
+ * app writes to git's global config lands here too, never in the runner's own.
+ * `git-identity.e2e.ts` empties the file for a moment to see the finding the other way round,
+ * and puts it back. `wdio.finder.conf.ts` names a `$HOME` of its own, with no identity in it, and
+ * replaces this one.
+ *
+ * A fixed path in the run's tree, so a spec worker names the home the launcher gave the app.
+ */
+export const THE_RUNS_HOME = join(THE_RUNS_TREE, "home");
+
+/** The global git config in `THE_RUNS_HOME`. */
+export const THE_RUNS_GIT_CONFIG = join(THE_RUNS_HOME, ".gitconfig");
+
+/** What `THE_RUNS_GIT_CONFIG` holds. */
+export const THE_RUNS_GIT_CONFIG_TEXT = `[user]\n\tname = ${THE_RUNS_GIT_IDENTITY.name}\n\temail = ${THE_RUNS_GIT_IDENTITY.email}\n`;
+
+/** `THE_RUNS_HOME`, made the first time it is asked for and left alone after. */
+function aHomeOfTheRunsOwn(): string {
+  mkdirSync(THE_RUNS_HOME, { recursive: true });
+  if (!existsSync(THE_RUNS_GIT_CONFIG))
+    writeFileSync(THE_RUNS_GIT_CONFIG, THE_RUNS_GIT_CONFIG_TEXT);
+  return THE_RUNS_HOME;
 }
 
 /**

@@ -2,6 +2,7 @@ import { existsSync, realpathSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
 import { anEmptyRecord, copyFixturePlane } from "../harness.js";
+import { bandNotice } from "../reading.js";
 
 /**
  * **A pin to a workspace that is gone is kept dormant** (NO-1 #1223, ruling V91c as amended),
@@ -145,10 +146,20 @@ describe("a pin to a workspace that is gone", function () {
 
     renameSync(join(mine, "workspaces", gone), away);
 
-    const notice = await $(`[data-cause="pin-dormant:${gone}"]`);
-    await notice.waitForDisplayed({ timeout: 30_000 });
-    expect(await notice.getText()).toContain(`${gone} is gone, kept dormant`);
-    await expect(notice.$("button=Forget")).toBeExisting();
+    // Found wherever the band put it: another Notice standing — a finding about the runner's
+    // machine — may sort first and put this one behind "+N more" (#1250).
+    const cause = `pin-dormant:${gone}`;
+    let said = "";
+    await browser.waitUntil(
+      async () => {
+        const now = await bandNotice(cause);
+        if (now.state === "shown") said = now.text;
+        return now.state === "shown";
+      },
+      { timeout: 30_000, timeoutMsg: `no Notice said ${gone} is gone` },
+    );
+    expect(said).toContain(`${gone} is gone, kept dormant`);
+    await expect($(`[data-cause="${cause}"]`).$("button=Forget")).toBeExisting();
     // Never written away: the store holds it, in its place, and names it gone.
     const held = await pins();
     expect(held.order).toEqual(before);
@@ -164,6 +175,9 @@ describe("a pin to a workspace that is gone", function () {
       },
       { timeout: 30_000, timeoutMsg: `the pin came back as ${JSON.stringify(saw)}` },
     );
-    await notice.waitForExist({ timeout: 20_000, reverse: true });
+    await browser.waitUntil(async () => (await bandNotice(cause)).state === "absent", {
+      timeout: 20_000,
+      timeoutMsg: `the Notice that ${gone} is gone stayed`,
+    });
   });
 });

@@ -179,6 +179,89 @@ fn a_bad_name_or_email_is_refused_field_by_field_and_nothing_is_written() {
     );
 }
 
+/// **A name has to show something** (#1250): fillers and marks that draw nothing on their own
+/// passed the invisible-character rule, so a commit could be authored by a blank. Each is
+/// refused alone, and a real name around one of them (a Korean name with its filler, an emoji
+/// with its variation selector) is still a name.
+#[test]
+fn a_name_with_no_visible_character_is_refused_and_nothing_is_written() {
+    charter_core::unsteered!();
+    let Some((home, dir)) =
+        in_a_temporary_home("a_name_with_no_visible_character_is_refused_and_nothing_is_written")
+    else {
+        return;
+    };
+    let root = project(&dir);
+
+    for name in [
+        "\u{3164}",
+        "\u{115f}",
+        "\u{1160}",
+        "\u{ffa0}",
+        "\u{034f}",
+        "\u{fe0f}",
+        "\u{2800}",
+        "\u{3164} \u{3164}",
+        "\u{115f}\u{fe0f}\u{034f}",
+    ] {
+        let refused = identity::apply(&root, name, "ann@example.invalid").expect_err(name);
+        assert_eq!(refused.name.len(), 1, "{name:?}: {refused:?}");
+        assert!(
+            refused.name[0].contains("at least one visible"),
+            "{name:?}: {refused:?}"
+        );
+        assert!(refused.email.is_empty(), "{refused:?}");
+    }
+    // Beside a bad email, so nothing is written: the name itself is taken.
+    for name in ["\u{d55c}\u{3164}", "Ann \u{2764}\u{fe0f}", "e\u{0301}"] {
+        let taken = identity::apply(&root, name, "nope").expect_err("the email");
+        assert!(taken.name.is_empty(), "{name:?}: {taken:?}");
+    }
+
+    assert!(
+        !home.join(".gitconfig").exists(),
+        "a refusal wrote the config"
+    );
+}
+
+/// **A secret is never an identity** (V91m, D-1250-7): a git identity is written to a plain
+/// file and into every commit's author line, so a value shaped like a credential is refused as
+/// every other writer refuses one, by its kind, and the refusal never repeats the value.
+#[test]
+fn a_secret_shaped_name_or_email_is_refused_by_its_kind_and_never_echoed() {
+    charter_core::unsteered!();
+    let Some((home, dir)) = in_a_temporary_home(
+        "a_secret_shaped_name_or_email_is_refused_by_its_kind_and_never_echoed",
+    ) else {
+        return;
+    };
+    let root = project(&dir);
+    // Made up, in the shape of a forge token: a prefix and a long body.
+    let token: String = ["ghp_", &"Ab1".repeat(12)].concat();
+
+    let refused = identity::apply(&root, &token, "ann@example.invalid").expect_err("the name");
+    assert_eq!(refused.name.len(), 1, "{refused:?}");
+    assert!(refused.name[0].contains("secret"), "{refused:?}");
+    assert!(refused.email.is_empty(), "{refused:?}");
+
+    let email = format!("{token}@example.invalid");
+    let refused = identity::apply(&root, "Ann", &email).expect_err("the email");
+    assert_eq!(refused.email.len(), 1, "{refused:?}");
+    assert!(refused.email[0].contains("secret"), "{refused:?}");
+
+    for why in refused.lines() {
+        assert!(!why.contains(&token[4..]), "the value was echoed: {why}");
+    }
+    // An ordinary identity is not a secret.
+    let fine = identity::apply(&root, "Ann Example", "nope").expect_err("the email only");
+    assert!(fine.name.is_empty(), "{fine:?}");
+
+    assert!(
+        !home.join(".gitconfig").exists(),
+        "a refusal wrote the config"
+    );
+}
+
 fn write_global(home: &Path, body: &str) {
     std::fs::write(home.join(".gitconfig"), body).unwrap();
 }

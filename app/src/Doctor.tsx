@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoaderCircle, Stethoscope } from "lucide-react";
+import { Notice } from "./Notice";
 import {
   FIXES_WITH_A_FORM,
   GitIdentityForm,
@@ -72,6 +73,10 @@ import {
  *
  * A fix that takes input (`git-identity`, FX-3) opens its form under the row instead, and is
  * applied when the form is sent: see `GitIdentityForm.tsx`.
+ *
+ * A finding whose fix id is in `FINDINGS_AS_NOTICES` also stands as a Notice under the strip
+ * (`DoctorNotices`, #1250), and the Notice's Fix does what the row's does: the same form, the
+ * same check again, so the Notice goes when the doctor no longer finds it.
  */
 
 /** What the window knows about the doctor for one project. */
@@ -315,18 +320,51 @@ type Fixer = {
   identityNow?: () => Promise<IdentityNow>;
 };
 
-/** A row's Fix button, and the form under it for a fix that takes input (FX-3). */
-function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fixer }) {
+/**
+ * **A fix's form, wherever its fix is pressed** (FX-3, #1250): the Doctor row's Fix and a
+ * Notice carrying the same fix id open it alike. For a fix in {@link FIXES_WITH_A_FORM},
+ * `press` opens the form (once what is set has been read, which is what it locks) or closes
+ * it; for any other, it applies the fix. `form` is the form while it is open, and it closes
+ * itself once the fix was applied or refused as a whole.
+ */
+function useFixForm(fix: string, fixer: Fixer) {
   // The form is open once what is set has been read: `current` is what it locks.
   const [current, setCurrent] = useState<IdentityNow>();
-  const form = current !== undefined;
-  const formId = useId();
-  const withForm = FIXES_WITH_A_FORM.has(row.fix);
-  if (withForm && !fixer.identity) return null;
-  const toggle = () => {
-    if (form) setCurrent(undefined);
+  const id = useId();
+  const withForm = FIXES_WITH_A_FORM.has(fix);
+  const open = current !== undefined;
+  const press = () => {
+    if (!withForm) fixer.apply(fix);
+    else if (open) setCurrent(undefined);
     else void (fixer.identityNow?.() ?? Promise.resolve({ name: "", email: "" })).then(setCurrent);
   };
+  const form = withForm && current !== undefined && fixer.identity && (
+    <GitIdentityForm
+      id={id}
+      current={current}
+      busy={fixer.busy}
+      onCancel={() => setCurrent(undefined)}
+      submit={async (name, email) => {
+        const refused = await fixer.identity?.(name, email);
+        if (refused === undefined) setCurrent(undefined);
+        return refused;
+      }}
+    />
+  );
+  return {
+    /** Whether this fix can be pressed here: one with a form needs somewhere to send it. */
+    offered: !withForm || fixer.identity !== undefined,
+    press,
+    /** The button's state, for a fix with a form. */
+    opens: withForm ? { id, open } : undefined,
+    form: form || undefined,
+  };
+}
+
+/** A row's Fix button, and the form under it for a fix that takes input (FX-3). */
+function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fixer }) {
+  const { offered, press, opens, form } = useFixForm(row.fix, fixer);
+  if (!offered) return null;
   return (
     <>
       <button
@@ -336,27 +374,129 @@ function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fi
         // Named by the row, as the operator reads it; the id is the CLI's word for the
         // same fix, kept where a pointer can read it.
         aria-label={`Fix ${row.name}`}
-        aria-expanded={withForm ? form : undefined}
-        aria-controls={withForm && form ? formId : undefined}
+        aria-expanded={opens?.open}
+        aria-controls={opens?.open ? opens.id : undefined}
         title={`charter doctor --fix ${row.fix}`}
         disabled={fixer.busy}
-        onClick={() => (withForm ? toggle() : fixer.apply(row.fix))}
+        onClick={press}
       >
         Fix
       </button>
-      {withForm && current !== undefined && fixer.identity && (
-        <GitIdentityForm
-          id={formId}
-          current={current}
-          busy={fixer.busy}
-          onCancel={() => setCurrent(undefined)}
-          submit={async (name, email) => {
-            const refused = await fixer.identity?.(name, email);
-            if (refused === undefined) setCurrent(undefined);
-            return refused;
-          }}
-        />
-      )}
+      {form}
+    </>
+  );
+}
+
+/**
+ * **The fix ids whose doctor finding stands as a Notice under the strip** (#1250), and not
+ * only as a row of the Doctor dialog. `git-identity` is one: without it every commit charter
+ * makes (memory, notes, tallies) silently never happens, and its fix is a form the Notice
+ * opens where it stands.
+ *
+ * Each by the name of the doctor row that finds it: a clean row carries no fix id, so the name
+ * is how a report says the finding has gone (and a dismissal of it is let go).
+ */
+export const FINDINGS_AS_NOTICES: ReadonlyMap<string, string> = new Map([
+  ["git-identity", "git identity"],
+]);
+
+/** The family of cause a doctor finding's Notice is (`doctor-finding:<fix id>`). */
+export const DOCTOR_FINDING = "doctor-finding";
+
+/** One doctor finding as a Notice, with its fix: a form for a fix that takes input. */
+function FindingNotice({
+  row,
+  doctor,
+  onDismiss,
+}: {
+  row: DoctorRow & { fix: string };
+  doctor: DoctorState & { fix: (id: string) => void };
+  onDismiss: () => void;
+}) {
+  const fixer: Fixer = {
+    apply: doctor.fix,
+    busy: doctor.running || doctor.fixing !== undefined,
+    identity: doctor.fixIdentity,
+    identityNow: doctor.identityNow,
+  };
+  const { offered, press, opens, form } = useFixForm(row.fix, fixer);
+  // What the last fix of this finding came to, when it did not mend it: the doctor checks
+  // again either way, and a finding still standing says why.
+  const fixed = doctor.fixed?.fix === row.fix ? doctor.fixed : undefined;
+  const why =
+    fixed !== undefined && fixed.refused !== null
+      ? `The fix was refused: ${fixed.refused}`
+      : fixed && !fixed.complete
+        ? fixed.said.join(" ")
+        : undefined;
+  const cause = `${DOCTOR_FINDING}:${row.fix}`;
+  return (
+    <Notice
+      cause={cause}
+      tone={row.status === "fail" ? "trouble" : "news"}
+      fixes={offered ? [{ label: "Fix", onPress: press, opens }] : undefined}
+      onDismiss={onDismiss}
+      under={form}
+    >
+      {`${row.name}: ${row.detail}`}
+      {why !== undefined && <p>{why}</p>}
+    </Notice>
+  );
+}
+
+/**
+ * **The doctor's findings that stand as Notices** (#1250, {@link FINDINGS_AS_NOTICES}): drawn in
+ * the project's band from the doctor the window already runs, and gone once the doctor checks
+ * again without them.
+ *
+ * **Dismiss lasts until the finding changes** (V91j, `dismissals.ts`): every report the doctor
+ * answers settles the `doctor-finding` family, so a finding that was mended lets its dismissal
+ * go and shows again if it comes back. A report that did not check the finding's row (git could
+ * not be asked) says nothing about it, and keeps its dismissal.
+ */
+export function DoctorNotices({
+  doctor,
+  dismissed,
+  dismiss,
+  settle,
+}: {
+  doctor: DoctorState;
+  /** The causes dismissed in this project, and the ways to change them (`useDismissals`). */
+  dismissed: ReadonlySet<string>;
+  dismiss: (cause: string) => void;
+  settle: (family: string, present: readonly string[]) => void;
+}) {
+  const { report, fix } = doctor;
+  const findings = (report?.rows ?? []).filter(
+    (row): row is DoctorRow & { fix: string } =>
+      row.status !== "ok" && row.checked && row.fix !== null && FINDINGS_AS_NOTICES.has(row.fix),
+  );
+
+  useEffect(() => {
+    if (report === undefined) return;
+    const present = [...FINDINGS_AS_NOTICES].flatMap(([id, name]) => {
+      const cause = `${DOCTOR_FINDING}:${id}`;
+      const row = report.rows.find((one) => one.name === name);
+      // Not checked, or not in this report: unknown, so it is not let go.
+      if (row === undefined || !row.checked) return [cause];
+      return row.status !== "ok" && row.fix === id ? [cause] : [];
+    });
+    settle(DOCTOR_FINDING, present);
+  }, [report, settle]);
+
+  if (fix === undefined) return null;
+  return (
+    <>
+      {findings
+        .filter((row) => !dismissed.has(`${DOCTOR_FINDING}:${row.fix}`))
+        .map((row) => (
+          <FindingNotice
+            key={row.fix}
+            row={row}
+            doctor={{ ...doctor, fix }}
+            onDismiss={() => dismiss(`${DOCTOR_FINDING}:${row.fix}`)}
+          />
+        ))}
     </>
   );
 }
