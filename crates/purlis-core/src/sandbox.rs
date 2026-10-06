@@ -453,6 +453,17 @@ pub const PLANTED: [Planted; 40] = [
     Planted::and_below(crate::names::LOCAL_SETTINGS.reads[0]),
 ];
 
+/// Whether this process runs in a chat the app started under a sandbox
+/// ([`crate::hookwire::SANDBOXED_ENV`] is `1`): a tool hook of that chat inherits it.
+pub fn chat_is_sandboxed() -> bool {
+    chat_is_sandboxed_in(&crate::envvar::var)
+}
+
+/// [`chat_is_sandboxed`], asking `env`.
+pub fn chat_is_sandboxed_in(env: &dyn Fn(&str) -> Option<String>) -> bool {
+    env(crate::hookwire::SANDBOXED_ENV).as_deref() == Some("1")
+}
+
 /// What a denied path is denied for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {

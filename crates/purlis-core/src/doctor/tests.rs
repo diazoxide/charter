@@ -2662,6 +2662,113 @@ fn the_sandbox_row_sits_after_the_version_lock() {
     assert_eq!(names[at + 1], "sandbox");
 }
 
+// ---- sandbox blocks (#1338) --------------------------------------------------------------------
+
+/// A project with no manifest of its own: the blocks file is all the row reads.
+fn bare() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    (dir, root)
+}
+
+/// Recorded violation lines, fed through what the hook reads and what the app keeps.
+fn blocked(root: &Path, command: &str, error: &str, at: u64) {
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "error": error,
+    });
+    let cwd = root.join("workspaces/alpha/repo");
+    let place = crate::sandboxblock::Place {
+        root,
+        chat: &cwd,
+        cwd: &cwd,
+        home: Some(Path::new("/Users/dev")),
+    };
+    for block in crate::sandboxblock::detect(&payload, &place) {
+        crate::sandboxblock::record(root, &block, at).unwrap();
+    }
+}
+
+#[test]
+fn a_project_nothing_was_blocked_in_prints_no_sandbox_blocks_row() {
+    let (_d, root) = bare();
+    assert!(
+        !doctor(&root)
+            .run()
+            .iter()
+            .any(|r| r.name == "sandbox blocks")
+    );
+}
+
+#[test]
+fn the_sandbox_blocks_row_counts_seven_days_of_blocks_per_operation() {
+    let (_d, root) = bare();
+    let now = 1_000 * 24 * 60 * 60;
+    let day = 24 * 60 * 60;
+    let session = format!(
+        "Exit code 1\n<sandbox_violations>\npurlis(1) deny(1) file-write-create \
+         {}/workspaces/alpha/sessions/x.md\n</sandbox_violations>",
+        root.display()
+    );
+    blocked(&root, "purlis session record", &session, now - 2 * day);
+    blocked(&root, "purlis session record", &session, now - 9 * day);
+    blocked(
+        &root,
+        "cargo build",
+        "<sandbox_violations>\ncargo(2) deny(1) file-write-create /Users/dev/.cargo/registry/x\n\
+         </sandbox_violations>",
+        now - day,
+    );
+    blocked(
+        &root,
+        "gh api x",
+        "<sandbox_violations>\ngh(3) deny(1) mach-lookup com.apple.trustd.agent\n\
+         </sandbox_violations>",
+        now - 60,
+    );
+    assert_eq!(
+        super::sandbox::blocks_at(&doctor(&root), now),
+        Some(Row::warn(
+            "sandbox blocks",
+            "write 2 (1 purlis's own), lookup 1 in the last 7 days",
+            "A block of purlis's own operation is a purlis bug. The chat's tab offers Report, \
+             which shows a draft naming only the operation, the kind of path and the versions, \
+             and sends nothing until you press File report."
+        ))
+    );
+    // Once purlis's own has left the window, what is left is the chats' own work: no fault.
+    assert_eq!(
+        super::sandbox::blocks_at(&doctor(&root), now + 5 * day + day / 2),
+        Some(Row::ok(
+            "sandbox blocks",
+            "write 1, lookup 1 in the last 7 days"
+        ))
+    );
+    assert_eq!(
+        super::sandbox::blocks_at(&doctor(&root), now + 30 * day),
+        None
+    );
+}
+
+#[test]
+fn the_sandbox_blocks_row_sits_after_the_sandbox_rows_place() {
+    let (_d, root) = bare();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    blocked(
+        &root,
+        "x",
+        "<sandbox_violations>\ntouch(1) deny(1) file-write-create /opt/x\n</sandbox_violations>",
+        now,
+    );
+    let names: Vec<String> = doctor(&root).run().into_iter().map(|r| r.name).collect();
+    let at = names.iter().position(|n| n == "version lock").unwrap();
+    assert_eq!(names[at + 1], "sandbox blocks");
+}
+
 // ---- forge budget (FI14, FW-4) ----------------------------------------------------------------
 
 /// Reply `status` with GitHub's rate-limit headers saying `remaining` of 5,000 left.

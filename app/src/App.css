@@ -1143,6 +1143,31 @@ button.show-more:focus-visible {
   background: none;
 }
 
+/* A sandbox block's Report (#1338), opened under its Notice in the pane's corner: the draft
+   exactly as it would be filed, and the one button that files it. */
+.block-report {
+  max-width: 36rem;
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.block-report-draft {
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: ui-monospace, monospace;
+}
+
+.block-report-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .gauge-ok {
   color: var(--state-success);
 }

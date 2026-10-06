@@ -966,7 +966,7 @@ pub struct RunOf<'a> {
 pub enum Phase {
     /// Before the tool runs: `PreToolUse`.
     Pre,
-    /// After it ran: `PostToolUse`.
+    /// After it ran: `PostToolUse`, or `PostToolUseFailure` for a call that failed.
     Post,
 }
 
@@ -983,7 +983,8 @@ pub fn phase(word: &str) -> Option<Phase> {
         })?;
     match event {
         "PreToolUse" => Some(Phase::Pre),
-        "PostToolUse" => Some(Phase::Post),
+        // A failed call's post hook is still the end of the call.
+        "PostToolUse" | "PostToolUseFailure" => Some(Phase::Post),
         _ => None,
     }
 }

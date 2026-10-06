@@ -498,6 +498,7 @@ impl Doctor {
         rows.push(deferred::row("vault registry", deferred::VAULTS));
         rows.push(config::version_lock(self));
         rows.extend(sandbox::sandbox(self));
+        rows.extend(sandbox::blocks(self));
         rows.push(memory::memory_indexes(self));
         rows.push(personas::personas(self));
         rows.push(personas::persona_grant(self));

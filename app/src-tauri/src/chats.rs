@@ -8,7 +8,7 @@
 //! not from anything a harness said. Nothing here reads a session's output.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -947,6 +947,7 @@ impl Chats {
         // pairs in order and two of one name would leave the later one standing.
         env.retain(|(key, _)| !wrapped.iter().any(|(set, _)| set == key));
         env.extend(wrapped);
+        what_its_hooks_read(&mut env, chat.cwd.as_deref(), sandbox.is_some());
         env.sort();
         // The app's own `charter` first, then the directories charter searched for the
         // harness — so a hook the plane spells as the bare word `charter`, or a skill's
@@ -1695,8 +1696,55 @@ fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// What a chat's hooks read about it (#1338, #1345), put in its `env`: the folder it was started
+/// in, and whether a sandbox was actually applied to it. Set where every chat opens, and only
+/// there: whatever a profile or the arming said under either name is replaced.
+fn what_its_hooks_read(env: &mut Vec<(String, String)>, cwd: Option<&Path>, sandboxed: bool) {
+    let ours = [
+        purlis_core::hookwire::SANDBOXED_ENV,
+        purlis_core::sandboxblock::CHAT_DIR_ENV,
+    ];
+    env.retain(|(key, _)| !ours.contains(&key.as_str()));
+    if let Some(cwd) = cwd {
+        env.push((ours[1].to_owned(), cwd.display().to_string()));
+    }
+    if sandboxed {
+        env.push((ours[0].to_owned(), "1".to_owned()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_chats_hooks_are_told_its_folder_and_only_a_sandboxed_chat_is_called_sandboxed() {
+        let of = |env: &[(String, String)], name: &str| {
+            env.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+        };
+        let mut env = vec![
+            ("PURLIS_SANDBOXED".to_owned(), "1".to_owned()),
+            ("PATH".to_owned(), "/bin".to_owned()),
+        ];
+        what_its_hooks_read(&mut env, Some(Path::new("/plane/workspaces/a")), false);
+        assert_eq!(
+            of(&env, "PURLIS_SANDBOXED"),
+            None,
+            "a profile cannot claim it"
+        );
+        assert_eq!(
+            of(&env, "PURLIS_CHAT_DIR").as_deref(),
+            Some("/plane/workspaces/a")
+        );
+        what_its_hooks_read(&mut env, Some(Path::new("/plane/workspaces/a")), true);
+        assert_eq!(of(&env, "PURLIS_SANDBOXED").as_deref(), Some("1"));
+        assert_eq!(
+            env.iter().filter(|(n, _)| n == "PURLIS_CHAT_DIR").count(),
+            1
+        );
+        assert!(purlis_core::sandbox::chat_is_sandboxed_in(&|name| of(
+            &env, name
+        )));
+    }
 
     #[test]
     fn a_chat_is_announced_before_its_program_starts() {

@@ -47,6 +47,11 @@ pub const CHAT_ENV: &str = "PURLIS_CHAT";
 /// to a chat another chat starts ([`NOT_INHERITED`]): a chat the app starts gets its own.
 pub const TOKEN_ENV: &str = "PURLIS_CHAT_TOKEN";
 
+/// Set to `1` in the environment of a chat the app actually started under a sandbox, and in no
+/// other (#1338, #1345). Read through [`crate::sandbox::chat_is_sandboxed`]. The app sets it at
+/// the launch, so a chat's own shell cannot claim it for the harness the hooks run under.
+pub const SANDBOXED_ENV: &str = "PURLIS_SANDBOXED";
+
 /// Where Claude Code puts the conversation a hook is running in.
 ///
 /// ADR 0024, C7, measured again on claude 2.1.276: it always equals the payload's
@@ -663,6 +668,8 @@ enum Line {
     Permission(permission::PermissionAsked),
     /// After every other kind: it requires `touching`, which none of them carries.
     Touching(Touching),
+    /// After every other kind: it requires `sandbox_blocked`, which none of them carries.
+    Blocked(SandboxBlocked),
 }
 
 impl Line {
@@ -679,6 +686,7 @@ impl Line {
             Self::Tool(call) => call.chat,
             Self::Permission(asked) => asked.chat,
             Self::Touching(touching) => touching.chat,
+            Self::Blocked(blocked) => blocked.chat,
         }
     }
 }
@@ -854,6 +862,33 @@ pub struct Touching {
 /// What hears a [`Touching`]. Nothing is answered: the hook does not wait for it.
 pub type Touched = Box<dyn Fn(Touching) + Send + Sync + 'static>;
 
+/// A chat's sandbox blocked an operation (#1338): what the window shows as a notice on the
+/// chat's tab, and what `purlis doctor` counts.
+///
+/// **Neither a report nor an ask, and it moves no chat.** A tool hook that runs outside the
+/// sandbox read the block in the harness's own report of the tool's result and sorted it
+/// ([`crate::sandboxblock::detect`]); this carries only that sort: an operation, a kind, and
+/// whether it was purlis's own. No path, argument, host or output is on the line, so there is
+/// nothing on it to keep out of a record.
+///
+/// Sent once, and never spooled ([`tell_blocked`]): a block the app did not take is one nobody
+/// was shown, and the count is of what the app heard. Anything holding the chat's token can send
+/// one, `ours` included, which buys a notice on its own chat's tab and one more in its project's
+/// count; the app takes a handful a minute per chat ([`crate::sandboxblock::Throttle`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SandboxBlocked {
+    /// The app's number for the chat that was blocked, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The block, sorted.
+    pub sandbox_blocked: crate::sandboxblock::Block,
+    /// The harness, by the word the project calls it ([`HARNESS_ENV`]), when the chat says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+}
+
+/// What hears a [`SandboxBlocked`]. Nothing is answered: the hook does not wait for it.
+pub type Blocked = Box<dyn Fn(SandboxBlocked) + Send + Sync + 'static>;
+
 /// What hears a [`Report`]. It answers as a [`Refused`] does.
 pub type Reported = Box<dyn Fn(Report) -> std::io::Result<()> + Send + Sync + 'static>;
 
@@ -876,6 +911,8 @@ pub struct Hearing {
     pub permission: Permitting,
     /// Every [`Touching`].
     pub touching: Touched,
+    /// Every [`SandboxBlocked`].
+    pub blocked: Blocked,
 }
 
 /// Sends one report to the socket at `path`. Answers whether the app took it.
@@ -920,6 +957,19 @@ pub fn touch(
     touching: &Touching,
 ) -> io::Result<()> {
     one_line_with_a_deadline(path, token, touching)
+}
+
+/// Tells the app at `path` its chat's sandbox blocked an operation (#1338). Answers whether it
+/// was written.
+///
+/// [`tell`]'s shape and deadline, and never spooled ([`SandboxBlocked`]).
+#[cfg(unix)]
+pub fn tell_blocked(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    blocked: &SandboxBlocked,
+) -> io::Result<()> {
+    one_line_with_a_deadline(path, token, blocked)
 }
 
 /// Tells the app at `path` a chat's session record is saved. Answers whether the app took it.
@@ -1324,6 +1374,7 @@ impl Listener {
             refused: Box::new(|_| Ok(())),
             tool: Box::new(|_| Ok(())),
             permission: Box::new(|_| None),
+            blocked: Box::new(|_| {}),
             touching: Box::new(|_| {}),
         })
     }
@@ -1607,6 +1658,7 @@ fn serve(
                 return;
             }
             Line::Touching(touching) => (hearing.touching)(touching),
+            Line::Blocked(blocked) => (hearing.blocked)(blocked),
         }
         // Told as taken only once it is recorded durably: a line the hearer could not record
         // gets no answer, so its hook spools it (FD-30). An older hook has closed its end
@@ -3209,6 +3261,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
+            blocked: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             each: Box::new(|_| panic!("no report was sent")),
             answer: Box::new(|_, _| panic!("no ask was sent")),
@@ -3266,6 +3319,7 @@ mod tests {
             saved: Box::new(|_| panic!("no record was saved")),
             refused: Box::new(|_| panic!("no commit was refused")),
             tool: Box::new(|_| panic!("no tool call was sent")),
+            blocked: Box::new(|_| {}),
             touching: Box::new(move |touching| tx.lock().unwrap().send(touching).unwrap()),
             permission: Box::new(|_| None),
         });
@@ -3274,6 +3328,69 @@ mod tests {
         assert_eq!(
             rx.recv_timeout(std::time::Duration::from_secs(5)),
             Ok(touching.clone())
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the line without the chat's token was dropped"
+        );
+    }
+
+    #[test]
+    fn a_sandbox_block_is_its_own_line_handed_to_the_app_with_its_chats_token() {
+        use crate::sandboxblock::{Block, Kind, Operation};
+        let blocked = SandboxBlocked {
+            chat: 4,
+            sandbox_blocked: Block {
+                operation: Operation::Write,
+                kind: Kind::ProjectFiles,
+                ours: true,
+            },
+            harness: Some("claude".to_owned()),
+        };
+        let line = serde_json::to_string(&blocked).unwrap();
+        assert_eq!(
+            line,
+            r#"{"chat":4,"sandbox_blocked":{"operation":"write","kind":"project-files","ours":true},"harness":"claude"}"#
+        );
+        assert!(
+            matches!(serde_json::from_str::<Line>(&line), Ok(Line::Blocked(_))),
+            "{line}"
+        );
+        for other in [
+            serde_json::to_string(&saved()).unwrap(),
+            r#"{"chat":4,"event":"stop"}"#.to_owned(),
+            r#"{"chat":4,"tool_hook":"posttooluse-blocked"}"#.to_owned(),
+            r#"{"chat":4,"touching":"/w/a"}"#.to_owned(),
+        ] {
+            assert!(
+                !matches!(serde_json::from_str::<Line>(&other), Ok(Line::Blocked(_))),
+                "no other line reads as a block: {other}"
+            );
+        }
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue(4).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.hear(Hearing {
+            each: Box::new(|_| panic!("no report was sent")),
+            answer: Box::new(|_, _| panic!("no ask was sent")),
+            noticed: Box::new(|_| panic!("no harness was started by hand")),
+            saved: Box::new(|_| panic!("no record was saved")),
+            refused: Box::new(|_| panic!("no commit was refused")),
+            tool: Box::new(|_| panic!("no tool call was sent")),
+            touching: Box::new(|_| panic!("no file was touched")),
+            blocked: Box::new(move |blocked| tx.lock().unwrap().send(blocked).unwrap()),
+            permission: Box::new(|_| None),
+        });
+        tell_blocked(&path, None, &blocked).expect("the line is written");
+        tell_blocked(&path, Some(&token), &blocked).expect("the line is written");
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(blocked.clone())
         );
         assert!(
             rx.recv_timeout(std::time::Duration::from_millis(200))
@@ -3341,6 +3458,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
+            blocked: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             each: Box::new(|_| panic!("no report was sent")),
             answer: Box::new(|_, _| panic!("no ask was sent")),
