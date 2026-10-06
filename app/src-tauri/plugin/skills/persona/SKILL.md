@@ -23,11 +23,11 @@ purlis persona show <name>    # its charter: the role to actually adopt
 The first rung that names a persona wins:
 
 1. `--persona`
-2. `$CHARTER_PERSONA` (a value that is empty or only whitespace counts as unset)
+2. `$PURLIS_PERSONA` (a value that is empty or only whitespace counts as unset)
 3. this session's selection
 4. this terminal's selection (3 and 4 are both written by `purlis persona use`)
-5. the plane-wide `.charter/active-persona` (a shell with no session or pane id)
-6. `charter.toml` `[persona] default`
+5. the plane-wide `.purlis/active-persona` (a shell with no session or pane id)
+6. `purlis.toml` `[persona] default`
 7. `personas/.default`
 8. none
 
@@ -35,7 +35,7 @@ A selection can name a persona that no longer exists, for example one left behin
 `purlis persona remove`. It still wins, and it resolves to **no persona**, not to the
 default. `purlis persona list` says so and names the way out. For a selection that is
 `purlis persona use <name>` or `purlis persona clear`. For the variable it is unsetting
-`$CHARTER_PERSONA`.
+`$PURLIS_PERSONA`.
 
 ## Adopt one
 
