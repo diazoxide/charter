@@ -29,7 +29,14 @@
 //! failing accept backs off rather than spinning.
 //!
 //! The proxy resolves each name itself. A listed name is a name, so an address literal is
-//! never carried unless a preset lists it.
+//! never carried unless a preset or a host lists it, and a wildcard never matches one. **A
+//! name is reached only at the addresses it resolves to that a chat may reach**
+//! ([`reachable`]): never this machine, a link-local, multicast or broadcast address, or a cloud
+//! metadata service, checked at every connect, so a name that resolves or is rebound there
+//! reaches nothing.
+//!
+//! **A host listed with a port** (`10.0.0.5:6443`, a project's or a person's, #1341) is carried
+//! on that port alone, tunnel or plain; a host without one on the ports above.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
@@ -83,12 +90,55 @@ pub fn allows(listed: &[String], host: &str) -> bool {
     listed.iter().any(|listed| {
         let listed = listed.to_ascii_lowercase();
         match listed.strip_prefix("*.") {
+            // A wildcard names names, never an address literal (#1341).
+            Some(_) if host.parse::<std::net::IpAddr>().is_ok() => false,
             Some(suffix) => host
                 .strip_suffix(suffix)
                 .is_some_and(|head| head.len() > 1 && head.ends_with('.')),
             None => host == listed,
         }
     })
+}
+
+/// Whether `host` on `port` is one `listed` names (#1341): an entry with a port (`host:port`,
+/// `[v6]:port`) on that port alone, and one without on `defaults`, the ports the proxy carries
+/// for what a preset lists. An IPv6 address is matched as an address, whatever its spelling.
+pub fn allows_on(listed: &[String], host: &str, port: u16, defaults: &[u16]) -> bool {
+    listed.iter().any(|entry| {
+        let (name, held) = entry_parts(entry);
+        let on = match held {
+            Some(held) => held == port,
+            None => defaults.contains(&port),
+        };
+        on && match (
+            name.parse::<std::net::Ipv6Addr>(),
+            host.parse::<std::net::Ipv6Addr>(),
+        ) {
+            (Ok(listed), Ok(asked)) => listed == asked,
+            _ => allows(&[name.to_owned()], host),
+        }
+    })
+}
+
+/// A listed entry's name and the port it is held to, where it has one: `[v6]` and `[v6]:port`,
+/// `name:port` with one colon, or the name alone.
+fn entry_parts(entry: &str) -> (&str, Option<u16>) {
+    if let Some(rest) = entry.strip_prefix('[')
+        && let Some((inside, after)) = rest.split_once(']')
+    {
+        return (
+            inside,
+            after.strip_prefix(':').and_then(|port| port.parse().ok()),
+        );
+    }
+    match entry.split_once(':') {
+        Some((name, port)) if !port.contains(':') => match port.parse() {
+            Ok(port) => (name, Some(port)),
+            // Not a port: never a match, rather than the name on every port.
+            Err(_) => ("", None),
+        },
+        _ => (entry, None),
+    }
 }
 
 /// A running proxy, on a port of the loopback interface. It stops listening when dropped;
@@ -219,7 +269,7 @@ impl Allowed {
             None => &self.tunnel_ports,
             Some(_) => &self.plain_ports,
         };
-        ports.contains(&request.port) && allows(&self.hosts, &request.host)
+        allows_on(&self.hosts, &request.host, request.port, ports)
     }
 }
 
@@ -261,8 +311,8 @@ fn serve(mut client: TcpStream, allowed: &Allowed) {
             &mut client,
             "403 Forbidden",
             &format!(
-                "purlis's sandbox does not allow {}:{}: no egress preset of this project \
-                 lists it",
+                "purlis's sandbox does not allow {}:{}: no egress preset or host of this \
+                 project lists it",
                 request.host, request.port
             ),
         );
@@ -470,11 +520,38 @@ fn host_port(authority: &str) -> Option<(String, u16)> {
     (!host.is_empty()).then(|| (host.to_owned(), port))
 }
 
+/// Connects to `host` on `port`: to an address literal as listed, and to a name only at the
+/// addresses it resolves to now that a chat may reach ([`reachable`]), checked at every
+/// connect so a name rebound to this machine or a metadata service reaches nothing.
 fn connect(host: &str, port: u16) -> Option<TcpStream> {
-    (host, port)
-        .to_socket_addrs()
-        .ok()?
+    let resolve = |host: &str, port: u16| {
+        (host, port)
+            .to_socket_addrs()
+            .map(Iterator::collect)
+            .unwrap_or_default()
+    };
+    reachable(host, port, &resolve, &super::hosts::own_addresses())
+        .into_iter()
         .find_map(|addr| TcpStream::connect_timeout(&addr, PATIENCE).ok())
+}
+
+/// The addresses `host` on `port` is reached at, as `resolve` answers: an address literal as
+/// it is (it was listed as itself, and a listed address is checked when it is added), and a
+/// name's addresses less every one a chat is never let reach
+/// ([`super::hosts::refused_address`], with `own` this machine's interface addresses).
+pub fn reachable(
+    host: &str,
+    port: u16,
+    resolve: &dyn Fn(&str, u16) -> Vec<SocketAddr>,
+    own: &[std::net::IpAddr],
+) -> Vec<SocketAddr> {
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return resolve(host, port);
+    }
+    resolve(host, port)
+        .into_iter()
+        .filter(|addr| !super::hosts::refused_address(addr.ip(), own))
+        .collect()
 }
 
 fn answer(client: &mut TcpStream, status: &str, why: &str) {

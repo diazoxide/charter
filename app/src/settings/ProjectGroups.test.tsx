@@ -116,7 +116,13 @@ const NO_SAVING: SavingInForce = {
   repos_left_out: null,
 };
 
-const SANDBOX_OFF: SandboxState = { on: false, offer: false, said: null, never: [] };
+const SANDBOX_OFF: SandboxState = {
+  on: false,
+  offer: false,
+  said: null,
+  never: [],
+  hosts_changed: null,
+};
 
 /** A file as the core would answer it after `edits`: each edited key set or gone. */
 function applied(file: SettingsFile, edits: readonly SettingsEdit[]): SettingsFile {
@@ -892,6 +898,7 @@ describe("the sandbox, in Sandbox (ADR 0067 §7, ruling V78 d)", () => {
         on: true,
         offer: false,
         never: [],
+        hosts_changed: null,
         said: "1 of 4 chats started without the sandbox on this machine (25%); the bar is under 10%",
       },
     });

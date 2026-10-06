@@ -53,7 +53,8 @@ fn taking_the_offer_turns_the_sandbox_on_and_keeps_every_line_the_operator_wrote
     assert_eq!(
         Plane::read(project.path()).said().policy,
         Some(Policy {
-            egress: Preset::DEFAULT.to_vec()
+            egress: Preset::DEFAULT.to_vec(),
+            hosts: vec![],
         })
     );
     assert!(!offer_due(project.path()), "asked once");
@@ -68,7 +69,8 @@ fn a_sandbox_table_without_a_mode_gains_the_mode_and_keeps_its_egress() {
     assert_eq!(
         Plane::read(project.path()).said().policy,
         Some(Policy {
-            egress: vec![Preset::Forge]
+            egress: vec![Preset::Forge],
+            hosts: vec![],
         })
     );
 }
@@ -296,4 +298,97 @@ fn counting_keeps_the_offers_answer_and_answering_keeps_the_count() {
             no_backend: 0,
         }
     );
+}
+
+// -------------------------------------------------------------------------------------
+// The project's hosts: one Notice per change, on each machine (#1341)
+// -------------------------------------------------------------------------------------
+
+const HOSTS: &str = "[sandbox]\nmode = \"on\"\nhosts = [\"10.100.39.145:6443\", \"a.example\"]\n";
+
+fn changed(added: &[&str], removed: &[&str], now: &[&str]) -> Option<HostsChange> {
+    let owned = |list: &[&str]| list.iter().map(|one| (*one).to_owned()).collect();
+    Some(HostsChange {
+        added: owned(added),
+        removed: owned(removed),
+        now: owned(now),
+    })
+}
+
+#[test]
+fn a_teammate_is_told_once_of_the_hosts_a_project_already_has() {
+    let project = a_project(HOSTS);
+    let seen = hosts_changed(project.path());
+    assert_eq!(
+        seen,
+        changed(
+            &["10.100.39.145:6443", "a.example"],
+            &[],
+            &["10.100.39.145:6443", "a.example"]
+        )
+    );
+    acknowledge_hosts(project.path(), &seen.expect("a change").now).expect("kept");
+    assert_eq!(hosts_changed(project.path()), None, "told once");
+}
+
+#[test]
+fn a_change_names_what_was_added_and_what_was_taken_away() {
+    let project = a_project(HOSTS);
+    acknowledge_hosts(
+        project.path(),
+        &["10.100.39.145:6443".to_owned(), "a.example".to_owned()],
+    )
+    .expect("kept");
+    std::fs::write(
+        project.path().join(crate::plane::MANIFEST),
+        "[sandbox]\nmode = \"on\"\nhosts = [\"a.example\", \"*.b.example\"]\n",
+    )
+    .expect("a teammate's push");
+    assert_eq!(
+        hosts_changed(project.path()),
+        changed(
+            &["*.b.example"],
+            &["10.100.39.145:6443"],
+            &["a.example", "*.b.example"]
+        )
+    );
+}
+
+#[test]
+fn what_was_acknowledged_is_what_was_shown_so_a_later_change_is_still_told() {
+    let project = a_project(HOSTS);
+    // Shown before the next push, and acknowledged after it.
+    acknowledge_hosts(project.path(), &["a.example".to_owned()]).expect("kept");
+    assert_eq!(
+        hosts_changed(project.path()),
+        changed(
+            &["10.100.39.145:6443"],
+            &[],
+            &["10.100.39.145:6443", "a.example"]
+        )
+    );
+}
+
+#[test]
+fn a_project_with_no_hosts_or_no_sandbox_tells_nothing() {
+    assert_eq!(
+        hosts_changed(a_project("[sandbox]\nmode = \"on\"\n").path()),
+        None
+    );
+    // Hosts in a project whose chats are not sandboxed reach nothing yet: told once it is on.
+    assert_eq!(
+        hosts_changed(a_project("[sandbox]\nhosts = [\"a.example\"]\n").path()),
+        None
+    );
+}
+
+#[test]
+fn reordering_the_hosts_is_no_change() {
+    let project = a_project(HOSTS);
+    acknowledge_hosts(
+        project.path(),
+        &["a.example".to_owned(), "10.100.39.145:6443".to_owned()],
+    )
+    .expect("kept");
+    assert_eq!(hosts_changed(project.path()), None);
 }

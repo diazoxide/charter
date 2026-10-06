@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-use super::egress::{Limits, Proxy, allows};
+use super::egress::{Limits, Proxy, allows, allows_on, reachable};
 
 /// The listed host every carried test request goes to: the address itself, so a name that
 /// also resolves to `::1`, where another program on the machine may listen, is never asked.
@@ -411,5 +411,130 @@ fn a_tunnel_idle_both_ways_is_closed() {
         began.elapsed() < Duration::from_secs(4),
         "{:?}",
         began.elapsed()
+    );
+}
+
+/// #1341: a host listed with a port is reached on that port, and only there, through the proxy
+/// every wrapped chat reaches the network through: a private cluster's API on 6443, say.
+#[test]
+fn a_host_listed_with_its_port_is_tunnelled_to_on_that_port_alone() {
+    let (listener, port) = an_echo_server();
+    let echoed = echo_once(listener);
+    // The proxy a chat is given, which carries only HTTPS's and HTTP's ports for a host
+    // without one.
+    let proxy = Proxy::start(vec![format!("{LOOPBACK}:{port}")]).expect("a proxy");
+    let mut client = to(&proxy);
+    let said = status(
+        &mut client,
+        &format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"),
+    );
+    assert_eq!(said, "HTTP/1.1 200 Connection established");
+    client.write_all(b"ping").expect("through the tunnel");
+    let mut back = [0u8; 4];
+    client.read_exact(&mut back).expect("echoed back");
+    assert_eq!(&back, b"ping");
+    assert_eq!(echoed.join().expect("the server"), b"ping");
+}
+
+#[test]
+fn a_host_listed_without_a_port_is_not_reached_on_another_one() {
+    let (listener, port) = an_echo_server();
+    listener.set_nonblocking(true).expect("nonblocking");
+    let proxy = Proxy::start(vec![LOOPBACK.to_owned()]).expect("a proxy");
+    let mut client = to(&proxy);
+    let said = status(
+        &mut client,
+        &format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n"),
+    );
+    assert_eq!(said, "HTTP/1.1 403 Forbidden");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(listener.accept().is_err());
+}
+
+#[test]
+fn a_listed_port_holds_its_host_to_it_and_an_address_matches_as_written() {
+    let listed = [
+        "10.100.39.145:6443".to_owned(),
+        "*.internal.example:8443".to_owned(),
+        "[fd00::7]:443".to_owned(),
+        "api.example.com".to_owned(),
+    ];
+    let defaults = [443];
+    for (host, port, want) in [
+        ("10.100.39.145", 6443, true),
+        ("10.100.39.145", 443, false),
+        ("10.100.39.14", 6443, false),
+        ("a.internal.example", 8443, true),
+        ("a.internal.example", 443, false),
+        ("internal.example", 8443, false),
+        ("fd00::7", 443, true),
+        ("fd00:0::7", 443, true),
+        ("fd00::7", 8443, false),
+        ("api.example.com", 443, true),
+        ("api.example.com", 6443, false),
+    ] {
+        assert_eq!(
+            allows_on(&listed, host, port, &defaults),
+            want,
+            "{host}:{port}"
+        );
+    }
+}
+
+/// Review of #1341, 1: a wildcard never matches an address literal, through the proxy.
+#[test]
+fn a_wildcard_never_matches_an_address() {
+    let listed = ["*.0.0.1".to_owned(), "*.254.169.254".to_owned()];
+    assert!(!allows_on(&listed, "127.0.0.1", 443, &[443]));
+    assert!(!allows_on(&listed, "169.254.169.254", 80, &[80]));
+    assert!(!allows(&["*.0.0.1:8080".to_owned()], "127.0.0.1"));
+}
+
+/// Review of #1341, 3: a name is reached only at the addresses a chat may reach, as the
+/// resolver answers at this connect, so a name rebound to this machine or a metadata service
+/// reaches nothing. A listed address literal is reached as itself.
+#[test]
+fn a_name_is_reached_only_at_addresses_a_chat_may_reach() {
+    let at = |ip: &str| std::net::SocketAddr::new(ip.parse().unwrap(), 443);
+    let own: Vec<std::net::IpAddr> = vec!["192.168.1.7".parse().unwrap()];
+    let resolver = |answer: Vec<std::net::SocketAddr>| move |_: &str, _: u16| answer.clone();
+    let rebound = resolver(vec![
+        at("127.0.0.1"),
+        at("169.254.169.254"),
+        at("192.168.1.7"),
+        at("100.100.100.200"),
+        at("10.100.39.145"),
+    ]);
+    assert_eq!(
+        reachable("api.internal.example", 443, &rebound, &own),
+        [at("10.100.39.145")]
+    );
+    let only_loopback = resolver(vec![at("127.0.0.1")]);
+    assert_eq!(
+        reachable("127.0.0.1.nip.io", 443, &only_loopback, &own),
+        Vec::<std::net::SocketAddr>::new()
+    );
+    // An address literal the project listed is reached as itself.
+    let literal = resolver(vec![at("10.100.39.145")]);
+    assert_eq!(
+        reachable("10.100.39.145", 443, &literal, &own),
+        [at("10.100.39.145")]
+    );
+}
+
+/// Review of #1341, round 3: an AAAA answer that carries a refused IPv4 address is dropped.
+#[test]
+fn an_aaaa_answer_carrying_this_machine_or_metadata_is_dropped() {
+    let at = |ip: &str| std::net::SocketAddr::new(ip.parse().unwrap(), 443);
+    let answer = vec![
+        at("64:ff9b::a9fe:a9fe"),
+        at("::7f00:1"),
+        at("2002:7f00:1::1"),
+        at("fd00::7"),
+    ];
+    let resolve = move |_: &str, _: u16| answer.clone();
+    assert_eq!(
+        reachable("api.internal.example", 443, &resolve, &[]),
+        [at("fd00::7")]
     );
 }

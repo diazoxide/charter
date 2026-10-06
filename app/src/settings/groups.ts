@@ -93,6 +93,8 @@ export type CollectionEntry = {
   page?: string;
   /** The entry's name, as Rename starts from it (ST-4). */
   name?: string;
+  /** Whether it waits for Confirm (#1341): your own sandbox host, not yet confirmed here. */
+  confirm?: boolean;
 };
 
 /** One field of a collection's Add form, written to the entry's key `field`. */

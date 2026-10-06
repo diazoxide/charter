@@ -64,6 +64,18 @@ export function CollectionView({
     settings.filter((one) => entry.settings.includes(one.id));
   const mine = new Set(collection.entries.flatMap((entry) => entry.settings));
 
+  /** Confirms the entry (#1341): your own sandbox host, which reaches nothing until it is. */
+  const confirm = async (entry: CollectionEntry) => {
+    setRemoving(entry.id);
+    await driver.entry(key, {
+      collection: collection.name,
+      base: collection.base,
+      confirm: entry.id,
+    });
+    setRemoving(undefined);
+    settle();
+  };
+
   const remove = async (entry: CollectionEntry) => {
     setRemoving(entry.id);
     // Sent against the text this entry was drawn from, whatever is queued before it.
@@ -135,6 +147,18 @@ export function CollectionView({
                 onClick={() => setRenaming(entry.id)}
               >
                 Rename
+              </button>
+            )}
+            {entry.confirm && (
+              <button
+                type="button"
+                className="ui-setting-reset"
+                tabIndex={0}
+                disabled={removing !== undefined}
+                aria-label={`Confirm ${entry.label}`}
+                onClick={() => void confirm(entry)}
+              >
+                Confirm
               </button>
             )}
             <button
