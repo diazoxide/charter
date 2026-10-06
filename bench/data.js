@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791290131893,
+  "lastUpdate": 1791316145011,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3024,6 +3024,48 @@ window.BENCHMARK_DATA = {
             "value": 105.766386,
             "unit": "ms",
             "extra": "median of 5 runs: 102.206, 104.583, 105.766, 107.030, 109.012 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "af8adc1249e8ac2b501d4e27338a8a3dba341e74",
+          "message": "brokered git test: quote the stand-in filter so it really runs\n\nThe operator's global `mark` filter in brokered_git.rs was written\nunquoted, `smudge = sh -c 'touch smudged; cat'`. git reads the `;` as\nthe start of a comment, so the command was cut to `sh -c 'touch smudged`,\nfailed, and, not being `required`, was skipped without a word. The\nterminal's clone therefore never ran it, and the assertion that the\napp's clone does not run it checked nothing. Linux CI caught the first\nhalf.\n\nThe value is now double-quoted and marks one absolute path in the\nworld's base directory, checked and cleared after each run, so the\nterminal's clone must run it and the app's clone and worktree must not.\nThe terminal's runs are asserted successful, and every failure prints\nthe run's stderr. The core broker tests' `evil` filter had the same\nunquoted value and is quoted too, so their \"the filter never ran\"\nassertions are no longer vacuous.\n\nRefs #1335\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T23:40:08+04:00",
+          "tree_id": "48522879f673ca83b1983426a7a0be192c787f03",
+          "url": "https://github.com/purlis/purlis/commit/af8adc1249e8ac2b501d4e27338a8a3dba341e74"
+        },
+        "date": 1791316143863,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.527177,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.499, 0.499, 0.527, 0.528, 0.564 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.922821,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.699, 16.747, 16.923, 17.117, 17.191 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.3217695,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.817, 103.494, 104.322, 105.027, 105.753 ms"
           }
         ]
       }
