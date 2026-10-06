@@ -247,6 +247,7 @@ and none takes a workspace, a project or a path:
 | --- | --- |
 | `todo_list`, `todo_add`, `todo_done` | The workspace's todos; closing one writes its trace to memory |
 | `memory_search`, `memory_add` | The workspace's memory |
+| `persona_remember` | One memory of the chat's own persona, or of shared memory; in a chat purlis started, purlis writes it for the chat, and the tool never writes it itself there (under Codex, which hands the tool no connection to purlis, run `purlis persona remember` in the chat) |
 | `session_record_list`, `session_record_read` | The session records where the chat works, by file name |
 | `change_status` | The workspace's cross-repo changes, from their records; the forge is not asked |
 | `ask_operator` | A question put to you through the harness's own prompt; the model never answers it |

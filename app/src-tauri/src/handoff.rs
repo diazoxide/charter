@@ -136,6 +136,8 @@ pub fn answer(
         // A brokered write, not a handoff: no ticket, because a record is the chat's own to
         // write and the line can only name the chat whose token it carries (#1332).
         Ask::SessionRecord(record) => crate::smartclose::record(held, &record),
+        // Another brokered write: the project's own files, for the chat that asks (#1333).
+        Ask::Write(write) => crate::brokered::write(held, &write),
     }
 }
 

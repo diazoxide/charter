@@ -84,6 +84,10 @@ purlis persona remember <name> "<durable fact>"       # persistent, committed
 purlis persona remember <name> "<fact>" --shared      # for every persona
 ```
 
+In a chat purlis started, the `persona_remember` tool does the same for the persona this chat
+runs as (or, with `shared`, for every persona), and purlis writes it even where the chat's
+sandbox would not let it.
+
 Record what the work *taught* you, such as a decision, a gotcha or a verified fact. Do not
 record what the repo already records. **Never put a secret in memory**; secrets belong in the
 vault.

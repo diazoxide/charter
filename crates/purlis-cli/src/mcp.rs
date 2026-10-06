@@ -88,6 +88,9 @@ impl ServerHandler for Server {
         if name == chattools::SESSION_RECORD {
             return Ok(done(blocking(move || session_record(&args)).await));
         }
+        if name == chattools::PERSONA_REMEMBER {
+            return Ok(done(blocking(move || persona_remember(&args)).await));
+        }
         let name = name.to_owned();
         Ok(done(
             blocking(move || {
@@ -134,6 +137,65 @@ fn session_record(args: &serde_json::Map<String, serde_json::Value>) -> Result<S
         }
         Err(crate::session::NotWritten::Refused(why) | crate::session::NotWritten::Failed(why)) => {
             Err(format!("nothing was written: {why}"))
+        }
+    }
+}
+
+/// `persona_remember`: the one operation `purlis persona remember` run in the chat performs, so
+/// the app that started the chat writes it (a brokered write, #1333). Answered with what the
+/// command says.
+///
+/// **This server runs outside the chat's sandbox, so in a chat the app started it never writes
+/// itself.** It writes only where there is no app that could have: no chat, or an app that has
+/// gone. A harness that hands it no connection to the app (Codex), an app that dropped the ask,
+/// or one that did not answer, is refused in a sentence: a write made here would be one no
+/// sandbox bounds, no rate holds and the trace does not credit.
+fn persona_remember(args: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
+    use crate::brokered::Forwarded;
+    let (text, title, shared) = chattools::persona_remember_args(args)?;
+    let write = purlis_core::brokered::Write::PersonaRemember {
+        text: text.clone(),
+        title: title.clone(),
+        shared,
+    };
+    write.check()?;
+    let said = |path: &str| {
+        format!(
+            "Remembered ({}persistent) → {path}",
+            if shared { "shared " } else { "" }
+        )
+    };
+    match crate::brokered::forwarded(write) {
+        Forwarded::Written { path, .. } => Ok(said(&path)),
+        Forwarded::Refused(why) | Forwarded::Unsure(why) => {
+            Err(format!("nothing was written: {why}"))
+        }
+        Forwarded::NotTaken(not) if !not.may_write_outside() => {
+            Err(format!("nothing was written: {}", not.refusal()))
+        }
+        Forwarded::NotTaken(_) => {
+            let here = crate::Here::read()?;
+            let root = here.plane.root();
+            if let purlis_core::compat::Compat::ReadOnly(why) = purlis_core::compat::read(root) {
+                return Err(format!("nothing was written: {why}"));
+            }
+            let owner = if shared {
+                purlis_core::contain::SHARED_PERSONA.to_owned()
+            } else {
+                here.active_persona(None).ok_or_else(|| {
+                    "this chat runs as no persona, so it has no persona memory of its own: \
+                     remember it with shared, or in its workspace with memory_add"
+                        .to_owned()
+                })?
+            };
+            let path = purlis_core::brokered::remember_persona(
+                root,
+                &owner,
+                &text,
+                title.as_deref(),
+                chrono::Local::now().naive_local(),
+            )?;
+            Ok(said(&crate::voice::rel(root, &path)))
         }
     }
 }
