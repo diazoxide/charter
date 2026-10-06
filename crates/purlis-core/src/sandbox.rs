@@ -67,6 +67,8 @@ pub struct Policy {
     /// `certificate-checks`: whether a chat may ask the system's certificate check, which Go
     /// programs such as `gh` need to verify a host (D-1337-7). Off unless the file says `true`.
     pub certificate_checks: bool,
+    /// Each persona's own grants: `[sandbox.personas.<name>]` in the committed file (#1362).
+    pub personas: std::collections::BTreeMap<String, persona::Grants>,
 }
 
 /// The key that lets a chat ask the system's certificate check.
@@ -151,9 +153,10 @@ impl Plane {
             .collect()
     }
 
-    /// The hosts that reach every chat here because this file says so: its own `[sandbox]
-    /// hosts`, then, while the `forge` preset is on, its `[[forge]]` hosts — what the one-time
-    /// Notice of a change names (#1341).
+    /// The hosts that reach chats here because this file says so: its own `[sandbox]
+    /// hosts`, then, while the `forge` preset is on, its `[[forge]]` hosts, then each persona's
+    /// own as `<host> for <persona> chats` (#1362), so the Notice says which chats a host
+    /// reaches — what the one-time Notice of a change names (#1341).
     pub fn granted_hosts(&self) -> Vec<String> {
         let Some(policy) = self.said().policy else {
             return Vec::new();
@@ -165,6 +168,14 @@ impl Plane {
                     out.push(host);
                 }
             }
+        }
+        for (persona, grants) in &policy.personas {
+            out.extend(
+                grants
+                    .hosts
+                    .iter()
+                    .map(|host| format!("{host} for {persona} chats")),
+            );
         }
         out
     }
@@ -230,6 +241,8 @@ pub enum Refusal {
     Host(String, String),
     /// `certificate-checks` that is not `true` or `false`.
     CertificateChecksNotABool,
+    /// Something in `personas` that grants nothing ([`persona::read`]), as one sentence.
+    Persona(String),
 }
 
 impl fmt::Display for Refusal {
@@ -280,6 +293,7 @@ impl fmt::Display for Refusal {
                 "{TABLE}.{CERTIFICATE_CHECKS} in {FILE} is not true or false; certificate checks \
                  stay off"
             ),
+            Self::Persona(said) => f.write_str(said),
         }
     }
 }
@@ -309,6 +323,7 @@ impl Said {
                     egress: Preset::DEFAULT.to_vec(),
                     hosts: Vec::new(),
                     certificate_checks: false,
+                    personas: std::collections::BTreeMap::new(),
                 }),
                 refused: vec![Refusal::NotATable],
             };
@@ -327,7 +342,12 @@ impl Said {
             }
         };
         for key in table.keys() {
-            if key != "mode" && key != "egress" && key != hosts::KEY && key != CERTIFICATE_CHECKS {
+            if key != "mode"
+                && key != "egress"
+                && key != hosts::KEY
+                && key != CERTIFICATE_CHECKS
+                && key != persona::KEY
+            {
                 refused.push(Refusal::UnknownKey(key.clone()));
             }
         }
@@ -373,11 +393,14 @@ impl Said {
                 false
             }
         };
+        let (personas, not) = persona::read(table.get(persona::KEY), FILE);
+        refused.extend(not.into_iter().map(Refusal::Persona));
         Self {
             policy: on.then_some(Policy {
                 egress,
                 hosts,
                 certificate_checks,
+                personas,
             }),
             refused,
         }
@@ -1054,15 +1077,27 @@ impl Compiled {
         }
     }
 
-    /// `policy`, for a chat in `plane` at `root`, on `machine`: its presets' hosts, then the
-    /// hosts in force at every level ([`hosts::in_force`]): the project's, then this machine's.
-    pub fn of(policy: &Policy, plane: &Plane, root: &Path, machine: &Machine) -> Self {
+    /// `policy`, for a chat in `plane` at `root` running as `persona`, on `machine`: its
+    /// presets' hosts, then the hosts in force at every level ([`hosts::in_force`]): the
+    /// project's, this machine's, then the persona's (#1362). A chat on another persona, or on
+    /// none, gets no persona's hosts.
+    pub fn of(
+        policy: &Policy,
+        plane: &Plane,
+        root: &Path,
+        machine: &Machine,
+        persona: Option<&str>,
+    ) -> Self {
         let denied = Denied::of(root, machine);
         let mut reached = hosts(&policy.egress, plane);
+        let personas = persona::of(&policy.personas, persona)
+            .map(|grants| grants.hosts.as_slice())
+            .unwrap_or_default();
         let granted = hosts::off_this_machine(
             hosts::in_force(
                 &policy.hosts,
                 &hosts::personal(root),
+                personas,
                 &hosts::Locks::of(root),
             ),
             &hosts::own_addresses(),
@@ -1776,6 +1811,17 @@ pub fn for_start(
     machine: &Machine,
     has: &dyn Fn(&str) -> bool,
 ) -> Result<Option<Applied>, NotStarted> {
+    for_start_as(harness, root, machine, has, None)
+}
+
+/// [`for_start`] for a chat running as `persona`, which adds the persona's own grants (#1362).
+pub fn for_start_as(
+    harness: Harness,
+    root: &Path,
+    machine: &Machine,
+    has: &dyn Fn(&str) -> bool,
+    persona: Option<&str>,
+) -> Result<Option<Applied>, NotStarted> {
     // One spelling of the plane for every harness: the kernel's.
     let real_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let root = real_root.as_path();
@@ -1797,7 +1843,7 @@ pub fn for_start(
     if let Some(missing) = backend::missing(machine.os, has) {
         return Err(NotStarted::NoBackend(missing));
     }
-    applied(harness, compile, &policy, &plane, root, machine).map(Some)
+    applied(harness, compile, &policy, &plane, root, machine, persona).map(Some)
 }
 
 /// `policy` for a chat of `harness` in `plane` at `root` on `machine`, compiled by `compile`
@@ -1809,8 +1855,9 @@ fn applied(
     plane: &Plane,
     root: &Path,
     machine: &Machine,
+    persona: Option<&str>,
 ) -> Result<Applied, NotStarted> {
-    let compiled = Compiled::of(policy, plane, root, machine);
+    let compiled = Compiled::of(policy, plane, root, machine, persona);
     let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
     Ok(Applied {
         harness,
@@ -1832,7 +1879,7 @@ pub(crate) fn applied_for(
     machine: &Machine,
 ) -> Result<Applied, NotStarted> {
     let compile = compiler(harness).expect("a harness with a compiler");
-    applied(harness, compile, policy, plane, root, machine)
+    applied(harness, compile, policy, plane, root, machine, None)
 }
 
 /// [`for_start`] without asking this machine for a backend, for a test of a compiler alone.
@@ -1848,7 +1895,7 @@ pub(crate) fn compiled_anyway(
         .policy
         .expect("a plane that turned the sandbox on");
     let compile = compiler(harness).ok_or(NotStarted::NoCompiler(harness))?;
-    applied(harness, compile, &policy, &plane, root, machine)
+    applied(harness, compile, &policy, &plane, root, machine, None)
 }
 
 /// A person's choice, in the window, to start one chat without the sandbox (ADR 0067 §7,
@@ -2013,6 +2060,7 @@ pub fn decide(
     machine: &Machine,
     has: &dyn Fn(&str) -> bool,
     opt_out: Option<&OptOut>,
+    persona: Option<&str>,
 ) -> Result<Option<Decided>, NotStarted> {
     // A file that cannot be read may say `[sandbox]`, so it never reads as "not set": it falls
     // through to the refusal below, which the opt-out sits inside.
@@ -2032,7 +2080,8 @@ pub fn decide(
             reason: None,
         })));
     }
-    for_start(harness, root, machine, has).map(|applied| applied.map(Decided::Sandboxed))
+    for_start_as(harness, root, machine, has, persona)
+        .map(|applied| applied.map(Decided::Sandboxed))
 }
 
 /// What the new-chat picker says about the sandbox for a chat of one harness, before anything
@@ -2088,7 +2137,7 @@ pub fn ahead(
             | NotStarted::PlaneUnreadable => None,
         },
     };
-    match decide(harness, root, machine, has, None) {
+    match decide(harness, root, machine, has, None, None) {
         Ok(None) => Ahead::Off,
         Ok(Some(Decided::Sandboxed(applied))) => match check(&applied) {
             Ok(()) => Ahead::Sandboxed,
@@ -2138,6 +2187,7 @@ pub mod egress;
 pub mod hosts;
 pub mod local;
 pub mod opencode;
+pub mod persona;
 pub mod planted;
 pub mod program;
 pub mod seatbelt;
@@ -2150,5 +2200,7 @@ mod egress_tests;
 mod hosts_tests;
 #[cfg(test)]
 mod opencode_tests;
+#[cfg(test)]
+mod persona_tests;
 #[cfg(test)]
 mod tests;

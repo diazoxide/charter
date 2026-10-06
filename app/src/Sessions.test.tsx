@@ -166,6 +166,8 @@ function core(
         row: ALPHAS.find((one) => one.path === given.path) ?? ROOT_RECORDS[0],
         place: "alpha",
         body: "# Ship the widget\n\n## Goal\n\nShip it.\n\n## Open\n\n- the **docs**\n",
+        persona_hosts: [],
+        resume_holds: false,
       };
     if (cmd === "resume_session") {
       const answer = on.resumes?.[resumed];

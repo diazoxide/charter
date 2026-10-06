@@ -332,6 +332,24 @@ export const commands = {
 	 */
 	acknowledgeProjectHosts: (plane: PlaneId, shown: string[]) => typedError<SandboxState, string>(__TAURI_INVOKE("acknowledge_project_hosts", { plane, shown })),
 	/**
+	 *  Whether chat `session` holds the asking chat's persona grants instead of its own, and whose
+	 *  (#1362): `null` for a chat that holds its own.
+	 */
+	personaGrantsHeld: (plane: PlaneId, session: number) => typedError<{
+	/**
+	 *  The chat that opened it by a handoff, by the name the person saw; `null` for a chat a
+	 *  Resume of a session record started.
+	 */
+	from: string | null,
+	/**  The persona it was opened as, whose hosts it cannot reach yet. */
+	persona: string | null,
+} | null, string>(__TAURI_INVOKE("persona_grants_held", { plane, session })),
+	/**
+	 *  The person allowed chat `session` its own persona's grants from its tab's Notice (#1362):
+	 *  they apply from its next start, since a chat's sandbox is compiled as it starts.
+	 */
+	allowPersonaGrants: (plane: PlaneId, session: number) => typedError<boolean, string>(__TAURI_INVOKE("allow_persona_grants", { plane, session })),
+	/**
 	 *  Types SD-30's install command into shell session `session` at the project root, and does
 	 *  not run it (ruling V78 c): installing needs `sudo`, so the person reads it and presses
 	 *  Return. The window sends no text; the line is built here, and it is typed only into a shell
@@ -475,6 +493,13 @@ export const commands = {
 	 *  refused start ends nothing. On a blocking thread, as `start_chat` is.
 	 */
 	startChatFresh: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("start_chat_fresh", { plane, session, columns, rows })),
+	/**
+	 *  **Restart now** (#1362): chat `session` started again as the same chat, resuming its
+	 *  conversation, so what changed for it at its start (the persona grants the person just
+	 *  allowed) applies. The window asks once the chat's turn has ended. The answer is the new one
+	 *  as the window draws it; the old one is ended once the new one has started.
+	 */
+	restartChat: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("restart_chat", { plane, session, columns, rows })),
 	/**
 	 *  Every chat this plane has open that is running on instructions the plane has changed since
 	 *  it started (charter#369): its tab is marked, and the mark names the files. The window asks
@@ -638,6 +663,16 @@ export const commands = {
 	place: string,
 	/**  The record after charter's frontmatter: its `# title` and its five sections. */
 	body: string,
+	/**
+	 *  The hosts the record's persona is granted in this project (#1362), each as the sandbox
+	 *  spells it: what a Resume as that persona could reach. Empty for none.
+	 */
+	persona_hosts: string[],
+	/**
+	 *  Whether a Resume holds back those hosts until the person allows them on the new chat's
+	 *  tab, because they reach past the default persona's (#1362, D-1362-6).
+	 */
+	resume_holds: boolean,
 } | null, string>(__TAURI_INVOKE("session_record", { plane, path })),
 	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
@@ -2649,6 +2684,20 @@ export type GoneProject = {
 	said: string,
 };
 
+/**
+ *  A handed-off chat that holds the asking chat's persona grants instead of its own (#1362,
+ *  D-1362-5), as its tab's Notice says it.
+ */
+export type GrantsHeld = {
+	/**
+	 *  The chat that opened it by a handoff, by the name the person saw; `null` for a chat a
+	 *  Resume of a session record started.
+	 */
+	from: string | null,
+	/**  The persona it was opened as, whose hosts it cannot reach yet. */
+	persona: string | null,
+};
+
 /**  What became of a reference handed to a chat. */
 export type Handed = 
 /**  Typed into the chat, unsent: `text` is what was typed. */
@@ -4453,6 +4502,16 @@ export type SessionRecordView = {
 	place: string,
 	/**  The record after charter's frontmatter: its `# title` and its five sections. */
 	body: string,
+	/**
+	 *  The hosts the record's persona is granted in this project (#1362), each as the sandbox
+	 *  spells it: what a Resume as that persona could reach. Empty for none.
+	 */
+	persona_hosts: string[],
+	/**
+	 *  Whether a Resume holds back those hosts until the person allows them on the new chat's
+	 *  tab, because they reach past the default persona's (#1362, D-1362-6).
+	 */
+	resume_holds: boolean,
 };
 
 /**  What a save is: Edit as TOML's whole text, or a form's changes to the text it was read as. */

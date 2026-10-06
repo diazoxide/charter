@@ -411,6 +411,7 @@ mod tests {
                 egress: crate::sandbox::Preset::DEFAULT.to_vec(),
                 hosts: vec![],
                 certificate_checks: false,
+                personas: Default::default(),
             })
         );
         assert!(said.refused.is_empty(), "{:?}", said.refused);

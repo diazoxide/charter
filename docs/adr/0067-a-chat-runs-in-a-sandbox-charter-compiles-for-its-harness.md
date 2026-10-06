@@ -65,6 +65,33 @@ hosts on this machine, unless policy forbids them). Workspaces have no sandbox s
 allowed from a block's Notice for one chat stays section 3's audited exception; allowing it in
 the project is a change to the project's committed settings and follows this rule.
 
+*Amended 2026-10-06 (#1362; D-1362-1 and D-1362-5):* **a persona carries the hosts its chats
+reach, as a fourth level.** The levels are Policy, Project, You and **Persona**: the project's
+committed settings may grant one persona's chats hosts of their own
+(`[sandbox.personas.<persona>] hosts`), which a chat running as that persona reaches and no
+other chat does. They follow the project's rule above: committed, told once to each teammate
+when they change, and lockable by policy.
+
+- **They live in the project's committed settings, never in the persona's own definition**
+  (D-1362-1). A chat may edit its own persona's charter (section 2, as amended), so a grant
+  written there would be a grant a chat could write itself; the project's settings file is one
+  no chat writes.
+- **They are fixed when the chat starts.** A chat that names no persona takes the default
+  persona's; one that switches persona mid-chat keeps the grants it started with until its next
+  start.
+- **A handoff never widens what a chat reaches** (D-1362-5). A chat opened by another chat's
+  handoff holds the grants the asking chat itself runs with, taken from purlis's own record of
+  that chat (its own hold included, so a chain of handoffs never climbs) and never from the
+  request, until the person allows its own on its tab. A handoff to a persona whose hosts the
+  asking chat already reaches, and a chat the person starts from the window, hold their own.
+- **A Resume never widens it either** (D-1362-6). A session record's persona is written from
+  what the chat said it was, so a Resume as a persona whose hosts reach past the default
+  persona's holds the default's grants until the person allows its own. The record's view says
+  the persona's hosts and that a Resume holds them back.
+- **Allowed grants apply at a start.** The person's Allow takes effect when the chat starts
+  again; the tab offers Restart now, which starts it again resuming its conversation once its
+  turn has ended.
+
 ### 2. One schema, compiled per harness
 
 The policy is neutral data. Each harness gets an adapter that compiles it, in the same shape as

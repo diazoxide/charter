@@ -546,6 +546,8 @@ impl Chats {
             &purlis_core::sandbox::Machine::this(),
             &purlis_core::sandbox::backend::installed,
             None,
+            // A chat on no profile adopts no persona, so no persona's grants (#1362).
+            None,
         )
         .map_err(|refused| refused.to_string())?;
         let (applied, lifted) = match decided {
@@ -689,6 +691,9 @@ impl Chats {
                 show_footer: chat.show_footer,
                 resuming: None,
                 without_sandbox: None,
+                // A handed-off chat keeps holding the asking chat's persona grants across a
+                // relaunch until the person allows its own (#1362, D-1362-5).
+                held: chat.held.clone(),
             },
             root,
         )?;
@@ -1155,6 +1160,40 @@ impl Chats {
         from.report = owed;
         drop(open);
         self.write_it_down();
+    }
+
+    /// Chat `session`'s own record, as the app keeps it while it is open: what a handoff from it
+    /// reads its grants from (#1362), never the request.
+    pub fn recorded_chat(&self, session: u32) -> Option<Chat> {
+        lock(&self.open).get(&session).map(|one| one.chat.clone())
+    }
+
+    /// Whose persona grants chat `session` holds instead of its own (#1362, D-1362-5/6): the
+    /// chat that opened it by a handoff, by the name the person saw (none for a Resume), and the
+    /// persona it was started as. `None` for a chat that holds its own, or one not open.
+    pub fn grants_held(&self, session: u32) -> Option<(Option<String>, Option<String>)> {
+        let open = lock(&self.open);
+        let one = open.get(&session)?;
+        one.chat.held.as_ref()?;
+        Some((
+            one.chat.from.as_ref().map(|from| from.name.clone()),
+            one.chat.persona.clone(),
+        ))
+    }
+
+    /// The person allowed chat `session` its own persona's grants (#1362): it no longer holds
+    /// another's, from its next start, and the record says so. Answers whether it held any.
+    pub fn allow_own_grants(&self, session: u32) -> bool {
+        let mut open = lock(&self.open);
+        let Some(one) = open.get_mut(&session) else {
+            return false;
+        };
+        if one.chat.held.take().is_none() {
+            return false;
+        }
+        drop(open);
+        self.write_it_down();
+        true
     }
 
     /// Chat `session`'s own harness has put it in conversation `id` — the first one a Codex
@@ -1634,11 +1673,27 @@ impl Chats {
     /// started**, so a refused start leaves it running and recorded as it was; while both are
     /// open, [`Self::record`] writes the newer. Ending the old one is the caller's next step
     /// (`Held::start_chat_fresh`), which takes it off the board too.
+    /// The tests' name for [`Self::start_again`] without the conversation; the app asks
+    /// through `Held::start_chat_fresh`.
+    #[cfg(test)]
     pub fn start_fresh(
         &self,
         session: u32,
         root: &std::path::Path,
         size: Size,
+    ) -> Result<u32, String> {
+        self.start_again(session, root, size, false)
+    }
+
+    /// [`Self::start_fresh`], or with `resuming` the same chat started again resuming its
+    /// conversation (**Restart now**, #1362): what is decided at a start — its sandbox, the
+    /// persona grants it holds — is decided again, and the conversation carries on.
+    pub fn start_again(
+        &self,
+        session: u32,
+        root: &std::path::Path,
+        size: Size,
+        resuming: bool,
     ) -> Result<u32, String> {
         let was = lock(&self.open)
             .get(&session)
@@ -1649,12 +1704,15 @@ impl Chats {
                 run: None,
                 ..was.identity.clone()
             },
-            resume: None,
+            resume: if resuming { was.resume.clone() } else { None },
             pid: None,
             number: None,
             ..was
         };
-        let started = self.start_recorded(&again, root, size, Why::Again)?;
+        // A restart that resumes begins its run as a relaunch does: `reopen` where the
+        // conversation came back.
+        let why = if resuming { Why::Relaunch } else { Why::Again };
+        let started = self.start_recorded(&again, root, size, why)?;
         // **It keeps its place** (#1246): the window puts the new session in the old one's pane,
         // so the record puts it where the old one was in the strip's order. Unplaced, it would
         // go last, and the next launch would draw it at the end of the strip.
@@ -4869,6 +4927,7 @@ mod tests {
                 show_footer: false,
                 resuming: None,
                 without_sandbox: None,
+                held: None,
             },
             &root,
         )

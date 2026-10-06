@@ -77,6 +77,15 @@ export function SessionRecordTab({ plane, path }: { plane: PlaneId; path: string
             { label: "Written", value: row.when },
             { label: "Where", value: record.place },
             { label: "Persona", value: row.persona ?? "none" },
+            {
+              label: "Persona's hosts",
+              value:
+                record.persona_hosts.length === 0
+                  ? "none of its own"
+                  : record.resume_holds
+                    ? `${record.persona_hosts.join(", ")}; Resume holds them back until you allow them on the new chat's tab`
+                    : record.persona_hosts.join(", "),
+            },
             { label: "Harness", value: row.harness ?? "not recorded" },
             {
               label: "Conversation",

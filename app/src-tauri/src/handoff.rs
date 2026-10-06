@@ -250,6 +250,20 @@ fn is_open(held: &Held, chat: u32) -> bool {
         .any(|open| open.session == chat)
 }
 
+/// **What a chat handed off to `target` holds** (#1362, D-1362-5): the grants the asking chat
+/// `asking` itself runs with (`start::runs_with`, from the app's own record of it, its own hold
+/// included), unless `target`'s hosts are all among them. So a chat that holds another
+/// persona's grants hands off holding them still, and a chain of handoffs never climbs.
+fn holds_after_handoff(
+    policy: Option<&purlis_core::sandbox::Policy>,
+    asking: &Chat,
+    root: &std::path::Path,
+    target: Option<&str>,
+) -> Option<purlis_core::reopen::HeldGrants> {
+    let trusted = purlis_core::start::runs_with(asking, root);
+    purlis_core::sandbox::persona::held_unless_within(policy, trusted.as_deref(), target)
+}
+
 /// The size a handed-off chat starts at, the same one a relaunch uses: it has no pane yet to
 /// ask, and the pane it lands in tells it the real one when it is first shown.
 const STARTING: Size = Size {
@@ -358,6 +372,23 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         .persona
         .clone()
         .or_else(|| start::persona_for_a_new_chat(root));
+    // **A handoff never widens what the asking chat reaches** (#1362, D-1362-5): where the
+    // persona it hands to has hosts the asking chat does not run with, the new chat holds the
+    // asking chat's grants — read from this app's record of that chat, never from the
+    // request — until the person allows its own on its tab.
+    let asking_chat = held
+        .chats()
+        .recorded_chat(from)
+        .ok_or_else(|| format!("chat {from} is not one this app has open"))?;
+    let held_grants = holds_after_handoff(
+        purlis_core::sandbox::Plane::read(root)
+            .said()
+            .policy
+            .as_ref(),
+        &asking_chat,
+        root,
+        persona.as_deref(),
+    );
     // Its own name is a number no chat in this plane has had, dealt now so the chat can be
     // started under it: with no task name its tab says `<persona> <N>`, the ordinary default,
     // and four handoffs from one chat are four different tabs (charter-app#258).
@@ -375,6 +406,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
             show_footer: false,
             resuming: None,
             without_sandbox: None,
+            held: held_grants.clone(),
         },
         root,
     )
@@ -417,6 +449,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
                 Owed::Nothing
             },
         }),
+        held: held_grants,
         renamed_from: None,
         ..Default::default()
     };
@@ -562,6 +595,7 @@ mod tests {
                 show_footer: false,
                 resuming: None,
                 without_sandbox: None,
+                held: None,
             },
             root,
         )
@@ -621,6 +655,89 @@ mod tests {
             Answer::Ticket { ticket } => ticket,
             other => panic!("a ticket, not {other:?}"),
         }
+    }
+
+    const PERSONAS: &str = "[sandbox]\nmode = \"on\"\negress = []\n\
+                            [sandbox.personas.devops]\nhosts = [\"10.100.39.145:6443\"]\n\
+                            [sandbox.personas.qa]\nhosts = []\n";
+
+    /// #1362, D-1362-5: a chat that holds another persona's grants hands off holding them, so a
+    /// chain of handoffs (qa → devops → devops) never climbs past the first chat's grants; a chat
+    /// that holds its own hands off widening nothing it already reaches.
+    #[test]
+    fn a_held_chat_s_own_handoff_stays_held() {
+        let policy = purlis_core::sandbox::Plane::of(Some(PERSONAS))
+            .said()
+            .policy;
+        let root = tempfile::tempdir().expect("a project");
+        let qa = Chat {
+            persona: Some("qa".to_owned()),
+            ..Default::default()
+        };
+        let b_holds = holds_after_handoff(policy.as_ref(), &qa, root.path(), Some("devops"))
+            .expect("qa to devops is held");
+        assert_eq!(b_holds.persona.as_deref(), Some("qa"));
+        let b = Chat {
+            persona: Some("devops".to_owned()),
+            held: Some(b_holds),
+            ..Default::default()
+        };
+        let c_holds = holds_after_handoff(policy.as_ref(), &b, root.path(), Some("devops"))
+            .expect("B's own handoff to devops stays held");
+        assert_eq!(c_holds.persona.as_deref(), Some("qa"));
+        // B once allowed hands off to devops holding its own.
+        let allowed = Chat { held: None, ..b };
+        assert_eq!(
+            holds_after_handoff(policy.as_ref(), &allowed, root.path(), Some("devops")),
+            None
+        );
+    }
+
+    /// #1362: Allow clears a chat's hold, and the record written says so, so a relaunch starts
+    /// it with its own persona's grants.
+    #[test]
+    fn allow_own_grants_clears_the_hold_and_the_record_keeps_it_cleared() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let chat = Chat {
+            program: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 5".to_owned()],
+            name: "sh".to_owned(),
+            persona: Some("devops".to_owned()),
+            held: Some(purlis_core::reopen::HeldGrants {
+                persona: Some("qa".to_owned()),
+            }),
+            ..Default::default()
+        };
+        let session = held.chats().start(&chat, STARTING).expect("it runs");
+        assert_eq!(
+            held.chats().grants_held(session),
+            Some((None, Some("devops".to_owned())))
+        );
+        assert!(
+            held.chats()
+                .record()
+                .chats
+                .iter()
+                .any(|chat| chat.held.is_some()),
+            "the record holds it until it is allowed"
+        );
+
+        assert!(held.chats().allow_own_grants(session));
+
+        assert_eq!(held.chats().grants_held(session), None);
+        assert!(
+            !held.chats().allow_own_grants(session),
+            "nothing left to allow"
+        );
+        // What the record is written from: the hold is gone from it too.
+        let recorded = held.chats().record();
+        assert!(
+            recorded.chats.iter().all(|chat| chat.held.is_none()),
+            "{recorded:?}"
+        );
     }
 
     #[test]

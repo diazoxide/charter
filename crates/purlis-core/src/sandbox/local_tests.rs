@@ -56,6 +56,7 @@ fn taking_the_offer_turns_the_sandbox_on_and_keeps_every_line_the_operator_wrote
             egress: Preset::DEFAULT.to_vec(),
             hosts: vec![],
             certificate_checks: false,
+            personas: Default::default(),
         })
     );
     assert!(!offer_due(project.path()), "asked once");
@@ -73,6 +74,7 @@ fn a_sandbox_table_without_a_mode_gains_the_mode_and_keeps_its_egress() {
             egress: vec![Preset::Forge],
             hosts: vec![],
             certificate_checks: false,
+            personas: Default::default(),
         })
     );
 }

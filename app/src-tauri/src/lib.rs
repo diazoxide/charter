@@ -816,6 +816,9 @@ fn resume_session(
         active: false,
         profile: resumed.start.profile.clone(),
         persona: resumed.start.persona.clone(),
+        // The default persona's grants, where the record's persona reaches past them, until the
+        // person allows its own on its tab (#1362, D-1362-6).
+        held: resumed.start.held.clone(),
         show_footer: false,
         pinned: false,
         number: None,
@@ -1248,6 +1251,7 @@ fn start_chat_in(
         show_footer,
         resuming: None,
         without_sandbox,
+        held: None,
     };
     let ready = purlis_core::start::ready(&start, root)?;
     let chat = Chat {
@@ -1536,6 +1540,28 @@ async fn start_chat_fresh(
     let held = planes.held(&plane)?;
     tauri::async_runtime::spawn_blocking(move || {
         let started = held.start_chat_fresh(session, Size { columns, rows })?;
+        drawn(&held, started)
+    })
+    .await
+    .map_err(|err| format!("purlis could not start the chat: {err}"))?
+}
+
+/// **Restart now** (#1362): chat `session` started again as the same chat, resuming its
+/// conversation, so what changed for it at its start (the persona grants the person just
+/// allowed) applies. The window asks once the chat's turn has ended. The answer is the new one
+/// as the window draws it; the old one is ended once the new one has started.
+#[tauri::command]
+#[specta::specta]
+async fn restart_chat(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    columns: u16,
+    rows: u16,
+) -> Result<OpenChat, String> {
+    let held = planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let started = held.restart_chat(session, Size { columns, rows })?;
         drawn(&held, started)
     })
     .await

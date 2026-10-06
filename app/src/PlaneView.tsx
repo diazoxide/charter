@@ -145,6 +145,7 @@ import {
 import { FreshMark, freshMarkShown, usePlaneUpdated } from "./PlaneUpdated";
 import { Notice, NoticeBand } from "./Notice";
 import { SandboxBlockNotice } from "./SandboxBlockNotice";
+import { PersonaGrantsNotice } from "./PersonaGrantsNotice";
 import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
@@ -3549,6 +3550,27 @@ export const PlaneView = memo(function PlaneView({
     change((tabs) => replaceSession(tabs, asked.session, chat.session));
   }, [change, freshening, noteStarted, plane]);
 
+  /**
+   * **Restart now** (#1362): the core starts the same chat again resuming its conversation
+   * (`restart_chat`) and ends the old one once the new one runs; the new session takes the old
+   * one's pane, as a Start fresh's does. Refused, nothing changes.
+   */
+  const restartChat = useCallback(
+    async (session: number) => {
+      const said = await commands
+        .restartChat(plane, session, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return;
+      const chat = said.data;
+      setReopened((was) => was.filter((one) => one.session !== session));
+      // The same chat, so a pin stays with it.
+      setPinnedChats((was) => was.map((one) => (one === session ? chat.session : one)));
+      noteStarted(chat);
+      change((tabs) => replaceSession(tabs, session, chat.session));
+    },
+    [change, noteStarted, plane],
+  );
+
   // A resumed chat whose harness ended without a word — it could not find the conversation — is
   // replaced by a fresh chat with the same record, once (SI-8d). Everything else a resumed chat
   // does only marks it heard, and a heard chat is the operator's from then on.
@@ -5061,6 +5083,7 @@ export const PlaneView = memo(function PlaneView({
                   onByHand={answerByHand}
                   startNotes={startNotes}
                   onDismissStartNote={dismissStartNote}
+                  onRestartChat={restartChat}
                   blocks={sandboxBlocks}
                   onDismissBlock={dismissBlock}
                   offered={views}
@@ -5898,6 +5921,7 @@ function PaneFrame({
   onDismissStartNote,
   blocks,
   onDismissBlock,
+  onRestart,
   doing,
   children,
 }: {
@@ -5917,6 +5941,8 @@ function PaneFrame({
   /** What this chat's start found to say, while it is up (ADR 0085). */
   startNotes?: StartNotes;
   onDismissStartNote: () => void;
+  /** Starts this chat again, resuming its conversation, in this pane (#1362: Restart now). */
+  onRestart: () => void;
   /** What this chat's sandbox blocked, newest last, while any is up (#1338). */
   blocks?: readonly ChatBlocked[];
   onDismissBlock: (block: ChatBlocked) => void;
@@ -5957,6 +5983,12 @@ function PaneFrame({
         {startNotes && (
           <StartNotice plane={plane} found={startNotes} onDismiss={onDismissStartNote} />
         )}
+        <PersonaGrantsNotice
+          plane={plane}
+          session={session}
+          running={running}
+          onRestart={onRestart}
+        />
         {newest !== undefined && (
           <SandboxBlockNotice
             key={`${newest.operation}:${newest.kind}:${newest.ours ? "ours" : "chat"}`}
@@ -6326,6 +6358,7 @@ function LayoutPanes({
   onByHand,
   startNotes,
   onDismissStartNote,
+  onRestartChat,
   blocks,
   onDismissBlock,
   offered,
@@ -6360,6 +6393,8 @@ function LayoutPanes({
   /** What each chat's start found to say, by session (ADR 0085). */
   startNotes: Readonly<Record<number, StartNotes>>;
   onDismissStartNote: (session: number) => void;
+  /** Starts chat `session` again, resuming its conversation, in its pane (#1362). */
+  onRestartChat: (session: number) => void;
   /** What each chat's sandbox blocked, by session (#1338). */
   blocks: Blocks;
   onDismissBlock: (session: number, block: ChatBlocked) => void;
@@ -6439,6 +6474,7 @@ function LayoutPanes({
         onByHand={(open) => onByHand(content.session, open)}
         startNotes={startNotes[content.session]}
         onDismissStartNote={() => onDismissStartNote(content.session)}
+        onRestart={() => onRestartChat(content.session)}
         blocks={blocks[content.session]}
         onDismissBlock={(block) => onDismissBlock(content.session, block)}
         doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
@@ -6489,6 +6525,7 @@ function LayoutPanes({
               onByHand={onByHand}
               startNotes={startNotes}
               onDismissStartNote={onDismissStartNote}
+              onRestartChat={onRestartChat}
               blocks={blocks}
               onDismissBlock={onDismissBlock}
               offered={offered}

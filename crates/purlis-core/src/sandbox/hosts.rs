@@ -17,8 +17,9 @@
 //! `charter.toml`: everyone who opens the project follows them, with no approval, and each
 //! teammate is told once when they change ([`super::local::hosts_changed`]). **You** are this
 //! machine's: `[sandbox] hosts` in `charter.local.toml`, read only while git leaves that file
-//! alone ([`crate::settings::layer_text`]). A persona's hosts (#1362) are a third level, added
-//! to [`Level`] and handed to [`in_force`] beside the other two.
+//! alone ([`crate::settings::layer_text`]). A **Persona**'s hosts (#1362) are a third level:
+//! `[sandbox.personas.<name>] hosts` in the committed file, granted only to a chat running as
+//! that persona ([`super::persona`]).
 //!
 //! **No chat writes either list.** Both files are later-code names a sandboxed chat never writes
 //! ([`super::PLANTED`]): that denial is the boundary today. [`super::changes_a_sandbox_key`] is
@@ -460,6 +461,9 @@ pub enum Level {
     Project,
     /// This machine's `charter.local.toml`.
     You,
+    /// The persona a chat runs as: `[sandbox.personas.<name>]` in the committed `charter.toml`
+    /// (#1362).
+    Persona,
 }
 
 impl Level {
@@ -468,6 +472,7 @@ impl Level {
         match self {
             Self::Project => "project",
             Self::You => "you",
+            Self::Persona => "persona",
         }
     }
 }
@@ -484,7 +489,8 @@ pub struct Granted {
 /// fills this from the machine's and the organisation's policy, and nothing else changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Locks {
-    _none_yet: (),
+    /// Whether policy forbids a persona's own grants (#1362): its hosts reach no chat.
+    no_persona_grants: bool,
 }
 
 impl Locks {
@@ -498,17 +504,40 @@ impl Locks {
         Self::none()
     }
 
+    /// Locks that forbid every persona's own grants: what a policy saying so compiles to
+    /// (#1343 reads it).
+    pub fn forbidding_persona_grants() -> Self {
+        Self {
+            no_persona_grants: true,
+        }
+    }
+
     /// Why `granted` is locked out, if it is.
-    pub fn refuses(&self, _granted: &Granted) -> Option<String> {
-        None
+    pub fn refuses(&self, granted: &Granted) -> Option<String> {
+        (self.no_persona_grants && granted.level == Level::Persona).then(|| {
+            format!(
+                "{} is a persona's host, and policy forbids a persona's own hosts: locked by \
+                 policy",
+                granted.host
+            )
+        })
     }
 }
 
-/// **The hosts in force**: the project's, then this machine's, each once (where both list a
-/// host, it is the project's), less what `locks` refuse.
-pub fn in_force(project: &[Host], personal: &[Host], locks: &Locks) -> Vec<Granted> {
+/// **The hosts in force**: the project's, then this machine's, then the persona's the chat runs
+/// as, each once (where two levels list a host, it is the first's), less what `locks` refuse.
+pub fn in_force(
+    project: &[Host],
+    personal: &[Host],
+    persona: &[Host],
+    locks: &Locks,
+) -> Vec<Granted> {
     let mut out: Vec<Granted> = Vec::new();
-    let levels = [(Level::Project, project), (Level::You, personal)];
+    let levels = [
+        (Level::Project, project),
+        (Level::You, personal),
+        (Level::Persona, persona),
+    ];
     for (level, hosts) in levels {
         for host in hosts {
             if out.iter().any(|kept| kept.host == *host) {

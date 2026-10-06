@@ -645,6 +645,12 @@ pub(crate) struct SessionRecordView {
     pub place: String,
     /// The record after charter's frontmatter: its `# title` and its five sections.
     pub body: String,
+    /// The hosts the record's persona is granted in this project (#1362), each as the sandbox
+    /// spells it: what a Resume as that persona could reach. Empty for none.
+    pub persona_hosts: Vec<String>,
+    /// Whether a Resume holds back those hosts until the person allows them on the new chat's
+    /// tab, because they reach past the default persona's (#1362, D-1362-6).
+    pub resume_holds: bool,
 }
 
 /// The record at `path`, or charter's sentence saying why not. `Ok(None)` is a record that is
@@ -659,10 +665,28 @@ pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRe
         return Ok(None);
     }
     let opened = sessionrecord::open(root, path)?;
+    let persona = opened
+        .listed
+        .persona
+        .clone()
+        .filter(|who| purlis_core::start::persona_for(root, who));
+    let persona_hosts = purlis_core::sandbox::Plane::read(root)
+        .said()
+        .policy
+        .and_then(|policy| {
+            let who = persona.as_deref()?;
+            policy
+                .personas
+                .get(who)
+                .map(|grants| grants.hosts.iter().map(ToString::to_string).collect())
+        })
+        .unwrap_or_default();
     Ok(Some(SessionRecordView {
         row: SessionRecordRow::from(&opened.listed),
         place: opened.place.word().to_owned(),
         body: opened.body().to_owned(),
+        persona_hosts,
+        resume_holds: purlis_core::sessionresume::resumed_holds(root, persona.as_deref()).is_some(),
     }))
 }
 
