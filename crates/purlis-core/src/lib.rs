@@ -137,6 +137,7 @@ pub mod sessionresume;
 pub mod settings;
 pub mod shellguard;
 pub mod shellseg;
+pub mod shellsubst;
 pub mod shellwrap;
 pub mod shown;
 pub mod skills;

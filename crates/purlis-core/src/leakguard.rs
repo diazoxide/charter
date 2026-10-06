@@ -25,11 +25,11 @@
 //! The Python docstring states the ceiling and this port is bound by the same words: it
 //! reliably catches the ORDINARY spellings — a reader with a vault path as an operand, behind
 //! any number of wrappers, after a relocation however spelled, through an input redirection,
-//! inside an unquoted substitution, on any line of a multi-line command — and it is **defeated
-//! by deliberate obfuscation**. A quoted `"$(cat <vault>)"`, a glob, a brace expansion, a path
-//! arriving through a variable, `sh -c '<string>'` and a program not in [`READERS`] all walk
-//! past it, each because closing it means being a shell. Those limits are not a TODO: charter's
-//! own `SECURITY.md` states them and `tests/test_documented_limits.py` pins them as behaviour.
+//! inside a command substitution however it is quoted or nested (#1412), on any line of a
+//! multi-line command — and it is **defeated by deliberate obfuscation**. A glob, a brace
+//! expansion, a path arriving through a variable, `sh -c '<string>'` and a program not in
+//! [`READERS`] all walk past it, each because closing it means being a shell. Those limits are
+//! not a TODO: charter's own `SECURITY.md` states them.
 //!
 //! # The two halves, and why they are both here
 //!
@@ -85,6 +85,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::guardcaps;
 use crate::heredoc;
 use crate::pypath;
 use crate::shellseg;
@@ -1485,21 +1486,159 @@ pub fn walks_into_guarded_state(
 /// see [`guarded_state_entries`]. `cwd` is the directory the command runs in, and it is used for
 /// exactly one thing — resolving the walk's operand — because the TEXT arms decide on the
 /// operand as written and a resolver on this hot path is what the Python declines to be.
+///
+/// # Every substitution the shell runs (#1412)
+///
+/// The command's segments are read as [`shellseg`] lexes them, and that lexer takes a
+/// `"$( … )"` for one quoted word: the command inside is never a segment of its own. So the text
+/// of every substitution a shell runs (as `shellsubst` finds them: inside double quotes, a
+/// `${ … }`, a backtick, an expanding heredoc body, or none) is read again as a command of its
+/// own, the same way, from each directory the outer command could have moved to by then, and so
+/// on inward. A `case` pattern's `)` is read as the end of a command. A substitution's text that
+/// does not lex is read through its per-line segments, and again with its heredoc bodies
+/// emptied, never by the whole-string match the top level falls back to.
+///
+/// **Past any bound the call is refused as too big to check** ([`guardcaps::REASON`]): more
+/// than [`guardcaps::MAX_NESTING`] substitutions deep, more than `RELOCATIONS` directories to
+/// read one from, or more than `READ_PER_CHARACTER` times the command's length read in all. The
+/// refusal is also reported to [`shellseg::too_deep_within`], so the verdict carries the same
+/// reason as a command the caps refuse up front, and the guard's time stays in proportion to
+/// the command.
 pub fn leak_reason(cmd: &str, cwd: &str, state_dir: &Path) -> Option<String> {
-    let cmd = heredoc::strip_reader_heredocs(cmd);
-    let (segments, parsed) = shellseg::segment_argv_parsed(&cmd);
-    if !parsed {
-        // No tokenizer got through, so argv is a guess. Match the string itself — a false deny
-        // on an already-malformed command is survivable; printing a credential is not.
-        if reveal_re().is_match(&cmd) {
-            return Some(REVEAL_REASON.to_string());
+    let budget = cmd
+        .len()
+        .saturating_mul(READ_PER_CHARACTER)
+        .max(READ_AT_LEAST);
+    let mut at = Inward {
+        cwd,
+        state_dir,
+        budget,
+    };
+    at.reason_from(cmd, &[String::new()], 0)
+}
+
+/// How many directories [`leak_reason`] reads a substitution's command from.
+const RELOCATIONS: usize = 8;
+
+/// How many characters of substitutions [`leak_reason`] reads as commands, per character of the
+/// command: a substitution nested in another is read once at each depth.
+const READ_PER_CHARACTER: usize = 4;
+
+/// …and at least, so a short command is read all the way in.
+const READ_AT_LEAST: usize = 64 * 1024;
+
+/// Where [`leak_reason`] reads substitutions from, and how much more of them it reads.
+struct Inward<'a> {
+    cwd: &'a str,
+    state_dir: &'a Path,
+    budget: usize,
+}
+
+impl Inward<'_> {
+    /// [`leak_reason`] for `cmd` run from each of `starts`, `depth` substitutions in.
+    fn reason_from(&mut self, cmd: &str, starts: &[String], depth: usize) -> Option<String> {
+        // Read once as a shell reads it: the substitutions it runs, its `case` patterns and its
+        // heredoc bodies. Not at all where it has none of them to find; the bodies matter only
+        // to a substitution's text, read again below when it does not lex.
+        let scan = crate::shellsubst::scan(cmd, depth > 0);
+        let cased = match &scan {
+            Some(scan) => scan.as_commands(false),
+            None => cmd.to_string(),
+        };
+        let stripped = heredoc::strip_reader_heredocs(&cased);
+        if depth > 0 {
+            let cost = stripped.len().saturating_mul(starts.len());
+            if cost > self.budget {
+                return Some(too_big_to_check());
+            }
+            self.budget -= cost;
         }
-        if names_a_vault_path(&cmd) {
-            return Some(READ_REASON.to_string());
+        let (mut segments, parsed) = shellseg::segment_argv_parsed(&stripped);
+        if !parsed {
+            if depth == 0 {
+                // The whole-string match is the top level's alone: a substitution's text that
+                // does not lex is read through its segments, so prose in an expanding heredoc
+                // body is not refused for a word it mentions.
+                if let Some(hit) = as_text(&stripped) {
+                    return Some(hit);
+                }
+            } else if let Some(scan) = &scan
+                && scan.has_heredoc_bodies()
+            {
+                // …and again with its heredoc bodies emptied, so a body's apostrophe is not a
+                // quote that hides the commands after it from the per-line reading. Both
+                // readings count, and the second is charged too.
+                let blanked = scan.as_commands(true);
+                let cost = blanked.len().saturating_mul(starts.len());
+                if cost > self.budget {
+                    return Some(too_big_to_check());
+                }
+                self.budget -= cost;
+                segments.extend(shellseg::segment_argv(&blanked));
+            }
         }
+        // Where the shell may stand when a substitution runs: every directory a segment starts
+        // in.
+        let mut heres: Vec<String> = Vec::new();
+        for start in starts {
+            if let Some(hit) = reason_in(&segments, start, self.cwd, self.state_dir, &mut heres) {
+                return Some(hit);
+            }
+        }
+        let inner = scan.map(|scan| scan.substitutions()).unwrap_or_default();
+        if inner.is_empty() {
+            return None;
+        }
+        if depth >= guardcaps::MAX_NESTING || heres.len() > RELOCATIONS {
+            return Some(too_big_to_check());
+        }
+        inner
+            .iter()
+            .find_map(|text| self.reason_from(text, &heres, depth + 1))
     }
-    let mut here = String::new();
-    for toks in &segments {
+}
+
+/// The refusal of a command whose substitutions reach past a bound: reported to
+/// [`shellseg::too_deep_within`] as well, so the caller refuses it as too big to check.
+fn too_big_to_check() -> String {
+    shellseg::met_a_string_too_deep();
+    guardcaps::too_deep_refusal()
+}
+
+/// The raw-string match an unparseable command gets: `--reveal` or a vault path anywhere in it.
+fn as_text(cmd: &str) -> Option<String> {
+    // No tokenizer got through, so argv is a guess. Match the string itself — a false deny
+    // on an already-malformed command is survivable; printing a credential is not.
+    if reveal_re().is_match(cmd) {
+        return Some(REVEAL_REASON.to_string());
+    }
+    names_a_vault_path(cmd).then(|| READ_REASON.to_string())
+}
+
+/// [`leak_reason`] over `segments`, the shell starting in `start`, adding to `heres` each
+/// directory a segment starts in.
+fn reason_in(
+    segments: &[Vec<String>],
+    start: &str,
+    cwd: &str,
+    state_dir: &Path,
+    heres: &mut Vec<String>,
+) -> Option<String> {
+    let mut here = start.to_string();
+    // Kept normalised, so `cd x; cd ..` is one directory and not two. One past `RELOCATIONS` is
+    // all a caller needs to know, and no more is kept.
+    let mut note = |here: &String| {
+        let place = match pypath::normpath(here) {
+            place if place == "." => String::new(),
+            place => place,
+        };
+        if heres.len() <= RELOCATIONS && !heres.contains(&place) {
+            heres.push(place);
+        }
+    };
+    note(&here);
+    for toks in segments {
+        note(&here);
         let it = shellwrap::split_env_chdir(toks.as_slice());
         let base = base_lower(&it.prog);
         if !it.prog.is_empty() && CHDIR_BUILTINS.contains(&base.as_str()) {

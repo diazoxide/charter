@@ -253,3 +253,31 @@ fn a_keys_file_that_does_not_read_rejects_its_lines_as_no_key_and_the_drain_fini
     assert_eq!(drained(&spool), [], "drained, not stuck");
     issued(&spool, 7);
 }
+
+#[test]
+fn a_spool_another_process_holds_is_given_up_on_in_bounded_time_and_the_line_is_lost() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("the first line is spooled");
+    // A second open of the file is a second lock holder to flock, as another process is.
+    let holder = File::open(file_for(&spool, 4)).expect("the spool opens");
+    holder.lock().expect("the holder takes the lock");
+
+    let started = std::time::Instant::now();
+    let refused = append(&spool, 4, &token, &call(4, "b")).expect_err("the line is not spooled");
+    let waited = started.elapsed();
+
+    assert_eq!(refused.kind(), io::ErrorKind::TimedOut, "{refused}");
+    assert!(
+        waited >= A_LOCK_IS_WAITED_FOR_AT_MOST && waited < Duration::from_secs(2),
+        "waited {waited:?}"
+    );
+    drop(holder);
+    append(&spool, 4, &token, &call(4, "c")).expect("a free spool takes the next line");
+    assert_eq!(
+        tools(&drained(&spool)),
+        [(4, 1, "a".to_owned()), (4, 2, "c".to_owned())],
+        "the line given up on is not in the spool, and nothing is numbered for it"
+    );
+}
