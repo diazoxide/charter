@@ -97,7 +97,7 @@ struct Args {
     acp_login: bool,
 
     /// Say whether this process has a controlling terminal, leave it as the host does
-    /// (`charter_core::noterminal::leave`), open a terminal pair, and say again; nothing else.
+    /// (`purlis_core::noterminal::leave`), open a terminal pair, and say again; nothing else.
     #[arg(long)]
     leave_terminal: bool,
 
@@ -248,7 +248,7 @@ fn answer_raw(stdout: &mut impl Write) -> Result<(), String> {
 /// `--leave-terminal`: what `/dev/tty` answers before and after leaving, and after opening a
 /// terminal pair the way the host does.
 fn leave_terminal(linger: bool) -> Result<(), String> {
-    use charter_core::noterminal::{self, Left};
+    use purlis_core::noterminal::{self, Left};
     let said = |when: &str| {
         let has = if noterminal::has_one() { "yes" } else { "no" };
         println!("terminal {when}: {has}");
@@ -258,8 +258,8 @@ fn leave_terminal(linger: bool) -> Result<(), String> {
         println!("started as pid {}", std::process::id());
     }
     // A level-3 chat refuses to start while the host still has its terminal.
-    let refused = charter_core::acp::Chat::start(
-        charter_core::acp::Launch {
+    let refused = purlis_core::acp::Chat::start(
+        purlis_core::acp::Launch {
             chat: "probe".to_owned(),
             argv: vec!["true".to_owned()],
             cwd: std::env::temp_dir(),
@@ -267,11 +267,11 @@ fn leave_terminal(linger: bool) -> Result<(), String> {
             charter_mcp: None,
             patience: std::time::Duration::from_secs(5),
         },
-        std::sync::Arc::new(charter_core::harness::asks::Asks::new()),
+        std::sync::Arc::new(purlis_core::harness::asks::Asks::new()),
     )
     .err();
     if noterminal::has_one() {
-        let refused = refused == Some(charter_core::acp::NotStarted::Terminal);
+        let refused = refused == Some(purlis_core::acp::NotStarted::Terminal);
         println!(
             "acp with a terminal refused: {}",
             if refused { "yes" } else { "no" }

@@ -148,7 +148,7 @@ describe("a project the last quit had open that is gone", () => {
   });
 
   it("says why the core refused a folder, and keeps the Notice", async () => {
-    const refused = "~/Downloads is not a project: charter found none there or above it";
+    const refused = "~/Downloads is not a project: purlis found none there or above it";
     const { sent } = core({ where: "restore", picked: "/home/dev/Downloads", locate: { refused } });
     render(<App />);
 

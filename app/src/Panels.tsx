@@ -35,7 +35,7 @@ import type { WorkspaceState } from "./workspaceState";
  * # What changed: this file stopped being the panels and became the thing that draws them
  *
  * The workspace's todos and the plane's personas, and **neither is written here**. They are
- * *contributions* — `charter_core::panel` values produced in `app/src-tauri/src/panels.rs` and
+ * *contributions* — `purlis_core::panel` values produced in `app/src-tauri/src/panels.rs` and
  * drawn by the loop below, through the same seam an extension's declared panel arrives on. This
  * component knows what a panel is; it does not know what a todo is.
  *
@@ -114,7 +114,7 @@ export function Panels({
    * window (`Panels.tsx`'s `useContributedPanels` says why) — and each is sorted on its own in
    * the core. A contributed panel is therefore not appended after charter's: it is sorted among
    * them, which is what makes `order` a number rather than a flag. The tie-break is the core's
-   * (`charter_core::panel::Panel::sort` — charter's own first, then by id), and a stable sort
+   * (`purlis_core::panel::Panel::sort` — charter's own first, then by id), and a stable sort
    * preserves it here.
    */
   const all = [...(panels?.contributed ?? []), ...contributed].sort((a, b) => a.order - b.order);
@@ -193,7 +193,7 @@ export function Panels({
  *
  * **A refusal is an empty list and not a thrown promise.** The extension record can be
  * unreadable — a missing config home, a record charter will not parse — and every one of those
- * states already means *nothing is in force* (`charter_core::extension`). The window that
+ * states already means *nothing is in force* (`purlis_core::extension`). The window that
  * reports them is `Extensions.tsx`'s dialog, which is where an operator goes to find out why
  * something is not contributing; a region that refused to draw charter's own panels over a
  * stranger's unreadable record would be the registry's failure taken out on the plane.
@@ -217,7 +217,7 @@ export function useContributedPanels(): PanelView[] {
   return contributed;
 }
 
-/** Every mark in `charter_core::panel::Mark`, as the glyph a heading draws. */
+/** Every mark in `purlis_core::panel::Mark`, as the glyph a heading draws. */
 const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   todo: CircleDashed,
   persona: UserRound,
@@ -401,7 +401,7 @@ function Contributed({
   );
 }
 
-/** charter's own panels, by the key `charter_core::panel::Panel::key` gives them. */
+/** charter's own panels, by the key `purlis_core::panel::Panel::key` gives them. */
 const TODOS = "charter/todos";
 const PERSONAS = "charter/personas";
 const SESSIONS = "charter/sessions";

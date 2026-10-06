@@ -2,7 +2,7 @@
 //! picks — one branch, the project in front, or every project open in charter.
 //!
 //! Thin, as `piecefiles.rs` is: what is offered, how it ranks and what never appears are
-//! `charter_core::files::find`'s answers. This holds one `Finder` per window for one palette
+//! `purlis_core::files::find`'s answers. This holds one `Finder` per window for one palette
 //! session, so each branch is listed once while the operator types, and drops it when the
 //! palette closes or the window goes.
 //!
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use charter_core::files::{Finder, Named, Place};
+use purlis_core::files::{Finder, Named, Place};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -316,7 +316,7 @@ mod tests {
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let ran = charter_core::forklock::output(
+        let ran = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
@@ -339,7 +339,7 @@ mod tests {
         std::fs::write(clone.join("README.md"), "one\n").unwrap();
         git(&clone, &["add", "-A"]);
         git(&clone, &["commit", "-q", "-m", "one"]);
-        let piece = charter_core::worktree::add(&root, "alpha", "thing", "piece", None)
+        let piece = purlis_core::worktree::add(&root, "alpha", "thing", "piece", None)
             .unwrap()
             .path;
         std::fs::create_dir_all(piece.join("docs")).unwrap();

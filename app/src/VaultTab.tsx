@@ -148,10 +148,10 @@ export function VaultTab({
     const stillExported = answer.data.identity_in_app_env;
     const relaunch =
       stillExported.length > 0
-        ? ` Your shell still exports ${stillExported.map((v) => `$${v}`).join(", ")}, which a chat can still read from charter's own environment — quit and relaunch charter from a shell that does not, and remove the export from your shell's startup files.`
+        ? ` Your shell still exports ${stillExported.map((v) => `$${v}`).join(", ")}, which a chat can still read from purlis's own environment — quit and relaunch purlis from a shell that does not, and remove the export from your shell's startup files.`
         : "";
     setNote({
-      said: `Stored ${names} in the Keychain. charter reads it from there, and no chat is given the token.${relaunch}`,
+      said: `Stored ${names} in the Keychain. purlis reads it from there, and no chat is given the token.${relaunch}`,
       trouble: relaunch !== "",
     });
     return true;
@@ -405,14 +405,14 @@ function IdentityPanel({
   const stillExported =
     inAppEnv.length > 0 ? (
       <span className="trouble">
-        {` Your shell still exports ${inAppEnv.map((v) => `$${v}`).join(", ")}; quit and relaunch charter without it so no chat can read it from charter's environment.`}
+        {` Your shell still exports ${inAppEnv.map((v) => `$${v}`).join(", ")}; quit and relaunch purlis without it so no chat can read it from purlis's environment.`}
       </span>
     ) : null;
 
   if (identity.every((one) => one.held === "keyring")) {
     return (
       <p className="vault-identity">
-        {`charter reads ${named(identity)} from the Keychain.`}
+        {`purlis reads ${named(identity)} from the Keychain.`}
         {stillExported}
       </p>
     );
@@ -428,7 +428,7 @@ function IdentityPanel({
   return (
     <div className="vault-identity">
       <p>
-        {`Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and charter finds it for every command.`}
+        {`Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and purlis finds it for every command.`}
         {stillExported}
       </p>
       <div className="vault-identity-put">
@@ -455,7 +455,7 @@ function IdentityPanel({
             disabled={busy}
             onClick={onMove}
           >
-            Move the token from charter's environment
+            Move the token from purlis's environment
           </button>
         )}
       </div>
@@ -720,7 +720,7 @@ function ValueDialog({
             )}
             <SettingRow
               label={secret === undefined ? "Value" : "New value"}
-              help="It goes into the vault and nowhere else. charter never shows it here."
+              help="It goes into the vault and nowhere else. purlis never shows it here."
               control={(ids) => (
                 // **A native box in the row's control slot, not a `Field`**: a `Field` is
                 // controlled, and a secret's value is never held in React state (see above).

@@ -3,11 +3,11 @@
 //! A chat works on zero or one work item (V3). The link is a line in this device's work link log
 //! of the workspace the chat is in, keyed by the chat's ULID, which V43 keeps stable across a
 //! relaunch and a move and mints again in a copy (ADR 0066 as amended). The rules are
-//! `charter_core::work::log`'s, and this module adds only what the host knows: which chat a
+//! `purlis_core::work::log`'s, and this module adds only what the host knows: which chat a
 //! session is, where the window files it, and this device's id.
 //!
 //! - **Where a chat is** is where the window's sidebar files it: the workspace its directory is
-//!   in ([`charter_core::workspaces::Plane::workspace_of`]). A chat filed at the project root
+//!   in ([`purlis_core::workspaces::Plane::workspace_of`]). A chat filed at the project root
 //!   cannot be linked (ADR 0088 §4), and one working outside the project is told that instead.
 //! - **The item is a tracker key in its normal form** (ADR 0088 §1), as the Work list (FW-9)
 //!   will hand it over. One that is not is refused, never rewritten (#861's D-0007).
@@ -17,8 +17,8 @@
 
 use std::path::Path;
 
-use charter_core::work::TrackerKey;
-use charter_core::work::log::{self, Place};
+use purlis_core::work::TrackerKey;
+use purlis_core::work::log::{self, Place};
 
 use crate::chats::Chats;
 use crate::planes::{PlaneId, Planes};
@@ -86,7 +86,7 @@ enum Filed {
 impl LinkedChat {
     fn of(root: &Path, chats: &Chats, session: u32) -> Result<LinkedChat, String> {
         let Some(at) = chats.chat_at(session) else {
-            return Err(format!("charter has no chat {session} open."));
+            return Err(format!("purlis has no chat {session} open."));
         };
         let Some(id) = at.id else {
             return Err(format!(
@@ -95,9 +95,9 @@ impl LinkedChat {
         };
         let place = match at.cwd.as_deref() {
             None => Filed::ProjectRoot,
-            Some(cwd) => match charter_core::workspaces::Plane::open(root).workspace_of(cwd) {
+            Some(cwd) => match purlis_core::workspaces::Plane::open(root).workspace_of(cwd) {
                 Some(ws) => Filed::Workspace(ws),
-                None if charter_core::active::inside_plane(root, cwd) => Filed::ProjectRoot,
+                None if purlis_core::active::inside_plane(root, cwd) => Filed::ProjectRoot,
                 None => Filed::Outside,
             },
         };

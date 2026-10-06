@@ -13,9 +13,9 @@
 use std::collections::BTreeSet;
 
 use bytes::Bytes;
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link::{self, Link};
-use charter_session_protocol::session::{
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link::{self, Link};
+use purlis_session_protocol::session::{
     self, Answer, Command, Frame, Host, Outcome, Peer, Pushed, Refusal, Reply,
 };
 use serde_json::{Value, json};

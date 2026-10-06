@@ -4,9 +4,9 @@
 //! credential never gets a link. The credential itself never crosses the wire, so whatever
 //! answers at the socket's path learns nothing it can replay.
 
-use charter_session_protocol::auth::{self, Credential, Credentials, Scope};
-use charter_session_protocol::link::{self, LinkError};
-use charter_session_protocol::version::{self, HANDSHAKE_TIMEOUT, Refused, Speaks, Version};
+use purlis_session_protocol::auth::{self, Credential, Credentials, Scope};
+use purlis_session_protocol::link::{self, LinkError};
+use purlis_session_protocol::version::{self, HANDSHAKE_TIMEOUT, Refused, Speaks, Version};
 use tokio::io::duplex;
 
 mod common;
@@ -226,7 +226,7 @@ async fn one_deadline_covers_the_whole_handshake_however_its_steps_are_spread() 
     let (_, io) = version::offer(&mut a, &v1()).await.unwrap();
     tokio::time::sleep(step).await;
     let _io =
-        charter_session_protocol::auth::present(io, Scope::LocalUi, HELD.of(Scope::LocalUi)).await;
+        purlis_session_protocol::auth::present(io, Scope::LocalUi, HELD.of(Scope::LocalUi)).await;
 
     let (refused, at) = host.await.unwrap();
 
@@ -239,7 +239,7 @@ async fn one_deadline_covers_the_whole_handshake_however_its_steps_are_spread() 
 #[cfg(unix)]
 #[tokio::test]
 async fn over_the_hosts_socket_this_uid_is_admitted_only_with_its_credential() {
-    use charter_session_protocol::local::Listener;
+    use purlis_session_protocol::local::Listener;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("charterd.sock");
@@ -254,7 +254,7 @@ async fn over_the_hosts_socket_this_uid_is_admitted_only_with_its_credential() {
                     stream,
                     v1(),
                     &HELD,
-                    &std::sync::Arc::new(charter_session_protocol::local::NoChats),
+                    &std::sync::Arc::new(purlis_session_protocol::local::NoChats),
                 )
                 .await
                 .map(|l| l.scope()),

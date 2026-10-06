@@ -3200,7 +3200,7 @@ h2.sidebar-title .node-icon {
 }
 
 /* Where I am: charter's own mark, and the workspace's name in the weight the footer gives it
-   (`crates/charter-core/src/footer.rs`, zone 1). */
+   (`crates/purlis-core/src/footer.rs`, zone 1). */
 .status-glyph {
   color: var(--accent-base);
 }

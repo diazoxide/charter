@@ -5,10 +5,10 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link::{self, Link};
-use charter_session_protocol::version::{Speaks, Version};
-use charter_session_protocol::view::{self, Attacher, Epoch, Limits, ViewId, Viewer};
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link::{self, Link};
+use purlis_session_protocol::version::{Speaks, Version};
+use purlis_session_protocol::view::{self, Attacher, Epoch, Limits, ViewId, Viewer};
 use tokio::io::{AsyncWriteExt, duplex};
 use tokio::time::Instant;
 

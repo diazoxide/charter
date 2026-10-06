@@ -288,9 +288,7 @@ describe("an extension's view", () => {
   it("draws the executor's refusal in its own words rather than an empty chart", async () => {
     core(
       () =>
-        new Error(
-          "'persona-statistics' has changed since you approved it — charter will ask again",
-        ),
+        new Error("'persona-statistics' has changed since you approved it — purlis will ask again"),
     );
     draw(THE_PLANE_S_STATISTICS, { title: "Statistics" });
 
@@ -331,7 +329,7 @@ describe("an extension's view", () => {
       expect(onAsk).toHaveBeenCalledTimes(1);
     });
 
-    it("does not make charter's own view wait, since it runs no program", async () => {
+    it("does not make purlis's own view wait, since it runs no program", async () => {
       const { opened } = core(() => PERSONA);
       draw(STEWARD, { waits: true });
 
@@ -343,7 +341,7 @@ describe("an extension's view", () => {
   it("says what changed outside the paths it declares, above its answer, and still draws it", async () => {
     core(() => ({
       ...CHARTED,
-      overreach: "While 'persona-statistics' was answering, charter saw these change: a.md.",
+      overreach: "While 'persona-statistics' was answering, purlis saw these change: a.md.",
     }));
     draw(THE_PLANE_S_STATISTICS, { title: "Statistics" });
 
@@ -458,7 +456,7 @@ describe("an action on an extension's row (charter-app#341)", () => {
           kind: "answered",
           blocks: counted(0, [JOT]),
           took_ms: 1,
-          overreach: "While 'extension-probe' was answering, charter saw these change: old.md.",
+          overreach: "While 'extension-probe' was answering, purlis saw these change: old.md.",
         };
       if (cmd === "run_action") return { blocks: counted(1, [JOT]), took_ms: 1, overreach: null };
       return undefined;
@@ -476,7 +474,7 @@ describe("an action on an extension's row (charter-app#341)", () => {
     acting([JOT], () => ({
       blocks: null,
       took_ms: 1,
-      overreach: "While 'extension-probe' was answering, charter saw these change: stray.txt.",
+      overreach: "While 'extension-probe' was answering, purlis saw these change: stray.txt.",
     }));
     draw(PROBE, { title: "Probe" });
 
@@ -859,7 +857,7 @@ describe("a change's Push and Land (#474)", () => {
 
   it("says a branch with a merge queue goes into it, and offers no squash it cannot do", async () => {
     const how =
-      "charter puts it in its merge queue at 6dcb09b5b578, and GitHub merges it once the merge queue's own checks pass.";
+      "purlis puts it in its merge queue at 6dcb09b5b578, and GitHub merges it once the merge queue's own checks pass.";
     forge({
       change_land_question: () => ({ ...QUESTION, through: "queue", how, squash: false }),
     });
@@ -989,7 +987,7 @@ describe("a change's Push and Land (#474)", () => {
       change_push_question: () => (asked++ === 0 ? at(HEAD) : at("a1b2c3d4e5f6a1b2c3d4")),
       change_push: () =>
         new Error(
-          "what charter would push is not what you confirmed: widget's branch change/api-2 is now at a1b2c3d4e5f6. Nothing was pushed.",
+          "what purlis would push is not what you confirmed: widget's branch change/api-2 is now at a1b2c3d4e5f6. Nothing was pushed.",
         ),
     });
     open("push-again");

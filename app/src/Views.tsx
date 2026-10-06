@@ -210,7 +210,7 @@ function ask(
 }
 
 /**
- * What a view is about, as `charter_core::panel::Subject` words it: charter's persona view is
+ * What a view is about, as `purlis_core::panel::Subject` words it: charter's persona view is
  * about personas, and an extension's view says (`ExtensionView.about`). It decides which other
  * views a view offers beside itself — never the view's contributor.
  */
@@ -413,8 +413,8 @@ export function ViewPane({
         {holding ? (
           <EmptyState
             mark={Puzzle}
-            headline={`${title} was open when charter last quit`}
-            body={`Showing it asks ${view.from}'s program again, and charter does not do that until you say so.`}
+            headline={`${title} was open when purlis last quit`}
+            body={`Showing it asks ${view.from}'s program again, and purlis does not do that until you say so.`}
             action={
               <button type="button" tabIndex={0} onClick={onAsk}>
                 {`Ask ${view.from}`}
@@ -749,7 +749,7 @@ function Answer({
     action: RowAction,
     confirmed: boolean,
   ): Promise<string | undefined> => {
-    if (from === null) return "charter's own views offer no extension's actions.";
+    if (from === null) return "purlis's own views offer no extension's actions.";
     const outcome = await runExtensionAction(
       plane,
       from,
@@ -1043,7 +1043,7 @@ function AnsweredBlocks({
 export type FactsBlock = Extract<PanelBlock, { kind: "facts" }>;
 
 /**
- * **Labelled facts, as a description list** — `charter_core::panel::Block::Facts`: what a
+ * **Labelled facts, as a description list** — `purlis_core::panel::Block::Facts`: what a
  * persona's definition says, label beside value, the two columns the persona card drew. A
  * `<dl>` because that is what it is, so a screen reader announces each value with its label.
  */
@@ -1066,7 +1066,7 @@ export function Facts({ facts }: { facts: FactsBlock }) {
 export type ChartBlock = Extract<PanelBlock, { kind: "chart" }>;
 
 /**
- * **A chart, drawn by charter from numbers and words** — `charter_core::panel::Chart`.
+ * **A chart, drawn by charter from numbers and words** — `purlis_core::panel::Chart`.
  *
  * Everything that makes it look like something is charter's: the bars are one theme token
  * (`accent.base`) on another (`surface.sunken`), scaled to the largest value here, and every

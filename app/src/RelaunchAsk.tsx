@@ -59,8 +59,8 @@ export function RelaunchAsk({
         >
           <Alert.Title>Reopen your sessions?</Alert.Title>
           <Alert.Description className="honest">
-            {question.after_update && "charter restarted to install an update. "}
-            {`${open} ${chats + views === 1 ? "was" : "were"} open when charter last quit.`}
+            {question.after_update && "purlis restarted to install an update. "}
+            {`${open} ${chats + views === 1 ? "was" : "were"} open when purlis last quit.`}
           </Alert.Description>
           <ul className="ending">
             {question.projects.map((project) => (

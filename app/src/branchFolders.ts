@@ -14,7 +14,7 @@ import { listen } from "./here";
  *
  * A branch is named, never given as a directory: a workspace, a repo and a piece, or no piece
  * for the repo's own folder (#948). A folder is its path inside the branch, `""` for its top.
- * What each holds is `charter_core::files::tree`'s answer, through `branch_tree`.
+ * What each holds is `purlis_core::files::tree`'s answer, through `branch_tree`.
  *
  * **What it costs.** One `branch_tree` per folder when it is expanded, and nothing for a
  * folder that is not: a branch of a hundred thousand files costs what its open folders hold.
@@ -155,7 +155,7 @@ export function useBranchFolders(
 
 const EMPTY: ReadonlyMap<string, FolderRead> = new Map();
 
-/** The most folders one `files_watch` takes (`charter_core::files::WATCHED`). */
+/** The most folders one `files_watch` takes (`purlis_core::files::WATCHED`). */
 const WATCHED = 256;
 
 /** Every tree's open folders in this window, by tree: the explorer's and each file tab's

@@ -58,9 +58,9 @@ jobs:
       # tauri::generate_context! reads the built frontend, so it has to exist before clippy.
       - run: mkdir -p app/dist
       - run: cargo fmt --all --check
-      # `charter-session-protocol/bench` so the latency bench, which only that feature builds, is
+      # `purlis-session-protocol/bench` so the latency bench, which only that feature builds, is
       # linted too (SC-16).
-      - run: cargo clippy --workspace --all-targets --locked --features charter-session-protocol/bench -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked --features purlis-session-protocol/bench -- -D warnings
       # --no-fail-fast because cargo stops at the first failing test binary and SKIPS every
       # later one. A flake in the binary that happens to run first (charter-app#39) then
       # hides every other result, so a red run says nothing about the rest of the suite.
@@ -159,7 +159,7 @@ jobs:
           node-version-file: .nvmrc
       - name: The change's bench, in release
         if: steps.scope.outputs.measure == 'true'
-        run: cargo build --release --locked -p charter-session-protocol --bin charter-session-bench --features bench
+        run: cargo build --release --locked -p purlis-session-protocol --bin charter-session-bench --features bench
       # The change's bench source, built against main's crate and lockfile: the same scenarios on
       # both sides, so only the code under them differs. When main's crate cannot build it (the
       # change moved the API the bench calls, or main has no such crate), there is no baseline:
@@ -178,7 +178,7 @@ jobs:
           features=tokio/rt-multi-thread
           if grep -q '^bench = ' ../main/crates/session-protocol/Cargo.toml 2>/dev/null; then features=bench; fi
           if (cd ../main && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/main" cargo build --release --locked \
-                -p charter-session-protocol --bin charter-session-bench --features "$features"); then
+                -p purlis-session-protocol --bin charter-session-bench --features "$features"); then
             echo "bench=$GITHUB_WORKSPACE/target/main/release/charter-session-bench" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::main's crate cannot build this change's bench, so nothing is gated: no baseline"
@@ -438,7 +438,7 @@ jobs:
       - name: The core's and the CLI's tests, as a normal user
         run: |
           runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \
-            cargo test --locked -p charter-core -p charter-cli --no-fail-fast
+            cargo test --locked -p purlis-core -p purlis-cli --no-fail-fast
       - name: The app starts and draws a window
         run: |
           runuser -u ci -- env HOME=/home/ci PATH="/home/ci/.cargo/bin:$PATH" \
@@ -462,10 +462,10 @@ jobs:
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: The plane writes, hooks, status line and doctor, as recorded
-        run: cargo test --locked -p charter-cli --test recorded_behaviour
+        run: cargo test --locked -p purlis-cli --test recorded_behaviour
       - name: The shell reader and the plane-root guards, as recorded
         run: >-
-          cargo test --locked -p charter-core
+          cargo test --locked -p purlis-core
           --test the_shell_is_read_the_way_python_reads_it
           --test the_leak_guard_answers_what_the_python_answers
           --test the_golden_rule_and_the_prose_guards_answer_what_the_python_answers
@@ -498,7 +498,7 @@ jobs:
       - run: npm ci
         working-directory: app
       - name: The harness the scenario tests run in every pane, and the binary its hooks run
-        run: cargo build -p fake-harness -p charter-cli
+        run: cargo build -p fake-harness -p purlis-cli
       # The `e2e` feature puts WebdriverIO's embedded WebDriver server inside the app, which is
       # what drives it on macOS as well as Linux. It is in no build anyone is given.
       - name: Build the app for the scenario tests
@@ -620,7 +620,7 @@ jobs:
           grep -cE 'error' windows-check.txt || true
       - name: cargo build, the binary a plane actually needs
         if: always()
-        run: cargo build -p charter-cli 2>&1 | tail -40 || true
+        run: cargo build -p purlis-cli 2>&1 | tail -40 || true
       - name: cargo test, if there is anything left to run
         if: always()
         run: cargo test --workspace --no-fail-fast 2>&1 | tail -80 || true

@@ -118,9 +118,9 @@ describe("loading a theme that is wrong never leaves the window without one", ()
     expect(theme.values["state.failed"]).toBe(DEFAULT_THEME.values["state.failed"]);
   });
 
-  it("names a token charter does not have rather than ignoring it", () => {
+  it("names a token purlis does not have rather than ignoring it", () => {
     const { complaints } = load(file({ tokens: { "gray.800": "#123456" } }));
-    expect(complaints).toEqual([{ said: "gray.800 is not a charter token", token: "gray.800" }]);
+    expect(complaints).toEqual([{ said: "gray.800 is not a purlis token", token: "gray.800" }]);
   });
 
   it("falls back to the LIGHT built-in when the theme says it is light", () => {

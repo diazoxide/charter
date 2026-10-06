@@ -142,7 +142,7 @@ describe("the bottom bar", () => {
    * only evidence for either, and jsdom gives every box a size of zero — so this is the only
    * place it can be asked. It also catches a rule that emitted no CSS at all.
    *
-   * The one cell that holds a SENTENCE — a tree charter could not read, a fetch that did not
+   * The one cell that holds a SENTENCE — a tree purlis could not read, a fetch that did not
    * happen — still wraps, and the next test is the one that holds it to that.
    *
    * **A cell's own height says nothing here**, which cost this spec a red run: a table cell is
@@ -276,7 +276,7 @@ describe("the right-hand region", () => {
    * (charter-app#191).
    *
    * Todos and personas stopped being hardcoded React fed by named fields: they are
-   * `charter_core::panel` values, produced in `app/src-tauri/src/panels.rs` and drawn by the
+   * `purlis_core::panel` values, produced in `app/src-tauri/src/panels.rs` and drawn by the
    * loop in `Panels.tsx` that draws a stranger's declared panel. The jsdom tests assert the
    * renderer against contract values and the Rust tests assert the producer against a plane on
    * disk; **neither can say that the two meet through a real command, across specta's generated

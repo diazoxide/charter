@@ -109,7 +109,7 @@ function offer(id: string, title: string, available = true): Offer {
     id,
     title,
     available,
-    reason: available ? "" : "charter found no plane, so it cannot reach a branch.",
+    reason: available ? "" : "purlis found no plane, so it cannot reach a branch.",
     does: { verb: "openProject" },
   };
 }

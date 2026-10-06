@@ -192,7 +192,7 @@ const arrangement = () => ({
 });
 
 /**
- * Answers the question charter asks before it ends a chat (`EndingChat.tsx`).
+ * Answers the question purlis asks before it ends a chat (`EndingChat.tsx`).
  *
  * **Every route to ending one asks first** — a tab's `×`, a pane's `×` and the palette's
  * rows all go through one place (the operator's *"closing session should ask confirmation"*).
@@ -224,7 +224,7 @@ describe("the palette reaching what the window can do", () => {
         "Focus workspace beta",
         "Merge this chat's branch into its clone",
         "Remove the folder of this chat's branch",
-        "Quit charter",
+        "Quit purlis",
       ]),
     );
   });

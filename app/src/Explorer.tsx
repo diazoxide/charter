@@ -552,7 +552,7 @@ export function Explorer({
         {filterBox}
 
         {/* The tree is the rows and what holds them. The sentences about the whole region — the
-          trouble above, the pending and empty notes and what charter would not read below —
+          trouble above, the pending and empty notes and what purlis would not read below —
           are outside it. The ones about ONE clone (its worktrees could not be listed, are
           still coming, or are none) stay inside that clone's `<details>`, beside the row they
           explain, and so inside the tree: moving them out would take them away from it. */}
@@ -638,7 +638,7 @@ export function Explorer({
                       cause={`branches-read:${workspace}/${repo}`}
                       onReadAgain={onReadAgain}
                     >
-                      charter could not list the branches of <code>{repo}</code>:{" "}
+                      purlis could not list the branches of <code>{repo}</code>:{" "}
                       {piecesRefused[repo]}
                     </ReadRefused>
                   ) : pieces[repo] === undefined ? (
@@ -759,7 +759,7 @@ export function Explorer({
             cause={`repo-refused:${workspace}/${name}`}
             onReadAgain={onReadAgain}
           >
-            charter will not read <code>{name}</code>: {why}
+            purlis will not read <code>{name}</code>: {why}
           </ReadRefused>
         ))}
 
@@ -900,7 +900,7 @@ function ChatList({
           </RovingFocusGroup.Item>
           {/* What its harness cannot tell charter, on the chat itself (#27). A Codex chat
               reads `unknown` until its first prompt and never says it is waiting on an
-              approval; without this it looks like charter is broken. */}
+              approval; without this it looks like purlis is broken. */}
           {chat.unreported && <p className="unreported">{chat.unreported}</p>}
           {/* What it spawned, under it (FD-18): its sub-agents, each with its state. */}
           <ChildAgents session={chat.session} name={chat.name} />

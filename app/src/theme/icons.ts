@@ -217,7 +217,7 @@ const BARE: IconTheme = {
 export const DEFAULT_ICONS: IconTheme = builtIn(charterIcons, BARE);
 
 /** The icon themes charter ships, by the name `[theme] icons` picks them by
- *  (`charter_core::extension::BUILT_IN_ICON_THEMES`). */
+ *  (`purlis_core::extension::BUILT_IN_ICON_THEMES`). */
 export const BUILT_IN_ICONS: Record<string, IconTheme> = { "charter-icons": DEFAULT_ICONS };
 
 /** What a shape carries as `data-tone` for `App.css` to colour: the token's custom property

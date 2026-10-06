@@ -220,7 +220,7 @@ describe("the status line", () => {
   });
 
   it("opens the alerts drawer over the whole window, naming every open project", async () => {
-    // The fixture plane is healthy, so charter has read every project to the end and found
+    // The fixture plane is healthy, so purlis has read every project to the end and found
     // nothing — which is a claim it can make, and the button makes it as `none`, with no badge.
     await untilTheStripIsRead();
     await untilTheButtonSays("Alerts: none");
@@ -282,7 +282,7 @@ describe("the status line", () => {
   });
 
   it("draws no pin item for a plane that pins nothing", async () => {
-    // The fixture plane pins no charter version, so `charter version` reports no drift and the
+    // The fixture plane pins no purlis version, so `charter version` reports no drift and the
     // pin item — which is drawn only on drift — is not there at all.
     //
     // **The updater used to be asserted here beside it and has moved** to `title-bar.e2e.ts`

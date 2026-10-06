@@ -8,7 +8,7 @@
 # line number, so that an edit above it does not quietly point it at a different mutant.
 #
 # `exclude_globs` is for TEST PLUMBING only: a file that is `cfg(test)` in spirit — nothing in
-# the product calls it — but has to be compiled into the library so charter-core's
+# the product calls it — but has to be compiled into the library so purlis-core's
 # integration tests, which are separate crates, can reach it. cargo-mutants skips `cfg(test)`
 # code on its own; this keeps that true for such a file. Product code never goes here.
 
@@ -17,7 +17,7 @@
 profile = "mutants"
 
 # `testrun` was `cfg(test)` until charter-app#267 made the integration tests re-run through it.
-exclude_globs = ["crates/charter-core/src/testrun.rs"]
+exclude_globs = ["crates/purlis-core/src/testrun.rs"]
 
 exclude_re = [
     # `steer::var`'s `Some(String::new())` against `None`: every caller reads an empty steering

@@ -15,8 +15,8 @@
 //! empty, and it went with the corpus (#352). What a version of the app brought is `charter
 //! news`.
 
-use charter_core::adopt;
-use charter_core::scaffold::Say;
+use purlis_core::adopt;
+use purlis_core::scaffold::Say;
 
 use crate::planes::{PlaneId, Planes};
 

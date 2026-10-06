@@ -1,12 +1,12 @@
 //! The palette's *Install `charter` command in PATH*: the app's own command line, linked into
 //! `/usr/local/bin` as `purlis` and, for the rename's window, as `charter` (RN-3), on the
-//! operator's word (`charter_core::clipath` holds the rule).
+//! operator's word (`purlis_core::clipath` holds the rule).
 //!
 //! Only on macOS. A `.deb` already lays `/usr/bin/purlis` and `/usr/bin/charter` down, and an AppImage runs from a
 //! mount point that changes at every launch, so a link to its binary would be dead by the next
 //! one — the row says so rather than making a link that stops working.
 
-use charter_core::clipath::{self, Linked};
+use purlis_core::clipath::{self, Linked};
 
 /// Links the app's command line into `/usr/local/bin` as `purlis` and as `charter`, asking
 /// macOS for an administrator's password once when that directory is not this user's to write.
@@ -16,7 +16,7 @@ use charter_core::clipath::{self, Linked};
 pub fn install_cli_on_path() -> Result<String, String> {
     if !cfg!(target_os = "macos") {
         return Err(
-            "charter puts itself on PATH from here on macOS only. On Linux the .deb \
+            "purlis puts itself on PATH from here on macOS only. On Linux the .deb \
                     installs /usr/bin/purlis and /usr/bin/charter; with the AppImage, run the \
                     purlis inside it by its path."
                 .to_owned(),
@@ -44,7 +44,7 @@ pub fn install_cli_on_path() -> Result<String, String> {
     if said.is_empty() {
         return Err(refused.join(" "));
     }
-    let home = charter_core::profiles::home();
+    let home = purlis_core::profiles::home();
     let mut sentences = Vec::new();
     for (link, done) in said {
         sentences.push(done);
@@ -74,11 +74,11 @@ fn as_administrator(
     binary: &std::path::Path,
 ) -> Result<Vec<(std::path::PathBuf, String)>, String> {
     let script = admin_script(links, binary);
-    let out = charter_core::forklock::output(
+    let out = purlis_core::forklock::output(
         std::process::Command::new("/usr/bin/osascript").args(["-e", &script]),
     )
     .map_err(|e| {
-        format!("charter could not ask macOS for permission ({e}); nothing was changed.")
+        format!("purlis could not ask macOS for permission ({e}); nothing was changed.")
     })?;
     if !out.status.success() {
         let said = String::from_utf8_lossy(&out.stderr);

@@ -248,7 +248,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Start"',
       'radio "claude"',
       'radio "steward"',
-      'checkbox "draw charter\'s footer in this chat"',
+      'checkbox "draw purlis\'s footer in this chat"',
       // The Name field (charter-app#254): an `<input>`, which every engine puts in the sequence.
       'input "Name"',
       'summary "1 refused"',
@@ -267,7 +267,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Cancel"',
       'summary "1 refused"',
       'input "Name"',
-      'checkbox "draw charter\'s footer in this chat"',
+      'checkbox "draw purlis\'s footer in this chat"',
       'radio "steward"',
       'radio "claude"',
       'button "Start"',
@@ -300,7 +300,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Approve and start"',
       'radio "claude"',
       'radio "none"',
-      'checkbox "draw charter\'s footer in this chat"',
+      'checkbox "draw purlis\'s footer in this chat"',
       'input "Name"',
     ]);
   });
@@ -553,7 +553,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
               onCancel={() => {}}
             />,
           ),
-        ['button "Cancel"', 'button "Quit charter"'],
+        ['button "Cancel"', 'button "Quit purlis"'],
       ],
       [
         "the first-open prompt",

@@ -166,7 +166,7 @@ describe("the explorer", () => {
     expect(onPick).toHaveBeenCalledWith(undefined);
   });
 
-  it("says a worktree has no charter layer before a chat is started in it", () => {
+  it("says a worktree has no purlis layer before a chat is started in it", () => {
     // `unwired` is what the operator has to see BEFORE they click: a chat started in such a
     // tree runs with none of the plane's ask/deny rules and no persona agents.
     draw({ state: state({ pieces: { svc: [piece("one", { wired: false })], tool: [] } }) });
@@ -214,7 +214,7 @@ describe("the explorer", () => {
     draw({
       state: state({
         pieces: { tool: [] },
-        piecesRefused: { svc: "charter will not run git through a symlink" },
+        piecesRefused: { svc: "purlis will not run git through a symlink" },
       }),
     });
 
@@ -387,7 +387,7 @@ describe("the explorer", () => {
     expect(screen.queryByTestId("clone-later")).not.toBeInTheDocument();
   });
 
-  it("shows what charter would not read instead of a workspace with fewer repos in it", () => {
+  it("shows what purlis would not read instead of a workspace with fewer repos in it", () => {
     draw({
       state: state({
         panels: {

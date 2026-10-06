@@ -14,7 +14,7 @@ clap.workspace = true
 serde_json.workspace = true
 # `--leave-terminal` probes charter's own `noterminal::leave`, and opens a terminal after it as
 # the host does, through the same crate.
-charter-core.workspace = true
+purlis-core.workspace = true
 portable-pty.workspace = true
 
 [dev-dependencies]

@@ -33,7 +33,7 @@ import { useTabStop } from "./roving";
  *
  * # It knows what a row is, and nothing else
  *
- * A [`PanelRow`] is `charter_core::panel::Row` on the wire. This component takes rows and never
+ * A [`PanelRow`] is `purlis_core::panel::Row` on the wire. This component takes rows and never
  * asks where they came from, which is what makes it the vocabulary a panel is drawn *with*
  * rather than advice a panel is written *to*. Its consumers on the day it was written:
  *
@@ -66,7 +66,7 @@ export const SHORTEST = 64;
 export const PAGE = 12;
 
 /**
- * Every mark in `charter_core::panel::Mark`, as the glyph charter already ships for it.
+ * Every mark in `purlis_core::panel::Mark`, as the glyph charter already ships for it.
  *
  * **A word out of a closed set, resolved here** — ADR 0041's third crossing is *a reference to
  * a file*, and an icon is the shape that invites one. A word this map does not know draws the
@@ -91,7 +91,7 @@ const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
  * `Menus.tsx` takes `{ on: "persona", persona }`, and there is no way to derive that from a row:
  * a row is words, a key and at most a catalogue id. charter's personas panel knows its rows are
  * personas and says so; a contributed panel cannot, and gets no context menu — which is the same
- * asymmetry `charter_core::panel`'s header names, one notch smaller, and is written down here
+ * asymmetry `purlis_core::panel`'s header names, one notch smaller, and is written down here
  * rather than in a comment on the day somebody notices.
  */
 export type RowMenu = (row: PanelRow, item: ReactNode) => ReactNode;

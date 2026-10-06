@@ -6,13 +6,13 @@ import { $, browser, expect } from "@wdio/globals";
  * **A workspace's cross-repo changes, in a view tab of their own** (charter#470, ADR 0060),
  * against the built app and the real core.
  *
- * The change is written onto the run's plane the way `charter change create` and `add` leave it
+ * The change is written onto the run's plane the way `purlis change create` and `add` leave it
  * — one record naming the fixture's `svc` clone — and the tab is opened the way the operator
  * opens it: `F2`, "Open changes", Enter. What is proved here and not in jsdom: the palette row
  * exists in the built window, `open_view` answers the `changes` view off the plane on disk, a
  * member charter cannot ask a forge about says why in the core's own words (the fixture's
  * clones have no `origin`, so nothing here reaches a forge or a network), and Refresh asks
- * again. What each forge answer draws is proved on stand-in `gh`/`glab` in charter-core
+ * again. What each forge answer draws is proved on stand-in `gh`/`glab` in purlis-core
  * (`a_change_is_shown_with_each_members_request_and_checks.rs`).
  *
  * Push and Land (#474) run their questions off the real core too: with no `origin`, Land's

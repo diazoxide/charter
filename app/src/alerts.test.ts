@@ -56,7 +56,7 @@ describe("the count", () => {
     expect(countOf({ at: "failed", why: "no" }, [A])).toBeUndefined();
   });
 
-  it("is dropped when charter stopped looking in any one project", () => {
+  it("is dropped when purlis stopped looking in any one project", () => {
     // The alerts it found stand, but their number is not that project's number.
     const reading = {
       at: "read" as const,

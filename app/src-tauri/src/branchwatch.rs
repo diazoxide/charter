@@ -7,7 +7,7 @@
 //! branch* moved: the window reads its status again.
 //!
 //! **What the whole branch costs depends on the platform**, so it is watched two ways
-//! (`charter_core::files::Root`):
+//! (`purlis_core::files::Root`):
 //! - where one watch covers a tree (FSEvents on macOS, `ReadDirectoryChangesW` on Windows), the
 //!   branch's folder, recursively. Adding folders one at a time there restarts the stream each
 //!   time, measured at about 6 ms a folder on macOS, so a branch of 2,000 folders would take 12
@@ -18,7 +18,7 @@
 //!
 //! **A move that cannot change the status is not told**: one only inside what git ignores (a
 //! build writing `target/`), or inside git's own folder. Asked once per branch per burst
-//! (`Root::matters`), of the bounded reader (`charter_core::files::Reader`, D-88h), and
+//! (`Root::matters`), of the bounded reader (`purlis_core::files::Reader`, D-88h), and
 //! **never on the watch's own thread**: each branch's check runs on a worker of its own, one at
 //! a time, with what moved meanwhile asked next. A branch whose check hangs (an ignore file that
 //! is a FIFO) holds only its own worker until the reader's deadline, which counts as "it
@@ -30,13 +30,13 @@
 //! may have made a folder, so a branch watched folder by folder is listed again.
 //!
 //! **The one watch per repo** (FD-11, #651). A clone whose save standing is shared
-//! (`charter_core::reposave::shared_standing`: auto-save's look, the Saving rows) asks to be
+//! (`purlis_core::reposave::shared_standing`: auto-save's look, the Saving rows) asks to be
 //! watched here too ([`BranchWatch::want`]), so the explorer's markers and the standing hear
 //! one watch and one check per burst, not one each. A move that matters touches the
-//! standing (`charter_core::planegit::touch`) as well as telling the windows, and while the
+//! standing (`purlis_core::planegit::touch`) as well as telling the windows, and while the
 //! clone's whole tree is watched its standing is *covered*: read again on what moved, and
 //! otherwise only on its long backstop — about one read in twenty minutes for a monorepo
-//! nobody touches (`charter_core::standings::WATCHED_SHARE`). Its plane let go of, it is let
+//! nobody touches (`purlis_core::standings::WATCHED_SHARE`). Its plane let go of, it is let
 //! go of too.
 //!
 //! **Only a watch of the whole tree covers** (D-FD11h, fail closed): FSEvents and
@@ -57,9 +57,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
-use charter_core::files::{Branch, Reader, Root};
-use charter_core::standings::Wanted;
 use notify::RecursiveMode;
+use purlis_core::files::{Branch, Reader, Root};
+use purlis_core::standings::Wanted;
 
 use crate::planes::{PlaneId, Planes};
 
@@ -71,7 +71,7 @@ const QUIET_FOR: Duration = Duration::from_millis(250);
 
 /// The most moved paths one burst holds, across every branch. Past it the burst is everything
 /// and every branch is read again; kept well above what one check asks
-/// (`charter_core::files::ASKED`), so a burst inside git's own folder or what it ignores is
+/// (`purlis_core::files::ASKED`), so a burst inside git's own folder or what it ignores is
 /// sorted rather than told.
 const MOST_PATHS: usize = 4096;
 
@@ -334,7 +334,7 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
         let _ = std::thread::Builder::new()
             .name("charter-standing-watch".into())
             .spawn(move || {
-                let found = charter_core::files::root(
+                let found = purlis_core::files::root(
                     &reader,
                     &wanted.plane,
                     Branch::repo(&wanted.workspace, &wanted.repo),
@@ -436,14 +436,14 @@ fn start<W: notify::Watcher + Send + 'static>(
                 heard(&inner, &reader, &told, &burst);
             }
         })
-        .map_err(|e| format!("charter could not watch the branch: {e}"))?;
+        .map_err(|e| format!("purlis could not watch the branch: {e}"))?;
     // No file-id cache, so nothing walks the tree under a watch — a link in the branch to the
     // operator's home is never followed and read (R2) — and links are not followed.
     W::new(
         crate::watchset::sender(sent),
         config.with_follow_symlinks(false),
     )
-    .map_err(|e| format!("charter could not watch the branch: {e}"))
+    .map_err(|e| format!("purlis could not watch the branch: {e}"))
 }
 
 /// Hands each branch that `burst` moved something in to its worker. Nothing is read here: this
@@ -499,7 +499,7 @@ fn check<W: notify::Watcher + Send + 'static>(
         let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
         let waiting = held.checking.entry(root.path().to_path_buf()).or_default();
         // Past what one check looks at, the rest only says "more": the burst matters anyway.
-        let room = (charter_core::files::ASKED + 1).saturating_sub(waiting.moved.len());
+        let room = (purlis_core::files::ASKED + 1).saturating_sub(waiting.moved.len());
         waiting.moved.extend(moved.into_iter().take(room));
         waiting.made_folder |= made_folder;
         if waiting.running {
@@ -543,9 +543,9 @@ fn check<W: notify::Watcher + Send + 'static>(
                     .map(|(at, _)| at.clone())
                     .collect()
             };
-            charter_core::planegit::touch(root.path());
+            purlis_core::planegit::touch(root.path());
             for at in standings {
-                charter_core::planegit::touch(&at);
+                purlis_core::planegit::touch(&at);
             }
             if made_folder {
                 relist_soon(&inner, &reader, root.clone());
@@ -718,10 +718,10 @@ impl<W: notify::Watcher> Inner<W> {
             .map(|(at, _)| at.clone())
             .collect();
         for gone in self.covering.difference(&now) {
-            charter_core::reposave::cover(gone, false);
+            purlis_core::reposave::cover(gone, false);
         }
         for new in now.difference(&self.covering) {
-            charter_core::reposave::cover(new, true);
+            purlis_core::reposave::cover(new, true);
         }
         self.covering = now;
     }
@@ -737,7 +737,7 @@ impl<W: notify::Watcher> Inner<W> {
             .map(|kept| kept.root.path().to_path_buf())
             .collect();
         for gone in self.covering.drain() {
-            charter_core::reposave::cover(&gone, false);
+            purlis_core::reposave::cover(&gone, false);
         }
         if let Some(watcher) = self.watcher.as_mut() {
             for root in whole {
@@ -753,7 +753,7 @@ impl<W: notify::Watcher> Inner<W> {
 /// Listens to every branch named, so the window hears when anything in one moves that its
 /// changes could show (FM-4). A branch that does not resolve is not listened to. The set
 /// replaces the window's last one.
-// Each branch is resolved by `charter_core::files::root`, with the tree's own checks; the window
+// Each branch is resolved by `purlis_core::files::root`, with the tree's own checks; the window
 // never names a directory. Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
@@ -795,7 +795,7 @@ fn resolve(
         .into_iter()
         .filter_map(|(plane, branch)| {
             let named = crate::piecefiles::branch(&branch.workspace, &branch.repo, &branch.piece);
-            let root = charter_core::files::root(reader, &plane, named).ok()?;
+            let root = purlis_core::files::root(reader, &plane, named).ok()?;
             let how = how(&root, reader);
             Some((branch, root, how))
         })
@@ -816,7 +816,7 @@ mod tests {
     type Source = notify::RecommendedWatcher;
 
     fn git(dir: &Path, args: &[&str]) {
-        let ran = charter_core::forklock::output(
+        let ran = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
@@ -840,7 +840,7 @@ mod tests {
         std::fs::write(clone.join(".gitignore"), "target/\n").unwrap();
         git(&clone, &["add", "-A"]);
         git(&clone, &["commit", "-q", "-m", "one"]);
-        let piece = charter_core::worktree::add(&root, "alpha", "thing", "piece", None)
+        let piece = purlis_core::worktree::add(&root, "alpha", "thing", "piece", None)
             .unwrap()
             .path;
         std::fs::create_dir_all(piece.join("target/debug")).unwrap();
@@ -861,10 +861,10 @@ mod tests {
     }
 
     fn root_of(plane: &Path, piece: &str) -> Root {
-        charter_core::files::root(
+        purlis_core::files::root(
             &crate::reader(),
             plane,
-            charter_core::files::Branch::piece("alpha", "thing", piece),
+            purlis_core::files::Branch::piece("alpha", "thing", piece),
         )
         .unwrap()
     }
@@ -949,7 +949,7 @@ mod tests {
         }
         std::os::unix::fs::symlink(outside.path(), piece.join("home")).unwrap();
         // The same branch with nothing behind it: the baseline, under whatever load this runs.
-        charter_core::worktree::add(&root, "alpha", "thing", "plain", None).unwrap();
+        purlis_core::worktree::add(&root, "alpha", "thing", "plain", None).unwrap();
         // The platform's own watcher, as the app runs it, on the whole branch; each time a fresh
         // one, so nothing one watch learned helps the next.
         let watching = |piece: &str| {
@@ -992,11 +992,11 @@ mod tests {
     #[test]
     fn a_branch_whose_check_hangs_holds_up_no_other_branch() {
         let (_dir, root, piece) = plane();
-        let other = charter_core::worktree::add(&root, "alpha", "thing", "other", None)
+        let other = purlis_core::worktree::add(&root, "alpha", "thing", "other", None)
             .unwrap()
             .path;
         // An ignore file that blocks whoever opens it: the check of this branch hangs.
-        let made = charter_core::forklock::output(
+        let made = purlis_core::forklock::output(
             std::process::Command::new("mkfifo").arg(piece.join("src/.gitignore")),
         )
         .unwrap();
@@ -1085,8 +1085,8 @@ mod tests {
     }
 
     /// What the shared standing asks of the watch for the plane's clone (FD-11).
-    fn the_clone(root: &Path) -> charter_core::standings::Wanted {
-        charter_core::standings::Wanted {
+    fn the_clone(root: &Path) -> purlis_core::standings::Wanted {
+        purlis_core::standings::Wanted {
             plane: root.to_path_buf(),
             workspace: "alpha".into(),
             repo: "thing".into(),
@@ -1094,11 +1094,11 @@ mod tests {
         }
     }
 
-    fn standing_of(wanted: &charter_core::standings::Wanted) -> charter_core::reposave::Standing {
-        charter_core::reposave::shared_standing(
+    fn standing_of(wanted: &purlis_core::standings::Wanted) -> purlis_core::reposave::Standing {
+        purlis_core::reposave::shared_standing(
             &wanted.plane,
             &wanted.workspace,
-            &charter_core::repos::Repo {
+            &purlis_core::repos::Repo {
                 name: wanted.repo.clone(),
                 path: wanted.path.clone(),
             },
@@ -1128,7 +1128,7 @@ mod tests {
 
         watch.want(&clone);
 
-        assert!(until(|| charter_core::reposave::covered(&clone.path)));
+        assert!(until(|| purlis_core::reposave::covered(&clone.path)));
         // The poller's first look is its baseline.
         std::thread::sleep(Duration::from_millis(300));
         assert_eq!(standing_of(&clone).changed, 0);
@@ -1137,7 +1137,7 @@ mod tests {
         assert!(until(|| standing_of(&clone).changed == 1));
         // Well inside the backstop a clone nothing watches is read again on.
         assert!(
-            started.elapsed() < charter_core::planegit::SHARED_FOR,
+            started.elapsed() < purlis_core::planegit::SHARED_FOR,
             "{:?}",
             started.elapsed()
         );
@@ -1150,11 +1150,11 @@ mod tests {
         let watch = watch.keeping_clones(|_, _| How::Whole);
         let clone = the_clone(&root);
         watch.want(&clone);
-        assert!(until(|| charter_core::reposave::covered(&clone.path)));
+        assert!(until(|| purlis_core::reposave::covered(&clone.path)));
 
         watch.let_go_of_plane(&root);
 
-        assert!(!charter_core::reposave::covered(&clone.path));
+        assert!(!purlis_core::reposave::covered(&clone.path));
         assert!(watch.watching().is_empty(), "{:?}", watch.watching());
     }
 
@@ -1180,7 +1180,7 @@ mod tests {
                 .watching()
                 .contains(&at.path().to_path_buf())));
             std::thread::sleep(Duration::from_millis(200));
-            assert!(!charter_core::reposave::covered(&clone.path));
+            assert!(!purlis_core::reposave::covered(&clone.path));
         }
     }
 
@@ -1208,7 +1208,7 @@ mod tests {
         let clone = the_clone(&root);
         let at = root_of_clone(&root).path().to_path_buf();
         watch.want(&clone);
-        assert!(until(|| charter_core::reposave::covered(&clone.path)));
+        assert!(until(|| purlis_core::reposave::covered(&clone.path)));
         assert_eq!(crate::watchset::raw::watched(&at), 1);
 
         // The platform lost track: watched again, and covered once that watch is made.
@@ -1216,24 +1216,24 @@ mod tests {
             notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan),
         );
         assert!(until(|| crate::watchset::raw::watched(&at) == 2));
-        assert!(charter_core::reposave::covered(&clone.path));
+        assert!(purlis_core::reposave::covered(&clone.path));
 
         // Lost again, and this time the tree cannot be watched: it stays uncovered.
         crate::watchset::raw::refuse(&at);
         crate::watchset::raw::event(
             notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan),
         );
-        assert!(until(|| !charter_core::reposave::covered(&clone.path)));
+        assert!(until(|| !purlis_core::reposave::covered(&clone.path)));
         std::thread::sleep(Duration::from_millis(300));
-        assert!(!charter_core::reposave::covered(&clone.path));
+        assert!(!purlis_core::reposave::covered(&clone.path));
     }
 
     /// The plane's clone, found as the standing's watch finds it.
     fn root_of_clone(plane: &Path) -> Root {
-        charter_core::files::root(
+        purlis_core::files::root(
             &crate::reader(),
             plane,
-            charter_core::files::Branch::repo("alpha", "thing"),
+            purlis_core::files::Branch::repo("alpha", "thing"),
         )
         .unwrap()
     }
@@ -1271,7 +1271,7 @@ mod tests {
 
         assert!(until(|| watch.inner.lock().unwrap().finding.is_empty()));
         assert!(watch.inner.lock().unwrap().kept.is_empty());
-        assert!(!charter_core::reposave::covered(&clone.path));
+        assert!(!purlis_core::reposave::covered(&clone.path));
     }
 
     #[test]

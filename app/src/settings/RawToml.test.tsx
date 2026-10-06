@@ -12,7 +12,7 @@ import type { SettingsChange, SettingsFile, SettingsWhich } from "../bindings";
  * **Edit as TOML** (SE-19, #1169; the spec on #558, V89d): one link per file at the foot of the
  * Project level's nav opens that file's whole text in the right column, with an explicit Save
  * and Discard. Whether a text is refused, and in which words, is the core's
- * (`charter_core::settings`'s tests); the core is the mock here, and what is held is what the
+ * (`purlis_core::settings`'s tests); the core is the mock here, and what is held is what the
  * person sees and what the window sends.
  */
 

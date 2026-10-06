@@ -111,7 +111,7 @@ describe("the bottom bar", () => {
     expect(row("tool")).toHaveTextContent("clean");
   });
 
-  it("never draws a tree charter could not read as clean", () => {
+  it("never draws a tree purlis could not read as clean", () => {
     // The whole reason the core has a third state. "Clean" here is a lie that reads as
     // "nothing to do", which is exactly the wrong thing to tell someone in a hurry.
     render(
@@ -234,7 +234,7 @@ describe("the bottom bar", () => {
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
-        state={state({ piecesRefused: { svc: "charter will not run git through a symlink" } })}
+        state={state({ piecesRefused: { svc: "purlis will not run git through a symlink" } })}
       />,
     );
 
@@ -351,7 +351,7 @@ describe("the bottom bar", () => {
   // Refusals, which are shown
   // ---------------------------------------------------------------------------------------
 
-  it("shows what charter would not read instead of a workspace with fewer repos in it", () => {
+  it("shows what purlis would not read instead of a workspace with fewer repos in it", () => {
     render(
       <BottomBar
         offers={NO_MENUS}

@@ -2,9 +2,9 @@
 //! any number of streams either end opens, each with its own flow control (ADR 0068 §4).
 
 use bytes::Bytes;
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link::{self, LinkError};
-use charter_session_protocol::version::{Refused, Speaks, Version};
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link::{self, LinkError};
+use purlis_session_protocol::version::{Refused, Speaks, Version};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
 mod common;
@@ -133,10 +133,10 @@ async fn a_link_the_multiplexer_gave_up_on_says_why() {
     // only "closed".
     let (a, b) = duplex(64 * 1024);
     let host = tokio::spawn(async move {
-        let (_, rest) = charter_session_protocol::version::answer(b, &v1())
+        let (_, rest) = purlis_session_protocol::version::answer(b, &v1())
             .await
             .unwrap();
-        let (_, mut rest) = charter_session_protocol::auth::admit(rest, &HELD)
+        let (_, mut rest) = purlis_session_protocol::auth::admit(rest, &HELD)
             .await
             .unwrap();
         // Wait for the client's control lane to arrive, so its link is up first.
@@ -171,7 +171,7 @@ async fn a_lane_that_is_not_the_clients_stream_1_is_refused() {
         v1(),
         link::ProvenDevice::stand_in(),
     ));
-    let (_, io) = charter_session_protocol::version::offer(a, &v1())
+    let (_, io) = purlis_session_protocol::version::offer(a, &v1())
         .await
         .unwrap();
     let mut connection =

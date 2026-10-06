@@ -5,7 +5,7 @@
 //! harness's permission prompt in front of that exact command, and nothing here asks again:
 //! the operator already answered with the brief on screen. The command then asks the app over
 //! the hook socket, in two lines on one connection: a ticket, and the open that spends it.
-//! `charter_core::hookwire::OpenChat` argues what that ticket is worth and what it is not,
+//! `purlis_core::hookwire::OpenChat` argues what that ticket is worth and what it is not,
 //! and it is not repeated here.
 //!
 //! What this module adds is **the questions only the app can answer**, and the one control
@@ -16,7 +16,7 @@
 //!   handoff never changes harness (`charter/commands_handoff.py:_printed_command`), and
 //!   taking the profile from the request would let the request choose one.
 //! - **The first message carries the stamp** of a handoff from that chat
-//!   (`charter_core::handoff::is_stamped_from`), so the chat the operator finds on the strip
+//!   (`purlis_core::handoff::is_stamped_from`), so the chat the operator finds on the strip
 //!   always says where it came from.
 //! - **It lands on a strip, and it does not take the operator's screen.** The window is told
 //!   ([`ARRIVED`]) and draws a tab in the target workspace's strip without bringing it to the
@@ -32,10 +32,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use charter_core::active::Place;
-use charter_core::engine::Size;
-use charter_core::hookwire::{Answer, Ask, OpenChat, Tickets};
-use charter_core::reopen::{Chat, HandedFrom, Owed};
+use purlis_core::active::Place;
+use purlis_core::engine::Size;
+use purlis_core::hookwire::{Answer, Ask, OpenChat, Tickets};
+use purlis_core::reopen::{Chat, HandedFrom, Owed};
 
 use crate::planes::{Held, PlaneId};
 
@@ -62,7 +62,7 @@ pub const ARRIVED: &str = "handoff-arrived";
 /// pane that looks broken.
 ///
 /// That the chat is on a strip at all, visibly, is what makes a handoff from inside the app
-/// acceptable: see the justification on `charter_core::hookwire::OpenChat`.
+/// acceptable: see the justification on `purlis_core::hookwire::OpenChat`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Arrived {
     pub plane: PlaneId,
@@ -146,11 +146,11 @@ pub fn answer(
 ///
 /// It reaches the parent in two ways and neither types anything into it: a needs-you item
 /// (`<child> reported back`), and the report itself, left in the plane for the parent's next
-/// `UserPromptSubmit` hook to hand its turn as context (`charter_core::handback`). A parent
+/// `UserPromptSubmit` hook to hand its turn as context (`purlis_core::handback`). A parent
 /// that has closed gets neither; the report is kept for its workspace instead, and the next
 /// chat to start there reads it.
 fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
-    use charter_core::handback::{self, For, Handback};
+    use purlis_core::handback::{self, For, Handback};
 
     let from = held.chats().handed_from(chat).ok_or_else(|| {
         format!(
@@ -175,7 +175,7 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
             ));
         }
     }
-    let summary = charter_core::handoff::report_summary(summary).map_err(|bad| bad.say())?;
+    let summary = purlis_core::handoff::report_summary(summary).map_err(|bad| bad.say())?;
     let chats = held.chats().open_now();
     let child = chats
         .iter()
@@ -191,7 +191,7 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
     let parent_open = chats.iter().any(|open| open.session == from.chat)
         && !matches!(
             held.board().glance(from.chat).state,
-            charter_core::state::State::Done | charter_core::state::State::Failed
+            purlis_core::state::State::Done | purlis_core::state::State::Failed
         );
     let to = if parent_open {
         held.chats()
@@ -233,7 +233,7 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
 /// `workspaces/` it is in, where it is in one. The ladder's cwd rung, so this and `charter`
 /// cannot answer one directory two ways (SI-1).
 fn workspace_of(root: &std::path::Path, cwd: &std::path::Path) -> Option<String> {
-    charter_core::active::workspace_of_tree(root, cwd)
+    purlis_core::active::workspace_of_tree(root, cwd)
 }
 
 fn no(why: String) -> Answer {
@@ -261,7 +261,7 @@ const STARTING: Size = Size {
 /// the workspace was created says so, the way Python's `NOTHING_ELSE` does, because a
 /// handoff that half-happened and says nothing about the half is worse than one that failed.
 fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<Arrived, String> {
-    use charter_core::{handoff, start, wscmd};
+    use purlis_core::{handoff, start, wscmd};
 
     let root = held.root();
     let from = open.chat;
@@ -289,13 +289,13 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
     let Some(left_from) = stamp.place() else {
         return Err(format!(
             "the stamp names '{}' as the workspace the handoff left from, which cannot be one",
-            charter_core::shown::short(stamp.workspace)
+            purlis_core::shown::short(stamp.workspace)
         ));
     };
     // The command held the name to this rule already; held again because the request is what
     // arrived here, and a name is drawn on a tab.
     let label = match open.name.as_deref() {
-        Some(raw) => charter_core::reopen::label(raw)?,
+        Some(raw) => purlis_core::reopen::label(raw)?,
         None => None,
     };
     let message = handoff::delivered(&open.message, &parent, open.report)
@@ -315,7 +315,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
     let dir = wscmd::workspace_dir(root, ws).ok_or_else(|| {
         format!(
             "'{}' cannot name a workspace",
-            charter_core::shown::short(ws)
+            purlis_core::shown::short(ws)
         )
     })?;
     let created = match open.create_vision.as_deref() {
@@ -326,7 +326,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
             wscmd::ensure::ensure(root, ws, chrono::Utc::now(), &wscmd::ensure::author())?;
             // `create`'s own two calls, in its order: the vision is written into the
             // workspace `ensure` just scaffolded.
-            let plane_on_disk = charter_core::workspaces::Plane::open(root);
+            let plane_on_disk = purlis_core::workspaces::Plane::open(root);
             if let Ok(workspace) = plane_on_disk.workspace(ws) {
                 let _ = workspace.set_vision(vision);
             }
@@ -381,7 +381,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         .and_then(|harness| handoff::first_message_argv(harness.name(), &message))
     else {
         return Err(stays(format!(
-            "profile '{profile}' runs a harness charter has not measured the first message of, \
+            "profile '{profile}' runs a harness purlis has not measured the first message of, \
              so it cannot be started on the brief."
         )));
     };
@@ -438,7 +438,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
-    use charter_core::hookwire::NO_TICKET;
+    use purlis_core::hookwire::NO_TICKET;
 
     use super::*;
     use crate::planes::Planes;
@@ -493,7 +493,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("a directory");
             let root = dir.path().join("plane");
             std::fs::create_dir_all(root.join("workspaces").join("alpha")).expect("alpha");
-            std::fs::write(root.join(charter_core::plane::MANIFEST), "").expect("charter.toml");
+            std::fs::write(root.join(purlis_core::plane::MANIFEST), "").expect("charter.toml");
             let runs = root.join("runs");
             std::fs::create_dir_all(&runs).expect("runs");
             let program = stand_in::program(
@@ -509,19 +509,19 @@ mod tests {
                 ),
             );
             std::fs::write(
-                root.join(charter_core::profiles::LOCAL_FILE),
+                root.join(purlis_core::profiles::LOCAL_FILE),
                 format!(
                     "[harness.work]\nkind = \"claude\"\ncommand = [{:?}]\n",
                     program.display().to_string()
                 ),
             )
             .expect("the profile");
-            let set = charter_core::profiles::current(&root);
+            let set = purlis_core::profiles::current(&root);
             let work = set.get("work").expect("the profile reads");
-            charter_core::profiletrust::record_launched(
+            purlis_core::profiletrust::record_launched(
                 &root,
                 "work",
-                &charter_core::profiletrust::fingerprint(work),
+                &purlis_core::profiletrust::fingerprint(work),
             )
             .expect("approved");
             Self { _dir: dir, root }
@@ -549,8 +549,8 @@ mod tests {
 
     /// A chat on the `work` profile, started the way the picker starts one.
     fn a_chat_on_work(held: &Held, root: &Path) -> u32 {
-        let ready = charter_core::start::ready(
-            &charter_core::start::Start {
+        let ready = purlis_core::start::ready(
+            &purlis_core::start::Start {
                 profile: Some("work".to_owned()),
                 persona: None,
                 name: "1".to_owned(),
@@ -762,7 +762,7 @@ mod tests {
             id,
             tickets,
             1,
-            Ask::Report(Box::new(charter_core::hookwire::ReportBack {
+            Ask::Report(Box::new(purlis_core::hookwire::ReportBack {
                 chat: child,
                 summary: summary.to_owned(),
                 ticket,
@@ -901,7 +901,7 @@ mod tests {
     }
 
     fn handoff_report_ask() -> &'static str {
-        charter_core::handoff::REPORT_ASK
+        purlis_core::handoff::REPORT_ASK
     }
 
     #[test]
@@ -931,13 +931,13 @@ mod tests {
         );
         assert!(held.hooks().board().needs_you().contains(&asking));
         let waiting =
-            charter_core::handback::take(held.root(), charter_core::handback::For::Chat(asking));
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
         assert_eq!(waiting.len(), 1, "left for its next turn");
         assert_eq!(waiting[0].summary, "Dropped it.");
         assert_eq!(waiting[0].from, "drop commons");
         assert_eq!(
             waiting[0].from_workspace,
-            charter_core::active::Place::Workspace("alpha".to_owned())
+            purlis_core::active::Place::Workspace("alpha".to_owned())
         );
     }
 
@@ -966,28 +966,28 @@ mod tests {
             .conversation(child)
             .map(str::to_owned)
             .expect("the child was started under a conversation charter chose");
-        charter_core::hookwire::send(
+        purlis_core::hookwire::send(
             held.hooks().socket().expect("the plane listens"),
             Some(&held.hooks().token_for(child)),
-            &charter_core::hookwire::Report {
+            &purlis_core::hookwire::Report {
                 chat: child,
-                event: charter_core::state::Event::UserPromptSubmit,
-                conversation: charter_core::hookwire::Conversation::Named(conversation),
+                event: purlis_core::state::Event::UserPromptSubmit,
+                conversation: purlis_core::hookwire::Conversation::Named(conversation),
                 pid: Some(4242),
                 agent: None,
-                detail: charter_core::state::Detail::default(),
+                detail: purlis_core::state::Detail::default(),
             },
         )
         .expect("the prompt is sent");
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
-        while held.hooks().board().state(child) != charter_core::state::State::Running
+        while held.hooks().board().state(child) != purlis_core::state::State::Running
             && Instant::now() < deadline
         {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!(
             held.hooks().board().state(child),
-            charter_core::state::State::Running,
+            purlis_core::state::State::Running,
             "the prompt reached the board"
         );
 
@@ -1076,9 +1076,9 @@ mod tests {
                 kept_for: Some("default".to_owned()),
             }
         );
-        let kept = charter_core::handback::take(
+        let kept = purlis_core::handback::take(
             held.root(),
-            charter_core::handback::For::Place(&charter_core::active::Place::Workspace(
+            purlis_core::handback::For::Place(&purlis_core::active::Place::Workspace(
                 "default".to_owned(),
             )),
         );
@@ -1112,7 +1112,7 @@ mod tests {
         // Where the brief sent it, as from anywhere else.
         assert_eq!(arrived.workspace, "alpha");
         let record = held.chats().handed_from(chat).expect("recorded");
-        assert_eq!(record.workspace, charter_core::active::Place::PlaneRoot);
+        assert_eq!(record.workspace, purlis_core::active::Place::PlaneRoot);
         assert_eq!(
             arrived.from.map(|from| from.workspace),
             Some("plane root".to_owned())
@@ -1153,15 +1153,15 @@ mod tests {
                 kept_for: Some("plane root".to_owned()),
             }
         );
-        let kept = charter_core::handback::take(
+        let kept = purlis_core::handback::take(
             held.root(),
-            charter_core::handback::For::Place(&charter_core::active::Place::PlaneRoot),
+            purlis_core::handback::For::Place(&purlis_core::active::Place::PlaneRoot),
         );
         assert_eq!(kept.len(), 1);
         // The child is in the workspace the brief named, whatever its parent was in.
         assert_eq!(
             kept[0].from_workspace,
-            charter_core::active::Place::Workspace("alpha".to_owned())
+            purlis_core::active::Place::Workspace("alpha".to_owned())
         );
     }
 

@@ -363,7 +363,7 @@ describe("a harness started by hand in a shell tab", () => {
     await act(() => emit("harness-by-hand", byHand()));
 
     const banner = await screen.findByRole("status", { name: "codex started by hand" });
-    expect(banner).toHaveTextContent("codex runs outside charter's session tracking");
+    expect(banner).toHaveTextContent("codex runs outside purlis's session tracking");
   });
 
   it("opens the picker in the shell's directory, on that harness, from Open as chat", async () => {

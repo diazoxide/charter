@@ -25,7 +25,7 @@ import type {
  * The core is a model of the window's contract with it: the profiles, the text they are written
  * as, an identity per profile that changes once it is renamed or changed, and a write refused
  * when the text it is sent against is not the text on disk. What it checks beyond that is
- * `charter_core::settings::harness_profiles`'s tests.
+ * `purlis_core::settings::harness_profiles`'s tests.
  */
 
 const PLANE = "/home/dev/plane";
@@ -206,7 +206,7 @@ function core({
             return refusal({ reasons: ["That profile is not in the file as it was shown"] });
           if (to.includes("."))
             return refusal({
-              fields: [{ field: "name", why: `profile '${to}' is not a name charter accepts` }],
+              fields: [{ field: "name", why: `profile '${to}' is not a name purlis accepts` }],
             });
           const users = used(was.name);
           if (users.length > 0) return refusal({ referrers: users });
@@ -461,7 +461,7 @@ describe("Rename a profile", () => {
     await userEvent.click(within(form).getByRole("button", { name: "Rename" }));
 
     expect(
-      await within(form).findByText("profile 'alt.x' is not a name charter accepts"),
+      await within(form).findByText("profile 'alt.x' is not a name purlis accepts"),
     ).toBeVisible();
     expect(screen.queryByText(/is not renamed while/)).toBeNull();
     expect(within(form).getByLabelText("New name")).toHaveValue("alt.x");

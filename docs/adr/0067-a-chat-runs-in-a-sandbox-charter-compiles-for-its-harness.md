@@ -280,7 +280,7 @@ opt-out in section 7 lifts them, and the audit records when it does.
   every start.
 
 *Amended 2026-10-04 (#1057):* class 5 names each harness's project config by file, and the
-list is `PLANTED` in `crates/charter-core/src/sandbox.rs`. Three joined it, each checked
+list is `PLANTED` in `crates/purlis-core/src/sandbox.rs`. Three joined it, each checked
 against the harness's own source or docs:
 
 - **`.claude/skills/`.** A skill runs its `` !`…` `` commands when invoked and registers the

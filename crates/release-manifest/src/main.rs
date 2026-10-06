@@ -21,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use charter_core::updates::Channel;
+use purlis_core::updates::Channel;
 use release_manifest::{Entry, assemble, published};
 
 fn main() -> std::process::ExitCode {
@@ -61,7 +61,7 @@ fn run(args: Vec<String>) -> Result<Vec<PathBuf>, String> {
                 let word = value()?;
                 channel = Some(
                     Channel::named(&word)
-                        .ok_or_else(|| format!("{word:?} is not a channel charter publishes"))?,
+                        .ok_or_else(|| format!("{word:?} is not a channel purlis publishes"))?,
                 );
             }
             "--version" => version = value()?,

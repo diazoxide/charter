@@ -1,7 +1,7 @@
 //! Before anything else crosses a stream, the two ends agree on one version of the protocol,
 //! and when they share no major version, both refuse: neither guesses (#643).
 
-use charter_session_protocol::version::{Refused, Speaks, Version, answer, offer};
+use purlis_session_protocol::version::{Refused, Speaks, Version, answer, offer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
 fn speaks(versions: &[(u16, u16)]) -> Speaks {
@@ -61,7 +61,7 @@ async fn a_host_that_accepts_a_major_the_client_never_offered_is_refused_by_the_
         let mut hello = [0u8; 512];
         let _ = b.read(&mut hello).await.unwrap();
         let body = br#"{"accept":{"major":9,"minor":0}}"#;
-        b.write_all(charter_session_protocol::version::MAGIC)
+        b.write_all(purlis_session_protocol::version::MAGIC)
             .await
             .unwrap();
         b.write_all(&(body.len() as u16).to_be_bytes())
@@ -97,7 +97,7 @@ async fn a_hello_longer_than_the_limit_is_refused_without_reading_it() {
     let (mut a, mut b) = duplex(64 * 1024);
     let host = speaks(&[(1, 0)]);
     let (host, _) = tokio::join!(answer(&mut b, &host), async {
-        a.write_all(charter_session_protocol::version::MAGIC)
+        a.write_all(purlis_session_protocol::version::MAGIC)
             .await
             .unwrap();
         a.write_all(&u16::MAX.to_be_bytes()).await.unwrap();
@@ -111,7 +111,7 @@ async fn a_hello_that_is_not_the_expected_shape_is_refused() {
     let host = speaks(&[(1, 0)]);
     let (host, _) = tokio::join!(answer(&mut b, &host), async {
         let body = br#"{"speaks":"everything"}"#;
-        a.write_all(charter_session_protocol::version::MAGIC)
+        a.write_all(purlis_session_protocol::version::MAGIC)
             .await
             .unwrap();
         a.write_all(&(body.len() as u16).to_be_bytes())
@@ -131,7 +131,7 @@ async fn bytes_the_host_sent_right_after_its_answer_are_not_lost() {
         let mut hello = [0u8; 512];
         let _ = b.read(&mut hello).await.unwrap();
         let body = br#"{"accept":{"major":1,"minor":0}}"#;
-        let mut all = charter_session_protocol::version::MAGIC.to_vec();
+        let mut all = purlis_session_protocol::version::MAGIC.to_vec();
         all.extend_from_slice(&(body.len() as u16).to_be_bytes());
         all.extend_from_slice(body);
         all.extend_from_slice(b"after the answer");

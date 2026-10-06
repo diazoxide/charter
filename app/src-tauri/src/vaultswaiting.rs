@@ -14,7 +14,7 @@
 
 use std::sync::Mutex;
 
-use charter_core::renamelocal::{self, Local, Seams, Waiting};
+use purlis_core::renamelocal::{self, Local, Seams, Waiting};
 use tauri::Manager;
 
 /// What the launch left waiting, and since the window finished some, what still does.
@@ -57,7 +57,7 @@ impl VaultsWaiting {
     ) -> Result<FinishedMoving, String> {
         if !self.holds_the_config_home {
             tracing::warn!(
-                "charter: finishing the vaults' move was refused: this app does not hold the \
+                "purlis: finishing the vaults' move was refused: this app does not hold the \
                  config home's lock, so a terminal's migrate could run at the same time"
             );
             return Err(REFUSED.to_owned());
@@ -69,10 +69,10 @@ impl VaultsWaiting {
         let waiting = self.list().clone();
         let moved = finish(&waiting);
         for line in &moved.said {
-            tracing::info!("charter: rename-local: {line}");
+            tracing::info!("purlis: rename-local: {line}");
         }
         if let Some(why) = &moved.refused {
-            tracing::warn!("charter: finishing the vaults' move was refused: {why}");
+            tracing::warn!("purlis: finishing the vaults' move was refused: {why}");
             return Err(REFUSED.to_owned());
         }
         let left = summary(&moved.waiting);
@@ -141,7 +141,7 @@ pub async fn finish_moving_vaults(app: tauri::AppHandle) -> Result<FinishedMovin
             let Some(mut local) = Local::of_this_machine(&[]) else {
                 return renamelocal::Moved {
                     refused: Some(
-                        "charter cannot tell where this machine's config home is, so there is \
+                        "purlis cannot tell where this machine's config home is, so there is \
                          nowhere to journal a move"
                             .to_owned(),
                     ),

@@ -825,157 +825,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "charter-app"
-version = "0.4.2"
-dependencies = [
- "arboard",
- "base64 0.23.1",
- "changelog",
- "charter-core",
- "charter-session-protocol",
- "chrono",
- "dunce",
- "notify",
- "rfd",
- "rustix",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "specta",
- "specta-typescript",
- "stand-in",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tauri-plugin-wdio",
- "tauri-plugin-wdio-webdriver",
- "tauri-specta",
- "tempfile",
- "tokio",
- "tracing",
- "zbus",
-]
-
-[[package]]
-name = "charter-cli"
-version = "0.4.2"
-dependencies = [
- "base64 0.23.1",
- "changelog",
- "charter-core",
- "chrono",
- "clap",
- "flate2",
- "regex",
- "rmcp",
- "serde_json",
- "sha2 0.11.0",
- "stand-in",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "charter-core"
-version = "0.4.2"
-dependencies = [
- "agent-client-protocol",
- "alacritty_terminal",
- "blocking",
- "changelog",
- "charter-core",
- "charter-same-user",
- "chrono",
- "dirs",
- "flate2",
- "futures",
- "getrandom 0.4.3",
- "gix",
- "glob",
- "graphql_client",
- "grep-matcher",
- "grep-regex",
- "grep-searcher",
- "hmac 0.13.0",
- "http",
- "ignore",
- "imagesize",
- "keyring",
- "libc",
- "log",
- "memchr",
- "memory-stats",
- "nix 0.31.3",
- "nucleo-matcher",
- "percent-encoding",
- "portable-pty",
- "proptest",
- "regex",
- "rustix",
- "secrecy",
- "security-framework",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "shell-words",
- "signal-hook",
- "stand-in",
- "subtle",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "toml 1.1.6+spec-1.1.0",
- "toml_edit 0.25.15+spec-1.1.0",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "ulid",
- "unicode-normalization",
- "unicode-properties",
- "unicode-width",
- "ureq",
- "uuid",
- "wiremock",
- "zeroize",
-]
-
-[[package]]
-name = "charter-same-user"
-version = "0.4.2"
-dependencies = [
- "nix 0.31.3",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "charter-session-protocol"
-version = "0.4.2"
-dependencies = [
- "base64 0.23.1",
- "bytes",
- "charter-same-user",
- "charter-session-protocol",
- "dhat",
- "futures",
- "getrandom 0.4.3",
- "hmac 0.13.0",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "yamux",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1797,8 +1646,8 @@ dependencies = [
 name = "extension-probe"
 version = "0.4.2"
 dependencies = [
- "charter-core",
  "chrono",
+ "purlis-core",
  "serde_json",
  "tempfile",
 ]
@@ -1807,9 +1656,9 @@ dependencies = [
 name = "fake-harness"
 version = "0.4.2"
 dependencies = [
- "charter-core",
  "clap",
  "portable-pty",
+ "purlis-core",
  "serde_json",
  "tempfile",
 ]
@@ -5038,8 +4887,8 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 name = "persona-statistics"
 version = "0.4.2"
 dependencies = [
- "charter-core",
  "chrono",
+ "purlis-core",
  "serde_json",
  "tempfile",
 ]
@@ -5350,6 +5199,157 @@ dependencies = [
 ]
 
 [[package]]
+name = "purlis-app"
+version = "0.4.2"
+dependencies = [
+ "arboard",
+ "base64 0.23.1",
+ "changelog",
+ "chrono",
+ "dunce",
+ "notify",
+ "purlis-core",
+ "purlis-session-protocol",
+ "rfd",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "specta",
+ "specta-typescript",
+ "stand-in",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "tauri-plugin-wdio",
+ "tauri-plugin-wdio-webdriver",
+ "tauri-specta",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "zbus",
+]
+
+[[package]]
+name = "purlis-cli"
+version = "0.4.2"
+dependencies = [
+ "base64 0.23.1",
+ "changelog",
+ "chrono",
+ "clap",
+ "flate2",
+ "purlis-core",
+ "regex",
+ "rmcp",
+ "serde_json",
+ "sha2 0.11.0",
+ "stand-in",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "purlis-core"
+version = "0.4.2"
+dependencies = [
+ "agent-client-protocol",
+ "alacritty_terminal",
+ "blocking",
+ "changelog",
+ "chrono",
+ "dirs",
+ "flate2",
+ "futures",
+ "getrandom 0.4.3",
+ "gix",
+ "glob",
+ "graphql_client",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "hmac 0.13.0",
+ "http",
+ "ignore",
+ "imagesize",
+ "keyring",
+ "libc",
+ "log",
+ "memchr",
+ "memory-stats",
+ "nix 0.31.3",
+ "nucleo-matcher",
+ "percent-encoding",
+ "portable-pty",
+ "proptest",
+ "purlis-core",
+ "purlis-same-user",
+ "regex",
+ "rustix",
+ "secrecy",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "shell-words",
+ "signal-hook",
+ "stand-in",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 1.1.6+spec-1.1.0",
+ "toml_edit 0.25.15+spec-1.1.0",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "ulid",
+ "unicode-normalization",
+ "unicode-properties",
+ "unicode-width",
+ "ureq",
+ "uuid",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "purlis-same-user"
+version = "0.4.2"
+dependencies = [
+ "nix 0.31.3",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "purlis-session-protocol"
+version = "0.4.2"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "dhat",
+ "futures",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
+ "purlis-same-user",
+ "purlis-session-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "yamux",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5518,9 +5518,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "release-manifest"
 version = "0.4.2"
 dependencies = [
- "charter-core",
  "minisign",
  "minisign-verify",
+ "purlis-core",
  "serde_json",
 ]
 

@@ -53,7 +53,7 @@ describe("the question a relaunch asks", () => {
     theDialog();
 
     const dialog = screen.getByRole("alertdialog");
-    expect(dialog).toHaveTextContent("3 chats and 1 view tab were open when charter last quit");
+    expect(dialog).toHaveTextContent("3 chats and 1 view tab were open when purlis last quit");
     expect(dialog).toHaveTextContent("charter2 chats, 1 view tab");
     expect(dialog).toHaveTextContent("ide1 chat");
   });
@@ -62,7 +62,7 @@ describe("the question a relaunch asks", () => {
     theDialog({ projects: [{ plane: ONE, chats: 1, views: 0 }], after_update: false });
 
     expect(screen.getByRole("alertdialog")).toHaveTextContent(
-      "1 chat was open when charter last quit",
+      "1 chat was open when purlis last quit",
     );
   });
 
@@ -109,11 +109,11 @@ describe("the question a relaunch asks", () => {
     for (const button of buttons) expect(button).toHaveAttribute("tabindex", "0");
   });
 
-  it("says why it is asking when charter restarted to install an update", () => {
+  it("says why it is asking when purlis restarted to install an update", () => {
     theDialog({ ...TWO_PROJECTS, after_update: true });
 
     expect(screen.getByRole("alertdialog")).toHaveTextContent(
-      "charter restarted to install an update",
+      "purlis restarted to install an update",
     );
   });
 });

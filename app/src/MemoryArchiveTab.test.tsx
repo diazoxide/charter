@@ -135,7 +135,7 @@ describe("a store's archive tab", () => {
     await waitFor(() => expect(document.activeElement).toBe(said));
   });
 
-  it("says what charter could not restore, and why, and keeps the memory listed", async () => {
+  it("says what purlis could not restore, and why, and keeps the memory listed", async () => {
     core([[archived()]], new Error("the store already holds freeze.md, so freeze stays archived"));
     draw();
     await userEvent.click(await screen.findByRole("button", { name: /Freeze/ }));
@@ -143,7 +143,7 @@ describe("a store's archive tab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Restore memory" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "charter could not restore Freeze: the store already holds freeze.md, so freeze stays archived",
+      "purlis could not restore Freeze: the store already holds freeze.md, so freeze stays archived",
     );
     expect(screen.getByRole("button", { name: /Freeze/ })).toBeInTheDocument();
   });
@@ -157,12 +157,12 @@ describe("a store's archive tab", () => {
     expect(empty).toHaveTextContent("A memory you delete from shared memory lands here");
   });
 
-  it("says what charter could not read, and why", async () => {
+  it("says what purlis could not read, and why", async () => {
     core([new Error("no persona 'ghost'")]);
     draw(0, { kind: "persona", name: "ghost" });
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "charter could not read ghost's archive: no persona 'ghost'",
+      "purlis could not read ghost's archive: no persona 'ghost'",
     );
   });
 

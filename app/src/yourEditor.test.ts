@@ -36,7 +36,7 @@ describe("which editor is yours (RC-20)", () => {
     }
   });
 
-  it("is none when the file names one charter does not know, and says so", () => {
+  it("is none when the file names one purlis does not know, and says so", () => {
     const { editor, said } = loadEditor({ editor: "emacs; rm -rf /" });
 
     expect(editor).toBeUndefined();

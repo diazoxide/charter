@@ -1,21 +1,21 @@
 //! The worktree verbs, as the window can reach them.
 //!
 //! Thin by design: every decision — what may be removed, what may be merged, which paths are
-//! this workspace's — lives in `charter_core::worktree`, and this layer converts. A rule
+//! this workspace's — lives in `purlis_core::worktree`, and this layer converts. A rule
 //! implemented here as well would be a second rule, and the two would drift.
 //!
 //! **A refusal crosses in the window's words, which the core chose.** The core's refusals are
 //! sentences, and each has two: `charter worktree`'s, which names the command-line repair
 //! (`--force`, `git -C <clone> …`), and the window's ([`worktree::Refusal::in_window`],
-//! [`charter_core::pieces::NotDeclared::in_window`]), which says it of a branch and its folder
+//! [`purlis_core::pieces::NotDeclared::in_window`]), which says it of a branch and its folder
 //! (ADR 0072 §4, #989) and leaves the repair to the window's own rows. Nothing here rewords
 //! either: no "failed to remove worktree", no error code the UI would then have to translate
 //! back into English.
 
 use std::path::{Path, PathBuf};
 
-use charter_core::worktree::Note;
-use charter_core::{chatpiece, worktree};
+use purlis_core::worktree::Note;
+use purlis_core::{chatpiece, worktree};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -137,7 +137,7 @@ fn pieces_of(plane: &Path, workspace: &str, repo: &str) -> Result<Vec<Piece>, St
             pieces
                 .into_iter()
                 .map(|p| Piece {
-                    said: charter_core::pieces::said(plane, workspace, repo, &p.piece, now),
+                    said: purlis_core::pieces::said(plane, workspace, repo, &p.piece, now),
                     piece: p.piece,
                     path: p.path.display().to_string(),
                     branch: p.branch,
@@ -223,12 +223,12 @@ fn declare_done(
     piece: &str,
 ) -> Result<(), String> {
     let who = window(config);
-    charter_core::pieces::declare(
+    purlis_core::pieces::declare(
         plane,
         workspace,
         repo,
         piece,
-        charter_core::pieces::Declaration::Done,
+        purlis_core::pieces::Declaration::Done,
         &who,
         chrono::Utc::now(),
     )
@@ -238,18 +238,18 @@ fn declare_done(
 
 /// The window speaking for a piece: no session or persona, this machine's name as the label,
 /// and the log named by the device id the store at `config` keeps (FD-25).
-fn window(config: Option<&Path>) -> charter_core::pieces::Who {
-    let host = charter_core::dispatch::host();
-    charter_core::pieces::Who {
+fn window(config: Option<&Path>) -> purlis_core::pieces::Who {
+    let host = purlis_core::dispatch::host();
+    purlis_core::pieces::Who {
         session: None,
         persona: None,
-        log: charter_core::dispatch::log_name(config, &host),
+        log: purlis_core::dispatch::log_name(config, &host),
         host,
     }
 }
 
 /// Said when a branch was cut but the piece log could not be written.
-const UNLOGGED: &str = "charter could not record that it cut this branch, so it will not say \
+const UNLOGGED: &str = "purlis could not record that it cut this branch, so it will not say \
                         how long the branch has been quiet.";
 
 /// Log a branch the window cut as `claimed`, and say what there is to say about it in the
@@ -316,7 +316,7 @@ pub async fn worktree_add(
         )
     })
     .await
-    .map_err(|err| format!("charter could not cut the branch: {err}"))?
+    .map_err(|err| format!("purlis could not cut the branch: {err}"))?
 }
 
 /// The cut itself, against a root the registry has already vouched for.
@@ -533,7 +533,7 @@ mod tests {
         let (_dir, root, clone) = plane();
         let by_hand = root.join("workspaces/alpha/.worktrees/thing/hand");
         std::fs::create_dir_all(by_hand.parent().unwrap()).unwrap();
-        charter_core::forklock::output(
+        purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(&clone)
@@ -638,7 +638,7 @@ mod tests {
 
     /// git in `dir`, for a test's own setup.
     fn git(dir: &Path, args: &[&str]) {
-        let ran = charter_core::forklock::output(
+        let ran = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
@@ -652,7 +652,7 @@ mod tests {
 
     /// Whether the clone still has `branch`.
     fn has_branch(clone: &Path, branch: &str) -> bool {
-        let listed = charter_core::forklock::output(
+        let listed = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(clone)
@@ -771,7 +771,7 @@ mod tests {
 
         assert_eq!(refused, "agents are stopped", "the start's own sentence");
         assert!(pieces_of(&root, "alpha", "thing").unwrap().is_empty());
-        let branch = charter_core::forklock::output(
+        let branch = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(&clone)

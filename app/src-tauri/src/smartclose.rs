@@ -34,21 +34,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use charter_core::hookwire::{Report, SessionSaved};
-use charter_core::reopen::Reopened;
-use charter_core::state::State;
+use purlis_core::hookwire::{Report, SessionSaved};
+use purlis_core::reopen::Reopened;
+use purlis_core::state::State;
 
 use crate::planes::{Held, PlaneId, Planes};
 
 /// What the chat is sent: one line naming charter's `smart-close` skill in words, never a
 /// `/slash` command, so every harness that reaches charter's skills can act on it (ADR 0063).
 pub const PROMPT: &str =
-    "Use charter's smart-close skill to write this session's record and close the chat.";
+    "Use purlis's smart-close skill to write this session's record and close the chat.";
 
 /// How long after the prompt is sent a record may take before the tab goes back to normal. The
 /// core's, because a chat's `Stop` passes on a saved-record line only while this has not
 /// passed (`sessionrecord::relay`, #517): one wait, one number.
-pub const GIVES_UP_AFTER: Duration = charter_core::sessionrecord::relay::PASSED_ON_WITHIN;
+pub const GIVES_UP_AFTER: Duration = purlis_core::sessionrecord::relay::PASSED_ON_WITHIN;
 
 /// The event the window is told each step of a smart close on.
 pub const EVENT: &str = "smart-close";
@@ -132,7 +132,7 @@ pub fn offer(facts: &Facts) -> SmartCloseOffer {
         Some("This chat's program has ended, so nothing is left to write a session record.")
     } else if facts.state == State::Unknown {
         Some(
-            "charter has heard nothing from this chat's harness, so it cannot tell when to ask \
+            "purlis has heard nothing from this chat's harness, so it cannot tell when to ask \
              it for a session record.",
         )
     } else if facts.turns == 0 && !facts.resumed {
@@ -427,7 +427,7 @@ pub(crate) fn reported_sending(
 pub fn saved(held: &Held, saved: &SessionSaved) {
     if !held.closing().forget(saved.chat) {
         tracing::warn!(
-            "charter: chat {} wrote a session record while it was not being smart-closed, so \
+            "purlis: chat {} wrote a session record while it was not being smart-closed, so \
              nothing was closed",
             saved.chat
         );
@@ -435,14 +435,14 @@ pub fn saved(held: &Held, saved: &SessionSaved) {
     }
     if let Err(why) = held.close_chat(saved.chat) {
         tracing::warn!(
-            "charter: chat {} wrote its session record and did not close cleanly ({why})",
+            "purlis: chat {} wrote its session record and did not close cleanly ({why})",
             saved.chat
         );
     }
     // Read through the one reading of a record's path there is, so a line naming anything else
     // still closes the tab and names nothing.
     let record =
-        charter_core::sessionrecord::saved(held.root(), &saved.session_saved).map(|listed| {
+        purlis_core::sessionrecord::saved(held.root(), &saved.session_saved).map(|listed| {
             SavedRecord {
                 path: listed.shown,
                 title: listed.title,
@@ -632,7 +632,7 @@ mod tests {
     fn the_prompt_is_one_paste_then_enter() {
         assert_eq!(
             sent_as(),
-            "\x1b[200~Use charter's smart-close skill to write this session's record and close \
+            "\x1b[200~Use purlis's smart-close skill to write this session's record and close \
              the chat.\x1b[201~\r"
         );
     }

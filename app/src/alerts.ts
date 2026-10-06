@@ -9,7 +9,7 @@ import { GIT, usePlaneChanged } from "./planeChanged";
  * Alerts are about a PLANE: its pin, its front door, its workspaces' layout, its root. They
  * are not about the workspace or the chat on screen, which is why they left the right-hand
  * region (a per-project surface) for a drawer the window owns. The core decides them — the
- * same `charter_core::alerts` that draws `charter statusline`'s rows — and this only asks.
+ * same `purlis_core::alerts` that draws `charter statusline`'s rows — and this only asks.
  */
 export type AlertsReading =
   /** Nothing has come back yet. */
@@ -74,7 +74,7 @@ export function useAlerts(planes: readonly PlaneId[]): {
         if (gone) return;
         if (answer.status === "error") setReading({ at: "failed", why: answer.error });
         else if (!Array.isArray(answer.data))
-          setReading({ at: "failed", why: "charter did not answer with a reading" });
+          setReading({ at: "failed", why: "purlis did not answer with a reading" });
         else setReading({ at: "read", planes: answer.data });
       })
       .catch((err: unknown) => {

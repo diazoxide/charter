@@ -7,7 +7,7 @@ that the next reader checks the file rather than a brief.
 The operator's goal, in his words, is a *"100% pluggable app"*, and his question was direct:
 *"is anyone can create plugin like this components?"* — meaning the window's side panels. The
 answer on 2026-09-23 was **no**, read off the tree rather than remembered:
-`crates/charter-core/src/extension.rs`'s `Manifest` let an extension contribute `themes: Vec<Theme>`
+`crates/purlis-core/src/extension.rs`'s `Manifest` let an extension contribute `themes: Vec<Theme>`
 and declare a `program` that is hashed, named in the prompt and **never run**; the panels were
 hardcoded React in `app/src/Panels.tsx`, fed by named fields of one Tauri command.
 
@@ -19,7 +19,7 @@ The work is charter-app's. The record is here because `0001`–`0042` are here, 
 extends [ADR 0041](0041-a-plugin-is-a-subprocess-or-charter-has-no-plugins.md)'s vocabulary —
 splitting the two would leave 0041's four properties in one repository and the second thing they
 govern in another. ADR 0031 and ADR 0041 both made the same move for the same reason. Every path
-below (`crates/charter-core/…`, `app/src-tauri/…`, `app/src/…`) is in `diazoxide/charter`.
+below (`crates/purlis-core/…`, `app/src-tauri/…`, `app/src/…`) is in `diazoxide/charter`.
 
 ## Where this extends ADR 0041, and where it does not contradict it
 
@@ -68,7 +68,7 @@ Mark   = todo | persona | repo | piece | note | trouble | dot
 Tone   = plain | default | trouble
 ```
 
-That is the whole of it. `crates/charter-core/src/panel.rs` is that type and its parser.
+That is the whole of it. `crates/purlis-core/src/panel.rs` is that type and its parser.
 
 ### It draws from a declared vocabulary, not arbitrary markup
 
@@ -235,7 +235,7 @@ plugin"*, and the personas one must carry all of this end to end.
 | **Statistics, with visualisation, from a button** | **No. See below.** |
 
 The substrate for the memories half already existed and was not rebuilt:
-`crates/charter-core/src/memstore.rs` (`read_files`, `read_store`, `Found`) and `recall.rs`. What
+`crates/purlis-core/src/memstore.rs` (`read_files`, `read_store`, `Found`) and `recall.rs`. What
 was missing was the wire, and that is what `persona_memories` is.
 
 **One thing this raises that is the operator's to rule on.** charter-app#173 chose a *popover* for

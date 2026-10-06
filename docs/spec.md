@@ -560,7 +560,7 @@ Each milestone is something the operator actually uses, not a layer.
   - a worktree per chat (ADR 0027). The gap ADR 0027 named is closed: the harness layer is
     written into a piece when charter cuts it and again when a chat starts there, so that chat
     has the plane's guards and its persona's agents
-    (`crates/charter-core/tests/a_chat_in_a_worktree_gets_the_planes_layer.rs`). `unwired` is
+    (`crates/purlis-core/tests/a_chat_in_a_worktree_gets_the_planes_layer.rs`). `unwired` is
     left only on a tree whose layer is not in it yet, and a chat is refused there rather than
     started unguarded. What is still missing is in decision 4
   - panels and the palette (read-only at M1; the panels write todos, personas and vaults since

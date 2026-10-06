@@ -26,7 +26,7 @@ export const THEIR_STATUS_LINE = "/bin/echo their own status line";
  * **charter-app#134, and the reason it reached the operator.** macOS hands a double-clicked
  * `.app` `PATH=/usr/bin:/bin:/usr/sbin:/sbin` — `launchd` starts a GUI process and no login
  * shell is involved. The operator's `claude` was in `~/.local/bin`, where its own installer
- * puts it, so charter could not find it, its wiring check answered `State::Unknown`, and the
+ * puts it, so purlis could not find it, its wiring check answered `State::Unknown`, and the
  * app refused every chat with *"an unknown is not a pass — nothing was started"*.
  *
  * **Nothing in this suite had ever launched the app that way.** Every other config inherits
@@ -63,7 +63,7 @@ const home = (process.env.CHARTER_FINDER_HOME ??= writeAHarnessOnlyAShellWouldFi
 ));
 
 // **And this launch's operator already has a status line.** charter must not replace it (the
-// ruling of 2026-09-22, `charter_core::footerclaim`), so the chats this app starts record no
+// ruling of 2026-09-22, `purlis_core::footerclaim`), so the chats this app starts record no
 // turn and their ctx/cache gauge stays dark — which the doctor has to say, in a row that names
 // this file. `launch.finder.e2e.ts` asks it.
 writeAStatusLineOfTheirOwn(home, THEIR_STATUS_LINE);

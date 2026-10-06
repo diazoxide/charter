@@ -162,7 +162,7 @@ function Body({
   if (reading.at === "failed") {
     return (
       <p className="trouble" role="alert">
-        charter could not read the alerts: {reading.why}
+        purlis could not read the alerts: {reading.why}
       </p>
     );
   }
@@ -220,7 +220,7 @@ function Project({
         <>
           {read.stopped !== null && (
             <p className="trouble" role="alert">
-              charter stopped looking here: {read.stopped}. The alerts below are the ones it found
+              purlis stopped looking here: {read.stopped}. The alerts below are the ones it found
               before that, and there may be more.
             </p>
           )}
@@ -333,7 +333,7 @@ function ProjectRow({
           if (fixing.current) return;
           fixing.current = true;
           setSaid(undefined);
-          const could = (why: string) => `charter could not ${label.toLowerCase()}: ${why}`;
+          const could = (why: string) => `purlis could not ${label.toLowerCase()}: ${why}`;
           void commands
             .planeDoctorFix(plane, way.id)
             .then((answer) => {
@@ -418,7 +418,7 @@ function MachineRow({
       >
         <Words
           {...shown}
-          detail="Use the built-in theme? charter moves the theme file aside to theme.aside.json (or the next free theme.aside-N.json), never over a file, and draws what is in force without it."
+          detail="Use the built-in theme? purlis moves the theme file aside to theme.aside.json (or the next free theme.aside-N.json), never over a file, and draws what is in force without it."
         />
       </Notice>
     );

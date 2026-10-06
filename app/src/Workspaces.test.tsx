@@ -401,7 +401,7 @@ describe("the workspace strip", () => {
     render(<App />);
 
     const hand = await screen.findByRole("button", {
-      name: "Nothing has asked for you, but steward 5 can't tell charter it's waiting",
+      name: "Nothing has asked for you, but steward 5 can't tell purlis it's waiting",
     });
     expect(hand).toHaveClass("muted");
     expect(screen.getByTestId("title-bar")).toContainElement(hand);

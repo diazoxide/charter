@@ -39,8 +39,8 @@ Intel macOS build, no `.rpm`, and no Windows until the port lands.
 
 | Path | What |
 | --- | --- |
-| `crates/charter-core` | The core: the plane, and later workspaces, personas and sessions. No UI, no Tauri |
-| `crates/charter-cli` | The `charter` binary, called by hooks, scripts and agents |
+| `crates/purlis-core` | The core: the plane, and later workspaces, personas and sessions. No UI, no Tauri |
+| `crates/purlis-cli` | The `purlis` binary, with `charter` as an alias, called by hooks, scripts and agents |
 | `crates/stand-in` | Test-only: the one way a test writes a program it is about to run |
 | `crates/same-user` | Whether a socket's peer, a directory or a file is this user's alone: the one copy of the checks `charterd.sock`, the hook sockets and the client scopes' credentials rest on |
 | `crates/persona-statistics` | charter's first built-in extension, and the executor's first consumer: the persona statistics view (ADR 0041 stage 2). The release build assembles it into the app's resources (`persona-statistics assemble <dir>`), and it links the core's stats code so its numbers are `charter persona stats`'s |
@@ -91,7 +91,7 @@ The commands the UI calls are generated into `app/src/bindings.ts`. Running the 
 and a test fails when it is out of date; to write it without running the app:
 
 ```bash
-cargo test -p charter-app -- --ignored
+cargo test -p purlis-app -- --ignored
 ```
 
 The scenario tests run against a built app; CI builds it with the `e2e` cargo feature first.
@@ -138,8 +138,8 @@ byte. Those answers were recorded once, on 2026-09-23, and are replayed against 
 no Python anywhere (ADR 0046):
 
 ```bash
-cargo test -p charter-cli --test recorded_behaviour                  # every scenario
-cargo test -p charter-cli --test recorded_behaviour -- save- doctor-  # only those
+cargo test -p purlis-cli --test recorded_behaviour                  # every scenario
+cargo test -p purlis-cli --test recorded_behaviour -- save- doctor-  # only those
 ```
 
 A change that is meant to move a recorded answer re-records it

@@ -4,7 +4,7 @@
 # copied into every recorded scenario, `tests/fixtures/recorded/` compares every file a command
 # leaves and every byte it prints against the recorded answer (ADR 0046),
 # `fixtures/corpora/*.raw` are raw terminal recordings with escape sequences in them, and a good
-# part of `crates/charter-core` asserts on exact output. Git for Windows enables `core.autocrlf` by default, and a checkout that rewrote a
+# part of `crates/purlis-core` asserts on exact output. Git for Windows enables `core.autocrlf` by default, and a checkout that rewrote a
 # line ending would make every one of those tests measure the checkout instead of the code —
 # silently, and only on one platform.
 #

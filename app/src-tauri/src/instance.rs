@@ -72,8 +72,8 @@ pub fn one_per_user(app: &tauri::App) {
             std::process::exit(0);
         }
         Err(NotHeld::Failed(why)) => tracing::warn!(
-            "charter: could not take {} ({why}); going on without the guard against a second \
-             charter",
+            "purlis: could not take {} ({why}); going on without the guard against a second \
+             purlis",
             lock.display()
         ),
     }
@@ -130,7 +130,7 @@ impl Instance {
 }
 
 /// What a launch that found another charter running says before it ends.
-pub const ALREADY_RUNNING: &str = "charter: charter is already running for this user, and \
+pub const ALREADY_RUNNING: &str = "purlis: purlis is already running for this user, and \
      without a session bus this launch cannot be handed to it — switch to its window. \
      charter-app#24.";
 
@@ -218,11 +218,11 @@ mod tests {
                 .expect("json")
         };
         let release = conf("tauri.conf.json");
-        assert_eq!(release["identifier"], charter_core::names::BUNDLE_ID.write);
-        assert_eq!(release["productName"], charter_core::names::BINARY.write);
+        assert_eq!(release["identifier"], purlis_core::names::BUNDLE_ID.write);
+        assert_eq!(release["productName"], purlis_core::names::BINARY.write);
         assert_eq!(
             conf("tauri.e2e.conf.json")["identifier"],
-            format!("{}.e2e", charter_core::names::BUNDLE_ID.write)
+            format!("{}.e2e", purlis_core::names::BUNDLE_ID.write)
         );
         let runtime = tempfile::tempdir().expect("a directory");
         assert_eq!(
@@ -234,13 +234,13 @@ mod tests {
             ),
             runtime.path().join("dev.purlis.app.lock")
         );
-        let old = charter_core::renamelocal::busy::Instances::of(
-            &charter_core::renamelocal::busy::Places {
+        let old = purlis_core::renamelocal::busy::Instances::of(
+            &purlis_core::renamelocal::busy::Places {
                 linux: true,
                 runtime: Some(runtime.path().to_owned()),
                 ..Default::default()
             },
-            Some(charter_core::names::BUNDLE_ID.write),
+            Some(purlis_core::names::BUNDLE_ID.write),
         );
         assert_eq!(old.locks, [runtime.path().join("dev.charter.app.lock")]);
     }
@@ -252,7 +252,7 @@ mod tests {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).expect("json");
         let deb = &conf["bundle"]["linux"]["deb"];
-        let old = charter_core::names::BINARY.reads[0];
+        let old = purlis_core::names::BINARY.reads[0];
         assert_eq!(deb["replaces"], serde_json::json!([old]));
         assert_eq!(deb["conflicts"], serde_json::json!([old]));
     }

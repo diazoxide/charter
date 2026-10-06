@@ -83,9 +83,9 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use charter_core::engine::Size;
-use charter_core::harness::Harness;
-use charter_core::reopen::{Chat, Fresh, Reopened};
+use purlis_core::engine::Size;
+use purlis_core::harness::Harness;
+use purlis_core::reopen::{Chat, Fresh, Reopened};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::ipc::Channel;
@@ -109,11 +109,11 @@ use planes::{Launch, PlaneId, Planes, Restoring, Showing};
 /// It must EXIST: arming a hook at a path that is not there would put an error in the
 /// harness's log on every single event, which is worse than the chats reading `unknown`.
 pub(crate) fn charter_binary() -> Option<PathBuf> {
-    let named = charter_core::envvar::var_os("PURLIS_BINARY").map(PathBuf::from);
+    let named = purlis_core::envvar::var_os("PURLIS_BINARY").map(PathBuf::from);
     let dir = std::env::current_exe()
         .ok()
         .and_then(|exe| Some(exe.parent()?.to_owned()));
-    let beside = charter_core::cliname::INSTALLED
+    let beside = purlis_core::cliname::INSTALLED
         .iter()
         .filter_map(move |name| Some(dir.as_ref()?.join(name)));
     named.into_iter().chain(beside).find(|path| path.is_file())
@@ -125,15 +125,15 @@ pub(crate) fn charter_binary() -> Option<PathBuf> {
 fn shell_tab_shims<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     binary: &std::path::Path,
-) -> Option<charter_core::shellguard::Shims> {
+) -> Option<purlis_core::shellguard::Shims> {
     let dir = app.path().app_data_dir().ok()?.join("shims");
-    let shims = charter_core::shellguard::Shims::at(&dir);
+    let shims = purlis_core::shellguard::Shims::at(&dir);
     match shims.write(binary) {
         Ok(()) => Some(shims),
         Err(why) if why.kind() == std::io::ErrorKind::Unsupported => None,
         Err(why) => {
             tracing::warn!(
-                "charter: no shell-tab shims at {} ({why}); a harness started in a shell tab \
+                "purlis: no shell-tab shims at {} ({why}); a harness started in a shell tab \
                  will not be warned about",
                 dir.display()
             );
@@ -148,15 +148,15 @@ fn shell_tab_shims<R: tauri::Runtime>(
 fn chat_git_hooks<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     binary: &std::path::Path,
-) -> Option<charter_core::githooks::GitHooks> {
+) -> Option<purlis_core::githooks::GitHooks> {
     let dir = app.path().app_data_dir().ok()?.join("git-hooks");
-    let hooks = charter_core::githooks::GitHooks::at(&dir);
+    let hooks = purlis_core::githooks::GitHooks::at(&dir);
     match hooks.write(binary) {
         Ok(()) => Some(hooks),
         Err(why) if why.kind() == std::io::ErrorKind::Unsupported => None,
         Err(why) => {
             tracing::warn!(
-                "charter: no git hooks at {} ({why}); a chat's commits will not be scanned \
+                "purlis: no git hooks at {} ({why}); a chat's commits will not be scanned \
                  for secrets",
                 dir.display()
             );
@@ -172,14 +172,14 @@ fn chat_git_hooks<R: tauri::Runtime>(
 pub(crate) struct Shipped {
     /// The `charter` every hook runs ([`charter_binary`]).
     pub binary: Option<PathBuf>,
-    /// The Claude Code plugin a chat loads (`charter_core::plugin`), inside the bundle.
+    /// The Claude Code plugin a chat loads (`purlis_core::plugin`), inside the bundle.
     pub plugin: Option<PathBuf>,
     /// The shims a shell tab finds first on its `PATH` (ADR 0062), written at launch under the
     /// app's data directory — none where they could not be written, or off unix.
-    pub shims: Option<charter_core::shellguard::Shims>,
+    pub shims: Option<purlis_core::shellguard::Shims>,
     /// The git hooks every harness chat commits through (SQ-16), written at launch under the
     /// app's data directory — none where they could not be written, or off unix.
-    pub git_hooks: Option<charter_core::githooks::GitHooks>,
+    pub git_hooks: Option<purlis_core::githooks::GitHooks>,
 }
 
 /// What rename-local moves the harness plugin with at launch (RN-8): this app's `charter` and
@@ -188,9 +188,9 @@ pub(crate) struct Shipped {
 /// keeps Claude Code's registration pointing at the copy the move carried (D-RN8-13). A fenced
 /// build touches no harness's configuration at all.
 #[cfg(not(feature = "e2e"))]
-fn plugin_to_move(app: &tauri::AppHandle) -> Option<charter_core::plugin_install::Machine> {
-    use charter_core::plugin_install as install;
-    if charter_core::fence::FENCED {
+fn plugin_to_move(app: &tauri::AppHandle) -> Option<purlis_core::plugin_install::Machine> {
+    use purlis_core::plugin_install as install;
+    if purlis_core::fence::FENCED {
         return None;
     }
     let binary = charter_binary().or_else(|| std::env::current_exe().ok())?;
@@ -202,12 +202,12 @@ fn plugin_to_move(app: &tauri::AppHandle) -> Option<charter_core::plugin_install
 }
 
 /// Re-run `charter plugin install` for each harness whose installed copy runs this app's
-/// `charter` and is out of date (`charter_core::plugin_install::refresh` has the rule), on a
+/// `charter` and is out of date (`purlis_core::plugin_install::refresh` has the rule), on a
 /// thread of its own. Said on standard error, as `charter plugin install` says it; a harness
 /// with nothing to do says nothing.
 fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
-    use charter_core::plugin_install as install;
-    if !install::refreshes_on_its_own(charter_core::fence::FENCED, cfg!(debug_assertions)) {
+    use purlis_core::plugin_install as install;
+    if !install::refreshes_on_its_own(purlis_core::fence::FENCED, cfg!(debug_assertions)) {
         return;
     }
     let _ = std::thread::Builder::new()
@@ -219,7 +219,7 @@ fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
             let machine = match install::Machine::from_env(binary, Some(plugin)) {
                 Ok(machine) => machine,
                 Err(why) => {
-                    tracing::warn!("charter: the installed plugin was not checked: {why}");
+                    tracing::warn!("purlis: the installed plugin was not checked: {why}");
                     return;
                 }
             };
@@ -227,13 +227,13 @@ fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
             if !outcomes.is_empty() {
                 let said = if install::failed(&outcomes) {
                     "could not bring the installed plugin fully up to date with this app; \
-                     `charter plugin install` says why"
+                     `purlis plugin install` says why"
                 } else {
                     "brought the installed plugin up to date with this app"
                 };
                 // One event, without the newline `render` ends on: the log adds its own.
                 tracing::info!(
-                    "charter: {said}\n{}",
+                    "purlis: {said}\n{}",
                     install::render(&outcomes, false).trim_end()
                 );
             }
@@ -244,7 +244,7 @@ fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
 /// one whose data home is refused, runs without it and says why: every chat still works, and
 /// only the record of its hook calls is missing.
 fn events() -> Option<hooks::Events> {
-    let opened = charter_core::eventlog::Recorder::open();
+    let opened = purlis_core::eventlog::Recorder::open();
     let _ = EVENT_LOG.set(match &opened {
         Ok(recorder) => Ok(recorder.dir().to_path_buf()),
         Err(why) => Err(EventLogRefused {
@@ -255,7 +255,7 @@ fn events() -> Option<hooks::Events> {
     match opened {
         Ok(recorder) => Some(std::sync::Arc::new(std::sync::Mutex::new(recorder))),
         Err(why) => {
-            tracing::warn!("charter: no event log ({why}); hook calls are not recorded");
+            tracing::warn!("purlis: no event log ({why}); hook calls are not recorded");
             None
         }
     }
@@ -423,7 +423,7 @@ static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
 /// can report anything. This is the thread to pull: each step, with the time it was
 /// reached. Silent unless the variable is set, which nothing but a person debugging does.
 fn reached(step: &str) {
-    if charter_core::envvar::var_os("PURLIS_LAUNCH_LOG").is_some() {
+    if purlis_core::envvar::var_os("PURLIS_LAUNCH_LOG").is_some() {
         tracing::info!(
             "charter-launch {:>5} ms  {step}",
             STARTED.elapsed().as_millis()
@@ -501,7 +501,7 @@ static FIRST_FRAME: AtomicBool = AtomicBool::new(false);
 #[specta::specta]
 fn first_frame() -> Option<slowstart::SlowStart> {
     let took = STARTED.elapsed();
-    if charter_core::envvar::var_os("PURLIS_BENCH_LOG").is_some() {
+    if purlis_core::envvar::var_os("PURLIS_BENCH_LOG").is_some() {
         println!("charter-bench first-frame {}", took.as_millis());
     }
     if FIRST_FRAME.swap(true, Ordering::SeqCst) {
@@ -593,12 +593,12 @@ pub struct HandedFromNote {
     /// The chat it came from, by the name the operator saw it under.
     pub name: String,
     /// The workspace it came from, or `plane root` for a chat that handed off from there
-    /// (SI-1b) — `charter_core::active::Place::word`, drawn as it is.
+    /// (SI-1b) — `purlis_core::active::Place::word`, drawn as it is.
     pub workspace: String,
 }
 
-impl From<&charter_core::reopen::HandedFrom> for HandedFromNote {
-    fn from(from: &charter_core::reopen::HandedFrom) -> Self {
+impl From<&purlis_core::reopen::HandedFrom> for HandedFromNote {
+    fn from(from: &purlis_core::reopen::HandedFrom) -> Self {
         Self {
             name: from.name.clone(),
             workspace: from.workspace.word().to_owned(),
@@ -638,7 +638,7 @@ struct Sidebar {
     unfiled: Vec<OpenChat>,
 }
 
-/// The sidebar, answered from the plane's model (FD-10b, [`charter_core::planemodel`]).
+/// The sidebar, answered from the plane's model (FD-10b, [`purlis_core::planemodel`]).
 ///
 /// The model is read once when the plane is held, and from then on each change the watch
 /// names re-reads only what it is part of: a todo closed in `beta` re-reads `beta/todos/`,
@@ -682,7 +682,7 @@ async fn off_the_window<T: Send + 'static>(
 /// chats it holds.
 fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
     let root = held.root();
-    let on_disk = charter_core::workspaces::Plane::open(root);
+    let on_disk = purlis_core::workspaces::Plane::open(root);
     let model = held.sidebar_model();
 
     let mut filed: std::collections::HashMap<String, Vec<OpenChat>> =
@@ -733,7 +733,7 @@ fn sidebar_of(held: &planes::Held) -> Result<Sidebar, String> {
 /// window showing a project the launch had not opened drew the workspaces of the one it had.
 /// A workspace name means nothing without its project; two projects can both have an `alpha`.
 ///
-/// **Served from the plane's model, per section** (FD-10c, [`charter_core::planemodel`]): a
+/// **Served from the plane's model, per section** (FD-10c, [`purlis_core::planemodel`]): a
 /// workspace's clones, todos, memories and session records are read the first time it is
 /// focused, and from then on each section again only when a change the watch names is part
 /// of it. A memory an agent saves re-reads that workspace's `memory/` and nothing else.
@@ -785,7 +785,7 @@ fn session_record(
 
 /// Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 /// given its conversation where it can be, and told the record in its briefing
-/// (`charter_core::sessionresume`). The answer is the chat as the window draws it, whose
+/// (`purlis_core::sessionresume`). The answer is the chat as the window draws it, whose
 /// `resumed` or `fresh` says which happened.
 ///
 /// `instead_of` is the window saying the chat it resumed this record into, by its number, ended
@@ -806,7 +806,7 @@ fn resume_session(
 ) -> Result<OpenChat, String> {
     let held = planes.held(&plane)?;
     let resumed =
-        charter_core::sessionresume::ready(held.root(), &path, &name, instead_of.is_some())?;
+        purlis_core::sessionresume::ready(held.root(), &path, &name, instead_of.is_some())?;
     let chat = Chat {
         program: resumed.ready.program.clone(),
         args: Vec::new(),
@@ -907,7 +907,7 @@ async fn alerts_everywhere(
 
 /// A harness's capability card at a glance (HP-19, W10, ADR 0072 §3): what the picker says under
 /// the harness that is picked, what a chat's header draws, and what a control that is off for a
-/// missing capability says. Every word is `charter_core::harness_card`'s, read off the harness's
+/// missing capability says. Every word is `purlis_core::harness_card`'s, read off the harness's
 /// declaration and the adapter charter ships for it; the whole card is the `harness` view.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 struct HarnessGlance {
@@ -924,14 +924,14 @@ struct HarnessGlance {
     cannot_type: Option<String>,
 }
 
-impl From<&charter_core::harness_card::Card> for HarnessGlance {
-    fn from(card: &charter_core::harness_card::Card) -> Self {
+impl From<&purlis_core::harness_card::Card> for HarnessGlance {
+    fn from(card: &purlis_core::harness_card::Card) -> Self {
         Self {
             name: card.name.clone(),
             title: card.title.clone(),
             label: card.label(),
             lines: card.lines(),
-            cannot_type: card.lacks(charter_core::harness_card::READY_TO_TYPE),
+            cannot_type: card.lacks(purlis_core::harness_card::READY_TO_TYPE),
         }
     }
 }
@@ -1006,15 +1006,15 @@ async fn start_options(
     let root = planes.held(&plane)?.root().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || start_options_in(&root))
         .await
-        .map_err(|err| format!("charter could not read the profiles: {err}"))?
+        .map_err(|err| format!("purlis could not read the profiles: {err}"))?
 }
 
 /// What [`start_options`] answers for the project at `root`.
 fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
-    let (set, check) = charter_core::profiles::for_launch(root);
-    let on_disk = charter_core::workspaces::Plane::open(root);
+    let (set, check) = purlis_core::profiles::for_launch(root);
+    let on_disk = purlis_core::workspaces::Plane::open(root);
     // Every harness the project has, read once for every row (HP-19).
-    let cards = charter_core::harness_card::read(root);
+    let cards = purlis_core::harness_card::read(root);
     Ok(StartOptions {
         profiles: set
             .profiles()
@@ -1022,13 +1022,13 @@ fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
             .map(|p| ProfileRow {
                 name: p.name.clone(),
                 kind: p.kind.clone(),
-                shown: charter_core::profiletrust::shown(root, p),
+                shown: purlis_core::profiletrust::shown(root, p),
                 source: p.source.as_str().to_owned(),
                 is_default: set.default.as_deref() == Some(p.name.as_str()),
-                approval: charter_core::profiletrust::approval_needed(root, p)
+                approval: purlis_core::profiletrust::approval_needed(root, p)
                     .map(|a| a.as_str().to_owned()),
-                ready_to_type: charter_core::harness::Harness::of_kind(&p.kind)
-                    .and_then(charter_core::harness::Harness::ready_to_type)
+                ready_to_type: purlis_core::harness::Harness::of_kind(&p.kind)
+                    .and_then(purlis_core::harness::Harness::ready_to_type)
                     .is_some(),
                 harness: cards
                     .iter()
@@ -1056,17 +1056,15 @@ fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
         // nothing checks, so it can name a deleted persona or `_shared` — and preselecting
         // one the picker does not draw means the operator presses Start and is refused over
         // a persona they never chose.
-        persona: charter_core::start::persona_for_a_new_chat(root),
+        persona: purlis_core::start::persona_for_a_new_chat(root),
         ignore_fix: (!check.passes()).then(|| check.fix.clone()),
-        ignore_fix_id: check.one_line_cures(root).then(|| {
-            charter_core::doctor::fix::FixId::LocalIgnore
-                .id()
-                .to_owned()
-        }),
+        ignore_fix_id: check
+            .one_line_cures(root)
+            .then(|| purlis_core::doctor::fix::FixId::LocalIgnore.id().to_owned()),
         declares_none: set
             .profiles()
             .iter()
-            .all(|p| p.source == charter_core::profiles::Source::BuiltIn),
+            .all(|p| p.source == purlis_core::profiles::Source::BuiltIn),
     })
 }
 
@@ -1096,14 +1094,14 @@ fn approve_profile(
     // Read through the LAUNCH read, so a profile in a file git would carry cannot be
     // approved into existence — the approval would be recorded and the launch would still
     // refuse, which is a yes that buys nothing.
-    let (set, _check) = charter_core::profiles::for_launch(root);
+    let (set, _check) = purlis_core::profiles::for_launch(root);
     let profile = set.get(&name).ok_or_else(|| {
         format!(
             "no profile '{}' to approve",
-            charter_core::shown::short(&name)
+            purlis_core::shown::short(&name)
         )
     })?;
-    charter_core::profiletrust::approve(root, profile, &shown)
+    purlis_core::profiletrust::approve(root, profile, &shown)
 }
 
 /// Starts a chat on a harness profile, with a persona.
@@ -1150,7 +1148,7 @@ async fn start_chat(
     rows: u16,
 ) -> Result<Started, String> {
     let label = match label {
-        Some(raw) => charter_core::reopen::label(&raw)?,
+        Some(raw) => purlis_core::reopen::label(&raw)?,
         None => None,
     };
     let held = planes.held(&plane)?;
@@ -1160,7 +1158,7 @@ async fn start_chat(
         let show_footer = boxes.show_footer;
         let without_sandbox = boxes
             .without_sandbox
-            .map(|asked| charter_core::sandbox::OptOut {
+            .map(|asked| purlis_core::sandbox::OptOut {
                 reason: asked.reason,
             });
         let (mut started, said) = worktrees::on_a_branch(
@@ -1190,7 +1188,7 @@ async fn start_chat(
         Ok(started)
     })
     .await
-    .map_err(|err| format!("charter could not start the chat: {err}"))?
+    .map_err(|err| format!("purlis could not start the chat: {err}"))?
 }
 
 /// The picker's two boxes, as the start reads them.
@@ -1221,7 +1219,7 @@ struct WithoutSandbox {
 /// What the picker's boxes decided about one chat, as its start reads them.
 struct Picked {
     show_footer: bool,
-    without_sandbox: Option<charter_core::sandbox::OptOut>,
+    without_sandbox: Option<purlis_core::sandbox::OptOut>,
 }
 
 /// The start itself, in the directory `on_a_branch` settled on.
@@ -1241,7 +1239,7 @@ fn start_chat_in(
     rows: u16,
 ) -> Result<Started, String> {
     let root = held.root();
-    let start = charter_core::start::Start {
+    let start = purlis_core::start::Start {
         profile: Some(profile.clone()),
         persona: persona.clone(),
         name: name.clone(),
@@ -1251,7 +1249,7 @@ fn start_chat_in(
         resuming: None,
         without_sandbox,
     };
-    let ready = charter_core::start::ready(&start, root)?;
+    let ready = purlis_core::start::ready(&start, root)?;
     let chat = Chat {
         program: ready.program.clone(),
         // What the RECORD keeps: the profile's own words, without charter's. A resume
@@ -1316,8 +1314,8 @@ struct TheirAgentsMd {
     piece: Option<String>,
 }
 
-impl From<charter_core::start::TheirAgentsMd> for TheirAgentsMd {
-    fn from(at: charter_core::start::TheirAgentsMd) -> Self {
+impl From<purlis_core::start::TheirAgentsMd> for TheirAgentsMd {
+    fn from(at: purlis_core::start::TheirAgentsMd) -> Self {
         Self {
             workspace: at.workspace,
             repo: at.repo,
@@ -1507,7 +1505,7 @@ async fn retry_chat_that_did_not_start(
         drawn(&held, session)
     })
     .await
-    .map_err(|err| format!("charter could not start the chat: {err}"))?
+    .map_err(|err| format!("purlis could not start the chat: {err}"))?
 }
 
 /// Forget this chat (NO-3): drops the chat with id `id` that this launch could not start from
@@ -1541,7 +1539,7 @@ async fn start_chat_fresh(
         drawn(&held, started)
     })
     .await
-    .map_err(|err| format!("charter could not start the chat: {err}"))?
+    .map_err(|err| format!("purlis could not start the chat: {err}"))?
 }
 
 /// Every chat this plane has open that is running on instructions the plane has changed since
@@ -1623,14 +1621,14 @@ fn plane_pins(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Pins, 
 /// could not be read whole, or while a workspace rename is between its steps (its journal).
 /// And a name is gone only when NOTHING is at `workspaces/<name>`: a symlink whose target is
 /// missing is unreadable, not gone, since an unmounted target comes back (D-NO1-9).
-fn pins_in(store: &charter_core::machine::Store, root: &std::path::Path) -> Pins {
+fn pins_in(store: &purlis_core::machine::Store, root: &std::path::Path) -> Pins {
     // The plane's own list, read off the disk the same way the sidebar is: what workspaces
     // exist is the plane's answer and never the store's, so a pin is only ever matched
     // against it.
     let under = root.join("workspaces");
-    let read = charter_core::workspaces::Plane::open(root).read_workspaces();
+    let read = purlis_core::workspaces::Plane::open(root).read_workspaces();
     let whole = under.is_dir() && matches!(&read, Ok((_, unread)) if unread.is_empty());
-    let renaming = charter_core::wscmd::rename::in_flight(root);
+    let renaming = purlis_core::wscmd::rename::in_flight(root);
     let there = read.map(|(names, _)| names).unwrap_or_default();
     let names: Vec<&str> = there.iter().map(String::as_str).collect();
     let (kept, missing) = store.pinned_workspaces(root, &names);
@@ -1802,7 +1800,7 @@ impl From<chats::Open> for OpenChat {
                 .and_then(Harness::unreported)
                 .map(str::to_owned),
             card: open.harness.map(|harness| {
-                HarnessGlance::from(&charter_core::harness_card::built_in_card(harness))
+                HarnessGlance::from(&purlis_core::harness_card::built_in_card(harness))
             }),
             profile: open.profile,
             persona: open.persona,
@@ -1823,10 +1821,10 @@ impl From<chats::Open> for OpenChat {
                     Some("no conversation was recorded for it".to_owned())
                 }
                 Reopened::Fresh(Fresh::NoResumeForThisProgram) => {
-                    Some("charter has not measured how this program resumes".to_owned())
+                    Some("purlis has not measured how this program resumes".to_owned())
                 }
                 Reopened::Fresh(Fresh::SessionNamedByTheOperator) => {
-                    Some("its own arguments name a session, so charter added none".to_owned())
+                    Some("its own arguments name a session, so purlis added none".to_owned())
                 }
                 Reopened::Fresh(Fresh::WorkspaceRenamed) => Some(
                     "its workspace was renamed, and Claude Code keeps a conversation under the \
@@ -2098,7 +2096,7 @@ fn without_channel_commands(bindings: &str) -> String {
     out.push_str(&lines[open + 1..begins[0]].concat());
     for pair in begins.windows(2) {
         let command = lines[pair[0]..pair[1]].concat();
-        let window_only = charter_session_protocol::ui::WINDOW_ONLY
+        let window_only = purlis_session_protocol::ui::WINDOW_ONLY
             .iter()
             .any(|name| command.contains(&format!("(\"{name}\"")));
         if !command.contains("Channel<") && !window_only {
@@ -2110,20 +2108,20 @@ fn without_channel_commands(bindings: &str) -> String {
 }
 
 /// The shared lock this app holds on the config home for its life (`renamelocal::busy::LOCK`).
-struct HoldsTheConfigHome(#[allow(dead_code)] charter_core::filelock::Held);
+struct HoldsTheConfigHome(#[allow(dead_code)] purlis_core::filelock::Held);
 
 /// What the launch's rename-local said, for the app's log.
 #[cfg(not(feature = "e2e"))]
-fn log_the_rename(renamed: &charter_core::renamelocal::Moved) {
+fn log_the_rename(renamed: &purlis_core::renamelocal::Moved) {
     match &renamed.refused {
-        Some(why) => tracing::warn!("charter: the local rename waits: {why}"),
+        Some(why) => tracing::warn!("purlis: the local rename waits: {why}"),
         None => {
             for line in &renamed.said {
-                tracing::info!("charter: rename-local: {line}");
+                tracing::info!("purlis: rename-local: {line}");
             }
             if !renamed.complete {
                 tracing::warn!(
-                    "charter: rename-local left some old names in place; they are still read"
+                    "purlis: rename-local left some old names in place; they are still read"
                 );
             }
         }
@@ -2141,10 +2139,10 @@ fn log_the_rename(renamed: &charter_core::renamelocal::Moved) {
 /// the window and the app's state half made.
 #[cfg(not(feature = "e2e"))]
 fn refuse_beside_the_old_app() {
-    use charter_core::renamelocal::busy;
+    use purlis_core::renamelocal::busy;
     let places = busy::Places::here();
     let parent = busy::parent_program();
-    let own = charter_core::names::BUNDLE_ID.write;
+    let own = purlis_core::names::BUNDLE_ID.write;
     let older = || busy::older_app_at_launch(&places, own, parent.as_deref());
     let mut found = older();
     for _ in 0..30 {
@@ -2159,7 +2157,7 @@ fn refuse_beside_the_old_app() {
     };
     tracing::error!("{} ({why})", busy::OLDER_APP_RUNNING);
     let said = busy::OLDER_APP_RUNNING
-        .strip_prefix("charter: ")
+        .strip_prefix("purlis: ")
         .unwrap_or(busy::OLDER_APP_RUNNING);
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
@@ -2176,8 +2174,8 @@ pub fn run() {
     // level-3 agent shares its session and could open it (V77, ADR 0080 §1). Started straight
     // from a shell, the app runs again as its own child, which leaves; this process only
     // waits for it and exits as it does.
-    let left = charter_core::noterminal::leave();
-    if let Ok(charter_core::noterminal::Left::Relaunched(code)) = left {
+    let left = purlis_core::noterminal::leave();
+    if let Ok(purlis_core::noterminal::Left::Relaunched(code)) = left {
         std::process::exit(code);
     }
     // Read first, so that what it holds is when the process started and not when the window
@@ -2185,7 +2183,7 @@ pub fn run() {
     LazyLock::force(&STARTED);
     // Before anything opens a descriptor: an app launchd started (the Finder, the Dock) has a
     // soft limit of 256, and 200 chats hold more than that (ADR 0068 §9, SC-15).
-    let raised = charter_core::openfiles::raise();
+    let raised = purlis_core::openfiles::raise();
     // Before anything that can panic: a panic that ends the app is written down on its way
     // out, where one that went to a standard error nobody reads was lost (charter-app#16).
     panics::record();
@@ -2194,10 +2192,10 @@ pub fn run() {
     // once, journalled, and only with nothing else of charter's running. Off in the scenario
     // build, whose specs name the old folders (D-RN5-7).
     #[cfg(not(feature = "e2e"))]
-    let logs_moved = charter_core::renamelocal::logs_at_launch();
+    let logs_moved = purlis_core::renamelocal::logs_at_launch();
     // Next, so everything the app notices from here on is kept in a file as well as said on
     // a standard error that, launched from the Dock, nobody reads (#647).
-    charter_core::applog::install();
+    purlis_core::applog::install();
     #[cfg(not(feature = "e2e"))]
     if let Some(moved) = &logs_moved {
         log_the_rename(moved);
@@ -2207,8 +2205,8 @@ pub fn run() {
     // set to the same value. It goes to the app's log, which a terminal launch also sees on
     // standard error, and the app does not start: every window it opened would act on a
     // project it guessed.
-    if let Some(disagree) = charter_core::envvar::disagreement() {
-        tracing::error!("charter: {disagree}");
+    if let Some(disagree) = purlis_core::envvar::disagreement() {
+        tracing::error!("purlis: {disagree}");
         std::process::exit(2);
     }
     reached("run() entered");
@@ -2216,11 +2214,11 @@ pub fn run() {
     match &left {
         Ok(left) => reached(&format!("the controlling terminal: {left:?}")),
         // Not fatal here: a level-3 chat checks again before it starts, and refuses to start
-        // while the host still has a terminal (`charter_core::acp::NotStarted::Terminal`).
-        Err(err) => tracing::warn!("charter: the app could not leave its terminal: {err}"),
+        // while the host still has a terminal (`purlis_core::acp::NotStarted::Terminal`).
+        Err(err) => tracing::warn!("purlis: the app could not leave its terminal: {err}"),
     }
-    if matches!(raised, charter_core::openfiles::Raised::Refused { .. }) {
-        tracing::warn!("charter: {raised}");
+    if matches!(raised, purlis_core::openfiles::Raised::Refused { .. }) {
+        tracing::warn!("purlis: {raised}");
     }
     // Before anything touches GTK: a desktop portal the session bus is still trying to start
     // costs GTK 25 s and WebKitGTK 5 more (charter-app#24). Asked here for 300 ms; when it is
@@ -2342,7 +2340,7 @@ pub fn run() {
             // The vaults it left waiting, because macOS would have asked about their items, are
             // the window's to offer (`vaultswaiting.rs`, #1306).
             #[cfg(not(feature = "e2e"))]
-            let waiting = match charter_core::renamelocal::at_launch(
+            let waiting = match purlis_core::renamelocal::at_launch(
                 &app.config().identifier,
                 plugin_to_move(app.handle()),
             ) {
@@ -2357,8 +2355,8 @@ pub fn run() {
             // From here on this app holds the config home: no rename-local of a later launch,
             // or of a terminal, moves it while the app runs.
             let mut holds_the_config_home = false;
-            if let Some(root) = charter_core::machine::config_root()
-                && let Some(held) = charter_core::renamelocal::busy::hold_shared(&root)
+            if let Some(root) = purlis_core::machine::config_root()
+                && let Some(held) = purlis_core::renamelocal::busy::hold_shared(&root)
             {
                 app.manage(HoldsTheConfigHome(held));
                 holds_the_config_home = true;
@@ -2372,7 +2370,7 @@ pub fn run() {
             // (`portal.rs`): nothing to say on one that has it.
             app.manage(portal::SessionBus::of(
                 std::env::var(portal::SESSION_BUS).ok().as_deref(),
-                charter_core::envvar::var(portal::SESSION_BUS_KEPT).as_deref(),
+                purlis_core::envvar::var(portal::SESSION_BUS_KEPT).as_deref(),
                 std::env::var_os("XDG_RUNTIME_DIR")
                     .map(PathBuf::from)
                     .as_deref(),
@@ -2394,7 +2392,7 @@ pub fn run() {
                 .ok_or("tauri.conf.json declares no main window")?;
             tauri::WebviewWindowBuilder::from_config(app.handle(), &main)?
                 .initialization_script(windowprefs::creation_script(
-                    charter_core::machine::config_root().as_deref(),
+                    purlis_core::machine::config_root().as_deref(),
                 ))
                 .on_new_window(navguard::no_new_window)
                 .build()?;
@@ -2402,7 +2400,7 @@ pub fn run() {
             // Where a panic is kept, now that the app can be told where its logs belong. An app
             // with no log directory still has standard error, which is all it had before.
             // Tauri's folder for this identifier, or the purlis one rename-local moved it to.
-            if let Some(logs) = charter_core::applog::log_dir_for(&app.config().identifier) {
+            if let Some(logs) = purlis_core::applog::log_dir_for(&app.config().identifier) {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
@@ -2451,7 +2449,7 @@ pub fn run() {
             // working trees (FD-11), so an idle clone's standing costs no `git status`.
             {
                 let app = app.handle().clone();
-                charter_core::standings::watch_with(std::sync::Arc::new(move |wanted| {
+                purlis_core::standings::watch_with(std::sync::Arc::new(move |wanted| {
                     if let Some(watch) = app.try_state::<branchwatch::BranchWatch>() {
                         watch.want(wanted);
                     }
@@ -2480,15 +2478,15 @@ pub fn run() {
             let binary = charter_binary();
             if binary.is_none() {
                 tracing::warn!(
-                    "charter: no `charter` binary beside the app, so no chat can report its \
+                    "purlis: no `purlis` binary beside the app, so no chat can report its \
                      state; every one will show as unknown"
                 );
             }
             let plugin = bundled_plugin(app.handle());
             if plugin.is_none() {
                 tracing::warn!(
-                    "charter: no plugin in the app's resources, so a Claude Code chat is started \
-                     without charter's hooks, guard or skills; every one will show as unknown"
+                    "purlis: no plugin in the app's resources, so a Claude Code chat is started \
+                     without purlis's hooks, guard or skills; every one will show as unknown"
                 );
             }
             // What a shell tab finds first on its `PATH` (ADR 0062), written at every launch so
@@ -2524,7 +2522,7 @@ pub fn run() {
                     },
                     // Resolved once, here, like the plane: it is an environment ladder, and a
                     // second reader of it is a second answer to where this machine's store is.
-                    charter_core::machine::config_root(),
+                    purlis_core::machine::config_root(),
                 )
                 // The host's event log (FD-9): one event per hook call, from every project.
                 .recording_events(events())
@@ -2634,7 +2632,7 @@ pub fn run() {
                             &app,
                             plane,
                             root,
-                            charter_core::extension::events::Event::PlaneSaved,
+                            purlis_core::extension::events::Event::PlaneSaved,
                         );
                     })
                 }),
@@ -2669,9 +2667,7 @@ pub fn run() {
             updates::watch(app.handle());
 
             if let Err(why) = lifecycle::tray(app.handle()) {
-                tracing::warn!(
-                    "charter: no tray icon ({why}); the window is reached from the dock"
-                );
+                tracing::warn!("purlis: no tray icon ({why}); the window is reached from the dock");
             }
             Ok(())
         })
@@ -2692,7 +2688,7 @@ pub fn run() {
                 instance::let_go_at_exit(app);
                 // An extension's program still answering is killed with its whole process
                 // group, so that nothing an extension was asked to run outlives the window
-                // that asked (`charter_core::executor`).
+                // that asked (`purlis_core::executor`).
                 app.state::<views::Views>().stop_all();
                 app.state::<heard::Heard>().stop_all();
                 // Every plane, not "the" plane: each one writes its own record into itself
@@ -2720,14 +2716,14 @@ mod tests {
     /// A git repo at a fresh temp dir holding the local settings file and nothing ignoring it.
     fn plane_carrying_local_settings() -> tempfile::TempDir {
         let plane = tempfile::tempdir().expect("a plane");
-        let git = charter_core::forklock::status(
+        let git = purlis_core::forklock::status(
             std::process::Command::new("git")
                 .args(["init", "-q"])
                 .arg(plane.path()),
         )
         .expect("git runs");
         assert!(git.success());
-        std::fs::write(charter_core::names::local_settings(plane.path()), "").expect("written");
+        std::fs::write(purlis_core::names::local_settings(plane.path()), "").expect("written");
         plane
     }
 
@@ -2746,8 +2742,8 @@ mod tests {
     fn the_picker_names_no_fix_where_an_ignore_line_would_not_cure_it() {
         // Tracked already: an ignore line does not untrack it, and charter never runs `git rm`.
         let plane = plane_carrying_local_settings();
-        let local = charter_core::names::local_settings(plane.path());
-        let added = charter_core::forklock::status(
+        let local = purlis_core::names::local_settings(plane.path());
+        let added = purlis_core::forklock::status(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(plane.path())
@@ -2764,8 +2760,8 @@ mod tests {
     }
 
     /// A store that remembers the plane at `root` with `pins`, in that order.
-    fn store_pinning(root: &std::path::Path, pins: &[&str]) -> charter_core::machine::Store {
-        let mut store = charter_core::machine::Store::default();
+    fn store_pinning(root: &std::path::Path, pins: &[&str]) -> purlis_core::machine::Store {
+        let mut store = purlis_core::machine::Store::default();
         store.remember(root, 1);
         for pin in pins {
             store
@@ -2792,7 +2788,7 @@ mod tests {
     }
 
     /// A plane with `beta` and `gamma` under `workspaces/`, and a store pinning `pins`.
-    fn plane_pinning(pins: &[&str]) -> (tempfile::TempDir, charter_core::machine::Store) {
+    fn plane_pinning(pins: &[&str]) -> (tempfile::TempDir, purlis_core::machine::Store) {
         let plane = tempfile::tempdir().expect("a plane");
         for name in ["beta", "gamma"] {
             std::fs::create_dir_all(plane.path().join("workspaces").join(name)).expect("made");
@@ -2848,7 +2844,7 @@ mod tests {
         // `wscmd::rename` moves the directory first and the pins last, so in between the old
         // name's pin names nothing: its journal says the rename is not done.
         let (plane, store) = plane_pinning(&["beta", "old-name", "new-name"]);
-        let journal = charter_core::wscmd::rename::journal_path(plane.path());
+        let journal = purlis_core::wscmd::rename::journal_path(plane.path());
         std::fs::create_dir_all(journal.parent().expect("a parent")).expect("made");
         std::fs::write(
             &journal,
@@ -2901,7 +2897,7 @@ mod tests {
     }
 
     /// Writes `BINDINGS`, for when the commands above change:
-    /// `cargo test -p charter-app -- --ignored`.
+    /// `cargo test -p purlis-app -- --ignored`.
     #[test]
     #[ignore = "writes the bindings instead of checking them"]
     fn regenerate_the_typescript_the_ui_imports() {
@@ -2915,15 +2911,15 @@ mod tests {
     fn hooks_file() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(PLUGIN_DIR)
-            .join(charter_core::plugin::HOOKS_FILE)
+            .join(purlis_core::plugin::HOOKS_FILE)
     }
 
-    /// Writes the bundled plugin's `hooks.json` from `charter_core::plugin::HOOKS`, for when
-    /// the registry changes: `cargo test -p charter-app -- --ignored`.
+    /// Writes the bundled plugin's `hooks.json` from `purlis_core::plugin::HOOKS`, for when
+    /// the registry changes: `cargo test -p purlis-app -- --ignored`.
     #[test]
     #[ignore = "writes the plugin's hooks file instead of checking it"]
     fn regenerate_the_bundled_plugins_hooks() {
-        std::fs::write(hooks_file(), charter_core::plugin::hooks_json())
+        std::fs::write(hooks_file(), purlis_core::plugin::hooks_json())
             .expect("the hooks file is written");
     }
 
@@ -2933,25 +2929,25 @@ mod tests {
         // so a hook cannot be wired that `charter hook` does not answer.
         assert_eq!(
             std::fs::read_to_string(hooks_file()).unwrap_or_default(),
-            charter_core::plugin::hooks_json(),
-            "{} is out of date: run `cargo test -p charter-app -- --ignored`",
+            purlis_core::plugin::hooks_json(),
+            "{} is out of date: run `cargo test -p purlis-app -- --ignored`",
             hooks_file().display()
         );
     }
 
     /// The bundled opencode shim, in the repository.
     fn opencode_shim_file() -> PathBuf {
-        charter_core::opencode::shim_in(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(PLUGIN_DIR))
+        purlis_core::opencode::shim_in(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(PLUGIN_DIR))
     }
 
-    /// Writes the bundled opencode shim from `charter_core::opencode`, for when it changes:
-    /// `cargo test -p charter-app -- --ignored`.
+    /// Writes the bundled opencode shim from `purlis_core::opencode`, for when it changes:
+    /// `cargo test -p purlis-app -- --ignored`.
     #[test]
     #[ignore = "writes the opencode shim instead of checking it"]
     fn regenerate_the_bundled_opencode_shim() {
         std::fs::write(
             opencode_shim_file(),
-            charter_core::opencode::shim(charter_core::opencode::Arming::Session),
+            purlis_core::opencode::shim(purlis_core::opencode::Arming::Session),
         )
         .expect("the shim is written");
     }
@@ -2962,8 +2958,8 @@ mod tests {
         // tool cannot be sent to a word `charter hook` does not answer (#371).
         assert_eq!(
             std::fs::read_to_string(opencode_shim_file()).unwrap_or_default(),
-            charter_core::opencode::shim(charter_core::opencode::Arming::Session),
-            "{} is out of date: run `cargo test -p charter-app -- --ignored`",
+            purlis_core::opencode::shim(purlis_core::opencode::Arming::Session),
+            "{} is out of date: run `cargo test -p purlis-app -- --ignored`",
             opencode_shim_file().display()
         );
     }
@@ -2976,7 +2972,7 @@ mod tests {
         let doc: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(manifest).expect("plugin.json"))
                 .expect("plugin.json is JSON");
-        assert_eq!(doc["name"], charter_core::plugin::NAME);
+        assert_eq!(doc["name"], purlis_core::plugin::NAME);
     }
 
     #[test]
@@ -3042,7 +3038,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(BINDINGS).unwrap_or_default(),
             std::fs::read_to_string(&generated).expect("the generated bindings are readable"),
-            "{BINDINGS} is out of date: run `cargo test -p charter-app -- --ignored`"
+            "{BINDINGS} is out of date: run `cargo test -p purlis-app -- --ignored`"
         );
     }
 
@@ -3051,7 +3047,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(UI_RPC).unwrap_or_default(),
             ui_rpc_client(),
-            "{UI_RPC} is out of date: run `cargo test -p charter-app -- --ignored`"
+            "{UI_RPC} is out of date: run `cargo test -p purlis-app -- --ignored`"
         );
     }
 
@@ -3071,7 +3067,7 @@ mod tests {
                     !called,
                     "`{command}` takes a channel, which a view carries instead"
                 );
-            } else if charter_session_protocol::ui::WINDOW_ONLY.contains(command) {
+            } else if purlis_session_protocol::ui::WINDOW_ONLY.contains(command) {
                 assert!(!called, "`{command}` is the window's alone (HP-6)");
             } else {
                 assert!(
@@ -3118,25 +3114,25 @@ mod tests {
 /// The bounded reader every automatic read of a branch goes through (FM-4, D-88h): this binary,
 /// started again as the reader. In a test, this test binary, run again picking
 /// [`reader_child`](tests_reader::reader_child).
-pub(crate) fn reader() -> charter_core::files::Reader {
+pub(crate) fn reader() -> purlis_core::files::Reader {
     #[cfg(test)]
     {
-        charter_core::files::Reader::new(
+        purlis_core::files::Reader::new(
             std::env::current_exe().unwrap_or_default(),
             [
                 "tests_reader::reader_child",
                 "--exact",
                 "--nocapture",
                 "--test-threads=1",
-                charter_core::files::READ_ARG,
+                purlis_core::files::READ_ARG,
             ]
             .map(std::ffi::OsString::from),
         )
     }
     #[cfg(not(test))]
     {
-        charter_core::files::Reader::this_binary()
-            .unwrap_or_else(|_| charter_core::files::Reader::new(std::path::PathBuf::new(), []))
+        purlis_core::files::Reader::this_binary()
+            .unwrap_or_else(|_| purlis_core::files::Reader::new(std::path::PathBuf::new(), []))
     }
 }
 
@@ -3146,7 +3142,7 @@ mod tests_reader {
     /// answers the one question asked and exits. In any other run it does nothing.
     #[test]
     fn reader_child() {
-        if let Some(code) = charter_core::files::serve_if_asked() {
+        if let Some(code) = purlis_core::files::serve_if_asked() {
             std::process::exit(code);
         }
     }

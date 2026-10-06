@@ -76,7 +76,7 @@ export function MemoryArchiveTab({
   if (said.trouble !== undefined) {
     return (
       <p className="trouble" role="alert">
-        {`charter could not read ${archiveWhere(scope)}: ${said.trouble}`}
+        {`purlis could not read ${archiveWhere(scope)}: ${said.trouble}`}
       </p>
     );
   }
@@ -90,7 +90,7 @@ export function MemoryArchiveTab({
     try {
       const answer = await commands.memoryUnarchive(plane, scope, memory.archived, null);
       if (answer.status === "error") {
-        setOutcome({ refused: `charter could not restore ${memory.title}: ${answer.error}` });
+        setOutcome({ refused: `purlis could not restore ${memory.title}: ${answer.error}` });
       } else {
         setOutcome({
           back: `${memory.title} is back in ${memoryOf(scope)}.`,
@@ -99,7 +99,7 @@ export function MemoryArchiveTab({
         setAgain((was) => was + 1);
       }
     } catch (err: unknown) {
-      setOutcome({ refused: `charter could not restore ${memory.title}: ${String(err)}` });
+      setOutcome({ refused: `purlis could not restore ${memory.title}: ${String(err)}` });
     } finally {
       setRestoring(false);
     }

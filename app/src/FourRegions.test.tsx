@@ -700,7 +700,7 @@ describe("the status line", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("drops the count when charter stopped looking in a project, and draws no zero", async () => {
+  it("drops the count when purlis stopped looking in a project, and draws no zero", async () => {
     alerts = [{ plane: PLANE, alerts: [], stopped: "charter.toml is not valid TOML" }];
     core();
     render(<App />);

@@ -2,7 +2,7 @@
 //! FM-1).
 //!
 //! Thin, as `worktrees.rs` is: which folder, which paths, what a folder holds and what a file
-//! holds are `charter_core::files`'s answers, and a refusal crosses as the core's sentence.
+//! holds are `purlis_core::files`'s answers, and a refusal crosses as the core's sentence.
 //!
 //! Every command names a branch as a workspace, a repo and a piece — or no piece, for the
 //! repo's own folder (#948) — and never as a directory.
@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use base64::Engine as _;
-use charter_core::files::{self, Branch, Entry, Kind, Mark, Opened};
-use charter_core::youreditor::{self, Editor, Launch};
+use purlis_core::files::{self, Branch, Entry, Kind, Mark, Opened};
+use purlis_core::youreditor::{self, Editor, Launch};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -430,7 +430,7 @@ impl From<YourEditor> for Editor {
 
 /// One file of a branch, opened in your editor at a line (RC-20). Refused, in the core's
 /// sentence, for any path the light editor would refuse.
-// The path is checked by `charter_core::files::in_your_editor` exactly as `piece_file`
+// The path is checked by `purlis_core::files::in_your_editor` exactly as `piece_file`
 // checks it, and the editor is handed the resolved absolute path: as a URL to the operating
 // system's opener, or as one argument of the program `$VISUAL`/`$EDITOR` names, never through
 // a shell. Not a doc comment, because the generated bindings carry those.
@@ -449,7 +449,7 @@ pub fn open_in_your_editor(
     editor: YourEditor,
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt as _;
-    let var = charter_core::envvar::var;
+    let var = purlis_core::envvar::var;
     match launch_of(
         planes.held(&plane)?.root(),
         branch(&workspace, &repo, &piece),
@@ -469,7 +469,7 @@ pub fn open_in_your_editor(
 /// **Open file** on a chat's start notice (NO-4): the operator's `AGENTS.md` at the top of a
 /// branch, which charter's exclude line hides from `git status`, opened in your editor.
 /// Refused, in the core's sentence, for an `AGENTS.md` that is not theirs.
-// Placed by name by `charter_core::guest::their_agents_md_in_your_editor`, never a path the
+// Placed by name by `purlis_core::guest::their_agents_md_in_your_editor`, never a path the
 // window sent; handed to the editor as `open_in_your_editor` hands one. Not a doc comment,
 // because the generated bindings carry those.
 #[allow(clippy::too_many_arguments)]
@@ -486,7 +486,7 @@ pub fn open_their_agents_md(
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt as _;
     let var = |name: &str| std::env::var(name).ok();
-    match charter_core::guest::their_agents_md_in_your_editor(
+    match purlis_core::guest::their_agents_md_in_your_editor(
         planes.held(&plane)?.root(),
         branch(&workspace, &repo, &piece),
         editor.into(),
@@ -513,7 +513,7 @@ pub fn move_their_agents_md_aside(
     repo: String,
     piece: Option<String>,
 ) -> Result<String, String> {
-    charter_core::guest::move_agents_md_aside(
+    purlis_core::guest::move_agents_md_aside(
         planes.held(&plane)?.root(),
         branch(&workspace, &repo, &piece),
     )
@@ -534,7 +534,7 @@ fn launch_of(
 /// One file or folder of a branch, its path put on the clipboard: relative to the branch's
 /// folder, or absolute (FM-10). Refused, in the core's sentence, for a path that leaves the
 /// branch, a link or git's own folder.
-// The path is placed by `charter_core::files::place` and the absolute one is the core's, never
+// The path is placed by `purlis_core::files::place` and the absolute one is the core's, never
 // one the window joined; it goes to the clipboard here and never back to the window. Not a doc
 // comment, because the generated bindings carry those.
 #[allow(clippy::too_many_arguments)]
@@ -648,7 +648,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn git(dir: &Path, args: &[&str]) {
-        let ran = charter_core::forklock::output(
+        let ran = purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
@@ -677,7 +677,7 @@ mod tests {
         std::fs::write(clone.join("README.md"), "one\n").unwrap();
         git(&clone, &["add", "-A"]);
         git(&clone, &["commit", "-q", "-m", "one"]);
-        let piece = charter_core::worktree::add(&root, "alpha", "thing", "piece", None)
+        let piece = purlis_core::worktree::add(&root, "alpha", "thing", "piece", None)
             .unwrap()
             .path;
         (dir, root, piece)

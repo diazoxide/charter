@@ -27,7 +27,7 @@
 
 /**
  * The palette a workspace names its colour from, as OKLCH hues in degrees
- * (`charter_core::extension::project::theme::PALETTE` names the same eight, and
+ * (`purlis_core::extension::project::theme::PALETTE` names the same eight, and
  * `tint.test.ts` holds the two lists to each other).
  */
 export const PALETTE: Readonly<Record<string, number>> = {

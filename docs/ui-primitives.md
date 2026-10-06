@@ -114,7 +114,7 @@ heading and Remove over the entry's own `SettingRow`s, and an Add form whose fie
 collection follow the same shape, in three layers:
 
 - **The core: one module per collection, `listed`, `add` and `remove`.**
-  `charter_core::settings::forges` is the model (`crates/charter-core/src/settings/collection.rs`
+  `purlis_core::settings::forges` is the model (`crates/purlis-core/src/settings/collection.rs`
   says the contract). `listed(text)` gives each entry an **opaque identity** (a forge's is
   `forge:<place>:<fingerprint of the block>`, so it changes once the block moves or changes; a
   profile's fingerprints its name and its table), its label, where its keys are, and the Add
@@ -151,7 +151,7 @@ collection follow the same shape, in three layers:
   the nav while it has no entry, since that is where one is added.
 
 **An entry with a page of its own, and Rename (ST-4).** Harness profiles are the second
-collection (`charter_core::settings::harness_profiles`, home file the local settings file). A
+collection (`purlis_core::settings::harness_profiles`, home file the local settings file). A
 profile has many fields, so each has **a page of its own** (V91e): a group with `sub` set, drawn
 indented under its collection's group in the nav. The collection's group lists each entry as a
 heading with Open and Remove, and holds Add; the page draws that entry alone (`adds: false`) with

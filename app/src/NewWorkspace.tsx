@@ -115,7 +115,7 @@ export function NewWorkspace({
               help={
                 <>
                   Recorded in <code>workspace.md</code>, the living charter a fork inherits. You can
-                  add it later with <code>charter workspace vision</code>.
+                  add it later with <code>purlis workspace vision</code>.
                 </>
               }
               control={(ids) => (

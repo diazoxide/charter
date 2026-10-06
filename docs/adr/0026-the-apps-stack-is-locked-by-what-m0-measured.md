@@ -247,7 +247,7 @@ tao, and charter cannot switch the proxy's auto-start off. The only lever inside
 process-wide: give the app no session bus when the portal looks dead. That would also remove
 the three things charter uses the bus for, and one of them is a guarantee the core depends on.
 The single-instance name is what makes it safe for `hookwire` to remove a stale hook socket at
-startup (charter-app `crates/charter-core/src/hookwire.rs`: "there is no second live app whose
+startup (charter-app `crates/purlis-core/src/hookwire.rs`: "there is no second live app whose
 socket this could be"). Notifications and the tray would go as well. Trading a startup delay
 for two live apps on one plane makes the product worse, not faster.
 

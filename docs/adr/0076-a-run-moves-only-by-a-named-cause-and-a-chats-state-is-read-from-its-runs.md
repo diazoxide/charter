@@ -43,7 +43,7 @@ Its concept is **Chat** ([ADR 0072](0072-charter-has-five-concepts-and-every-oth
 
 ## Where charter is today
 
-`crates/charter-core/src/state.rs` holds a chat's state as one of five values: `Unknown`,
+`crates/purlis-core/src/state.rs` holds a chat's state as one of five values: `Unknown`,
 `Running`, `Waiting`, `Done` and `Failed`. Hooks move it, and so does the program's exit. Beside
 the state, a `needs_you` flag says whether the chat is in the queue, with three kinds of item on
 top of it: an ask (`asking`), a report back (charter-app#259) and a refused
@@ -423,7 +423,7 @@ The code does not change with this record.
 
 | Where | What changes |
 |---|---|
-| `crates/charter-core/src/state.rs` | `State` becomes the nine run states, with `input-required`'s reason and the holds. A `Move { from, to, cause }` is the one way a run changes, and a table of allowed `(from, to, cause)` refuses the rest. **One test per row of §2's table and §6's** (FD-23's acceptance). `needs_you` becomes a function over the run and the chat's items. `exited` reads the host's stop intent first. `SessionEnd` no longer sets `Done` |
+| `crates/purlis-core/src/state.rs` | `State` becomes the nine run states, with `input-required`'s reason and the holds. A `Move { from, to, cause }` is the one way a run changes, and a table of allowed `(from, to, cause)` refuses the rest. **One test per row of §2's table and §6's** (FD-23's acceptance). `needs_you` becomes a function over the run and the chat's items. `exited` reads the host's stop intent first. `SessionEnd` no longer sets `Done` |
 | `Board`, the app's `hooks.rs` | Track each chat's current run and its children. `chat-moved` carries the run state and its reason or hold |
 | `app/src/chatState.ts`, `NeedsYou.tsx` | Draw the nine states, and read needs you from the items. The words shown are the design system's (ADR 0072 §3) |
 | `docs/spec.md` | Its *Session state* line is replaced by this record's states, when `state.rs` changes |

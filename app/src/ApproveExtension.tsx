@@ -18,7 +18,7 @@ import type { ExtensionAsk } from "./bindings";
  * trusts anyway.
  *
  * So the sentences that say so are `ask.runs_as_you`, `ask.fingerprint_note` and — when there is
- * one — `ask.state_note`, they come from `charter_core::extension`, they are pinned by tests in
+ * one — `ask.state_note`, they come from `purlis_core::extension`, they are pinned by tests in
  * that crate, and this component renders them **as given**. Nothing here composes a reassurance
  * of its own. Nothing here summarises them shorter.
  *

@@ -191,7 +191,7 @@ first frame.** A layout has no stand-in the way the built-in theme does: the ope
 arrangement _is_ the thing, and one read over an asynchronous Tauri command would land after
 the window had painted the default and make it lay itself out again — the flash
 charter-app#141 left. So the Rust side reads the file before it builds the window
-(`charter_core::windowprefs`, `app/src-tauri/src/windowprefs.rs`) and puts what it read into
+(`purlis_core::windowprefs`, `app/src-tauri/src/windowprefs.rs`) and puts what it read into
 the page with the window's `initialization_script`; the page's first render is drawn from it
 and nothing is fetched. What the window changes — a region put away, a slot dragged — is
 written back to the file through a command, pretty-printed, `0600`.

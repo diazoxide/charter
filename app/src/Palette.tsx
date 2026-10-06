@@ -56,7 +56,7 @@ import { onAMac } from "./tabKeys";
  * it as `\x0b`, which is readline's kill-to-end-of-line in the shell every chat starts in, so
  * the chat keeps it and this listener stands back (`theChatKeepsIt`).
  *
- * **A refusal keeps the palette open, in the core's own words.** `charter_core::worktree`
+ * **A refusal keeps the palette open, in the core's own words.** `purlis_core::worktree`
  * refuses a removal with a sentence naming the repair; the window does not reword it, does
  * not replace it with a generic failure, and shows it beside the rows rather than behind
  * them — the profile picker's rule, for the same reason: a refusal an operator cannot see

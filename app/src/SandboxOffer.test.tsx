@@ -32,7 +32,7 @@ const DUE: SandboxState = {
   on: false,
   offer: true,
   said: null,
-  never: ["Codex: charter can wrap it on macOS only, so far"],
+  never: ["Codex: purlis can wrap it on macOS only, so far"],
 };
 
 describe("the sandbox offer", () => {
@@ -89,7 +89,7 @@ describe("the sandbox offer", () => {
     render(<SandboxOffer plane={PLANE} />);
 
     expect(await screen.findByRole("status", { name: "The sandbox offer" })).toHaveTextContent(
-      "Never sandboxed on this machine, so a new chat on them starts only without it: Codex: charter can wrap it on macOS only, so far.",
+      "Never sandboxed on this machine, so a new chat on them starts only without it: Codex: purlis can wrap it on macOS only, so far.",
     );
   });
 });

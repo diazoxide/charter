@@ -49,7 +49,7 @@ fn every_rust_binary_the_release_ships_is_built_with_its_dependency_list() {
             build,
             "The purlis binary the app's hooks run, its charter alias, and the built-in extensions"
         )),
-        ["cargo auditable build --release --locked -p charter-cli -p persona-statistics"]
+        ["cargo auditable build --release --locked -p purlis-cli -p persona-statistics"]
     );
 
     // Tauri runs `<runner> build …` itself, so the app binary goes through the wrapper. Both
@@ -215,9 +215,7 @@ fn the_sbom_job_holds_nothing_and_reads_the_sbom_off_the_built_bundles() {
     );
     assert_eq!(
         step_value(&names, "env", "REQUIRED_PURLS"),
-        Some(
-            "pkg:cargo/charter-app@ pkg:cargo/charter-cli@ pkg:cargo/persona-statistics@ pkg:npm/"
-        )
+        Some("pkg:cargo/purlis-app@ pkg:cargo/purlis-cli@ pkg:cargo/persona-statistics@ pkg:npm/")
     );
     let lines = run_lines(&names);
     position(&lines, r#"for sbom in out/*.cdx.json; do"#);

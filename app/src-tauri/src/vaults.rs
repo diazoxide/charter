@@ -1,11 +1,11 @@
 //! The plane's vaults, as the window reaches them.
 
-use charter_core::secrets::cmd::{self, Io, Say};
-use charter_core::secrets::identity::{self, Held};
-use charter_core::secrets::keyring;
-use charter_core::secrets::registry::{self, Vault};
-use charter_core::secrets::vaultcmd;
-use charter_core::secrets::{Ctx, Env, VaultError, identity_missing};
+use purlis_core::secrets::cmd::{self, Io, Say};
+use purlis_core::secrets::identity::{self, Held};
+use purlis_core::secrets::keyring;
+use purlis_core::secrets::registry::{self, Vault};
+use purlis_core::secrets::vaultcmd;
+use purlis_core::secrets::{Ctx, Env, VaultError, identity_missing};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -249,7 +249,7 @@ fn write(
     if value.0.is_empty() {
         return Err(format!(
             "refusing to store an empty value for '{key}' — it would read as a present, healthy \
-             secret everywhere charter looks."
+             secret everywhere purlis looks."
         ));
     }
     let v = writable(ctx, vault)?;
@@ -861,7 +861,7 @@ pub(crate) async fn vault_secret_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use charter_core::secrets::registry;
+    use purlis_core::secrets::registry;
 
     /// A plane with a keyring vault `ops` and a plain-file vault `files`, both registered
     /// locally. A test build keeps the keyring in `<state>/keyring-stub.json`.
@@ -1138,7 +1138,7 @@ mod tests {
 
     /// Every line the plane's trace holds, for a test run outside any session.
     fn traced(ctx: &Ctx) -> Vec<serde_json::Value> {
-        let file = charter_core::trace::file(&ctx.root, charter_core::trace::NO_SESSION);
+        let file = purlis_core::trace::file(&ctx.root, purlis_core::trace::NO_SESSION);
         std::fs::read_to_string(file)
             .unwrap_or_default()
             .lines()
@@ -1594,7 +1594,7 @@ mod tests {
     #[test]
     fn a_plain_file_vault_that_git_would_commit_is_not_written() {
         let (dir, ctx) = plane();
-        charter_core::forklock::output(
+        purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir.path())

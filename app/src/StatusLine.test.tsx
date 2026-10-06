@@ -205,7 +205,7 @@ describe("the alerts button", () => {
   });
 
   it("drops a count charter cannot stand behind and still opens the drawer", async () => {
-    // Not every project has answered, or charter stopped looking in one: a partial total is a
+    // Not every project has answered, or purlis stopped looking in one: a partial total is a
     // wrong total. The dash is not a zero, and the drawer is where the reason is.
     const open = vi.fn();
     draw({ alerts: { count: undefined, open } });

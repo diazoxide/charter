@@ -170,7 +170,7 @@ export function Opener({
         </>
       ) : here ? (
         <>
-          <h1 id="opener-heading">charter found no project here</h1>
+          <h1 id="opener-heading">purlis found no project here</h1>
           {/* The resolver's own words. An operator who ran `charter` in a directory asked a
               question, and "a project is the nearest directory at or above this one with a
               charter.toml" is the answer to it. */}
@@ -241,7 +241,7 @@ export function Opener({
                 </button>
                 {/* What the store holds, and nothing more: whether this project still
                     contributes what was approved is asked when it is opened. */}
-                {!plane.approved && <span className="value">charter will ask about this one</span>}
+                {!plane.approved && <span className="value">purlis will ask about this one</span>}
               </li>
             ))}
           </ul>
@@ -294,7 +294,7 @@ export function Opener({
           cause="no-machine-store"
           onDismiss={() => setDismissed((was) => new Set(was).add("no-machine-store"))}
         >
-          charter cannot remember projects on this machine ({recents.forgetful}), so there is no
+          purlis cannot remember projects on this machine ({recents.forgetful}), so there is no
           recent list and it will ask about every project you open.
         </Notice>
       )}

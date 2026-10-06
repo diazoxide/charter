@@ -285,7 +285,7 @@ describe("the muted hand: a chat that cannot say it is waiting (charter-app#52, 
     render(<NeedsYouMenu items={[]} quiet={quiet} onPress={() => {}} />);
 
     const hand = screen.getByRole("button", {
-      name: "Nothing has asked for you, but shell 2 can't tell charter it's waiting",
+      name: "Nothing has asked for you, but shell 2 can't tell purlis it's waiting",
     });
     expect(hand).toHaveClass("muted");
     expect(hand).toHaveAttribute("title", hand.getAttribute("aria-label"));
@@ -304,7 +304,7 @@ describe("the muted hand: a chat that cannot say it is waiting (charter-app#52, 
 
     expect(
       screen.getByRole("button", {
-        name: "Nothing has asked for you, but 2 chats can't tell charter they're waiting",
+        name: "Nothing has asked for you, but 2 chats can't tell purlis they're waiting",
       }),
     ).toBeInTheDocument();
   });
@@ -321,8 +321,8 @@ describe("the muted hand: a chat that cannot say it is waiting (charter-app#52, 
     await userEvent.click(screen.getByRole("button"));
 
     const menu = await screen.findByRole("menu");
-    expect(menu).toHaveTextContent("shell 2 · charter can't tell charter it's waiting");
-    expect(menu).toHaveTextContent("codex 4 · ops can't tell charter it's waiting");
+    expect(menu).toHaveTextContent("shell 2 · charter can't tell purlis it's waiting");
+    expect(menu).toHaveTextContent("codex 4 · ops can't tell purlis it's waiting");
   });
 
   it("opens and closes from the keyboard the same way, and gives the keyboard back", async () => {

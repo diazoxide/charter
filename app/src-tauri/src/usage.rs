@@ -7,7 +7,7 @@
 //! were missing in the app, and this is the second:
 //!
 //! 1. **The feed.** Claude Code hands those numbers to its `statusLine` command and nothing
-//!    else. `charter_core::harness` now arms `charter statusline` as this session's
+//!    else. `purlis_core::harness` now arms `charter statusline` as this session's
 //!    `statusLine`, and that command records each turn (`usage::record`).
 //! 2. **The reader.** This command reads what was recorded — through the core's gated read,
 //!    the same one the writer uses — and hands the window the numbers and the tone each is
@@ -20,11 +20,11 @@
 //! nested harness's (`Board::conversation`, ADR 0024 C5/C6). A chat with no known conversation
 //! has no gauge — never a guessed one.
 
-use charter_core::usage::{self, Tone};
+use purlis_core::usage::{self, Tone};
 
 use crate::planes::{PlaneId, Planes};
 
-/// How a number reads, as the window colours it — `charter_core::usage::Tone`.
+/// How a number reads, as the window colours it — `purlis_core::usage::Tone`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum GaugeTone {

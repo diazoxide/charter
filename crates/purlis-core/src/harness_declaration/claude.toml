@@ -1,0 +1,40 @@
+# Claude Code, as charter ships it (ADR 0073 §3). Read by the same reader as a project's
+# `harnesses/<name>.toml`; a project may not take this name.
+#
+# Every fact here was measured on one version of Claude Code, and each is cited beside the
+# `Harness` method that still answers it (`crates/purlis-core/src/harness.rs`). A test holds
+# the two equal until `Harness` reads them from here.
+name = "claude"
+title = "Claude Code"
+program = "claude"
+# `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_*`.
+env = ["CLAUDE_*"]
+login = "set CLAUDE_CONFIG_DIR and run /login inside Claude Code"
+tested = "2.1.283"
+
+[session]
+# `--session-id` is reported at SessionStart as given (Claude Code 2.1.272, C1).
+chosen_by = "charter"
+new = ["--session-id", "{id}", "--name", "{name}"]
+resume = ["--resume", "{id}", "--name", "{name}"]
+named_by = ["--session-id", "--resume", "-r", "--continue", "-c", "--fork-session"]
+
+[terminal]
+# ESC CR is a new line in the input, unsent (SI-4).
+newline = "\u001b\r"
+# `[Pasted text #N +M lines]` over 800 characters or at 4 lines or more.
+paste_drawn_whole = { lines = 3, chars = 800 }
+ready_to_type = "on-start"
+
+[levels]
+terminal = true
+# The bundled plugin, loaded for this session alone (ADR 0050).
+hooks = true
+
+[capabilities]
+reports_its_process = "yes"
+reports_its_start_before_the_first_prompt = "yes"
+keeps_conversations_by_directory = "yes"
+reports_waiting = "yes"
+resumes_by_id = "yes"
+per_chat_plugins = "yes"

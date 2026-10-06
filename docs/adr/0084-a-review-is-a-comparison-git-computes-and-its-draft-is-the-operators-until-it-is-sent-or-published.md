@@ -86,14 +86,14 @@ charter has no diff view, no review and no editor (ADR 0081, *Where charter is t
 has near review:
 
 - **The commit scan reads a diff**, of the lines a chat's commit adds, from inside git's
-  `pre-commit` hook (`crates/charter-core/src/diffscan.rs`, ADR 0074). It is a scan, not a view,
+  `pre-commit` hook (`crates/purlis-core/src/diffscan.rs`, ADR 0074). It is a scan, not a view,
   and reads only the index being committed.
 - **A cross-repo change** is recorded intent (`workspaces/<ws>/changes/<slug>.json`, ADR 0060):
   which repos, which branch in each, which must land first. Its state is read from git and the
-  forge (`crates/charter-core/src/change/`).
+  forge (`crates/purlis-core/src/change/`).
 - **The forge seam is decided and not built.** ADR 0070 reserves `pub trait Reviews { /* FG-5a/b,
   FW-16a/b */ }` and nothing implements it. Today's forge code reads a request's state and its
-  checks (`crates/charter-core/src/forge/pr.rs`, `checks.rs`).
+  checks (`crates/purlis-core/src/forge/pr.rs`, `checks.rs`).
 - **charter runs git as a program** (`std::process::Command::new("git")` throughout
   `charter-core`), with no git library in any crate.
 
@@ -348,7 +348,7 @@ warns, naming the chat and its state, and saving is still the operator's choice.
     one save or from many across several of the operator's sittings, each path once. Once a turn
     has carried the line, those edits are announced and are not repeated.
   - **Where it goes.** At level 2, in the harness's `UserPromptSubmit` hook output as
-    `additionalContext`, beside a handed-back report (`crates/charter-core/src/handback.rs`), or
+    `additionalContext`, beside a handed-back report (`crates/purlis-core/src/handback.rs`), or
     the harness's equivalent hook; on a harness with no prompt hook, in its `SessionStart`
     briefing at the next run and through charter's MCP server (HP-7) in between. At level 3, in
     the structured context of the next prompt the host delivers.
@@ -358,7 +358,7 @@ warns, naming the chat and its state, and saving is still the operator's choice.
   - **What it is built from.** The human-edit events in the event log (FD-9) since the chat's
     last `prompted` move (ADR 0076 §2). It adds no store.
   - **No ADR owns the briefing's parts as a whole.** `briefing::parts`
-    (`crates/charter-core/src/briefing.rs`) is a port of the Python charter's session-start
+    (`crates/purlis-core/src/briefing.rs`) is a port of the Python charter's session-start
     briefing, and ADR 0063 and ADR 0064 each added one part to it. This line is a per-turn part,
     so it lives in the prompt hook's output, and the `SessionStart` briefing carries it only on a
     harness without one.

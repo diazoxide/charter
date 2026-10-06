@@ -12,7 +12,7 @@ import type { ViewRef } from "./tabs";
 
 /**
  * **⌘⇧F: the Search view tab's model** (FM-8, #1111; #1103, V86 F9/F10). What it searches, how a
- * tab is keyed, and the run it asks the core for — `charter_core::files::search`, through
+ * tab is keyed, and the run it asks the core for — `purlis_core::files::search`, through
  * `search_files`. The window names a project and branches, never a directory.
  *
  * A Search tab is **keyed by its scope and its query**, so the same search asked twice brings the

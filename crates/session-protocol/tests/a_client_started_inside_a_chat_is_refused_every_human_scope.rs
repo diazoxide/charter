@@ -15,10 +15,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use charter_session_protocol::auth::Scope;
-use charter_session_protocol::link::{self, LinkError};
-use charter_session_protocol::local::{Chats, Listener};
-use charter_session_protocol::version::{Refused, Speaks, Version};
+use purlis_session_protocol::auth::Scope;
+use purlis_session_protocol::link::{self, LinkError};
+use purlis_session_protocol::local::{Chats, Listener};
+use purlis_session_protocol::version::{Refused, Speaks, Version};
 use tokio::net::UnixListener;
 
 mod common;

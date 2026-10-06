@@ -228,7 +228,7 @@ describe("the title bar", () => {
     // Moved rather than copied (`StatusLine.tsx` argues it): an offer is a fact about the app
     // and the status line is drawn once per open project, so eight projects meant eight
     // updater clients reporting one thing. A scenario build never checks on its own
-    // (`charter_core::updates::checks_on_its_own`), so nothing is on offer: the button is the
+    // (`purlis_core::updates::checks_on_its_own`), so nothing is on offer: the button is the
     // way in to the channel, with no words.
     await untilTheStripIsRead();
 

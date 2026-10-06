@@ -4,8 +4,8 @@
 // Each test file uses some of these.
 #![allow(dead_code)]
 
-use charter_session_protocol::auth::Credentials;
-use charter_session_protocol::version::MAGIC;
+use purlis_session_protocol::auth::Credentials;
+use purlis_session_protocol::version::MAGIC;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// One start of the host's credentials, which every link in these tests is admitted with.

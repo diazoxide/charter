@@ -1,6 +1,6 @@
 //! The extension registry, as the window asks about it.
 //!
-//! `charter_core::extension` is the whole of the thinking; this is the wire. Four commands:
+//! `purlis_core::extension` is the whole of the thinking; this is the wire. Four commands:
 //! what has contributed what ([`installed_extensions`]), pick a directory
 //! ([`pick_extension`]), read one and ask about it ([`install_extension`]), and record the
 //! yes ([`approve_extension`]).
@@ -8,7 +8,7 @@
 //! **There is no executor here, and that is still deliberate.** ADR 0041 staged it —
 //! the registry first, the subprocess afterwards — so that the first extension runtime was not
 //! also the thing that invented the list it runs against. The runtime now exists
-//! (`charter_core::executor`, drawn by `crate::views`) and it was built against this list: it
+//! (`purlis_core::executor`, drawn by `crate::views`) and it was built against this list: it
 //! re-reads the record and re-takes the fingerprint at every press, and nothing in this file
 //! starts anything.
 //!
@@ -21,7 +21,7 @@
 
 use std::sync::OnceLock;
 
-use charter_core::extension;
+use purlis_core::extension;
 use tauri_plugin_dialog::DialogExt;
 
 /// Where this app's bundle keeps its built-in extensions, relative to its resource directory.
@@ -57,7 +57,7 @@ pub(crate) fn built_in() -> extension::BuiltIn {
 
 /// The question charter asks before an extension contributes anything.
 ///
-/// A mirror of [`extension::Prompt`] rather than the thing itself, because `charter-core` never
+/// A mirror of [`extension::Prompt`] rather than the thing itself, because `purlis-core` never
 /// depends on the app and the app's wire types are generated into TypeScript.
 ///
 /// **charter's own sentences travel with it rather than being written in the dialog.** That is
@@ -228,14 +228,14 @@ pub async fn extension_panels() -> Result<Vec<crate::panels::PanelView>, String>
 /// [`extension_panels`] with the survey already taken, so the shaping is testable without a
 /// Tauri runtime to run it on.
 fn panels_in_force(seen: &extension::Survey) -> Vec<crate::panels::PanelView> {
-    let mut found: Vec<charter_core::panel::Panel> = seen
+    let mut found: Vec<purlis_core::panel::Panel> = seen
         .installed
         .iter()
         .flat_map(|row| row.panels_in_force().iter().cloned())
         .collect();
     // Sorted here rather than in the window, so that two extensions declaring the same `order`
     // land in the same place at every launch instead of the order the record was read in.
-    charter_core::panel::Panel::sort(&mut found);
+    purlis_core::panel::Panel::sort(&mut found);
     found.iter().map(crate::panels::PanelView::from).collect()
 }
 
@@ -275,8 +275,8 @@ fn texts_in_force(
 
 /// The config home, or the reason charter has no machine-level state.
 fn config_root() -> Result<std::path::PathBuf, String> {
-    charter_core::machine::config_root()
-        .ok_or_else(|| "this machine has no config home, so charter keeps no extensions".to_owned())
+    purlis_core::machine::config_root()
+        .ok_or_else(|| "this machine has no config home, so purlis keeps no extensions".to_owned())
 }
 
 /// What has contributed what to this window.
@@ -592,7 +592,7 @@ pub(crate) fn file_of(
 
 /// A plane for a test (charter-app#319): a git repository with `shared` as its `charter.toml`,
 /// `local` as its `charter.local.toml` — which `.gitignore` ignores when `ignored` says, and which
-/// git would commit otherwise — and a workspace `alpha`. Made from charter-core's fixture template
+/// git would commit otherwise — and a workspace `alpha`. Made from purlis-core's fixture template
 /// (charter-app#262), so the developer's global excludes file does not decide what git would do.
 #[cfg(test)]
 pub(crate) fn test_plane(shared: &str, local: &str, ignored: bool) -> tempfile::TempDir {
@@ -606,9 +606,9 @@ pub(crate) fn test_plane(shared: &str, local: &str, ignored: bool) -> tempfile::
     std::fs::create_dir_all(root.join("workspaces/alpha")).expect("the workspace");
     let template = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/charter-core/tests/support/git-template"
+        "/../../crates/purlis-core/tests/support/git-template"
     );
-    let init = charter_core::forklock::output(
+    let init = purlis_core::forklock::output(
         std::process::Command::new("git").arg("-C").arg(root).args([
             "init",
             "-q",
@@ -1538,8 +1538,8 @@ mod tests {
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         let plane = test_plane(SHARED, LOCAL, false);
         let root = plane.path();
-        let why = charter_core::profiles::ignore_check(root).reason;
-        assert!(why.contains("charter reads nothing in it"), "{why}");
+        let why = purlis_core::profiles::ignore_check(root).reason;
+        assert!(why.contains("purlis reads nothing in it"), "{why}");
 
         for workspace in [None, Some("alpha")] {
             let choices = extension::project::Choices::read_in(root, workspace);

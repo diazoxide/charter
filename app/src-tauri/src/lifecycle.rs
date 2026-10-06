@@ -165,12 +165,12 @@ fn tray_icon(macos: bool, app_icon: Option<Image<'static>>) -> Option<TrayIcon> 
 
 /// The tray icon: what the app is while its window is hidden, and what brings it back.
 pub fn tray(app: &AppHandle) -> tauri::Result<()> {
-    let show_item = MenuItem::with_id(app, SHOW, "Show charter", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, QUIT, "Quit charter", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, SHOW, "Show purlis", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, QUIT, "Quit purlis", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
     let mut tray = TrayIconBuilder::with_id("charter")
-        .tooltip("charter")
+        .tooltip("purlis")
         .menu(&menu)
         // The menu is for the right button. A left click is "give me the window back", which
         // is what the icon is mostly there for.
@@ -194,7 +194,7 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
         Some(icon) => tray = tray.icon(icon.image).icon_as_template(icon.as_template),
         // Said out loud, because a tray with no icon is a tray that is hard to find, and
         // reaching the window from the dock is easier than hunting for an empty slot.
-        None => tracing::warn!("charter: the tray has no icon; its menu is still on the click"),
+        None => tracing::warn!("purlis: the tray has no icon; its menu is still on the click"),
     }
     tray.build(app)?;
     Ok(())
@@ -249,7 +249,7 @@ enum Item {
 fn layout(macos: bool) -> Vec<(&'static str, Vec<Item>)> {
     if !macos {
         return vec![(
-            "charter",
+            "purlis",
             vec![
                 Item::Settings("Ctrl+,"),
                 Item::Separator,
@@ -259,7 +259,7 @@ fn layout(macos: bool) -> Vec<(&'static str, Vec<Item>)> {
     }
     vec![
         (
-            "charter",
+            "purlis",
             vec![
                 Item::Settings("CmdOrCtrl+,"),
                 Item::Separator,
@@ -299,7 +299,7 @@ pub fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 Item::Quit(accelerator) => Box::new(MenuItem::with_id(
                     app,
                     QUIT,
-                    "Quit charter",
+                    "Quit purlis",
                     true,
                     Some(accelerator),
                 )?),
@@ -487,7 +487,7 @@ mod tests {
             layout(true),
             vec![
                 (
-                    "charter",
+                    "purlis",
                     vec![
                         Item::Settings("CmdOrCtrl+,"),
                         Item::Separator,

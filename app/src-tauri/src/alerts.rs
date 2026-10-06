@@ -6,13 +6,13 @@
 //! for exactly that reason: a drawer that could be asked about one project could be wired to
 //! the one in front and quietly stop being about the rest.
 //!
-//! The deciding is `charter_core::alerts`, the port of charter's `_alerts`, which also draws
+//! The deciding is `purlis_core::alerts`, the port of charter's `_alerts`, which also draws
 //! the terminal status line's rows — so the drawer and `charter statusline` cannot disagree
 //! about whether a plane has anything to say.
 
 use std::path::Path;
 
-use charter_core::alerts;
+use purlis_core::alerts;
 
 use crate::planes::PlaneId;
 
@@ -49,7 +49,7 @@ pub(crate) enum AlertWay {
 
 /// The way out of one of the core's alerts.
 fn way_out(alert: &alerts::Alert) -> AlertWay {
-    use charter_core::doctor::{SettingsGroup, fix::FixId};
+    use purlis_core::doctor::{SettingsGroup, fix::FixId};
     match alert {
         // The version lock, the update channel and the default persona's picker are all in
         // Project › General — where the doctor's `version lock` and `front door` rows link too.
@@ -123,7 +123,7 @@ const BLOCKED_FOR: f64 = 600.0;
 /// or at once for a secret. The app's alone, not the core's: the terminal status line reads the
 /// core's alerts, and the Saving view is where this one is resolved.
 fn save_blocked(root: &Path, now: f64) -> Option<AlertRow> {
-    use charter_core::planegit;
+    use purlis_core::planegit;
     let standing = planegit::shared_standing(root);
     let why = standing.blocked?;
     // A secret is said at once: that save never goes through without somebody.
@@ -329,9 +329,9 @@ mod tests {
                 .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
                 .env("GIT_COMMITTER_NAME", "t")
                 .env("GIT_COMMITTER_EMAIL", "t@example.invalid");
-            charter_core::forklock::output(&mut command).expect("git runs");
+            purlis_core::forklock::output(&mut command).expect("git runs");
         }
-        let journal = charter_core::planegit::journal_path(root);
+        let journal = purlis_core::planegit::journal_path(root);
         std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
         std::fs::write(
             journal,
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn a_save_blocked_by_a_secret_is_said_at_once() {
-        let dir = blocked_plane(charter_core::planegit::SECRET_REFUSED, now());
+        let dir = blocked_plane(purlis_core::planegit::SECRET_REFUSED, now());
         let memory = dir.path().join("personas/steward/memory");
         std::fs::create_dir_all(&memory).unwrap();
         std::fs::write(

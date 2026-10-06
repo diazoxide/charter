@@ -28,10 +28,10 @@
 
 use std::process::ExitCode;
 
-use charter_session_protocol::auth::{self, Credential, Scope};
-use charter_session_protocol::link::CONTROL_LANE;
-use charter_session_protocol::version::{Speaks, Version, answer, offer};
 use futures::AsyncWriteExt;
+use purlis_session_protocol::auth::{self, Credential, Scope};
+use purlis_session_protocol::link::CONTROL_LANE;
+use purlis_session_protocol::version::{Speaks, Version, answer, offer};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 fn speaks(arg: &str) -> Option<Speaks> {
@@ -90,7 +90,7 @@ async fn main() -> ExitCode {
 
 /// What came of a refused call, as one word: its code.
 #[cfg(feature = "any-stream")]
-fn refused(error: &charter_session_protocol::session::CallError) -> String {
+fn refused(error: &purlis_session_protocol::session::CallError) -> String {
     error
         .refusal()
         .map_or_else(|| format!("failed: {error}"), |r| r.code.clone())
@@ -102,10 +102,10 @@ async fn remote_link<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + S
     chat: &str,
     build: &str,
 ) -> ExitCode {
-    use charter_session_protocol::session::{Client, speaks};
-    use charter_session_protocol::view::{Chunk, Viewer};
+    use purlis_session_protocol::session::{Client, speaks};
+    use purlis_session_protocol::view::{Chunk, Viewer};
 
-    let link = match charter_session_protocol::link::connect_as_a_device(stdio, speaks()).await {
+    let link = match purlis_session_protocol::link::connect_as_a_device(stdio, speaks()).await {
         Ok(link) => link,
         Err(e) => {
             eprintln!("no link: {e}");
@@ -209,7 +209,7 @@ async fn present(scope: Scope, socket: &str, orphaned_from: Option<u32>) -> Exit
         }
     };
     let ours = Speaks::new([Version { major: 1, minor: 0 }]);
-    match charter_session_protocol::link::connect(stream, ours, scope, &credential).await {
+    match purlis_session_protocol::link::connect(stream, ours, scope, &credential).await {
         Ok(mut link) => {
             eprintln!("admitted as {}", link.scope());
             // Held until the host closes it, so the host takes its control lane first.

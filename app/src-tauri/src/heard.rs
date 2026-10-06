@@ -1,6 +1,6 @@
 //! Events the window's own actions report to the extensions that hear them (charter-app#343).
 //!
-//! `charter_core::extension::events::deliver` is the whole of the thinking — who hears what,
+//! `purlis_core::extension::events::deliver` is the whole of the thinking — who hears what,
 //! the gate, the deadline. This is the app's half: **when** it is asked, and where what it says
 //! goes.
 //!
@@ -22,9 +22,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use charter_core::executor::Executor;
-use charter_core::extension::events::{self, Event};
-use charter_core::extension::project::Choices;
+use purlis_core::executor::Executor;
+use purlis_core::extension::events::{self, Event};
+use purlis_core::extension::project::Choices;
 
 use crate::planes::PlaneId;
 
@@ -51,7 +51,7 @@ pub(crate) struct ExtensionHeard {
 
 impl Heard {
     /// Delivering with an executor that knows the app's built-in extensions (charter-app#339).
-    pub(crate) fn with_built_in(built_in: charter_core::extension::BuiltIn) -> Self {
+    pub(crate) fn with_built_in(built_in: purlis_core::extension::BuiltIn) -> Self {
         Self {
             executor: Arc::new(Executor::with_built_in(built_in)),
             ..Self::default()
@@ -66,7 +66,7 @@ impl Heard {
     /// Tell the extensions that hear it that `event` happened in the plane at `root`, on a
     /// thread started here — the caller returns at once. See the module's header.
     pub(crate) fn tell(&self, app: &tauri::AppHandle, plane: PlaneId, root: PathBuf, event: Event) {
-        let Some(config) = charter_core::machine::config_root_if_there() else {
+        let Some(config) = purlis_core::machine::config_root_if_there() else {
             return;
         };
         let executor = Arc::clone(&self.executor);
@@ -123,7 +123,7 @@ mod tests {
     /// An approved extension at `<dir>/ext` that hears a workspace being created and answers
     /// `answer` to it, writing down every event it is told.
     fn hearing(dir: &Path, answer: &str) -> PathBuf {
-        use charter_core::extension;
+        use purlis_core::extension;
         let ext = dir.join("ext");
         std::fs::create_dir_all(ext.join("bin")).expect("the extension's directory");
         std::fs::write(

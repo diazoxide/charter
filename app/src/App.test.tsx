@@ -178,7 +178,7 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
-      "charter found no project here",
+      "purlis found no project here",
     );
     expect(screen.getByText(/no charter.toml in \/tmp/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open project…" })).toBeInTheDocument();

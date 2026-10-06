@@ -511,7 +511,7 @@ describe("a 1Password vault's token", () => {
   const PUT = "put-token-9f21ab";
 
   /** `team`, a 1Password vault read through `$OP_TEAM_TOKEN`, held `held`, with `inAppEnv` the
-   *  variables charter's own environment still carries. */
+   *  variables purlis's own environment still carries. */
   function team(
     held: "environment" | "keyring",
     inAppEnv: string[] = held === "environment" ? ["OP_TEAM_TOKEN"] : [],
@@ -547,7 +547,7 @@ describe("a 1Password vault's token", () => {
     expect(onChanged).toHaveBeenCalled();
   });
 
-  it("offers to move the token charter's environment already has, and warns to relaunch", async () => {
+  it("offers to move the token purlis's environment already has, and warns to relaunch", async () => {
     // The move path leaves the export in the app's own process, so the note warns to relaunch
     // (#271 review, U3): the honest wording, not "no chat is given it".
     const asked = core(team("environment"), {
@@ -556,14 +556,14 @@ describe("a 1Password vault's token", () => {
     draw();
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Move the token from charter's environment" }),
+      await screen.findByRole("button", { name: "Move the token from purlis's environment" }),
     );
 
     expect(asked.at(-1)).toEqual({
       cmd: "vault_identity_move",
       args: { plane: PLANE, vault: "ops" },
     });
-    expect(await screen.findByRole("alert")).toHaveTextContent("relaunch charter");
+    expect(await screen.findByRole("alert")).toHaveTextContent("relaunch purlis");
   });
 
   it("says where the token is, and offers nothing, once it is in the Keychain", async () => {
@@ -575,7 +575,7 @@ describe("a 1Password vault's token", () => {
       screen.queryByRole("button", { name: "Put this vault's token in the Keychain" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Move the token from charter's environment" }),
+      screen.queryByRole("button", { name: "Move the token from purlis's environment" }),
     ).not.toBeInTheDocument();
   });
 
@@ -583,7 +583,7 @@ describe("a 1Password vault's token", () => {
     core(team("keyring", ["OP_TEAM_TOKEN"]));
     draw();
 
-    expect(await screen.findByText(/relaunch charter without it/)).toBeInTheDocument();
+    expect(await screen.findByText(/relaunch purlis without it/)).toBeInTheDocument();
   });
 
   it("offers nothing for a vault read through no token", async () => {
@@ -599,7 +599,7 @@ describe("a 1Password vault's token", () => {
   it("says why when the core refuses the put, and keeps offering it", async () => {
     core(team("environment"), {
       vault_identity_put: new Error(
-        "charter could not write 'charter/@identity/ab' in the system keyring",
+        "purlis could not write 'charter/@identity/ab' in the system keyring",
       ),
     });
     draw();

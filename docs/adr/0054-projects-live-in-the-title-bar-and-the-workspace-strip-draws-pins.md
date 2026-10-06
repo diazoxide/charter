@@ -127,7 +127,7 @@ board**. So a project that had moved fifty times an hour ago read higher than on
 once just now.
 
 **The count is now one per process, shared by every board** (`MOVES` in
-`crates/charter-core/src/state.rs`). Within a plane it orders chats exactly as before. Across
+`crates/purlis-core/src/state.rs`). Within a plane it orders chats exactly as before. Across
 planes it now orders them too, so the window derives a project's last activity as the newest
 `movedAt` among its chats (`PlaneReport.moved`) and sorts the menu by it. No field was added.
 The count still rides `chat-moved` and the first snapshot.

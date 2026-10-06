@@ -1,10 +1,10 @@
 //! A project's harness plugins, as the Settings tab asks about them (charter-app#274).
 //!
-//! `charter_core::harness_plugin` does the thinking: the adapters, the precedence, the pins. This
+//! `purlis_core::harness_plugin` does the thinking: the adapters, the precedence, the pins. This
 //! file is the wire: one group per harness, every one of them, including a harness whose adapter
 //! cannot apply, which carries the sentence that says so.
 
-use charter_core::harness_plugin;
+use purlis_core::harness_plugin;
 
 /// One harness's plugins in one project.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
@@ -14,7 +14,7 @@ pub struct HarnessPlugins {
     pub harness: String,
     /// What a person calls it.
     pub title: String,
-    // ADR 0050's sentence; `charter_core::harness_plugin` says what the "yet" waits on.
+    // ADR 0050's sentence; `purlis_core::harness_plugin` says what the "yet" waits on.
     /// "plugins for <harness> are not supported yet — <why>", or none where charter applies
     /// a project's choice to the chats it starts.
     pub unsupported: Option<String>,
@@ -255,8 +255,8 @@ mod tests {
             false,
         );
         let root = plane.path();
-        let why = charter_core::profiles::ignore_check(root).reason;
-        assert!(why.contains("charter reads nothing in it"), "{why}");
+        let why = purlis_core::profiles::ignore_check(root).reason;
+        assert!(why.contains("purlis reads nothing in it"), "{why}");
         let empty = tempfile::tempdir().expect("an empty home");
         let env = harness_plugin::Env {
             chat: &[],

@@ -479,7 +479,7 @@ async fn refused<H: Host>(command: &Command, peer: &Peer, host: &H) -> Option<Re
         return Some(Refusal {
             code: NOT_ALLOWED.into(),
             why: format!(
-                "this ask elicits a secret, which is answered in charter's window only, and \
+                "this ask elicits a secret, which is answered in purlis's window only, and \
                  this link is `{scope}`"
             ),
         });

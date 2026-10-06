@@ -25,7 +25,7 @@ export function thisMachineGroup(): SettingsGroup {
   return {
     id: "you.machine",
     label: "This machine",
-    help: "What charter remembers on this machine: your recent projects, your pins, the projects you approved, and where updates come from.",
+    help: "What purlis remembers on this machine: your recent projects, your pins, the projects you approved, and where updates come from.",
     settings: [recents, pins, approvals, channel],
   };
 }
@@ -71,7 +71,7 @@ async function reread() {
         ? { state: "trouble", trouble: said.error }
         : typeof said.data === "object" && said.data !== null
           ? { state: "read", machine: said.data }
-          : { state: "trouble", trouble: "charter did not say what this machine remembers." },
+          : { state: "trouble", trouble: "purlis did not say what this machine remembers." },
   }));
 }
 
@@ -243,7 +243,7 @@ function list(
 const recents = list(
   "you.machine.recents",
   "Recent projects",
-  "The projects charter offers when it opens. Forget takes one off this machine, with its pins and approval; it is asked about again the next time it is opened. One that has moved or gone can be forgotten here too.",
+  "The projects purlis offers when it opens. Forget takes one off this machine, with its pins and approval; it is asked about again the next time it is opened. One that has moved or gone can be forgotten here too.",
   (machine) => ({
     empty: "No recent projects.",
     entries: machine.projects.map((one) => (
@@ -339,7 +339,7 @@ const approvals = list(
   }),
 );
 
-/** The channels a machine can be on (`charter_core::updates::Channel`). */
+/** The channels a machine can be on (`purlis_core::updates::Channel`). */
 const CHANNELS = [
   { value: "stable", label: "stable", says: "Releases cut on the maintainers' word." },
   { value: "dev", label: "dev", says: "Every green build of main, for testing." },
@@ -348,7 +348,7 @@ const CHANNELS = [
 const channel: LiveSetting = {
   id: "you.machine.channel",
   label: "Update channel",
-  help: "Which stream this machine takes charter from. It applies to the next check for an update.",
+  help: "Which stream this machine takes purlis from. It applies to the next check for an update.",
   useControl: function useChannel() {
     const id = "you.machine.channel";
     const { error } = useMachine(id);

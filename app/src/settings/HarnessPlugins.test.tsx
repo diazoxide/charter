@@ -9,9 +9,9 @@ import type { HarnessPlugins, ProjectSettings as Both, SettingsFile } from "../b
 
 /**
  * The **Plugins** group of the Settings tab's Project level (charter-app#274, ADR 0050; carried
- * over from the old Project settings page by SE-19): every harness charter knows, each plugin
+ * over from the old Project settings page by SE-19): every harness purlis knows, each plugin
  * as a setting kept in `charter.toml`. What each plugin resolves to, and which harnesses can
- * apply it, is the core's (`charter_core::harness_plugin`'s tests); here the core is the mock,
+ * apply it, is the core's (`purlis_core::harness_plugin`'s tests); here the core is the mock,
  * and what is held is that every harness is said, a fixed plugin has no control, a harness that
  * cannot apply says so, and a toggle writes its key.
  */
@@ -52,14 +52,14 @@ const BOTH: Both = {
 };
 
 const OWN_WHY =
-  "charter@inline is always on: it is charter's own plugin, and it carries charter's hooks and the Bash guard";
+  "charter@inline is always on: it is purlis's own plugin, and it carries purlis's hooks and the Bash guard";
 const OLD_WHY =
   "charter@charter is always off: it is the Python charter's plugin, and a chat the app starts carrying it too would have two sets of hooks and two handoff skills";
 
 /** The ignore check's sentence for a `charter.local.toml` git would commit, as the core says it
  *  (charter-app#308): what every group that shows what is in force says. */
 const LEFT_OUT =
-  "git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter doctor --fix local-ignore adds /charter.local.toml to .gitignore.";
+  "git would commit charter.local.toml, so purlis reads nothing in it until it is ignored — purlis doctor --fix local-ignore adds /charter.local.toml to .gitignore.";
 
 const HARNESSES: HarnessPlugins[] = [
   {
@@ -192,7 +192,7 @@ async function drawn() {
 }
 
 describe("the Plugins group (charter-app#274)", () => {
-  it("says every harness charter knows, and never leaves one out", async () => {
+  it("says every harness purlis knows, and never leaves one out", async () => {
     core();
     const group = await drawn();
 
@@ -225,7 +225,7 @@ describe("the Plugins group (charter-app#274)", () => {
     );
   });
 
-  it("draws charter's own plugin and the old one as fixed, with no control to change either", async () => {
+  it("draws purlis's own plugin and the old one as fixed, with no control to change either", async () => {
     core();
     const group = await drawn();
 

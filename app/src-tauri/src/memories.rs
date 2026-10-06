@@ -15,10 +15,10 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use charter_core::memscope::{self, Scope};
-use charter_core::memstore::{Base, EditRefused};
-use charter_core::personas::{Persona, SHARED};
-use charter_core::workspaces::{Opened, Plane, Workspace};
+use purlis_core::memscope::{self, Scope};
+use purlis_core::memstore::{Base, EditRefused};
+use purlis_core::personas::{Persona, SHARED};
+use purlis_core::workspaces::{Opened, Plane, Workspace};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -205,7 +205,7 @@ impl Store {
         }
     }
 
-    fn archived(&self) -> io::Result<Vec<charter_core::workspaces::Entry>> {
+    fn archived(&self) -> io::Result<Vec<purlis_core::workspaces::Entry>> {
         match self {
             Self::Workspace(ws) => ws.archived_memories(),
             Self::Persona(p) => p.archived_memories(),
@@ -431,7 +431,7 @@ pub async fn memory_archived(
 fn archived(root: &Path, scope: &MemoryScope) -> Result<Vec<ArchivedMemory>, String> {
     let store = Store::of(root, scope)?;
     let entries = store.archived().map_err(|e| e.to_string())?;
-    let dir = format!("{}/{}", scope.store(), charter_core::memstore::ARCHIVE);
+    let dir = format!("{}/{}", scope.store(), purlis_core::memstore::ARCHIVE);
     Ok(entries
         .into_iter()
         .map(|entry| ArchivedMemory {

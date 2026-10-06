@@ -11,7 +11,7 @@ import { type Interrupts, countInterrupts, withinTheBudget } from "./interruptBu
  * accounts, cloud or telemetry.
  *
  * What the core does with the repo — the local plane in charter's own directory, the
- * workspace named after the repo, nothing written into it — is `charter_core::firstrun`'s
+ * workspace named after the repo, nothing written into it — is `purlis_core::firstrun`'s
  * and is tested there against real directories. This is about the window: what it asks, what
  * it does not, and that the first chat starts in that workspace's clone.
  */
@@ -267,7 +267,7 @@ describe("the first run", () => {
     expect(document.body.textContent).not.toMatch(/account|cloud|telemetry|sign up/i);
     // ADR 0072's words: what a project is, and no "plane" or "repository" on the way in.
     expect(
-      screen.getByText(/A project is where charter keeps your workspaces, personas and memory/),
+      screen.getByText(/A project is where purlis keeps your workspaces, personas and memory/),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/plane|repository/i);
   });
@@ -546,7 +546,7 @@ describe("the first run", () => {
 /**
  * FR-18a (#612): the agent instructions the repo carries — `CLAUDE.md`, `AGENTS.md` and
  * `.cursor/rules` — offered to the workspace's memory with a preview. What is found, what is
- * left out and what is written are `charter_core::repoinstructions`'s, tested against real
+ * left out and what is written are `purlis_core::repoinstructions`'s, tested against real
  * directories; this is about the window: the offer asks nothing (W10's interrupt budget), and
  * nothing is written without the preview's yes.
  */
@@ -764,7 +764,7 @@ describe("the repo's agent instructions", () => {
  * installer, run in a shell tab on a press; the harness's own login is its own first screen;
  * and a local model server already on the machine is named as the way in with no account.
  * Which installer, where it installs, and what counts as a local server are
- * `charter_core::noharness`'s, tested there.
+ * `purlis_core::noharness`'s, tested there.
  */
 describe("no harness found (FR-29)", () => {
   const NOTHING = {

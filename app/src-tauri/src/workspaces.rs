@@ -1,7 +1,7 @@
 //! Making a workspace and deleting one, as the window can reach them.
 //!
 //! Thin by design, exactly like `worktrees.rs`: what a workspace may be called, what it is
-//! scaffolded with, and **what may be deleted** all live in `charter_core::wscmd`, and this
+//! scaffolded with, and **what may be deleted** all live in `purlis_core::wscmd`, and this
 //! layer converts. A rule implemented here as well would be a second rule, and the two would
 //! drift — which for [`workspace_remove`] means a recursive delete deciding for itself what is
 //! safe to destroy.
@@ -10,7 +10,7 @@
 //!
 //! `charter workspace remove` refuses when the workspace holds work that removing it would
 //! discard: a clone charter could not read, a dirty tree, unpushed commits, a worktree holding
-//! commits reachable from no other ref. That guard is [`charter_core::wscmd::work_at_risk`] and
+//! commits reachable from no other ref. That guard is [`purlis_core::wscmd::work_at_risk`] and
 //! it runs **inside `wscmd::remove`**, between the name check and `remove_dir_all`.
 //!
 //! So [`workspace_remove`] calls `wscmd::remove` and nothing else. It does not call
@@ -48,15 +48,15 @@
 
 use std::path::Path;
 
-use charter_core::extension::events::Event;
-use charter_core::repocmd::Say;
-use charter_core::wscmd;
+use purlis_core::extension::events::Event;
+use purlis_core::repocmd::Say;
+use purlis_core::wscmd;
 
 use crate::planes::{PlaneId, Planes};
 
 /// One reason a workspace holds work that deleting it would discard.
 ///
-/// A mirror of [`wscmd::AtRisk`] rather than the thing itself, because `charter-core` never
+/// A mirror of [`wscmd::AtRisk`] rather than the thing itself, because `purlis-core` never
 /// depends on the app and the app's wire types are generated into TypeScript.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct AtRisk {
@@ -189,7 +189,7 @@ pub fn workspace_focused(
     workspace: String,
 ) -> Result<(), String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    if !charter_core::contain::workspace_name_ok(&workspace) {
+    if !purlis_core::contain::workspace_name_ok(&workspace) {
         return Err(format!("'{workspace}' is not a workspace's name"));
     }
     heard.tell(&app, plane, root, Event::WorkspaceFocused { workspace });
@@ -207,7 +207,7 @@ fn create_in(
     // an empty `## Vision` section into the workspace's charter and charter would read it back
     // as one that had been recorded.
     let vision = vision.map(str::trim).filter(|text| !text.is_empty());
-    let ids = charter_core::active::Ids::default();
+    let ids = purlis_core::active::Ids::default();
     let mut said = Vec::new();
     let code = wscmd::create::create(
         &wscmd::create::Request {
@@ -373,7 +373,7 @@ pub(crate) fn rename_in(
 ) -> Result<Vec<String>, String> {
     let root = held.root().to_path_buf();
     let chats = held.chats();
-    let on_disk = charter_core::workspaces::Plane::open(&root);
+    let on_disk = purlis_core::workspaces::Plane::open(&root);
     // Under either name, so a rename finished after a crash is guarded as well.
     let running: Vec<String> = chats
         .open_now()
@@ -449,7 +449,7 @@ pub async fn reachable_repos(
 }
 
 fn reachable_in(root: &Path) -> Result<ReachableRepos, String> {
-    let found = charter_core::repocmd::reachable::reachable(root)?;
+    let found = purlis_core::repocmd::reachable::reachable(root)?;
     let text = |r: &serde_json::Value, key: &str| {
         r.get(key)
             .and_then(serde_json::Value::as_str)
@@ -489,7 +489,7 @@ pub async fn take_repos(
 ) -> Result<(), String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {
-        charter_core::repocmd::reachable::take(&root, &repos)
+        purlis_core::repocmd::reachable::take(&root, &repos)
     })
     .await
     .map_err(|err| format!("the inventory was not updated: {err}"))?
@@ -519,8 +519,8 @@ pub async fn clone_repo(
 fn clone_into(root: &Path, workspace: &str, repo: &str) -> Result<Vec<String>, String> {
     let author = wscmd::ensure::author();
     let mut said = Vec::new();
-    let code = charter_core::repocmd::clone::clone(
-        &charter_core::repocmd::clone::Request {
+    let code = purlis_core::repocmd::clone::clone(
+        &purlis_core::repocmd::clone::Request {
             root,
             ws: workspace,
             repos: &[repo.to_string()],
@@ -618,7 +618,7 @@ mod tests {
     }
 
     fn git(at: &Path, argv: &[&str]) {
-        charter_core::forklock::output(
+        purlis_core::forklock::output(
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(at)
@@ -698,7 +698,7 @@ mod tests {
         // Read back the way charter reads it, which answers "" for its own placeholder — so
         // "no vision" is the core's own judgement and not this test's reading of a file.
         let vision = |name: &str| {
-            charter_core::workspaces::Plane::open(&root)
+            purlis_core::workspaces::Plane::open(&root)
                 .workspace(name)
                 .expect("a workspace")
                 .vision()
@@ -719,7 +719,7 @@ mod tests {
             std::fs::read_to_string(root.join("workspaces").join(name).join("workspace.md"))
                 .expect("its charter")
         };
-        let placeholder = charter_core::workspaces::VISION_PLACEHOLDER;
+        let placeholder = &purlis_core::workspaces::vision_placeholder(&root);
         assert!(
             charter_of("beta").contains(placeholder),
             "{}",
@@ -781,7 +781,7 @@ mod tests {
     fn a_repo_not_cloned_here_leaves_the_workspace_and_a_cloned_one_is_refused() {
         let (_dir, root) = plane();
         let kept = clone_in(&root, "alpha", "kept");
-        let workspace = charter_core::workspaces::Plane::open(&root)
+        let workspace = purlis_core::workspaces::Plane::open(&root)
             .workspace("alpha")
             .expect("a workspace");
         workspace

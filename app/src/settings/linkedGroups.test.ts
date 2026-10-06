@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * **Every Settings group the core can link to is one the window declares** (SE-22, D-SE22f).
  *
  * A doctor row names the group its fix is made in by the group's address
- * (`charter_core::doctor::SettingsGroup`), and the window shows that group. An address the
+ * (`purlis_core::doctor::SettingsGroup`), and the window shows that group. An address the
  * window does not declare would land on the level's first group without a word, so the two
  * lists are held together here: the core's one `match` that spells each address, read from its
  * source, against the group ids `project.ts` declares.
@@ -22,7 +22,7 @@ const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
  * by rustfmt, or returning a const) fails here instead of dropping out of the check.
  */
 function coreGroups(): string[] {
-  const source = read("crates/charter-core/src/doctor/mod.rs");
+  const source = read("crates/purlis-core/src/doctor/mod.rs");
   const variants = /pub enum SettingsGroup \{([^}]*)\}/.exec(source);
   expect(variants, "SettingsGroup is the enum the core links by").not.toBeNull();
   const body = /impl SettingsGroup \{[\s\S]*?pub const fn id\(self\)[\s\S]*?\n {4}\}/.exec(source);

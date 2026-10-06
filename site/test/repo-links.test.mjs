@@ -9,7 +9,7 @@ const repoRoot = mkdtempSync(join(tmpdir(), "repo-links-"));
 for (const path of [
   "docs/spec.md",
   "docs/adr/0070-a-forge.md",
-  "crates/charter-core/src/curation.rs",
+  "crates/purlis-core/src/curation.rs",
   "CONTRIBUTING.md",
   "docs/v1.2-notes.md",
   "docs/guides/index.md",
@@ -35,8 +35,8 @@ test("a link to a page goes to the address Starlight gives that page", () => {
 
 test("a link to a file outside docs/ goes to that file on the forge at the built ref", () => {
   assert.equal(
-    siteLink("../../crates/charter-core/src/curation.rs", at("docs/adr/0070-a-forge.md")),
-    "https://github.com/diazoxide/charter/blob/v1.2.3/crates/charter-core/src/curation.rs",
+    siteLink("../../crates/purlis-core/src/curation.rs", at("docs/adr/0070-a-forge.md")),
+    "https://github.com/diazoxide/charter/blob/v1.2.3/crates/purlis-core/src/curation.rs",
   );
   assert.equal(
     siteLink("../CONTRIBUTING.md", at("docs/spec.md")),

@@ -89,7 +89,7 @@ describe("LiveDialog", () => {
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
       await screen.findByText(
-        "This plane has no remote charter can push to, so they are committed on this machine only.",
+        "This plane has no remote purlis can push to, so they are committed on this machine only.",
       ),
     ).toBeTruthy();
     cleanup();
@@ -98,13 +98,13 @@ describe("LiveDialog", () => {
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={() => {}} />);
     expect(
       await screen.findByText(
-        "This plane's mode is off, so charter commits nothing; they are published when you commit and push them.",
+        "This plane's mode is off, so purlis commits nothing; they are published when you commit and push them.",
       ),
     ).toBeTruthy();
   });
 
   it("shows a refusal in the core's words and stays open", async () => {
-    core(preview(), new Error("no workspace 'ide' (create it: charter workspace create ide)"));
+    core(preview(), new Error("no workspace 'ide' (create it: purlis workspace create ide)"));
     const onDone = vi.fn();
     render(<LiveDialog plane={PLANE} workspace="ide" onClose={() => {}} onDone={onDone} />);
 

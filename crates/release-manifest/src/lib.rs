@@ -40,12 +40,12 @@ use std::collections::BTreeMap;
 
 pub mod weekly;
 
-use charter_core::updates::{Channel, TARGETS};
+use purlis_core::updates::{Channel, TARGETS};
 
 /// One platform's row: what to download and the signature over it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// The platform key, one of [`charter_core::updates::TARGETS`].
+    /// The platform key, one of [`purlis_core::updates::TARGETS`].
     pub target: String,
     /// Where the artifact is published.
     pub url: String,
@@ -97,7 +97,7 @@ impl std::fmt::Display for Refused {
             ),
             Self::UnknownTarget(t) => write!(
                 f,
-                "{t:?} is not a platform charter publishes ({}) — a key no updater asks for is \
+                "{t:?} is not a platform purlis publishes ({}) — a key no updater asks for is \
                  a row nobody reads",
                 TARGETS.join(", ")
             ),
@@ -158,7 +158,7 @@ pub fn assemble(
     notes: &str,
     entries: &[Entry],
 ) -> Result<(&'static str, String), Refused> {
-    charter_core::updates::pubkey_usable(pubkey).map_err(|not| Refused::NoKey(not.why()))?;
+    purlis_core::updates::pubkey_usable(pubkey).map_err(|not| Refused::NoKey(not.why()))?;
     let public_key = decode_base64_text(pubkey.trim())
         .and_then(|text| minisign_verify::PublicKey::decode(&text).ok())
         .ok_or(Refused::NoKey(
@@ -350,9 +350,9 @@ fn is_dotted(text: &str) -> bool {
 
 /// Standard base64 to text, or `None`.
 ///
-/// A second copy of the decoder in `charter_core::updates` would be a second answer to one
+/// A second copy of the decoder in `purlis_core::updates` would be a second answer to one
 /// question, so this is the same function reached through the one public thing that needs it
-/// — see [`charter_core::updates::pubkey_usable`]. It is not public there, and exporting a
+/// — see [`purlis_core::updates::pubkey_usable`]. It is not public there, and exporting a
 /// base64 decoder from the crate that ships inside the app to serve one release tool would be
 /// the wrong trade; this is sixteen lines, in a crate nothing ships.
 fn decode_base64_text(text: &str) -> Option<String> {
@@ -622,7 +622,7 @@ mod tests {
         let signer = Signer::new();
         let refused = assemble(
             Channel::Stable,
-            charter_core::updates::PUBKEY_UNSET,
+            purlis_core::updates::PUBKEY_UNSET,
             "0.2.0",
             "x",
             "",

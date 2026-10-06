@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
  * worst — it spread the scenario config and then replaced `services` whole, dropping
  * `CHARTER_ROOT` and `CHARTER_CONFIG_HOME` with it, silently, for months.
  *
- * **Why a test and not just the fence.** The fence in `charter-core` makes an unpinned run
+ * **Why a test and not just the fence.** The fence in `purlis-core` makes an unpinned run
  * *die* rather than write, which is the guard that cannot be refactored away. This is the
  * other half: it names the thing that puts the fence there. A config could pass the fence by
  * simply never starting an app, and the app's `e2e` cargo feature — which is what compiles
@@ -121,7 +121,7 @@ describe("every launcher starts the app inside a plane the run made", () => {
 
   it("the app the scenario tests drive is built with the fence compiled into it", () => {
     // `e2e` is the feature the scenario build turns on (`tauri.e2e.conf.json`), and it is
-    // where `charter-core/fenced` has to hang: nothing else in the app's graph turns the
+    // where `purlis-core/fenced` has to hang: nothing else in the app's graph turns the
     // fence on for a binary, because `[dev-dependencies]` reaches `cargo test` and not
     // `tauri build`. Dropped from here, every assertion above still passes and the scenario
     // suite silently goes back to being able to write the operator's plane.
@@ -129,6 +129,6 @@ describe("every launcher starts the app inside a plane the run made", () => {
     const feature = /^e2e = \[(.*)\]$/m.exec(manifest);
 
     expect(feature, "the app has no e2e feature any more").not.toBeNull();
-    expect(feature?.[1]).toContain("charter-core/fenced");
+    expect(feature?.[1]).toContain("purlis-core/fenced");
   });
 });

@@ -35,12 +35,12 @@ next `git status` in that plane is dirty for a reason nobody did on purpose.
 ## Where each of the three goes
 
 **A project pin, and a workspace pin, go in the machine store** (ADR 0034,
-`crates/charter-core/src/machine.rs`). That store already holds which planes this machine knows
+`crates/purlis-core/src/machine.rs`). That store already holds which planes this machine knows
 and how they were arranged in windows; a pin is the same kind of fact one level finer. The
 amendment below is what lets it.
 
 **A chat pin goes in the plane's own app record**, `.charter/app/reopen.json`
-(`crates/charter-core/src/reopen.rs`), and **not** in the machine store. Three reasons, and the
+(`crates/purlis-core/src/reopen.rs`), and **not** in the machine store. Three reasons, and the
 first is ADR 0034's own words:
 
 - 0034 forbids it in as many words — **"no chat names"** — and the prohibition is not a

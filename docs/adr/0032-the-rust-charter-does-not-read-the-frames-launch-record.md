@@ -12,7 +12,7 @@ charter-app's `charter` ports every rung but that one.
 reads nor writes there"; the app replaces that frame rather than inheriting its state. Reading
 the record would mean reading state the format forbids it to touch, and the app writes no frame
 record of its own — so the rung would be one nothing on this side can ever set. It is left out,
-named in `crates/charter-core/src/active.rs`'s ladder table as *not ported*, and pinned by the
+named in `crates/purlis-core/src/active.rs`'s ladder table as *not ported*, and pinned by the
 differential scenario `workspace-the-frames-launch-record-is-a-rung-in-python-and-not-here`.
 
 ## Where the two implementations can actually disagree
@@ -94,10 +94,10 @@ launch wide with a one-command repair, the boundary is worth more than the rung.
 - `workspace-the-frames-launch-record-is-a-rung-in-python-and-not-here`, in
   `tests/differential/run.py`, carries the divergence as a `stdout_differs` note. That note
   **fails the day the two agree**, so it cannot outlive the difference it records.
-- `the_tmux_frames_launch_record_is_not_a_rung_here`, in `crates/charter-cli/tests/active.rs`,
+- `the_tmux_frames_launch_record_is_not_a_rung_here`, in `crates/purlis-cli/tests/active.rs`,
   asserts *which* answer this side gives. The differential says only that Python answers
   something else, and an inequality is satisfied by any wrong answer.
-- The ladder table at the top of `crates/charter-core/src/active.rs` carries the rung as a row
+- The ladder table at the top of `crates/purlis-core/src/active.rs` carries the rung as a row
   marked *not ported*, so a reader counting rungs finds the gap named rather than missing.
 
 ## What this rules out

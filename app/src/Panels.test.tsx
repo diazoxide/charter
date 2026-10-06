@@ -30,7 +30,7 @@ const PLANE = "/home/dev/plane";
 // ---------------------------------------------------------------------------------------
 
 /**
- * **These fixtures are `charter_core::panel` values, and that is the change.**
+ * **These fixtures are `purlis_core::panel` values, and that is the change.**
  *
  * Until this file was rewritten it asserted that `Panels.tsx` drew a todo out of a `todos`
  * field. There is no such field in the renderer now: todos and personas are contributions, so
@@ -343,7 +343,7 @@ describe("a panel", () => {
   });
 
   it("draws a block charter could not fill as charter's own sentence, never as an empty list", () => {
-    // A store charter would not read is not a workspace with nothing to do, and "Nothing to
+    // A store purlis would not read is not a workspace with nothing to do, and "Nothing to
     // do" is exactly what an empty list would claim about it.
     draw({
       state: state({

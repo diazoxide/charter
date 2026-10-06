@@ -19,7 +19,7 @@
 //!   reference-style link still resolves in a release body lifted out of the file.
 //!
 //! This is the APP's version line (0.1.0 onwards). `charter news` reads it too, through
-//! `charter_core::news` (#352).
+//! `purlis_core::news` (#352).
 
 use std::fmt;
 

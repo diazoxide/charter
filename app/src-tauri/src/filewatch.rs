@@ -9,9 +9,9 @@
 //! window.
 //!
 //! **The window names folders, never directories.** Each one is a branch and a path inside it,
-//! resolved by `charter_core::files::folders` with every check the tree's own read makes; one
+//! resolved by `purlis_core::files::folders` with every check the tree's own read makes; one
 //! that does not resolve is not watched. Each branch is found once per call, however many of
-//! its folders are open, and at most `charter_core::files::WATCHED` folders are watched for a
+//! its folders are open, and at most `purlis_core::files::WATCHED` folders are watched for a
 //! window.
 //!
 //! **One event per burst** ([`crate::watchset::bursts`]), and an access is not a change: the
@@ -179,14 +179,14 @@ impl<W: notify::Watcher + Send + 'static> FileWatch<W> {
                     }
                 }
             })
-            .map_err(|e| format!("charter could not watch the branch's folders: {e}"))?;
+            .map_err(|e| format!("purlis could not watch the branch's folders: {e}"))?;
         W::new(
             crate::watchset::sender(sent),
             // Never into a link: a folder linked from inside the branch to outside it is not
             // the branch's, as the tree's own read refuses it.
             self.config.with_follow_symlinks(false),
         )
-        .map_err(|e| format!("charter could not watch the branch's folders: {e}"))
+        .map_err(|e| format!("purlis could not watch the branch's folders: {e}"))
     }
 }
 
@@ -239,7 +239,7 @@ impl<W: notify::Watcher> Inner<W> {
 /// The folders of branches this window's explorer has expanded, watched until it names others
 /// (FM-1). A folder that does not resolve — gone, or refused as the tree refuses it — is not
 /// watched.
-// Each folder is resolved by `charter_core::files::folder`, with the tree's own checks; the
+// Each folder is resolved by `purlis_core::files::folder`, with the tree's own checks; the
 // window never names a directory. Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
@@ -253,7 +253,7 @@ pub async fn files_watch(
     // Each project resolved here, so the blocking half carries paths and not registry handles;
     // and each branch once, with every one of its folders, and no more than a window may watch.
     let mut by_branch: Vec<(PathBuf, Vec<BranchFolder>)> = Vec::new();
-    for folder in folders.into_iter().take(charter_core::files::WATCHED) {
+    for folder in folders.into_iter().take(purlis_core::files::WATCHED) {
         let Ok(held) = planes.held(&folder.plane) else {
             continue;
         };
@@ -272,7 +272,7 @@ pub async fn files_watch(
             let first = &of[0];
             let branch = crate::piecefiles::branch(&first.workspace, &first.repo, &first.piece);
             let named: Vec<&str> = of.iter().map(|folder| folder.folder.as_str()).collect();
-            let dirs = charter_core::files::folders(&root, branch, &named);
+            let dirs = purlis_core::files::folders(&root, branch, &named);
             for (folder, dir) in of.iter().zip(dirs) {
                 if let Ok(dir) = dir {
                     resolved.push((folder.clone(), dir));

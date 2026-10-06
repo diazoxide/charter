@@ -144,7 +144,7 @@ export const DEFAULT_ARRANGEMENT: Arrangement = [
 /** Where web storage held the arrangement before it was a file. Read once, to move it. */
 export const LEGACY_KEY = "charter.layout";
 
-/** The one version of the file's format this build writes. `charter_core::windowprefs` refuses
+/** The one version of the file's format this build writes. `purlis_core::windowprefs` refuses
  *  any other before the window sees it. */
 export const VERSION = 1;
 
@@ -296,7 +296,7 @@ export async function settleLayout(layout: Reading = atCreation().layout): Promi
   if (moved.status === "error") {
     sayAboutThisMachine("layout", {
       severity: "warn",
-      detail: `charter could not move the arrangement it kept in the window into ${where(layout.path)}: ${moved.error}`,
+      detail: `purlis could not move the arrangement it kept in the window into ${where(layout.path)}: ${moved.error}`,
       remedy: "nothing to do: it is still drawn, and the next launch tries again",
     });
     return;
@@ -388,7 +388,7 @@ export function load(raw: unknown): Loaded {
           said.push("a placement with no id was skipped");
         } else if (!(REGION_IDS as string[]).includes(placement.id)) {
           said.push(
-            `${JSON.stringify(placement.id)} is not a region this charter has (${REGION_IDS.join(", ")}), so it was left out`,
+            `${JSON.stringify(placement.id)} is not a region this purlis has (${REGION_IDS.join(", ")}), so it was left out`,
           );
         } else {
           held.set(placement.id, placement);
@@ -448,7 +448,7 @@ function remember(arrangement: Arrangement): void {
     if (kept.status === "error") {
       sayAboutThisMachine("layout", {
         severity: "warn",
-        detail: `charter could not keep the layout: ${kept.error}`,
+        detail: `purlis could not keep the layout: ${kept.error}`,
         remedy: "the window keeps it until you quit; the next launch starts from the last one kept",
       });
     } else {

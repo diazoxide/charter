@@ -8,7 +8,7 @@
 //! `PATH` and so does not reproduce it. A doctor the app cannot run is a doctor that answers
 //! for the wrong process.
 //!
-//! So this runs [`charter_core::doctor::Doctor`] **in the app's own process**, on the plane the
+//! So this runs [`purlis_core::doctor::Doctor`] **in the app's own process**, on the plane the
 //! window names, and hands the rows over unchanged. Thin by design, as `worktrees.rs` is: every
 //! row, every sentence and every verdict is the core's, the same ones `charter doctor --json`
 //! prints (and the recorded `doctor-*` scenarios hold byte for byte to Python's, ADR 0046).
@@ -23,7 +23,7 @@
 //!
 //! `charter doctor` prints the core's rows and this hands them over unchanged. The app has one
 //! question of its own that no CLI can answer — whether the chats THIS app starts can record
-//! their turns ([`charter_core::footerclaim`]) — so it travels in [`DoctorReport::app_rows`],
+//! their turns ([`purlis_core::footerclaim`]) — so it travels in [`DoctorReport::app_rows`],
 //! beside the table rather than inside it. Keeping it out of `rows` is what lets the test below
 //! hold "what the window draws is what `charter doctor --json` prints" as an equality.
 //!
@@ -33,7 +33,7 @@
 //!   keeps that to a doctor *a person asked for* (`doctor/profiles.rs`, ruling 11), so the
 //!   window asks it only when the operator opens the doctor. Opening it is the asking.
 
-use charter_core::doctor::{Doctor, Row, Status};
+use purlis_core::doctor::{Doctor, Row, Status};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -76,7 +76,7 @@ pub struct DoctorRow {
     /// when the fix is a setting ([`Row::settings`], SE-22): the window links the row there.
     /// `charter doctor --json` does not print it.
     pub settings: Option<String>,
-    /// The fix charter can make for this finding itself (FX-1, `charter_core::doctor::fix`),
+    /// The fix charter can make for this finding itself (FX-1, `purlis_core::doctor::fix`),
     /// by the id `charter doctor --fix <id>` takes: the dialog draws a Fix button for it, which
     /// calls [`plane_doctor_fix`]. `None` for a row charter cannot fix, and for the app's own.
     pub fix: Option<String>,
@@ -178,12 +178,12 @@ fn fixed(
     fix: &str,
     shipped: &crate::Shipped,
 ) -> Result<DoctorFixed, String> {
-    use charter_core::doctor::fix::{self as registry, FixId, Fixed};
-    use charter_core::plugin_install::Machine;
+    use purlis_core::doctor::fix::{self as registry, FixId, Fixed};
+    use purlis_core::plugin_install::Machine;
     let id = FixId::parse(fix).ok_or_else(|| {
         format!(
-            "charter has no fix '{}'; the fixes are {}",
-            charter_core::shown::short(fix),
+            "purlis has no fix '{}'; the fixes are {}",
+            purlis_core::shown::short(fix),
             FixId::ALL.map(FixId::id).join(", ")
         )
     })?;
@@ -199,10 +199,10 @@ fn fixed(
 
 /// A fix's outcome, as the dialog draws it.
 fn answered(
-    id: charter_core::doctor::fix::FixId,
-    outcome: charter_core::doctor::fix::Fixed,
+    id: purlis_core::doctor::fix::FixId,
+    outcome: purlis_core::doctor::fix::Fixed,
 ) -> DoctorFixed {
-    use charter_core::doctor::fix::Fixed;
+    use purlis_core::doctor::fix::Fixed;
     match outcome {
         Fixed::Ran { said, complete } => DoctorFixed {
             fix: id.id().to_owned(),
@@ -272,9 +272,9 @@ pub async fn plane_doctor_identity(
 ) -> Result<DoctorIdentityNow, String> {
     planes.held(&plane)?;
     tauri::async_runtime::spawn_blocking(|| {
-        charter_core::doctor::fix::identity::current().map(|now| DoctorIdentityNow {
-            name: charter_core::shown::line(&now.name),
-            email: charter_core::shown::line(&now.email),
+        purlis_core::doctor::fix::identity::current().map(|now| DoctorIdentityNow {
+            name: purlis_core::shown::line(&now.name),
+            email: purlis_core::shown::line(&now.email),
         })
     })
     .await
@@ -283,16 +283,14 @@ pub async fn plane_doctor_identity(
 
 /// [`plane_doctor_fix_identity`], on the calling thread.
 fn identity_fixed(root: &std::path::Path, name: &str, email: &str) -> DoctorIdentityFixed {
-    identity_answer(charter_core::doctor::fix::identity::apply(
-        root, name, email,
-    ))
+    identity_answer(purlis_core::doctor::fix::identity::apply(root, name, email))
 }
 
 /// The core's answer to the form, as the window reads it.
 fn identity_answer(
-    answer: Result<charter_core::doctor::fix::Fixed, charter_core::doctor::fix::identity::Invalid>,
+    answer: Result<purlis_core::doctor::fix::Fixed, purlis_core::doctor::fix::identity::Invalid>,
 ) -> DoctorIdentityFixed {
-    use charter_core::doctor::fix::FixId;
+    use purlis_core::doctor::fix::FixId;
     match answer {
         Ok(outcome) => DoctorIdentityFixed::Fixed {
             fixed: answered(FixId::GitIdentity, outcome),
@@ -321,7 +319,7 @@ pub(crate) fn report(root: &std::path::Path, full: bool, shipped: &crate::Shippe
     let machine = if full {
         machine(
             shipped,
-            charter_core::plugin_install::Machine::from_env_to_read,
+            purlis_core::plugin_install::Machine::from_env_to_read,
         )
         .ok()
     } else {
@@ -330,7 +328,7 @@ pub(crate) fn report(root: &std::path::Path, full: bool, shipped: &crate::Shippe
     report_in(
         root,
         full,
-        charter_core::machine::config_root_if_there().as_deref(),
+        purlis_core::machine::config_root_if_there().as_deref(),
         machine,
     )
 }
@@ -342,10 +340,10 @@ fn machine(
     from_env: fn(
         std::path::PathBuf,
         Option<std::path::PathBuf>,
-    ) -> Result<charter_core::plugin_install::Machine, String>,
-) -> Result<charter_core::plugin_install::Machine, String> {
+    ) -> Result<purlis_core::plugin_install::Machine, String>,
+) -> Result<purlis_core::plugin_install::Machine, String> {
     let binary = shipped.binary.as_ref().ok_or(
-        "this app has no `charter` beside it for the hooks to run, so nothing was installed",
+        "this app has no `purlis` beside it for the hooks to run, so nothing was installed",
     )?;
     // Resolved, as the `charter` that installed a copy named itself.
     let binary = binary.canonicalize().unwrap_or_else(|_| binary.clone());
@@ -359,7 +357,7 @@ fn report_in(
     root: &std::path::Path,
     full: bool,
     config_root: Option<&std::path::Path>,
-    machine: Option<charter_core::plugin_install::Machine>,
+    machine: Option<purlis_core::plugin_install::Machine>,
 ) -> DoctorReport {
     let doctor = Doctor::at(root, root, false, !full);
     let doctor = match machine {
@@ -374,8 +372,8 @@ fn report_in(
     // remote, as a typed `charter doctor` does (SQ-8). The preflight asks no forge.
     let doctor = if full {
         doctor.asking_forges(
-            charter_core::forge::Caller::window(),
-            std::sync::Arc::new(charter_core::forge::cli::Cli::default()),
+            purlis_core::forge::Caller::window(),
+            std::sync::Arc::new(purlis_core::forge::cli::Cli::default()),
         )
     } else {
         doctor
@@ -401,7 +399,7 @@ fn report_in(
 /// reads its project settings; a chat started in a workspace or a worktree reads that
 /// directory's, and the row says so rather than implying it asked for every chat.
 fn chat_footer(root: &std::path::Path) -> DoctorRow {
-    use charter_core::footerclaim::{Claim, UNSEEN, status_line};
+    use purlis_core::footerclaim::{Claim, UNSEEN, status_line};
 
     const NAME: &str = "chat footer";
     // A row's own words, in the doctor's register. Built here rather than through the core's
@@ -426,7 +424,7 @@ fn chat_footer(root: &std::path::Path) -> DoctorRow {
         // asked would be the shape ADR 0013 refuses.
         Claim::Free => row(
             DoctorStatus::Ok,
-            "charter fills Claude Code's status line in the chats it starts, so each turn's \
+            "purlis fills Claude Code's status line in the chats it starts, so each turn's \
              context and cache are recorded"
                 .to_owned(),
             where_it_looked,
@@ -437,7 +435,7 @@ fn chat_footer(root: &std::path::Path) -> DoctorRow {
         } => row(
             DoctorStatus::Ok,
             format!(
-                "{} already runs charter's own statusline, so turns are recorded and charter \
+                "{} already runs purlis's own statusline, so turns are recorded and purlis \
                  arms none of its own",
                 file.display()
             ),
@@ -449,12 +447,12 @@ fn chat_footer(root: &std::path::Path) -> DoctorRow {
         } => row(
             DoctorStatus::Warn,
             format!(
-                "{} fills Claude Code's status line, so charter arms none of its own and a \
+                "{} fills Claude Code's status line, so purlis arms none of its own and a \
                  chat's ctx/cache gauge stays dark",
                 file.display()
             ),
             format!(
-                "charter will not replace a status line you wrote. Point that one at `charter \
+                "purlis will not replace a status line you wrote. Point that one at `purlis \
                  statusline` — it draws the footer you asked for and records the turn — or \
                  remove the key, and chats started after that record theirs. {where_it_looked}"
             ),
@@ -462,24 +460,24 @@ fn chat_footer(root: &std::path::Path) -> DoctorRow {
         Claim::Suppressed { file, key } => row(
             DoctorStatus::Warn,
             format!(
-                "{} sets {key}, which narrows the status line to a managed one, so charter \
+                "{} sets {key}, which narrows the status line to a managed one, so purlis \
                  arms none and a chat's ctx/cache gauge stays dark",
                 file.display()
             ),
             format!(
                 "Claude Code skips an unmanaged status line under that key without a word, so \
-                 charter does not arm one it knows would be ignored. {where_it_looked}"
+                 purlis does not arm one it knows would be ignored. {where_it_looked}"
             ),
         ),
         Claim::Unknown { file, why } => row(
             DoctorStatus::Warn,
             format!(
-                "not checked (charter could not read {}: {why}), so it armed no status line \
+                "not checked (purlis could not read {}: {why}), so it armed no status line \
                  and a chat's ctx/cache gauge stays dark",
                 file.display()
             ),
             format!(
-                "charter arms a status line only where it can see that nothing else fills it, \
+                "purlis arms a status line only where it can see that nothing else fills it, \
                  so a settings file it cannot read leaves the operator's configuration \
                  untouched. {where_it_looked}"
             ),
@@ -521,24 +519,24 @@ fn event_log(opened: Option<&Result<std::path::PathBuf, crate::EventLogRefused>>
             match refused.kind {
                 ErrorKind::PermissionDenied | ErrorKind::NotFound => {
                     "set CHARTER_DATA_HOME to a directory outside any project or repository, \
-                     and start charter again; every chat works meanwhile"
+                     and start purlis again; every chat works meanwhile"
                 }
                 ErrorKind::WouldBlock => {
-                    "another charter on this machine is writing this device's log; quit it, \
+                    "another purlis on this machine is writing this device's log; quit it, \
                      and start this one again"
                 }
                 ErrorKind::InvalidData => {
-                    "the log holds nothing charter can read; move events.jsonl aside (charter \
-                     never rewrites it), and start charter again"
+                    "the log holds nothing purlis can read; move events.jsonl aside (purlis \
+                     never rewrites it), and start purlis again"
                 }
-                _ => "start charter again; every chat works meanwhile",
+                _ => "start purlis again; every chat works meanwhile",
             }
             .to_owned(),
         ),
         None => row(
             DoctorStatus::Warn,
             "not checked (this app has not opened its event log)".to_owned(),
-            "start charter again; the log is opened as the app starts".to_owned(),
+            "start purlis again; the log is opened as the app starts".to_owned(),
         ),
     }
 }
@@ -572,7 +570,7 @@ mod tests {
         let (_dir, root) = plane();
 
         let drawn = report_in(&root, false, None, None);
-        let printed: serde_json::Value = serde_json::from_str(&charter_core::doctor::json(
+        let printed: serde_json::Value = serde_json::from_str(&purlis_core::doctor::json(
             &Doctor::at(&root, &root, false, true).run(),
         ))
         .expect("the doctor's JSON parses");
@@ -631,7 +629,7 @@ mod tests {
             .join("machine");
         std::fs::create_dir_all(place.join("codex")).expect("a codex home");
         std::fs::write(place.join("charter-bin"), "").expect("a binary");
-        let machine = charter_core::plugin_install::Machine {
+        let machine = purlis_core::plugin_install::Machine {
             claude_config: place.join("claude"),
             codex_home: place.join("codex"),
             opencode_config: place.join("opencode"),
@@ -658,7 +656,7 @@ mod tests {
         assert!(
             done.refused
                 .as_deref()
-                .is_some_and(|why| why.contains("no `charter` beside it")),
+                .is_some_and(|why| why.contains("no `purlis` beside it")),
             "{done:?}"
         );
     }
@@ -667,7 +665,7 @@ mod tests {
     fn the_identity_form_reads_the_cores_answer_as_a_fix_or_as_field_refusals() {
         // The core's answer, not a call: the core writes git's global config, and this
         // process's HOME is the operator's. The write is the core's test, on a temporary home.
-        use charter_core::doctor::fix::{Fixed, identity::Invalid};
+        use purlis_core::doctor::fix::{Fixed, identity::Invalid};
         let refused = Invalid {
             name: vec![],
             email: vec!["not an email".to_owned()],
@@ -705,7 +703,7 @@ mod tests {
 
     #[test]
     fn the_window_shows_each_forge_accounts_request_budget() {
-        use charter_core::forge::budget::{Meter, SystemClock};
+        use purlis_core::forge::budget::{Meter, SystemClock};
         let (_dir, root) = plane();
         let config = tempfile::tempdir().expect("a directory");
         let budget_rows = |report: &DoctorReport| {
@@ -717,8 +715,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(budget_rows(&report_in(&root, false, Some(config.path()), None)).is_empty());
-        let account = charter_core::forge::Account {
-            kind: charter_core::forge::Kind::GitLab,
+        let account = purlis_core::forge::Account {
+            kind: purlis_core::forge::Kind::GitLab,
             host: "gitlab.com".into(),
             login: "octocat".into(),
         };
@@ -769,7 +767,7 @@ mod tests {
             "an absent answer is not health"
         );
         assert!(
-            busy.hint.contains("another charter"),
+            busy.hint.contains("another purlis"),
             "the repair for that reason: {}",
             busy.hint
         );
@@ -785,7 +783,7 @@ mod tests {
         let row = &free.app_rows[0];
         assert_eq!(row.name, "chat footer");
         assert_eq!(row.status, DoctorStatus::Ok);
-        assert!(row.detail.contains("charter fills"), "{row:?}");
+        assert!(row.detail.contains("purlis fills"), "{row:?}");
         // Even green, it says what it did not look at.
         assert!(row.hint.contains("MDM"), "{row:?}");
         // And it is NOT in the table `charter doctor` prints.

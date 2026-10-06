@@ -66,7 +66,7 @@ function chat(
 /**
  * **The machine's layout file**, as the core keeps it: the window's layout as it last wrote it,
  * and the dismissals, which only `set_dismissed` writes, one project at a time, and which a
- * `write_layout` leaves as they are (`charter_core::windowprefs`).
+ * `write_layout` leaves as they are (`purlis_core::windowprefs`).
  */
 const disk: { layout?: Record<string, unknown>; dismissed: Record<string, string[]> } = {
   dismissed: {},

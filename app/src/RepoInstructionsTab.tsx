@@ -18,7 +18,7 @@ import { Choice, SettingActions, SettingRow } from "./settings/components";
  * be written. A file already in memory, or left out — a link, a file too large, one that looks
  * like it holds a secret — is listed with why, and has no box. The core is handed back the text
  * shown here and writes nothing if a file no longer holds it
- * (`charter_core::repoinstructions::import`).
+ * (`purlis_core::repoinstructions::import`).
  *
  * The words are ADR 0072's: a code repo is a "repo", and what is written is the workspace's
  * memory.
@@ -154,7 +154,7 @@ function isTicked(file: InstructionFile, pressed: ReadonlyMap<string, boolean>):
 
 /**
  * Zero-width characters, the bidirectional controls and the Unicode tag block — the characters
- * `charter_core::repoinstructions::is_invisible` names. Text the operator approves goes into
+ * `purlis_core::repoinstructions::is_invisible` names. Text the operator approves goes into
  * every chat's briefing, so the preview draws each one as its code point instead of nothing.
  */
 const INVISIBLE =

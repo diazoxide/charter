@@ -120,7 +120,7 @@ describe("useWorkspaceState", () => {
     // the one an operator has to act on.
     core((cmd, args) => {
       if (cmd === "worktree_list" && args.repo === "svc")
-        throw new Error("charter will not run git through a symlink");
+        throw new Error("purlis will not run git through a symlink");
       return ORDINARY(cmd, args);
     });
 

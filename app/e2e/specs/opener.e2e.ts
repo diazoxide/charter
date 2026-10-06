@@ -140,7 +140,7 @@ describe("opening a project", () => {
     const question = await asking(stranger);
 
     expect(question.first).toBe(true);
-    // The three things charter can enumerate, all present: a plugin, an environment variable,
+    // The three things purlis can enumerate, all present: a plugin, an environment variable,
     // and the program the record would run.
     expect(question.contributes.plugins.map(([name]) => name)).toEqual(["stranger@market"]);
     expect(question.contributes.env).toEqual([["STRANGER_SAYS", "hello"]]);

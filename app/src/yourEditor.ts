@@ -31,7 +31,7 @@ export const EDITORS: readonly { id: YourEditor; name: string; says: string }[] 
   {
     id: "variable",
     name: "$VISUAL or $EDITOR",
-    says: "Run with +line and the file, as charter was started. Pick one that opens a window of its own, such as gvim or emacsclient -c: a terminal editor has no terminal here.",
+    says: "Run with +line and the file, as purlis was started. Pick one that opens a window of its own, such as gvim or emacsclient -c: a terminal editor has no terminal here.",
   },
 ];
 

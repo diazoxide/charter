@@ -499,7 +499,7 @@ describe("a chat the project's instructions changed under", () => {
   });
 
   it("says it cannot tell, on a shell tab nothing has reported on (#1246 review)", async () => {
-    // A harness started by hand in a shell could be mid-turn, and charter would never know.
+    // A harness started by hand in a shell could be mid-turn, and purlis would never know.
     open = [chat(1, "one", { harness: null, profile: null })];
     states = [];
     core();
@@ -509,7 +509,7 @@ describe("a chat the project's instructions changed under", () => {
 
     const question = await screen.findByRole("alertdialog");
     expect(question.textContent).toContain(
-      "one reports no state, so charter cannot tell whether it is mid-turn.",
+      "one reports no state, so purlis cannot tell whether it is mid-turn.",
     );
   });
 

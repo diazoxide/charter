@@ -5,7 +5,7 @@
 //! still holds if that directory is ever wrong: the host reads the peer's uid from the socket
 //! itself and closes a connection whose uid is not its own, unread. A peer whose uid cannot be
 //! read is refused the same way, and so is an unmapped uid on either end. The checks are
-//! `charter_same_user`'s, the same ones each plane's hook socket makes.
+//! `purlis_same_user`'s, the same ones each plane's hook socket makes.
 //!
 //! **The check is a type, not a step to remember.** [`Listener::accept`] hands on a
 //! [`SameUser`], which only it can make, and [`crate::link::serve`] takes nothing else. A host
@@ -19,10 +19,10 @@
 //! So is a peer whose ancestry or session cannot be read. This is the second layer; the first is
 //! that a chat's sandbox denies it the credentials (ADR 0067 §5, class 3).
 
-use charter_same_user::Uid;
+use purlis_same_user::Uid;
 use tokio::net::{UnixListener, UnixStream};
 
-pub use charter_same_user::NotThisUser;
+pub use purlis_same_user::NotThisUser;
 
 /// A connection whose peer runs as this host's own uid. Made only by [`Listener::accept`].
 #[derive(Debug)]
@@ -58,7 +58,7 @@ pub trait Chats: Send + Sync + 'static {
 
     /// Runs a program the check needs: `/bin/ps`, where the kernel's process table is not a
     /// filesystem (everywhere but Linux). Through the host's own gate, so it is started the way
-    /// every program the host starts is (charter-core's fork lock); an error refuses.
+    /// every program the host starts is (purlis-core's fork lock); an error refuses.
     fn run(&self, command: &mut std::process::Command) -> std::io::Result<std::process::Output>;
 }
 
@@ -76,7 +76,7 @@ impl Chats for NoChats {
 }
 
 /// Which of `chats`' programs process `pid` runs inside, if any, read from the kernel off the
-/// async runtime (`charter_same_user::inside_a_chat`). An error is a doubt, and the caller
+/// async runtime (`purlis_same_user::inside_a_chat`). An error is a doubt, and the caller
 /// refuses.
 pub(crate) async fn inside_a_chat<C: Chats>(
     pid: u32,
@@ -87,12 +87,12 @@ pub(crate) async fn inside_a_chat<C: Chats>(
         return Ok(None);
     }
     tokio::task::spawn_blocking(move || {
-        let parents = charter_same_user::Parents::now(|ps| chats.run(ps))?;
-        charter_same_user::inside_a_chat(
+        let parents = purlis_same_user::Parents::now(|ps| chats.run(ps))?;
+        purlis_same_user::inside_a_chat(
             pid,
             &programs,
             |at| parents.of(at),
-            charter_same_user::session_of,
+            purlis_same_user::session_of,
         )
     })
     .await
@@ -116,7 +116,7 @@ impl Listener {
         Listener {
             listener,
             owner: Uid::effective(),
-            identify: charter_same_user::peer_of,
+            identify: purlis_same_user::peer_of,
         }
     }
 
@@ -127,8 +127,8 @@ impl Listener {
     pub async fn accept(&self) -> std::io::Result<Result<SameUser, NotThisUser>> {
         let (stream, _) = self.listener.accept().await?;
         Ok(
-            charter_same_user::admit_peer((self.identify)(&stream), self.owner).and_then(|()| {
-                let (_, pid) = charter_same_user::peer_process_of(&stream)
+            purlis_same_user::admit_peer((self.identify)(&stream), self.owner).and_then(|()| {
+                let (_, pid) = purlis_same_user::peer_process_of(&stream)
                     .map_err(NotThisUser::Unidentified)?;
                 Ok(SameUser { stream, pid })
             }),
@@ -194,7 +194,7 @@ mod tests {
         // not: this test's own connection is then the other user's.
         let ours = Uid::effective();
         let theirs = Uid::from_raw(ours.as_raw().wrapping_add(1));
-        let (refused, client, _dir) = verdict(theirs, charter_same_user::peer_of).await;
+        let (refused, client, _dir) = verdict(theirs, purlis_same_user::peer_of).await;
 
         assert!(
             matches!(refused, Err(NotThisUser::OtherUid { peer, .. }) if peer == ours),

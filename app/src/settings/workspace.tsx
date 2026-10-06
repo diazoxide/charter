@@ -186,7 +186,7 @@ export function workspaceGroups(read: WorkspaceRead, switched: () => void): Sett
     {
       id: "workspace.plugins",
       label: "Plugins",
-      help: "Which harness plugins the chats charter starts in this workspace have on.",
+      help: "Which harness plugins the chats purlis starts in this workspace have on.",
       settings: fromFile(
         "workspace.plugins",
         plugins.flatMap((one) => one.controls),

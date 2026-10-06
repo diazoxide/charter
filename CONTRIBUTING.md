@@ -61,7 +61,7 @@ ticket:
   `cargo fmt --all --check`, clippy with `-D warnings` on the crates you touched, and the test
   files you touched or added. For app changes, also `npm ci`, then typecheck, lint, format and
   the vitest files you touched. A change to recorded behaviour or the CLI also runs
-  `cargo test -p charter-cli --test recorded_behaviour`. README.md's "Develop" has the commands.
+  `cargo test -p purlis-cli --test recorded_behaviour`. README.md's "Develop" has the commands.
 - **A train is one pull request, `train/<date>-<n>`** (for example `train/2026-10-03-1`), that
   stacks the tickets' commits on `main`. CI runs on it once, and it is merged **by rebase**, so
   each ticket stays one commit on `main` and its `Closes #<n>` closes its issue.

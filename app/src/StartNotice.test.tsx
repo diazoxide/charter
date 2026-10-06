@@ -58,8 +58,8 @@ const START_OPTIONS = {
 };
 
 const HIDDEN =
-  "/home/dev/plane/workspaces/alpha/svc/AGENTS.md: not written by charter, and hidden from git " +
-  "status by the /AGENTS.md line charter keeps in that repository's info/exclude.";
+  "/home/dev/plane/workspaces/alpha/svc/AGENTS.md: not written by purlis, and hidden from git " +
+  "status by the /AGENTS.md line purlis keeps in that repository's info/exclude.";
 
 type Asked = { cmd: string; args: Record<string, unknown> };
 

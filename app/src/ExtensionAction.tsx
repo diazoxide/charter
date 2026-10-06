@@ -7,7 +7,7 @@ import { commands, type ActionAnswer, type PlaneId, type RowAction } from "./bin
  * (charter-app#341, ADR 0053).
  *
  * The core decides everything that matters: the gate re-taken at the press, the one process,
- * and the refusal of an action that asks first without a yes (`charter_core::executor::act`).
+ * and the refusal of an action that asks first without a yes (`purlis_core::executor::act`).
  * What the window does is ask — when the action's manifest says to, and always when it deletes
  * (`RowAction.asks_first`, which the core computed) — and say what came back.
  */
@@ -99,8 +99,8 @@ export function AskFirst({
           </AlertDialog.Title>
           <AlertDialog.Description className="came-back">
             {action.deletes
-              ? "It deletes, and charter asks before every action that deletes. What it deletes is its own to say; charter does not stop it."
-              : `${extension} asks charter to ask you before it runs this.`}
+              ? "It deletes, and purlis asks before every action that deletes. What it deletes is its own to say; purlis does not stop it."
+              : `${extension} asks purlis to ask you before it runs this.`}
           </AlertDialog.Description>
           {(trouble ?? seen) !== undefined && (
             <p className="trouble" role="alert">
