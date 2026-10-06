@@ -68,6 +68,7 @@ const OURS: ChatBlocked = {
   offer: "none",
   target: null,
   route: null,
+  levels: [],
 };
 
 /** What `cargo build`'s refused cache write becomes: the chat's own work. */
@@ -238,6 +239,7 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     said: "a connection to an internet host this project does not allow",
     offer: "host",
     target: "api.example.com:443",
+    levels: ["chat", "you", "project"],
   };
 
   it("allows what it shows whole for this chat, then restarts the chat on its conversation", async () => {
@@ -301,6 +303,7 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
         ...THEIRS,
         offer: "write",
         target: "/Users/dev/.cache/cargo",
+        levels: ["chat", "you"],
       }),
     );
     const notice = await screen.findByRole("status", { name: "Sandbox block" });
@@ -380,6 +383,74 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
   });
 });
 
+describe("a block policy forbids offers nothing it forbids and says who forbade it (#1343)", () => {
+  const LOCKED = "Locked by policy, set by Platform team in /etc/purlis/policy.json.";
+  const HOST: ChatBlocked = {
+    ...THEIRS,
+    operation: "connect",
+    kind: "host",
+    said: "a connection to an internet host this project does not allow",
+    offer: "host",
+    target: "api.example.com:443",
+    levels: ["chat", "you", "project"],
+  };
+
+  it("offers Allow only at the levels policy leaves open", async () => {
+    await aChat();
+    await act(() => emit("chat-sandbox-blocked", { ...HOST, levels: ["project"] }));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(within(notice).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
+    await userEvent.click(within(notice).getByRole("button", { name: "Always allow…" }));
+    expect(
+      await screen.findByRole("button", { name: "Allow for everyone in this project" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow for me on this machine" })).toBeNull();
+  });
+
+  it("offers no Allow and no Start without the sandbox, and names the policy and its owner", async () => {
+    const { asked } = await aChat();
+    await act(() =>
+      emit("chat-sandbox-blocked", {
+        ...HOST,
+        offer: "policy",
+        levels: [],
+        route: `api.example.com:443 is not a host policy allows. ${LOCKED} Policy forbids starting this chat without the sandbox too.`,
+      }),
+    );
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(notice).toHaveTextContent("is not a host policy allows");
+    expect(notice).toHaveTextContent(LOCKED);
+    for (const name of [
+      "Allow for this chat",
+      "Always allow…",
+      "Start without the sandbox for this chat",
+    ])
+      expect(within(notice).queryByRole("button", { name })).toBeNull();
+    // Never a dead end in silence: it can still be put away, and nothing was allowed.
+    expect(within(notice).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(asked("allow_sandbox_block")).toEqual([]);
+    expect(asked("restart_chat_without_sandbox")).toEqual([]);
+  });
+
+  it("offers Start without the sandbox, saying why, where policy forbids only the Allow", async () => {
+    await aChat();
+    await act(() =>
+      emit("chat-sandbox-blocked", {
+        ...THEIRS,
+        kind: "home",
+        offer: "unsandboxed",
+        target: "/opt/cache",
+        route: `Policy forbids allowing a chat to write a folder. ${LOCKED}`,
+      }),
+    );
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(notice).toHaveTextContent(LOCKED);
+    expect(
+      within(notice).getByRole("button", { name: "Start without the sandbox for this chat" }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("a restart a chat is owed for a grant (#1342)", () => {
   const HOST: ChatBlocked = {
     ...THEIRS,
@@ -387,6 +458,7 @@ describe("a restart a chat is owed for a grant (#1342)", () => {
     kind: "host",
     offer: "host",
     target: "api.example.com:443",
+    levels: ["chat", "you", "project"],
   };
 
   it("waits for the person where the harness says nothing of its turns", async () => {

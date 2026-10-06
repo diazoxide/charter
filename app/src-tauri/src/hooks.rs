@@ -228,8 +228,12 @@ pub struct ChatBlocked {
     /// person types. The app checks it again before anything is granted.
     pub target: Option<String>,
     /// For [`BlockOffer::Brokered`], the way that works instead; for
-    /// [`BlockOffer::Unsandboxed`], why purlis grants nothing here.
+    /// [`BlockOffer::Unsandboxed`], why purlis grants nothing here; for [`BlockOffer::Policy`],
+    /// what policy forbids, naming the policy and who set it (#1343).
     pub route: Option<String>,
+    /// For [`BlockOffer::Host`] and [`BlockOffer::Write`], the levels Allow may keep it at:
+    /// each a policy does not forbid (#1343).
+    pub levels: Vec<crate::sandboxing::GrantLevel>,
 }
 
 /// What the app does with a sandbox block chat `block.chat`'s hook sent on the project at
@@ -271,11 +275,15 @@ pub type BlockTeller = Arc<dyn Fn(ChatBlocked) + Send + Sync + 'static>;
 /// app does not start is no harness: the line is the chat's own.
 pub fn blocked(plane: &PlaneId, blocked: &purlis_core::hookwire::SandboxBlocked) -> ChatBlocked {
     let block = blocked.sandbox_blocked;
-    let (offer, target, route) = offered(plane.root(), &block, blocked.target.as_deref());
+    let (offer, target, route, levels) = held(
+        &purlis_core::sandbox::policy::Locks::of(plane.root()),
+        offered(plane.root(), &block, blocked.target.as_deref()),
+    );
     ChatBlocked {
         offer,
         target,
         route,
+        levels,
         plane: plane.clone(),
         session: blocked.chat,
         operation: block.operation.word().to_owned(),
@@ -306,6 +314,96 @@ pub enum BlockOffer {
     /// Nothing to allow: purlis's own operation (a bug to report), or a block with nothing a
     /// grant could name.
     None,
+    /// What would be offered is forbidden by policy, and so is starting the chat without the
+    /// sandbox (#1343): nothing is offered, and [`ChatBlocked::route`] names the policy and who
+    /// set it, so the person knows whom to ask.
+    Policy,
+}
+
+/// What a block's Notice offers once `locks`, an administrator's policy (#1343), have their say
+/// on what [`offered`] would offer: the strictest wins.
+///
+/// - Allow is offered only at the levels policy leaves open ([`ChatBlocked::levels`]); a host
+///   named whole is judged as it would be kept at each level.
+/// - Where policy leaves no Allow, or forbids what a Start without the sandbox stood in for,
+///   the Notice offers Start without the sandbox, saying why, unless policy forbids that too:
+///   then it offers nothing and says why ([`BlockOffer::Policy`]). It never dead-ends silently.
+fn held(
+    locks: &purlis_core::sandbox::policy::Locks,
+    (offer, target, route): (BlockOffer, Option<String>, Option<String>),
+) -> (
+    BlockOffer,
+    Option<String>,
+    Option<String>,
+    Vec<crate::sandboxing::GrantLevel>,
+) {
+    use crate::sandboxing::GrantLevel;
+    use purlis_core::sandbox::grant::{self, What};
+    let instead = |target: Option<String>, why: String| match locks.opt_out_refused() {
+        None => (BlockOffer::Unsandboxed, target, Some(why), Vec::new()),
+        Some(_) => (
+            BlockOffer::Policy,
+            target,
+            Some(format!(
+                "{why} Policy forbids starting this chat without the sandbox too."
+            )),
+            Vec::new(),
+        ),
+    };
+    match offer {
+        BlockOffer::Host => {
+            let named = target.as_deref().and_then(|typed| grant::host(typed).ok());
+            let mut why = None;
+            let levels: Vec<GrantLevel> = [GrantLevel::Chat, GrantLevel::You, GrantLevel::Project]
+                .into_iter()
+                .filter(|level| {
+                    let refused = match &named {
+                        Some(host) => {
+                            locks.refuses_grant(&What::Host(host.clone()), (*level).into())
+                        }
+                        // A host the person types is judged once typed; here only the level.
+                        None => (locks.forbids_personal_hosts() && *level != GrantLevel::Project)
+                            .then(|| {
+                                format!("Policy forbids hosts of your own. {}", locks.locked_by())
+                            }),
+                    };
+                    if refused.is_some() && why.is_none() {
+                        why = refused.clone();
+                    }
+                    refused.is_none()
+                })
+                .collect();
+            match (levels.is_empty(), why) {
+                (true, Some(why)) => instead(target, why),
+                _ => (offer, target, route, levels),
+            }
+        }
+        BlockOffer::Write => match locks.write_grants_refused() {
+            Some(why) => instead(target, why),
+            None => (
+                offer,
+                target,
+                route,
+                vec![GrantLevel::Chat, GrantLevel::You],
+            ),
+        },
+        BlockOffer::Unsandboxed => match locks.opt_out_refused() {
+            Some(locked) => (
+                BlockOffer::Policy,
+                target,
+                Some(
+                    format!("{} {locked}", route.unwrap_or_default())
+                        .trim()
+                        .to_owned(),
+                ),
+                Vec::new(),
+            ),
+            None => (offer, target, route, Vec::new()),
+        },
+        BlockOffer::Brokered | BlockOffer::None | BlockOffer::Policy => {
+            (offer, target, route, Vec::new())
+        }
+    }
 }
 
 /// What a block's Notice offers (#1342) for `block`, refused on `target` as the hook read it, in
@@ -1627,6 +1725,7 @@ mod tests {
                 offer: BlockOffer::None,
                 target: None,
                 route: None,
+                levels: Vec::new(),
             }]
         );
         // A harness word purlis does not start is no harness.
@@ -1780,6 +1879,59 @@ mod tests {
             told(Operation::Write, Kind::System, true, Some("/opt/x")),
             (BlockOffer::None, None, false)
         );
+    }
+
+    #[test]
+    fn a_block_s_notice_offers_nothing_policy_forbids_and_says_who_forbade_it() {
+        use crate::sandboxing::GrantLevel;
+        use purlis_core::sandbox::policy::Locks;
+        let policy = |json: &str| Locks::parse(json, Path::new("/etc/purlis/policy.json"));
+        let host = || (BlockOffer::Host, Some("pastebin.example".to_owned()), None);
+        let write = || (BlockOffer::Write, Some("/p/out".to_owned()), None);
+        let socket = || {
+            (
+                BlockOffer::Unsandboxed,
+                None,
+                Some("Not a grant.".to_owned()),
+            )
+        };
+        // No policy: every level, and Start without the sandbox where nothing is granted.
+        assert_eq!(
+            held(&Locks::none(), host()).3,
+            [GrantLevel::Chat, GrantLevel::You, GrantLevel::Project]
+        );
+        assert_eq!(held(&Locks::none(), socket()).0, BlockOffer::Unsandboxed);
+        // Your own hosts forbidden: only everyone in the project.
+        let mine = policy(r#"{"owner": "IT", "sandbox": {"personal-hosts": false}}"#);
+        assert_eq!(held(&mine, host()).3, [GrantLevel::Project]);
+        // A host policy does not allow: no Allow; Start without the sandbox, saying why.
+        let listed = policy(r#"{"owner": "IT", "sandbox": {"hosts": ["*.corp.example"]}}"#);
+        let (offer, _, route, levels) = held(&listed, host());
+        assert_eq!((offer, levels), (BlockOffer::Unsandboxed, Vec::new()));
+        let route = route.expect("why");
+        assert!(route.contains("not a host policy allows"), "{route}");
+        assert!(route.contains("set by IT"), "{route}");
+        // Write grants forbidden: no Allow for a folder.
+        let writes = policy(r#"{"owner": "IT", "sandbox": {"write-grants": false}}"#);
+        assert_eq!(held(&writes, write()).0, BlockOffer::Unsandboxed);
+        // …and with the opt-out forbidden too, nothing is offered, and it still says why.
+        let both = policy(
+            r#"{"owner": "IT", "sandbox": {"write-grants": false, "opt-out": false,
+                "hosts": []}}"#,
+        );
+        for offered in [host(), write(), socket()] {
+            let (offer, _, route, levels) = held(&both, offered);
+            assert_eq!((offer, levels), (BlockOffer::Policy, Vec::new()));
+            let route = route.expect("why");
+            assert!(route.contains("Locked by policy, set by IT"), "{route}");
+        }
+        // What is never granted keeps the way that works, policy or not.
+        let brokered = (
+            BlockOffer::Brokered,
+            None,
+            Some("Use the broker.".to_owned()),
+        );
+        assert_eq!(held(&both, brokered).0, BlockOffer::Brokered);
     }
 
     fn told_block() -> purlis_core::sandboxblock::Block {

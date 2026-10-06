@@ -233,6 +233,7 @@ function core({
                 presets: [],
                 persona_hosts: [],
                 besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+                policy: null,
               }
             : {
                 on: false,
@@ -243,6 +244,7 @@ function core({
                 presets: [],
                 persona_hosts: [],
                 besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+                policy: null,
               };
         case "save_project_settings": {
           const which = given.which as SettingsWhich;

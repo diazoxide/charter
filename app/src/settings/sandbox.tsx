@@ -1,4 +1,4 @@
-import type { SandboxPreset, SandboxState, SettingsFile } from "../bindings";
+import type { SandboxPolicy, SandboxPreset, SandboxState, SettingsFile } from "../bindings";
 import { key, onOffAt, textAt, valueAt, type Control, type Shown } from "./fileControls";
 import type { LiveSetting } from "./groups";
 
@@ -11,6 +11,10 @@ import type { LiveSetting } from "./groups";
  * **Every preset and host is the core's** (`sandbox_state`'s `presets`, from
  * `purlis_core::sandbox::Preset` and `hosts`): nothing here lists a host. Which presets are on is
  * read from the committed file as it stands, so the sentence follows a box as it is ticked.
+ *
+ * **An administrator's policy has the last word** (#1343, ADR 0067 §1): each value it locks is
+ * shown as "Locked by policy", with who set it ({@link SandboxPolicy}'s `locked_by`), and offers
+ * no control. The presets in force are the project's within the policy's.
  */
 
 /** `[sandbox] mode`, which this page turns on and never back off (D-SE17g). */
@@ -29,10 +33,20 @@ const PACKAGES = "toolchains";
  * The presets in force as `shared` stands: those `egress` names, in the core's order; every
  * preset where the file names none, as the core reads a missing `egress` (ADR 0067 §3).
  */
-export function presetsOn(shared: Shown, table: readonly SandboxPreset[]): SandboxPreset[] {
+export function presetsOn(
+  shared: Shown,
+  table: readonly SandboxPreset[],
+  policy: SandboxPolicy | null = null,
+): SandboxPreset[] {
   const value = valueAt(shared, EGRESS);
-  if (value?.kind !== "list") return [...table];
-  return table.filter((preset) => value.value.includes(preset.word));
+  const asked =
+    value?.kind !== "list"
+      ? [...table]
+      : table.filter((preset) => value.value.includes(preset.word));
+  // The strictest wins: a preset the policy does not allow is off, whatever the file says.
+  return policy?.presets == null
+    ? asked
+    : asked.filter((preset) => policy.presets?.includes(preset.word));
 }
 
 /** What the sentence at the top is made from. */
@@ -106,6 +120,7 @@ function capitalised(said: string): string {
  * on writes `mode = "on"`; nothing here takes it back off, and it has no Undo (D-SE17g).
  */
 function modeStatus(sandbox: SandboxState | undefined): Control {
+  const policy = sandbox?.policy ?? null;
   return {
     ...textAt(SANDBOX_MODE, "Sandbox"),
     kind: "status",
@@ -114,7 +129,9 @@ function modeStatus(sandbox: SandboxState | undefined): Control {
     status: (value) =>
       value !== ""
         ? [
-            "On for everyone in this project. To run one chat without it, use that chat's tab.",
+            policy?.opt_out === true
+              ? `On for everyone in this project, and no chat runs without it. ${policy.locked_by}`
+              : "On for everyone in this project. To run one chat without it, use that chat's tab.",
             // The opt-out count is this machine's, and is never sent (ADR 0067 §7, V78 d).
             ...(sandbox?.on === true && sandbox.said !== null
               ? [`${capitalised(sandbox.said)}. Counted on this machine only, and never sent.`]
@@ -130,7 +147,28 @@ function modeStatus(sandbox: SandboxState | undefined): Control {
  * opening to the hosts the core lists for it. Unticking every box writes `[]`, which reaches no
  * host, rather than taking the key out, which would reach every preset.
  */
-function internetAccess(table: readonly SandboxPreset[]): Control {
+function internetAccess(table: readonly SandboxPreset[], policy: SandboxPolicy | null): Control {
+  const allowed = policy?.presets ?? null;
+  const lockedBy = policy?.locked_by ?? "";
+  if (allowed !== null)
+    // Locked: what is on, said, and no box to tick (#1343).
+    return {
+      ...textAt(EGRESS, "Internet access"),
+      kind: "status",
+      hint: "The hosts every chat here may reach, besides the project's own below.",
+      read: (file) =>
+        presetsOn(file, table, policy)
+          .map((preset) => preset.word)
+          .join("\n"),
+      status: (value) => {
+        const on = table.filter((preset) => value.split("\n").includes(preset.word));
+        return `${
+          on.length > 0
+            ? `${listed(on.map((preset) => preset.title))} ${on.length === 1 ? "is" : "are"} on.`
+            : "No preset is on."
+        } ${lockedBy}`;
+      },
+    };
   return {
     id: JSON.stringify(EGRESS),
     label: "Internet access",
@@ -185,7 +223,11 @@ function certificateChecks(): Control {
 
 /** The sandbox's settings kept in the committed file, in the order the page draws them. */
 export function sandboxControls(sandbox: SandboxState | undefined): Control[] {
-  return [modeStatus(sandbox), internetAccess(sandbox?.presets ?? []), certificateChecks()];
+  return [
+    modeStatus(sandbox),
+    internetAccess(sandbox?.presets ?? [], sandbox?.policy ?? null),
+    certificateChecks(),
+  ];
 }
 
 /** What the top says while the core has not said what the sandbox grants (#1340). */
@@ -207,7 +249,7 @@ export function sandboxSentence(
   const cert = valueAt(shared, CERTIFICATE_CHECKS);
   return whatAChatCanDo({
     on,
-    presets: presetsOn(shared, sandbox.presets),
+    presets: presetsOn(shared, sandbox.presets, sandbox.policy),
     projectHosts: sandbox.besides.project_hosts,
     yourHosts: sandbox.besides.your_hosts,
     folders: sandbox.besides.folders,
@@ -231,13 +273,29 @@ const NOTHING: Reach = {
  */
 export function sandboxNotes(shared: Shown, sandbox: SandboxState | undefined): string[] {
   if (valueAt(shared, SANDBOX_MODE) === undefined && sandbox?.on !== true) return [];
+  const policy = sandbox?.policy ?? null;
+  const lockedBy = policy?.locked_by ?? "";
+  const personaLocked = policy?.persona_hosts === true;
+  const allowedHosts = policy?.hosts ?? null;
   return [
     // Reads are confined only by the classes (ADR 0067 §5): your own logins are not hidden.
     "A chat can read any file you can, except vaults and purlis's own keys, so keep secrets in a vault.",
-    ...(sandbox?.persona_hosts ?? []).map(
-      (one) => `A chat as ${one.persona} also reaches ${listed(one.hosts)}.`,
-    ),
-    ...((sandbox?.persona_hosts ?? []).length > 0
+    ...(personaLocked
+      ? (sandbox?.persona_hosts ?? []).map(
+          (one) =>
+            `A chat as ${one.persona} reaches none of its own hosts (${listed(one.hosts)}). ${lockedBy}`,
+        )
+      : (sandbox?.persona_hosts ?? []).map(
+          (one) => `A chat as ${one.persona} also reaches ${listed(one.hosts)}.`,
+        )),
+    ...(allowedHosts !== null
+      ? [
+          allowedHosts.length > 0
+            ? `Only these hosts may be added, by the project or its forges, you, a persona or a block's Allow: ${listed(allowedHosts)}. Any other is not reached. ${lockedBy}`
+            : `No host may be added, by the project or its forges, you, a persona or a block's Allow. ${lockedBy}`,
+        ]
+      : []),
+    ...(!personaLocked && (sandbox?.persona_hosts ?? []).length > 0
       ? [
           // start::grants_persona, D-1362-5 and D-1362-6.
           "A chat that names no persona reaches its default persona's hosts. A chat opened by a handoff may hold the asking chat's hosts, and a Resume the default persona's, until you allow its own on its tab.",
@@ -317,6 +375,31 @@ function alwaysProtected(shared: string, local: string): Reason[] {
   ];
 }
 
+/**
+ * **A value an administrator's policy locks** (#1343), as a row of its own: what it says —
+ * "Locked by policy" and who set it — and no control.
+ */
+export function lockedRow(id: string, label: string, said: string): LiveSetting {
+  return {
+    id,
+    label,
+    help: "",
+    useControl: () => ({
+      grouped: true,
+      control: (ids) => (
+        <p
+          id={ids.id}
+          className="ui-setting-status"
+          aria-labelledby={ids.labelledBy}
+          aria-describedby={ids.describedBy}
+        >
+          {said}
+        </p>
+      ),
+    }),
+  };
+}
+
 /** A read-only list of reasons, as a row of its own. */
 function reasons(id: string, label: string, help: string, items: readonly Reason[]): LiveSetting {
   return {
@@ -351,7 +434,9 @@ export function sandboxReasons(
   sandbox: SandboxState | undefined,
 ): LiveSetting[] {
   const when = valueAt(shared, SANDBOX_MODE) !== undefined ? "" : " Once the sandbox is on.";
-  const caches = presetsOn(shared, sandbox?.presets ?? []).some((one) => one.word === PACKAGES);
+  const caches = presetsOn(shared, sandbox?.presets ?? [], sandbox?.policy ?? null).some(
+    (one) => one.word === PACKAGES,
+  );
   return [
     reasons(
       "project.sandbox.changes",

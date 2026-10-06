@@ -983,6 +983,14 @@ impl Denied {
             }
         }
 
+        // …and this machine's policy (#1343): what an administrator locks is never a chat's to
+        // write, wherever the system lets it be written.
+        deny(
+            Class::HumanPowers,
+            real(&policy::machine_folder()),
+            Access::Write,
+        );
+
         // 5. Later code: the project root's manifests, under every name (#1336); those between
         // the root and the chat's folder are added where the folder is known
         // ([`Applied::form_in`]).
@@ -1077,7 +1085,11 @@ pub fn ancestors_within(path: &Path, root: &Path) -> Vec<PathBuf> {
 ///
 /// A first cut, and SD-4 owns what each preset holds; what a preset does not list is refused
 /// rather than let through.
-pub fn hosts(presets: &[Preset], plane: &Plane) -> Vec<String> {
+///
+/// **A forge's host is the project's choice, not the preset's** (D-1343-10): it is held to
+/// `locks` as a host of the project's own is, so a policy's `hosts` reaches it. A preset's fixed
+/// list is the `presets` lock's, which the caller asks first.
+pub fn hosts(presets: &[Preset], plane: &Plane, locks: &policy::Locks) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut add = |host: &str| {
         if !out.iter().any(|it| it == host) {
@@ -1091,7 +1103,17 @@ pub fn hosts(presets: &[Preset], plane: &Plane) -> Vec<String> {
         }
         if *preset == Preset::Forge {
             for host in plane.forge_hosts() {
-                add(&host);
+                let held = hosts::Host::parse(&host).map_or(true, |host| {
+                    locks
+                        .refuses(&hosts::Granted {
+                            host,
+                            level: hosts::Level::Project,
+                        })
+                        .is_some()
+                });
+                if !held {
+                    add(&host);
+                }
             }
         }
     }
@@ -1120,20 +1142,22 @@ pub fn besides(root: &Path, plane: &Plane, machine: &Machine) -> Besides {
     let Some(policy) = plane.said().policy else {
         return Besides::default();
     };
+    let locks = policy::Locks::of(root);
     Besides {
-        folders: granted_folders(root, machine, &[]).len(),
-        ..counted_hosts(&granted_hosts(&policy, root, &[], &[]))
+        folders: granted_folders(root, machine, &[], &locks).len(),
+        ..counted_hosts(&granted_hosts(&policy, root, &[], &[], &locks))
     }
 }
 
 /// The hosts every level grants a chat in the project at `root`: the project's, this
-/// machine's with `chat`'s own, then `persona`'s, each held to the locks and none an address of
+/// machine's with `chat`'s own, then `persona`'s, each held to `locks` and none an address of
 /// this machine. The one place a chat's start and Settings' count read them ([`besides`]).
 fn granted_hosts(
     policy: &Policy,
     root: &Path,
     persona: &[hosts::Host],
     chat: &[hosts::Host],
+    locks: &policy::Locks,
 ) -> Vec<hosts::Granted> {
     let mut personal = hosts::personal(root);
     for host in chat {
@@ -1142,15 +1166,24 @@ fn granted_hosts(
         }
     }
     hosts::off_this_machine(
-        hosts::in_force(&policy.hosts, &personal, persona, &hosts::Locks::of(root)),
+        hosts::in_force(&policy.hosts, &personal, persona, locks),
         &hosts::own_addresses(),
     )
 }
 
 /// The folders a chat in the project at `root` may write besides its own: `chat`'s and the
-/// ones you let every chat write here, each judged again ([`grant::still_grantable`]). The one
-/// place a chat's start and Settings' count read them ([`besides`]).
-fn granted_folders(root: &Path, machine: &Machine, chat: &[PathBuf]) -> Vec<PathBuf> {
+/// ones you let every chat write here, each judged again ([`grant::still_grantable`]); none
+/// where `locks` forbid write grants (#1343). The one place a chat's start and Settings' count
+/// read them ([`besides`]).
+fn granted_folders(
+    root: &Path,
+    machine: &Machine,
+    chat: &[PathBuf],
+    locks: &policy::Locks,
+) -> Vec<PathBuf> {
+    if locks.forbids_write_grants() {
+        return Vec::new();
+    }
     let mut writes = chat.to_vec();
     writes.extend(local::granted_writes(root));
     grant::still_grantable(&writes, &grant::Ground::of(root, root, machine).place())
@@ -1359,18 +1392,25 @@ impl Compiled {
         persona: Option<&str>,
         chat: &grant::Grants,
     ) -> Self {
-        let mut reached = hosts(&policy.egress, plane);
+        // An administrator's policy (#1343): the strictest value wins, so a preset it does not
+        // allow is off here, whatever the project's file says.
+        let locks = policy::Locks::of(root);
+        let policy = &Policy {
+            egress: locks.presets(&policy.egress),
+            ..policy.clone()
+        };
+        let mut reached = hosts(&policy.egress, plane, &locks);
         let personas = persona::of(&policy.personas, persona)
             .map(|grants| grants.hosts.as_slice())
             .unwrap_or_default();
-        for one in granted_hosts(policy, root, personas, &chat.hosts) {
+        for one in granted_hosts(policy, root, personas, &chat.hosts, &locks) {
             let spelled = one.host.to_string();
             if !reached.contains(&spelled) {
                 reached.push(spelled);
             }
         }
         let denied = Denied::of(root, machine);
-        let writable = granted_folders(root, machine, &chat.writes);
+        let writable = granted_folders(root, machine, &chat.writes, &locks);
         Self {
             widened: Widened::of(policy, machine, root, &denied),
             denied,
@@ -2092,6 +2132,9 @@ pub enum NotStarted {
     /// A config's commands change folder or name scripts more often than purlis follows
     /// ([`planted::MOST_MOVES`], [`planted::MOST_NAMED`]), so what they run is not known.
     Unread(Named),
+    /// A person asked to start the chat without the sandbox, and an administrator's policy
+    /// forbids it (#1343): why, naming the policy and who set it.
+    OptOutLocked(String),
 }
 
 impl NotStarted {
@@ -2229,6 +2272,7 @@ impl fmt::Display for NotStarted {
                 named.file.display(),
                 named.word
             ),
+            Self::OptOutLocked(why) => write!(f, "{why} Nothing was started."),
             Self::NoBackend(missing) => write!(
                 f,
                 "{lead}, and this machine cannot apply the sandbox: {missing}. Nothing was \
@@ -2676,6 +2720,10 @@ pub fn decide_granted(
         return Ok(None);
     }
     if let Some(opt_out) = opt_out {
+        // An administrator's policy may forbid it (#1343, ADR 0067 §7): refused, saying who.
+        if let Some(why) = policy::Locks::of(root).opt_out_refused() {
+            return Err(NotStarted::OptOutLocked(why));
+        }
         return Ok(Some(Decided::Unsandboxed(Lifted {
             by: By::Person,
             reason: opt_out.kept_reason(),
@@ -2745,7 +2793,8 @@ pub fn ahead(
             | NotStarted::CoversItsGround { .. }
             | NotStarted::Unread(_)
             | NotStarted::PlaneUnreadable
-            | NotStarted::PlaneMissing => None,
+            | NotStarted::PlaneMissing
+            | NotStarted::OptOutLocked(_) => None,
         },
     };
     match decide(harness, root, machine, has, None, None) {
@@ -2801,6 +2850,7 @@ pub mod local;
 pub mod opencode;
 pub mod persona;
 pub mod planted;
+pub mod policy;
 pub mod program;
 pub mod seatbelt;
 

@@ -9,6 +9,7 @@ import { forgetGroups } from "./links";
 import { whatAChatCanDo } from "./sandbox";
 import { namedIn } from "./project";
 import type {
+  SandboxPolicy,
   SandboxPreset,
   SandboxState,
   SettingsEdit,
@@ -179,6 +180,7 @@ function state(more: Partial<SandboxState> = {}): SandboxState {
     presets: PRESETS,
     persona_hosts: [],
     besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+    policy: null,
     ...more,
   };
 }
@@ -515,5 +517,102 @@ describe("Settings › Project › Sandbox", () => {
     expect(texts.length).toBeGreaterThan(10);
     const sentences = texts.flatMap((text) => text.split(/(?<=\.)\s+/));
     for (const sentence of sentences) expect(sentence, sentence).toMatch(/^[^a-z]/);
+  });
+});
+
+describe("values an administrator's policy locks (#1343)", () => {
+  const LOCKED = "Locked by policy, set by Platform team in /etc/purlis/policy.json.";
+  const policy = (more: Partial<SandboxPolicy> = {}): SandboxPolicy => ({
+    locked_by: LOCKED,
+    presets: null,
+    hosts: null,
+    personal_hosts: false,
+    persona_hosts: false,
+    opt_out: false,
+    write_grants: false,
+    ...more,
+  });
+
+  it("shows locked presets as locked, with who set them, and no box to tick", async () => {
+    const { sent } = core({ sandbox: state({ policy: policy({ presets: ["model-providers"] }) }) });
+    const page = await atSandbox();
+
+    const access = await within(page).findByRole("group", { name: "Internet access" });
+    expect(access).toHaveTextContent(`AI providers is on. ${LOCKED}`);
+    expect(within(page).queryByRole("checkbox")).toBeNull();
+    expect(within(access).queryByRole("button")).toBeNull();
+    // The strictest wins in the sentence too: only what policy allows is reached.
+    await waitFor(() =>
+      expect(page).toHaveTextContent(
+        "A chat here can change files in the folder it works in, and reach AI providers.",
+      ),
+    );
+    expect(sent).toEqual([]);
+  });
+
+  it("says the opt-out is locked on the mode's status line", async () => {
+    core({ sandbox: state({ policy: policy({ opt_out: true }) }) });
+    const page = await atSandbox();
+
+    const status = await within(page).findByRole("group", { name: "Sandbox" });
+    expect(status).toHaveTextContent(
+      `On for everyone in this project, and no chat runs without it. ${LOCKED}`,
+    );
+    expect(status).not.toHaveTextContent("use that chat's tab");
+  });
+
+  it("says which hosts policy allows, and that a persona's own are locked out", async () => {
+    core({
+      sandbox: state({
+        persona_hosts: [{ persona: "devops", hosts: ["10.0.0.5:6443"] }],
+        policy: policy({ hosts: ["*.corp.example"], persona_hosts: true }),
+      }),
+    });
+    const page = await atSandbox();
+
+    await waitFor(() =>
+      expect(page).toHaveTextContent(
+        `Only these hosts may be added, by the project or its forges, you, a persona or a block's Allow: *.corp.example. Any other is not reached. ${LOCKED}`,
+      ),
+    );
+    expect(page).toHaveTextContent(
+      `A chat as devops reaches none of its own hosts (10.0.0.5:6443). ${LOCKED}`,
+    );
+    expect(page).not.toHaveTextContent("A chat as devops also reaches");
+  });
+
+  it("shows your own hosts as locked, with no Add", async () => {
+    core({ sandbox: state({ policy: policy({ personal_hosts: true }) }) });
+    render(<SettingsTab plane={PLANE} level="project" />);
+    const nav = await screen.findByRole("navigation", { name: "Groups" });
+    await userEvent.click(await within(nav).findByRole("button", { name: "Your hosts" }));
+    const page = await screen.findByRole("region", { name: "Your hosts" });
+
+    expect(page).toHaveTextContent(
+      `Policy forbids hosts of your own, so none reaches a chat here. ${LOCKED}`,
+    );
+    expect(within(page).queryByRole("button", { name: /Add/ })).toBeNull();
+    expect(within(page).queryByRole("textbox")).toBeNull();
+  });
+
+  it("shows the folders chats may be granted as locked where policy forbids write grants", async () => {
+    core({ sandbox: state({ policy: policy({ write_grants: true }) }) });
+    render(<SettingsTab plane={PLANE} level="project" />);
+    const nav = await screen.findByRole("navigation", { name: "Groups" });
+    await userEvent.click(await within(nav).findByRole("button", { name: "Granted" }));
+    const page = await screen.findByRole("region", { name: "Granted" });
+
+    await waitFor(() =>
+      expect(page).toHaveTextContent(`Policy forbids allowing a chat to write a folder. ${LOCKED}`),
+    );
+    expect(within(page).queryByRole("button", { name: "Add folder" })).toBeNull();
+  });
+
+  it("locks nothing without a policy", async () => {
+    core();
+    const page = await atSandbox();
+    await within(page).findByRole("group", { name: "Internet access" });
+    expect(page).not.toHaveTextContent("Locked by policy");
+    expect(within(page).getAllByRole("checkbox").length).toBe(3);
   });
 });

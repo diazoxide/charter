@@ -22,6 +22,9 @@ pub struct SandboxAhead {
     /// SD-30's install command, shown before the person asks for it to be typed: where the
     /// refusal is a program this machine is missing and charter knows its distribution.
     pub install: Option<String>,
+    /// Where policy forbids starting a chat without the sandbox (#1343): why, naming the policy
+    /// and who set it. The picker then offers no opt-out.
+    pub locked: Option<String>,
 }
 
 impl SandboxAhead {
@@ -31,6 +34,7 @@ impl SandboxAhead {
             state: state.to_owned(),
             said,
             install,
+            locked: None,
         };
         match ahead {
             Ahead::Off => None,
@@ -91,6 +95,10 @@ fn ahead_with(
         &os_release(),
         None,
     )?)?;
+    let row = SandboxAhead {
+        locked: sandbox::policy::Locks::of(root).opt_out_refused(),
+        ..row
+    };
     Some(if !approved && row.state == "sandboxed" {
         SandboxAhead {
             said: CHECKED_ONCE_APPROVED.to_owned(),
@@ -127,6 +135,52 @@ pub struct SandboxState {
     /// What every chat here reaches and writes on this machine besides its presets (#1340), as
     /// the core grants it (`sandbox::besides`): none where the sandbox is off.
     pub besides: SandboxBesides,
+    /// An administrator's policy on this machine (#1343): what it locks, and who set it. `null`
+    /// where there is none.
+    pub policy: Option<SandboxPolicy>,
+}
+
+/// An administrator's policy (`sandbox::policy::Locks`), as Settings shows what it locks: each
+/// locked value says [`Self::locked_by`] and offers no control.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SandboxPolicy {
+    /// "Locked by policy, set by <who> in <file>.": said beside every value it locks.
+    pub locked_by: String,
+    /// The presets a project may turn on, by word, where the policy fixes them.
+    pub presets: Option<Vec<String>>,
+    /// The hosts any level may add, where the policy fixes them.
+    pub hosts: Option<Vec<String>>,
+    /// Whether your own hosts on this machine are forbidden.
+    pub personal_hosts: bool,
+    /// Whether a persona's own hosts are forbidden.
+    pub persona_hosts: bool,
+    /// Whether starting a chat without the sandbox is forbidden.
+    pub opt_out: bool,
+    /// Whether every folder a grant would let a chat write is forbidden.
+    pub write_grants: bool,
+}
+
+impl SandboxPolicy {
+    /// What `locks` lock, or none where no policy is in force.
+    pub fn of(locks: &sandbox::policy::Locks) -> Option<Self> {
+        locks.any().then(|| Self {
+            locked_by: locks.locked_by(),
+            presets: locks.fixes_presets().then(|| {
+                locks
+                    .presets(&sandbox::Preset::ALL)
+                    .into_iter()
+                    .map(|preset| preset.word().to_owned())
+                    .collect()
+            }),
+            hosts: locks
+                .allowed_hosts()
+                .map(|hosts| hosts.iter().map(ToString::to_string).collect()),
+            personal_hosts: locks.forbids_personal_hosts(),
+            persona_hosts: locks.forbids_persona_hosts(),
+            opt_out: locks.forbids_opt_out(),
+            write_grants: locks.forbids_write_grants(),
+        })
+    }
 }
 
 /// `sandbox::Besides`, counted for the window.
@@ -170,14 +224,15 @@ pub struct PersonaHosts {
     pub hosts: Vec<String>,
 }
 
-/// Every preset as the project at `plane` would have it reach.
-fn presets_of(plane: &sandbox::Plane) -> Vec<SandboxPreset> {
+/// Every preset as the project at `plane` would have it reach under `locks`: a forge's host a
+/// policy does not allow is not listed (D-1343-10).
+fn presets_of(plane: &sandbox::Plane, locks: &sandbox::policy::Locks) -> Vec<SandboxPreset> {
     sandbox::Preset::ALL
         .into_iter()
         .map(|preset| SandboxPreset {
             word: preset.word().to_owned(),
             title: preset.title().to_owned(),
-            hosts: sandbox::hosts(&[preset], plane),
+            hosts: sandbox::hosts(&[preset], plane, locks),
         })
         .collect()
 }
@@ -219,6 +274,7 @@ fn state_of(root: &std::path::Path) -> SandboxState {
 fn state_on(root: &std::path::Path, os: sandbox::Os) -> SandboxState {
     let plane = sandbox::Plane::read(root);
     let on = plane.said().policy.is_some();
+    let locks = sandbox::policy::Locks::of(root);
     SandboxState {
         on,
         offer: sandbox::local::offer_due(root),
@@ -229,9 +285,10 @@ fn state_on(root: &std::path::Path, os: sandbox::Os) -> SandboxState {
             removed: change.removed,
             now: change.now,
         }),
-        presets: presets_of(&plane),
+        presets: presets_of(&plane, &locks),
         persona_hosts: persona_hosts_of(&plane),
         besides: sandbox::besides(root, &plane, &sandbox::Machine::this()).into(),
+        policy: SandboxPolicy::of(&locks),
     }
 }
 
@@ -287,6 +344,20 @@ pub struct GrantsHeld {
     pub from: Option<String>,
     /// The persona it was opened as, whose hosts it cannot reach yet.
     pub persona: Option<String>,
+    /// Where an administrator's policy forbids a persona's own hosts (#1343): why, naming the
+    /// policy and who set it. Allowing them would reach nothing, so the Notice offers no Allow.
+    pub locked: Option<String>,
+}
+
+/// Why a persona's own hosts reach no chat in the project at `root`, where policy says so.
+pub(crate) fn persona_hosts_locked(root: &std::path::Path) -> Option<String> {
+    let locks = sandbox::policy::Locks::of(root);
+    locks.forbids_persona_hosts().then(|| {
+        format!(
+            "Policy forbids a persona's own hosts. {}",
+            locks.locked_by()
+        )
+    })
 }
 
 /// Whether chat `session` holds the asking chat's persona grants instead of its own, and whose
@@ -299,10 +370,15 @@ pub fn persona_grants_held(
     session: u32,
 ) -> Result<Option<GrantsHeld>, String> {
     let held = planes.held(&plane)?;
+    let locked = persona_hosts_locked(held.root());
     Ok(held
         .chats()
         .grants_held(session)
-        .map(|(from, persona)| GrantsHeld { from, persona }))
+        .map(|(from, persona)| GrantsHeld {
+            from,
+            persona,
+            locked,
+        }))
 }
 
 /// The person allowed chat `session` its own persona's grants from its tab's Notice (#1362):
@@ -593,12 +669,9 @@ fn allow(
             What::Write(grant::write(target, &ground.place()).map_err(|why| why.to_string())?)
         }
     };
-    if let What::Host(host) = &what
-        && let Some(why) = sandbox::hosts::Locks::of(root).refuses(&sandbox::hosts::Granted {
-            host: host.clone(),
-            level: level.hosts_level(),
-        })
-    {
+    // Policy (#1343): the strictest wins, for a host at the level it would be kept at, and for
+    // any folder at all.
+    if let Some(why) = sandbox::policy::Locks::of(root).refuses_grant(&what, level) {
         return Err(why);
     }
     let target = what.target();
@@ -956,6 +1029,10 @@ fn list_folder(
     machine: &sandbox::Machine,
     folder: &str,
 ) -> Result<GrantableListed, String> {
+    // Policy (#1343): a folder listed here is one a chat may be granted, which it forbids.
+    if let Some(why) = sandbox::policy::Locks::of(root).write_grants_refused() {
+        return Err(why);
+    }
     let ground = sandbox::grant::Ground::of(root, root, machine);
     let folder =
         sandbox::grant::grantable(folder, &ground.place()).map_err(|why| why.to_string())?;
@@ -993,6 +1070,33 @@ pub fn unlist_grantable_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- an administrator's policy (#1343), through the test build's seam ----
+
+    #[test]
+    fn a_persona_s_hosts_locked_by_policy_say_who_locked_them_and_no_policy_reads_none() {
+        use sandbox::policy::{Locks, set_for_this_test};
+        let root = std::path::Path::new("/home/dev/plane");
+        // A test build never reads this machine's file: no policy until a test sets one.
+        assert_eq!(persona_hosts_locked(root), None);
+        assert_eq!(state_on_policy(root), None);
+        set_for_this_test(Locks::parse(
+            r#"{"owner": "IT", "sandbox": {"persona-hosts": false}}"#,
+            std::path::Path::new("/etc/purlis/policy.json"),
+        ));
+        let said = persona_hosts_locked(root).expect("locked");
+        set_for_this_test(Locks::none());
+        assert_eq!(
+            said,
+            "Policy forbids a persona's own hosts. Locked by policy, set by IT in \
+             /etc/purlis/policy.json."
+        );
+    }
+
+    /// What Settings is told of the policy for the project at `root`.
+    fn state_on_policy(root: &std::path::Path) -> Option<SandboxPolicy> {
+        SandboxPolicy::of(&sandbox::policy::Locks::of(root))
+    }
 
     // ---- a block's Allow, and the Granted list (#1342, #1348) ----
 
@@ -1220,6 +1324,7 @@ mod tests {
                 state: "refused".to_owned(),
                 said: "socat is not installed".to_owned(),
                 install: Some("sudo apt install socat".to_owned()),
+                locked: None,
             })
         );
     }
@@ -1261,7 +1366,7 @@ mod tests {
         let plane = sandbox::Plane::of(Some(
             "[sandbox]\nmode = \"on\"\n\n[[forge]]\nkind = \"gitlab\"\nhost = \"git.example.org\"\n",
         ));
-        let shown = presets_of(&plane);
+        let shown = presets_of(&plane, &sandbox::policy::Locks::none());
         assert_eq!(
             shown
                 .iter()
@@ -1274,7 +1379,10 @@ mod tests {
             ]
         );
         for (one, preset) in shown.iter().zip(sandbox::Preset::ALL) {
-            assert_eq!(one.hosts, sandbox::hosts(&[preset], &plane));
+            assert_eq!(
+                one.hosts,
+                sandbox::hosts(&[preset], &plane, &sandbox::policy::Locks::none())
+            );
         }
         assert!(shown[1].hosts.contains(&"git.example.org".to_owned()));
         assert!(!shown[0].hosts.contains(&"git.example.org".to_owned()));
@@ -1308,9 +1416,13 @@ mod tests {
                 said: None,
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
-                presets: presets_of(&sandbox::Plane::read(project.path())),
+                presets: presets_of(
+                    &sandbox::Plane::read(project.path()),
+                    &sandbox::policy::Locks::none(),
+                ),
                 persona_hosts: Vec::new(),
                 besides: SandboxBesides::default(),
+                policy: None,
             }
         );
 
@@ -1327,9 +1439,13 @@ mod tests {
                 ),
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
-                presets: presets_of(&sandbox::Plane::read(project.path())),
+                presets: presets_of(
+                    &sandbox::Plane::read(project.path()),
+                    &sandbox::policy::Locks::none(),
+                ),
                 persona_hosts: Vec::new(),
                 besides: SandboxBesides::default(),
+                policy: None,
             }
         );
     }
@@ -1349,9 +1465,13 @@ mod tests {
                 said: None,
                 never: never_here(sandbox::Os::this()),
                 hosts_changed: None,
-                presets: presets_of(&sandbox::Plane::read(project.path())),
+                presets: presets_of(
+                    &sandbox::Plane::read(project.path()),
+                    &sandbox::policy::Locks::none(),
+                ),
                 persona_hosts: Vec::new(),
                 besides: SandboxBesides::default(),
+                policy: None,
             }
         );
         assert_eq!(

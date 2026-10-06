@@ -119,6 +119,7 @@ function core({
             presets: [],
             persona_hosts: [],
             besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+            policy: null,
           };
         case "add_sandbox_host": {
           const host = given.host as string;

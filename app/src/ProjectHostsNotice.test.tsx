@@ -26,6 +26,7 @@ const QUIET: SandboxState = {
   presets: [],
   persona_hosts: [],
   besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+  policy: null,
 };
 
 const CHANGED: SandboxState = {

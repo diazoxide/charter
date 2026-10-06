@@ -49,6 +49,7 @@ import { GRANTED, grantedGroup } from "./GrantedList";
 import { onAMac } from "../tabKeys";
 import {
   SANDBOX_MODE,
+  lockedRow,
   sandboxControls,
   sandboxNotes,
   sandboxReasons,
@@ -529,25 +530,52 @@ function declaredGroups(read: ProjectRead): SettingsGroup[] {
       // The sentence at the top (#1340): what a chat here can do, as the files stand now.
       help: sandboxSentence(read.shared, read.sandbox, onAMac()),
       notes: sandboxNotes(read.shared, read.sandbox),
+      // The mode, and any value an administrator's policy locks (#1343), is a status line:
+      // nothing here takes it back, moves it or resets it.
       settings: fromShared("project.sandbox", sandboxControls(read.sandbox)).map((one) =>
-        same(one.key, SANDBOX_MODE) ? { ...one, oneWay: true } : one,
+        same(one.key, SANDBOX_MODE) || one.kind === "status" ? { ...one, oneWay: true } : one,
       ),
       ...(sharedOk ? { collection: hostsCollection(read.shared, "hosts") } : {}),
       after: sharedOk ? sandboxReasons(read.shared, read.local, read.sandbox) : [],
     },
     ...(localOk
       ? [
-          {
-            id: MY_HOSTS,
-            label: "Your hosts",
-            help: `Hosts your chats here reach besides the project's, on this machine only. Kept in ${read.local.file}.`,
-            settings: [],
-            collection: hostsCollection(read.local, "myHosts"),
-            sub: true,
-          },
+          read.sandbox?.policy?.personal_hosts === true
+            ? {
+                // Locked by policy (#1343): said, with who set it, and no Add or Remove.
+                id: MY_HOSTS,
+                label: "Your hosts",
+                help: `Hosts your chats here would reach besides the project's, on this machine only.`,
+                settings: [
+                  lockedRow(
+                    `${MY_HOSTS}.locked`,
+                    "Your hosts",
+                    `Policy forbids hosts of your own, so none reaches a chat here. ${read.sandbox.policy.locked_by}`,
+                  ),
+                ],
+                sub: true,
+              }
+            : {
+                id: MY_HOSTS,
+                label: "Your hosts",
+                help: `Hosts your chats here reach besides the project's, on this machine only. Kept in ${read.local.file}.`,
+                settings: [],
+                collection: hostsCollection(read.local, "myHosts"),
+                sub: true,
+              },
         ]
       : []),
-    ...(read.plane !== undefined ? [grantedGroup(read.plane, read.shared.file)] : []),
+    ...(read.plane !== undefined
+      ? [
+          grantedGroup(
+            read.plane,
+            read.shared.file,
+            read.sandbox?.policy?.write_grants === true
+              ? `Policy forbids allowing a chat to write a folder. ${read.sandbox.policy.locked_by}`
+              : null,
+          ),
+        ]
+      : []),
     {
       id: "project.forges",
       label: "Forges",
