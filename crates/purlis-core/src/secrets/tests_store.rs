@@ -1150,6 +1150,135 @@ fn a_plain_file_vault_that_is_a_link_is_never_read() {
     assert!(plain_file::get(&ctx, &v, "K").is_err());
 }
 
+/// #1321: a vault file inside the project's state folder is gated from the trust root, as the
+/// registry halves are, and not from its own directory: the state folder is charter's own, so
+/// a `.charter/` that is itself a link is refused for the vault in it — read, set, delete and
+/// health — whether the vault's `file` is recorded relative or absolute. Nothing lands where
+/// the link points, and nothing is read from there.
+#[test]
+fn a_vault_in_a_state_folder_that_is_a_link_is_refused() {
+    for provider in ["plain-file", "reference"] {
+        let (tmp, ctx) = registry_plane();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(elsewhere.path().join("vaults")).unwrap();
+        chmod(&elsewhere.path().join("vaults"), 0o700);
+        let planted = elsewhere.path().join("vaults/a.json");
+        std::fs::write(&planted, r#"{"K": "op://planted/item/field"}"#).unwrap();
+        // Loose on purpose: a read that tightened it would have changed a file it may not reach.
+        chmod(&planted, 0o644);
+        std::os::unix::fs::symlink(elsewhere.path(), tmp.path().join(".charter")).unwrap();
+        let absolute = tmp.path().join(".charter/vaults/a.json");
+
+        for file in [".charter/vaults/a.json", absolute.to_str().unwrap()] {
+            let v = vault("a", provider, json!({"file": file}));
+            let read = match provider {
+                "plain-file" => plain_file::keys(&ctx, &v),
+                _ => reference::keys(&ctx, &v),
+            };
+            assert!(read.is_err(), "{provider} {file} read through .charter");
+            let got = match provider {
+                "plain-file" => plain_file::get(&ctx, &v, "K"),
+                _ => reference::reference_for(&ctx, &v, "K").map(|v| v.to_string()),
+            };
+            assert!(
+                got.is_err(),
+                "{provider} {file} handed out through .charter"
+            );
+            let set = match provider {
+                "plain-file" => plain_file::set(&ctx, &v, "NEW", "v", day("2026-10-06")),
+                _ => reference::set(&ctx, &v, "NEW", "op://x/y/z"),
+            };
+            assert!(set.is_err(), "{provider} {file} written through .charter");
+            let delete = match provider {
+                "plain-file" => plain_file::delete(&ctx, &v, "K"),
+                _ => reference::delete(&ctx, &v, "K"),
+            };
+            assert!(
+                delete.is_err(),
+                "{provider} {file} deleted through .charter"
+            );
+            let (ok, _) = match provider {
+                "plain-file" => plain_file::health(&ctx, &v),
+                _ => reference::health(&ctx, &v),
+            };
+            assert!(!ok, "{provider} {file} counted through .charter");
+        }
+        assert_eq!(
+            std::fs::read_to_string(&planted).unwrap(),
+            r#"{"K": "op://planted/item/field"}"#
+        );
+        assert_eq!(
+            mode_of(&planted),
+            0o644,
+            "{provider}: chmodded through .charter"
+        );
+        let mut there: Vec<_> = std::fs::read_dir(elsewhere.path().join("vaults"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        there.sort();
+        assert_eq!(there, ["a.json"], "{provider}");
+    }
+}
+
+/// #1321: a state folder that is a link to an EMPTY folder is refused by the health check too,
+/// not reported as a vault not created yet: the existence test would follow the link.
+#[test]
+fn a_health_check_through_a_state_folder_linked_to_an_empty_folder_is_refused() {
+    for provider in ["plain-file", "reference"] {
+        let (tmp, ctx) = registry_plane();
+        let empty = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(empty.path(), tmp.path().join(".charter")).unwrap();
+        let v = vault("a", provider, json!({"file": ".charter/vaults/a.json"}));
+
+        let (ok, said) = match provider {
+            "plain-file" => plain_file::health(&ctx, &v),
+            _ => reference::health(&ctx, &v),
+        };
+
+        assert!(!ok, "{provider}: {said}");
+        assert!(!said.contains("not created yet"), "{provider}: {said}");
+        assert!(said.contains("symlink"), "{provider}: {said}");
+    }
+}
+
+/// #1321: a vault the operator keeps OUTSIDE the state folder is still gated from its own
+/// directory: the folders above it are the operator's choice, and may be links honestly.
+#[test]
+fn a_vault_outside_the_state_folder_may_sit_below_a_link() {
+    let (tmp, ctx) = registry_plane();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), tmp.path().join("secrets")).unwrap();
+    let v = vault("a", "plain-file", json!({"file": "secrets/a.json"}));
+
+    plain_file::set(&ctx, &v, "K", "v", day("2026-10-06")).unwrap();
+
+    assert_eq!(plain_file::get(&ctx, &v, "K").unwrap(), "v");
+    assert!(elsewhere.path().join("a.json").is_file());
+}
+
+/// #1321: a state folder `$PURLIS_HOME` puts outside the project is the operator's own choice
+/// of directory, gated from itself (as the registry halves are), so it may be a link.
+#[test]
+fn a_vault_in_a_state_folder_set_elsewhere_may_be_reached_through_that_folders_link() {
+    let plane = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let links = tempfile::tempdir().unwrap();
+    let home = links.path().join("home");
+    std::os::unix::fs::symlink(elsewhere.path(), &home).unwrap();
+    let ctx = Ctx::new(
+        plane.path(),
+        Env::of(&[("PURLIS_HOME", home.to_str().unwrap())]),
+    );
+    let file = home.join("vaults/a.json");
+    let v = vault("a", "plain-file", json!({"file": file.to_str().unwrap()}));
+
+    plain_file::set(&ctx, &v, "K", "v", day("2026-10-06")).unwrap();
+
+    assert_eq!(plain_file::get(&ctx, &v, "K").unwrap(), "v");
+    assert!(elsewhere.path().join("vaults/a.json").is_file());
+}
+
 /// #440: a keyring vault's key index that is a link is never read.
 #[test]
 fn a_keyring_index_that_is_a_link_is_never_read() {

@@ -127,6 +127,38 @@ fn a_plain_file_vault_is_read_and_written_where_rename_local_moved_it() {
     );
 }
 
+/// #1321: a record that names the vault's file by its ABSOLUTE path in the project's state
+/// folder — hand-edited, or from an older build — follows the folder too, and a write lands in
+/// the moved file rather than starting a second vault at the old spelling.
+#[test]
+fn an_absolute_vault_file_in_the_state_folder_follows_it_where_rename_local_moved_it() {
+    purlis_core::unsteered!();
+    let m = machine();
+    let absolute = m.plane.join(".charter").join("vaults").join("app.json");
+    std::fs::write(
+        m.plane.join(".charter/vaults.json"),
+        serde_json::json!({"vaults": {
+            "app": {"provider": "plain-file", "config": {"file": absolute}}
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    assert!(renamelocal::run(&m.local, &nobody_running()).complete);
+    assert!(!m.plane.join(".charter").exists());
+
+    let ctx = ctx(&m);
+    let app = registry::vault(&ctx, "app").unwrap();
+    assert_eq!(plain_file::get(&ctx, &app, "TOKEN").unwrap(), "s3cret");
+
+    plain_file::set(&ctx, &app, "NEW", "value", day()).unwrap();
+    let moved = std::fs::read_to_string(m.plane.join(".purlis/vaults/app.json")).unwrap();
+    assert!(moved.contains("NEW") && moved.contains("s3cret"), "{moved}");
+    assert!(
+        !m.plane.join(".charter").exists(),
+        "a write never starts a second vault at the old spelling"
+    );
+}
+
 #[test]
 fn a_reference_vault_is_read_where_rename_local_moved_it() {
     purlis_core::unsteered!();
