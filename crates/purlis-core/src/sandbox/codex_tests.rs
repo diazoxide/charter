@@ -843,6 +843,50 @@ fn the_wrap_allows_codex_no_unix_socket_but_the_hook_socket() {
     );
 }
 
+/// #1336: a Codex chat in `ws/repo` is denied the manifests at the root, in `ws` and in its own
+/// folder, by path, and no rule names a manifest at any depth.
+#[test]
+fn a_codex_chat_is_denied_the_manifests_of_its_folder_and_those_above_it_only() {
+    let plane = plane_saying(ON);
+    let repo = plane.path().join("ws/repo");
+    std::fs::create_dir_all(repo.join("sub")).expect("a repo");
+    let home = tempfile::tempdir().expect("a home");
+    let applied = for_start(
+        Harness::Codex,
+        plane.path(),
+        &machine_at(home.path(), Os::MacOs),
+        &|_| true,
+    )
+    .expect("starts")
+    .expect("sandboxed");
+    let confinement = applied.confine().expect("confined").expect("a wrap");
+    let profile = line_in(&applied, &repo, "", &confinement)
+        .expect("starts")
+        .args[1]
+        .clone();
+    let root = real(plane.path());
+    let denies = |path: &Path| {
+        profile.contains(&format!(
+            "(deny file-write* (subpath \"{}\"))",
+            path.display()
+        ))
+    };
+    for name in MANIFESTS {
+        for folder in [root.clone(), root.join("ws"), root.join("ws/repo")] {
+            assert!(
+                denies(&folder.join(name)),
+                "{}: {profile}",
+                folder.display()
+            );
+        }
+        assert!(!denies(&root.join("ws/repo/sub").join(name)), "{profile}");
+        assert!(
+            !profile.contains(&name.replace('.', "\\\\.")),
+            "{name}: {profile}"
+        );
+    }
+}
+
 /// The wrap, applied for real: what a Codex chat could do under Codex's own sandbox, measured
 /// in earlier rounds, refused under charter's.
 #[cfg(target_os = "macos")]
@@ -923,6 +967,33 @@ mod live {
             }
         }
         out
+    }
+
+    #[test]
+    fn a_wrapped_codex_chat_writes_a_manifest_only_where_it_cannot_change_a_chats_sandbox() {
+        // #1336: below its folder and in its temp folder, yes; in its folder, `ws` and the
+        // root, never, nor moved into place.
+        let wrapped = Wrapped::new();
+        let repo = wrapped.plane.path().join("ws/repo");
+        std::fs::create_dir_all(&repo).expect("a repo");
+        let line = wrapped.line(&repo);
+        for name in MANIFESTS {
+            for allowed in [
+                format!("mkdir -p sub && echo x > sub/{name}"),
+                format!("mkdir -p \"$TMPDIR/x\" && echo x > \"$TMPDIR/x/{name}\""),
+            ] {
+                assert!(ran_in(&line, &repo, &allowed), "{allowed} was refused");
+            }
+            for refused in [
+                format!("echo x > {name}"),
+                format!("echo x > ../{name}"),
+                format!("echo x > ../../{name}"),
+                format!("mv sub/{name} {name}"),
+            ] {
+                assert!(!ran_in(&line, &repo, &refused), "{refused} was let through");
+            }
+            assert!(!repo.join(name).exists(), "{name}");
+        }
     }
 
     #[test]

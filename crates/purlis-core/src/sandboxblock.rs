@@ -144,7 +144,8 @@ pub enum Kind {
     /// purlis's state folder at the project root (`.purlis/` or `.charter/`).
     ProjectState,
     /// A file a later program loads code or settings from, which the sandbox protects
-    /// wherever it is (`.git/config`, `.vscode`, a manifest; `sandbox::PLANTED`).
+    /// wherever it is (`.git/config`, `.vscode`; `sandbox::PLANTED`), or a project manifest
+    /// where it could change a chat's sandbox (`sandbox::manifests_held`).
     ProtectedFile,
     /// The chat's own folder.
     ChatFolder,
@@ -521,6 +522,14 @@ pub fn kind_of(path: &Path, place: &Place<'_>) -> Kind {
         let dir = lexical(dir);
         path.starts_with(&dir) || unprivate(&path).starts_with(unprivate(&dir))
     };
+    // A manifest where the sandbox holds one: at the root, or in a folder from the chat's up to
+    // it (#1336).
+    if crate::sandbox::manifests_held(place.root, Some(place.chat))
+        .iter()
+        .any(|held| unprivate(&path) == unprivate(&lexical(&held.path)))
+    {
+        return Kind::ProtectedFile;
+    }
     // Under either spelling of the state folder: the one the project has may not be the one
     // a chat was refused writing.
     if crate::names::STATE_DIR

@@ -29,7 +29,8 @@
 //! `.opencode`, `.codex`, `.envrc` and `charter.toml`. With each name added to `denyWrite` as
 //! `**/<name>`, every one was refused at any depth, and an ordinary file was still written.
 //! `.claude/skills`, `tui.json`, `tui.jsonc` and `.agents`, added later (#1057), are held by
-//! the same `**/<name>` rule.
+//! the same `**/<name>` rule. The project's manifests are not (#1336): they are denied by path,
+//! at the project root and in each folder from the chat's up to it ([`Settings::denying`]).
 //! What it does not hold: a command moved a directory holding a `config` into a nested
 //! clone's `.git` (measured), and no glob can deny the `.git` itself without denying what git
 //! writes below it (#1065).
@@ -108,18 +109,7 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
     let mut deny_write = Vec::new();
     let mut read_rules = Vec::new();
     let mut edit_rules = Vec::new();
-    // Each denied path as written, and as the kernel names it where that differs: a path
-    // through a link (a linked `~/.config`, `/tmp`, `/var`) is denied by both names, so a rule
-    // matches whichever name the sandbox or a tool compares (FD-27).
-    let names = compiled.denied.paths.iter().flat_map(|denial| {
-        let resolved = super::real(&denial.path);
-        let mut both = vec![(denial, denial.path.clone())];
-        if resolved != denial.path {
-            both.push((denial, resolved));
-        }
-        both
-    });
-    for (denial, path) in names {
+    for (denial, path) in names_of(&compiled.denied.paths) {
         let path = path.display().to_string();
         let rooted = format!("/{path}");
         if denial.access == Access::ReadWrite {
@@ -241,4 +231,48 @@ impl Settings {
         }
         out
     }
+
+    /// These settings with `denied` denied too, after the compiled rules: each path as written
+    /// and as the kernel names it where that differs, to the sandbox and to the Read and Edit
+    /// tools, as [`settings`] writes the compiled ones. The manifests between the project root
+    /// and the chat's folder, which only the place the chat opens knows (#1336).
+    pub fn denying(&self, denied: &[super::Denial]) -> Settings {
+        let mut out = self.clone();
+        for (denial, path) in names_of(denied) {
+            let path = path.display().to_string();
+            let filesystem = &mut out.sandbox["filesystem"];
+            if denial.access == Access::ReadWrite {
+                if let Some(list) = filesystem["denyRead"].as_array_mut() {
+                    list.push(json!(path));
+                }
+                out.deny.push(format!("Read(/{path})"));
+                out.deny.push(format!("Read(/{path}/**)"));
+            }
+            if let Some(list) = filesystem["denyWrite"].as_array_mut() {
+                list.push(json!(path));
+            }
+            out.deny.push(format!("Edit(/{path})"));
+            out.deny.push(format!("Edit(/{path}/**)"));
+        }
+        out
+    }
+}
+
+/// Each of `denied` under every name a rule on it is written by: as written, and as the kernel
+/// names it where that differs, so a path through a link (a linked `~/.config`, `/tmp`, `/var`)
+/// is denied by both names and a rule matches whichever name the sandbox or a tool compares
+/// (FD-27); and, where its last part is a link, that link in its folder as the kernel names
+/// it, so the link itself is held as well as its target ([`super::seatbelt::held_names`], #1336).
+fn names_of(denied: &[super::Denial]) -> Vec<(&super::Denial, std::path::PathBuf)> {
+    let mut out = Vec::new();
+    for denial in denied {
+        let mut names = vec![denial.path.clone()];
+        for name in super::seatbelt::held_names(&denial.path) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        out.extend(names.into_iter().map(|name| (denial, name)));
+    }
+    out
 }

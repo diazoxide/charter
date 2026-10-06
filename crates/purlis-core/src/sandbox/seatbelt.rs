@@ -54,6 +54,21 @@ pub fn quote(path: &Path) -> Result<String, &'static str> {
     string(&real(path).display().to_string())
 }
 
+/// The names a rule on `path` is written under: as the kernel names it, and, where its last part
+/// is a link, that link itself in the folder as the kernel names it. A rule on the target alone
+/// would let the link be removed and a file made in its place (#1336).
+pub fn held_names(path: &Path) -> Vec<PathBuf> {
+    let resolved = real(path);
+    let mut out = vec![resolved.clone()];
+    if let (Some(folder), Some(name)) = (path.parent(), path.file_name()) {
+        let itself = real(folder).join(name);
+        if itself != resolved {
+            out.push(itself);
+        }
+    }
+    out
+}
+
 /// `text` with every regular-expression character escaped.
 pub fn escaped(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -212,7 +227,12 @@ pub fn profile(
             Access::ReadWrite => "file-read* file-write*",
             Access::Write => "file-write*",
         };
-        line(format!("(deny {what} (subpath {}))", quote(&denial.path)?));
+        for name in held_names(&denial.path) {
+            line(format!(
+                "(deny {what} (subpath {}))",
+                string(&name.display().to_string())?
+            ));
+        }
     }
     // Each directory between the chat's own and a denied path, as an entry only, so it is never
     // moved away with the denied path in it, nor replaced (measured: a plane-root chat could

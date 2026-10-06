@@ -29,8 +29,7 @@
     harness's project config runs;
   - shell startup files;
   - `.mcp.json`;
-  - Claude Code's, Codex's, opencode's and editors' project config;
-  - `charter.toml` and `charter.local.toml`.
+  - Claude Code's, Codex's, opencode's and editors' project config.
 
   As a result, a sandboxed opencode chat can no longer create a git repository, or clone one,
   inside its directory. What Claude Code's own sandbox still lets through is listed in
