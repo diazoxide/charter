@@ -128,10 +128,11 @@ line where two old names would read the same afterwards, which is left for a per
   a file such as `0056-the-repo-named-charter-is-the-app.md` keeps its name. Its path is
   linked from commit messages, pull requests and issues that will not be rewritten, and from
   the docs site, so a rename would break every one of those links for no reader's benefit.
-- **D-RN11b-2: crate names and crate paths in the docs follow the crates.** Until the last
-  train renames them, the docs still say `charter-core` and `crates/charter-core/…`, so every
-  link out of `docs/` resolves and the docs site's link check passes. That train renames these
-  paths in the docs in the same change.
+- **D-RN11b-2: crate names and crate paths in the docs follow the crates.** The crates became
+  `purlis-core` and `purlis-cli` (`crates/purlis-core/…`) in the same change as the docs
+  rename (RN-13), so the docs name them as they are, every link out of `docs/` resolves and
+  the docs site's link check passes. The ADRs written before it keep the crate names they
+  were written with; only their links' paths moved.
 - **D-RN11b-3 and D-RN11b-8: the docs rename only prose.** Any identifier the code still
   spells `charter` stays exactly as the code spells it today: paths, folder names, file names,
   environment variables without a `PURLIS_` spelling, labels, sockets, the bundle id
