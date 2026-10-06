@@ -2130,6 +2130,46 @@ fn log_the_rename(renamed: &charter_core::renamelocal::Moved) {
     }
 }
 
+/// Ends this launch, said in a dialog, when the app under its old identifier is running beside it
+/// (`renamelocal::busy::older_app_at_launch`). The update's restart, whose parent is the old app,
+/// is let through. Asked for a few seconds first, since an old app quitting may still be letting
+/// go of its endpoint.
+///
+/// **Before Tauri is built**, with the dialog the dialog plugin draws through (`rfd`): the
+/// plugin's blocking show waits on the event loop, which does not run until `setup` returns,
+/// so asked from `setup` it would never return; and returning from `setup` early would leave
+/// the window and the app's state half made.
+#[cfg(not(feature = "e2e"))]
+fn refuse_beside_the_old_app() {
+    use charter_core::renamelocal::busy;
+    let places = busy::Places::here();
+    let parent = busy::parent_program();
+    let own = charter_core::names::BUNDLE_ID.write;
+    let older = || busy::older_app_at_launch(&places, own, parent.as_deref());
+    let mut found = older();
+    for _ in 0..30 {
+        if found.is_none() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        found = older();
+    }
+    let Some(why) = found else {
+        return;
+    };
+    tracing::error!("{} ({why})", busy::OLDER_APP_RUNNING);
+    let said = busy::OLDER_APP_RUNNING
+        .strip_prefix("charter: ")
+        .unwrap_or(busy::OLDER_APP_RUNNING);
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("purlis")
+        .set_description(said)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+    std::process::exit(1);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Before anything else, chats included: the host has no controlling terminal, because a
@@ -2188,6 +2228,10 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     portal::start_clear_of_a_silent_portal();
     reached("the desktop portal is asked");
+    // The app under its old name, still running beside this one (RN-9): the two identifiers
+    // are two single-instance names, so this launch would not be handed to it.
+    #[cfg(not(feature = "e2e"))]
+    refuse_beside_the_old_app();
     let commands = commands();
 
     #[cfg(debug_assertions)]
@@ -2290,30 +2334,6 @@ pub fn run() {
             // when it is stale on the promise that no second app is running.
             #[cfg(target_os = "linux")]
             instance::one_per_user(app);
-            // The app under its old name, still running beside this one (RN-9): the two have
-            // different single-instance names, so this launch would not be handed to it.
-            // Said, and this launch ends, before it opens anything. Asked for a few seconds
-            // first: the update from the old app restarts into this one, and the old one may
-            // still be letting go of its endpoint as this starts.
-            let places = charter_core::renamelocal::busy::Places::here();
-            let older =
-                || charter_core::renamelocal::busy::older_app(&places, &app.config().identifier);
-            let mut found = older();
-            for _ in 0..30 {
-                if found.is_none() {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                found = older();
-            }
-            if let Some(why) = found {
-                tracing::error!(
-                    "{} ({why})",
-                    charter_core::renamelocal::busy::OLDER_APP_RUNNING
-                );
-                app.handle().cleanup_before_exit();
-                std::process::exit(1);
-            }
             // This machine's local state moves to the purlis names (RN-5, V93f): after the
             // single-instance handoff and the one-per-user lock, so a second launch never
             // migrates, and before any project, chat or watch opens a file under one. Anything
