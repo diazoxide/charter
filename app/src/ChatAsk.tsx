@@ -1,5 +1,4 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
-import type { State } from "./chatState";
 
 /**
  * **The question a chat Notice asks before it does what cannot be taken back** (NO-3): Forget
@@ -27,7 +26,8 @@ export function ChatAsk({
   says: string;
   /** The button that does it: its verb. */
   answer: string;
-  /** What the answer would interrupt, said beside what it does ({@link midTurnWarning}). */
+  /** What the answer would interrupt (`oneChatMidTurn`), said as part of the description, so it
+   *  is announced with it. */
   warns?: string;
   /** The core's refusal of the last answer. */
   trouble?: string;
@@ -49,8 +49,14 @@ export function ChatAsk({
         <AlertDialog.Overlay className="asking" />
         <AlertDialog.Content className="warning" onCloseAutoFocus={onCloseAutoFocus}>
           <AlertDialog.Title>{title}</AlertDialog.Title>
-          <AlertDialog.Description className="honest">{says}</AlertDialog.Description>
-          {warns && <p className="honest mid-turn">{warns}</p>}
+          {/* One description holding both, so a screen reader announces the warning with what
+              the answer does (#1246 review). */}
+          <AlertDialog.Description asChild>
+            <div>
+              <p className="honest">{says}</p>
+              {warns && <p className="honest mid-turn">{warns}</p>}
+            </div>
+          </AlertDialog.Description>
           {trouble && (
             <p className="trouble" role="alert">
               {trouble}
@@ -77,19 +83,6 @@ export function ChatAsk({
       </AlertDialog.Portal>
     </AlertDialog.Root>
   );
-}
-
-/**
- * **What ending a chat's program would interrupt** (#1246), as the quit warning says it
- * (`MidTurnSaid`): a chat the board says is mid-turn, and one whose harness reports nothing, so
- * charter cannot tell. Nothing for a chat that is waiting, done or failed, nor for a shell
- * nothing has reported on (`state` undefined).
- */
-export function midTurnWarning(name: string, state: State | undefined): string | undefined {
-  if (state === "running") return `${name} is mid-turn, and the turn will be interrupted.`;
-  if (state === "unknown")
-    return `${name} reports no state, so charter cannot tell whether it is mid-turn.`;
-  return undefined;
 }
 
 /**

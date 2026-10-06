@@ -337,6 +337,33 @@ describe("the keyboard after a Forget (#1246)", () => {
   });
 });
 
+describe("the keyboard after a Cancel (#1246 review)", () => {
+  it("goes back to the Notice's Forget this chat…, after a refusal too", async () => {
+    waiting = [{ id: "id-ide", name: "ide", why: "no such directory: /home/dev/gone" }];
+    core();
+    render(<App />);
+    await screen.findByText(/did not start/);
+    const forgetOn = () =>
+      within(notice("chat-did-not-start:id-ide") as HTMLElement).getByRole("button", {
+        name: "Forget this chat…",
+      });
+
+    await userEvent.click(forgetOn());
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }),
+    );
+    await waitFor(() => expect(document.activeElement).toBe(forgetOn()));
+
+    refuse.forget_chat_that_did_not_start = "the record could not be written";
+    await userEvent.click(forgetOn());
+    const question = await screen.findByRole("alertdialog");
+    await userEvent.click(within(question).getByRole("button", { name: "Forget chat" }));
+    await within(question).findByRole("alert");
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(document.activeElement).toBe(forgetOn()));
+  });
+});
+
 describe("how a chat came back", () => {
   it("is news that can be dismissed: resumed, or back as a new chat", async () => {
     open = [chat(1, "one", { harness: "claude-code", fresh: "no conversation was recorded" })];
@@ -467,8 +494,39 @@ describe("a chat the project's instructions changed under", () => {
     await userEvent.click(await screen.findByRole("button", { name: /Start chat one fresh/ }));
 
     expect((await screen.findByRole("alertdialog")).textContent).toContain(
-      "one is mid-turn, and the turn will be interrupted.",
+      "one is mid-turn and will be interrupted.",
     );
+  });
+
+  it("says it cannot tell, on a shell tab nothing has reported on (#1246 review)", async () => {
+    // A harness started by hand in a shell could be mid-turn, and charter would never know.
+    open = [chat(1, "one", { harness: null, profile: null })];
+    states = [];
+    core();
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Start chat one fresh/ }));
+
+    const question = await screen.findByRole("alertdialog");
+    expect(question.textContent).toContain(
+      "one reports no state, so charter cannot tell whether it is mid-turn.",
+    );
+  });
+
+  it("announces the turn it interrupts as part of the question's description (#1246 review)", async () => {
+    states = [{ session: 1, state: "running" }];
+    core();
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Start chat one fresh/ }));
+
+    const question = await screen.findByRole("alertdialog");
+    const described = (question.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(described).toContain("one is mid-turn and will be interrupted.");
+    expect(described).toContain("Its program ends");
   });
 
   it("asks without a word about a turn on a chat that is waiting for you (#1246)", async () => {

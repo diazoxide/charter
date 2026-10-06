@@ -136,6 +136,19 @@ export function mightBeMidTurn(chat: Ending): boolean {
   return chat.state === "running" || chat.state === "unknown";
 }
 
+/**
+ * **What ending one chat's program would interrupt**, in the one wording every question that
+ * ends a chat uses: the quit warning's rows below, and Start fresh's question (`ChatAsk`, #1246).
+ * A chat that says it is mid-turn, and one that reports no state, so charter cannot tell. Nothing
+ * for a chat that is waiting, done or failed.
+ */
+export function oneChatMidTurn(name: string, state: State): string | undefined {
+  if (state === "running") return `${name} is mid-turn and will be interrupted.`;
+  if (state === "unknown")
+    return `${name} reports no state, so charter cannot tell whether it is mid-turn.`;
+  return undefined;
+}
+
 /** What the chats about to be ended are doing: which are mid-turn, and which cannot say. */
 export function MidTurnSaid({ chats }: { chats: readonly Ending[] }) {
   const running = chats.filter((chat) => chat.state === "running");
@@ -145,7 +158,7 @@ export function MidTurnSaid({ chats }: { chats: readonly Ending[] }) {
       {running.length > 0 && (
         <p className="honest mid-turn" role="alert">
           {running.length === 1
-            ? `${running[0].name} is mid-turn and will be interrupted.`
+            ? oneChatMidTurn(running[0].name, "running")
             : `${running.length} sessions are mid-turn and will be interrupted.`}
         </p>
       )}
@@ -155,7 +168,7 @@ export function MidTurnSaid({ chats }: { chats: readonly Ending[] }) {
             could be mid-turn and charter would never know — saying "nothing is running"
             over the top of it would be the app claiming something it cannot see. */}
           {unknown.length === 1
-            ? `${unknown[0].name} reports no state, so charter cannot tell whether it is mid-turn.`
+            ? oneChatMidTurn(unknown[0].name, "unknown")
             : `${unknown.length} sessions report no state, so charter cannot tell whether they are mid-turn.`}
         </p>
       )}
