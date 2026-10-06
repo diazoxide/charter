@@ -68,6 +68,12 @@
 //! * **#345** — a `cd` only moves the later segments for certain when its failure would stop them
 //!   (the shell's own `cd`, joined by `&&`); any other `cd` adds a directory the shell may be in
 //!   and keeps the one it was in ([`Whereabouts`]).
+//! * **#1323** — a directory git is sent to (`-C`, `--git-dir`, `--work-tree`, `GIT_DIR`,
+//!   `GIT_WORK_TREE`, a wrapper's chdir flag) is read the way the shell hands it over: `~` is
+//!   `$HOME`, and a word the guard cannot name (`$VAR`, a glob, `~user`) may be the root
+//!   ([`invocation_readings`]), refused with a sentence of its own. The Python joined the word
+//!   to the cwd as written. And a subject that IS the root's git directory reaches the root,
+//!   wherever that directory lives.
 
 use crate::gitconfig;
 use crate::memstore::py_strip;
@@ -381,6 +387,10 @@ pub struct RootInvocation {
     pub sub: String,
     pub post: Vec<String>,
     pub pre: Vec<String>,
+    /// It reaches the root only through a directory the guard cannot name before the shell runs
+    /// (`cd "$X"`, `git -C "$X"`, a glob, `cd -`): it MAY act on the root, so it is refused, and
+    /// the denial says that rather than claiming it does (#1323).
+    pub unnamed: bool,
 }
 
 /// The plane root as the walk recognises it: by IDENTITY, never by spelling (#346).
@@ -426,6 +436,11 @@ impl TheRoot {
         let Some((root_gd, root_gd_id)) = &self.git_dir else {
             return false;
         };
+        // The root's git directory itself, wherever it lives: `--git-dir=<it>` moves the root's
+        // HEAD as surely as standing in the root does.
+        if same_dir(&t, root_gd, *root_gd_id) {
+            return true;
+        }
         gitconfig::git_dir_at(&t).is_some_and(|gd| same_dir(&resolved(&gd), root_gd, *root_gd_id))
     }
 }
@@ -535,6 +550,11 @@ struct CdContext {
     /// `CDPATH` is in play — set on the line, or in the environment the shell inherits — so a
     /// relative name may resolve somewhere else entirely.
     cdpath: bool,
+    /// The line quotes or escapes a `~` (`'~`, `"~`, `\~`, or a quote right after one), so a
+    /// separated `~` word the reader hands over unquoted may be one the shell leaves alone: a
+    /// directory named `~`, not `$HOME` (#1323). Read from the text, before anything runs, so a
+    /// `~` the same line creates is covered too.
+    quotes_tilde: bool,
 }
 
 impl CdContext {
@@ -551,6 +571,11 @@ impl CdContext {
             sets_home: cmd.contains("HOME"),
             cdpath: cmd.contains("CDPATH")
                 || std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty()),
+            // `$'…'` too: ANSI-C quoting spells a `~` as `$'\x7e'` or `$'\176'`, which the
+            // reader decodes and the raw text never shows.
+            quotes_tilde: ["'~", "\"~", "\\~", "~'", "~\"", "~\\", "$'"]
+                .iter()
+                .any(|quoted| cmd.contains(quoted)),
         }
     }
 }
@@ -597,24 +622,38 @@ fn cd_destinations(
     if dest.contains(['$', '*', '?', '[', '{', '`']) {
         return anywhere();
     }
-    let dest = if dest == "~" || dest.starts_with("~/") {
+    if dest == "~" || dest.starts_with("~/") {
         if line.sets_home {
             return anywhere();
         }
-        match std::env::var("HOME") {
-            Ok(home) if is_abs(&home) => format!("{home}{}", &dest[1..]),
-            _ => return anywhere(),
+        let Some(home) = std::env::var("HOME").ok().filter(|h| is_abs(h)) else {
+            return anywhere();
+        };
+        let mut out = cd_to(format!("{home}{}", &dest[1..]), here, line);
+        // A quoted or escaped `~` stays a directory named `~`, and the reader has taken the
+        // quoting off: on a line that shows one, both are where the shell may go (#1323).
+        if line.quotes_tilde {
+            out.merge(cd_to(dest, here, line));
         }
-    } else if dest.starts_with('~') {
+        return out;
+    }
+    if dest.starts_with('~') {
         return anywhere();
-    } else {
-        dest
-    };
+    }
+    cd_to(dest, here, line)
+}
+
+/// Where a `cd` to the named `dest` sends the shell from `here` — [`cd_destinations`] once the
+/// word is read: `CDPATH`, and both readings of a `..`.
+fn cd_to(dest: String, here: &Whereabouts, line: &CdContext) -> Whereabouts {
     if !is_abs(&dest) {
         let walks_cdpath =
             !(dest == "." || dest == ".." || dest.starts_with("./") || dest.starts_with("../"));
         if walks_cdpath && line.cdpath {
-            return anywhere();
+            return Whereabouts {
+                dirs: Vec::new(),
+                anywhere: true,
+            };
         }
     }
     let mut out = Whereabouts {
@@ -639,6 +678,117 @@ fn cd_destinations(
     out
 }
 
+/// The most `~` words one invocation's directories are read both ways for. Each doubles the
+/// readings; past this many the invocation is one the guard cannot name.
+const MAX_TILDE_WORDS: usize = 4;
+
+/// How the shell hands git one directory word: the readings it may become, or `None` when the
+/// guard cannot name it (#1323).
+///
+/// `None` is a word the shell expands later — `$`, a command substitution, a glob, a brace — or a
+/// `~user`, or a `~` when the line may set `HOME` or `HOME` is not absolute. These are the
+/// destinations [`cd_destinations`] cannot name either. A `~` or `~/…` is `$HOME`, as the shell
+/// expands it unquoted in a word of its own. The reader has taken the quoting off, though, so a
+/// `'~'` or `\~` arrives looking the same and stays a directory named `~`: `literal` keeps that
+/// reading as well, and the caller sets it wherever the shell may leave the `~` alone.
+fn directory_readings(word: &str, literal: bool, line: &CdContext) -> Option<Vec<String>> {
+    if word.contains(['$', '`', '*', '?', '[', '{']) {
+        return None;
+    }
+    if !word.starts_with('~') {
+        return Some(vec![word.to_string()]);
+    }
+    if !(word == "~" || word.starts_with("~/")) || line.sets_home {
+        return None;
+    }
+    let home = std::env::var("HOME").ok().filter(|h| is_abs(h))?;
+    let expanded = format!("{home}{}", &word[1..]);
+    Some(if literal {
+        vec![word.to_string(), expanded]
+    } else {
+        vec![expanded]
+    })
+}
+
+/// One reading of an invocation's directory words: git's own options, its environment, and a
+/// wrapper's chdir flag, as [`git_target`] and the walk take them.
+type Reading = (Vec<String>, Vec<String>, String);
+
+/// Every way one invocation's directory words may reach git — `(pre, env, chdir)` with each word
+/// replaced by one of its [`directory_readings`] — or `None` when one of them cannot be named.
+///
+/// The words are git's own `-C`, `--git-dir` and `--work-tree` (separated or attached), the
+/// `GIT_DIR`/`GIT_WORK_TREE` it inherits, and a wrapper's chdir flag. Nothing else in `pre` or
+/// `env` is read: a `$` in `-c x.y=$V` names no directory.
+fn invocation_readings(
+    pre: &[String],
+    env: &[String],
+    chdir: &str,
+    chdir_separated: bool,
+    line: &CdContext,
+) -> Option<Vec<Reading>> {
+    // A separated word's `~` stays literal only when quoted or escaped, which the reader cannot
+    // see in the word but the line's text shows ([`CdContext::quotes_tilde`]). An attached `--git-dir=~`, an
+    // assignment's value (zsh leaves `GIT_DIR=~/x` alone after `env`) and an attached wrapper
+    // chdir flag (`env --chdir=~` and `env -C~` leave it alone everywhere) keep both always.
+    // Every word that names a directory: where it is, and its readings.
+    enum At {
+        Pre(usize, &'static str),
+        Env(usize, &'static str),
+        Chdir,
+    }
+    let mut words: Vec<(At, Vec<String>)> = Vec::new();
+    let mut i = 0usize;
+    while i < pre.len() {
+        let tok = pre[i].as_str();
+        if matches!(tok, "-C" | "--git-dir" | "--work-tree") {
+            if let Some(val) = pre.get(i + 1) {
+                let literal = line.quotes_tilde;
+                words.push((At::Pre(i + 1, ""), directory_readings(val, literal, line)?));
+            }
+            i += 2;
+            continue;
+        }
+        for prefix in ["--git-dir=", "--work-tree="] {
+            if let Some(val) = tok.strip_prefix(prefix) {
+                words.push((At::Pre(i, prefix), directory_readings(val, true, line)?));
+            }
+        }
+        i += if GIT_VALUE_OPTS.contains(&tok) { 2 } else { 1 };
+    }
+    for (j, assign) in env.iter().enumerate() {
+        for prefix in ["GIT_DIR=", "GIT_WORK_TREE="] {
+            if let Some(val) = assign.strip_prefix(prefix) {
+                words.push((At::Env(j, prefix), directory_readings(val, true, line)?));
+            }
+        }
+    }
+    if !chdir.is_empty() {
+        let literal = !chdir_separated || line.quotes_tilde;
+        words.push((At::Chdir, directory_readings(chdir, literal, line)?));
+    }
+    if words.iter().filter(|(_, r)| r.len() > 1).count() > MAX_TILDE_WORDS {
+        return None;
+    }
+    let mut out = vec![(pre.to_vec(), env.to_vec(), chdir.to_string())];
+    for (at, readings) in &words {
+        let mut next = Vec::new();
+        for (p, e, c) in &out {
+            for reading in readings {
+                let (mut p, mut e, mut c) = (p.clone(), e.clone(), c.clone());
+                match at {
+                    At::Pre(k, prefix) => p[*k] = format!("{prefix}{reading}"),
+                    At::Env(k, prefix) => e[*k] = format!("{prefix}{reading}"),
+                    At::Chdir => c = reading.clone(),
+                }
+                next.push((p, e, c));
+            }
+        }
+        out = next;
+    }
+    Some(out)
+}
+
 /// Every git invocation in `cmd` that acts on the PLANE ROOT — `_plane_root_git`, the walk both
 /// guards share, so the two of them share one pair of eyes.
 ///
@@ -654,7 +804,8 @@ fn cd_destinations(
 ///   program — ADDS its destination and keeps the directory the shell was in (#345).
 /// * **A wrapper's own chdir flag** (`env -C`, `sudo --chdir`) moves git as a `cd` would.
 /// * **Any** subject being the root is enough ([`git_target`]), from any directory the shell may
-///   be in.
+///   be in, and under every reading of the directory words git is sent to; a word the guard
+///   cannot name puts the invocation on the root (#1323).
 pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
     let Some(segments) = shellseg::joined_argv(cmd) else {
         return Vec::new();
@@ -687,24 +838,37 @@ pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
             if let Some((sub, post)) = rest.split_first() {
                 // `before + env`, in that order: an assignment on THIS invocation overrides an
                 // export.
-                let on_root = here.anywhere
-                    || here.dirs.iter().any(|dir| {
-                        let dir = if chdir.is_empty() {
-                            dir.clone()
-                        } else {
-                            join_dir(dir, &chdir) // `env -C`, `sudo --chdir`
-                        };
-                        git_target(&dir, &pre, &inherited).iter().any(|t| {
-                            the_root
-                                .get_or_init(|| TheRoot::of(root))
-                                .is_reached_from(t)
+                // `env -C ~/x` hands the shell a word of its own; `env --chdir=~/x` does not.
+                let chdir_separated = seg
+                    .argv
+                    .windows(2)
+                    .any(|w| matches!(w[0].as_str(), "-C" | "-D" | "--chdir") && w[1] == chdir);
+                let readings =
+                    invocation_readings(&pre, &inherited, &chdir, chdir_separated, &context);
+                let named = readings.as_ref().is_some_and(|readings| {
+                    readings.iter().any(|(pre, inherited, chdir)| {
+                        here.dirs.iter().any(|dir| {
+                            let dir = if chdir.is_empty() {
+                                dir.clone()
+                            } else {
+                                join_dir(dir, chdir) // `env -C`, `sudo --chdir`
+                            };
+                            git_target(&dir, pre, inherited).iter().any(|t| {
+                                the_root
+                                    .get_or_init(|| TheRoot::of(root))
+                                    .is_reached_from(t)
+                            })
                         })
-                    });
-                if on_root {
+                    })
+                });
+                // Fail closed: a directory the guard cannot name may be the root (#1323).
+                let unnamed = !named && (here.anywhere || readings.is_none());
+                if named || unnamed {
                     out.push(RootInvocation {
                         sub: sub.clone(),
                         post: post.to_vec(),
                         pre,
+                        unnamed,
                     });
                 }
             }
@@ -1064,68 +1228,77 @@ pub fn plane_root_branch_reason(cmd: &str, cwd: &str, root: &str) -> Option<Stri
         }
 
         let want0 = wants.first().cloned().unwrap_or_default();
-        let opening = match kind {
-            OperandKind::Both => format!(
-                "cannot tell what `git checkout {want0}` does in the PLANE ROOT — it is \
+        let opening = if inv.unnamed {
+            format!(
+                "cannot tell which repository this `git {sub}` acts on: a directory it is sent \
+                 to is named only when the shell runs it (a variable, a command substitution, a \
+                 glob, `~user`, `cd -`), so it may be the PLANE ROOT. Spell the path out and \
+                 purlis checks it: `git -C <path>` and `cd <path> && git …` are both read. "
+            )
+        } else {
+            match kind {
+                OperandKind::Both => format!(
+                    "cannot tell what `git checkout {want0}` does in the PLANE ROOT — it is \
                  AMBIGUOUS: '{want0}' is both a tracked path here and a name git \
                  resolves to a commit, so it could be a file restore or a ref move, and \
                  git breaks that tie in favour of the REF — this would switch the root. \
                  Say which you meant and it runs: `git restore {want0}` (or \
                  `git checkout -- {want0}`) restores the file, and purlis allows that \
                  here in either spelling. "
-            ),
-            OperandKind::Neither => format!(
-                "would move HEAD in the PLANE ROOT: '{want0}' is not a path this tree \
+                ),
+                OperandKind::Neither => format!(
+                    "would move HEAD in the PLANE ROOT: '{want0}' is not a path this tree \
                  tracks, so `git checkout` reads it as a revision — and a branch of that \
                  name on a remote is checked out here as a new local branch. (Meant the \
                  file? `git restore {want0}` is allowed, and would tell you git has \
                  never heard of that path either.) "
-            ),
-            OperandKind::Unknown => format!(
-                "would move HEAD in the PLANE ROOT — purlis could not ask git whether \
+                ),
+                OperandKind::Unknown => format!(
+                    "would move HEAD in the PLANE ROOT — purlis could not ask git whether \
                  '{want0}' is a path or a revision here, and a guard that opened \
                  because it failed to ask is no guard. "
-            ),
-            _ => match &unplaced {
-                Some(unplaced) if !creating && !detaching => {
-                    let hint = if wants.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            "(A restore needs no options here: `git restore {want0}` and \
+                ),
+                _ => match &unplaced {
+                    Some(unplaced) if !creating && !detaching => {
+                        let hint = if wants.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                "(A restore needs no options here: `git restore {want0}` and \
                              `git checkout -- {want0}` are both allowed.) "
-                        )
-                    };
-                    format!(
-                        "cannot read this `git {sub}` as a file restore in the PLANE ROOT: it does \
+                            )
+                        };
+                        format!(
+                            "cannot read this `git {sub}` as a file restore in the PLANE ROOT: it does \
                          not recognise the option '{unplaced}', and an option purlis cannot place \
                          is one that may move HEAD — `git checkout --orphan <file>` reads exactly \
                          like a restore and creates a branch. Only a form purlis can show is a \
                          restore opens that gate. {hint}"
-                    )
-                }
-                _ => {
-                    let created = if creating {
-                        created_branch(&opts, &classes, &wants).filter(|c| !c.is_empty())
-                    } else {
-                        None
-                    };
-                    let moving = if let Some(created) = created {
-                        format!("create '{created}'")
-                    } else if creating {
-                        "create a branch".to_string()
-                    } else if detaching && !wants.is_empty() {
-                        format!("detach HEAD at '{want0}'")
-                    } else if detaching {
-                        "detach HEAD".to_string()
-                    } else if !wants.is_empty() {
-                        format!("switch to '{want0}'")
-                    } else {
-                        "switch branches".to_string()
-                    };
-                    format!("would {moving} in the PLANE ROOT. ")
-                }
-            },
+                        )
+                    }
+                    _ => {
+                        let created = if creating {
+                            created_branch(&opts, &classes, &wants).filter(|c| !c.is_empty())
+                        } else {
+                            None
+                        };
+                        let moving = if let Some(created) = created {
+                            format!("create '{created}'")
+                        } else if creating {
+                            "create a branch".to_string()
+                        } else if detaching && !wants.is_empty() {
+                            format!("detach HEAD at '{want0}'")
+                        } else if detaching {
+                            "detach HEAD".to_string()
+                        } else if !wants.is_empty() {
+                            format!("switch to '{want0}'")
+                        } else {
+                            "switch branches".to_string()
+                        };
+                        format!("would {moving} in the PLANE ROOT. ")
+                    }
+                },
+            }
         };
         let back = match default.as_deref().filter(|d| !d.is_empty()) {
             Some(d) => format!(

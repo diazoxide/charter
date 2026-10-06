@@ -528,3 +528,390 @@ fn python_int_reads_what_rev_list_writes_and_nothing_else() {
     assert_eq!(py_int("x"), None);
     assert_eq!(py_int(""), None);
 }
+
+/// A plane root, a session directory inside it, and a scratch clone of the root OUTSIDE it — the
+/// layout of #1323. With `linked`, each repository keeps its git directory beside it and has a
+/// `.git` FILE naming it (`git clone --separate-git-dir`), the layout a scratch clone often has.
+struct Scratch {
+    _dir: tempfile::TempDir,
+    root: String,
+    session: String,
+    clone: String,
+}
+
+fn scratch(linked: bool) -> Scratch {
+    scratch_with(linked, linked)
+}
+
+/// [`scratch`] with the root's and the clone's layouts chosen apart.
+fn scratch_with(root_linked: bool, clone_linked: bool) -> Scratch {
+    let dir = tempfile::tempdir().unwrap();
+    let base = crate::pypath::realpath(dir.path().to_str().unwrap());
+    let root = format!("{base}/plane");
+    let clone = format!("{base}/scratch/clone");
+    let session = format!("{root}/workspaces/w");
+    std::fs::create_dir_all(format!("{base}/scratch")).unwrap();
+    let b = std::path::Path::new(&base);
+    let r = std::path::Path::new(&root);
+    let beside = |repo: &str| format!("--separate-git-dir={repo}.gitdir");
+    let mut init = vec!["init", "-q", "-b", "main"];
+    let root_gd = beside(&root);
+    if root_linked {
+        init.push(&root_gd);
+    }
+    init.push(&root);
+    git(b, &init);
+    std::fs::write(r.join("README"), "r\n").unwrap();
+    git(r, &["add", "README"]);
+    git(r, &["commit", "-q", "-m", "one"]);
+    git(r, &["branch", "feature"]);
+    std::fs::create_dir_all(&session).unwrap();
+    let mut cl = vec!["clone", "-q"];
+    let clone_gd = beside(&clone);
+    if clone_linked {
+        cl.push(&clone_gd);
+    }
+    cl.extend([root.as_str(), clone.as_str()]);
+    git(b, &cl);
+    Scratch {
+        _dir: dir,
+        root,
+        session,
+        clone,
+    }
+}
+
+/// `~/` followed by the climb from `$HOME` to `/` and then `abs` — the path `abs` spelled from
+/// the home directory — or `None` where the test's `HOME` is not absolute.
+fn from_home(abs: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok().filter(|h| h.starts_with('/'))?;
+    let ups = "../".repeat(home.trim_end_matches('/').matches('/').count());
+    Some(format!("~/{ups}{}", &abs[1..]))
+}
+
+/// #1323: the guard follows a command to the repository it really acts on. `git -C <clone>` and
+/// a `cd <clone> &&` earlier in the line act in the clone, from a session standing in the root;
+/// the same two spellings aimed at the root are refused from a session standing in the clone.
+fn a_command_aimed_at_another_clone_acts_there(linked: bool) {
+    let s = scratch(linked);
+    let (root, clone) = (&s.root, &s.clone);
+    for cmd in [
+        format!("git -C {clone} switch -c x"),
+        format!("git -C {clone} checkout -b x"),
+        format!("git -C {clone} checkout --detach"),
+        format!("cd {clone} && git checkout -b x"),
+        format!("cd {clone} && git switch -c x"),
+        format!("cd {clone} && git fetch -q && git checkout -q -b x 2>&1 | tail -3"),
+    ] {
+        assert_eq!(
+            plane_root_branch_reason(&cmd, &s.session, root),
+            None,
+            "{cmd:?}"
+        );
+    }
+    for cmd in [
+        format!("git -C {root} switch -c x"),
+        format!("cd {root} && git checkout -b x"),
+        format!("git -C {clone} status && git -C {root} checkout -b x"),
+        format!("cd {root}/workspaces/w && git checkout -b x"),
+    ] {
+        assert!(
+            plane_root_branch_reason(&cmd, clone, root).is_some(),
+            "{cmd:?}"
+        );
+    }
+}
+
+#[test]
+fn a_command_aimed_at_another_clone_acts_there_with_a_git_directory() {
+    a_command_aimed_at_another_clone_acts_there(false);
+}
+
+#[test]
+fn a_command_aimed_at_another_clone_acts_there_with_a_git_file() {
+    a_command_aimed_at_another_clone_acts_there(true);
+}
+
+/// A `~` in a directory git is pointed at is read the way the shell reads it, as a `cd`'s is:
+/// `$HOME`, and the literal name as well, since a quoted `~` stays one.
+fn a_home_relative_directory_is_where_the_shell_sends_git(linked: bool) {
+    let s = scratch(linked);
+    let (Some(to_clone), Some(to_root)) = (from_home(&s.clone), from_home(&s.root)) else {
+        return;
+    };
+    for cmd in [
+        format!("git -C {to_clone} switch -c x"),
+        format!("cd {to_clone} && git checkout -b x"),
+    ] {
+        assert_eq!(
+            plane_root_branch_reason(&cmd, &s.session, &s.root),
+            None,
+            "{cmd:?}"
+        );
+    }
+    for cmd in [
+        format!("git -C {to_root} switch -c x"),
+        format!("GIT_WORK_TREE={to_root} git checkout -b x"),
+        format!("git --git-dir {to_root}/.git checkout -b x"),
+        format!("env -C {to_root} git checkout -b x"),
+        format!("HOME=/elsewhere git -C {to_clone} switch -c x"),
+    ] {
+        assert!(
+            plane_root_branch_reason(&cmd, &s.clone, &s.root).is_some(),
+            "{cmd:?}"
+        );
+    }
+}
+
+#[test]
+fn a_home_relative_directory_is_where_the_shell_sends_git_with_a_git_directory() {
+    a_home_relative_directory_is_where_the_shell_sends_git(false);
+}
+
+#[test]
+fn a_home_relative_directory_is_where_the_shell_sends_git_with_a_git_file() {
+    a_home_relative_directory_is_where_the_shell_sends_git(true);
+}
+
+/// A directory git is pointed at that the guard cannot name — the shell expands it later — may
+/// be the root, so it is refused from anywhere, a clone of the guard's own included. Fail
+/// closed: the guard cannot tell, so it answers as if it were the root.
+fn a_directory_the_guard_cannot_name_may_be_the_root(linked: bool) {
+    let s = scratch(linked);
+    for cmd in [
+        "git -C \"$PLANE\" switch -c x".to_string(),
+        "git -C $PLANE/ checkout -b x".to_string(),
+        "git -C ~operator/plane checkout -b x".to_string(),
+        format!("git -C {}/pla* checkout -b x", &s.root[..s.root.len() - 6]),
+        "git -C {a,b} checkout -b x".to_string(),
+        "git --git-dir=$P/.git checkout -b x".to_string(),
+        "git --work-tree \"$P\" checkout -b x".to_string(),
+        "GIT_DIR=$P/.git git checkout -b x".to_string(),
+        "export GIT_WORK_TREE=$P && git checkout -b x".to_string(),
+        "env -C \"$P\" git checkout -b x".to_string(),
+    ] {
+        assert!(
+            plane_root_branch_reason(&cmd, &s.clone, &s.root).is_some(),
+            "{cmd:?}"
+        );
+    }
+    // What it cannot name only matters where it names a directory.
+    assert_eq!(
+        plane_root_branch_reason("git -c x.y=$V switch -c x", &s.clone, &s.root),
+        None
+    );
+}
+
+#[test]
+fn a_directory_the_guard_cannot_name_may_be_the_root_with_a_git_directory() {
+    a_directory_the_guard_cannot_name_may_be_the_root(false);
+}
+
+#[test]
+fn a_directory_the_guard_cannot_name_may_be_the_root_with_a_git_file() {
+    a_directory_the_guard_cannot_name_may_be_the_root(true);
+}
+
+/// A `~` the shell leaves alone names a directory called `~`: quoted (`'~'`, `\~`), after an
+/// assignment's `=` under `env` (zsh), and in an attached wrapper flag. The reader takes the
+/// quoting off, so such a `~` arrives looking like `$HOME`. From a clone holding a `~` that
+/// links to the root, each of these acts on the root and is refused (#1323).
+#[cfg(unix)]
+fn a_tilde_the_shell_leaves_alone_is_a_directory_named_tilde(linked: bool) {
+    let s = scratch(linked);
+    std::os::unix::fs::symlink(&s.root, format!("{}/~", s.clone)).unwrap();
+    for cmd in [
+        "git -C '~' checkout -b x",
+        "git -C \\~ switch -c x",
+        "env GIT_DIR=~/.git git checkout -b x",
+        "env --chdir=~ git checkout -b x",
+        "env -C '~' git checkout -b x",
+        "sudo -D~ git checkout -b x",
+    ] {
+        assert!(
+            plane_root_branch_reason(cmd, &s.clone, &s.root).is_some(),
+            "{cmd:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tilde_the_shell_leaves_alone_is_a_directory_named_tilde_with_a_git_directory() {
+    a_tilde_the_shell_leaves_alone_is_a_directory_named_tilde(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tilde_the_shell_leaves_alone_is_a_directory_named_tilde_with_a_git_file() {
+    a_tilde_the_shell_leaves_alone_is_a_directory_named_tilde(true);
+}
+
+/// A root whose git directory lives beside it (a `.git` file) is reached by naming that
+/// directory: `--git-dir=<it>` moves the root's HEAD from anywhere.
+#[test]
+fn the_roots_own_git_directory_is_the_root_wherever_it_lives() {
+    let s = scratch(true);
+    let gd = format!("{}.gitdir", s.root);
+    for cmd in [
+        format!("git --git-dir={gd} checkout -b x"),
+        format!("git --git-dir {gd} --work-tree {} switch -c x", s.clone),
+        format!("GIT_DIR={gd} git checkout -b x"),
+    ] {
+        assert!(
+            plane_root_branch_reason(&cmd, &s.clone, &s.root).is_some(),
+            "{cmd:?}"
+        );
+    }
+}
+
+/// A command refused only because a directory it is sent to cannot be named says so, rather
+/// than claiming what it would do in the root; one that reaches the root by name keeps its own
+/// sentence.
+fn a_directory_the_guard_cannot_name_is_refused_as_unnamed(linked: bool) {
+    let s = scratch(linked);
+    for cmd in [
+        "git -C \"$WT\" switch -c x",
+        "cd \"$X\" && git checkout -b x",
+        "cd - && git checkout feature",
+    ] {
+        let said = plane_root_branch_reason(cmd, &s.clone, &s.root).expect(cmd);
+        assert!(
+            said.starts_with("cannot tell which repository this `git "),
+            "{cmd:?}: {said}"
+        );
+        assert!(said.contains("Spell the path out"), "{said}");
+    }
+    let said =
+        plane_root_branch_reason(&format!("git -C {} switch -c x", s.root), &s.clone, &s.root)
+            .unwrap();
+    assert!(
+        said.starts_with("would create 'x' in the PLANE ROOT"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_directory_the_guard_cannot_name_is_refused_as_unnamed_with_a_git_directory() {
+    a_directory_the_guard_cannot_name_is_refused_as_unnamed(false);
+}
+
+#[test]
+fn a_directory_the_guard_cannot_name_is_refused_as_unnamed_with_a_git_file() {
+    a_directory_the_guard_cannot_name_is_refused_as_unnamed(true);
+}
+
+/// The layout the live refusals came from: the root has a `.git` directory, and the scratch clone
+/// outside it has a `.git` FILE naming a git directory outside both. Pointed at by name, the clone
+/// is the clone; pointed at through a variable, it is refused as a directory the guard cannot
+/// name, and the denial asks for the path spelled out.
+fn a_clone_whose_git_is_a_file_elsewhere(root_linked: bool) {
+    let s = scratch_with(root_linked, true);
+    let clone = &s.clone;
+    for cmd in [
+        format!("git -C {clone} switch -c x"),
+        format!("git -C {clone} checkout -b x"),
+        format!("cd {clone} && git switch -c x"),
+    ] {
+        assert_eq!(
+            plane_root_branch_reason(&cmd, &s.session, &s.root),
+            None,
+            "{cmd:?}"
+        );
+    }
+    let said = plane_root_branch_reason("git -C \"$C\" switch -c x", &s.session, &s.root).unwrap();
+    assert!(said.contains("Spell the path out"), "{said}");
+}
+
+#[test]
+fn a_clone_whose_git_is_a_file_elsewhere_beside_a_root_with_a_git_directory() {
+    a_clone_whose_git_is_a_file_elsewhere(false);
+}
+
+#[test]
+fn a_clone_whose_git_is_a_file_elsewhere_beside_a_root_with_a_git_file() {
+    a_clone_whose_git_is_a_file_elsewhere(true);
+}
+
+/// Whether a separated `~` is a directory named `~` is read from the line's quoting, never from
+/// the filesystem before the line runs: a `~` the same line makes, quoted or escaped, is the
+/// directory git is sent to, and from inside the root that directory is in the root.
+fn a_quoted_tilde_the_same_line_makes_is_read_literally(linked: bool) {
+    let s = scratch(linked);
+    for cmd in [
+        "mkdir \\~ && git -C \\~ switch -c x",
+        "mkdir -p '~/a' && git -C '~/a' switch -c x",
+        "git -C \"~/clone\" checkout -b x",
+        "git -C ~'/a' checkout -b x",
+    ] {
+        assert!(
+            plane_root_branch_reason(cmd, &s.session, &s.root).is_some(),
+            "{cmd:?}"
+        );
+    }
+}
+
+#[test]
+fn a_quoted_tilde_the_same_line_makes_is_read_literally_with_a_git_directory() {
+    a_quoted_tilde_the_same_line_makes_is_read_literally(false);
+}
+
+#[test]
+fn a_quoted_tilde_the_same_line_makes_is_read_literally_with_a_git_file() {
+    a_quoted_tilde_the_same_line_makes_is_read_literally(true);
+}
+
+/// Reading a long run of `-C`s costs what the run is long, not twice as much per `-C`: the hook
+/// answers on a deadline, and a guard that timed out would let the command through.
+#[test]
+fn a_long_run_of_directory_options_is_read_in_time() {
+    let s = scratch(true);
+    let cmd = format!("git -C '~' {}-C {} switch -c x", "-C . ".repeat(64), s.root);
+    let started = std::time::Instant::now();
+    assert!(plane_root_branch_reason(&cmd, &s.clone, &s.root).is_some());
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}
+
+/// ANSI-C quoting spells a `~` without one (`$'\x7e'`, `$'\176'`), and a `cd` to a quoted `~`
+/// goes to the directory named `~` as well as `$HOME`. From a clone holding a `~` that links to
+/// the root, and from inside the root after the line makes one, each of these is refused.
+#[cfg(unix)]
+fn a_tilde_spelled_without_one_or_reached_by_cd_is_read_literally(linked: bool) {
+    let s = scratch(linked);
+    std::os::unix::fs::symlink(&s.root, format!("{}/~", s.clone)).unwrap();
+    for cmd in [
+        "git -C $'\\x7e' checkout -b x",
+        "git -C $'\\176' switch -c x",
+        "cd \\~ && git switch -c x",
+        "cd $'\\x7e' && git checkout -b x",
+    ] {
+        assert!(
+            plane_root_branch_reason(cmd, &s.clone, &s.root).is_some(),
+            "{cmd:?}"
+        );
+    }
+    for cmd in [
+        "mkdir $'\\x7e' && git -C $'\\x7e' switch -c x",
+        "mkdir \\~ && cd \\~ && git switch -c x",
+        "mkdir $'\\x7e' && cd $'\\x7e' && git switch -c x",
+        "mkdir '~' && cd '~' && git switch -c x",
+    ] {
+        assert!(
+            plane_root_branch_reason(cmd, &s.session, &s.root).is_some(),
+            "{cmd:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tilde_spelled_without_one_or_reached_by_cd_is_read_literally_with_a_git_directory() {
+    a_tilde_spelled_without_one_or_reached_by_cd_is_read_literally(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tilde_spelled_without_one_or_reached_by_cd_is_read_literally_with_a_git_file() {
+    a_tilde_spelled_without_one_or_reached_by_cd_is_read_literally(true);
+}
