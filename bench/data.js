@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791244591738,
+  "lastUpdate": 1791245616618,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2520,6 +2520,48 @@ window.BENCHMARK_DATA = {
             "value": 102.4245225,
             "unit": "ms",
             "extra": "median of 5 runs: 101.415, 102.246, 102.425, 102.491, 102.725 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "475e66594cab7d1c1b714519e588d802157a0efa",
+          "message": "train 6: the tickets' tests meet main's guards and the renamed server\n\n- RN-8 gave rename-local's `Local` a `plugin` field after RN-6's keychain\n  test was written, so the test's `Local` names it as `None`, as the other\n  rename-local test does.\n- RN-8's three later rename-local plugin tests open with\n  `charter_core::unsteered!()`, as every test in charter-core's tests\n  directory must.\n- fake-harness's ACP handshake test expects the MCP server under its\n  current name (`chattools::SERVER`, `purlis` since RN-8) rather than the\n  old literal.\n\nRefs #1264\nRefs #1266\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T04:05:49+04:00",
+          "tree_id": "ca728e37e1cd9f3c7711b6e0f3452f06ee79ee86",
+          "url": "https://github.com/purlis/purlis/commit/475e66594cab7d1c1b714519e588d802157a0efa"
+        },
+        "date": 1791245615063,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.516165,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.482, 0.508, 0.516, 0.518, 0.520 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.075515,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.555, 17.027, 17.076, 17.081, 17.465 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.9795895,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.237, 104.544, 104.980, 105.285, 108.416 ms"
           }
         ]
       }
