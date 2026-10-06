@@ -147,6 +147,13 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
             edit_rules.push(format!("Edit(/{glob}/**)"));
             deny_write.push(glob);
         }
+        // And every project manifest under it (D-T55-4): #1336 holds them by path only in the
+        // chat's own folders, which a granted folder is not.
+        for name in super::MANIFESTS {
+            let glob = format!("{}/**/{name}", folder.display());
+            edit_rules.push(format!("Edit(/{glob})"));
+            deny_write.push(glob);
+        }
     }
     // The project's package caches (D-1337-6), each path as written and as the kernel names it.
     let mut allow_write: Vec<String> = Vec::new();
