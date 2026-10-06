@@ -34,8 +34,8 @@ use std::path::{Path, PathBuf};
 mod window;
 pub use window::{
     STATE_MOVED_RECORD, has_manifest, listed_in, local_settings, manifest, manifest_name,
-    moved_by_rename_local, scan_allow, state, state_alternation, state_name, state_name_with,
-    under_state,
+    moved_by_rename_local, recorded_under_state, scan_allow, state, state_alternation, state_name,
+    state_name_with, under_state,
 };
 
 /// What sort of thing a name names. Callers never branch on it; it is how the doctor, the

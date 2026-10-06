@@ -71,6 +71,39 @@ fn a_plain_file_vault_defaults_to_the_state_directory_written_relative_to_the_pl
     );
 }
 
+/// D-VP-5: on a project whose state folder moved to `.purlis/`, the default file is still
+/// RECORDED in the old spelling — which a build older than the rename can find after an undo —
+/// and read and written where the folder is now.
+#[test]
+fn a_moved_projects_vault_is_recorded_in_the_old_spelling_and_lives_in_the_moved_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join(".purlis")).unwrap();
+    let ctx = Ctx::new(tmp.path(), crate::secrets::Env::of(&[]));
+    assert_eq!(ctx.state, tmp.path().join(".purlis"));
+    for (name, provider) in [("p", "plain-file"), ("r", "reference")] {
+        let mut io = Rec::default();
+        assert_eq!(add(&ctx, &req(name, provider), &mut io), 0, "{}", io.said());
+        let doc: Value =
+            serde_json::from_str(&std::fs::read_to_string(ctx.local_registry()).unwrap()).unwrap();
+        assert_eq!(
+            doc["vaults"][name]["config"]["file"],
+            json!(format!(".charter/vaults/{name}.json")),
+            "{provider}"
+        );
+    }
+    let p = registry::vault(&ctx, "p").unwrap();
+    crate::secrets::plain_file::set(
+        &ctx,
+        &p,
+        "A",
+        "1",
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 6).unwrap(),
+    )
+    .unwrap();
+    assert!(tmp.path().join(".purlis/vaults/p.json").is_file());
+    assert!(!tmp.path().join(".charter").exists());
+}
+
 #[test]
 fn a_reference_vault_defaults_its_file_too_and_says_what_it_stores() {
     let plane = Plane::new(&[]);

@@ -35,7 +35,11 @@ fn portable_file(ctx: &Ctx, p: &Path) -> String {
     let p = super::expanduser(&p.to_string_lossy(), &ctx.env);
     match (super::resolve(&p), super::resolve(&ctx.root)) {
         (Some(rp), Some(rr)) => match rp.strip_prefix(&rr) {
-            Ok(rel) => rel.to_string_lossy().into_owned(),
+            // A path in the state folder is recorded in its old spelling during the rename
+            // window, and read under the folder the project has (D-VP-5).
+            Ok(rel) => crate::names::recorded_under_state(rel)
+                .to_string_lossy()
+                .into_owned(),
             Err(_) => p.to_string_lossy().into_owned(),
         },
         _ => p.to_string_lossy().into_owned(),

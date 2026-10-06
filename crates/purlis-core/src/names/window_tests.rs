@@ -283,3 +283,25 @@ fn a_recorded_path_under_either_state_spelling_is_read_under_the_state_folder_th
         );
     }
 }
+
+#[test]
+fn a_path_under_the_state_folder_is_recorded_in_the_old_spelling_during_the_window() {
+    for path in [
+        ".purlis/vaults/app.json",
+        ".charter/vaults/app.json",
+        "./.purlis/vaults/app.json",
+    ] {
+        assert_eq!(
+            recorded_under_state(Path::new(path)),
+            PathBuf::from(".charter/vaults/app.json"),
+            "{path}"
+        );
+    }
+    for path in [
+        "secrets/app.json",
+        ".purlisx/app.json",
+        "/abs/.purlis/app.json",
+    ] {
+        assert_eq!(recorded_under_state(Path::new(path)), PathBuf::from(path));
+    }
+}

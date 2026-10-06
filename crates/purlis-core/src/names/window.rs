@@ -105,6 +105,26 @@ pub fn under_state(dir: &Path, recorded: &Path) -> PathBuf {
     }
 }
 
+/// A path under the state folder, relative to the project, as a record WRITES it (D-VP-5): its
+/// first folder in the newest old spelling for as long as old spellings are read, whichever
+/// folder the project has. [`under_state`] reads it either way; a build older than the rename
+/// knows only the old spelling, so a record it may read after an undo names the file it can
+/// find, and it never starts a second vault beside it. Any other path is returned as given.
+pub fn recorded_under_state(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut parts = path.components();
+    let mut first = parts.next();
+    while first == Some(Component::CurDir) {
+        first = parts.next();
+    }
+    match first {
+        Some(Component::Normal(first)) if STATE_DIR.is(first) => {
+            Path::new(STATE_DIR.newest_old()).join(parts.as_path())
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
 /// [`state`]'s last component alone, for a walk that opens the folder one step at a time.
 pub fn state_name(dir: &Path) -> &'static str {
     state_name_with(dir, moved_by_rename_local)

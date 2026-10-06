@@ -536,16 +536,22 @@ fn registered_vault_files(plane: &Path) -> Option<Vec<String>> {
         files
             .into_values()
             .flatten()
-            .map(|f| {
-                // `vault_file_path`: `Path(f).expanduser()`, then the plane under a relative one
-                // — under the state folder the project has now when it names one (D-VP-1).
+            .flat_map(|f| {
+                // `vault_file_path`: `Path(f).expanduser()`, then the plane under a relative one.
+                // Both the path as recorded and where it is read under the state folder the
+                // project has now (D-VP-1): the union only widens what the gate protects.
                 let f = expanduser(&f);
                 if pypath::is_abs(&f) {
-                    f
+                    return vec![f];
+                }
+                let as_recorded = plane.join(&f).to_string_lossy().into_owned();
+                let read = crate::names::under_state(plane, Path::new(&f))
+                    .to_string_lossy()
+                    .into_owned();
+                if read == as_recorded {
+                    vec![as_recorded]
                 } else {
-                    crate::names::under_state(plane, Path::new(&f))
-                        .to_string_lossy()
-                        .into_owned()
+                    vec![as_recorded, read]
                 }
             })
             .collect(),
@@ -1145,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn a_vault_file_recorded_under_the_old_state_folder_is_listed_where_it_moved() {
+    fn a_vault_file_recorded_under_the_old_state_folder_is_listed_as_recorded_and_where_it_moved() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         std::fs::create_dir(root.join(".purlis")).unwrap();
@@ -1157,9 +1163,12 @@ mod tests {
         assert_eq!(
             registered_vault_files(&root),
             Some(vec![
+                root.join(".charter/vaults/db.json")
+                    .to_string_lossy()
+                    .into_owned(),
                 root.join(".purlis/vaults/db.json")
                     .to_string_lossy()
-                    .into_owned()
+                    .into_owned(),
             ])
         );
     }
