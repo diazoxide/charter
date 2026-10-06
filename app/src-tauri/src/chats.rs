@@ -20,26 +20,25 @@ use purlis_core::reopen::{Chat, Focus, Record, Reopened, View};
 use purlis_core::harness::StateHooks;
 
 use crate::host::{Opening, SessionHost};
+#[cfg(test)]
 use crate::sessions::{Reporting, Sessions};
 
-/// Every identity variable a vault of the plane at `cwd` declares — both halves of each `env`
-/// binding — so a chat is started without any of them (#271 review, U6). A `cwd` outside a
-/// plane, or a registry that cannot be read, yields none: the chat still loses every `OP_*` by
-/// prefix. Read on the thread that starts the chat; it is a small JSON read, once per start.
+/// Every identity variable a vault of the project at `root` declares — both halves of each
+/// `env` binding — so a chat is started without any of them (#271 review, U6). `root` is the
+/// open project's, never one found above the chat's folder (#1410). A registry that cannot be
+/// read yields none: the chat still loses every `OP_*` by prefix. Read on the thread that
+/// starts the chat; it is a small JSON read, once per start.
 ///
-/// **Skipped in a fenced build.** Resolving the plane walks up from `cwd` and, in a fenced test
-/// build, that walk aborts the moment it names a plane outside the fixture fence
-/// (`purlis_core::fence`, charter-app#129) — which a unit test's `cwd` routinely does. A test
+/// **Skipped in a fenced build.** Reading a vault's registry resolves through the plane and, in
+/// a fenced test build, that aborts the moment it names a plane outside the fixture fence
+/// (`purlis_core::fence`, charter-app#129) — which a unit test's project routinely is. A test
 /// build therefore strips only by the `OP_` prefix; the declared-name strip is exercised at the
 /// session builder ([`crate::sessions`] tests pass `env_strip` directly) and in the core.
-fn declared_identity_vars(cwd: Option<&std::path::Path>) -> Vec<String> {
+fn declared_identity_vars(root: &Path) -> Vec<String> {
     if purlis_core::fence::FENCED {
         return Vec::new();
     }
-    let Some(root) = cwd.and_then(|c| purlis_core::plane::find_root(c).ok()) else {
-        return Vec::new();
-    };
-    let ctx = purlis_core::secrets::Ctx::new(&root, purlis_core::secrets::Env::from_process());
+    let ctx = purlis_core::secrets::Ctx::new(root, purlis_core::secrets::Env::from_process());
     let Ok(doc) = purlis_core::secrets::registry::load_registry(&ctx) else {
         return Vec::new();
     };
@@ -52,12 +51,40 @@ fn declared_identity_vars(cwd: Option<&std::path::Path>) -> Vec<String> {
     names
 }
 
-/// What more of this machine's environment the operator lets a chat started in `cwd` have:
-/// the `[chat_env] pass` of that plane's `charter.local.toml`. A chat outside a plane has none.
-fn operator_env_pass(cwd: Option<&std::path::Path>) -> Vec<String> {
-    cwd.and_then(|c| purlis_core::plane::find_root(c).ok())
-        .map(|root| purlis_core::chatenv::read(&root))
-        .unwrap_or_default()
+/// What more of this machine's environment the operator lets a chat of the project at `root`
+/// have: the `[chat_env] pass` of its `charter.local.toml`. Read from the open project, never
+/// from a project found above the chat's folder (#1410).
+fn operator_env_pass(root: &Path) -> Vec<String> {
+    purlis_core::chatenv::read(root)
+}
+
+/// What the project at `root` decides about the sandbox of a `harness` chat on no profile in
+/// the folder `cwd`, on `machine` (#1410).
+///
+/// In order: the project's own manifest is read first, and a project that leaves the sandbox
+/// off decides nothing more. Where it turns the sandbox on, or its manifest is missing or cannot
+/// be read, the chat's folder is checked next ([`purlis_core::sandbox::folder_refusal`]): a
+/// chat with no folder, one outside the project, or one reached through a link is refused and
+/// never started any other way. Only then is the sandbox decided. A system with no backend
+/// (Windows) never sandboxes a chat, so its folder is not checked there.
+fn project_sandbox(
+    harness: Harness,
+    root: &Path,
+    cwd: Option<&Path>,
+    machine: &purlis_core::sandbox::Machine,
+    has: &dyn Fn(&str) -> bool,
+) -> Result<Option<purlis_core::sandbox::Decided>, String> {
+    let plane = purlis_core::sandbox::Plane::read(root);
+    let leaves_it_off = !plane.missing() && !plane.unreadable() && plane.said().policy.is_none();
+    if !leaves_it_off && machine.os.has_backend() {
+        let Some(cwd) = cwd else {
+            return Err(purlis_core::sandbox::FOLDER_MISSING.to_owned());
+        };
+        if let Some(why) = purlis_core::sandbox::folder_refusal(root, cwd) {
+            return Err(why.to_owned());
+        }
+    }
+    purlis_core::sandbox::decide(harness, root, machine, has, None).map_err(|not| not.to_string())
 }
 
 /// One chat the app has open, as the UI and the quit warning see it.
@@ -242,6 +269,9 @@ struct Waiting {
 
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
+    /// The open project's root, as the app holds it (#1410): the project of every chat
+    /// started here, whatever folder the chat stands in.
+    project: PathBuf,
     /// Whatever runs the sessions (FD-3). A trait object, so nothing here can reach past
     /// [`SessionHost`] to a pty: a chat layer that did would not compile against another host.
     sessions: Box<dyn SessionHost>,
@@ -318,23 +348,36 @@ type Decided = (
 );
 
 impl Chats {
-    /// Chats whose record is written by `record_it` every time what is open changes.
+    /// Chats whose record is written by `record_it` every time what is open changes, in no
+    /// project: what the tests use when the project is not what they are about.
     ///
     /// Quitting writes it too, but only a graceful quit reaches that: an app that is killed,
     /// or crashes, runs no exit handler. Writing as it goes means such an app comes back on
     /// the chats it had rather than on none.
+    #[cfg(test)]
     pub fn recorded_by(record_it: Recorder) -> Self {
         Self::recorded_by_reporting_to(record_it, None)
     }
 
     /// The same, with sessions that report what their harness does to `reporting`'s socket.
+    #[cfg(test)]
     pub fn recorded_by_reporting_to(record_it: Recorder, reporting: Option<Reporting>) -> Self {
-        Self::on_host(record_it, Box::new(Sessions::reporting_to(reporting)))
+        Self::on_host(
+            record_it,
+            Box::new(Sessions::reporting_to(reporting)),
+            tests::no_project(),
+        )
     }
 
-    /// The same, on `host` — whatever runs the sessions, which is [`Sessions`] in the app.
-    pub fn on_host(record_it: Recorder, host: Box<dyn SessionHost>) -> Self {
+    /// Chats of the project at `project`, whose record `record_it` writes, on `host` —
+    /// whatever runs the sessions, which is [`crate::sessions::Sessions`] in the app.
+    ///
+    /// **`project` is the open project's own root, as the app holds it** (#1410): every chat
+    /// started here takes its project, and so its sandbox, from it — never from a walk up
+    /// from the chat's folder, which a link or a planted manifest can steer.
+    pub fn on_host(record_it: Recorder, host: Box<dyn SessionHost>, project: PathBuf) -> Self {
         Self {
+            project,
             sessions: host,
             starting: Mutex::new(None),
             beginning: Mutex::new(None),
@@ -358,6 +401,15 @@ impl Chats {
         }
     }
 
+    /// These chats, of the project at `root` instead.
+    #[cfg(test)]
+    fn in_project(self, root: &Path) -> Self {
+        Self {
+            project: root.to_path_buf(),
+            ..self
+        }
+    }
+
     /// These chats, starting at most `most` from a record rather than [`MOST_AT_ONCE`].
     #[cfg(test)]
     fn starting_at_most(self, most: usize) -> Self {
@@ -368,6 +420,7 @@ impl Chats {
     }
 
     /// Chats nothing records — what the tests use when the record is not what they are about.
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::recorded_by(Box::new(|_| {}))
     }
@@ -513,41 +566,28 @@ impl Chats {
 
     /// The sandbox a chat that is not on a profile starts under: the same decision
     /// `purlis_core::start::ready` makes for one that is (ADR 0067). A chat whose program is a
-    /// harness, in a plane that turned the sandbox on, is sandboxed or refused. A shell, or a
-    /// chat outside any plane, is the operator's own and is left as it was.
-    /// With the sandbox, the program the chat then runs: the real file the check asked about
-    /// (ruling V87g), never the name it was recorded by.
+    /// harness, in a project that turned the sandbox on, is sandboxed or refused. A shell, or a
+    /// chat in a project that leaves the sandbox off, is the operator's own and is left as it
+    /// was. With the sandbox, the program the chat then runs: the real file the check asked
+    /// about (ruling V87g), never the name it was recorded by.
+    ///
+    /// **The project is the open one's, [`Self::project`]** (#1410), as for a chat on a profile,
+    /// never one found by walking up from the chat's folder; see [`project_sandbox`].
     ///
     /// No person picked it in the window, so there is no opt-out here; a system with no backend
     /// (Windows) starts it unsandboxed, and says why, as it does a chat on a profile.
-    fn sandbox_off_profile(chat: &Chat) -> Result<Decided, String> {
+    fn sandbox_off_profile(&self, chat: &Chat) -> Result<Decided, String> {
         let Some(harness) = chat.harness() else {
             return Ok((None, None));
         };
-        // A `charter.toml` above the chat that is not a regular file is no plane to the walk
-        // below, which would start the chat unsandboxed: it is refused instead.
-        if chat
-            .cwd
-            .as_deref()
-            .is_some_and(purlis_core::sandbox::marker_unreadable)
-        {
-            return Err(purlis_core::sandbox::NotStarted::PlaneUnreadable.to_string());
-        }
-        let Some(root) = chat
-            .cwd
-            .as_deref()
-            .and_then(|cwd| purlis_core::plane::find_root(cwd).ok())
-        else {
-            return Ok((None, None));
-        };
-        let decided = purlis_core::sandbox::decide(
+        let root = &self.project;
+        let decided = project_sandbox(
             harness,
-            &root,
+            root,
+            chat.cwd.as_deref(),
             &purlis_core::sandbox::Machine::this(),
             &purlis_core::sandbox::backend::installed,
-            None,
-        )
-        .map_err(|refused| refused.to_string())?;
+        )?;
         let (applied, lifted) = match decided {
             Some(purlis_core::sandbox::Decided::Sandboxed(applied)) => (Some(applied), None),
             Some(purlis_core::sandbox::Decided::Unsandboxed(lifted)) => (None, Some(lifted)),
@@ -652,11 +692,10 @@ impl Chats {
         )
     }
 
-    /// [`Self::put_back`] against a plane the test does not care about — every chat in
-    /// these records is a shell, which is resolved from the record alone.
+    /// [`Self::put_back`], kept by the name the tests know it by.
     #[cfg(test)]
     fn put_back_here(&self, record: &Record, size: Size) -> Vec<Open> {
-        self.put_back(record, std::path::Path::new("/nonexistent-plane"), size)
+        self.put_back(record, size)
     }
 
     /// Starts one chat out of the record, on its own profile where it had one.
@@ -666,13 +705,7 @@ impl Chats {
     /// means this chat is skipped BY NAME — another profile may be another account, where
     /// this chat's resume id does not exist and where its workspace's code was never meant
     /// to go. It stays in the record, so declaring the profile again brings it back.
-    fn start_recorded(
-        &self,
-        chat: &Chat,
-        root: &std::path::Path,
-        size: Size,
-        why: Why,
-    ) -> Result<u32, String> {
+    fn start_recorded(&self, chat: &Chat, size: Size, why: Why) -> Result<u32, String> {
         let Some(profile) = chat.profile.clone() else {
             return self.start_as(chat, size, false, why);
         };
@@ -690,7 +723,7 @@ impl Chats {
                 resuming: None,
                 without_sandbox: None,
             },
-            root,
+            &self.project,
         )?;
         // The core's start knows no chat, so it says "nothing recorded"; this chat may know
         // better — a workspace rename left it without its conversation (charter#367).
@@ -723,7 +756,7 @@ impl Chats {
         why: Why,
     ) -> Result<u32, String> {
         // Before anything is resolved or run, as for a chat on a profile.
-        let (sandboxed, unsandboxed) = Self::sandbox_off_profile(chat)?;
+        let (sandboxed, unsandboxed) = self.sandbox_off_profile(chat)?;
         let mut launch = chat.launch();
         let sandbox = sandboxed.map(|(applied, program)| {
             launch.program = program;
@@ -731,7 +764,12 @@ impl Chats {
         });
         // A shell tab's shims, and the start files that keep them first. Never recorded: they
         // are this build's, and worked out again at every start.
-        let (args, env) = self.shell_start(chat, &launch.program, launch.args);
+        let (args, mut env) = self.shell_start(chat, &launch.program, launch.args);
+        // The project its hooks and guards act for: the open one, as a chat on a profile is
+        // told (`purlis_core::start`), never one they would find above the chat's folder.
+        if chat.harness().is_some() {
+            env.push(("PURLIS_ROOT".to_owned(), self.project.display().to_string()));
+        }
         self.open_it(
             chat,
             launch.program,
@@ -971,9 +1009,9 @@ impl Chats {
                     // Every identity variable a vault of this chat's plane declares, so none
                     // reaches the chat even when it is not `OP_`-prefixed (#271 review, U6). Read
                     // from the plane the chat starts in; a chat outside a plane declares none.
-                    env_strip: declared_identity_vars(chat.cwd.as_deref()),
+                    env_strip: declared_identity_vars(&self.project),
                     harness,
-                    env_pass: operator_env_pass(chat.cwd.as_deref()),
+                    env_pass: operator_env_pass(&self.project),
                     operator_shell,
                     git_hooks: self.git_hooks_for(harness),
                 },
@@ -1410,7 +1448,7 @@ impl Chats {
     /// A chat whose program cannot be started is left out and the rest still open — a
     /// relaunch that failed whole because one harness had been uninstalled would be worse
     /// than one that came back short.
-    pub fn put_back(&self, record: &Record, root: &std::path::Path, size: Size) -> Vec<Open> {
+    pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
         self.putting_back.store(true, Ordering::SeqCst);
         // Before a single chat starts, so that a number the record spent on a chat it no
         // longer holds — one the operator closed before quitting — is not dealt again to a
@@ -1469,7 +1507,7 @@ impl Chats {
         let mut front = None;
         let mut opened: Vec<u32> = Vec::new();
         for (chat, why) in starting {
-            match self.start_recorded(chat, root, size, *why) {
+            match self.start_recorded(chat, size, *why) {
                 Ok(session) => {
                     if chat.active {
                         front = Some(session);
@@ -1481,7 +1519,7 @@ impl Chats {
                 Err(why) => {
                     // Read before the lock is taken, as Retry does: it reads the profile's
                     // file and runs git, and the list must not wait on either.
-                    let approval = NeedsApproval::of(chat, root);
+                    let approval = NeedsApproval::of(chat, &self.project);
                     lock(&self.would_not_start).push(Waiting {
                         approval,
                         chat: chat.clone(),
@@ -1576,19 +1614,19 @@ impl Chats {
     /// record written meanwhile still has it; [`Self::record`] leaves out a waiting chat whose id
     /// is open, so one written after the start has it once, as running. It leaves the list only
     /// once it has started, and if it fails again it stays with the new reason.
-    pub fn retry(&self, id: &str, root: &std::path::Path, size: Size) -> Result<u32, String> {
+    pub fn retry(&self, id: &str, size: Size) -> Result<u32, String> {
         let chat = lock(&self.would_not_start)
             .iter()
             .find(|one| one.chat.identity.id.as_deref() == Some(id))
             .map(|one| one.chat.clone())
             .ok_or_else(|| format!("chat {id} is not waiting to start"))?;
-        let started = self.start_recorded(&chat, root, size, Why::Relaunch);
+        let started = self.start_recorded(&chat, size, Why::Relaunch);
         // Read again at every refusal, outside the lock: what the profile needs now, and not
         // what it needed at the launch (#1246).
         let approval = started
             .as_ref()
             .err()
-            .and_then(|_| NeedsApproval::of(&chat, root));
+            .and_then(|_| NeedsApproval::of(&chat, &self.project));
         {
             let mut waiting = lock(&self.would_not_start);
             match &started {
@@ -1634,12 +1672,7 @@ impl Chats {
     /// started**, so a refused start leaves it running and recorded as it was; while both are
     /// open, [`Self::record`] writes the newer. Ending the old one is the caller's next step
     /// (`Held::start_chat_fresh`), which takes it off the board too.
-    pub fn start_fresh(
-        &self,
-        session: u32,
-        root: &std::path::Path,
-        size: Size,
-    ) -> Result<u32, String> {
+    pub fn start_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
         let was = lock(&self.open)
             .get(&session)
             .map(|one| one.chat.clone())
@@ -1654,7 +1687,7 @@ impl Chats {
             number: None,
             ..was
         };
-        let started = self.start_recorded(&again, root, size, Why::Again)?;
+        let started = self.start_recorded(&again, size, Why::Again)?;
         // **It keeps its place** (#1246): the window puts the new session in the old one's pane,
         // so the record puts it where the old one was in the strip's order. Unplaced, it would
         // go last, and the next launch would draw it at the end of the strip.
@@ -1686,6 +1719,7 @@ impl Chats {
     }
 }
 
+#[cfg(test)]
 impl Default for Chats {
     fn default() -> Self {
         Self::new()
@@ -1714,7 +1748,7 @@ fn what_its_hooks_read(env: &mut Vec<(String, String)>, cwd: Option<&Path>, sand
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 
     #[test]
     fn a_chats_hooks_are_told_its_folder_and_only_a_sandboxed_chat_is_called_sandboxed() {
@@ -2001,6 +2035,20 @@ mod tests {
         .to_string()
     }
 
+    /// A project that leaves the sandbox off: what chats are of when their project is not what
+    /// a test is about. It has a manifest, because a project whose manifest is missing starts
+    /// no harness chat (D-1410e). Made once per test process, in a folder of its own.
+    pub(crate) fn no_project() -> PathBuf {
+        static ONE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+        ONE.get_or_init(|| {
+            let dir = tempfile::tempdir().expect("a project");
+            std::fs::write(dir.path().join(purlis_core::plane::MANIFEST), "").expect("a manifest");
+            dir
+        })
+        .path()
+        .to_path_buf()
+    }
+
     fn chat(program: &str, name: &str, resume: Option<&str>) -> Chat {
         Chat {
             program: program.to_owned(),
@@ -2269,7 +2317,6 @@ mod tests {
 
     #[test]
     fn a_record_s_focus_is_held_for_the_window_when_it_is_put_back() {
-        let dir = tempfile::tempdir().unwrap();
         let (chats, wrote) = recorded();
 
         chats.put_back(
@@ -2277,7 +2324,6 @@ mod tests {
                 focus: Some(a_focus()),
                 ..Default::default()
             },
-            dir.path(),
             SIZE,
         );
 
@@ -2300,7 +2346,6 @@ mod tests {
 
     #[test]
     fn a_record_s_view_tabs_are_held_for_the_window_and_not_written_back_while_it_is_put_back() {
-        let dir = tempfile::tempdir().unwrap();
         let (chats, wrote) = recorded();
 
         chats.put_back(
@@ -2308,7 +2353,6 @@ mod tests {
                 views: vec![a_view("steward")],
                 ..Default::default()
             },
-            dir.path(),
             SIZE,
         );
 
@@ -2404,7 +2448,7 @@ mod tests {
         let socket = plane.path().join(".charter/app/hooks.sock");
         let host = Pretend::default();
         host.reporting_on(socket.clone());
-        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()), no_project());
         chats.arming_with(crate::Shipped {
             binary: Some(plane.path().join("charter")),
             plugin: Some(plugin),
@@ -2480,7 +2524,7 @@ mod tests {
         // chat the app started unsandboxed must not carry it, even in a sandboxed project.
         let plane = a_sandboxed_plane();
         let host = Pretend::default();
-        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()), no_project());
         let ready = purlis_core::start::Ready {
             sandbox: None,
             env: vec![(
@@ -2519,6 +2563,15 @@ mod tests {
         plane
     }
 
+    /// Chats of the project at `plane`, on the app's own sessions.
+    fn chats_of(plane: &std::path::Path) -> Chats {
+        Chats::on_host(
+            Box::new(|_| {}),
+            Box::new(Sessions::reporting_to(None)),
+            plane.to_path_buf(),
+        )
+    }
+
     /// A chat on no profile whose program is `program`, standing in `plane`.
     fn a_chat_in(plane: &std::path::Path, program: &str) -> Chat {
         Chat {
@@ -2531,7 +2584,7 @@ mod tests {
     fn a_harness_opened_on_no_profile_in_a_sandboxed_plane_is_refused_not_run_unconfined() {
         // `open_session` with a harness as its program: no profile, and still a harness.
         let plane = a_sandboxed_plane();
-        let chats = Chats::new();
+        let chats = chats_of(plane.path());
 
         let refused = chats
             .start(&a_chat_in(plane.path(), "/nowhere/opencode"), SIZE)
@@ -2551,14 +2604,13 @@ mod tests {
         let plane = a_sandboxed_plane();
         // A program that would run, so only the sandbox decision can keep it from starting.
         let opencode = stand_in::program(plane.path(), "opencode", "#!/bin/sh\nsleep 600\n");
-        let chats = Chats::new();
+        let chats = chats_of(plane.path());
 
         let open = chats.put_back(
             &Record {
                 chats: vec![a_chat_in(plane.path(), &opencode.display().to_string())],
                 ..Default::default()
             },
-            plane.path(),
             SIZE,
         );
 
@@ -2572,7 +2624,7 @@ mod tests {
         let plane = a_sandboxed_plane();
         let elsewhere = tempfile::tempdir().expect("a temp folder");
         let opencode = stand_in::program(elsewhere.path(), "opencode", "#!/bin/sh\nsleep 600\n");
-        let chats = Chats::new();
+        let chats = chats_of(plane.path());
 
         let refused = chats
             .start(
@@ -2607,7 +2659,7 @@ mod tests {
             }
             let below = plane.path().join("workspaces/w");
             std::fs::create_dir_all(&below).expect("a workspace");
-            let chats = Chats::new();
+            let chats = chats_of(plane.path());
             let refused = chats
                 .start(
                     &Chat {
@@ -2628,7 +2680,7 @@ mod tests {
     #[test]
     fn a_shell_in_a_sandboxed_plane_is_still_the_operators_own() {
         let plane = a_sandboxed_plane();
-        let chats = Chats::new();
+        let chats = chats_of(plane.path());
 
         let session = chats
             .start(&a_chat_in(plane.path(), "/bin/sh"), SIZE)
@@ -2721,7 +2773,7 @@ mod tests {
         // #1123: charter wraps Codex where it can (macOS); a program that is not there, or a
         // system charter cannot wrap it on, refuses the chat rather than starting it without.
         let plane = a_sandboxed_plane();
-        let chats = Chats::new();
+        let chats = chats_of(plane.path());
 
         let refused = chats
             .start(&a_chat_in(plane.path(), "/nowhere/codex"), SIZE)
@@ -2730,6 +2782,212 @@ mod tests {
         assert!(!refused.contains("#1123"), "{refused}");
         assert!(refused.contains("started"), "{refused}");
         assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    /// Chats of the project at `plane`, on a host that runs nothing: a start that is not
+    /// refused opens, whatever program it names.
+    fn pretend_chats_of(plane: &std::path::Path) -> Chats {
+        Chats::on_host(
+            Box::new(|_| {}),
+            Box::new(Pretend::default()),
+            plane.to_path_buf(),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_harness_on_no_profile_whose_folder_was_swapped_for_a_link_is_refused() {
+        // #1410: `workspaces` replaced by a link to a folder outside the project. Walking up
+        // from the chat's folder then finds no project, and the chat used to start unsandboxed.
+        let plane = a_sandboxed_plane();
+        let elsewhere = tempfile::tempdir().expect("a folder outside the project");
+        std::fs::create_dir_all(elsewhere.path().join("w")).expect("a folder");
+        std::os::unix::fs::symlink(elsewhere.path(), plane.path().join("workspaces"))
+            .expect("a link");
+        let chats = pretend_chats_of(plane.path());
+
+        let refused = chats
+            .start(
+                &a_chat_in(&plane.path().join("workspaces/w"), "/nowhere/opencode"),
+                SIZE,
+            )
+            .expect_err("not started");
+
+        assert_eq!(refused, purlis_core::sandbox::FOLDER_LINKED);
+        assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    #[test]
+    fn a_harness_on_no_profile_in_a_folder_with_no_project_is_refused() {
+        // #1410: no project above the chat's folder is no reason to drop the open project's
+        // sandbox.
+        let plane = a_sandboxed_plane();
+        let elsewhere = tempfile::tempdir().expect("a folder in no project");
+        let chats = pretend_chats_of(plane.path());
+
+        let refused = chats
+            .start(&a_chat_in(elsewhere.path(), "/nowhere/opencode"), SIZE)
+            .expect_err("not started");
+        assert_eq!(refused, purlis_core::sandbox::FOLDER_OUTSIDE);
+
+        let refused = chats
+            .start(&chat("/nowhere/opencode", "no folder", None), SIZE)
+            .expect_err("not started");
+        assert_eq!(refused, purlis_core::sandbox::FOLDER_MISSING);
+        assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    #[test]
+    fn a_manifest_planted_below_the_project_does_not_change_a_chats_project() {
+        // #1410: a manifest written in a folder below the root (outside `workspaces/`, which
+        // is not re-rooted) would be found as the project of a chat started there.
+        let plane = a_sandboxed_plane();
+        let planted = plane.path().join("notes");
+        std::fs::create_dir_all(&planted).expect("a folder");
+        std::fs::write(planted.join(purlis_core::plane::MANIFEST), "").expect("a manifest");
+        let chats = pretend_chats_of(plane.path());
+
+        let refused = chats
+            .start(&a_chat_in(&planted, "/nowhere/opencode"), SIZE)
+            .expect_err("not started");
+
+        assert!(
+            refused.starts_with("this plane runs every chat sandboxed"),
+            "{refused}"
+        );
+        assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    #[test]
+    fn a_harness_on_no_profile_is_told_the_open_project_and_a_shell_is_not() {
+        // Its hooks and guards act for the project the chat was started in, as a chat on a
+        // profile's do, and never for one they would find above its folder.
+        let project = no_project();
+        let host = Pretend::default();
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()), project.clone());
+        let elsewhere = tempfile::tempdir().expect("a folder");
+        let root_of = |opening: &crate::host::Opening| {
+            opening
+                .env
+                .iter()
+                .filter(|(key, _)| key == "PURLIS_ROOT")
+                .map(|(_, value)| value.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let agent = chats
+            .start(&a_chat_in(elsewhere.path(), "/nowhere/claude"), SIZE)
+            .expect("starts");
+        let opening = host.openings().pop().expect("opened");
+        assert_eq!(root_of(&opening), [project.display().to_string()]);
+
+        let shell = chats
+            .start(&a_chat_in(elsewhere.path(), "/bin/sh"), SIZE)
+            .expect("starts");
+        let opening = host.openings().pop().expect("opened");
+        assert_eq!(root_of(&opening), Vec::<String>::new());
+        let _ = chats.close(agent);
+        let _ = chats.close(shell);
+    }
+
+    #[test]
+    fn a_harness_on_no_profile_in_a_project_whose_manifest_has_gone_is_refused() {
+        // D-1410e: the open project cannot say whether it runs chats sandboxed.
+        let gone = tempfile::tempdir().expect("a project whose manifest has gone");
+        let chats = pretend_chats_of(gone.path());
+
+        let refused = chats
+            .start(&a_chat_in(gone.path(), "/nowhere/claude"), SIZE)
+            .expect_err("not started");
+
+        assert_eq!(
+            refused,
+            purlis_core::sandbox::NotStarted::PlaneMissing.to_string()
+        );
+        assert!(chats.in_order().is_empty(), "a chat was opened");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_system_with_no_backend_checks_no_folder_for_a_sandbox_it_never_applies() {
+        // Windows starts every chat unsandboxed, and says why: a folder check there would
+        // refuse for a sandbox that was never going to be applied.
+        let plane = a_sandboxed_plane();
+        let elsewhere = tempfile::tempdir().expect("a folder outside the project");
+        std::os::unix::fs::symlink(elsewhere.path(), plane.path().join("workspaces"))
+            .expect("a link");
+        let on = |os| purlis_core::sandbox::Machine {
+            env: purlis_core::secrets::Env::of(&[]),
+            home: None,
+            os,
+        };
+        let linked = plane.path().join("workspaces");
+
+        let windows = project_sandbox(
+            Harness::ClaudeCode,
+            plane.path(),
+            Some(&linked),
+            &on(purlis_core::sandbox::Os::Windows),
+            &|_| true,
+        );
+        assert!(
+            matches!(
+                windows,
+                Ok(Some(purlis_core::sandbox::Decided::Unsandboxed(
+                    purlis_core::sandbox::Lifted {
+                        by: purlis_core::sandbox::By::NoBackend(_),
+                        ..
+                    }
+                )))
+            ),
+            "{windows:?}"
+        );
+        let mac = project_sandbox(
+            Harness::ClaudeCode,
+            plane.path(),
+            Some(&linked),
+            &on(purlis_core::sandbox::Os::MacOs),
+            &|_| true,
+        );
+        assert_eq!(
+            mac.map(|_| ()),
+            Err(purlis_core::sandbox::FOLDER_LINKED.to_owned())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_persons_opt_out_still_starts_without_the_sandbox_in_a_linked_folder() {
+        // "Start without the sandbox" is a person's choice for one chat, never a fallback: the
+        // folder check guards a sandbox, and this chat was asked for without one.
+        let plane = a_sandboxed_plane();
+        let elsewhere = tempfile::tempdir().expect("a folder outside the project");
+        std::os::unix::fs::symlink(elsewhere.path(), plane.path().join("workspaces"))
+            .expect("a link");
+        let mut chats = pretend_chats_of(plane.path());
+        // An opt-out is recorded before it runs (ADR 0067 §7).
+        let said = saying(&mut chats);
+        let ready = purlis_core::start::Ready {
+            harness: Some(Harness::ClaudeCode),
+            unsandboxed: Some(a_person_lifted_it()),
+            ..a_shell_ready()
+        };
+        let chat = Chat {
+            cwd: Some(plane.path().join("workspaces")),
+            ..chat("/bin/sh", "c", None)
+        };
+
+        let session = chats.start_ready(&chat, &ready, SIZE).expect("starts");
+
+        assert!(
+            lock(&said)
+                .iter()
+                .any(|line| line.starts_with("trust.sandbox.off")),
+            "{:?}",
+            lock(&said)
+        );
+        assert!(chats.record().chats[0].unsandboxed);
+        let _ = chats.close(session);
     }
 
     #[test]
@@ -3413,8 +3671,6 @@ mod tests {
             .collect()
     }
 
-    const HERE: &str = "/nonexistent-plane";
-
     #[test]
     fn a_chat_that_did_not_start_is_started_by_retry_once_what_it_needs_is_back() {
         // NO-3: Retry now, after the harness was reinstalled. The chat is the recorded one,
@@ -3428,9 +3684,7 @@ mod tests {
         let from = lock(&wrote).len();
 
         assert_eq!(a_claude(dir.path()), program);
-        let session = chats
-            .retry(&id, std::path::Path::new(HERE), SIZE)
-            .expect("it starts now");
+        let session = chats.retry(&id, SIZE).expect("it starts now");
 
         assert!(chats.would_not_start().is_empty());
         let open: Vec<(u32, String)> = chats
@@ -3455,7 +3709,7 @@ mod tests {
         let id = waiting_id(&chats);
 
         let refused = chats
-            .retry(&id, std::path::Path::new(HERE), SIZE)
+            .retry(&id, SIZE)
             .expect_err("the program is still not there");
 
         assert_eq!(
@@ -3520,8 +3774,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane_with_work(dir.path(), "");
         let (chats, _) = recorded();
+        let chats = chats.in_project(&root);
 
-        let open = chats.put_back(&one_on_work(&root), &root, SIZE);
+        let open = chats.put_back(&one_on_work(&root), SIZE);
 
         assert!(open.is_empty(), "an unapproved profile started");
         let waiting = chats.would_not_start();
@@ -3552,8 +3807,9 @@ mod tests {
         .expect("approved once");
         a_plane_with_work(dir.path(), ", \"--then-something-else\"");
         let (chats, _) = recorded();
+        let chats = chats.in_project(&root);
 
-        chats.put_back(&one_on_work(&root), &root, SIZE);
+        chats.put_back(&one_on_work(&root), SIZE);
 
         let waiting = chats.would_not_start();
         let asked = waiting[0].approval.clone().expect("it asks again");
@@ -3570,8 +3826,9 @@ mod tests {
         let filler = "x".repeat(purlis_core::shown::DISPLAY_LIMIT);
         let root = a_plane_with_work(dir.path(), &format!(", \"{filler}\", \"the-last-word\""));
         let (chats, _) = recorded();
+        let chats = chats.in_project(&root);
 
-        chats.put_back(&one_on_work(&root), &root, SIZE);
+        chats.put_back(&one_on_work(&root), SIZE);
 
         let waiting = chats.would_not_start();
         let asked = waiting[0].approval.clone().expect("it asks");
@@ -3592,16 +3849,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane_with_work(dir.path(), "");
         let (chats, _) = recorded();
-        chats.put_back(&one_on_work(&root), &root, SIZE);
+        let chats = chats.in_project(&root);
+        chats.put_back(&one_on_work(&root), SIZE);
         let waiting = chats.would_not_start();
         let asked = waiting[0].approval.clone().expect("it asks");
 
         purlis_core::profiletrust::approve(&root, &work_at(&root), &asked.shown)
             .expect("the line shown is the line on disk");
         assert!(chats.open_now().is_empty(), "approving started the chat");
-        chats
-            .retry(&waiting[0].id, &root, SIZE)
-            .expect("it starts now");
+        chats.retry(&waiting[0].id, SIZE).expect("it starts now");
 
         assert!(chats.would_not_start().is_empty());
         chats.end_all();
@@ -3614,6 +3870,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane_with_work(dir.path(), "");
         let (chats, _) = recorded();
+        let chats = chats.in_project(&root);
         let record = one_on_work(&root);
         chats.put_back(
             &Record {
@@ -3623,7 +3880,6 @@ mod tests {
                 }],
                 ..record
             },
-            &root,
             SIZE,
         );
         let waiting = chats.would_not_start();
@@ -3638,9 +3894,7 @@ mod tests {
         )
         .unwrap();
 
-        chats
-            .retry(&waiting[0].id, &root, SIZE)
-            .expect_err("not approved");
+        chats.retry(&waiting[0].id, SIZE).expect_err("not approved");
 
         let asked = chats.would_not_start()[0].approval.clone();
         assert_eq!(
@@ -3746,9 +4000,8 @@ mod tests {
     #[test]
     fn a_chat_that_is_not_waiting_to_start_cannot_be_retried_or_forgotten() {
         let (chats, _) = recorded();
-        let here = std::path::Path::new(HERE);
         assert!(chats.forget(ID).is_err());
-        assert!(chats.retry(ID, here, SIZE).is_err());
+        assert!(chats.retry(ID, SIZE).is_err());
     }
 
     #[test]
@@ -3763,9 +4016,7 @@ mod tests {
         let was = open[0].session;
         let id = chats.record().chats[0].identity.id.clone().unwrap();
 
-        let session = chats
-            .start_fresh(was, std::path::Path::new(HERE), SIZE)
-            .expect("it starts again");
+        let session = chats.start_fresh(was, SIZE).expect("it starts again");
         assert_ne!(session, was);
         let both = chats.record();
         assert_eq!(both.chats.len(), 1, "one chat, while two programs run");
@@ -3800,7 +4051,7 @@ mod tests {
         std::fs::remove_file(&claude).unwrap();
 
         chats
-            .start_fresh(was, std::path::Path::new(HERE), SIZE)
+            .start_fresh(was, SIZE)
             .expect_err("its program is gone");
 
         let open: Vec<u32> = chats
@@ -3830,9 +4081,7 @@ mod tests {
         let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
         chats.hold_order(vec![a, b]);
 
-        let again = chats
-            .start_fresh(a, std::path::Path::new(HERE), SIZE)
-            .expect("it starts again");
+        let again = chats.start_fresh(a, SIZE).expect("it starts again");
         chats.close(a).unwrap();
 
         let last = lock(&wrote).last().cloned().expect("a record was written");
@@ -3849,11 +4098,7 @@ mod tests {
     #[test]
     fn a_chat_that_is_not_open_cannot_be_started_fresh() {
         let (chats, _) = recorded();
-        assert!(
-            chats
-                .start_fresh(42, std::path::Path::new(HERE), SIZE)
-                .is_err()
-        );
+        assert!(chats.start_fresh(42, SIZE).is_err());
     }
 
     #[test]
@@ -3950,7 +4195,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let claude = a_claude(dir.path());
         let (_plane, root) = bare_plane();
-        let chats = Chats::new();
+        let chats = Chats::new().in_project(&root);
         let first = chats.start(&chat(&claude, "ide.7", None), SIZE).unwrap();
         let second = chats.start(&chat(&claude, "ide.8", None), SIZE).unwrap();
         picks(&root, first, "finance");
@@ -3959,8 +4204,8 @@ mod tests {
         let record = chats.record();
         chats.end_all();
 
-        let relaunched = Chats::new();
-        let back = relaunched.put_back(&record, &root, SIZE);
+        let relaunched = Chats::new().in_project(&root);
+        let back = relaunched.put_back(&record, SIZE);
 
         assert_eq!(
             back.len(),
@@ -3995,7 +4240,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let claude = a_claude(dir.path());
         let (_plane, root) = bare_plane();
-        let chats = Chats::new();
+        let chats = Chats::new().in_project(&root);
         let staying = chats.start(&chat(&claude, "ide.7", None), SIZE).unwrap();
         let going = chats.start(&chat(&claude, "ide.8", None), SIZE).unwrap();
         picks(&root, staying, "finance");
@@ -4004,8 +4249,8 @@ mod tests {
         let record = chats.record();
         chats.end_all();
 
-        let relaunched = Chats::new();
-        relaunched.put_back(&record, &root, SIZE);
+        let relaunched = Chats::new().in_project(&root);
+        relaunched.put_back(&record, SIZE);
         let fresh = relaunched
             .start(&chat(&claude, "ide.9", None), SIZE)
             .unwrap();
@@ -5086,7 +5331,7 @@ mod tests {
     fn a_chat_runs_on_whichever_session_host_the_chats_were_given() {
         let host = Pretend::default();
         host.already_dealt(6);
-        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()), no_project());
 
         let session = chats
             .start(
@@ -5199,7 +5444,8 @@ mod tests {
     #[test]
     fn a_chat_whose_last_run_was_unsandboxed_is_audited_back_on_when_it_starts_sandboxed() {
         let plane = a_sandboxed_plane();
-        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()));
+        let mut chats =
+            Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()), no_project());
         chats.arming_with(crate::Shipped {
             binary: Some(plane.path().join("charter")),
             plugin: Some(plane.path().join("plugin")),
@@ -5232,7 +5478,8 @@ mod tests {
     #[test]
     fn a_new_sandboxed_chat_is_counted_and_has_nothing_to_audit() {
         let plane = a_sandboxed_plane();
-        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()));
+        let mut chats =
+            Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()), no_project());
         chats.arming_with(crate::Shipped {
             binary: Some(plane.path().join("charter")),
             plugin: Some(plane.path().join("plugin")),
@@ -5274,7 +5521,7 @@ mod tests {
     #[test]
     fn a_persons_opt_out_that_cannot_be_recorded_is_not_started() {
         let host = Pretend::default();
-        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()), no_project());
         let said = saying_or(&mut chats, Some("the disk is full"));
         let ready = purlis_core::start::Ready {
             harness: Some(Harness::ClaudeCode),
@@ -5296,7 +5543,7 @@ mod tests {
     #[test]
     fn a_persons_opt_out_with_no_event_log_at_all_is_not_started() {
         let host = Pretend::default();
-        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()), no_project());
         let ready = purlis_core::start::Ready {
             harness: Some(Harness::ClaudeCode),
             unsandboxed: Some(a_person_lifted_it()),
@@ -5316,7 +5563,7 @@ mod tests {
     #[test]
     fn a_windows_start_that_cannot_be_recorded_still_starts_and_its_tab_says_so() {
         let host = Pretend::default();
-        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()));
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host.clone()), no_project());
         let _said = saying_or(&mut chats, Some("the disk is full"));
         let ready = purlis_core::start::Ready {
             harness: Some(Harness::ClaudeCode),
@@ -5342,7 +5589,7 @@ mod tests {
     fn only_a_shell_tab_at_the_project_root_is_a_place_to_type_an_install_command() {
         let root = tempfile::tempdir().expect("a project");
         let elsewhere = tempfile::tempdir().expect("elsewhere");
-        let chats = Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()));
+        let chats = Chats::on_host(Box::new(|_| {}), Box::new(Pretend::default()), no_project());
         let shell_at = |cwd: &std::path::Path| {
             chats
                 .start(

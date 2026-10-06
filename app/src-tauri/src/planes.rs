@@ -537,7 +537,7 @@ impl Held {
             }
         };
         let wanted = record.chats.len();
-        let back = self.chats.put_back(&record, &self.root, size).len();
+        let back = self.chats.put_back(&record, size).len();
         if wanted > 0 {
             tracing::info!(
                 "purlis: plane {}, {back} of {wanted} chats back",
@@ -585,7 +585,7 @@ impl Held {
     /// it — off the board, its program gone — so nothing the window does or fails to do can leave
     /// it running. A refused start ends nothing. The new one takes the old one's place in front.
     pub fn start_chat_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
-        let started = self.chats.start_fresh(session, &self.root, size)?;
+        let started = self.chats.start_fresh(session, size)?;
         let in_front = self.chats.front() == Some(session);
         // The new one has started, so it is the answer whatever the old one's end says: a
         // program that had already ended answers its close with an error, and the new chat
@@ -1683,9 +1683,11 @@ impl Planes {
             clone_seat: reopen::CloneSeat::of(&root, device.clone()),
         });
         let writes = Arc::clone(&records);
+        // The project every chat started here is of, sandbox and all (#1410).
         let mut chats = Chats::on_host(
             Box::new(move |record| writes.write(record)),
             (self.hosting)(reporting),
+            root.clone(),
         );
         chats.arming_with(self.shipped.clone());
         chats.stopped_by(Arc::clone(&self.kill_switch));
@@ -3511,7 +3513,6 @@ mod tests {
                 chats: vec![an_agent_that_will_not_go_quietly()],
                 ..one_chat_on("/bin/sh")
             },
-            held.root(),
             A_PANE,
         );
 

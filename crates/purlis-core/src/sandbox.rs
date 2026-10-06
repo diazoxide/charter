@@ -85,6 +85,10 @@ pub struct Plane {
     /// The file is there and is not TOML charter can read, so what it says about the sandbox
     /// is unknown ([`NotStarted::PlaneUnreadable`]).
     unreadable: bool,
+    /// There is no file at all, so what the project says about the sandbox is unknown too
+    /// ([`NotStarted::PlaneMissing`]): a project's own manifest that has gone never reads as
+    /// "the sandbox is off" (D-1410e).
+    missing: bool,
 }
 
 impl Plane {
@@ -96,15 +100,17 @@ impl Plane {
             Err(()) => Self {
                 top: None,
                 unreadable: true,
+                missing: false,
             },
         }
     }
 
-    /// `text`, the whole of a `charter.toml`.
+    /// `text`, the whole of a `charter.toml`, or `None` where there is no file.
     pub fn of(text: Option<&str>) -> Self {
         let top = text.map(|text| text.parse::<toml::Table>().ok());
         Self {
             unreadable: matches!(top, Some(None)),
+            missing: top.is_none(),
             top: top.flatten(),
         }
     }
@@ -112,6 +118,11 @@ impl Plane {
     /// Whether the file is there and charter cannot read it as TOML.
     pub fn unreadable(&self) -> bool {
         self.unreadable
+    }
+
+    /// Whether there is no file at all.
+    pub fn missing(&self) -> bool {
+        self.missing
     }
 
     /// What it says about the sandbox.
@@ -519,6 +530,13 @@ pub enum Os {
 }
 
 impl Os {
+    /// Whether purlis has a sandbox backend on this system at all. Where it has none (Windows),
+    /// a chat in a project that turns the sandbox on starts unsandboxed and says why
+    /// ([`By::NoBackend`]), so nothing about a sandbox is checked for it.
+    pub fn has_backend(self) -> bool {
+        self != Self::Windows
+    }
+
     /// This machine's.
     pub fn this() -> Self {
         if cfg!(target_os = "macos") {
@@ -1205,16 +1223,23 @@ pub fn never_on(harness: Harness, os: Os) -> Option<String> {
 
 /// Why a sandboxed chat with no folder of its own is not started.
 pub const FOLDER_MISSING: &str = "this plane runs every chat sandboxed, and the chat has no folder \
-                                  of its own to be confined to, so nothing was started.";
+                                  of its own to be confined to, so nothing was started. Forget \
+                                  this chat and start a new one in a folder of the project; Start \
+                                  without the sandbox is yours to pick when you start it.";
 
 /// Why a sandboxed chat in a linked folder is not started.
 pub const FOLDER_LINKED: &str = "this plane runs every chat sandboxed, and the chat's folder, or a \
                                  folder between it and the plane, is a link or not a real folder, \
-                                 so nothing was started.";
+                                 so nothing was started. Move the chat's folder into the project \
+                                 as a real folder, or forget this chat and start a new one; Start \
+                                 without the sandbox is yours to pick when you start it.";
 
 /// Why a sandboxed chat outside its plane is not started.
 pub const FOLDER_OUTSIDE: &str = "this plane runs every chat sandboxed, and the chat's folder is \
-                                  not inside the plane, so nothing was started.";
+                                  not inside the plane, so nothing was started. Move the chat's \
+                                  folder into the project, or forget this chat and start a new \
+                                  one; Start without the sandbox is yours to pick when you start \
+                                  it.";
 
 /// Why a chat in the folder `cwd` of the plane at `root` may not start sandboxed, or `None`
 /// (ruling of 2026-10-03): every folder from the plane's own, as the kernel names it, down to
@@ -1374,6 +1399,9 @@ pub enum NotStarted {
     /// The plane's `charter.toml` cannot be read, so whether it turns the sandbox on is
     /// unknown, and the chat is not started rather than started unsandboxed.
     PlaneUnreadable,
+    /// The open project's own manifest is not there, so whether it runs chats sandboxed is
+    /// unknown, and the chat is not started rather than started unsandboxed (D-1410e).
+    PlaneMissing,
     /// A path the sandbox would deny covers the ground the chat stands on ([`covering`]), so
     /// it would start unable to write where it works (#1327).
     CoversItsGround {
@@ -1449,6 +1477,11 @@ impl fmt::Display for NotStarted {
                 "{FILE} in this plane cannot be read as TOML, so purlis cannot tell whether it \
                  runs chats sandboxed, and nothing was started. Fix {FILE} and start the chat \
                  again."
+            ),
+            Self::PlaneMissing => write!(
+                f,
+                "This project's {FILE} is missing, so purlis cannot tell whether it runs chats \
+                 sandboxed, and nothing was started. Restore {FILE}, or reopen the project."
             ),
             Self::CoversItsGround {
                 path,
@@ -1758,10 +1791,11 @@ pub fn decide(
     has: &dyn Fn(&str) -> bool,
     opt_out: Option<&OptOut>,
 ) -> Result<Option<Decided>, NotStarted> {
-    // A file that cannot be read may say `[sandbox]`, so it never reads as "not set": it falls
-    // through to the refusal below, which the opt-out sits inside.
+    // A file that cannot be read may say `[sandbox]`, so it never reads as "not set", and nor
+    // does one that has gone (D-1410e): each falls through to a refusal below, which the
+    // opt-out sits inside.
     let plane = Plane::read(root);
-    if !plane.unreadable() && plane.said().policy.is_none() {
+    if !plane.unreadable() && !plane.missing() && plane.said().policy.is_none() {
         return Ok(None);
     }
     if let Some(opt_out) = opt_out {
@@ -1770,11 +1804,14 @@ pub fn decide(
             reason: opt_out.kept_reason(),
         })));
     }
-    if machine.os == Os::Windows {
+    if !machine.os.has_backend() {
         return Ok(Some(Decided::Unsandboxed(Lifted {
             by: By::NoBackend(Os::Windows),
             reason: None,
         })));
+    }
+    if plane.missing() {
+        return Err(NotStarted::PlaneMissing);
     }
     for_start(harness, root, machine, has).map(|applied| applied.map(Decided::Sandboxed))
 }
@@ -1829,7 +1866,8 @@ pub fn ahead(
             | NotStarted::Uncompilable(_)
             | NotStarted::CoversItsGround { .. }
             | NotStarted::Unread(_)
-            | NotStarted::PlaneUnreadable => None,
+            | NotStarted::PlaneUnreadable
+            | NotStarted::PlaneMissing => None,
         },
     };
     match decide(harness, root, machine, has, None) {

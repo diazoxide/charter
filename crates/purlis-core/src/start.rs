@@ -302,8 +302,17 @@ pub fn ready_on(
         },
         None => {
             // A declared harness has no adapter, so nothing compiles a sandbox for it yet
-            // (SD-2): in a project that turned the sandbox on, it is not started at all.
-            if crate::sandbox::Plane::read(root).said().policy.is_some() {
+            // (SD-2): in a project that turned the sandbox on, it is not started at all. Nor in
+            // one whose manifest has gone or cannot be read, which may have turned it on
+            // (D-1410e): neither reads as "the sandbox is off".
+            let plane = crate::sandbox::Plane::read(root);
+            if plane.missing() {
+                return Err(crate::sandbox::NotStarted::PlaneMissing.to_string());
+            }
+            if plane.unreadable() {
+                return Err(crate::sandbox::NotStarted::PlaneUnreadable.to_string());
+            }
+            if plane.said().policy.is_some() {
                 return Err(format!(
                     "this project turns the sandbox on, and purlis cannot sandbox a {} chat \
                      yet — it is a declared harness with no adapter, and a chat that cannot be \
