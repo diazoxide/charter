@@ -107,6 +107,11 @@ impl HarnessAdapter for Opencode {
         Some(|compiled| crate::sandbox::opencode::wrap(compiled).map(Form::Opencode))
     }
 
+    /// Yes: the wrap is around the whole harness, so its plugin's hooks run inside it.
+    fn sandbox_holds_what_it_starts(&self) -> bool {
+        true
+    }
+
     /// The wrap's program first, with the profile written for where the chat opens, then the
     /// chat's whole line. Its traffic is pointed at charter's egress proxy, the only place the
     /// profile lets it connect, and its temp directory is its own.

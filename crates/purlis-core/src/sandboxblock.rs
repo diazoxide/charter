@@ -359,8 +359,26 @@ fn on_stderr(text: &str, place: &Place<'_>) -> Vec<(Block, Option<String>)> {
     // refusal would only count it again, less well.
     if out.is_empty() {
         let lines: Vec<&str> = text.lines().collect();
+        // purlis's own words for a write the chat's sandbox refused it (#1421): purlis's own
+        // block, which no grant names, as a violation line naming `purlis` is.
+        out.extend(
+            lines
+                .iter()
+                .filter_map(|line| purlis_refusal(line, place))
+                .map(|kind| {
+                    (
+                        Block {
+                            operation: Operation::Write,
+                            kind,
+                            ours: true,
+                        },
+                        None,
+                    )
+                }),
+        );
         out.extend(
             (0..lines.len())
+                .filter(|at| purlis_refusal(lines[*at], place).is_none())
                 .filter_map(|at| refused_path(&lines, at, place))
                 .filter(|(_, kind, _)| !matches!(kind, Kind::ChatFolder | Kind::Temp))
                 // A read there that macOS's privacy controls refuse (`du`, `find`, `ls`) says
@@ -479,6 +497,32 @@ fn writes(program: &str, said: &str) -> bool {
         ]
         .iter()
         .any(|stem| said.contains(stem))
+}
+
+/// The kind of path a line of purlis's own refusal wording names, where `line` is one: the
+/// sandboxed [`crate::rewrite::refused_write`] ("this chat's sandbox refused writing <path>
+/// (Operation not permitted). …"), or a sentence carrying [`crate::rewrite::os_words`]'s clause
+/// ("… <path> (Operation not permitted: this chat's sandbox refused it) …"). In the second the
+/// path is the caller's, read as the last absolute path before the clause (a relative one there
+/// is the project's, not the command's folder's); a line that names none is the project's
+/// files, which is what purlis writes.
+fn purlis_refusal(line: &str, place: &Place<'_>) -> Option<Kind> {
+    use crate::rewrite::{NOT_PERMITTED, SANDBOX_REFUSED_IT, SANDBOX_REFUSED_WRITING};
+    if let Some(at) = line.find(SANDBOX_REFUSED_WRITING) {
+        let rest = &line[at + SANDBOX_REFUSED_WRITING.len()..];
+        let path = rest
+            .split(NOT_PERMITTED)
+            .next()
+            .filter(|_| rest.contains(NOT_PERMITTED))?;
+        return Some(kind_of(Path::new(path), place));
+    }
+    let at = line.find(&format!("Operation not permitted: {SANDBOX_REFUSED_IT}"))?;
+    let named = line[..at]
+        .split_whitespace()
+        .rev()
+        .map(|word| word.trim_matches(|c: char| "'\"`(),:".contains(c)))
+        .find(|word| word.starts_with('/'));
+    Some(named.map_or(Kind::ProjectFiles, |path| kind_of(Path::new(path), place)))
 }
 
 /// A program's own "Operation not permitted" at line `at` of `lines`, naming its path, sorted.

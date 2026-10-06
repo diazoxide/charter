@@ -141,7 +141,8 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> Removal {
 
     if let Err(why) = std::fs::remove_dir_all(&dir) {
         say(Say::Fail(format!(
-            "could not remove '{name}' ({why}) — some of it may still be there."
+            "could not remove '{name}' ({}) — some of it may still be there.",
+            crate::rewrite::os_words(&why)
         )));
         return Removal::just(1);
     }

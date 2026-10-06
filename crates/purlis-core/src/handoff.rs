@@ -57,6 +57,7 @@
 //! `handoff-inside-the-app-opens-the-chat-there-and-records-its-todo` (ADR 0046).
 
 use crate::active::Place;
+use crate::names::HANDOFF_SAYS;
 
 /// The first line of every handoff's first message. Facts charter can observe and no
 /// instruction: where it came from, which workspace that was, and when.
@@ -124,24 +125,23 @@ impl NoBrief {
         );
         match self {
             Self::Closed => format!(
-                "charter handoff: this shell has no stdin at all — the command was run with \
+                "{HANDOFF_SAYS} this shell has no stdin at all — the command was run with \
                  its input closed, so there is nothing to read a brief from and nothing was \
                  opened. {heredoc}"
             ),
             Self::Terminal => format!(
-                "charter handoff: reads its brief from stdin, and stdin here is a terminal — \
+                "{HANDOFF_SAYS} reads its brief from stdin, and stdin here is a terminal — \
                  nothing was opened. {heredoc}"
             ),
             Self::NotUtf8 => {
-                "charter handoff: the brief on stdin is not UTF-8 text — nothing was opened."
-                    .to_string()
+                format!("{HANDOFF_SAYS} the brief on stdin is not UTF-8 text — nothing was opened.")
             }
             // "Pass IT", where the two above say "Pass THE BRIEF". charter words this one
             // differently — the sentence in front of it has just named the brief — and the
             // differential caught the paraphrase, which is the whole reason it compares
             // stderr byte for byte.
             Self::Empty => format!(
-                "charter handoff: the brief on stdin is empty — nothing was opened. {}",
+                "{HANDOFF_SAYS} the brief on stdin is empty — nothing was opened. {}",
                 heredoc.replacen("Pass the brief as", "Pass it as", 1)
             ),
         }

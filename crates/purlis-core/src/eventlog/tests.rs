@@ -1640,3 +1640,16 @@ fn every_sandbox_grant_and_revoke_is_a_trust_event_naming_what_it_named() {
     assert_eq!(revoked.chat, None);
     assert_eq!(read(dir.path()).unwrap().last(), Some(&revoked), "written");
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_segment_the_filesystem_refuses_to_open_names_the_segment() {
+    // #1421: an EPERM here printed only "Operation not permitted (os error 1)".
+    let dir = tempfile::tempdir().unwrap();
+    let _frozen = crate::rewrite::frozen::Frozen::at(dir.path());
+    let segment = dir.path().join(FILE);
+
+    let refused = private_file(&segment).unwrap_err();
+
+    crate::rewrite::frozen::names(&refused, &segment);
+}

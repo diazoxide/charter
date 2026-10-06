@@ -53,6 +53,7 @@ use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 
 use purlis_core::handoff::{self, BadMessage, NoBrief};
+use purlis_core::names::HANDOFF_SAYS;
 
 use crate::voice;
 
@@ -92,7 +93,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
             return report_back(summary);
         }
         voice::err(&format!(
-            "charter handoff: takes one workspace and its brief on stdin, and was given a \
+            "{HANDOFF_SAYS} takes one workspace and its brief on stdin, and was given a \
              second word after '{}' — nothing was opened. A report back is spelled: charter \
              handoff report \"<summary>\"",
             purlis_core::personas::one_line(ws)
@@ -102,7 +103,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
 
     if !purlis_core::contain::workspace_name_ok(ws) {
         voice::err(&format!(
-            "charter handoff: '{}' cannot name a workspace — nothing was opened. A workspace \
+            "{HANDOFF_SAYS} '{}' cannot name a workspace — nothing was opened. A workspace \
              name is letters, digits, '.', '_' and '-', and does not start with a dot.",
             purlis_core::personas::one_line(ws)
         ));
@@ -111,17 +112,17 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     let vision = args.vision.as_deref().filter(|v| !v.is_empty());
     if vision.is_some() && !args.create {
         voice::err(&format!(
-            "charter handoff: --vision describes a workspace this call creates, and '{ws}' is \
+            "{HANDOFF_SAYS} --vision describes a workspace this call creates, and '{ws}' is \
              not being created — nothing was opened. Set an existing workspace's vision with: \
              purlis workspace vision --workspace {ws} \"<the goal>\""
         ));
         return ExitCode::FAILURE;
     }
     if args.create && vision.is_none() {
-        voice::err(
-            "charter handoff: --create needs --vision — a workspace with no vision is never \
-             proposed as a target, so it would be created unfindable. Nothing was opened.",
-        );
+        voice::err(&format!(
+            "{HANDOFF_SAYS} --create needs --vision — a workspace with no vision is never \
+             proposed as a target, so it would be created unfindable. Nothing was opened."
+        ));
         return ExitCode::FAILURE;
     }
     // `workspace use`'s rule, asked rather than re-invented: the always-present workspace
@@ -136,14 +137,14 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         || ws == purlis_core::active::plane_default_workspace(root);
     if args.create && exists {
         voice::err(&format!(
-            "charter handoff: workspace '{ws}' already exists, and --create only makes a new \
+            "{HANDOFF_SAYS} workspace '{ws}' already exists, and --create only makes a new \
              one — nothing was opened. Drop --create to hand off into it."
         ));
         return ExitCode::FAILURE;
     }
     if !args.create && !exists {
         voice::err(&format!(
-            "charter handoff: no workspace '{ws}' on this plane — nothing was opened. Create \
+            "{HANDOFF_SAYS} no workspace '{ws}' on this plane — nothing was opened. Create \
              it in the same call: charter handoff {ws} --create --vision \"<what it is for>\""
         ));
         return ExitCode::FAILURE;
@@ -156,7 +157,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         && let Some(refused) = purlis_core::personas::name_refusal(root, name)
     {
         voice::err(&format!(
-            "charter handoff: {refused} — have: {}. Nothing was opened.",
+            "{HANDOFF_SAYS} {refused} — have: {}. Nothing was opened.",
             some(&here.plane.personas().unwrap_or_default())
         ));
         return ExitCode::FAILURE;
@@ -168,9 +169,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         None => None,
         Some(Ok(name)) => name,
         Some(Err(why)) => {
-            voice::err(&format!(
-                "charter handoff: --name: {why} Nothing was opened."
-            ));
+            voice::err(&format!("{HANDOFF_SAYS} --name: {why} Nothing was opened."));
             return ExitCode::FAILURE;
         }
     };
@@ -188,7 +187,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     // the transcript this exists to keep it out of.
     if let Some(kind) = purlis_core::secretshape::kind_as_read(None, &brief) {
         voice::err(&format!(
-            "charter handoff: the brief looks like it carries a secret ({kind}) — nothing was \
+            "{HANDOFF_SAYS} the brief looks like it carries a secret ({kind}) — nothing was \
              opened. A brief travels to the new chat as a command-line argument any local \
              process can read while the harness starts, so it never carries a secret. Name \
              where the credential lives instead of pasting it, as the whole value on its \
@@ -207,7 +206,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     let now = match when(args.now.as_deref()) {
         Ok(now) => now,
         Err(why) => {
-            voice::err(&format!("charter handoff: {why}"));
+            voice::err(&format!("{HANDOFF_SAYS} {why}"));
             return ExitCode::FAILURE;
         }
     };
@@ -221,7 +220,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     // app says so in that case; this is the refusal nearly every such brief gets.
     let sent = handoff::delivered(&msg, &source_chat, args.report).unwrap_or_else(|| msg.clone());
     if let Some(bad) = handoff::bad_message(&sent) {
-        let mut said = format!("charter handoff: {}", bad.say());
+        let mut said = format!("{HANDOFF_SAYS} {}", bad.say());
         // Only the byte bound gets the note, and it is compared against the seam's own
         // sentence rather than re-deriving the bound here: two places counting bytes is how
         // the note comes to appear beside a refusal that was about something else.
@@ -236,10 +235,11 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     // ---- the host: the app that started this chat, if one did ---------------------------
     let create_vision = vision.filter(|_| args.create);
     let refused = match in_the_app(ws, &msg, create_vision, persona, name, args.report) {
-        Host::Opened(chat) => {
+        Host::Opened(chat, row) => {
             record_opened(&Opened {
                 here,
                 chat,
+                row,
                 ws,
                 brief: &brief,
                 source_chat: &source_chat,
@@ -248,9 +248,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
                 now,
             });
             // `commands_handoff.OPENED`, word for word, on stdout where Python prints it.
-            println!(
-                "charter handoff: opened chat {chat} in workspace '{ws}', started on the brief"
-            );
+            println!("{HANDOFF_SAYS} opened chat {chat} in workspace '{ws}', started on the brief");
             return ExitCode::SUCCESS;
         }
         Host::Refused(why) => Some(why),
@@ -263,12 +261,12 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     let mut said = match refused {
         // The app answered and said no: that is the whole answer, in its words.
         Some(why) => format!(
-            "charter handoff: the purlis app that started this chat was asked, and would not \
+            "{HANDOFF_SAYS} the purlis app that started this chat was asked, and would not \
              open one: {} — nothing was opened.",
             purlis_core::personas::one_line(&why)
         ),
         None => format!(
-            "charter handoff: no purlis app answered this call, so nothing was opened. Open \
+            "{HANDOFF_SAYS} no purlis app answered this call, so nothing was opened. Open \
              purlis, then run this handoff again from a chat the app started — or start a \
              chat in workspace '{ws}' from the window and give it the brief."
         ),
@@ -317,33 +315,43 @@ fn record_opened(opened: &Opened<'_>) {
             purlis_core::personas::one_line(&dup)
         )),
         Err(why) => voice::warn(&format!(
-            "charter handoff: chat {chat} is open in '{ws}', but its todo could not be \
+            "{HANDOFF_SAYS} chat {chat} is open in '{ws}', but its todo could not be \
              recorded there ({}). Record it with: purlis workspace todo -w {ws} \"<the \
              brief's first line>\"",
             purlis_core::personas::one_line(&why)
         )),
     }
-    let placement = if opened.source.workspace() == Some(ws) {
-        purlis_core::dispatch::Placement::Here
-    } else {
-        purlis_core::dispatch::Placement::Elsewhere
+    // The app writes the row where it opened the chat (#1421): a sandboxed chat may not write
+    // the project's `personas/_dispatch/`. An app that leaves it here gets it written here.
+    let unwritten = match &opened.row {
+        Some(purlis_core::hookwire::Row::Written) => None,
+        Some(purlis_core::hookwire::Row::Unwritten { why }) => Some(why.clone()),
+        None => {
+            let placement = if opened.source.workspace() == Some(ws) {
+                purlis_core::dispatch::Placement::Here
+            } else {
+                purlis_core::dispatch::Placement::Elsewhere
+            };
+            purlis_core::dispatch::record_handoff(
+                opened.here.plane.root(),
+                placement,
+                opened.created,
+                opened.now.with_timezone(&chrono::Utc),
+                &purlis_core::dispatch::this_log_name(),
+            )
+            .err()
+            .map(|why| purlis_core::rewrite::os_words(&why))
+        }
     };
-    let recorded = purlis_core::dispatch::record_handoff(
-        opened.here.plane.root(),
-        placement,
-        opened.created,
-        opened.now.with_timezone(&chrono::Utc),
-        &purlis_core::dispatch::this_log_name(),
-    );
-    if let Err(why) = recorded {
+    if let Some(why) = unwritten {
         // The chat is open and its todo recorded: only the count of handoffs misses one. The
         // OS's words, not the rewording, which would name the log's path a second time and
         // ask for a rerun that would open a second chat (#1359).
         voice::warn(&format!(
-            "charter handoff: chat {chat} is open in '{ws}'. Only its row in the dispatch log \
+            "{HANDOFF_SAYS} chat {chat} is open in '{ws}'. Only its row in the dispatch log \
              (personas/{}) is missing ({}); there is nothing to run again.",
             purlis_core::dispatch::DIR_NAME,
-            purlis_core::personas::one_line(&purlis_core::rewrite::os_words(&why))
+            purlis_core::personas::one_line(&why)
         ));
     }
 }
@@ -382,12 +390,16 @@ struct Opened<'a> {
     source: &'a purlis_core::active::Place,
     created: bool,
     now: chrono::DateTime<chrono::Local>,
+    /// The row the app wrote, or why it could not; `None` from an app that leaves it to this
+    /// command.
+    row: Option<purlis_core::hookwire::Row>,
 }
 
 /// What the app that started this chat did with a handoff.
 enum Host {
-    /// The chat is open, under this number on the app's board.
-    Opened(u32),
+    /// The chat is open, under this number on the app's board, and what became of its row in
+    /// the dispatch log where the app wrote it ([`purlis_core::hookwire::Row`]).
+    Opened(u32, Option<purlis_core::hookwire::Row>),
     /// The app answered, and said no, in its own words.
     Refused(String),
     /// There is no app to ask, or it did not answer: the terminal path, unchanged.
@@ -440,7 +452,7 @@ fn in_the_app(
         report,
     };
     match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
-        Ok(Answer::Opened { chat }) => Host::Opened(chat),
+        Ok(Answer::Opened { chat, row }) => Host::Opened(chat, row),
         Ok(Answer::No { why }) => Host::Refused(why),
         Ok(
             Answer::Ticket { .. }

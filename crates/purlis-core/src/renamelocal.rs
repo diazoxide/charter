@@ -644,7 +644,12 @@ fn move_logs(local: &Local, seams: &Seams, moved: &mut Moved, logs: &Logs) {
         let entry = Entry::Made {
             path: parent.to_path_buf(),
         };
-        if let Err(e) = write_entry(local, &entry).and_then(|()| std::fs::create_dir(parent)) {
+        // The journal's own refusal names the journal; the folder's is said in the OS's words,
+        // since the sentence names the folder (#1421).
+        let made = write_entry(local, &entry)
+            .map_err(|e| e.to_string())
+            .and_then(|()| std::fs::create_dir(parent).map_err(|e| crate::rewrite::os_words(&e)));
+        if let Err(e) = made {
             moved.failed(format!(
                 "the log folder: {} could not be made ({e}), so the logs stay in {}",
                 parent.display(),
@@ -1119,7 +1124,11 @@ fn undo_one(local: &Local, seams: &Seams, moved: &mut Moved, entry: &Entry) {
             };
             match put_back {
                 Ok(()) => moved.done(format!("{}: put back as it was", file.display())),
-                Err(e) => moved.failed(format!("{} could not be put back ({e})", file.display())),
+                Err(e) => moved.failed(format!(
+                    "{} could not be put back ({})",
+                    file.display(),
+                    crate::rewrite::os_words(&e)
+                )),
             }
         }
         Entry::Made { path } => {
