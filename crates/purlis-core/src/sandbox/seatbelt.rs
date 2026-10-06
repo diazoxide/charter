@@ -335,8 +335,22 @@ pub const PROXY_ENV: [&str; 6] = [
 /// connection anyway, and this way it is refused by the proxy, which says why.
 pub const NO_PROXY_ENV: [&str; 2] = ["NO_PROXY", "no_proxy"];
 
+/// What tools read in place of `TMPDIR`, each pointed into a wrapped chat's own temp directory
+/// (#1120, measured on macOS 26.2): `TMP` and `TEMP`, and `xcrun`'s cache and clang's module
+/// cache by the name below it, which otherwise go to the system's per-user temp and cache
+/// folders (`/var/folders/…/T` and `…/C`). No chat may write those, so clang and Swift fail
+/// on the module cache without this. Fresh each start: no chat loads a module another built.
+pub const TEMP_ENV: [(&str, &str); 4] = [
+    ("TMP", ""),
+    ("TEMP", ""),
+    ("xcrun_db", "xcrun_db"),
+    ("CLANG_MODULE_CACHE_PATH", "clang-module-cache"),
+];
+
 /// What a wrapped chat's environment gains: its traffic pointed at the proxy at `proxy`, the
-/// way past it emptied, and its own temp directory `tmp`.
+/// way past it emptied, and its own temp directory `tmp`, under every name in [`TEMP_ENV`] too.
+/// `mktemp` and Foundation's `NSTemporaryDirectory` read no variable at all, and are refused:
+/// a block sorted as `sandboxblock::Kind::SystemTemp`, whose notice gives `mktemp`'s way round.
 pub fn env(proxy: &str, tmp: &Path) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = PROXY_ENV
         .iter()
@@ -348,5 +362,13 @@ pub fn env(proxy: &str, tmp: &Path) -> Vec<(String, String)> {
             .map(|key| ((*key).to_owned(), String::new())),
     );
     env.push(("TMPDIR".to_owned(), tmp.display().to_string()));
+    env.extend(TEMP_ENV.iter().map(|(key, below)| {
+        let at = if below.is_empty() {
+            tmp.to_path_buf()
+        } else {
+            tmp.join(below)
+        };
+        ((*key).to_owned(), at.display().to_string())
+    }));
     env
 }
