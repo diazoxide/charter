@@ -184,6 +184,60 @@ pub struct NotStarted {
     pub name: String,
     /// Why it did not start.
     pub why: String,
+    /// The approval its profile needs before it can start, where it needs one (#1246,
+    /// D-1246-5): read when its start was last refused, so the window offers **Review and
+    /// approve…** from this and never from the words of `why`. Null for a chat on no profile,
+    /// a profile not declared, or one with nothing to approve.
+    pub approval: Option<NeedsApproval>,
+}
+
+/// **A profile's command waiting on the operator's approval** (ADR 0022), as a waiting chat's
+/// Notice offers it (#1246): which profile, and the exact line the approval is for.
+///
+/// What the picker's row says of the same profile (`ProfileRow`), in its words, so the window
+/// draws the picker's own sentence and mark (`ProfileApproval.tsx`, ruling V69). `shown` is the
+/// line `approve_profile` checks the click against: a file changed since this was read is
+/// refused there, and nothing is recorded.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct NeedsApproval {
+    /// The profile's name, as `approve_profile` takes it.
+    pub profile: String,
+    /// Its `kind`.
+    pub kind: String,
+    /// Where it was declared: `built-in`, `charter.local.toml` or the project's harnesses.
+    pub source: String,
+    /// `new` or `changed`, as the picker's row says it.
+    pub approval: String,
+    /// What it would run, as the picker shows it (`profiletrust::shown`), already contained.
+    pub shown: String,
+}
+
+impl NeedsApproval {
+    /// What `chat`'s profile needs approved at `root` before it can start, read through the
+    /// launch's own read, as `approve_profile` reads it: a profile in a file the launch
+    /// refuses has nothing a yes could buy.
+    fn of(chat: &Chat, root: &std::path::Path) -> Option<Self> {
+        let name = chat.profile.as_deref()?;
+        let (set, _check) = purlis_core::profiles::for_launch(root);
+        let profile = set.get(name)?;
+        let needs = purlis_core::profiletrust::approval_needed(root, profile)?;
+        Some(Self {
+            profile: profile.name.clone(),
+            kind: profile.kind.clone(),
+            source: profile.source.as_str().to_owned(),
+            approval: needs.as_str().to_owned(),
+            shown: purlis_core::profiletrust::shown(root, profile),
+        })
+    }
+}
+
+/// A chat a launch could not start, as it is held: the chat, why, and the approval its profile
+/// needs ([`NeedsApproval`]).
+#[derive(Debug)]
+struct Waiting {
+    chat: Chat,
+    why: String,
+    approval: Option<NeedsApproval>,
 }
 
 /// Every chat the app has open, and which of them is in front.
@@ -215,7 +269,7 @@ pub struct Chats {
     /// Chats a launch could not start, and why. They are kept because the record has to
     /// keep them: a workspace directory that has moved, or a harness mid-reinstall, must
     /// not silently delete the chat on the next write.
-    would_not_start: Mutex<Vec<(Chat, String)>>,
+    would_not_start: Mutex<Vec<Waiting>>,
     /// The tabs the window has open that hold a view rather than a chat, as it last said.
     ///
     /// **The window's to say and this layer's to write down**, and nothing else: a view has no
@@ -1186,8 +1240,8 @@ impl Chats {
         for one in lock(&self.open).values_mut() {
             changed |= moved.chat(&mut one.chat);
         }
-        for (chat, _) in lock(&self.would_not_start).iter_mut() {
-            changed |= moved.chat(chat);
+        for one in lock(&self.would_not_start).iter_mut() {
+            changed |= moved.chat(&mut one.chat);
         }
         for view in lock(&self.views).iter_mut() {
             changed |= moved.view(view);
@@ -1307,8 +1361,9 @@ impl Chats {
         // so they keep their place and are tried again at the next launch.
         let mut chats: Vec<Chat> = lock(&self.would_not_start)
             .iter()
-            .filter(|(chat, _)| !superseded(chat, None))
-            .map(|(chat, _)| Chat {
+            .map(|one| &one.chat)
+            .filter(|chat| !superseded(chat, None))
+            .map(|chat| Chat {
                 pid: None,
                 ..chat.clone()
             })
@@ -1403,10 +1458,12 @@ impl Chats {
         let most = self.most_at_once;
         let (starting, too_many) = chats.split_at(chats.len().min(most));
         for (chat, _) in too_many {
-            lock(&self.would_not_start).push((
-                chat.clone(),
-                format!("more than {most} chats were recorded"),
-            ));
+            lock(&self.would_not_start).push(Waiting {
+                chat: chat.clone(),
+                why: format!("more than {most} chats were recorded"),
+                // Never tried, so nothing was refused: Retry now reads it.
+                approval: None,
+            });
         }
         let mut front = None;
         let mut opened: Vec<u32> = Vec::new();
@@ -1420,7 +1477,11 @@ impl Chats {
                 }
                 // Kept, not dropped: the next record has to hold it too, or a directory
                 // that has moved deletes the chat for good.
-                Err(why) => lock(&self.would_not_start).push((chat.clone(), why)),
+                Err(why) => lock(&self.would_not_start).push(Waiting {
+                    approval: NeedsApproval::of(chat, root),
+                    chat: chat.clone(),
+                    why,
+                }),
             }
         }
         self.bring_to_front(front);
@@ -1493,10 +1554,11 @@ impl Chats {
     pub fn would_not_start(&self) -> Vec<NotStarted> {
         lock(&self.would_not_start)
             .iter()
-            .map(|(chat, why)| NotStarted {
-                id: chat.identity.id.clone().unwrap_or_default(),
-                name: chat.name.clone(),
-                why: why.clone(),
+            .map(|one| NotStarted {
+                id: one.chat.identity.id.clone().unwrap_or_default(),
+                name: one.chat.name.clone(),
+                why: one.why.clone(),
+                approval: one.approval.clone(),
             })
             .collect()
     }
@@ -1511,18 +1573,25 @@ impl Chats {
     pub fn retry(&self, id: &str, root: &std::path::Path, size: Size) -> Result<u32, String> {
         let chat = lock(&self.would_not_start)
             .iter()
-            .find(|(chat, _)| chat.identity.id.as_deref() == Some(id))
-            .map(|(chat, _)| chat.clone())
+            .find(|one| one.chat.identity.id.as_deref() == Some(id))
+            .map(|one| one.chat.clone())
             .ok_or_else(|| format!("chat {id} is not waiting to start"))?;
         let started = self.start_recorded(&chat, root, size, Why::Relaunch);
+        // Read again at every refusal, outside the lock: what the profile needs now, and not
+        // what it needed at the launch (#1246).
+        let approval = started
+            .as_ref()
+            .err()
+            .and_then(|_| NeedsApproval::of(&chat, root));
         {
             let mut waiting = lock(&self.would_not_start);
             match &started {
-                Ok(_) => waiting.retain(|(one, _)| one.identity.id.as_deref() != Some(id)),
+                Ok(_) => waiting.retain(|one| one.chat.identity.id.as_deref() != Some(id)),
                 Err(why) => {
-                    for (one, was) in waiting.iter_mut() {
-                        if one.identity.id.as_deref() == Some(id) {
-                            *was = why.clone();
+                    for one in waiting.iter_mut() {
+                        if one.chat.identity.id.as_deref() == Some(id) {
+                            one.why = why.clone();
+                            one.approval = approval.clone();
                         }
                     }
                 }
@@ -1542,7 +1611,7 @@ impl Chats {
             let mut waiting = lock(&self.would_not_start);
             let at = waiting
                 .iter()
-                .position(|(chat, _)| chat.identity.id.as_deref() == Some(id))
+                .position(|one| one.chat.identity.id.as_deref() == Some(id))
                 .ok_or_else(|| format!("chat {id} is not waiting to start"))?;
             waiting.remove(at);
         }
@@ -3305,7 +3374,9 @@ mod tests {
             vec![NotStarted {
                 id: id.clone(),
                 name: "ide.7".to_owned(),
-                why: refused
+                why: refused,
+                // A shell is on no profile, so it has nothing to approve.
+                approval: None,
             }]
         );
         let last = lock(&wrote).len() - 1;
@@ -3314,6 +3385,155 @@ mod tests {
             vec![1],
             "still recorded, once"
         );
+    }
+
+    /// A plane at `dir/plane` declaring the profile `work` (kind `claude`) in its local file,
+    /// running a stand-in that waits, with `extra` after its program in its command. Nothing is
+    /// approved. Answers the plane's root.
+    fn a_plane_with_work(dir: &std::path::Path, extra: &str) -> std::path::PathBuf {
+        let root = dir.join("plane");
+        std::fs::create_dir_all(&root).expect("the plane");
+        std::fs::write(root.join(purlis_core::plane::MANIFEST), "").expect("charter.toml");
+        let program = a_claude(&root);
+        std::fs::write(
+            root.join(purlis_core::profiles::LOCAL_FILE),
+            format!("[harness.work]\nkind = \"claude\"\ncommand = [{program:?}{extra}]\n"),
+        )
+        .expect("the profile");
+        root
+    }
+
+    /// A record holding one chat, `ide.7`, on the profile `work`, standing in `root`.
+    fn one_on_work(root: &std::path::Path) -> Record {
+        Record {
+            chats: vec![Chat {
+                profile: Some("work".to_owned()),
+                cwd: Some(root.to_path_buf()),
+                ..chat("claude", "ide.7", None)
+            }],
+            ..one_recorded("claude")
+        }
+    }
+
+    /// The profile `work` as the launch reads it at `root`.
+    fn work_at(root: &std::path::Path) -> purlis_core::profiles::Profile {
+        purlis_core::profiles::for_launch(root)
+            .0
+            .get("work")
+            .expect("work is declared")
+            .clone()
+    }
+
+    #[test]
+    fn a_chat_waiting_on_a_profile_nobody_approved_says_which_line_needs_approving() {
+        // #1246 (D-1246-5): the waiting chat's record says WHICH profile and WHICH exact line
+        // need approval, so the window offers Review and approve… without reading the reason.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane_with_work(dir.path(), "");
+        let (chats, _) = recorded();
+
+        let open = chats.put_back(&one_on_work(&root), &root, SIZE);
+
+        assert!(open.is_empty(), "an unapproved profile started");
+        let waiting = chats.would_not_start();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(
+            waiting[0].approval,
+            Some(NeedsApproval {
+                profile: "work".to_owned(),
+                kind: "claude".to_owned(),
+                source: purlis_core::profiles::Source::Local.as_str().to_owned(),
+                approval: "new".to_owned(),
+                // The very line the picker shows and `approve_profile` checks a click against.
+                shown: purlis_core::profiletrust::shown(&root, &work_at(&root)),
+            })
+        );
+        chats.end_all();
+    }
+
+    #[test]
+    fn a_chat_waiting_on_a_profile_whose_command_changed_says_it_changed() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane_with_work(dir.path(), "");
+        purlis_core::profiletrust::record_launched(
+            &root,
+            "work",
+            &purlis_core::profiletrust::fingerprint(&work_at(&root)),
+        )
+        .expect("approved once");
+        a_plane_with_work(dir.path(), ", \"--then-something-else\"");
+        let (chats, _) = recorded();
+
+        chats.put_back(&one_on_work(&root), &root, SIZE);
+
+        let waiting = chats.would_not_start();
+        let asked = waiting[0].approval.clone().expect("it asks again");
+        assert_eq!(asked.approval, "changed");
+        assert!(asked.shown.contains("--then-something-else"), "{asked:?}");
+        chats.end_all();
+    }
+
+    #[test]
+    fn a_waiting_chat_whose_profile_is_approved_then_starts_on_retry_and_asks_nothing() {
+        // The approval is recorded by `approve` against the line shown, and Retry now runs the
+        // whole start again: nothing about the approval starts a chat on its own.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane_with_work(dir.path(), "");
+        let (chats, _) = recorded();
+        chats.put_back(&one_on_work(&root), &root, SIZE);
+        let waiting = chats.would_not_start();
+        let asked = waiting[0].approval.clone().expect("it asks");
+
+        purlis_core::profiletrust::approve(&root, &work_at(&root), &asked.shown)
+            .expect("the line shown is the line on disk");
+        assert!(chats.open_now().is_empty(), "approving started the chat");
+        chats
+            .retry(&waiting[0].id, &root, SIZE)
+            .expect("it starts now");
+
+        assert!(chats.would_not_start().is_empty());
+        chats.end_all();
+    }
+
+    #[test]
+    fn a_retry_refused_for_approval_after_another_refusal_says_so_now() {
+        // The approval is read again at every refused start, so a chat that first failed for
+        // another reason offers it once a retry is refused for it.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane_with_work(dir.path(), "");
+        let (chats, _) = recorded();
+        let record = one_on_work(&root);
+        chats.put_back(
+            &Record {
+                chats: vec![Chat {
+                    profile: Some("not-declared-yet".to_owned()),
+                    ..record.chats[0].clone()
+                }],
+                ..record
+            },
+            &root,
+            SIZE,
+        );
+        let waiting = chats.would_not_start();
+        assert_eq!(waiting[0].approval, None, "no such profile to approve");
+        std::fs::write(
+            root.join(purlis_core::profiles::LOCAL_FILE),
+            std::fs::read_to_string(root.join(purlis_core::profiles::LOCAL_FILE))
+                .unwrap()
+                .replace("[harness.work]", "[harness.not-declared-yet]"),
+        )
+        .unwrap();
+
+        chats
+            .retry(&waiting[0].id, &root, SIZE)
+            .expect_err("not approved");
+
+        let asked = chats.would_not_start()[0].approval.clone();
+        assert_eq!(
+            asked.map(|a| a.profile),
+            Some("not-declared-yet".to_owned())
+        );
+        chats.end_all();
     }
 
     #[test]

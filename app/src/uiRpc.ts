@@ -3048,6 +3048,28 @@ export type NearBranch = {
 	piece: string | null,
 };
 
+/**
+ *  **A profile's command waiting on the operator's approval** (ADR 0022), as a waiting chat's
+ *  Notice offers it (#1246): which profile, and the exact line the approval is for.
+ * 
+ *  What the picker's row says of the same profile (`ProfileRow`), in its words, so the window
+ *  draws the picker's own sentence and mark (`ProfileApproval.tsx`, ruling V69). `shown` is the
+ *  line `approve_profile` checks the click against: a file changed since this was read is
+ *  refused there, and nothing is recorded.
+ */
+export type NeedsApproval = {
+	/**  The profile's name, as `approve_profile` takes it. */
+	profile: string,
+	/**  Its `kind`. */
+	kind: string,
+	/**  Where it was declared: `built-in`, `charter.local.toml` or the project's harnesses. */
+	source: string,
+	/**  `new` or `changed`, as the picker's row says it. */
+	approval: string,
+	/**  What it would run, as the picker shows it (`profiletrust::shown`), already contained. */
+	shown: string,
+};
+
 /**  A branch the window cut: the piece it is, and what git calls it (ADR 0072 §4). */
 export type NewBranch = {
 	piece: string,
@@ -3071,6 +3093,13 @@ export type NotStarted = {
 	name: string,
 	/**  Why it did not start. */
 	why: string,
+	/**
+	 *  The approval its profile needs before it can start, where it needs one (#1246,
+	 *  D-1246-5): read when its start was last refused, so the window offers **Review and
+	 *  approve…** from this and never from the words of `why`. Null for a chat on no profile,
+	 *  a profile not declared, or one with nothing to approve.
+	 */
+	approval: NeedsApproval | null,
 };
 
 /**  One section of the changelog, as the dialog draws it. */

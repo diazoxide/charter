@@ -4,6 +4,7 @@ import { cleanup, render as renderBare, screen, waitFor, within } from "@testing
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { ApprovalSentence } from "./ProfileApproval";
 import { forgetThisLaunch } from "./regions";
 
 /**
@@ -56,7 +57,11 @@ type Asked = { cmd: string; args: Record<string, unknown> };
 
 /** What the core holds, and how it answers the three NO-3 commands. */
 let open: ReturnType<typeof chat>[];
-let waiting: { id: string; name: string; why: string }[];
+let waiting: { id: string; name: string; why: string; approval?: Approval | null }[];
+/** A waiting chat's profile approval, as the core says it (`NeedsApproval`, #1246). */
+type Approval = { profile: string; kind: string; source: string; approval: string; shown: string };
+/** The profiles the core has recorded an approval for, by name (`approve_profile`). */
+let approved: string[];
 let updated: { session: number; files: string[] }[];
 let refuse: Partial<Record<string, string>>;
 /** What the core says each chat is doing (`chat_states`). */
@@ -98,10 +103,22 @@ function core(): Asked[] {
       // A refusal is a THROWN value, which is what arrives as `{ status: "error" }`.
       if (refuse[cmd] !== undefined) throw refuse[cmd];
       const was = waiting.find((one) => one.id === given.id);
+      // The whole start gate, again: a profile nobody approved is refused, and the core reads
+      // the approval it needs again with the refusal.
+      if (was?.approval && !approved.includes(was.approval.profile)) {
+        const why = `profile '${was.approval.profile}' is ${was.approval.approval}, and nobody has approved it — nothing was started.`;
+        waiting = waiting.map((one) => (one.id === given.id ? { ...one, why } : one));
+        throw why;
+      }
       waiting = waiting.filter((one) => one.id !== given.id);
       const started = chat(7, was?.name ?? "?");
       open = [...open, started];
       return started;
+    }
+    if (cmd === "approve_profile") {
+      if (refuse[cmd] !== undefined) throw refuse[cmd];
+      approved.push(String(given.name));
+      return null;
     }
     if (cmd === "forget_chat_that_did_not_start") {
       if (refuse[cmd] !== undefined) throw refuse[cmd];
@@ -160,6 +177,7 @@ beforeEach(() => {
   updated = [];
   refuse = {};
   states = [];
+  approved = [];
 });
 
 afterEach(() => {
@@ -240,6 +258,142 @@ describe("a chat that did not start", () => {
     );
     await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
     expect(notice("chat-did-not-start:id-ide")).not.toBeNull();
+  });
+});
+
+describe("a chat waiting on its profile's approval (#1246)", () => {
+  const WORK: Approval = {
+    profile: "work",
+    kind: "claude",
+    source: "charter.local.toml",
+    approval: "changed",
+    shown: "ANTHROPIC_PROFILE=work ccs work --verbose",
+  };
+  const REVIEW = "Review and approve…";
+
+  beforeEach(() => {
+    waiting = [
+      {
+        id: "id-ide",
+        name: "ide",
+        why: "profile 'work' is changed, and nobody has approved it — nothing was started.",
+        approval: WORK,
+      },
+    ];
+  });
+
+  const said = async () =>
+    (await screen.findByText(/did not start/)).closest("[data-cause]") as HTMLElement;
+
+  it("offers Review and approve…, never a one-press Approve, and only where it needs one", async () => {
+    waiting = [...waiting, { id: "id-gone", name: "gone", why: "no such directory: /gone" }];
+    core();
+    render(<App />);
+    await screen.findAllByText(/did not start/);
+
+    const asking = notice("chat-did-not-start:id-ide") as HTMLElement;
+    expect(within(asking).getByRole("button", { name: REVIEW })).toBeTruthy();
+    expect(within(asking).queryByRole("button", { name: /^Approve/ })).toBeNull();
+    const other = notice("chat-did-not-start:id-gone") as HTMLElement;
+    expect(within(other).queryByRole("button", { name: REVIEW })).toBeNull();
+  });
+
+  it("opens the picker's own approval sentence, with the exact line, and approves nothing yet", async () => {
+    const asked = core();
+    render(<App />);
+
+    await userEvent.click(within(await said()).getByRole("button", { name: REVIEW }));
+
+    const question = await screen.findByRole("alertdialog");
+    // The very component the new-chat picker draws, drawn from the core's line as it is.
+    const picker = renderBare(<ApprovalSentence row={WORK} />).container.firstElementChild;
+    const sentence = question.querySelector(".honest.approve");
+    expect(sentence?.outerHTML).toBe(picker?.outerHTML);
+    expect(sentence?.querySelector("code")?.textContent).toBe(WORK.shown);
+    expect(question.querySelector(".needs-approval")?.textContent).toBe("changed");
+    expect(sent(asked, "approve_profile")).toEqual([]);
+    expect(sent(asked, "retry_chat_that_did_not_start")).toEqual([]);
+  });
+
+  it("changes nothing on Cancel", async () => {
+    const asked = core();
+    render(<App />);
+    const line = await said();
+
+    await userEvent.click(within(line).getByRole("button", { name: REVIEW }));
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }),
+    );
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sent(asked, "approve_profile")).toEqual([]);
+    expect(sent(asked, "retry_chat_that_did_not_start")).toEqual([]);
+    expect(within(line).getByRole("button", { name: REVIEW })).toBeTruthy();
+  });
+
+  it("is refused, in the question, when the file changed in between, and nothing starts", async () => {
+    refuse.approve_profile =
+      "profile 'work' changed while you were reading it, so nothing was approved and nothing was started. It now runs: ccs evil";
+    const asked = core();
+    render(<App />);
+    const line = await said();
+
+    await userEvent.click(within(line).getByRole("button", { name: REVIEW }));
+    const question = await screen.findByRole("alertdialog");
+    await userEvent.click(within(question).getByRole("button", { name: "Approve" }));
+
+    expect(
+      (await within(question).findByText(/changed while you were reading/)).textContent,
+    ).toContain("ccs evil");
+    // The line sent is the one on screen, for the core to check against the file.
+    expect(sent(asked, "approve_profile")).toEqual([
+      { plane: PLANE, name: "work", shown: WORK.shown },
+    ]);
+    expect(sent(asked, "retry_chat_that_did_not_start")).toEqual([]);
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    expect(within(line).getByRole("button", { name: REVIEW })).toBeTruthy();
+    expect(tabNames()).not.toContain("ide");
+  });
+
+  it("starts the chat on Retry now once approved, and the keyboard is on Retry now", async () => {
+    const asked = core();
+    render(<App />);
+    const line = await said();
+
+    await userEvent.click(within(line).getByRole("button", { name: REVIEW }));
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Approve" }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(sent(asked, "approve_profile")).toEqual([
+      { plane: PLANE, name: "work", shown: WORK.shown },
+    ]);
+    // Approving starts nothing: Retry now runs the whole start again.
+    expect(sent(asked, "retry_chat_that_did_not_start")).toEqual([]);
+    expect(within(line).queryByRole("button", { name: REVIEW })).toBeNull();
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Retry now"));
+
+    await userEvent.click(within(line).getByRole("button", { name: "Retry now" }));
+
+    await waitFor(() => expect(tabNames()).toContain("ide"));
+    expect(notice("chat-did-not-start:id-ide")).toBeNull();
+  });
+
+  it("offers it once a Retry now is refused for it", async () => {
+    // A chat that first waited for another reason: the core reads the approval again with the
+    // refusal, and the window takes it from the core, never from the reason's words.
+    waiting = [{ id: "id-ide", name: "ide", why: "no such directory: /home/dev/gone" }];
+    core();
+    render(<App />);
+    const line = await said();
+    expect(within(line).queryByRole("button", { name: REVIEW })).toBeNull();
+    waiting = [{ ...waiting[0], approval: WORK }];
+
+    await userEvent.click(within(line).getByRole("button", { name: "Retry now" }));
+
+    expect(await within(line).findByRole("button", { name: REVIEW })).toBeTruthy();
+    expect(line.textContent).toContain("nobody has approved it");
   });
 });
 

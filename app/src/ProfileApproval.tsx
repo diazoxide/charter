@@ -10,7 +10,13 @@ import type { ProfileRow } from "./bindings";
  * *as it now stands* when the command changed since it was approved — with the command in
  * `<code>`, which `.ui-choice-says .meta .where` keeps undimmed, and the row's `.needs-approval` mark.
  */
-export function ApprovalSentence({ row }: { row: ProfileRow | undefined }) {
+export function ApprovalSentence({
+  row,
+}: {
+  /** A picker row, or a waiting chat's approval (`NeedsApproval`, #1246), which says the same
+   *  two things in the same words. */
+  row: Pick<ProfileRow, "approval" | "shown"> | null | undefined;
+}) {
   if (!row?.approval) return null;
   return (
     <p className="honest approve" role="alert">
@@ -30,7 +36,9 @@ export function ProfileMeta({
   id,
   children,
 }: {
-  row: ProfileRow;
+  /** A picker row, or a waiting chat's approval (`NeedsApproval`, #1246), which has no default. */
+  row: Pick<ProfileRow, "kind" | "shown" | "source" | "approval"> &
+    Partial<Pick<ProfileRow, "is_default">>;
   /** The id the radio's `aria-describedby` names, when the row does not name its own. */
   id?: string;
   /** What the surface adds, after the picker's own detail. */
