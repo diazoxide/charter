@@ -70,6 +70,10 @@ pub struct Settings {
 ///
 /// The credential store is held by the store on macOS (ruling V90a) and refused elsewhere:
 /// Claude Code's settings have no key that denies it (`Compiled::holds_every_service`).
+///
+/// No denial reaching here covers `/`, the home directory, the project or a folder above it:
+/// [`super::for_start`] refuses that chat, and [`super::Applied::line`] refuses one whose own
+/// folder a denial covers ([`super::covering`], #1327).
 pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
     compiled.holds_every_service(Harness::ClaudeCode)?;
     let mut deny_read = Vec::new();
