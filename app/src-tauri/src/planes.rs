@@ -5693,7 +5693,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn answering_a_question_the_chat_asks_while_it_wraps_up_does_not_cancel_it() {
-        // The skill runs `charter session record`, and a harness may ask the operator's leave
+        // The skill runs `purlis session record`, and a harness may ask the operator's leave
         // first. Answering that is not taking the chat back.
         use purlis_core::state::Event::{Notification, UserPromptSubmit};
         let dir = tempfile::tempdir().expect("a directory");

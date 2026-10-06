@@ -246,7 +246,7 @@ fn settings(
     }
     // **The one command that ends a Smart close, pre-allowed** (SI-8e, the
     // operator's ruling of 2026-09-28): a chat asked to write its record must not stop on a
-    // permission prompt for `charter session record`. Only `allow`, and no `ask`, `deny` or
+    // permission prompt for `purlis session record`. Only `allow`, and no `ask`, `deny` or
     // mode, because Claude Code merges a session's permission rules with the user's and the
     // project's rather than replacing them, and its `deny` and `ask` outrank an `allow` — so
     // the operator's own rules all still stand (measured on 2.1.283 in ADR 0064: a project
@@ -341,10 +341,10 @@ fn permission_hook(binary: &std::path::Path) -> serde_json::Value {
     })
 }
 
-/// The permission rule a Claude Code chat the app starts carries for Smart close: `charter
+/// The permission rule a Claude Code chat the app starts carries for Smart close: `purlis
 /// session record`, with any arguments, runs without asking (SI-8e, ADR 0064). Beside it, the
 /// read-only charter tools of [`crate::chattools::PRE_ALLOWED`] (V79).
-pub const SMART_CLOSE_ALLOW: &str = "Bash(charter session record *)";
+pub const SMART_CLOSE_ALLOW: &str = "Bash(purlis session record *)";
 
 /// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.
 ///

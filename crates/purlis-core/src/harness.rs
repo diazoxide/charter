@@ -956,7 +956,7 @@ mod tests {
         assert_eq!(
             settings["permissions"],
             serde_json::json!({"allow": [
-                "Bash(charter session record *)",
+                "Bash(purlis session record *)",
                 "mcp__purlis__todo_list",
                 "mcp__purlis__memory_search",
                 "mcp__purlis__session_record_list",
@@ -1197,7 +1197,7 @@ mod tests {
         assert_eq!(
             settings["permissions"]["allow"],
             serde_json::json!([
-                "Bash(charter session record *)",
+                "Bash(purlis session record *)",
                 "mcp__purlis__todo_list",
                 "mcp__purlis__memory_search",
                 "mcp__purlis__session_record_list",

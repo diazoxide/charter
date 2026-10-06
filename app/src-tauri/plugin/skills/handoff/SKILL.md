@@ -91,11 +91,15 @@ Say the task name and whether it reports back beside the brief. Offer:
 ## 5. On a yes, run exactly this
 
 ```bash
-charter handoff billing --name "retry webhook deliveries" <<'BRIEF'
+purlis handoff billing --name "retry webhook deliveries" <<'BRIEF'
 # Retry the failed webhook deliveries
 ...the brief, verbatim...
 BRIEF
 ```
+
+If purlis refuses that spelling because this project's permission rule still names the command
+by its old name, run exactly the command the refusal names, with the same brief in the same
+heredoc. `purlis doctor --fix rename-plane` adds the rule for the `purlis` spelling.
 
 `billing` is the workspace from step 2, spelled out: the workspace is always named, the
 current one included, because the permission prompt has to say where the chat goes and `.`
@@ -128,7 +132,7 @@ every shape that prompt cannot stand in front of. Each one is the rule working:
 
 | It refuses | Because |
 |---|---|
-| any spelling but `charter handoff` — a path to the binary, `purlis 'handoff'` | the host's permission rule does not match those, so no prompt appears |
+| any spelling but the exact one the project's permission rule names — a path to the binary, `purlis 'handoff'` | the host's permission rule does not match those, so no prompt appears |
 | a brief from a pipe, a file, a here-string, or a heredoc a shell runs | the prompt would show a path or a `bash`, not the brief |
 | a call from a sub-agent | there is no operator in a sub-agent's turn to answer the prompt |
 | an unattended run (`bypassPermissions`) | the same, and nothing would ask |
@@ -141,7 +145,7 @@ line under it says the chat that handed this off wants an answer, then when the 
 or when you are stuck and cannot finish — finish with:
 
 ```bash
-charter handoff report "Dropped account-console-commons from both repos; PRs #41 and #42 open.
+purlis handoff report "Dropped account-console-commons from both repos; PRs #41 and #42 open.
 One caller left in billing-ui, noted in its todos."
 ```
 
@@ -151,7 +155,7 @@ recipient when it opened this chat. **You get exactly one report**, so send it a
 not as progress notes; a second is refused whatever happens in between. If the chat that
 asked needs another answer later, it hands off again with `--report`.
 
-Without that line under the stamp, nobody is waiting on a report and `charter handoff report`
+Without that line under the stamp, nobody is waiting on a report and `purlis handoff report`
 is refused — just finish the work.
 
 ## Limits, and say them
