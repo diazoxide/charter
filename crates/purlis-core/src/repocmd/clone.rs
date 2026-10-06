@@ -436,9 +436,10 @@ fn unreachable_host(hosts: &[String], url: &str) -> Option<String> {
     (!crate::sandbox::egress::allows(hosts, &host)).then(|| {
         format!(
             "its host '{}' is not one this chat's sandbox may reach, so the app did not clone \
-             it for the chat. The project's `[sandbox] egress` in charter.toml says which hosts \
-             a chat reaches (the `forge` preset holds the forges')",
-            crate::shown::escaped(&host)
+             it for the chat. The project's `[sandbox] egress` in {} says which hosts a chat \
+             reaches (the `forge` preset holds the forges')",
+            crate::shown::escaped(&host),
+            crate::plane::MANIFEST
         )
     })
 }

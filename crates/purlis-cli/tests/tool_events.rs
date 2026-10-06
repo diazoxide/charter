@@ -136,8 +136,8 @@ fn a_guard_that_did_not_answer_in_time_tells_the_host_it_refused_for_that_reason
         "pretooluse",
         &serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}),
         &[
-            ("CHARTER_TEST_GUARD_DEADLINE_MS", "200"),
-            ("CHARTER_TEST_GUARD_STALLS", "1"),
+            ("PURLIS_TEST_GUARD_DEADLINE_MS", "200"),
+            ("PURLIS_TEST_GUARD_STALLS", "1"),
         ],
     );
 

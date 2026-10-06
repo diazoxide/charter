@@ -251,11 +251,11 @@ pub fn confirm(root: &Path, base: Option<&str>, id: &str) -> Result<String, Refu
     super::unchanged(root, Which::Local, base).map_err(Refusal::file)?;
     let text = base.unwrap_or_default();
     let Some(entry) = listed(text).into_iter().find(|one| one.id == id) else {
-        return Err(Refusal::file(vec![
-            "That host is not in charter.local.toml as it was shown, so nothing was confirmed. \
-             Read the file again, then confirm it again."
-                .to_owned(),
-        ]));
+        return Err(Refusal::file(vec![format!(
+            "That host is not in {} as it was shown, so nothing was confirmed. Read the file \
+             again, then confirm it again.",
+            crate::profiles::LOCAL_FILE
+        )]));
     };
     let written = entry
         .values

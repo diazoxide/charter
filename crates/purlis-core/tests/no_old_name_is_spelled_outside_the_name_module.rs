@@ -117,7 +117,6 @@ const STILL_SPELLED: &[(&str, usize, Why)] = &[
     ("crates/purlis-core/src/scaffold/mod.rs", 1, Why::CommittedTemplate),
     // Test-only variables: #1278.
     ("crates/purlis-cli/src/extensions.rs", 1, Why::TestVariable),
-    ("crates/purlis-cli/src/guard.rs", 1, Why::TestVariable),
     ("crates/purlis-cli/src/main.rs", 2, Why::TestVariable),
     ("crates/purlis-core/src/fence.rs", 1, Why::TestVariable),
     ("crates/session-protocol/src/bin/charter-session-peer.rs", 1, Why::TestVariable),
