@@ -188,6 +188,21 @@ it, and never sends that count anywhere.
   into place (#1065). purlis's wrap holds this for opencode and Codex.
 - **Temp directories.** A wrapped opencode or Codex chat gets a temp directory of its own. Some macOS
   tools ignore `TMPDIR` and are refused (#1120).
+- **Package caches, with the toolchains preset.** While a project's `toolchains` preset is on,
+  its sandboxed chats download into package caches of the project's own, which purlis keeps
+  under its data home and points cargo, npm, pip, Go, Gradle, yarn and pnpm at. Your own caches
+  are never written: a cached package is code a later build runs, often without checking it
+  again, so a chat that could write your caches could change what your own builds run. A chat
+  can still change what a later sandboxed chat of the same project builds, never what an
+  unsandboxed build runs. The project's cargo home is seeded with where your crates come from
+  (registries and source replacements), never your tokens or credential providers, so a
+  private registry that needs a login is not reached from a sandboxed chat. The cost is disk,
+  and a first download in each project.
+- **The certificate check is off unless a project turns it on.** Go programs such as `gh` verify
+  a certificate on macOS by asking the system's certificate service. That service also fetches
+  the addresses a certificate names, which is a way out past the egress proxy, so a sandboxed
+  chat may ask it only where the project sets `certificate-checks = true` under `[sandbox]`.
+  Without it, `gh` and other Go tools in a sandboxed chat fail to verify TLS.
 - **An embedded bare repository.** A chat can write a directory that git takes for a bare
   repository, and a git run *inside* it later reads its config. No protected name is in it,
   so the sandbox cannot tell it apart. Setting git's `safe.bareRepository = explicit` closes

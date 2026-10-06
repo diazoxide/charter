@@ -45,6 +45,24 @@
 //! denied to writes beside it: under the project's state folder that is denied already, and the
 //! fallback folder in the temp directory is not. `allowAllUnixSockets` is set `false`, never
 //! left out, so a user's `true` cannot merge in. On Linux a sandboxed chat reaches no socket.
+//!
+//! **What a project's sandbox widens** (spec #1330, #1337). Read out of Claude Code 2.1.291's
+//! own settings schema and its profile builder:
+//! - `filesystem.allowWrite` is *"Additional paths to allow writing within the sandbox"*,
+//!   absolute or `~`-expanded, a glob compiled to a regular expression. It carries the project's
+//!   package caches ([`super::Widened::caches`]): each tool's folder and cargo's few files by
+//!   path, and inside each of cargo's bare repositories by `<db>/*/**`, which never matches an
+//!   entry itself. Each path by both names where a link stands in between; left out when there
+//!   are none. Every `denyWrite` still wins inside them.
+//! - Each folder purlis made is pinned: Claude Code denies `file-write-unlink` and
+//!   `file-write-create` on every folder above a `denyWrite` entry, so a `.git` denied at each
+//!   cache folder's top pins that folder, and a bare repository's `config` and `hooks` denied
+//!   pin cargo's git database.
+//! - `enableWeakerNetworkIsolation` is *"macOS only: Allow access to com.apple.trustd.agent in
+//!   the sandbox. Needed for Go-based CLI tools (gh, gcloud, terraform, etc.) to verify TLS
+//!   certificates"*; its profile adds exactly `(allow mach-lookup (global-name
+//!   "com.apple.trustd.agent"))`. It is `true` only where the project's `certificate-checks` is
+//!   (D-1337-7), and `false` otherwise, never left out, so a user's `true` does not merge in.
 
 use std::path::Path;
 
@@ -52,6 +70,16 @@ use serde_json::{Value, json};
 
 use super::{Access, Compiled, Uncompilable};
 use crate::harness::Harness;
+
+/// `path` as written, and as the kernel names it where that differs.
+fn both_names(path: &Path) -> Vec<std::path::PathBuf> {
+    let resolved = super::real(path);
+    if resolved == path {
+        vec![path.to_path_buf()]
+    } else {
+        vec![path.to_path_buf(), resolved]
+    }
+}
 
 /// Claude Code's own tools that reach the network from its process rather than through its
 /// sandbox, so the sandbox's allowed hosts do not hold them.
@@ -116,6 +144,56 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
         edit_rules.push(format!("Edit({glob})"));
         edit_rules.push(format!("Edit({glob}/**)"));
     }
+    // The project's package caches (D-1337-6), each path as written and as the kernel names it.
+    let mut allow_write: Vec<String> = Vec::new();
+    if let Some(caches) = &compiled.widened.caches {
+        let mut allow = |path: String| {
+            if !allow_write.contains(&path) {
+                allow_write.push(path);
+            }
+        };
+        for path in caches.trees.iter().chain(&caches.files) {
+            for name in both_names(path) {
+                allow(name.display().to_string());
+            }
+        }
+        // Inside each bare repository, never an entry itself: a glob is a regular expression
+        // in Claude Code's profile, and `*/**` matches nothing at the first level.
+        for bare in &caches.bare {
+            for name in both_names(bare) {
+                allow(format!("{}/*/**", name.display()));
+            }
+        }
+        // Claude Code pins every folder above a denied path, so it is not removed, renamed or
+        // made (measured in 2.1.291's profile builder: each ancestor of a `denyWrite` entry is
+        // denied `file-write-unlink` and `file-write-create` as a literal). A repository's
+        // `.git` at a tree's top is denied for that pin, and what a later git runs in each
+        // bare repository (ADR 0067 §5) pins the database.
+        let mut deny = |path: String| {
+            deny_write.push(path.clone());
+            edit_rules.push(format!("Edit(/{path})"));
+            edit_rules.push(format!("Edit(/{path}/**)"));
+        };
+        for tree in &caches.trees {
+            for name in both_names(tree) {
+                deny(format!("{}/.git", name.display()));
+            }
+        }
+        for bare in &caches.bare {
+            for name in both_names(bare) {
+                for run in super::caches::BARE_RUN {
+                    deny(format!("{}/*/{run}", name.display()));
+                }
+            }
+        }
+    }
+    let mut filesystem = json!({
+        "denyRead": deny_read,
+        "denyWrite": deny_write,
+    });
+    if !allow_write.is_empty() {
+        filesystem["allowWrite"] = json!(allow_write);
+    }
     let deny = WEB_TOOLS
         .iter()
         .map(|tool| (*tool).to_owned())
@@ -127,15 +205,13 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
             "enabled": true,
             "failIfUnavailable": true,
             "allowUnsandboxedCommands": false,
+            "enableWeakerNetworkIsolation": compiled.widened.trust,
             "network": {
                 "allowedDomains": compiled.hosts,
                 "strictAllowlist": true,
                 "allowAllUnixSockets": false,
             },
-            "filesystem": {
-                "denyRead": deny_read,
-                "denyWrite": deny_write,
-            },
+            "filesystem": filesystem,
         }),
         deny,
     })

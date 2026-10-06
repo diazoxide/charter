@@ -410,6 +410,7 @@ mod tests {
             Some(crate::sandbox::Policy {
                 egress: crate::sandbox::Preset::DEFAULT.to_vec(),
                 hosts: vec![],
+                certificate_checks: false,
             })
         );
         assert!(said.refused.is_empty(), "{:?}", said.refused);

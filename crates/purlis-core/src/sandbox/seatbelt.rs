@@ -99,6 +99,51 @@ pub fn planted_rules(root: &Path) -> Result<Vec<String>, &'static str> {
         .collect()
 }
 
+/// The one lookup the certificate check needs (#1337): Go programs on macOS, `gh` among them,
+/// verify a host's certificate by asking the `trustd` agent, and fail every TLS connection
+/// without it. The same rule Claude Code's `enableWeakerNetworkIsolation` adds to its profile.
+/// The agent fetches the addresses a certificate names, past the egress proxy, so it is off
+/// unless the project turns `certificate-checks` on (D-1337-7).
+pub const TRUST: &str = "(allow mach-lookup (global-name \"com.apple.trustd.agent\"))";
+
+/// `own`, widened by what the project's sandbox widens ([`super::Widened`]): its package caches
+/// (D-1337-6), each tool's folder written whole, inside each of cargo's bare repositories and
+/// never an entry itself, and cargo's few files; each folder purlis made pinned as an entry, so
+/// it is never removed, renamed or swapped for a link; the later-code names denied at any
+/// depth of each, as in every folder a chat writes, and a bare repository's `config` and
+/// `hooks` never written. And the certificate check, where the project turned it on (D-1337-7).
+pub fn widen(own: &mut Own, widened: &super::Widened) -> Result<(), &'static str> {
+    if let Some(caches) = &widened.caches {
+        for tree in &caches.trees {
+            own.allow.push(format!("(subpath {})", quote(tree)?));
+            own.roots.push(tree.clone());
+        }
+        for bare in &caches.bare {
+            own.allow
+                .push(format!("(regex {})", string(&under(bare, "[^/]+/.+$"))?));
+            own.roots.push(bare.clone());
+            own.deny.push(format!(
+                "(deny file-write* (regex {}))",
+                string(&under(
+                    bare,
+                    &format!("[^/]+/({})(/.*)?$", super::caches::BARE_RUN.join("|"))
+                ))?
+            ));
+        }
+        for file in &caches.files {
+            own.allow.push(format!("(literal {})", quote(file)?));
+        }
+        for folder in caches.folders() {
+            own.deny
+                .push(format!("(deny file-write* (literal {}))", quote(&folder)?));
+        }
+    }
+    if widened.trust {
+        own.after.push(TRUST.to_owned());
+    }
+    Ok(())
+}
+
 /// The keychain files of the home `home`, denied with the vaults class: no lookup of the
 /// security service is allowed either, so a wrap holds a keyring vault ([`BASE`]).
 pub fn keychains(home: Option<&Path>) -> Option<Denial> {
