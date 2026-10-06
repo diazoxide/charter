@@ -167,10 +167,12 @@ pub fn hosts(root: &Path, asker: &Asker) -> Result<Option<Vec<String>>, String> 
     if plane.unreadable() {
         return Err(crate::sandbox::NotStarted::PlaneUnreadable.to_string());
     }
+    // An administrator's policy holds a clone's egress as it holds the chat's (#1343).
+    let locks = crate::sandbox::policy::Locks::of(root);
     Ok(plane
         .said()
         .policy
-        .map(|policy| crate::sandbox::hosts(&policy.egress, &plane)))
+        .map(|policy| crate::sandbox::hosts(&locks.presets(&policy.egress), &plane, &locks)))
 }
 
 /// Who the piece log credits: the chat, by the app's number for it, and its persona (D-4).

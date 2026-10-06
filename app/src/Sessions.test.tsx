@@ -120,6 +120,8 @@ function core(
     reopened?: unknown[];
     /** The focused workspace's records, when not {@link ALPHAS}. */
     alphas?: SessionRecordRow[];
+    /** The record's persona hosts, and the policy that locks them out (#1343). */
+    personaHosts?: { hosts: string[]; holds: boolean; locked: string | null };
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -166,8 +168,9 @@ function core(
         row: ALPHAS.find((one) => one.path === given.path) ?? ROOT_RECORDS[0],
         place: "alpha",
         body: "# Ship the widget\n\n## Goal\n\nShip it.\n\n## Open\n\n- the **docs**\n",
-        persona_hosts: [],
-        resume_holds: false,
+        persona_hosts: on.personaHosts?.hosts ?? [],
+        resume_holds: on.personaHosts?.holds ?? false,
+        persona_hosts_locked: on.personaHosts?.locked ?? null,
       };
     if (cmd === "resume_session") {
       const answer = on.resumes?.[resumed];
@@ -227,6 +230,21 @@ describe("the Sessions panel", () => {
     expect(
       asked.filter((one) => one.cmd === "session_record").map((one) => one.args),
     ).toContainEqual({ plane: PLANE, path: NEWER });
+  });
+
+  it("says a persona's hosts are locked by policy, not held until you allow them (#1343)", async () => {
+    const locked =
+      "Policy forbids a persona's own hosts. Locked by policy, set by Platform team in /etc/purlis/policy.json.";
+    core({ personaHosts: { hosts: ["10.0.0.5:6443"], holds: true, locked } });
+    render(<App />);
+    const panel = await screen.findByTestId("panel-sessions");
+    await userEvent.click(await within(panel).findByRole("button", { name: /Ship the widget/ }));
+
+    await screen.findByTestId("session-record");
+    expect(
+      await screen.findByText(`10.0.0.5:6443; no chat as this persona reaches them. ${locked}`),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Resume holds them back/)).toBeNull();
   });
 
   it("resumes a record from its row's menu as a new chat that says it was resumed", async () => {

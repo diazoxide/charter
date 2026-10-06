@@ -25,8 +25,8 @@
 //! ([`super::PLANTED`]): that denial is the boundary today. [`super::changes_a_sandbox_key`] is
 //! the rule a brokered write asks once #1333 builds one.
 //!
-//! **Policy** (#1343) is the seam [`Locks`]: an admin's locks, which [`in_force`] asks of every
-//! host before it is granted. There are none until #1343 reads them.
+//! **Policy** (#1343) is [`Locks`] ([`super::policy`]): an admin's locks, which [`in_force`]
+//! asks of every host before it is granted.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -99,6 +99,21 @@ impl Host {
         let port = port.map(port_of).transpose()?;
         let name = name_of(name)?;
         Ok(Self { name, port })
+    }
+
+    /// **Whether `self`, as a policy lists it, allows `other`** (#1343): the same name, or
+    /// for `*.domain` any name under it (a `*.` entry under it included); and any port where
+    /// `self` names none, else that port alone.
+    pub fn covers(&self, other: &Host) -> bool {
+        let names = match (&self.name, &other.name) {
+            (Name::Under(suffix), Name::Domain(name) | Name::Under(name)) => {
+                name.strip_suffix(suffix.as_str())
+                    .is_some_and(|head| head.ends_with('.'))
+                    || matches!(&other.name, Name::Under(same) if same == suffix)
+            }
+            (mine, theirs) => mine == theirs,
+        };
+        names && self.port.is_none_or(|port| other.port == Some(port))
     }
 
     /// The address it is, where it is an address rather than a name.
@@ -484,45 +499,7 @@ pub struct Granted {
     pub level: Level,
 }
 
-/// **An admin's locks** (policy, #1343; ADR 0067 §1 and §4): asked of every host before it is
-/// granted, and the strictest answer wins. None are read yet, so none refuse anything; #1343
-/// fills this from the machine's and the organisation's policy, and nothing else changes.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Locks {
-    /// Whether policy forbids a persona's own grants (#1362): its hosts reach no chat.
-    no_persona_grants: bool,
-}
-
-impl Locks {
-    /// No locks: what every chat has until #1343.
-    pub fn none() -> Self {
-        Self::default()
-    }
-
-    /// The locks this machine and its organisation set for the project at `root`.
-    pub fn of(_root: &Path) -> Self {
-        Self::none()
-    }
-
-    /// Locks that forbid every persona's own grants: what a policy saying so compiles to
-    /// (#1343 reads it).
-    pub fn forbidding_persona_grants() -> Self {
-        Self {
-            no_persona_grants: true,
-        }
-    }
-
-    /// Why `granted` is locked out, if it is.
-    pub fn refuses(&self, granted: &Granted) -> Option<String> {
-        (self.no_persona_grants && granted.level == Level::Persona).then(|| {
-            format!(
-                "{} is a persona's host, and policy forbids a persona's own hosts: locked by \
-                 policy",
-                granted.host
-            )
-        })
-    }
-}
+pub use super::policy::Locks;
 
 /// **The hosts in force**: the project's, then this machine's, then the persona's the chat runs
 /// as, each once (where two levels list a host, it is the first's), less what `locks` refuse.

@@ -235,7 +235,15 @@ function GrantableFolders({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
 }
 
 /** The Granted list's group, for the project at `plane`, whose committed file is `file`. */
-export function grantedGroup(plane: PlaneId, file: string): SettingsGroup {
+/**
+ * The Granted page. Where an administrator's policy forbids write grants (#1343), `writesLocked`
+ * is what it says — "Locked by policy" and who set it — and the folders list offers no control.
+ */
+export function grantedGroup(
+  plane: PlaneId,
+  file: string,
+  writesLocked: string | null = null,
+): SettingsGroup {
   return {
     id: GRANTED,
     label: "Granted",
@@ -255,7 +263,22 @@ export function grantedGroup(plane: PlaneId, file: string): SettingsGroup {
         label: "Folders chats may be granted",
         help: "Folders outside this project that a block's Allow may name, such as a tool's cache. Kept on this machine only, never committed.",
         useControl: function useGrantableFolders() {
-          return { control: (ids) => <GrantableFolders plane={plane} ids={ids} /> };
+          return {
+            grouped: writesLocked !== null,
+            control: (ids) =>
+              writesLocked === null ? (
+                <GrantableFolders plane={plane} ids={ids} />
+              ) : (
+                <p
+                  id={ids.id}
+                  className="ui-setting-status"
+                  aria-labelledby={ids.labelledBy}
+                  aria-describedby={ids.describedBy}
+                >
+                  {writesLocked}
+                </p>
+              ),
+          };
         },
       },
     ],

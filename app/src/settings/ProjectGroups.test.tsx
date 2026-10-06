@@ -125,6 +125,7 @@ const SANDBOX_OFF: SandboxState = {
   presets: [],
   persona_hosts: [],
   besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+  policy: null,
 };
 
 /** A file as the core would answer it after `edits`: each edited key set or gone. */
@@ -905,6 +906,7 @@ describe("the sandbox, in Sandbox (ADR 0067 §7, ruling V78 d)", () => {
         presets: [],
         persona_hosts: [],
         besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+        policy: null,
         said: "1 of 4 chats started without the sandbox on this machine (25%); the bar is under 10%",
       },
     });

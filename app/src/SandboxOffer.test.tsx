@@ -37,6 +37,7 @@ const DUE: SandboxState = {
   presets: [],
   persona_hosts: [],
   besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+  policy: null,
 };
 
 describe("the sandbox offer", () => {
@@ -58,6 +59,7 @@ describe("the sandbox offer", () => {
       presets: [],
       persona_hosts: [],
       besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+      policy: null,
     });
     render(<SandboxOffer plane={PLANE} />);
 
@@ -75,6 +77,7 @@ describe("the sandbox offer", () => {
       presets: [],
       persona_hosts: [],
       besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+      policy: null,
     });
     render(<SandboxOffer plane={PLANE} />);
 
@@ -101,6 +104,7 @@ describe("the sandbox offer", () => {
       presets: [],
       persona_hosts: [],
       besides: { project_hosts: 0, your_hosts: 0, folders: 0 },
+      policy: null,
     });
     render(<SandboxOffer plane={PLANE} />);
 

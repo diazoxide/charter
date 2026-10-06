@@ -343,6 +343,11 @@ export const commands = {
 	from: string | null,
 	/**  The persona it was opened as, whose hosts it cannot reach yet. */
 	persona: string | null,
+	/**
+	 *  Where an administrator's policy forbids a persona's own hosts (#1343): why, naming the
+	 *  policy and who set it. Allowing them would reach nothing, so the Notice offers no Allow.
+	 */
+	locked: string | null,
 } | null, string>(__TAURI_INVOKE("persona_grants_held", { plane, session })),
 	/**
 	 *  The person allowed chat `session` its own persona's grants from its tab's Notice (#1362):
@@ -720,6 +725,11 @@ export const commands = {
 	 *  tab, because they reach past the default persona's (#1362, D-1362-6).
 	 */
 	resume_holds: boolean,
+	/**
+	 *  Where an administrator's policy forbids a persona's own hosts (#1343): why, naming the
+	 *  policy and who set it. No chat as this persona reaches them, Resume or not.
+	 */
+	persona_hosts_locked: string | null,
 } | null, string>(__TAURI_INVOKE("session_record", { plane, path })),
 	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
@@ -1935,7 +1945,13 @@ export type BlockOffer =
  *  Nothing to allow: purlis's own operation (a bug to report), or a block with nothing a
  *  grant could name.
  */
-"none";
+"none" | 
+/**
+ *  What would be offered is forbidden by policy, and so is starting the chat without the
+ *  sandbox (#1343): nothing is offered, and [`ChatBlocked::route`] names the policy and who
+ *  set it, so the person knows whom to ask.
+ */
+"policy";
 
 /**
  *  **A Report of a sandbox block of purlis's own** (#1338), as the window shows it before
@@ -2104,9 +2120,15 @@ export type ChatBlocked = {
 	target: string | null,
 	/**
 	 *  For [`BlockOffer::Brokered`], the way that works instead; for
-	 *  [`BlockOffer::Unsandboxed`], why purlis grants nothing here.
+	 *  [`BlockOffer::Unsandboxed`], why purlis grants nothing here; for [`BlockOffer::Policy`],
+	 *  what policy forbids, naming the policy and who set it (#1343).
 	 */
 	route: string | null,
+	/**
+	 *  For [`BlockOffer::Host`] and [`BlockOffer::Write`], the levels Allow may keep it at:
+	 *  each a policy does not forbid (#1343).
+	 */
+	levels: GrantLevel[],
 };
 
 /**
@@ -2824,6 +2846,11 @@ export type GrantsHeld = {
 	from: string | null,
 	/**  The persona it was opened as, whose hosts it cannot reach yet. */
 	persona: string | null,
+	/**
+	 *  Where an administrator's policy forbids a persona's own hosts (#1343): why, naming the
+	 *  policy and who set it. Allowing them would reach nothing, so the Notice offers no Allow.
+	 */
+	locked: string | null,
 };
 
 /**  What became of a reference handed to a chat. */
@@ -4491,6 +4518,11 @@ export type SandboxAhead = {
 	 *  refusal is a program this machine is missing and charter knows its distribution.
 	 */
 	install: string | null,
+	/**
+	 *  Where policy forbids starting a chat without the sandbox (#1343): why, naming the policy
+	 *  and who set it. The picker then offers no opt-out.
+	 */
+	locked: string | null,
 };
 
 /**  `sandbox::Besides`, counted for the window. */
@@ -4522,6 +4554,27 @@ export type SandboxGrant = {
 	chat: string | null,
 	/**  Why a policy locks it out, where one does. */
 	locked: string | null,
+};
+
+/**
+ *  An administrator's policy (`sandbox::policy::Locks`), as Settings shows what it locks: each
+ *  locked value says [`Self::locked_by`] and offers no control.
+ */
+export type SandboxPolicy = {
+	/**  "Locked by policy, set by <who> in <file>.": said beside every value it locks. */
+	locked_by: string,
+	/**  The presets a project may turn on, by word, where the policy fixes them. */
+	presets: string[] | null,
+	/**  The hosts any level may add, where the policy fixes them. */
+	hosts: string[] | null,
+	/**  Whether your own hosts on this machine are forbidden. */
+	personal_hosts: boolean,
+	/**  Whether a persona's own hosts are forbidden. */
+	persona_hosts: boolean,
+	/**  Whether starting a chat without the sandbox is forbidden. */
+	opt_out: boolean,
+	/**  Whether every folder a grant would let a chat write is forbidden. */
+	write_grants: boolean,
 };
 
 /**  One Internet access preset (`sandbox::Preset`), as Settings shows it. */
@@ -4574,6 +4627,11 @@ export type SandboxState = {
 	 *  the core grants it (`sandbox::besides`): none where the sandbox is off.
 	 */
 	besides: SandboxBesides,
+	/**
+	 *  An administrator's policy on this machine (#1343): what it locks, and who set it. `null`
+	 *  where there is none.
+	 */
+	policy: SandboxPolicy | null,
 };
 
 /**  One save attempt, as the journal holds it. */
@@ -4708,6 +4766,11 @@ export type SessionRecordView = {
 	 *  tab, because they reach past the default persona's (#1362, D-1362-6).
 	 */
 	resume_holds: boolean,
+	/**
+	 *  Where an administrator's policy forbids a persona's own hosts (#1343): why, naming the
+	 *  policy and who set it. No chat as this persona reaches them, Resume or not.
+	 */
+	persona_hosts_locked: string | null,
 };
 
 /**  What a save is: Edit as TOML's whole text, or a form's changes to the text it was read as. */

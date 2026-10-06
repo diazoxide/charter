@@ -651,6 +651,9 @@ pub(crate) struct SessionRecordView {
     /// Whether a Resume holds back those hosts until the person allows them on the new chat's
     /// tab, because they reach past the default persona's (#1362, D-1362-6).
     pub resume_holds: bool,
+    /// Where an administrator's policy forbids a persona's own hosts (#1343): why, naming the
+    /// policy and who set it. No chat as this persona reaches them, Resume or not.
+    pub persona_hosts_locked: Option<String>,
 }
 
 /// The record at `path`, or charter's sentence saying why not. `Ok(None)` is a record that is
@@ -687,6 +690,7 @@ pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRe
         body: opened.body().to_owned(),
         persona_hosts,
         resume_holds: purlis_core::sessionresume::resumed_holds(root, persona.as_deref()).is_some(),
+        persona_hosts_locked: crate::sandboxing::persona_hosts_locked(root),
     }))
 }
 
