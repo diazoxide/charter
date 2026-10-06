@@ -1961,6 +1961,7 @@ fn a_denial_that_covers_the_chat_s_ground_refuses_it_naming_the_file_and_the_wor
                     file: std::path::PathBuf::from("/plane/.claude/settings.json"),
                     word: "./".to_owned(),
                 }),
+                within: None,
             }),
             "{path}"
         );
@@ -2041,6 +2042,7 @@ fn what_a_wrap_adds_is_held_to_the_same_ground() {
             path: std::path::PathBuf::from("/home/op"),
             class: Class::LaterCode,
             named: None,
+            within: None,
         })
     );
 }
@@ -2059,6 +2061,7 @@ fn a_codex_home_that_is_the_home_directory_refuses_the_chat() {
             path: std::path::PathBuf::from("/home/op"),
             class: Class::LaterCode,
             named: None,
+            within: None,
         })
     );
 }
@@ -2122,6 +2125,7 @@ fn a_hook_word_that_names_the_chat_s_own_folder_refuses_a_chat_there_only() {
                 file: root.join("ws/repo/.claude/settings.json"),
                 word: "./tools/".to_owned(),
             }),
+            within: None,
         }
         .to_string())
     );
@@ -2249,4 +2253,231 @@ fn a_config_purlis_could_not_read_through_refuses_the_chat() {
          Move that command into a script of its own, or start this chat without the sandbox \
          from the new-chat picker."
     );
+}
+
+#[test]
+fn the_ground_refusal_names_the_repo_and_the_workspace_its_config_sits_in() {
+    // #1356: a word in a clone's config, then in a workspace's own, then in the project's.
+    for (dir, place) in [
+        (
+            "workspaces/w/repo",
+            Some("(in the repo workspaces/w/repo of workspace w)"),
+        ),
+        ("workspaces/w", Some("(in workspace w)")),
+        ("ws/repo", Some("(in the repo ws/repo)")),
+        ("", None),
+    ] {
+        let plane = plane_with_hook(dir, "make -C ./tools/");
+        let root = plane.path().canonicalize().expect("the plane");
+        let at = root.join(dir);
+        if dir.ends_with("repo") {
+            std::fs::create_dir_all(at.join(".git")).expect("a clone");
+        }
+        let tools = at.join("tools");
+        std::fs::create_dir_all(&tools).expect("tools");
+        let applied =
+            compiled_anyway(Harness::ClaudeCode, &root, &machine(Os::MacOs)).expect("compiles");
+        let words = Words {
+            program: "claude".to_owned(),
+            command: Vec::new(),
+            armed: Vec::new(),
+            charters: Vec::new(),
+        };
+        let refused = applied
+            .line(
+                words,
+                &At {
+                    cwd: Some(&tools),
+                    ..At::default()
+                },
+            )
+            .expect_err("refused");
+        let file = at.join(".claude/settings.json");
+        match place {
+            Some(place) => assert!(
+                refused.contains(&format!("in {} {place} reads", file.display())),
+                "{dir}: {refused}"
+            ),
+            None => assert!(
+                refused.contains(&format!("in {} reads", file.display())),
+                "{dir}: {refused}"
+            ),
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_missing_folder_that_differs_from_the_ground_only_in_case_covers_it_where_case_folds() {
+    // #1356: on a volume that folds case, `NEW` and `new` are one folder before either exists.
+    let base = tempfile::tempdir().expect("a base");
+    let base = base.path().canonicalize().expect("the base");
+    std::fs::create_dir_all(base.join("plane")).expect("the plane");
+    let folds = std::fs::metadata(base.join("PLANE")).is_ok();
+    let ground = [base.join("plane/new/repo")];
+    for written in ["plane/NEW", "PLANE/new/repo", "Plane/New/Repo/x/.."] {
+        let denied = [later_code(
+            base.join(written).to_str().expect("a path"),
+            "/f",
+            written,
+        )];
+        assert_eq!(covering(&denied, &ground).is_some(), folds, "{written}");
+    }
+    // Beside the ground in any case is still beside it.
+    let denied = [later_code(
+        base.join("PLANE/newer").to_str().expect("a path"),
+        "/f",
+        "../newer",
+    )];
+    assert_eq!(covering(&denied, &ground), None);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_denial_in_the_data_volume_spelling_is_held_to_the_ground_and_both_ways() {
+    // #1356: macOS reaches a firmlinked folder (`/Users`, `/private`, …) by two names, and
+    // resolving either leaves its spelling as it is.
+    let base = tempfile::tempdir().expect("a base");
+    let base = base.path().canonicalize().expect("the base");
+    std::fs::create_dir_all(base.join("plane/ws")).expect("the plane");
+    let data = std::path::Path::new("/System/Volumes/Data")
+        .join(base.strip_prefix("/").expect("absolute"));
+    assert!(data.join("plane").is_dir(), "{}", data.display());
+    let plain = base.join("plane");
+    let spelled = data.join("plane");
+    for (denial, ground) in [(&spelled, &plain), (&plain, &spelled)] {
+        let denied = [later_code(denial.to_str().expect("a path"), "/f", "x")];
+        assert!(
+            covering(&denied, &[ground.join("ws")]).is_some(),
+            "{} over {}",
+            denial.display(),
+            ground.display()
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_denied_path_is_denied_under_its_data_volume_spelling_too() {
+    // #1356: as a path through a link is denied by both names (FD-27).
+    for (written, twin) in [
+        (
+            "/Users/op/tools/x.sh",
+            "/System/Volumes/Data/Users/op/tools/x.sh",
+        ),
+        ("/System/Volumes/Data/Users/op/y.sh", "/Users/op/y.sh"),
+    ] {
+        let denied = Denied {
+            paths: vec![later_code(written, "/f", "x")],
+            ..Denied::default()
+        };
+        let settings = claude::settings(&compiled(denied, Os::MacOs)).expect("compiles");
+        for name in [written, twin] {
+            assert!(deny_write(&settings).iter().any(|it| it == name), "{name}");
+            assert!(
+                settings.deny.contains(&format!("Edit(/{name})")),
+                "{name}: {:?}",
+                settings.deny
+            );
+        }
+    }
+}
+
+#[test]
+fn a_config_that_names_the_project_is_named_with_its_repo_and_workspace() {
+    // #1356, before any chat's folder: the refusal at the start says where the config sits.
+    let plane = tempfile::tempdir().expect("a plane");
+    let root = plane.path().canonicalize().expect("the plane");
+    std::fs::create_dir_all(root.join("workspaces/w/repo/.git")).expect("a clone");
+    std::fs::create_dir_all(root.join("workspaces/v/.claude")).expect("a workspace");
+    let compile = compiler(Harness::ClaudeCode).expect("a compiler");
+    for (file, place) in [
+        (
+            "workspaces/w/repo/.claude/settings.json",
+            " (in the repo workspaces/w/repo of workspace w) ",
+        ),
+        ("workspaces/v/.claude/settings.json", " (in workspace v) "),
+        (".claude/settings.json", " "),
+    ] {
+        let file = root.join(file);
+        let denied = Denied {
+            paths: vec![later_code(
+                root.to_str().expect("a path"),
+                file.to_str().expect("a path"),
+                "../..",
+            )],
+            ..Denied::default()
+        };
+        let refused = compile_checked(
+            compile,
+            &compiled(denied, Os::MacOs),
+            &root,
+            &machine(Os::MacOs),
+        )
+        .map(|_| ())
+        .expect_err("refused")
+        .to_string();
+        assert!(
+            refused.contains(&format!("in {}{place}reads as a script", file.display())),
+            "{refused}"
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn charters_own_wrap_denies_a_path_and_pins_its_folders_under_both_firmlink_names() {
+    // #1356 review F1: the kernel may name a firmlinked folder either way, so a deny rule and
+    // the pin on each folder between the chat's and the denied path carry both.
+    let cwd = std::path::Path::new("/Users/op-1356/plane");
+    let tmp = std::path::Path::new("/Users/op-1356/tmp");
+    for written in [
+        "/Users/op-1356/plane/tools/hook.sh",
+        "/System/Volumes/Data/Users/op-1356/plane/tools/hook.sh",
+    ] {
+        let denied = [later_code(written, "/f", "./tools/hook.sh")];
+        let profile = seatbelt::profile(&denied, &seatbelt::Own::default(), cwd, tmp, 4040, None)
+            .expect("a profile");
+        let rules: Vec<&str> = profile
+            .lines()
+            .filter(|line| {
+                line.starts_with("(deny file-write* (subpath")
+                    || line.starts_with("(deny file-write* (literal")
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                "(deny file-write* (subpath \"/Users/op-1356/plane/tools/hook.sh\"))",
+                "(deny file-write* (subpath \"/System/Volumes/Data/Users/op-1356/plane/tools/hook.sh\"))",
+                "(deny file-write* (literal \"/Users/op-1356/plane\"))",
+                "(deny file-write* (literal \"/System/Volumes/Data/Users/op-1356/plane\"))",
+                "(deny file-write* (literal \"/Users/op-1356/tmp\"))",
+                "(deny file-write* (literal \"/System/Volumes/Data/Users/op-1356/tmp\"))",
+                "(deny file-write* (literal \"/Users/op-1356/plane/tools\"))",
+                "(deny file-write* (literal \"/System/Volumes/Data/Users/op-1356/plane/tools\"))",
+            ],
+            "{written}:\n{profile}"
+        );
+    }
+}
+
+#[test]
+fn the_firmlinks_are_the_system_s_list_and_the_known_one_together() {
+    // #1356 review F2: an unreadable list falls back to the one compiled in, never to none.
+    let known = firmlinks_from(None);
+    for link in [
+        "/Users",
+        "/private",
+        "/usr/local",
+        "/Volumes",
+        "/Applications",
+    ] {
+        assert!(known.contains(&std::path::PathBuf::from(link)), "{link}");
+    }
+    assert_eq!(known.len(), 18);
+    assert_eq!(firmlinks_from(Some("")), known);
+    let read = firmlinks_from(Some("/Extra\tExtra\n/Users\tUsers\n/\t\n"));
+    assert!(read.contains(&std::path::PathBuf::from("/Extra")));
+    assert_eq!(read.len(), 19);
 }

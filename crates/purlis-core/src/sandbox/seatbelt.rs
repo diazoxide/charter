@@ -162,31 +162,50 @@ pub fn profile(
         out.push_str(&text);
         out.push('\n');
     };
+    // Each under every name the kernel may give it: as it resolves, and across a macOS
+    // firmlink (`/Users` and `/System/Volumes/Data/Users`), which resolving leaves as spelled
+    // (#1356).
+    let named = |path: &Path| -> Result<Vec<String>, &'static str> {
+        super::kernel_names(path)
+            .iter()
+            .map(|name| string(&name.display().to_string()))
+            .collect()
+    };
     for denial in denied {
         let what = match denial.access {
             Access::ReadWrite => "file-read* file-write*",
             Access::Write => "file-write*",
         };
-        line(format!("(deny {what} (subpath {}))", quote(&denial.path)?));
+        for name in named(&denial.path)? {
+            line(format!("(deny {what} (subpath {name}))"));
+        }
     }
     // Each directory between the chat's own and a denied path, as an entry only, so it is never
     // moved away with the denied path in it, nor replaced (measured: a plane-root chat could
     // otherwise move `.charter` aside and write `.charter/app` under its new name).
     let mut pinned = std::collections::BTreeSet::new();
+    let mut pin = |folder: &Path, line: &mut dyn FnMut(String)| -> Result<(), &'static str> {
+        let names = named(folder)?;
+        if pinned.insert(names.first().cloned()) {
+            for name in names {
+                line(format!("(deny file-write* (literal {name}))"));
+            }
+        }
+        Ok(())
+    };
     // The chat's own directory and its temp directory too, as entries: moved whole into the
     // other, every path rule under the one moved would no longer match (measured).
     for root in [&cwd_real, &real(tmp)] {
-        if pinned.insert(root.clone()) {
-            line(format!("(deny file-write* (literal {}))", quote(root)?));
-        }
+        pin(root, &mut line)?;
     }
+    // Between a name of the chat's directory and the same side's name of the denied path.
+    let cwd_names = super::kernel_names(&cwd_real);
     for denial in denied {
-        for ancestor in super::ancestors_within(&real(&denial.path), &cwd_real) {
-            if pinned.insert(ancestor.clone()) {
-                line(format!(
-                    "(deny file-write* (literal {}))",
-                    quote(&ancestor)?
-                ));
+        for path in super::kernel_names(&denial.path) {
+            for cwd_name in &cwd_names {
+                for ancestor in super::ancestors_within(&path, cwd_name) {
+                    pin(&ancestor, &mut line)?;
+                }
             }
         }
     }

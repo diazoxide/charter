@@ -82,14 +82,19 @@ pub fn settings(compiled: &Compiled) -> Result<Settings, Uncompilable> {
     let mut edit_rules = Vec::new();
     // Each denied path as written, and as the kernel names it where that differs: a path
     // through a link (a linked `~/.config`, `/tmp`, `/var`) is denied by both names, so a rule
-    // matches whichever name the sandbox or a tool compares (FD-27).
+    // matches whichever name the sandbox or a tool compares (FD-27). So is each on the other
+    // side of a macOS firmlink (`/Users` and `/System/Volumes/Data/Users`, #1356), which
+    // resolving leaves as it is spelled.
     let names = compiled.denied.paths.iter().flat_map(|denial| {
-        let resolved = super::real(&denial.path);
-        let mut both = vec![(denial, denial.path.clone())];
-        if resolved != denial.path {
-            both.push((denial, resolved));
-        }
-        both
+        let mut every = vec![denial.path.clone(), super::real(&denial.path)];
+        let twins: Vec<_> = every
+            .iter()
+            .filter_map(|it| super::firmlink_twin(it))
+            .collect();
+        every.extend(twins);
+        let mut seen = std::collections::HashSet::new();
+        every.retain(|it| seen.insert(it.clone()));
+        every.into_iter().map(move |path| (denial, path))
     });
     for (denial, path) in names {
         let path = path.display().to_string();
