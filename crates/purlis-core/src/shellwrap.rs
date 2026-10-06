@@ -76,6 +76,36 @@ pub(crate) const SHELL_KEYWORDS: [&str; 21] = [
     "esac", "select", "function", "!", "{", "}", "(", ")", "$",
 ];
 
+/// Where the body starts in a segment that opens with a function definition (`f ( ) {`,
+/// `function f {`, zsh's `f ( )` before a simple command), or `None` for one that does not. A
+/// keyword in front (`then`, `{`, `(`, …) is stepped over, and so is a definition inside a
+/// definition's header. A reader of segments takes `f ( ) { <cmd>` for a call of `f`, so every
+/// guard that reads a segment's program reads it from here (#1417).
+pub(crate) fn past_function_headers(toks: &[String]) -> Option<usize> {
+    let word = |k: usize| toks.get(k).map(String::as_str);
+    let keyword =
+        |k: usize| word(k).is_some_and(|w| w != "function" && SHELL_KEYWORDS.contains(&w));
+    let mut at = 0;
+    let mut found = false;
+    loop {
+        while keyword(at) {
+            at += 1;
+        }
+        if word(at) == Some("function") && word(at + 1).is_some() {
+            at += 2;
+            if word(at) == Some("(") && word(at + 1) == Some(")") {
+                at += 2;
+            }
+        } else if word(at).is_some() && word(at + 1) == Some("(") && word(at + 2) == Some(")") {
+            at += 3;
+        } else {
+            break;
+        }
+        found = true;
+    }
+    found.then_some(at)
+}
+
 /// Wrapper flags whose VALUE is a SEPARATE token, per wrapper — `_WRAPPER_VALUE_FLAGS`.
 ///
 /// Per wrapper rather than one flat set, because the same spelling differs: `env -i` ignores the

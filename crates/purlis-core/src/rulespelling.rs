@@ -34,7 +34,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::consentspelling;
+use crate::consentspelling::{self, Place};
 use crate::scaffold::settings::{self, CONSENT_PATTERNS, PURLIS_CONSENT_PATTERNS};
 use serde_json::Value;
 
@@ -156,7 +156,17 @@ impl Rules {
         {
             return None;
         }
-        let look = |text: &str| hits(files, text);
+        // Every substitution a shell runs, at every depth, is read once through the leak
+        // guard's scanner (#1417) and handed to the arm that reads it; past its bounds the
+        // call is too big to check, not read in part.
+        let inward = crate::shellsubst::every_substitution(cmd);
+        if inward.too_big {
+            return Some(crate::guardcaps::too_deep_refusal());
+        }
+        // A segment as written, and a string a shell is handed whole, read all the way in.
+        let look = |text: &str| hits(files, text, false);
+        let look_inward = |text: &str| hits(files, text, true);
+        let named = |name: &str| named(files, name);
         let stripped = heredoc::strip_reader_heredocs(cmd);
         let first = |found: &Found, source: &str| match found {
             Found::TooDeep => None,
@@ -167,39 +177,65 @@ impl Rules {
                     .unwrap_or(hits[0]),
             ),
         };
-        consentspelling::in_a_shell_string_by(&stripped, &look)
-            .or_else(|| consentspelling::in_a_shells_heredoc_by(cmd, &look))
-            .map(|found| match first(&found, "") {
-                Some(hit) => shell_string_refusal(files, hit),
-                None => too_deep_refusal(),
+        // Where the command sits first (a substitution, a `case` branch, a function body), so
+        // the refusal says so; then a string a shell runs; then how it is spelt.
+        consentspelling::in_a_substitution_by(&inward, &|segments: &[Vec<String>]| {
+            hits_in(files, consentspelling::readings_in(segments, &named))
+        })
+        .map(|found| (found, Place::Substitution))
+        .or_else(|| consentspelling::in_a_branch_or_body_by(&stripped, &look))
+        .map(|(found, place)| match first(&found, "") {
+            Some(hit) => placed_refusal(files, hit, place),
+            None => too_deep_refusal(),
+        })
+        .or_else(|| {
+            consentspelling::in_a_shell_string_by(&stripped, &look_inward)
+                .or_else(|| consentspelling::in_a_shells_heredoc_by(cmd, &look_inward))
+                .map(|found| match first(&found, "") {
+                    Some(hit) => shell_string_refusal(files, hit),
+                    None => too_deep_refusal(),
+                })
+        })
+        .or_else(|| {
+            let asked = |source: &str, found: &Found| match found {
+                Found::TooDeep => false,
+                Found::Hits(hits) => hits.iter().all(|h| asks(files, *h, source)),
+            };
+            consentspelling::not_as_written_by(&stripped, &look, asked).map(|(found, source)| {
+                match first(&found, &source) {
+                    Some(hit) => spelling_refusal(files, hit),
+                    None => too_deep_refusal(),
+                }
             })
-            .or_else(|| {
-                let asked = |source: &str, found: &Found| match found {
-                    Found::TooDeep => false,
-                    Found::Hits(hits) => hits.iter().all(|h| asks(files, *h, source)),
-                };
-                consentspelling::not_as_written_by(&stripped, &look, asked).map(
-                    |(found, source)| match first(&found, &source) {
-                        Some(hit) => spelling_refusal(files, hit),
-                        None => too_deep_refusal(),
-                    },
-                )
-            })
+        })
     }
 }
 
 /// Every rule of every file that holds a command `text` runs — at every wrapper layer a rule
-/// names, of every segment, and in every substitution a `"…"` holds
+/// names, of every segment, and with `inward` in every substitution a shell runs, at any depth
 /// ([`consentspelling::every_reading_in`]) — or `None` for none. A segment read through more
 /// wrappers than the guard follows is a hit of its own ([`Found::TooDeep`]): it fails closed.
-fn hits(files: &[File], text: &str) -> Option<Found> {
-    let named = |name: &str| {
-        files
-            .iter()
-            .flat_map(|f| f.rules.iter())
-            .any(|r| r.program.as_ref().is_some_and(|p| p.is(name)))
-    };
-    let (readings, too_deep) = consentspelling::every_reading_in(text, &named);
+fn hits(files: &[File], text: &str, inward: bool) -> Option<Found> {
+    let named = |name: &str| named(files, name);
+    hits_in(
+        files,
+        consentspelling::every_reading_in(text, &named, inward),
+    )
+}
+
+/// Whether a rule in `files` names the program `name`.
+fn named(files: &[File], name: &str) -> bool {
+    files
+        .iter()
+        .flat_map(|f| f.rules.iter())
+        .any(|r| r.program.as_ref().is_some_and(|p| p.is(name)))
+}
+
+/// [`hits`] over readings already made, with whether one stood behind too many wrappers.
+fn hits_in(
+    files: &[File],
+    (readings, too_deep): (Vec<consentspelling::Reading>, bool),
+) -> Option<Found> {
     if too_deep {
         return Some(Found::TooDeep);
     }
@@ -283,6 +319,23 @@ fn shell_string_refusal(files: &[File], hit: Hit) -> String {
          `eval`, `bash <<'EOF'`). It falls under the rule `{glob}` in {shown}, which {does}, \
          and the host matches that rule against the outer command only. Run it directly, spelt \
          as the rule does: `{program}`, unquoted, at the start of its command.",
+        glob = rule.glob,
+        shown = file.shown,
+        does = what_it_does(rule),
+    )
+}
+
+/// What a ruled command the host's rule never sees, where it sits, is told.
+fn placed_refusal(files: &[File], hit: Hit, place: Place) -> String {
+    let file = &files[hit.file];
+    let rule = &file.rules[hit.rule];
+    let program = rule.program.as_ref().map_or("", |p| p.written.as_str());
+    format!(
+        "`{program} …` is refused {where_}. It falls under the rule `{glob}` in {shown}, which \
+         {does}, and the host matches that rule against the command as written, which does not \
+         start with it. Run it as a command of its own, spelt as the rule does: `{program}`, \
+         unquoted, at the start.",
+        where_ = place.said(),
         glob = rule.glob,
         shown = file.shown,
         does = what_it_does(rule),

@@ -44,6 +44,7 @@
 use std::path::Path;
 
 use crate::cliname;
+use crate::guardcaps;
 use crate::handoffguard::as_the_shell_reads;
 use crate::heredoc;
 use crate::leakguard;
@@ -53,8 +54,9 @@ use crate::scaffold::settings::{
     self, CONSENT_PATTERNS, HANDOFF_PATTERN, PROMOTE_PATTERN, PURLIS_CONSENT_PATTERNS,
 };
 use crate::shellseg;
-use crate::shellsubst::quoted_substitutions;
+use crate::shellsubst::{Inward, every_substitution, scan};
 use crate::shellwrap::{self, base_lower};
+use std::collections::HashSet;
 
 /// The trace reason this refusal is tallied under.
 pub const REASON: &str = "consent-spelling";
@@ -98,10 +100,24 @@ impl Gated {
 ///
 /// `anchors` are where the host's settings may come from: the session's start folder and the
 /// call's `cwd` ([`settings::twin_in_force`]). None given keeps the new spelling refused.
+///
+/// **Every substitution a shell runs, at every depth** (#1417), is read as a command of its own
+/// ([`every_substitution`], the leak guard's scanner): in double quotes, a `${ … }`, a backtick
+/// or an expanding heredoc body, however deep it nests. Past the walk's bounds the call is
+/// refused as too big to check, never read in part.
 pub fn refusal(cmd: &str, plane: &Path, anchors: &[&Path]) -> Option<String> {
+    // Read once for the whole command, every depth, and handed to the arm that reads it.
+    let inward = every_substitution(cmd);
+    if inward.too_big {
+        return Some(guardcaps::too_deep_refusal());
+    }
     let stripped = heredoc::strip_reader_heredocs(cmd);
     let at = At { plane, anchors };
-    refusal_in(&stripped, at)
+    // Where the command sits first (a substitution, a `case` branch, a function body), so the
+    // refusal says so; then how it is spelt.
+    in_a_substitution(&inward)
+        .or_else(|| in_a_branch_or_body(&stripped))
+        .or_else(|| refusal_in(&stripped, at))
         .or_else(|| in_a_shell_string(&stripped))
         .or_else(|| in_a_shells_heredoc(cmd))
         .or_else(|| not_as_the_rule_spells_it(&stripped))
@@ -170,51 +186,180 @@ fn readings_of(toks: &[String], wanted: &impl Fn(&str) -> bool) -> (Vec<Reading>
 }
 
 /// Every [`Reading`] in `text` ([`readings_of`], with `wanted` choosing the wrapper layers):
-/// each segment's, and each substitution's a `"…"` holds ([`quoted_substitutions`]), less any
-/// heredoc body a reader takes as data. `true` beside them when a segment has more wrappers in
-/// front of its program than are read.
-pub(crate) fn every_reading_in(text: &str, wanted: &impl Fn(&str) -> bool) -> (Vec<Reading>, bool) {
+/// each segment's, as written. With `inward`, each command a substitution in `text` runs too,
+/// at every depth ([`every_substitution`]), less any heredoc body a reader takes as data, with
+/// a `case` branch and a function body read as commands of their own ([`commands_of`]). `true`
+/// beside them when a segment has more wrappers in front of its program than are read, or the
+/// substitutions reach past the walk's bounds.
+pub(crate) fn every_reading_in(
+    text: &str,
+    wanted: &impl Fn(&str) -> bool,
+    inward: bool,
+) -> (Vec<Reading>, bool) {
     let mut out: Vec<Reading> = Vec::new();
     let mut too_deep = false;
-    let mut read = |text: &str| {
-        for toks in shellseg::segment_argv(text) {
+    let mut read = |segments: Vec<Vec<String>>| {
+        for toks in segments {
             let (readings, deep) = readings_of(&toks, wanted);
             out.extend(readings);
             too_deep |= deep;
         }
     };
-    read(text);
-    for inner in quoted_substitutions(text) {
-        read(&lines_it_runs(&inner));
+    if !inward {
+        return readings_in(&shellseg::segment_argv(text), wanted);
+    }
+    read(commands_of(text));
+    let inner = every_substitution(text);
+    for cased in &inner.texts {
+        read(with_function_bodies(shellseg::segment_argv(
+            &lines_it_runs(cased),
+        )));
+    }
+    (out, too_deep || inner.too_big)
+}
+
+/// Every [`Reading`] of `segments` ([`readings_of`]), and `true` beside them when one has more
+/// wrappers in front of its program than are read.
+pub(crate) fn readings_in(
+    segments: &[Vec<String>],
+    wanted: &impl Fn(&str) -> bool,
+) -> (Vec<Reading>, bool) {
+    let mut out = Vec::new();
+    let mut too_deep = false;
+    for toks in segments {
+        let (readings, deep) = readings_of(toks, wanted);
+        out.extend(readings);
+        too_deep |= deep;
     }
     (out, too_deep)
 }
 
-/// What `find` makes of the first segment of `text` it answers for — in the words as written, or
-/// in a substitution a `"…"` holds ([`quoted_substitutions`]).
+/// What `find` makes of the first command `text` runs that it answers for — its segments, a
+/// `case` branch, a function body, or a substitution a shell runs at any depth
+/// ([`every_substitution`]). For a string a shell is handed whole (`sh -c`, a body `bash`
+/// reads), which no other reading here looks inside.
 fn found<T>(text: &str, find: &impl Fn(&Reading) -> Option<T>) -> Option<T> {
-    found_in(text, find).or_else(|| {
-        quoted_substitutions(text)
-            .iter()
-            .find_map(|inner| found_in(&lines_it_runs(inner), find))
+    let first =
+        |segments: Vec<Vec<String>>| segments.iter().find_map(|toks| find(&reading_of(toks)?));
+    first(commands_of(text)).or_else(|| {
+        every_substitution(text).texts.iter().find_map(|cased| {
+            first(with_function_bodies(shellseg::segment_argv(
+                &lines_it_runs(cased),
+            )))
+        })
     })
 }
 
-/// [`found`] over the words as written.
+/// What `find` makes of the first segment of `text` as written that it answers for.
 fn found_in<T>(text: &str, find: &impl Fn(&Reading) -> Option<T>) -> Option<T> {
     shellseg::segment_argv(text)
         .iter()
         .find_map(|toks| find(&reading_of(toks)?))
 }
 
+/// The words of each command `text` runs, as the leak guard reads them (#1417): a `case`
+/// pattern's `)` read as the end of a command ([`crate::shellsubst::Scan::as_commands`]), so
+/// a branch's command is a command of its own, and a function body read where it is defined
+/// ([`with_function_bodies`]). For a text that holds no heredoc body a reader takes as data.
+fn commands_of(text: &str) -> Vec<Vec<String>> {
+    let segments = match scan(text, false) {
+        Some(scan) => shellseg::segment_argv(&scan.as_commands(false)),
+        None => shellseg::segment_argv(text),
+    };
+    with_function_bodies(segments)
+}
+
+/// `segments`, each with a function definition's header taken off its front
+/// ([`shellwrap::past_function_headers`]), so the first command of the body is read as the
+/// command it is. A body is read where it is defined, called or not.
+fn with_function_bodies(segments: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    segments
+        .into_iter()
+        .map(|toks| match shellwrap::past_function_headers(&toks) {
+            Some(at) => toks[at..].to_vec(),
+            None => toks,
+        })
+        .collect()
+}
+
 /// The lines of `text` a shell runs: a heredoc body a reader takes as data — a commit message,
-/// a pull request's body — left out ([`leakguard::lines_a_command_could_run`]).
+/// a pull request's body, a script written to a file — left out
+/// ([`leakguard::lines_a_command_could_run`]).
+///
+/// Its line continuations are taken out first, as the shell takes them out before it reads a
+/// heredoc's delimiter: `<<E\` and a newline and `OF` is an unquoted `EOF`, whose body expands
+/// (#1417).
 fn lines_it_runs(text: &str) -> String {
-    leakguard::lines_a_command_could_run(text)
+    leakguard::lines_a_command_could_run(&text.replace("\\\n", ""))
         .into_iter()
         .map(|(row, _)| row)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Where a command sits that the host's rule, read against the command as written, never sees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Place {
+    /// In a command substitution (`$( … )`, a backtick), quoted or not, at any depth.
+    Substitution,
+    /// In a `case` branch.
+    CaseBranch,
+    /// In the body of a shell function the command defines.
+    FunctionBody,
+}
+
+impl Place {
+    /// Where it sits, as a refusal says it.
+    pub(crate) fn said(self) -> &'static str {
+        match self {
+            Self::Substitution => "inside a command substitution",
+            Self::CaseBranch => "inside a `case` branch",
+            Self::FunctionBody => "inside a function body",
+        }
+    }
+}
+
+/// Whether `text` may define a shell function: it holds `function`, or a `(` with only blanks
+/// before a `)`. A cheap test, so a text that defines none is not read again.
+fn defines_a_function(text: &str) -> bool {
+    text.contains("function")
+        || text.match_indices('(').any(|(at, _)| {
+            text[at + 1..]
+                .trim_start_matches([' ', '\t'])
+                .starts_with(')')
+        })
+}
+
+/// What `look` finds in a command a `case` branch or a function body in `text` runs, which no
+/// segment as written starts with, and where it sits. Read over the lines a shell runs
+/// ([`lines_it_runs`]), so a heredoc body a reader takes as data, a script written to a file
+/// included, is never read as commands. A `case` branch is read once each pattern's `)` ends a
+/// command; a function body once its header is off the front of its segment.
+pub(crate) fn in_a_branch_or_body_by<T>(
+    text: &str,
+    look: &impl Fn(&str) -> Option<T>,
+) -> Option<(T, Place)> {
+    let cased = scan(text, false).filter(|scan| scan.has_case_patterns());
+    if cased.is_none() && !defines_a_function(text) {
+        return None;
+    }
+    let runs = lines_it_runs(text);
+    let as_written: HashSet<Vec<String>> = shellseg::segment_argv(text).into_iter().collect();
+    let new = |words: &Vec<String>| !words.is_empty() && !as_written.contains(words);
+    let branches = match scan(&runs, false).filter(|scan| scan.has_case_patterns()) {
+        Some(scan) => shellseg::segment_argv(&scan.as_commands(false)),
+        None => shellseg::segment_argv(&runs),
+    };
+    branches
+        .iter()
+        .filter(|words| cased.is_some() && new(words))
+        .find_map(|words| look(&quoted(words)).map(|it| (it, Place::CaseBranch)))
+        .or_else(|| {
+            with_function_bodies(branches)
+                .iter()
+                .filter(|words| new(words))
+                .find_map(|words| look(&quoted(words)).map(|it| (it, Place::FunctionBody)))
+        })
 }
 
 /// [`gated`] over the words as written.
@@ -292,6 +437,63 @@ pub(crate) fn in_a_shells_heredoc_by<T>(cmd: &str, look: &impl Fn(&str) -> Optio
         .find_map(|(row, _)| look(&as_the_shell_reads(row)))
 }
 
+/// A consent-gated command under either name in a substitution a shell runs anywhere in the
+/// command as written (`inward`), an expanding heredoc body's included, which
+/// [`heredoc::strip_reader_heredocs`] takes out of every other reading here: the host's rule
+/// reads only the outer command. A handoff too: A7 judges the one it finds first, and one it
+/// does not find in a substitution is one no rule asks about.
+fn in_a_substitution(inward: &Inward) -> Option<String> {
+    let find = |it: &Reading| consent_gated(it, &|_: &Gated| true);
+    in_a_substitution_by(inward, &|segments: &[Vec<String>]| {
+        segments.iter().find_map(|toks| find(&reading_of(toks)?))
+    })
+    .map(|it| placed_refusal(&it, Place::Substitution))
+}
+
+/// A consent-gated command under either name, not a handoff (A7's), in a `case` branch or a
+/// function body ([`in_a_branch_or_body_by`]).
+fn in_a_branch_or_body(text: &str) -> Option<String> {
+    let find = |it: &Reading| consent_gated(it, &Gated::not_a7s);
+    in_a_branch_or_body_by(text, &|text: &str| found_in(text, &find))
+        .map(|(it, place)| placed_refusal(&it, place))
+}
+
+/// What `look` finds in the commands of a substitution a shell runs anywhere in the command, at
+/// any depth, as `inward` read them once ([`every_substitution`]): each read less the heredoc
+/// bodies a reader takes as data, with a function body read as commands of its own.
+pub(crate) fn in_a_substitution_by<T>(
+    inward: &Inward,
+    look: &impl Fn(&[Vec<String>]) -> Option<T>,
+) -> Option<T> {
+    inward.texts.iter().find_map(|cased| {
+        look(&with_function_bodies(shellseg::segment_argv(
+            &lines_it_runs(cased),
+        )))
+    })
+}
+
+/// `words` as a command line a shell reads back as the same words.
+fn quoted(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|w| crate::handoff::quote(w))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What a consent-gated command the host's rule never sees, where it sits, is told.
+fn placed_refusal(it: &Gated, place: Place) -> String {
+    let what = it.as_the_rule_spells_it();
+    format!(
+        "`{name} {what}` is refused {where_}. It waits for your consent through a rule spelt \
+         `{RULES_NAME} …`, and the host matches that rule against the command as written, which \
+         does not start with it, so nothing would ask you. Run it as a command of its own, spelt \
+         `{RULES_NAME} {what}`, the bare name at the start.",
+        name = it.name,
+        where_ = place.said(),
+    )
+}
+
 /// A segment of `text` that runs a consent-gated command under the rules' own name, whose
 /// source a rule does not match.
 fn not_as_the_rule_spells_it(text: &str) -> Option<String> {
@@ -302,7 +504,7 @@ fn not_as_the_rule_spells_it(text: &str) -> Option<String> {
             .iter()
             .any(|pattern| pypath::fnmatch(source, pattern))
     };
-    not_as_written_by(text, &|text: &str| found(text, &find), asked)
+    not_as_written_by(text, &|text: &str| found_in(text, &find), asked)
         .map(|(it, _)| spelling_refusal(&it))
 }
 
@@ -319,10 +521,16 @@ pub(crate) fn not_as_written_by<T>(
     };
     let toks = shellseg::split_punctuation(toks);
     let chars: Vec<char> = text.chars().collect();
+    let data = data_lines(text);
     heredoc::segments_of(&toks)
         .iter()
         .find_map(|(seg, _before)| {
             let (first, last) = (seg.first()?, seg.last()?);
+            // A line of a heredoc body a reader takes as data is no command: only the
+            // substitutions in it run, and those are read on their own.
+            if usize::try_from(first.start).is_ok_and(|at| data.get(at).copied().unwrap_or(false)) {
+                return None;
+            }
             let Some(source) = source_of(&chars, first.start, last.end) else {
                 let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
                 return look(&words.join(" ")).map(|it| (it, String::new()));
@@ -330,6 +538,30 @@ pub(crate) fn not_as_written_by<T>(
             let it = look(&source)?;
             (!asked(&source, &it)).then_some((it, source))
         })
+}
+
+/// Which characters of `text` stand on a line of a heredoc body that no shell runs: data a
+/// reader takes, such as a script written to a file. Empty where the layout is not the text
+/// line for line, or the text holds a line continuation, so nothing is skipped.
+fn data_lines(text: &str) -> Vec<bool> {
+    // A line continuation can turn what the layout reads as a quoted delimiter into an unquoted
+    // one, so with one in the text nothing is skipped.
+    if !text.contains("<<") || text.contains("\\\n") {
+        return Vec::new();
+    }
+    let layout = heredoc::heredoc_layout(text);
+    if !layout.iter().map(|l| l.text.as_str()).eq(text.split('\n')) {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(text.len());
+    for (k, line) in layout.iter().enumerate() {
+        if k > 0 {
+            out.push(false); // the newline
+        }
+        let data = line.body && !line.executed;
+        out.extend(std::iter::repeat_n(data, line.text.chars().count()));
+    }
+    out
 }
 
 /// The source text between two character offsets, or `None` where the lexer measured neither
@@ -359,10 +591,9 @@ fn refusal_in(text: &str, at: At<'_>) -> Option<String> {
     let lifted = |it: &Gated| {
         it.name == cliname::PRIMARY && spelt_as_a_twin(text) && ruled_under(&it.words, at)
     };
-    let it = gated_in(text, &|it: &Gated| it.under_a_new_name() && !lifted(it)).or_else(|| {
-        quoted_substitutions(text)
-            .iter()
-            .find_map(|inner| gated_in(&lines_it_runs(inner), &Gated::under_a_new_name))
+    // Over the lines a shell runs: a heredoc body a reader takes as data names no command.
+    let it = gated_in(&lines_it_runs(text), &|it: &Gated| {
+        it.under_a_new_name() && !lifted(it)
     })?;
     let (name, words) = (&it.name, &it.words);
     let verb = words.first().map_or("", String::as_str);

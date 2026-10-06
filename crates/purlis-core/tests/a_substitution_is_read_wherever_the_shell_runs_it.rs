@@ -19,6 +19,9 @@ use purlis_core::{guardcaps, leakguard, shellseg};
 /// What the fixture's vault file holds, and what the stand-in prints on `--reveal`.
 const MARKER: &str = "MARKER-1412-SECRET";
 
+/// What a stand-in prints when a command a host rule gates really runs.
+const RAN: &str = "RAN-GATED-COMMAND";
+
 /// The fixture project: a vault file holding [`MARKER`], an ordinary `sub/`, and a `bin/` with a
 /// stand-in command line under both of its names.
 struct Fixture {
@@ -40,13 +43,22 @@ fn fixture() -> Fixture {
     std::fs::create_dir_all(&bin).expect("mkdir");
     // Spelt in two halves, so a search of the project finds the marker only in the vault.
     let (a, b) = MARKER.split_at(6);
+    // …and a consent-gated report, or a ruled `terraform apply`, prints [`RAN`] when it runs.
+    let (c, d) = RAN.split_at(4);
     let script = format!(
         "#!/bin/sh\nfor w in \"$@\"; do [ \"$w\" = --reveal ] && printf '%s%s\\n' '{a}' '{b}'; \
+         [ \"$1\" = report ] && [ \"$w\" = --yes ] && printf '%s%s\\n' '{c}' '{d}'; \
+         [ \"$1\" = handoff ] && printf '%s%s\\n' '{c}' '{d}'; \
          done\nexit 0\n"
     );
-    for name in ["charter", "purlis"] {
+    let ruled = format!("#!/bin/sh\n[ \"$1\" = apply ] && printf '%s%s\\n' '{c}' '{d}'\nexit 0\n");
+    for (name, script) in [
+        ("charter", &script),
+        ("purlis", &script),
+        ("terraform", &ruled),
+    ] {
         let p = bin.join(name);
-        std::fs::write(&p, &script).expect("write the stand-in");
+        std::fs::write(&p, script).expect("write the stand-in");
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     }
@@ -144,6 +156,15 @@ fn shapes() -> Vec<(String, Shells)> {
             "echo $(case x in x) cat {V};; esac)",
             SomeRead(&[Bash5, Zsh]),
         ),
+        // …and a pattern written with its optional leading paren, in any branch.
+        ("case x in (x) cat {V};; esac", Read),
+        ("case x in (x) {R};; esac", Read),
+        ("case x in (y) :;; (x) cat {V};; esac", Read),
+        ("echo \"$(case x in (x) cat {V};; esac)\"", Read),
+        (
+            "case x in (y) :;& (x) cat {V};; esac",
+            SomeRead(&[Bash5, Zsh]),
+        ),
         // Backticks around a quoted substitution, and the other way about.
         ("echo `echo \"$(cat {V})\"`", Read),
         ("echo \"$(echo `cat {V}`)\"", Read),
@@ -182,6 +203,8 @@ fn shapes() -> Vec<(String, Shells)> {
         ("cat <<EOF\n\"$(cat {V})\"\nEOF", Read),
         ("cat <<EOF\nit's\n$(cat {V})\nit's\nEOF", Read),
         ("cat <<EOF\n'$(cat {V})'\nEOF", Read),
+        ("cat <<E\\\nOF\n$(cat {V})\nEOF", Read),
+        ("cat <<\\\nEOF\n$(cat {V})\nEOF", Read),
         // A line continuation inside what only becomes a substitution, a `case` or a heredoc
         // once the shell takes the backslash-newline out.
         ("echo \"$\\\n(cat {V})\"", SomeRead(&[Bash3, Bash5])),
@@ -201,6 +224,27 @@ fn shapes() -> Vec<(String, Shells)> {
              cd .purlis/vaults; cd ..; cd ..; cd .purlis/vaults; cd ..; cd ..; \
              cd .purlis/vaults; echo \"$(cat f.json)\"",
             Read,
+        ),
+        // A function the command defines and calls runs its body where it is called.
+        ("f(){ cat {V}; }; f", Read),
+        ("f() {\n  cat {V}\n}\nf", Read),
+        ("function f { cat {V}; }; f", Read),
+        ("function f() { cat {V}; }; f", Read),
+        ("f() ( cat {V} ); f", Read),
+        ("f(){ {R}; }; f", Read),
+        ("f(){ g(){ cat {V}; }; g; }; f", Read),
+        ("if true; then f(){ cat {V}; }; fi; f", Read),
+        ("f(){ cat vaults/f.json; }; cd .purlis; f", Read),
+        ("f(){ cat vaults/f.json; }; echo \"$(cd .purlis; f)\"", Read),
+        ("echo \"$(f(){ cat {V}; }; f)\"", Read),
+        ("echo \"$(f(){ cd .purlis; }; f; cat vaults/f.json)\"", Read),
+        ("f() cat {V}; f", SomeRead(&[Zsh])),
+        ("f(){ echo {V}; }; f", Mention),
+        // A reader's heredoc body is data, whatever function or `case` it spells.
+        ("cat > s.sh <<EOF\nf(){ cat {V}; }\nf\nEOF", Mention),
+        (
+            "cat > s.sh <<EOF\ncase x in (x) cat {V};; esac\nEOF",
+            Mention,
         ),
         // Mentions: nothing runs, so nothing is read. A backslash-newline the shell keeps,
         // inside single quotes, a comment or a quoted heredoc body, opens nothing.
@@ -230,6 +274,11 @@ fn shapes() -> Vec<(String, Shells)> {
     .into_iter()
     .map(|(s, shells)| (s.to_string(), shells))
     .collect();
+    // A long function and many substitutions after it: its body is read once from each
+    // directory, not once per substitution, so the command is read whole and let through.
+    let body = "echo a-line-of-the-function; ".repeat(80);
+    let subs = "echo \"$(echo hi)\"; ".repeat(60);
+    out.push((format!("f(){{ {body}}}; {subs}f"), Mention));
     // Nested, read at every depth up to the cap.
     for depth in 1..=guardcaps::MAX_NESTING {
         out.push((nested("cat {V}", depth), Read));
@@ -248,6 +297,11 @@ fn spell(shape: &str, f: &Fixture) -> String {
 
 /// Whether `shell` prints the marker when it runs `cmd` in the fixture.
 fn shell_reads(shell: &Path, cmd: &str, f: &Fixture) -> bool {
+    shell_prints(shell, cmd, f, MARKER)
+}
+
+/// Whether `shell` prints `marker` when it runs `cmd` in the fixture.
+fn shell_prints(shell: &Path, cmd: &str, f: &Fixture, marker: &str) -> bool {
     let mut command = Command::new(shell);
     command
         .arg("-c")
@@ -265,7 +319,7 @@ fn shell_reads(shell: &Path, cmd: &str, f: &Fixture) -> bool {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    text.contains(MARKER)
+    text.contains(marker)
 }
 
 fn shells() -> Vec<PathBuf> {
@@ -404,5 +458,220 @@ fn the_verdict_past_the_cap_is_too_big_to_check_in_both_modes() {
         let at_the_cap = spell(&nested("cat {V}", guardcaps::MAX_NESTING), &f);
         let reason = verdict(&at_the_cap).expect("a read at the cap is refused");
         assert_ne!(reason, guardcaps::REASON, "{mode}: read whole at the cap");
+    }
+}
+
+/// Every shape that runs `{G}`, a command a host rule gates, from inside a substitution or a
+/// string the rule never reads, and every shape that only mentions it.
+fn gated_shapes() -> Vec<(String, Shells)> {
+    let mut out: Vec<(String, Shells)> = [
+        ("echo \"$({G})\"", Read),
+        ("echo \"`{G}`\"", Read),
+        ("echo \"${unset_1417:-$({G})}\"", Read),
+        ("echo \"${unset_1417:-'$({G})'}\"", Read),
+        ("echo $'\\'' \"$({G})\" $'\\''", Read),
+        ("echo \"$(echo hi # )\n{G}\n)\"", Read),
+        (
+            "echo \"$(cat <<'EOF'\n)\nEOF\n{G})\"",
+            SomeRead(&[Bash5, Zsh]),
+        ),
+        (
+            "echo \"$(case x in x) {G};; esac)\"",
+            SomeRead(&[Bash5, Zsh]),
+        ),
+        ("echo `echo \"$({G})\"`", Read),
+        ("echo \"$(echo `{G}`)\"", Read),
+        ("echo \"$\\\n({G})\"", SomeRead(&[Bash3, Bash5])),
+        // An expanding heredoc body runs its substitutions, whichever program reads the body.
+        ("cat <<EOF\n$({G})\nEOF", Read),
+        ("sort <<EOF\n\"$({G})\"\nEOF", Read),
+        ("cat <<EOF\nit's\n`{G}`\nEOF", Read),
+        // A `case` branch and a function body run their commands, and the rule reads neither.
+        ("case x in x) {G};; esac", Read),
+        ("case x in y) :;; x) {G};; esac", Read),
+        ("case x in (x) {G};; esac", Read),
+        ("case x in (y) :;; (x) {G};; esac", Read),
+        ("echo \"$(case x in (x) {G};; esac)\"", Read),
+        // A line continuation in the delimiter is taken out first: the body expands.
+        ("cat <<E\\\nOF\n$({G})\nEOF", Read),
+        ("cat <<\\\nEOF\n$({G})\nEOF", Read),
+        // A reader's heredoc runs only the substitutions in its body.
+        ("tee s.sh <<EOF\nf() { x; }\n$({G})\nEOF", Read),
+        ("f(){ {G}; }; f", Read),
+        ("function f { {G}; }; f", Read),
+        ("echo \"$(f(){ {G}; }; f)\"", Read),
+        // Mentions.
+        ("echo \"$(echo {G})\"", Mention),
+        ("f(){ echo {G}; }; f", Mention),
+        // A reader's heredoc body is data, whatever function or `case` it spells.
+        ("cat > s.sh <<EOF\nf() { {G}; }\nEOF", Mention),
+        ("cat > s.sh <<EOF\n/usr/local/bin/{G}\nEOF", Mention),
+        ("cat > s.sh <<EOF\nf() { {G}; }\nf\nEOF", Mention),
+        ("cat > s.sh <<EOF\ncase $1 in a) {G};; esac\nEOF", Mention),
+        (
+            "cat > s.sh <<EOF\ncase x in (y) :;; (x) {G};; esac\nEOF",
+            Mention,
+        ),
+        ("echo '$({G})'", Mention),
+        ("echo \"\\$({G})\"", Mention),
+        ("cat <<'EOF'\n$({G})\nEOF", Mention),
+        ("echo \"$(echo hi # $({G})\n)\"", Mention),
+        ("echo \"`echo {G}`\"", Mention),
+    ]
+    .into_iter()
+    .map(|(s, shells)| (s.to_string(), shells))
+    .collect();
+    for depth in 1..=guardcaps::MAX_NESTING {
+        out.push((nested("{G}", depth), Read));
+        out.push((nested("echo {G}", depth), Mention));
+    }
+    out
+}
+
+/// Runs every [`gated_shapes`] shape `shapes` keeps for each gated command in `gated` through
+/// the shells and through `judge`, and answers every disagreement: a shape a shell runs the command with must be
+/// refused, and a mention let through.
+fn disagreements(
+    gated: &[&str],
+    judge: &dyn Fn(&str) -> Option<String>,
+    shapes: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let f = fixture();
+    let installed = shells();
+    let kinds: Vec<Option<Shell>> = installed.iter().map(|shell| kind(shell)).collect();
+    let mut wrong = Vec::new();
+    for g in gated {
+        for (shape, expected) in gated_shapes().into_iter().filter(|(s, _)| shapes(s)) {
+            let cmd = spell(&shape.replace("{G}", g), &f);
+            let ran: Vec<bool> = installed
+                .iter()
+                .map(|shell| shell_prints(shell, &cmd, &f, RAN))
+                .collect();
+            let agrees = match expected {
+                Read => ran.iter().all(|&r| r),
+                SomeRead(readers) => kinds
+                    .iter()
+                    .zip(&ran)
+                    .all(|(kind, &r)| kind.is_none_or(|kind| readers.contains(&kind) == r)),
+                Mention => !ran.iter().any(|&r| r),
+            };
+            if !installed.is_empty() && !agrees {
+                wrong.push(format!(
+                    "the shells ({installed:?}) ran it {ran:?} for {cmd:?}; the corpus says \
+                     {expected:?}"
+                ));
+            }
+            let (refused, _) = shellseg::too_deep_within(|| judge(&cmd));
+            if refused.is_some() != (expected != Mention) {
+                wrong.push(format!(
+                    "the backstop {} {cmd:?}",
+                    if expected == Mention {
+                        "refused"
+                    } else {
+                        "let through"
+                    },
+                ));
+            }
+        }
+    }
+    wrong
+}
+
+#[test]
+fn every_shape_a_shell_runs_an_operators_ruled_command_with_is_refused_and_no_other() {
+    purlis_core::unsteered!();
+    let rules = purlis_core::rulespelling::Rules::of_claude_settings(
+        ".claude/settings.json",
+        r#"{"permissions": {"ask": ["Bash(terraform apply *)"]}}"#,
+    );
+    let wrong = disagreements(&["terraform apply x"], &|cmd| rules.refusal(cmd), |_| true);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn every_shape_a_shell_runs_a_consent_gated_command_with_is_refused_at_every_depth() {
+    purlis_core::unsteered!();
+    // A project with no consent rule under the new name, so neither spelling is the host's to
+    // ask about once it sits where the rule does not read.
+    let project = tempfile::tempdir().expect("a project");
+    let judge =
+        |cmd: &str| purlis_core::consentspelling::refusal(cmd, project.path(), &[project.path()]);
+    let mut wrong = disagreements(
+        &["purlis report bug --yes x", "charter report bug --yes x"],
+        &judge,
+        |_| true,
+    );
+    // A handoff in a substitution, which the handoff guard does not read there.
+    wrong.extend(disagreements(&["charter handoff beta"], &judge, |shape| {
+        shape.contains("$(") || shape.contains('`')
+    }));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_gated_command_nested_past_the_cap_is_refused_as_too_big_to_check() {
+    purlis_core::unsteered!();
+    let project = tempfile::tempdir().expect("a project");
+    let rules = purlis_core::rulespelling::Rules::of_claude_settings(
+        ".claude/settings.json",
+        r#"{"permissions": {"ask": ["Bash(terraform apply *)"]}}"#,
+    );
+    for depth in [guardcaps::MAX_NESTING + 1, 33] {
+        let consent = nested("purlis report bug --yes x", depth);
+        let (refused, too_deep) = shellseg::too_deep_within(|| {
+            purlis_core::consentspelling::refusal(&consent, project.path(), &[project.path()])
+        });
+        assert!(
+            refused.is_some() && too_deep,
+            "consent, depth {depth}: {refused:?}"
+        );
+        let ruled = nested("terraform apply x", depth);
+        let (refused, too_deep) = shellseg::too_deep_within(|| rules.refusal(&ruled));
+        assert!(
+            refused.is_some() && too_deep,
+            "rule, depth {depth}: {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn a_refusal_says_where_the_command_sits_and_to_run_it_as_its_own_command() {
+    purlis_core::unsteered!();
+    let project = tempfile::tempdir().expect("a project");
+    let rules = purlis_core::rulespelling::Rules::of_claude_settings(
+        ".claude/settings.json",
+        r#"{"permissions": {"ask": ["Bash(terraform apply *)"]}}"#,
+    );
+    for (shape, place) in [
+        ("x=$({G})", "inside a command substitution"),
+        (
+            "echo \"$(echo \"$({G})\")\"",
+            "inside a command substitution",
+        ),
+        ("case x in y) :;; x) {G};; esac", "inside a `case` branch"),
+        ("f(){ {G}; }; f", "inside a function body"),
+    ] {
+        for (g, judged) in [
+            (
+                "terraform apply x",
+                rules.refusal(&shape.replace("{G}", "terraform apply x")),
+            ),
+            (
+                "purlis report bug --yes x",
+                purlis_core::consentspelling::refusal(
+                    &shape.replace("{G}", "purlis report bug --yes x"),
+                    project.path(),
+                    &[project.path()],
+                ),
+            ),
+        ] {
+            let why = judged.unwrap_or_else(|| panic!("{shape} with {g} was let through"));
+            assert!(why.contains(place), "{shape} with {g}: {why}");
+            assert!(
+                why.contains("as a command of its own"),
+                "{shape} with {g}: {why}"
+            );
+            assert!(!why.contains("another case"), "{shape} with {g}: {why}");
+        }
     }
 }
