@@ -543,6 +543,17 @@ jobs:
         run: xvfb-run -a npm run e2e:layout
         if: runner.os == 'Linux'
         working-directory: app
+      # The app launched over an old charter install, and the launch's migration it runs
+      # (RN-10). Its own run, because the old install has to be on disk before the one app
+      # process a run keeps is started, and this is the one app that migrates at launch.
+      - name: An upgrade over an old charter install
+        run: npm run e2e:upgrade
+        if: runner.os == 'macOS'
+        working-directory: app
+      - name: An upgrade over an old charter install
+        run: xvfb-run -a npm run e2e:upgrade
+        if: runner.os == 'Linux'
+        working-directory: app
       # The app ended and started again, which no scenario spec can do: WebdriverIO's service
       # keeps one app process for a whole run, so a spec that quits takes the run with it.
       - name: Reopening what was open, across a real relaunch
