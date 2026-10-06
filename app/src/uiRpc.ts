@@ -334,6 +334,19 @@ export const commands = {
 	 */
 	typeSandboxInstall: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("type_sandbox_install", { plane, session })),
 	/**
+	 *  The draft of a Report for a sandbox block of purlis's own (#1338). Nothing is sent: this only
+	 *  drafts, here, with no network.
+	 */
+	sandboxBlockReport: (operation: string, kind: string, harness: string | null) => typedError<BlockReport, string>(__TAURI_INVOKE("sandbox_block_report", { operation, kind, harness })),
+	/**
+	 *  Files the Report the window showed (#1338), on the person's press and never otherwise: by the
+	 *  app, under the person's own `gh` login and never a token from the environment
+	 *  ([`purlis_core::report::file`]), not by anything inside a chat's sandbox. Only the draft whose
+	 *  digest is `digest` is filed; one that changed since it was shown is refused unsent. Answers
+	 *  the new issue's address, or why it was not filed with the link that files it in a browser.
+	 */
+	fileSandboxBlockReport: (operation: string, kind: string, harness: string | null, digest: string) => typedError<string, string>(__TAURI_INVOKE("file_sandbox_block_report", { operation, kind, harness, digest })),
+	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
 	 *  a workspace named after it, and the plane is opened **through the trust gate**, exactly as
@@ -1790,6 +1803,19 @@ export type AtRisk = {
 };
 
 /**
+ *  **A Report of a sandbox block of purlis's own** (#1338), as the window shows it before
+ *  anything is sent: the scrubbed draft `purlis report bug` would file, and its digest.
+ */
+export type BlockReport = {
+	/**  The repository it would be filed on. */
+	repository: string,
+	title: string,
+	body: string,
+	/**  What filing names, so only exactly this draft is filed. */
+	digest: string,
+};
+
+/**
  *  The picker's two boxes, as the start reads them.
  * 
  *  A struct because tauri-specta types a command of at most ten arguments, and `start_chat` grew
@@ -1909,6 +1935,29 @@ export type ChangeMember = {
 	/**  The row's key. */
 	key: string,
 	repo: string,
+};
+
+/**
+ *  A sandbox block, as the window shows it on the chat's tab (#1338): an operation and the kind
+ *  of path or host, by their fixed words, and the sentence purlis says about them. **No path,
+ *  argument, host or output**: the hook kept none of it.
+ */
+export type ChatBlocked = {
+	plane: PlaneId,
+	session: number,
+	/**  The operation's word: `write`, `read`, `connect`, …. */
+	operation: string,
+	/**  The kind's word: `project-files`, `toolchain-cache`, `host`, …. */
+	kind: string,
+	/**  Whether it was purlis's own operation: a purlis bug, which the Notice offers to report. */
+	ours: boolean,
+	/**
+	 *  The harness the chat runs, by the word the project calls it, when it is one purlis
+	 *  starts.
+	 */
+	harness: string | null,
+	/**  What was blocked, as a sentence names it: "a write to the project's own files". */
+	said: string,
 };
 
 /**

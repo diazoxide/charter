@@ -176,6 +176,89 @@ pub struct Hooks {
     /// after the fact, for `answering`'s reason: confining it needs the chat's folder.
     /// **Never recorded**: nothing here writes it, and the event log is not told (D-86a).
     touching: Arc<Mutex<Option<Touches>>>,
+    /// Told each sandbox block a chat's hook found (#1338), once it is kept for `purlis doctor`
+    /// — a slot filled after the fact, for `answering`'s reason.
+    blocked: Arc<Mutex<Option<Blocks>>>,
+}
+
+/// What is told each sandbox block a chat's hook found, as the hook sent it.
+pub type Blocks = Arc<dyn Fn(purlis_core::hookwire::SandboxBlocked) + Send + Sync + 'static>;
+
+/// The event the window is sent when a chat's sandbox blocked an operation (#1338).
+pub const SANDBOX_BLOCKED: &str = "chat-sandbox-blocked";
+
+/// A sandbox block, as the window shows it on the chat's tab (#1338): an operation and the kind
+/// of path or host, by their fixed words, and the sentence purlis says about them. **No path,
+/// argument, host or output**: the hook kept none of it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ChatBlocked {
+    pub plane: PlaneId,
+    pub session: u32,
+    /// The operation's word: `write`, `read`, `connect`, ….
+    pub operation: String,
+    /// The kind's word: `project-files`, `toolchain-cache`, `host`, ….
+    pub kind: String,
+    /// Whether it was purlis's own operation: a purlis bug, which the Notice offers to report.
+    pub ours: bool,
+    /// The harness the chat runs, by the word the project calls it, when it is one purlis
+    /// starts.
+    pub harness: Option<String>,
+    /// What was blocked, as a sentence names it: "a write to the project's own files".
+    pub said: String,
+}
+
+/// What the app does with a sandbox block chat `block.chat`'s hook sent on the project at
+/// `root` (#1338), heard at `at` (seconds since 1970, and now): let through the chat's
+/// [`purlis_core::sandboxblock::Throttle`], then kept for `purlis doctor`'s count, then handed
+/// to whoever `slot` holds for the chat's notice. A block the throttle holds back is neither
+/// kept nor shown. It holds an operation and a kind only, so keeping it keeps nothing of what
+/// the chat ran. The listener is taken out of the lock before it runs, as an answer is.
+fn heard_block(
+    root: &Path,
+    throttle: &Mutex<purlis_core::sandboxblock::Throttle>,
+    slot: &Mutex<Option<Blocks>>,
+    block: purlis_core::hookwire::SandboxBlocked,
+    at: (u64, std::time::Instant),
+) {
+    let let_through = throttle
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .lets(block.chat, &block.sandbox_blocked, at.1);
+    if !let_through {
+        return;
+    }
+    if let Err(why) = purlis_core::sandboxblock::record(root, &block.sandbox_blocked, at.0) {
+        tracing::warn!(
+            "purlis: a sandbox block of chat {} was not kept for the doctor's count ({why})",
+            block.chat
+        );
+    }
+    let listener = slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    if let Some(listener) = listener {
+        listener(block);
+    }
+}
+
+/// Told each sandbox block, as the window shows it.
+pub type BlockTeller = Arc<dyn Fn(ChatBlocked) + Send + Sync + 'static>;
+
+/// What the window is told of a block a chat's hook sent on `plane`'s socket. A harness word the
+/// app does not start is no harness: the line is the chat's own.
+pub fn blocked(plane: &PlaneId, blocked: &purlis_core::hookwire::SandboxBlocked) -> ChatBlocked {
+    let block = blocked.sandbox_blocked;
+    ChatBlocked {
+        plane: plane.clone(),
+        session: blocked.chat,
+        operation: block.operation.word().to_owned(),
+        kind: block.kind.word().to_owned(),
+        ours: block.ours,
+        harness: blocked
+            .harness
+            .as_deref()
+            .and_then(purlis_core::harness::Harness::of_kind)
+            .map(|harness| harness.name().to_owned()),
+        said: block.said(),
+    }
 }
 
 /// What is told each path a chat's file tool touched, unconfined.
@@ -360,6 +443,7 @@ impl Hooks {
             asks: Arc::new(HookAsks::new(Arc::new(Asks::new()))),
             asks_told: Arc::new(Mutex::new(None)),
             touching: Arc::new(Mutex::new(None)),
+            blocked: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -387,7 +471,28 @@ impl Hooks {
         let asks = Arc::new(HookAsks::new(Arc::new(Asks::new())));
         let asks_told: crate::asking::Telling = Arc::new(Mutex::new(None));
         let touching: Arc<Mutex<Option<Touches>>> = Arc::new(Mutex::new(None));
+        let blocked: Arc<Mutex<Option<Blocks>>> = Arc::new(Mutex::new(None));
         let reading = listener.hear(Hearing {
+            // A sandbox block (#1338): kept for `purlis doctor`'s count, then handed on for the
+            // chat's Notice. It holds an operation and a kind only, so keeping it keeps nothing
+            // of what the chat ran. Taken out of the lock before it runs, as an answer is.
+            blocked: {
+                let blocked = Arc::clone(&blocked);
+                let plane = plane.clone();
+                let throttle = Mutex::new(purlis_core::sandboxblock::Throttle::default());
+                Box::new(move |block| {
+                    let at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |since| since.as_secs());
+                    heard_block(
+                        plane.root(),
+                        &throttle,
+                        &blocked,
+                        block,
+                        (at, std::time::Instant::now()),
+                    );
+                })
+            },
             permission: crate::asking::permitting(
                 plane.clone(),
                 Arc::clone(&asks),
@@ -560,6 +665,7 @@ impl Hooks {
             asks,
             asks_told,
             touching,
+            blocked,
         })
     }
 
@@ -698,6 +804,11 @@ impl Hooks {
     /// it: the plane confines it to the chat's folder before the window hears of it.
     pub fn when_touching(&self, touches: Touches) {
         *self.touching.lock().unwrap_or_else(PoisonError::into_inner) = Some(touches);
+    }
+
+    /// Who is told, from now on, each sandbox block a chat's hook found (#1338), once it is kept.
+    pub fn when_blocked(&self, blocks: Blocks) {
+        *self.blocked.lock().unwrap_or_else(PoisonError::into_inner) = Some(blocks);
     }
 
     /// Who is told, from now on, each session record a chat says it saved (ADR 0064).
@@ -1293,6 +1404,111 @@ mod tests {
             vec!["run.started", "hook.userpromptsubmit", "hook.pretooluse"],
             "one event per hook call, after the run it is under"
         );
+    }
+
+    #[test]
+    fn recorded_violation_lines_reach_the_window_as_the_notice_says_them() {
+        use purlis_core::hookwire::SandboxBlocked;
+        use purlis_core::sandboxblock::{Place, detect};
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        // What Claude Code handed `posttoolusefailure-blocked` for a smart close from a clone.
+        let payload = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "purlis session record --title close"},
+            "error": "Exit code 1\n<sandbox_violations>\npurlis(48211) deny(1) \
+                      file-write-create /plane/workspaces/alpha/sessions/close.md\n\
+                      </sandbox_violations>",
+        });
+        let place = Place {
+            root: Path::new("/plane"),
+            chat: Path::new("/plane/workspaces/alpha/repo"),
+            cwd: Path::new("/plane/workspaces/alpha/repo"),
+            home: None,
+        };
+        let told: Vec<ChatBlocked> = detect(&payload, &place)
+            .into_iter()
+            .map(|block| {
+                blocked(
+                    &plane,
+                    &SandboxBlocked {
+                        chat: 3,
+                        sandbox_blocked: block,
+                        harness: Some("claude".to_owned()),
+                    },
+                )
+            })
+            .collect();
+        assert_eq!(
+            told,
+            vec![ChatBlocked {
+                plane: plane.clone(),
+                session: 3,
+                operation: "write".to_owned(),
+                kind: "project-files".to_owned(),
+                ours: true,
+                harness: Some("claude".to_owned()),
+                said: "a write to the project's own files".to_owned(),
+            }]
+        );
+        // A harness word purlis does not start is no harness.
+        let other = blocked(
+            &plane,
+            &SandboxBlocked {
+                chat: 3,
+                sandbox_blocked: told_block(),
+                harness: Some("/home/dev/bin/thing".to_owned()),
+            },
+        );
+        assert_eq!(other.harness, None);
+    }
+
+    #[test]
+    fn a_heard_block_is_kept_then_told_and_a_flood_is_held_back() {
+        use purlis_core::hookwire::SandboxBlocked;
+        let dir = tempfile::tempdir().expect("a directory");
+        let throttle = Mutex::new(purlis_core::sandboxblock::Throttle::default());
+        let told: Arc<Mutex<Vec<SandboxBlocked>>> = Arc::new(Mutex::new(Vec::new()));
+        let slot: Mutex<Option<Blocks>> = Mutex::new(Some({
+            let told = Arc::clone(&told);
+            let root = dir.path().to_path_buf();
+            Arc::new(move |block| {
+                // Kept before it is told: the doctor's count already has it.
+                assert_eq!(
+                    purlis_core::sandboxblock::counts(&root, 100)
+                        .iter()
+                        .map(|count| count.blocks)
+                        .sum::<u64>(),
+                    told.lock().unwrap().len() as u64 + 1
+                );
+                told.lock().unwrap().push(block);
+            })
+        }));
+        let now = std::time::Instant::now();
+        let line = SandboxBlocked {
+            chat: 3,
+            sandbox_blocked: told_block(),
+            harness: None,
+        };
+        for _ in 0..50 {
+            heard_block(dir.path(), &throttle, &slot, line.clone(), (100, now));
+        }
+        assert_eq!(
+            *told.lock().unwrap(),
+            vec![line.clone()],
+            "one, however often it is sent"
+        );
+        assert_eq!(
+            purlis_core::sandboxblock::counts(dir.path(), 100)[0].blocks,
+            1
+        );
+    }
+
+    fn told_block() -> purlis_core::sandboxblock::Block {
+        purlis_core::sandboxblock::Block {
+            operation: purlis_core::sandboxblock::Operation::Connect,
+            kind: purlis_core::sandboxblock::Kind::Host,
+            ours: false,
+        }
     }
 
     #[test]

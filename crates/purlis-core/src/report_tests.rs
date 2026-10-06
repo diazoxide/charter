@@ -121,10 +121,10 @@ fn a_described_report_is_titled_by_its_first_line_without_a_heading_marker() {
     assert_eq!(d.title, "`charter report` should exist");
     assert!(
         d.body
-            .starts_with("## `charter report` should exist\n\nbody\n\n---\ncharter ")
+            .starts_with("## `charter report` should exist\n\nbody\n\n---\npurlis ")
     );
     assert!(
-        d.body.ends_with("_Filed with `charter report feature`._"),
+        d.body.ends_with("_Filed with `purlis report feature`._"),
         "the body does not end with its footer"
     );
 
@@ -315,5 +315,96 @@ fn a_credential_split_across_lines_a_backslash_joins_is_redacted_with_its_lines(
         out.matches("[redacted: a line that looks like").count(),
         2,
         "{out}"
+    );
+}
+
+// ---- a sandbox block of purlis's own (#1338) ----------------------------------------------------
+
+#[test]
+fn a_sandbox_block_draft_names_the_operation_the_kind_and_the_versions_and_nothing_else() {
+    use crate::sandboxblock::{Block, Kind as Blocked, Operation, Place, detect};
+    // The block as a hook reads it: a real command, real paths, a real program's words.
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "purlis session record --title 'billing-api outage' <<'EOF'\nsecret body\nEOF"},
+        "error": "Exit code 1\npurlis: could not save /srv/planes/acme-plane/workspaces/acme/sessions/x.md\n\
+                  <sandbox_violations>\npurlis(4021) deny(1) file-write-create \
+                  /srv/planes/acme-plane/workspaces/acme/sessions/x.md\n</sandbox_violations>",
+    });
+    let place = Place {
+        root: Path::new("/srv/planes/acme-plane"),
+        chat: Path::new("/srv/planes/acme-plane/workspaces/acme/billing-api"),
+        cwd: Path::new("/srv/planes/acme-plane/workspaces/acme/billing-api"),
+        home: Some(Path::new("/var/root")),
+    };
+    let blocks = detect(&payload, &place);
+    assert_eq!(
+        blocks,
+        vec![Block {
+            operation: Operation::Write,
+            kind: Blocked::ProjectFiles,
+            ours: true
+        }]
+    );
+    let draft =
+        Draft::of_sandbox_block(&blocks[0], Some(crate::harness::Harness::ClaudeCode)).unwrap();
+    assert_eq!(draft.kind, Kind::Bug);
+    assert_eq!(
+        draft.title,
+        "Sandbox blocked purlis's own write (project-files)"
+    );
+    for said in [
+        "- **operation:** write",
+        "- **kind of path or host:** project-files (the project's own files)",
+        "- **harness:** claude",
+        &format!("- **purlis version:** {}", crate::adopt::app_version()),
+        std::env::consts::OS,
+    ] {
+        assert!(
+            draft.body.contains(said),
+            "{said} missing from:\n{}",
+            draft.body
+        );
+    }
+    // No path, argument or content: nothing of the command, its paths or what it printed.
+    for leak in [
+        "/srv",
+        "/var/root",
+        "acme",
+        "billing",
+        "outage",
+        "secret",
+        "sessions",
+        "x.md",
+        "4021",
+        "--title",
+        "EOF",
+    ] {
+        assert!(
+            !format!("{}\n{}", draft.title, draft.body).contains(leak),
+            "{leak} leaked into:\n{}\n{}",
+            draft.title,
+            draft.body
+        );
+    }
+    assert!(draft.scrubbed.is_empty());
+}
+
+#[test]
+fn a_sandbox_block_draft_with_no_harness_known_says_so() {
+    let block = crate::sandboxblock::Block {
+        operation: crate::sandboxblock::Operation::Connect,
+        kind: crate::sandboxblock::Kind::Host,
+        ours: true,
+    };
+    let draft = Draft::of_sandbox_block(&block, None).unwrap();
+    assert!(
+        draft.body.contains("- **harness:** not known"),
+        "{}",
+        draft.body
+    );
+    assert_eq!(
+        draft.digest(),
+        Draft::of_sandbox_block(&block, None).unwrap().digest()
     );
 }

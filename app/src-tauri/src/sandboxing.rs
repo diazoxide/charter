@@ -214,9 +214,165 @@ pub fn type_sandbox_install(
     held.operator_input(session, line.as_bytes())
 }
 
+/// **A Report of a sandbox block of purlis's own** (#1338), as the window shows it before
+/// anything is sent: the scrubbed draft `purlis report bug` would file, and its digest.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct BlockReport {
+    /// The repository it would be filed on.
+    pub repository: String,
+    pub title: String,
+    pub body: String,
+    /// What filing names, so only exactly this draft is filed.
+    pub digest: String,
+}
+
+/// The draft for a block of purlis's own `operation` on `kind`, from the chat running `harness`.
+///
+/// **Made from the fixed words alone.** The window hands back the two words the Notice was told,
+/// and a word that is not one of [`purlis_core::sandboxblock`]'s is refused, so no text from the
+/// window, or from the chat that sent the block, can reach the draft.
+fn block_draft(
+    operation: &str,
+    kind: &str,
+    harness: Option<&str>,
+) -> Result<purlis_core::report::Draft, String> {
+    use purlis_core::sandboxblock::{Block, Kind, Operation};
+    let block = Block {
+        operation: Operation::of_word(operation)
+            .ok_or_else(|| "That is not an operation the sandbox reports.".to_owned())?,
+        kind: Kind::of_word(kind)
+            .ok_or_else(|| "That is not a kind of path or host the sandbox reports.".to_owned())?,
+        ours: true,
+    };
+    let harness = harness.and_then(purlis_core::harness::Harness::of_kind);
+    purlis_core::report::Draft::of_sandbox_block(&block, harness).map_err(|refused| refused.0)
+}
+
+/// The draft of a Report for a sandbox block of purlis's own (#1338). Nothing is sent: this only
+/// drafts, here, with no network.
+#[tauri::command]
+#[specta::specta]
+pub fn sandbox_block_report(
+    operation: String,
+    kind: String,
+    harness: Option<String>,
+) -> Result<BlockReport, String> {
+    let draft = block_draft(&operation, &kind, harness.as_deref())?;
+    Ok(BlockReport {
+        repository: purlis_core::report::UPSTREAM.to_owned(),
+        digest: draft.digest(),
+        title: draft.title,
+        body: draft.body,
+    })
+}
+
+/// Files the Report the window showed (#1338), on the person's press and never otherwise: by the
+/// app, under the person's own `gh` login and never a token from the environment
+/// ([`purlis_core::report::file`]), not by anything inside a chat's sandbox. Only the draft whose
+/// digest is `digest` is filed; one that changed since it was shown is refused unsent. Answers
+/// the new issue's address, or why it was not filed with the link that files it in a browser.
+#[tauri::command]
+#[specta::specta]
+pub async fn file_sandbox_block_report(
+    operation: String,
+    kind: String,
+    harness: Option<String>,
+    digest: String,
+) -> Result<String, String> {
+    let draft = shown_draft(&operation, &kind, harness.as_deref(), &digest)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        purlis_core::report::file(&draft).map_err(|why| {
+            let (url, whole) = draft.fallback_url();
+            format!(
+                "It was not filed: gh said {why}. Open this link to file it in a browser{}: {url}",
+                if whole {
+                    ""
+                } else {
+                    ", and paste the body from the draft"
+                }
+            )
+        })
+    })
+    .await
+    .map_err(|err| format!("The report did not finish: {err}"))?
+}
+
+/// The draft for a block, only if its digest is the one the window showed.
+fn shown_draft(
+    operation: &str,
+    kind: &str,
+    harness: Option<&str>,
+    digest: &str,
+) -> Result<purlis_core::report::Draft, String> {
+    let draft = block_draft(operation, kind, harness)?;
+    if draft.digest() != digest {
+        return Err(
+            "The draft is not the one that was shown, so nothing was sent. Open Report again."
+                .to_owned(),
+        );
+    }
+    Ok(draft)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_block_report_is_drafted_from_the_fixed_words_alone() {
+        let report = sandbox_block_report(
+            "write".to_owned(),
+            "project-files".to_owned(),
+            Some("claude".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(report.repository, purlis_core::report::UPSTREAM);
+        assert_eq!(
+            report.title,
+            "Sandbox blocked purlis's own write (project-files)"
+        );
+        assert!(
+            report.body.contains("- **harness:** claude"),
+            "{}",
+            report.body
+        );
+        // A harness word purlis does not start is not one, and says nothing of itself.
+        let other = sandbox_block_report(
+            "write".to_owned(),
+            "project-files".to_owned(),
+            Some("/home/dev/my-harness".to_owned()),
+        )
+        .unwrap();
+        assert!(!other.body.contains("/home/dev"), "{}", other.body);
+        assert!(
+            other.body.contains("- **harness:** not known"),
+            "{}",
+            other.body
+        );
+    }
+
+    #[test]
+    fn a_block_report_refuses_words_the_sandbox_does_not_report() {
+        for (operation, kind) in [
+            ("write", "/Users/dev/plane/workspaces/a/sessions"),
+            ("rm -rf /", "project-files"),
+            ("", ""),
+        ] {
+            assert!(
+                sandbox_block_report(operation.to_owned(), kind.to_owned(), None).is_err(),
+                "{operation} {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_draft_that_was_shown_is_filed() {
+        let shown = sandbox_block_report("connect".to_owned(), "host".to_owned(), None).unwrap();
+        assert!(shown_draft("connect", "host", None, &shown.digest).is_ok());
+        let refused = shown_draft("connect", "host", Some("claude"), &shown.digest).unwrap_err();
+        assert!(refused.contains("nothing was sent"), "{refused}");
+        assert!(shown_draft("write", "host", None, &shown.digest).is_err());
+    }
 
     #[test]
     fn a_project_without_the_sandbox_shows_the_picker_nothing() {

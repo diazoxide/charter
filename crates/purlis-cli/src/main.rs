@@ -1457,6 +1457,45 @@ fn tell_the_host_about_the_tool_call(
     }
 }
 
+/// Each sandbox block a block word found in the call's result, to the host, when one is
+/// listening (#1338): an operation and a kind, and whether it was purlis's own — never the path,
+/// the command or what it printed. Sent once each and never spooled
+/// ([`hookwire::tell_blocked`]); a block the app did not take is said only on stderr.
+#[cfg(unix)]
+fn tell_the_host_about_blocks(word: &str, payload: &str) {
+    use std::io::Write as _;
+    // The word first: every other tool hook passes through here, and none of them is read.
+    if !hooks::is_a_block_word(word) {
+        return;
+    }
+    let Some(socket) = purlis_core::envvar::var_os(SOCKET_ENV) else {
+        return;
+    };
+    let Some(chat) =
+        purlis_core::envvar::var(hookwire::CHAT_ENV).and_then(|chat| chat.parse().ok())
+    else {
+        return;
+    };
+    let data: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
+    let token = hookwire::ChatToken::from_env();
+    let harness = purlis_core::envvar::var(hookwire::HARNESS_ENV).filter(|it| !it.is_empty());
+    for block in hooks::blocks(&data, &purlis_core::envvar::var) {
+        let blocked = hookwire::SandboxBlocked {
+            chat,
+            sandbox_blocked: block,
+            harness: harness.clone(),
+        };
+        if let Err(why) =
+            hookwire::tell_blocked(std::path::Path::new(&socket), token.as_ref(), &blocked)
+        {
+            let _ = writeln!(std::io::stderr(), "{} {word} ({why})", hookwire::NOT_TAKEN);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn tell_the_host_about_blocks(_word: &str, _payload: &str) {}
+
 /// What a crashed `PreToolUse` guard, or one that did not answer in time, tells the host from its
 /// panic hook: the call was refused, and why. The payload is not read again in a process that is going down.
 fn tell_the_host_about_a_crash(word: &str, unanswered: bool) {
@@ -1538,6 +1577,7 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
             _ => guard::pretooluse(&text, now),
         };
         tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
+        tell_the_host_about_blocks(name, &text);
         return answered.print();
     }
     if purlis_core::hookreg::NO_OPS.contains(&name) {

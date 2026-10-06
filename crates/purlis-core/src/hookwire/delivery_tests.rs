@@ -23,6 +23,7 @@ fn call(chat: u32, id: &str) -> ToolCall {
 
 fn hearing(tool: Tooled) -> Hearing {
     Hearing {
+        blocked: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| Answer::No { why: String::new() }),

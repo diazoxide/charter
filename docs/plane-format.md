@@ -260,6 +260,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`frame/<frame-id>/` for a non-chat frame (e.g. the live plane's `probe-1`)](#frameframe-id-for-a-non-chat-frame-eg-the-live-planes-probe-1)
   - [`app/` — the desktop app's own state](#app--the-desktop-apps-own-state)
   - [`app/sandbox.json`](#appsandboxjson)
+  - [`app/sandbox-blocks.json`](#appsandbox-blocksjson)
   - [`app/reopen.json`](#appreopenjson)
   - [`app/hooks.sock`](#apphookssock)
   - [Top-level markers, gates and ledgers](#top-level-markers-gates-and-ledgers)
@@ -4522,6 +4523,27 @@ down rather than read off the code.
 - **Tier:** Clone state — deleting it asks the offer again, if the project still has the
   sandbox off, and starts the count from nothing (ADR 0069).
 - **Git:** gitignored (under `/.charter/`).
+
+### `app/sandbox-blocks.json`
+- **What:** the sandbox blocks this machine's app heard from this project's chats in the last
+  seven days (#1338), each as when, an operation and the kind of path or host, and whether it
+  was purlis's own operation. **No path, argument, host or output**: the chat's hook sorted the
+  block and kept none of it. **Local only, never sent**: `purlis doctor`'s `sandbox blocks` row
+  counts it, and a Report of a block is drafted from the window's Notice, not from this file.
+- **Format:** JSON, pretty-printed, trailing `\n`, read and replaced whole under purlis's lock on
+  the directory (`rewrite::update`). A file that is not this shape reads as empty, and the next
+  block starts it again.
+- **Keys:** `blocks` — a list, oldest first, of `{"at": <seconds since 1970>, "operation":
+  "write"|"read"|"connect"|"lookup"|"run"|"file"|"other", "kind": "project-files"|
+  "project-state"|"protected-file"|"chat-folder"|"toolchain-cache"|"home"|"temp"|"system"|
+  "host"|"local-socket"|"certificate-check"|"system-service", "ours": <bool>}`. A block older
+  than seven days is let go of when the next is kept, and at most 1000 are held.
+- **Who writes it:** the app, as each block arrives on the hook channel
+  (`purlis_core::sandboxblock::record`), at most once a minute for one chat's same block and
+  ten a minute per chat (`sandboxblock::Throttle`). A sandboxed chat cannot: `.purlis/app/` is the
+  integrity class's.
+- **Tier:** Clone state — deleting it empties the doctor's count, and nothing else (ADR 0069).
+- **Git:** gitignored (under the state folder).
 
 ### `app/reopen.json`
 - **Format:** JSON, `indent=2`, trailing `\n`. Replaced whole by `rewrite::replace`: written
