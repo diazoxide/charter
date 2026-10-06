@@ -372,8 +372,9 @@ impl Program {
 pub enum Admission {
     /// The chat's token, from inside the chat.
     Admitted,
-    /// No token, a wrong one, or a chat with none: dropped without a word, as a line that will
-    /// not parse is.
+    /// No token, a wrong one, or a chat with none: dropped unread, and answered only with
+    /// "this line does not carry chat N's token" (#1333), as a line that will not parse is
+    /// answered that the app could not read it. Nothing the line asks is acted on.
     NoToken,
     /// The chat's token, from a process outside the chat: refused, and told so
     /// ([`OUTSIDE_THE_CHAT`]).

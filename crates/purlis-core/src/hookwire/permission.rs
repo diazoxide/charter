@@ -407,7 +407,9 @@ mod tests {
             Duration::from_secs(5),
         );
 
-        assert!(chosen.is_err(), "dropped unread: {chosen:?}");
+        // Refused unread, and told so (#1333): a hook reads the refusal as no option chosen,
+        // and the harness decides, as it did when the connection closed without a word.
+        assert_eq!(chosen.ok(), Some(None), "read as an ask");
         assert!(hooks.pending(Instant::now()).is_empty());
     }
 
