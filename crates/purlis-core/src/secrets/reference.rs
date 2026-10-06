@@ -282,7 +282,14 @@ pub fn set(ctx: &Ctx, vault: &Vault, key: &str, value: &str) -> Result<(), Vault
     }
     let mut data = plain_file::load(ctx, vault, "reference")?;
     data.insert(key.to_string(), as_json);
-    save(ctx, vault, data)
+    save(ctx, vault, data)?;
+    // The same rotation record a plain-file vault keeps, so a reference file that goes missing
+    // is told from one never written (D-VP-2).
+    plain_file::stamp(
+        &plain_file::file_path(ctx, vault)?,
+        key,
+        chrono::Local::now().date_naive(),
+    )
 }
 
 /// `delete`: drop the reference.
@@ -294,7 +301,8 @@ pub fn delete(ctx: &Ctx, vault: &Vault, key: &str) -> Result<(), VaultError> {
             vault.name
         )));
     }
-    save(ctx, vault, data)
+    save(ctx, vault, data)?;
+    plain_file::unstamp(&plain_file::file_path(ctx, vault)?, key)
 }
 
 /// `_save`: sorted keys, indented, ASCII-escaped, 0600 from the moment the file exists.
@@ -331,6 +339,9 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
         parts.join(", ")
     };
     if !p.exists() {
+        if let Some(gone) = plain_file::gone(ctx, vault, &p) {
+            return (false, gone.message);
+        }
         return (
             true,
             line(format!(

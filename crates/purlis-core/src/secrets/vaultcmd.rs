@@ -71,10 +71,7 @@ pub fn git_ignores(root: &Path, path: &Path) -> Option<bool> {
 
 /// `_unignored_plaintext`: the path, if a plaintext file there would be committed.
 pub fn unignored_plaintext(ctx: &Ctx, configured: &str) -> Option<String> {
-    let mut p = super::expanduser(configured, &ctx.env);
-    if !p.is_absolute() {
-        p = ctx.root.join(p);
-    }
+    let p = ctx.vault_file_path(configured);
     let rp = super::resolve(&p)?;
     let rr = super::resolve(&ctx.root)?;
     let rel = rp.strip_prefix(&rr).ok()?.to_path_buf();

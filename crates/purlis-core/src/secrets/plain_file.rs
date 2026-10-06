@@ -28,14 +28,26 @@ pub fn file_path(ctx: &Ctx, vault: &Vault) -> Result<PathBuf, VaultError> {
     }
 }
 
-/// `_load`: the vault's JSON object. **Never writes.** A missing file is an empty vault.
+/// `_load`: the vault's JSON object. **Never writes.**
+///
+/// A missing file is an empty vault only while nothing was ever written to it: a vault
+/// registered and not yet set has no file, and that is not an error. Once a value has been
+/// written, the file's rotation record ([`meta_path`]) sits beside it; a vault file missing
+/// beside its record is GONE — moved, deleted or mis-pointed — and is refused by path, never
+/// read as empty (D-VP-2). An empty read there would show the secrets as lost, and the next
+/// `secret set` would start a second vault where the first one was.
 pub fn load(ctx: &Ctx, vault: &Vault, what: &str) -> Result<Map<String, Value>, VaultError> {
     let p = file_path(ctx, vault)?;
     // Gated from the vault's own directory — the file alone — as its writer is (#429): a
     // vault that is a link is refused, never read (#440).
     let text = match crate::contain::read_text_no_link(beside(&p), &p) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return match gone(ctx, vault, &p) {
+                Some(refused) => Err(refused),
+                None => Ok(Map::new()),
+            };
+        }
         Err(e) => {
             return Err(VaultError::new(format!(
                 "vault file {} cannot be read: {e}",
@@ -58,6 +70,23 @@ pub fn load(ctx: &Ctx, vault: &Vault, what: &str) -> Result<Map<String, Value>, 
             p.display()
         ))),
     }
+}
+
+/// Why the vault at `p`, which is not there, is gone rather than new: its rotation record is
+/// still beside where it was (D-VP-2). `None` for a vault nothing was ever written to.
+pub fn gone(ctx: &Ctx, vault: &Vault, p: &Path) -> Option<VaultError> {
+    let record = meta_path(p);
+    std::fs::symlink_metadata(&record).ok()?;
+    Some(VaultError::new(format!(
+        "vault '{}': its file {} is missing, but values were written to it before (its record {} \
+         is still there). charter will not read it as an empty vault, nor write a new file there \
+         beside the old one. Nothing was read or written.\n  Put the file back, or point the \
+         vault's 'file' at where it is now; to start this vault empty on purpose, remove {} too.",
+        vault.name,
+        super::short_path(&ctx.root, p),
+        super::short_path(&ctx.root, &record),
+        super::short_path(&ctx.root, &record),
+    )))
 }
 
 /// `_tighten`: force the file to 0600 if any group/other bit is set. Called from the VALUE
@@ -190,14 +219,20 @@ pub fn set(
     let mut data = load(ctx, vault, "secret")?;
     data.insert(key.to_string(), Value::String(value.to_string()));
     write_private(&p, &Value::Object(data))?;
-    let mut meta = load_meta(&p);
+    stamp(&p, key, today)
+}
+
+/// The date `key` was set, in the rotation record beside the vault file at `p` — which is also
+/// what tells a vault that was written to from one never created ([`gone`]).
+pub fn stamp(p: &Path, key: &str, today: chrono::NaiveDate) -> Result<(), VaultError> {
+    let mut meta = load_meta(p);
     let mut stamp = Map::new();
     stamp.insert(
         "set_at".into(),
         Value::String(today.format("%Y-%m-%d").to_string()),
     );
     meta.insert(key.to_string(), Value::Object(stamp));
-    write_private(&meta_path(&p), &Value::Object(meta))
+    write_private(&meta_path(p), &Value::Object(meta))
 }
 
 /// `delete`: the key, and its date if it had one.
@@ -211,9 +246,15 @@ pub fn delete(ctx: &Ctx, vault: &Vault, key: &str) -> Result<(), VaultError> {
         )));
     }
     write_private(&p, &Value::Object(data))?;
-    let mut meta = load_meta(&p);
+    unstamp(&p, key)
+}
+
+/// Drop `key`'s date from the rotation record beside `p`. The record itself stays, emptied:
+/// the vault was written to.
+pub fn unstamp(p: &Path, key: &str) -> Result<(), VaultError> {
+    let mut meta = load_meta(p);
     if meta.shift_remove(key).is_some_and(|v| !v.is_null()) {
-        write_private(&meta_path(&p), &Value::Object(meta))?;
+        write_private(&meta_path(p), &Value::Object(meta))?;
     }
     Ok(())
 }
@@ -252,6 +293,9 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
     };
     let note = super::loose_dir_note(&ctx.root, &loose_dirs(ctx, vault));
     if !pp.exists() {
+        if let Some(gone) = gone(ctx, vault, &pp) {
+            return (false, gone.message);
+        }
         let mut line = format!("not created yet ({})", super::short_path(&ctx.root, &pp));
         if !note.is_empty() {
             line.push_str(&format!(", {note}"));

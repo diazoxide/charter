@@ -253,3 +253,33 @@ fn the_record_names_a_project_by_its_root_one_line_each() {
     fs::write(&record, format!("/somewhere/else\n{}\n", p.root.display())).unwrap();
     assert!(listed_in(&record, &p.root));
 }
+
+#[test]
+fn a_recorded_path_under_either_state_spelling_is_read_under_the_state_folder_there_now() {
+    for (has, folder) in [(Has::Old, ".charter"), (Has::New, ".purlis")] {
+        let p = plane(has);
+        for recorded in [
+            ".charter/vaults/app.json",
+            ".purlis/vaults/app.json",
+            "./.charter/vaults/app.json",
+        ] {
+            assert_eq!(
+                under_state(&p.root, Path::new(recorded)),
+                p.root.join(folder).join("vaults/app.json"),
+                "{recorded}"
+            );
+        }
+        // Anything else is joined as recorded: another folder, a name that only starts like
+        // the state folder, and an absolute path.
+        for recorded in ["secrets/app.json", ".charterx/app.json", "app.json"] {
+            assert_eq!(
+                under_state(&p.root, Path::new(recorded)),
+                p.root.join(recorded)
+            );
+        }
+        assert_eq!(
+            under_state(&p.root, Path::new("/abs/.charter/app.json")),
+            PathBuf::from("/abs/.charter/app.json")
+        );
+    }
+}
