@@ -1500,19 +1500,28 @@ pub fn walks_into_guarded_state(
 ///
 /// **Past any bound the call is refused as too big to check** ([`guardcaps::REASON`]): more
 /// than [`guardcaps::MAX_NESTING`] substitutions deep, more than `RELOCATIONS` directories to
-/// read one from, or more than `READ_PER_CHARACTER` times the command's length read in all. The
+/// read one from, or more than `shellsubst::read_budget` of the command's length read in all. The
 /// refusal is also reported to [`shellseg::too_deep_within`], so the verdict carries the same
 /// reason as a command the caps refuse up front, and the guard's time stays in proportion to
 /// the command.
+///
+/// # A function the command defines (#1417)
+///
+/// `f(){ <read>; }; f` runs the read where `f` is called, and the reader of segments takes
+/// `f ( ) { <read>` for a call of `f`. So a function definition's header is taken off the front
+/// of its segment, and every segment from the first definition on is read again, as the
+/// commands it is, from each directory the command, or any substitution read after it, could
+/// stand in: the call may come after the shell has moved, or inside a substitution. That reads
+/// a body that is defined and never called too, the refusing direction. A heredoc body a reader
+/// takes as data, such as a script written to a file, defines nothing.
 pub fn leak_reason(cmd: &str, cwd: &str, state_dir: &Path) -> Option<String> {
-    let budget = cmd
-        .len()
-        .saturating_mul(READ_PER_CHARACTER)
-        .max(READ_AT_LEAST);
+    let budget = crate::shellsubst::read_budget(cmd.len());
     let mut at = Inward {
         cwd,
         state_dir,
         budget,
+        functions: Vec::new(),
+        functions_read_from: Vec::new(),
     };
     at.reason_from(cmd, &[String::new()], 0)
 }
@@ -1520,23 +1529,35 @@ pub fn leak_reason(cmd: &str, cwd: &str, state_dir: &Path) -> Option<String> {
 /// How many directories [`leak_reason`] reads a substitution's command from.
 const RELOCATIONS: usize = 8;
 
-/// How many characters of substitutions [`leak_reason`] reads as commands, per character of the
-/// command: a substitution nested in another is read once at each depth.
-const READ_PER_CHARACTER: usize = 4;
-
-/// …and at least, so a short command is read all the way in.
-const READ_AT_LEAST: usize = 64 * 1024;
-
 /// Where [`leak_reason`] reads substitutions from, and how much more of them it reads.
 struct Inward<'a> {
     cwd: &'a str,
     state_dir: &'a Path,
     budget: usize,
+    /// The segments of every function definition in force, from its header on
+    /// ([`function_bodies`]), read again from each directory a later text could stand in.
+    functions: Vec<Vec<String>>,
+    /// The directories [`Self::functions`] have been read from since they last grew, so each
+    /// is read from each directory once, however many substitutions stand there.
+    functions_read_from: Vec<String>,
 }
 
 impl Inward<'_> {
-    /// [`leak_reason`] for `cmd` run from each of `starts`, `depth` substitutions in.
+    /// [`leak_reason`] for `cmd` run from each of `starts`, `depth` substitutions in. A function
+    /// `cmd` defines is forgotten once it is read: a substitution runs in a subshell, so what it
+    /// defines is not there after it.
     fn reason_from(&mut self, cmd: &str, starts: &[String], depth: usize) -> Option<String> {
+        let kept = self.functions.len();
+        let hit = self.reason_at(cmd, starts, depth);
+        if self.functions.len() != kept {
+            self.functions.truncate(kept);
+            self.functions_read_from.clear();
+        }
+        hit
+    }
+
+    /// [`Self::reason_from`], the functions defined further out known.
+    fn reason_at(&mut self, cmd: &str, starts: &[String], depth: usize) -> Option<String> {
         // Read once as a shell reads it: the substitutions it runs, its `case` patterns and its
         // heredoc bodies. Not at all where it has none of them to find; the bodies matter only
         // to a substitution's text, read again below when it does not lex.
@@ -1577,12 +1598,49 @@ impl Inward<'_> {
                 segments.extend(shellseg::segment_argv(&blanked));
             }
         }
+        // A function this text defines, read over the lines a shell runs: a heredoc body a
+        // reader takes as data (a script written to a file) defines nothing here.
+        if stripped.contains('(') || stripped.contains("function") {
+            let runs: Vec<String> = lines_a_command_could_run(&stripped)
+                .into_iter()
+                .map(|(row, _)| row)
+                .collect();
+            let (bodies, defined) = function_bodies(shellseg::segment_argv(&runs.join("\n")));
+            if let Some(from) = defined {
+                self.functions.extend(bodies[from..].iter().cloned());
+                self.functions_read_from.clear();
+            }
+        }
         // Where the shell may stand when a substitution runs: every directory a segment starts
         // in.
         let mut heres: Vec<String> = Vec::new();
         for start in starts {
             if let Some(hit) = reason_in(&segments, start, self.cwd, self.state_dir, &mut heres) {
                 return Some(hit);
+            }
+        }
+        // A function defined here or further out may be called from any of them.
+        let unread: Vec<&String> = heres
+            .iter()
+            .filter(|here| !self.functions_read_from.contains(here))
+            .collect();
+        if !self.functions.is_empty() && !unread.is_empty() {
+            let size: usize = self.functions.iter().flatten().map(String::len).sum();
+            let cost = size.saturating_mul(unread.len());
+            if cost > self.budget {
+                return Some(too_big_to_check());
+            }
+            self.budget -= cost;
+            self.functions_read_from
+                .extend(unread.iter().map(|here| (*here).clone()));
+            let mut elsewhere = Vec::new();
+            for here in unread {
+                let functions = &self.functions;
+                if let Some(hit) =
+                    reason_in(functions, here, self.cwd, self.state_dir, &mut elsewhere)
+                {
+                    return Some(hit);
+                }
             }
         }
         let inner = scan.map(|scan| scan.substitutions()).unwrap_or_default();
@@ -1596,6 +1654,27 @@ impl Inward<'_> {
             .iter()
             .find_map(|text| self.reason_from(text, &heres, depth + 1))
     }
+}
+
+/// `segments` with each function definition's header taken off the front of its segment
+/// (`f ( ) {`, `function f {`, zsh's `f ( )` before a simple command), so the first command of
+/// the body is read as the command it is, and the index of the first segment that defined one.
+/// A keyword in front (`then`, `{`, `(`, …) is stepped over, and so is a definition inside a
+/// definition's header.
+fn function_bodies(segments: Vec<Vec<String>>) -> (Vec<Vec<String>>, Option<usize>) {
+    let mut first = None;
+    let segments = segments
+        .into_iter()
+        .enumerate()
+        .map(|(k, toks)| match shellwrap::past_function_headers(&toks) {
+            Some(at) => {
+                first.get_or_insert(k);
+                toks[at..].to_vec()
+            }
+            None => toks,
+        })
+        .collect();
+    (segments, first)
 }
 
 /// The refusal of a command whose substitutions reach past a bound: reported to
