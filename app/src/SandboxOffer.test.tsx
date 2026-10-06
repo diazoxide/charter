@@ -33,6 +33,7 @@ const DUE: SandboxState = {
   offer: true,
   said: null,
   never: ["Codex: purlis can wrap it on macOS only, so far"],
+  hosts_changed: null,
 };
 
 describe("the sandbox offer", () => {
@@ -45,7 +46,13 @@ describe("the sandbox offer", () => {
   });
 
   it("says nothing to a project that has the sandbox, or has answered", async () => {
-    const asked = core({ on: true, offer: false, said: "no chat yet", never: [] });
+    const asked = core({
+      on: true,
+      offer: false,
+      said: "no chat yet",
+      never: [],
+      hosts_changed: null,
+    });
     render(<SandboxOffer plane={PLANE} />);
 
     await waitFor(() => expect(asked.map((one) => one.cmd)).toContain("sandbox_state"));
@@ -53,7 +60,13 @@ describe("the sandbox offer", () => {
   });
 
   it("turns the sandbox on only when asked to, and is gone once answered", async () => {
-    const asked = core(DUE, { on: true, offer: false, said: "no chat yet", never: [] });
+    const asked = core(DUE, {
+      on: true,
+      offer: false,
+      said: "no chat yet",
+      never: [],
+      hosts_changed: null,
+    });
     render(<SandboxOffer plane={PLANE} />);
 
     await userEvent
@@ -70,7 +83,13 @@ describe("the sandbox offer", () => {
   });
 
   it("keeps it off when asked to, and does not ask again", async () => {
-    const asked = core(DUE, { on: false, offer: false, said: null, never: [] });
+    const asked = core(DUE, {
+      on: false,
+      offer: false,
+      said: null,
+      never: [],
+      hosts_changed: null,
+    });
     render(<SandboxOffer plane={PLANE} />);
 
     await userEvent.setup().click(await screen.findByRole("button", { name: "Keep it off" }));

@@ -55,12 +55,15 @@ impl Preset {
 
 /// A plane's sandbox policy, where it has turned the sandbox on.
 ///
-/// Only egress is the plane's to choose. What a chat may write (its own directory, and the
-/// harness's own temp directory) and what it is always denied ([`Class`]) are not in the file
-/// at all, so no file can widen them.
+/// Only Internet access is the plane's to choose: the presets, and the project's own hosts
+/// ([`hosts::Host`], #1341). What a chat may write (its own directory, and the harness's own temp
+/// directory) and what it is always denied ([`Class`]) are not in the file at all, so no file
+/// can widen them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     pub egress: Vec<Preset>,
+    /// The project's own hosts: `[sandbox] hosts` in the committed file.
+    pub hosts: Vec<hosts::Host>,
 }
 
 /// The `[sandbox]` block that turns the sandbox on with the default egress, as charter writes it
@@ -134,8 +137,30 @@ impl Plane {
             .iter()
             .filter_map(|forge| forge.get("host")?.as_str())
             .filter(|host| crate::forge::host_ok(host))
-            .map(|host| host.split(':').next().unwrap_or(host).to_owned())
+            .map(|host| host.split(':').next().unwrap_or(host))
+            // A host as a project's own hosts are taken (#1341): never this machine, a
+            // link-local or metadata address, or a name ending in a number.
+            .filter_map(|host| hosts::Host::parse(host).ok())
+            .map(|host| host.to_string())
             .collect()
+    }
+
+    /// The hosts that reach every chat here because this file says so: its own `[sandbox]
+    /// hosts`, then, while the `forge` preset is on, its `[[forge]]` hosts — what the one-time
+    /// Notice of a change names (#1341).
+    pub fn granted_hosts(&self) -> Vec<String> {
+        let Some(policy) = self.said().policy else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = policy.hosts.iter().map(ToString::to_string).collect();
+        if policy.egress.contains(&Preset::Forge) {
+            for host in self.forge_hosts() {
+                if !out.contains(&host) {
+                    out.push(host);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -193,6 +218,10 @@ pub enum Refusal {
     EgressNotAList,
     /// A word in `egress` that is not a preset, as written.
     EgressUnknown(String),
+    /// `hosts` that is not a list.
+    HostsNotAList,
+    /// An entry of `hosts` that is not a host ([`hosts::Host::parse`]): as written, and why.
+    Host(String, String),
 }
 
 impl fmt::Display for Refusal {
@@ -201,12 +230,12 @@ impl fmt::Display for Refusal {
         match self {
             Self::NotATable => write!(
                 f,
-                "{TABLE} in {FILE} is not a table — [{TABLE}] holds mode and egress; {on}"
+                "{TABLE} in {FILE} is not a table — [{TABLE}] holds mode, egress and hosts; {on}"
             ),
             Self::UnknownKey(key) => write!(
                 f,
-                "{TABLE}.{key} in {FILE} is not a key purlis reads — [{TABLE}] holds mode and \
-                 egress"
+                "{TABLE}.{key} in {FILE} is not a key purlis reads — [{TABLE}] holds mode, \
+                 egress and hosts"
             ),
             Self::ModeOff => write!(
                 f,
@@ -227,6 +256,15 @@ impl fmt::Display for Refusal {
                 f,
                 "{TABLE}.egress in {FILE} names {word}, which is not a preset — one of: {}",
                 Preset::listed()
+            ),
+            Self::HostsNotAList => write!(
+                f,
+                "{TABLE}.hosts in {FILE} is not a list of hosts, so no host of the project's is \
+                 allowed — write hosts = [\"api.example.com\", \"10.0.0.5:6443\"]"
+            ),
+            Self::Host(written, why) => write!(
+                f,
+                "{TABLE}.hosts in {FILE} names {written}, which no chat is let reach: {why}"
             ),
         }
     }
@@ -255,6 +293,7 @@ impl Said {
             return Self {
                 policy: Some(Policy {
                     egress: Preset::DEFAULT.to_vec(),
+                    hosts: Vec::new(),
                 }),
                 refused: vec![Refusal::NotATable],
             };
@@ -273,7 +312,7 @@ impl Said {
             }
         };
         for key in table.keys() {
-            if key != "mode" && key != "egress" {
+            if key != "mode" && key != "egress" && key != hosts::KEY {
                 refused.push(Refusal::UnknownKey(key.clone()));
             }
         }
@@ -295,18 +334,37 @@ impl Said {
                 Preset::DEFAULT.to_vec()
             }
         };
+        let hosts = match hosts::read(table.get(hosts::KEY)) {
+            Ok(hosts::Listed {
+                hosts,
+                refused: not,
+            }) => {
+                refused.extend(
+                    not.into_iter()
+                        .map(|(written, why)| Refusal::Host(written, why)),
+                );
+                hosts
+            }
+            Err(hosts::NotAList) => {
+                refused.push(Refusal::HostsNotAList);
+                Vec::new()
+            }
+        };
         Self {
-            policy: on.then_some(Policy { egress }),
+            policy: on.then_some(Policy { egress, hosts }),
             refused,
         }
     }
 }
 
 /// Everything in `text`'s `[sandbox]` that charter would not honour as written, as `file`
-/// holds it — for the Settings tab's save, which refuses to write it. Only the
-/// committed file is read for it; `charter.local.toml` already refuses every table it does not
-/// carry.
+/// holds it — for the Settings tab's save, which refuses to write it. The committed file's
+/// whole table, and this machine's `charter.local.toml`, which holds the person's own hosts and
+/// nothing else of the sandbox ([`hosts`], #1341).
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
+    if file == crate::profiles::LOCAL_FILE {
+        return local_refusals(text);
+    }
     if file != FILE {
         return Vec::new();
     }
@@ -930,11 +988,27 @@ impl Compiled {
         }
     }
 
-    /// `policy`, for a chat in `plane` at `root`, on `machine`.
+    /// `policy`, for a chat in `plane` at `root`, on `machine`: its presets' hosts, then the
+    /// hosts in force at every level ([`hosts::in_force`]): the project's, then this machine's.
     pub fn of(policy: &Policy, plane: &Plane, root: &Path, machine: &Machine) -> Self {
+        let mut reached = hosts(&policy.egress, plane);
+        let granted = hosts::off_this_machine(
+            hosts::in_force(
+                &policy.hosts,
+                &hosts::personal(root),
+                &hosts::Locks::of(root),
+            ),
+            &hosts::own_addresses(),
+        );
+        for one in granted {
+            let spelled = one.host.to_string();
+            if !reached.contains(&spelled) {
+                reached.push(spelled);
+            }
+        }
         Self {
             denied: Denied::of(root, machine),
-            hosts: hosts(&policy.egress, plane),
+            hosts: reached,
             os: machine.os,
             homes: Homes {
                 codex_project: Homes::codex_project(machine, root),
@@ -1527,6 +1601,70 @@ impl fmt::Display for NotStarted {
     }
 }
 
+/// **Whether writing `after` over `before` changes a sandbox key** — the rule every brokered
+/// write keeps (ADR 0067 §1 and §2 as amended; #1333): a write a chat asks `purlisd` to make is
+/// refused when it would. `before` is the file as it stands (`None`: not there). Any change to
+/// `[sandbox]` counts, in either settings file: its mode, its presets, its hosts. A text that is
+/// not TOML counts too, since what it says about the sandbox is unknown — and so does an absent
+/// file made where none was, if it holds `[sandbox]`.
+pub fn changes_a_sandbox_key(before: Option<&str>, after: &str) -> bool {
+    let table = |text: &str| -> Result<Option<toml::Value>, ()> {
+        let top = text.parse::<toml::Table>().map_err(|_| ())?;
+        Ok(top.get(TABLE).cloned())
+    };
+    let was = match before.map(table) {
+        None => Ok(None),
+        Some(was) => was,
+    };
+    match (was, table(after)) {
+        (Ok(was), Ok(now)) => was != now,
+        _ => true,
+    }
+}
+
+/// What this machine's `charter.local.toml` says in `[sandbox]` that purlis does not take: any
+/// key but `hosts`, and each entry of it that is not a host.
+fn local_refusals(text: &str) -> Vec<String> {
+    let local = crate::profiles::LOCAL_FILE;
+    let Ok(top) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(table) = top.get(TABLE) else {
+        return Vec::new();
+    };
+    let Some(table) = table.as_table() else {
+        return vec![format!(
+            "{TABLE} in {local} is not a table — this machine's [{TABLE}] holds hosts, and only \
+             hosts"
+        )];
+    };
+    let mut out: Vec<String> = table
+        .keys()
+        .filter(|key| *key != hosts::KEY)
+        .map(|key| {
+            format!(
+                "{TABLE}.{key} in {local} is not read — this machine's [{TABLE}] holds hosts, and \
+                 only hosts. Whether chats run sandboxed, and the presets, are the project's, in \
+                 {FILE}."
+            )
+        })
+        .collect();
+    match hosts::read(table.get(hosts::KEY)) {
+        Ok(hosts::Listed { refused, .. }) => {
+            out.extend(refused.into_iter().map(|(written, why)| {
+                format!(
+                    "{TABLE}.hosts in {local} names {written}, which no chat is let reach: {why}"
+                )
+            }))
+        }
+        Err(hosts::NotAList) => out.push(format!(
+            "{TABLE}.hosts in {local} is not a list of hosts, so none of yours is allowed — \
+             write hosts = [\"api.example.com\", \"10.0.0.5:6443\"]"
+        )),
+    }
+    out
+}
+
 /// What a chat of `harness` in the plane at `root` starts under on `machine`: `None` where the
 /// plane has not turned the sandbox on, the compiled sandbox where it has — or why the chat
 /// does not start. `has` answers whether a program the backend needs is installed
@@ -1878,6 +2016,7 @@ pub mod backend;
 pub mod claude;
 pub mod codex;
 pub mod egress;
+pub mod hosts;
 pub mod local;
 pub mod opencode;
 pub mod planted;
@@ -1888,6 +2027,8 @@ pub mod seatbelt;
 mod codex_tests;
 #[cfg(test)]
 mod egress_tests;
+#[cfg(test)]
+mod hosts_tests;
 #[cfg(test)]
 mod opencode_tests;
 #[cfg(test)]

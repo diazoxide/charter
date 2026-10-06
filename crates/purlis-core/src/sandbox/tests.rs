@@ -10,6 +10,7 @@ fn said(text: &str) -> Said {
 fn default_policy() -> Option<Policy> {
     Some(Policy {
         egress: vec![Preset::ModelProviders, Preset::Forge, Preset::Toolchains],
+        hosts: vec![],
     })
 }
 
@@ -65,7 +66,8 @@ fn a_plane_names_its_egress_by_preset_and_an_unknown_preset_is_refused() {
     assert_eq!(
         said.policy,
         Some(Policy {
-            egress: vec![Preset::Forge]
+            egress: vec![Preset::Forge],
+            hosts: vec![],
         })
     );
     assert_eq!(
@@ -83,7 +85,13 @@ fn a_plane_names_its_egress_by_preset_and_an_unknown_preset_is_refused() {
 #[test]
 fn an_empty_egress_list_is_the_strictest_answer_and_is_kept() {
     let said = said("[sandbox]\nmode = \"on\"\negress = []\n");
-    assert_eq!(said.policy, Some(Policy { egress: vec![] }));
+    assert_eq!(
+        said.policy,
+        Some(Policy {
+            egress: vec![],
+            hosts: vec![]
+        })
+    );
 }
 
 #[test]
@@ -94,10 +102,64 @@ fn a_key_the_schema_does_not_have_is_refused() {
 }
 
 #[test]
-fn only_the_committed_file_is_asked_for_sandbox_refusals() {
+fn this_machine_s_file_holds_its_own_hosts_and_never_the_mode() {
     let off = "[sandbox]\nmode = \"off\"\n";
     assert_eq!(refusals(off, "charter.toml").len(), 1);
-    assert_eq!(refusals(off, "charter.local.toml"), Vec::<String>::new());
+    assert_eq!(
+        refusals(off, "charter.local.toml"),
+        [
+            "sandbox.mode in charter.local.toml is not read — this machine's [sandbox] holds hosts, \
+          and only hosts. Whether chats run sandboxed, and the presets, are the project's, in \
+          charter.toml."
+        ]
+    );
+    let mine = "[sandbox]\nhosts = [\"10.100.39.145:6443\"]\n";
+    assert_eq!(refusals(mine, "charter.local.toml"), Vec::<String>::new());
+    let bad = "[sandbox]\nhosts = [\"127.0.0.1\"]\n";
+    let said = refusals(bad, "charter.local.toml");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with(
+            "sandbox.hosts in charter.local.toml names \"127.0.0.1\", which no chat is let reach: \
+             127.0.0.1 is this machine."
+        ),
+        "{said:?}"
+    );
+    // Any other file says nothing about the sandbox.
+    assert_eq!(refusals(off, "workspace.json"), Vec::<String>::new());
+}
+
+#[test]
+fn a_project_names_its_own_hosts_and_a_host_that_is_not_one_is_refused_and_dropped() {
+    let said = said(
+        "[sandbox]\nmode = \"on\"\nhosts = [\"10.100.39.145:6443\", \"*.internal.example\", \
+         \"https://x.example/\", 7]\n",
+    );
+    assert_eq!(
+        said.policy.expect("on").hosts,
+        [
+            hosts::Host::parse("10.100.39.145:6443").unwrap(),
+            hosts::Host::parse("*.internal.example").unwrap(),
+        ]
+    );
+    let refused: Vec<String> = said.refused.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        refused,
+        [
+            "sandbox.hosts in charter.toml names \"https://x.example/\", which no chat is let \
+             reach: That is a URL. Type its host alone, such as x.example, without the scheme or \
+             a path.",
+            "sandbox.hosts in charter.toml names 7, which no chat is let reach: A host is written \
+             as text in quotes.",
+        ]
+    );
+}
+
+#[test]
+fn hosts_that_are_not_a_list_grant_nothing() {
+    let said = said("[sandbox]\nmode = \"on\"\nhosts = \"10.0.0.5\"\n");
+    assert_eq!(said.refused, [Refusal::HostsNotAList]);
+    assert_eq!(said.policy.expect("on").hosts, []);
 }
 
 // -------------------------------------------------------------------------------------
@@ -421,6 +483,82 @@ fn the_model_provider_preset_reaches_the_three_harnesses_providers() {
     for host in ["api.anthropic.com", "api.openai.com", "opencode.ai"] {
         assert!(hosts.contains(&host.to_owned()), "{host}: {hosts:?}");
     }
+}
+
+/// What each harness's compiled sandbox lets a chat reach, as its compiler hands it on: Claude
+/// Code's `network.allowedDomains`, and the egress proxy's list for a harness purlis wraps.
+fn reached(applied: &Applied) -> Vec<String> {
+    match applied.form() {
+        Form::ClaudeCode(settings) => settings.sandbox["network"]["allowedDomains"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|host| host.as_str().expect("text").to_owned())
+            .collect(),
+        Form::Codex(wrap) => wrap.hosts.clone(),
+        Form::Opencode(wrap) => wrap.hosts.clone(),
+    }
+}
+
+/// #1341: the project's own hosts reach every chat in it with no approval, on every harness,
+/// private addresses and ports included; this machine's are added to them, and a host that is
+/// not one grants nothing.
+#[test]
+fn the_project_s_hosts_and_this_machine_s_reach_a_chat_on_every_harness() {
+    let plane = plane_saying(
+        "[sandbox]\nmode = \"on\"\negress = []\nhosts = [\"10.100.39.145:6443\", \
+         \"*.internal.example\", \"169.254.169.254\"]\n",
+    );
+    std::fs::write(
+        plane.path().join("charter.local.toml"),
+        "[sandbox]\nhosts = [\"[fd00::7]:8443\", \"10.100.39.145:6443\"]\n",
+    )
+    .expect("charter.local.toml");
+    // Confirmed in Settings on this machine, as adding it there does.
+    local::confirm_host(plane.path(), "[fd00::7]:8443").expect("confirmed");
+    for harness in Harness::ALL {
+        let applied =
+            compiled_anyway(harness, plane.path(), &machine(Os::MacOs)).expect("compiles");
+        assert_eq!(
+            reached(&applied),
+            ["10.100.39.145:6443", "*.internal.example", "[fd00::7]:8443"],
+            "{harness:?}"
+        );
+    }
+}
+
+/// #1341: another project's hosts, and this machine's file in another project, reach nothing
+/// here: hosts are the project's and this machine's for this project.
+#[test]
+fn a_project_without_hosts_reaches_only_its_presets() {
+    let plane = plane_saying("[sandbox]\nmode = \"on\"\negress = []\n");
+    let other = plane_saying("[sandbox]\nmode = \"on\"\nhosts = [\"10.0.0.5\"]\n");
+    std::fs::write(
+        other.path().join("charter.local.toml"),
+        "[sandbox]\nhosts = [\"10.0.0.6\"]\n",
+    )
+    .expect("charter.local.toml");
+    for harness in Harness::ALL {
+        let applied =
+            compiled_anyway(harness, plane.path(), &machine(Os::MacOs)).expect("compiles");
+        assert_eq!(reached(&applied), Vec::<String>::new(), "{harness:?}");
+    }
+}
+
+/// #1341: this machine's file grants nothing once git would carry it, since what it says
+/// would then reach every clone with no trace of the project's flow.
+#[test]
+fn this_machine_s_hosts_in_a_file_git_would_commit_grant_nothing() {
+    let plane = plane_saying("[sandbox]\nmode = \"on\"\negress = []\n");
+    crate::testgit::run(plane.path(), &["init", "-q"]);
+    std::fs::write(
+        plane.path().join("charter.local.toml"),
+        "[sandbox]\nhosts = [\"10.0.0.6\"]\n",
+    )
+    .expect("charter.local.toml");
+    let applied =
+        compiled_anyway(Harness::ClaudeCode, plane.path(), &machine(Os::MacOs)).expect("compiles");
+    assert_eq!(reached(&applied), Vec::<String>::new());
 }
 
 // -------------------------------------------------------------------------------------
@@ -2249,4 +2387,95 @@ fn a_config_purlis_could_not_read_through_refuses_the_chat() {
          Move that command into a script of its own, or start this chat without the sandbox \
          from the new-chat picker."
     );
+}
+
+/// #1333's rule, which every brokered write asks (ADR 0067 §1 as amended): a chat never changes
+/// the sandbox, at any level, through purlisd.
+#[test]
+fn a_brokered_write_that_changes_any_sandbox_key_is_told_it_does() {
+    let on = "schema = 1\n[sandbox]\nmode = \"on\"\nhosts = [\"a.example\"]\n";
+    // Another key, and a comment, change no sandbox key.
+    assert!(!changes_a_sandbox_key(
+        Some(on),
+        &format!("{on}\n[memory]\nshare = \"local\"\n# a note\n")
+    ));
+    assert!(!changes_a_sandbox_key(None, "schema = 1\n"));
+    for after in [
+        "schema = 1\n[sandbox]\nmode = \"on\"\nhosts = [\"a.example\", \"10.0.0.5\"]\n",
+        "schema = 1\n[sandbox]\nmode = \"on\"\n",
+        "schema = 1\n[sandbox]\nmode = \"on\"\nhosts = [\"a.example\"]\negress = []\n",
+        "schema = 1\n",
+        "not toml [",
+    ] {
+        assert!(changes_a_sandbox_key(Some(on), after), "{after}");
+    }
+    // This machine's file, made where there was none, with hosts of its own.
+    assert!(changes_a_sandbox_key(
+        None,
+        "[sandbox]\nhosts = [\"10.0.0.5\"]\n"
+    ));
+    // A file that was not TOML is unknown, so a write over it is never let through as no change.
+    assert!(changes_a_sandbox_key(Some("not toml ["), "schema = 1\n"));
+}
+
+/// Review of #1341, 8: a `[[forge]]` host is taken as a project's own host is, so it never
+/// reaches this machine or a metadata service.
+#[test]
+fn a_forge_host_is_taken_as_a_host_is() {
+    for host in ["127.0.0.1", "localhost", "169.254.169.254", "0x7f.1"] {
+        let hosts = hosts_of(
+            &[Preset::Forge],
+            Some(&format!(
+                "[[forge]]\nkind = \"gitlab\"\nhost = \"{host}\"\n"
+            )),
+        );
+        assert!(!hosts.contains(&host.to_owned()), "{host}: {hosts:?}");
+    }
+}
+
+/// Review of #1341, 8: the Notice names a project's `[[forge]]` hosts with its own, while the
+/// `forge` preset lets every chat reach them.
+#[test]
+fn the_hosts_a_teammate_is_told_of_include_the_forge_hosts() {
+    let plane = Plane::of(Some(
+        "[sandbox]\nmode = \"on\"\nhosts = [\"10.0.0.5:6443\"]\n\n[[forge]]\nkind = \"gitlab\"\n\
+         host = \"git.example.org:8443\"\n",
+    ));
+    assert_eq!(plane.granted_hosts(), ["10.0.0.5:6443", "git.example.org"]);
+    let without = Plane::of(Some(
+        "[sandbox]\nmode = \"on\"\negress = []\n\n[[forge]]\nkind = \"gitlab\"\n\
+         host = \"git.example.org\"\n",
+    ));
+    assert_eq!(without.granted_hosts(), Vec::<String>::new());
+}
+
+/// Review of #1341, round 3: a chat can write all of a clone's git state, so this machine's
+/// file grants only what you confirmed in Settings. A host a chat (or a teammate's commit) put
+/// there grants nothing until it is confirmed.
+#[test]
+fn this_machine_s_hosts_grant_only_what_you_confirmed() {
+    let plane = plane_saying("[sandbox]\nmode = \"on\"\negress = []\n");
+    std::fs::write(
+        plane.path().join("charter.local.toml"),
+        "[sandbox]\nhosts = [\"10.0.0.6\", \"10.0.0.7\"]\n",
+    )
+    .expect("written by a chat");
+    assert_eq!(hosts::personal(plane.path()), Vec::<hosts::Host>::new());
+    local::confirm_host(plane.path(), "10.0.0.7").expect("confirmed");
+    assert_eq!(
+        hosts::personal(plane.path()),
+        [hosts::Host::parse("10.0.0.7").unwrap()]
+    );
+}
+
+/// Review of #1341, 6: this machine's file is never read through a link.
+#[cfg(unix)]
+#[test]
+fn this_machine_s_hosts_through_a_link_grant_nothing() {
+    let plane = plane_saying("[sandbox]\nmode = \"on\"\negress = []\n");
+    let elsewhere = tempfile::tempdir().expect("elsewhere");
+    let target = elsewhere.path().join("hosts.toml");
+    std::fs::write(&target, "[sandbox]\nhosts = [\"10.0.0.6\"]\n").expect("target");
+    std::os::unix::fs::symlink(&target, plane.path().join("charter.local.toml")).expect("link");
+    assert_eq!(hosts::personal(plane.path()), Vec::<hosts::Host>::new());
 }

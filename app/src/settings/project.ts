@@ -193,6 +193,40 @@ function forgesCollection(shared: SettingsFile, settings: readonly FileSetting[]
   return collection;
 }
 
+/** The address of the page of your own hosts (#1341): a sub-page of Sandbox. */
+export const MY_HOSTS = "project.sandbox.mine";
+
+/**
+ * **A sandbox's hosts as a collection** (#1341): each entry of `[sandbox] hosts` the core lists
+ * in `file`, with Remove, and an Add form of one field the core checks
+ * (`purlis_core::settings::hosts`, `add_sandbox_host`, `remove_sandbox_host`): the project's in
+ * `charter.toml` (`hosts`), which every teammate follows, or yours in `charter.local.toml`
+ * (`myHosts`), on this machine only. A host the core refuses is said under the field, with why.
+ */
+function hostsCollection(file: SettingsFile, name: "hosts" | "myHosts"): Collection {
+  return {
+    name,
+    noun: "host",
+    base: file.exists ? file.text : null,
+    entries: (file.entries ?? [])
+      .filter((one) => one.collection === name)
+      .map((one) => ({
+        id: one.id,
+        label: one.label,
+        settings: [],
+        confirm: one.values.some((value) => value.field === "confirmed" && value.value === "no"),
+      })),
+    fields: [
+      {
+        field: "host",
+        label: "Host",
+        help: "A domain such as api.example.com, *.example.com for every name under it, or an IP address such as 10.0.0.5. Add :port to reach a port other than HTTPS's.",
+        kind: "text",
+      },
+    ],
+  };
+}
+
 /** The address of the profile `name`'s own page (ST-4): a sub-page of Harness & profiles. */
 export function profilePage(name: string): string {
   return `project.profile.${name}`;
@@ -439,11 +473,24 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
     {
       id: "project.sandbox",
       label: "Sandbox",
-      help: "Whether the chats purlis starts here run in a sandbox, and which hosts it lets them reach.",
+      help: "Whether the chats purlis starts here run in a sandbox, and which hosts it lets them reach. The project's own hosts below are kept in charter.toml, and every chat of everyone who opens the project reaches them.",
       settings: fromShared("project.sandbox", sandboxSettings(shared, read.sandbox)).map((one) =>
         same(one.key, SANDBOX_MODE) ? { ...one, oneWay: true } : one,
       ),
+      ...(sharedOk ? { collection: hostsCollection(read.shared, "hosts") } : {}),
     },
+    ...(localOk
+      ? [
+          {
+            id: MY_HOSTS,
+            label: "Your hosts",
+            help: "Hosts your chats here reach besides the project's, on this machine only. Kept in charter.local.toml.",
+            settings: [],
+            collection: hostsCollection(read.local, "myHosts"),
+            sub: true,
+          },
+        ]
+      : []),
     {
       id: "project.forges",
       label: "Forges",
@@ -487,6 +534,8 @@ export function projectGroups(read: ProjectRead): SettingsGroup[] {
 const HOMES: Readonly<Record<string, { file: SettingsWhich; noun: string }>> = {
   forges: { file: "shared", noun: "forge" },
   profiles: { file: "local", noun: "profile" },
+  hosts: { file: "shared", noun: "host" },
+  myHosts: { file: "local", noun: "host" },
 };
 
 /** What the driver answers at the Project level: what was read, and what to do with a setting. */
@@ -618,8 +667,16 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
     const home = HOMES[op.collection];
     if (home === undefined)
       return Promise.resolve(refused([`No collection is called ${op.collection}.`]));
-    const asked =
-      op.collection === "forges"
+    const hosts = op.collection === "hosts" || op.collection === "myHosts";
+    const asked = hosts
+      ? "add" in op
+        ? commands.addSandboxHost(plane, home.file, op.base, op.add.host ?? "")
+        : "remove" in op
+          ? commands.removeSandboxHost(plane, home.file, op.base, op.remove)
+          : "confirm" in op
+            ? commands.confirmSandboxHost(plane, op.base, op.confirm)
+            : undefined
+      : op.collection === "forges"
         ? "add" in op
           ? commands.addProjectForge(plane, op.base, {
               kind: op.add.kind ?? "",
@@ -638,9 +695,11 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
             })
           : "remove" in op
             ? commands.removeProjectProfile(plane, op.base, op.remove)
-            : commands.renameProjectProfile(plane, op.base, op.rename, op.to);
+            : "rename" in op
+              ? commands.renameProjectProfile(plane, op.base, op.rename, op.to)
+              : undefined;
     if (asked === undefined)
-      return Promise.resolve(refused([`A ${home.noun} is not renamed here.`]));
+      return Promise.resolve(refused([`A ${home.noun} is not changed that way here.`]));
     return asked.then((said): EntryWrote<ProjectFiles> => {
       if (said.status === "error") return refused([said.error]);
       const answer = said.data;
@@ -666,6 +725,13 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
           said: `Added ${labelOf(answer.added ?? "", file)}.`,
           undo: { collection: op.collection, base: after, remove: answer.added ?? "" },
         };
+      if ("confirm" in op)
+        return {
+          saved,
+          file: which,
+          said: `Confirmed ${labelOf(answer.added ?? "", file)}.`,
+          undo: undefined,
+        };
       if ("rename" in op) {
         const was = entryIn(op.rename, both[which]);
         const name = was?.values.find((one) => one.field === "name")?.value ?? "";
@@ -679,7 +745,7 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
       return {
         saved,
         file: which,
-        said: `Removed ${labelOf(op.remove, both[which])}.`,
+        said: `Removed ${labelOf("remove" in op ? op.remove : "", both[which])}.`,
         // Exact: the text the entry was removed from, against the text the remove left.
         undo: { restore: { file: which, base: after, text: op.base ?? "" } },
       };

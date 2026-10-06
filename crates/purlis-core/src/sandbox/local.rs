@@ -1,6 +1,7 @@
 //! What this machine keeps about a project's sandbox, beside the project and never committed:
-//! the answer to the one-time offer (ADR 0067 §1, ruling V21 1), and how many new chats started
-//! with the sandbox and without it — the opt-out rate (ADR 0067 §7, V12).
+//! the answer to the one-time offer (ADR 0067 §1, ruling V21 1), how many new chats started
+//! with the sandbox and without it — the opt-out rate (ADR 0067 §7, V12) — and the project's
+//! hosts as this machine last told the person of them (#1341).
 //!
 //! **Local, and never sent** (ruling V78 d). The count is shown by `charter doctor` and the
 //! Settings tab, and nothing reads it for anything else.
@@ -32,6 +33,15 @@ struct OnDisk {
     offer: String,
     #[serde(default)]
     chats: Tally,
+    /// The project's hosts as this machine last showed them to the person (#1341), each as
+    /// [`super::hosts::Host`] spells it; absent before the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hosts_seen: Option<Vec<String>>,
+    /// Your own hosts for this project that you confirmed in Settings on this machine (#1341),
+    /// each as [`super::hosts::Host`] spells it: the only ones of `charter.local.toml` that
+    /// grant anything ([`super::hosts::personal`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    hosts_mine: Vec<String>,
 }
 
 fn read(root: &Path) -> OnDisk {
@@ -178,6 +188,72 @@ fn turn_on(root: &Path) -> io::Result<()> {
         Ok(Some(next))
     })
     .map(|_| ())
+}
+
+// ---- the project's hosts, told once per change (#1341) --------------------------------------
+
+/// The project's own hosts as they changed since this machine last told the person: what was
+/// added, what was taken away, and the whole list now — what acknowledging it records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostsChange {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub now: Vec<String>,
+}
+
+/// **How the project's hosts changed since this machine last told the person** — its own
+/// `[sandbox] hosts` and the `[[forge]]` hosts the `forge` preset lets every chat reach (ADR 0067 §1 as
+/// amended: each teammate sees a one-time Notice naming what changed). `None` when nothing did,
+/// and in a project whose chats are not sandboxed, where its hosts reach nothing. A project
+/// first seen on this machine with hosts is a change: nothing widens unseen. Order is no change.
+pub fn hosts_changed(root: &Path) -> Option<HostsChange> {
+    let plane = Plane::read(root);
+    plane.said().policy?;
+    let now = plane.granted_hosts();
+    let seen = read(root).hosts_seen.unwrap_or_default();
+    let added: Vec<String> = now
+        .iter()
+        .filter(|one| !seen.contains(one))
+        .cloned()
+        .collect();
+    let removed: Vec<String> = seen
+        .iter()
+        .filter(|one| !now.contains(one))
+        .cloned()
+        .collect();
+    (!added.is_empty() || !removed.is_empty()).then_some(HostsChange {
+        added,
+        removed,
+        now,
+    })
+}
+
+/// Records that the person was told of `shown`, the project's hosts as the Notice showed them:
+/// a change after it was shown is told again ([`hosts_changed`]).
+pub fn acknowledge_hosts(root: &Path, shown: &[String]) -> io::Result<()> {
+    change(root, |held| held.hosts_seen = Some(shown.to_vec()))
+}
+
+// ---- your own hosts, as you confirmed them (#1341) -------------------------------------------
+
+/// Your own hosts for the project at `root` that you confirmed in Settings on this machine.
+pub fn confirmed_hosts(root: &Path) -> Vec<String> {
+    read(root).hosts_mine
+}
+
+/// Records `host` as one you confirmed: Settings' Add and Confirm, never a chat (a sandboxed
+/// chat cannot write this file).
+pub fn confirm_host(root: &Path, host: &str) -> io::Result<()> {
+    change(root, |held| {
+        if !held.hosts_mine.iter().any(|one| one == host) {
+            held.hosts_mine.push(host.to_owned());
+        }
+    })
+}
+
+/// Takes `host` off the record: Settings' Remove.
+pub fn unconfirm_host(root: &Path, host: &str) -> io::Result<()> {
+    change(root, |held| held.hosts_mine.retain(|one| one != host))
 }
 
 // ---- the opt-out count -----------------------------------------------------------------------
