@@ -53,6 +53,11 @@ const ALLOWED: &[(&str, &str)] = &[
         "`charter report`'s `gh`, listing its call in the network log as Charter's",
     ),
     (
+        "app/src-tauri/src/sandboxing.rs",
+        "a sandbox block's Report (#1338) shows the tracker it would file on, then files there \
+         through `report::file` on the person's press (ADR 0059)",
+    ),
+    (
         "crates/purlis-core/src/netlog.rs",
         "the network log telling a Charter address from a third party's; it calls nothing",
     ),
