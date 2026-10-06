@@ -165,6 +165,16 @@ rows are such calls, so their `rfr` moved from `null` to that refusal: `shellseg
 rows 246 to 252 and 256, and generated rows 1061, 1451, 2119, 2202, 2387 and 2389. `rfr` is the
 only key that moved, and the attended answer (`rfa`) did not.
 
+**And where an alias chain longer than the guard follows is refused (#1354).** The fixture's
+`d1` reaches `checkout` in five hops (`d1` → `d2` → `d3` → `d4` → `d5` → `checkout`), one more
+than the four the guard follows. The frozen Python stopped at `d5` and allowed the command. A
+chain that is still on an alias when the hops run out is now refused, because its unseen end
+may move HEAD. Sixteen rows run `d1` where the root is reached, so their `bra` moved from
+`null` to that refusal: `planeroot-oracle.jsonl` row 117, and generated rows 143, 237, 443, 692,
+749, 902, 908, 988, 1149, 1256, 1262, 1335, 1539, 1574 and 1616. Generated row 923 already
+refused a later `git checkout feature`; it now refuses at `d1` first, with the new sentence.
+`bra` is the only key that moved. `rga` still records where the four hops end.
+
 ## The session recording
 
 Re-record with:
