@@ -5,42 +5,89 @@
 //! [`crate::shellseg`] reads a command line into the segments a shell runs, and it takes a
 //! `"$( … )"` for one quoted word. The command inside still runs. So a guard that must see every
 //! command a shell runs asks this module for the substitutions' text and reads each one again:
-//! the leak guard reads every one ([`Scan::substitutions`]), and the consent and operator-rule
-//! backstops read the ones inside double quotes ([`quoted_substitutions`]).
+//! the leak guard reads every one ([`Scan::substitutions`]) from each directory the shell could
+//! stand in, and the consent and operator-rule backstops read every one at every depth
+//! ([`every_substitution`], #1417), so the grammar is fixed in one place.
 //!
 //! One pass over the text with a stack of the contexts it is in, so the cost grows with the text
 //! and never with how deep the substitutions nest or how many are left open.
 
-use crate::heredoc;
+use crate::guardcaps;
 use crate::shellseg;
 
-/// The text of each `$( … )` and backtick inside double quotes in `text`, outermost only: the
-/// shell runs it, though the word it sits in is quoted. A heredoc body is stepped over where
-/// [`heredoc::heredoc_layout`] finds one, as the readers of these consent rules take it as data.
-pub(crate) fn quoted_substitutions(text: &str) -> Vec<String> {
-    let chars: Vec<char> = text.chars().collect();
-    let found = closes(&chars, Heredocs::Layout(&body_chars(text)));
-    // Read lazily: only a substitution left open falls back to it.
-    let mut quoted: Option<Vec<bool>> = None;
-    let mut out = Vec::new();
-    let mut taken_to = 0usize;
-    for &from in &found.quoted {
-        if from < taken_to {
-            continue; // inside a body already taken
+/// What [`every_substitution`] read: the text of every command substitution a shell runs, at
+/// every depth, and whether it stopped at a bound.
+pub(crate) struct Inward {
+    /// Each substitution's text as the shell runs it ([`Scan::substitutions`]), and read as
+    /// commands ([`Scan::as_commands`]: a `case` pattern's `)` ends a command), outermost
+    /// first; one nested in another is listed after it, apart. Each distinct text is scanned
+    /// and listed once.
+    pub(crate) texts: Vec<String>,
+    /// The walk reached past a bound ([`guardcaps::MAX_NESTING`] deep, or more text than
+    /// [`read_budget`] allows), so it is not a reading anyone may decide on. It has been
+    /// reported to [`shellseg::too_deep_within`] as well.
+    pub(crate) too_big: bool,
+}
+
+/// How many characters of substitutions a guard reads as commands, per character of the
+/// command: a substitution nested in another is read once at each depth.
+const READ_PER_CHARACTER: usize = 4;
+
+/// …and at least, so a short command is read all the way in.
+const READ_AT_LEAST: usize = 64 * 1024;
+
+/// How much substitution text a guard reads for a command `len` characters long.
+pub(crate) fn read_budget(len: usize) -> usize {
+    len.saturating_mul(READ_PER_CHARACTER).max(READ_AT_LEAST)
+}
+
+/// Every command substitution a shell runs in `text`, at every depth, wherever it opens
+/// ([`Scan::substitutions`]: unquoted, in double quotes, in a `${ … }`, a backtick or an
+/// expanding heredoc body), the one reading the consent and operator-rule backstops share with
+/// the leak guard (#1417).
+///
+/// **Bounded, and fails closed past a bound**: more than [`guardcaps::MAX_NESTING`] deep, or
+/// more text than [`read_budget`] of `text`'s length, and the walk stops with
+/// [`Inward::too_big`] set and the bound reported to [`shellseg::too_deep_within`], so the
+/// caller refuses the call as too big to check.
+pub(crate) fn every_substitution(text: &str) -> Inward {
+    let mut budget = read_budget(text.len());
+    let mut out = Inward {
+        texts: Vec::new(),
+        too_big: false,
+    };
+    // Depth first, each text with how deep it sits. A text read once is not read again: its
+    // reading, and the substitutions in it, are the same wherever it sits.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut todo: Vec<(String, usize)> = vec![(text.to_owned(), 0)];
+    while let Some((text, depth)) = todo.pop() {
+        if depth > 0 && !seen.insert(text.clone()) {
+            continue;
         }
-        // Balanced, the body runs to its close. Never closed — which a shell refuses to run at
-        // all — it runs only to where the quote map is back in the quoted context, so a crafted
-        // line of unclosed substitutions is not read again from each one to its end.
-        let to = found.closes.get(&from).copied().unwrap_or_else(|| {
-            let quoted = quoted.get_or_insert_with(|| shellseg::quote_map(text));
-            (from..chars.len())
-                .find(|&k| quoted.get(k).copied().unwrap_or(true))
-                .unwrap_or(chars.len())
-                .saturating_sub(1)
-                .max(from)
-        });
-        out.push(chars[from..to].iter().collect());
-        taken_to = to + 1;
+        let scanned = scan(&text, true);
+        if depth > 0 {
+            out.texts.push(match &scanned {
+                Some(scan) => scan.as_commands(false),
+                None => text,
+            });
+        }
+        let Some(scan) = scanned else {
+            continue;
+        };
+        let inner = scan.substitutions();
+        if inner.is_empty() {
+            continue;
+        }
+        let cost: usize = inner.iter().map(String::len).sum();
+        if depth >= guardcaps::MAX_NESTING || cost > budget {
+            shellseg::met_a_string_too_deep();
+            out.too_big = true;
+            return out;
+        }
+        budget -= cost;
+        for body in inner.into_iter().rev() {
+            todo.push((body, depth + 1));
+        }
     }
     out
 }
@@ -69,7 +116,7 @@ pub(crate) fn scan(text: &str, heredocs: bool) -> Option<Scan> {
         return None;
     }
     let chars: Vec<char> = text.chars().collect();
-    let found = closes(&chars, Heredocs::Native);
+    let found = closes(&chars);
     Some(Scan { chars, found })
 }
 
@@ -120,6 +167,9 @@ impl Scan {
         for &k in &self.found.case_patterns {
             chars[k] = ';';
         }
+        for &k in &self.found.case_opens {
+            chars[k] = ' ';
+        }
         if blank_bodies {
             for &(from, to) in &self.found.bodies {
                 for c in &mut chars[from..to.min(self.chars.len())] {
@@ -136,6 +186,11 @@ impl Scan {
             .filter(|(_, gone)| !**gone)
             .map(|(c, _)| c)
             .collect()
+    }
+
+    /// Whether the text has a `case` pattern.
+    pub(crate) fn has_case_patterns(&self) -> bool {
+        !self.found.case_patterns.is_empty()
     }
 
     /// Whether the text has a heredoc body.
@@ -164,17 +219,17 @@ fn untick(body: &[char], quoted: bool) -> String {
     out
 }
 
-/// What [`closes`] finds: where each substitution closes, keyed by where its body starts, and
-/// the body starts of the ones that open inside double quotes, in order.
+/// What [`closes`] finds: where each substitution closes, keyed by where its body starts.
 #[derive(Default)]
 struct Closes {
     closes: std::collections::HashMap<usize, usize>,
-    quoted: Vec<usize>,
     /// Every substitution's body start in order, in whatever context it opens, with what kind
     /// of substitution it is.
     all: Vec<(usize, Opened)>,
     /// Where each `case` pattern's closing `)` stands.
     case_patterns: Vec<usize>,
+    /// Where each `case` pattern's optional opening `(` stands.
+    case_opens: Vec<usize>,
     /// Each heredoc body read natively, from its first line to the end of its delimiter's line.
     bodies: Vec<(usize, usize)>,
     /// The characters of each line continuation the shell takes out (a backslash and its
@@ -190,38 +245,6 @@ enum Opened {
     /// A backtick, and whether it stands inside double quotes: a shell takes the backslash off
     /// `\$`, `` \` `` and `\\` in its body before it runs it, and off `\"` too in quotes.
     Tick { quoted: bool },
-}
-
-/// How [`closes`] knows a heredoc body.
-#[derive(Clone, Copy)]
-enum Heredocs<'a> {
-    /// The characters [`body_chars`] marks are stepped over, and nothing else is a body.
-    Layout(&'a [bool]),
-    /// Read here, as a shell reads one: from the line after its `<<` to its delimiter's line,
-    /// at any depth, and with its substitutions live where the delimiter is unquoted.
-    Native,
-}
-
-/// Which characters of `text` stand on a heredoc body's line or its terminator's
-/// ([`heredoc::heredoc_layout`], the walk every guard reads bodies with): text, not brackets or
-/// quotes, to the shells that end the body only at its delimiter.
-fn body_chars(text: &str) -> Vec<bool> {
-    if !text.contains("<<") {
-        return Vec::new();
-    }
-    let layout = heredoc::heredoc_layout(text);
-    // Read only where the layout is the text, line for line; otherwise no body is skipped.
-    if !layout.iter().map(|l| l.text.as_str()).eq(text.split('\n')) {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    for (k, line) in layout.iter().enumerate() {
-        if k > 0 {
-            out.push(false); // the newline
-        }
-        out.extend(std::iter::repeat_n(line.body, line.text.chars().count()));
-    }
-    out
 }
 
 /// A heredoc whose `<<` has been read and whose body starts on the next line.
@@ -250,12 +273,24 @@ enum Ctx {
     Group,
     /// A backtick whose body starts here.
     Tick(usize),
-    /// A `case … esac`, where a pattern's `)` closes nothing.
-    Case,
+    /// A `case … esac`, where a pattern's `)` closes nothing, and where in it the pass is.
+    Case(CasePart),
     /// A `#` comment, to the end of its line.
     Comment,
     /// A heredoc's body, and where it starts.
     Body(Pending, usize),
+}
+
+/// Where in a `case … esac` the pass is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CasePart {
+    /// The word before `in`.
+    Head,
+    /// Where a pattern stands: after `in`, `;;`, `;&` or `;;&`. A `(` here opens the pattern
+    /// (POSIX's optional leading paren) and pushes nothing.
+    Pattern,
+    /// A branch's commands, after the pattern's `)`.
+    Branch,
 }
 
 /// The shell's reserved words after which a command may follow at once.
@@ -266,14 +301,10 @@ const LEADS_A_COMMAND: [&str; 10] = [
 /// Where each command substitution in `chars` closes, keyed by where its body starts: the `)`
 /// that balances a `$(`, or the backtick that ends one. Quotes are read as quotes, `$' … '` with
 /// its escapes, a `'` inside a double-quoted `${ … }` as a plain character, a `#` comment to its
-/// line's end, a `case` pattern's `)` as no close, and a heredoc body as [`Heredocs`] says. One
-/// left open has no entry.
-fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
-    let in_body = match heredocs {
-        Heredocs::Layout(marks) => marks,
-        Heredocs::Native => &[],
-    };
-    let native = matches!(heredocs, Heredocs::Native);
+/// line's end, a `case` pattern's `)` as no close, and a heredoc body as a shell reads one: from
+/// the line after its `<<` to its delimiter's line, at any depth, with its substitutions live
+/// where the delimiter is unquoted. One left open has no entry.
+fn closes(chars: &[char]) -> Closes {
     let mut out = Closes::default();
     let mut stack: Vec<Ctx> = Vec::new();
     // Heredocs whose `<<` is read and whose bodies start after the next newline, in order.
@@ -283,10 +314,6 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
     out.gone = vec![false; chars.len()];
     let mut k = 0;
     while k < chars.len() {
-        if in_body.get(k).copied().unwrap_or(false) {
-            k += 1;
-            continue;
-        }
         if chars[k] == '\\' && chars.get(k + 1) == Some(&'\n') && splices(stack.last()) {
             out.gone[k] = true;
             out.gone[k + 1] = true;
@@ -377,7 +404,6 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
                 '$' if next == Some('(') => {
                     stack.push(Ctx::Sub(nj + 1));
                     command_position = true;
-                    out.quoted.push(nj + 1);
                     out.all.push((nj + 1, Opened::Dollar));
                     k = jump(&mut out.gone, chars, k, nj);
                 }
@@ -387,7 +413,6 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
                 }
                 '`' => {
                     stack.push(Ctx::Tick(k + 1));
-                    out.quoted.push(k + 1);
                     out.all.push((k + 1, Opened::Tick { quoted: true }));
                 }
                 _ => {}
@@ -425,6 +450,41 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
             // A command context: the top level, a substitution's body, a group or a `case`.
             _ => {
                 let word_start = k == 0 || " \t\n;&|()".contains(chars[k - 1]);
+                let part = match stack.last() {
+                    Some(Ctx::Case(part)) => Some(*part),
+                    _ => None,
+                };
+                // `in` ends a case's head, and `esac` may stand where a pattern would.
+                if word_start
+                    && is_word_char(c)
+                    && matches!(part, Some(CasePart::Head | CasePart::Pattern))
+                {
+                    let mut word = String::new();
+                    let mut end = k;
+                    while let Some(&w) = chars.get(end).filter(|&&w| is_word_char(w)) {
+                        word.push(w);
+                        end = past_continuations(chars, end + 1);
+                    }
+                    let ends_here = chars.get(end).is_none_or(|&e| " \t\n;&|()<>".contains(e));
+                    let next_part = match (part, word.as_str()) {
+                        (Some(CasePart::Head), "in") => Some(true),
+                        (Some(CasePart::Pattern), "esac") => Some(false),
+                        _ => None,
+                    };
+                    if let (true, Some(opens)) = (ends_here, next_part) {
+                        if opens {
+                            if let Some(Ctx::Case(part)) = stack.last_mut() {
+                                *part = CasePart::Pattern;
+                            }
+                        } else {
+                            stack.pop();
+                        }
+                        command_position = false;
+                        jump(&mut out.gone, chars, k, end);
+                        k = end;
+                        continue;
+                    }
+                }
                 if command_position && word_start && is_word_char(c) {
                     // The word as the shell reads it, line continuations taken out.
                     let mut word = String::new();
@@ -436,11 +496,11 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
                     let ends_here = chars.get(end).is_none_or(|&e| " \t\n;&|()<>".contains(e));
                     let keyword = ends_here
                         && (word == "case"
-                            || (word == "esac" && matches!(stack.last(), Some(Ctx::Case)))
+                            || (word == "esac" && matches!(stack.last(), Some(Ctx::Case(_))))
                             || LEADS_A_COMMAND.contains(&word.as_str()));
                     if keyword {
                         if word == "case" {
-                            stack.push(Ctx::Case);
+                            stack.push(Ctx::Case(CasePart::Head));
                             command_position = false;
                         } else if word == "esac" {
                             stack.pop();
@@ -453,6 +513,18 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
                 }
                 match c {
                     ' ' | '\t' => {}
+                    // `;;`, `;&` and `;;&` end a branch: a pattern stands next.
+                    ';' if part == Some(CasePart::Branch) && matches!(next, Some(';' | '&')) => {
+                        command_position = true;
+                        if let Some(Ctx::Case(part)) = stack.last_mut() {
+                            *part = CasePart::Pattern;
+                        }
+                        k = jump(&mut out.gone, chars, k, nj);
+                        let after = past_continuations(chars, k + 1);
+                        if chars.get(after) == Some(&'&') {
+                            k = jump(&mut out.gone, chars, k, after);
+                        }
+                    }
                     ';' | '&' | '|' => command_position = true,
                     '\n' => {
                         command_position = true;
@@ -494,7 +566,7 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
                         stack.push(Ctx::AnsiC);
                         k = jump(&mut out.gone, chars, k, nj);
                     }
-                    '<' if native && next == Some('<') => {
+                    '<' if next == Some('<') => {
                         let third = past_continuations(chars, nj + 1);
                         if chars.get(third) == Some(&'<') {
                             k = jump(&mut out.gone, chars, k, third); // a here-string
@@ -507,6 +579,8 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
                             k = jump(&mut out.gone, chars, k, nj);
                         }
                     }
+                    // A pattern's optional leading `(` opens nothing.
+                    '(' if part == Some(CasePart::Pattern) => out.case_opens.push(k),
                     '(' => {
                         command_position = true;
                         if !stack.is_empty() {
@@ -515,9 +589,12 @@ fn closes(chars: &[char], heredocs: Heredocs<'_>) -> Closes {
                     }
                     ')' => {
                         command_position = true;
-                        match stack.last() {
+                        match stack.last_mut() {
                             // A pattern's `)`: the command after it is in command position.
-                            Some(Ctx::Case) => out.case_patterns.push(k),
+                            Some(Ctx::Case(part)) => {
+                                out.case_patterns.push(k);
+                                *part = CasePart::Branch;
+                            }
                             // A group's `)`, or one at the top level that closes nothing,
                             // records none.
                             _ => {
@@ -585,9 +662,12 @@ fn is_word_char(c: char) -> bool {
 /// optional `-`, blanks, then the delimiter word, whose quoting is taken off and tells whether
 /// the body expands. `None` when no word follows.
 fn heredoc_header(chars: &[char], mut at: usize) -> Option<(Pending, usize)> {
+    // A line continuation anywhere in the header is taken out first, as the shell does: it
+    // neither quotes the delimiter nor ends it (`<<E\` newline `OF` is `<<EOF`, #1417).
+    at = past_continuations(chars, at);
     let dash = chars.get(at) == Some(&'-');
     if dash {
-        at += 1;
+        at = past_continuations(chars, at + 1);
     }
     while matches!(chars.get(at), Some(' ' | '\t')) {
         at += 1;
@@ -596,6 +676,7 @@ fn heredoc_header(chars: &[char], mut at: usize) -> Option<(Pending, usize)> {
     let mut expands = true;
     while let Some(&c) = chars.get(at) {
         match c {
+            '\\' if chars.get(at + 1) == Some(&'\n') => at += 2,
             '\'' | '"' => {
                 expands = false;
                 let close = (at + 1..chars.len()).find(|&j| chars[j] == c)?;
@@ -641,6 +722,27 @@ mod tests {
                 .expect("a case")
                 .as_commands(false),
             "case x in x; cat y;; esac"
+        );
+        // A line continuation in a heredoc's delimiter neither quotes nor ends it.
+        assert_eq!(run("cat <<E\\\nOF\n$(cat x)\nEOF"), ["cat x"]);
+        assert_eq!(run("cat <<\\\nEOF\n$(cat x)\nEOF"), ["cat x"]);
+        assert_eq!(
+            run("cat <<'E\\\nOF'\n$(cat x)\nE\\\nOF"),
+            Vec::<String>::new()
+        );
+        // A pattern's optional leading paren, in every branch, and `;&` / `;;&` between them.
+        assert_eq!(
+            scan(
+                "case x in (y) :;; (x) cat y;& (z|w) cat z;;& *) (cat q);; esac",
+                false
+            )
+            .expect("a case")
+            .as_commands(false),
+            "case x in  y; :;;  x; cat y;&  z|w; cat z;;& *; (cat q);; esac"
+        );
+        assert_eq!(
+            run("echo \"$(case x in (x) cat y;; esac)\""),
+            ["case x in (x) cat y;; esac"]
         );
         assert_eq!(
             scan("cat <<EOF\nit's\n$(x)\nEOF\ncat y", true)

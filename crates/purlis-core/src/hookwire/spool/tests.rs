@@ -283,3 +283,77 @@ fn a_spool_another_process_holds_is_given_up_on_in_bounded_time_and_the_line_is_
         "the line given up on is not in the spool, and nothing is numbered for it"
     );
 }
+
+/// What `append` answers for chat `chat` in `spool`, or `None` if it has not answered in two
+/// seconds: a hook must answer its harness whatever sits at the spool path.
+fn appended_within_two_seconds(
+    spool: &Path,
+    chat: u32,
+    token: crate::hookwire::ChatToken,
+) -> Option<io::Result<u64>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spool = spool.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(append(&spool, chat, &token, &call(chat, "a")));
+    });
+    rx.recv_timeout(Duration::from_secs(2)).ok()
+}
+
+#[test]
+fn a_spool_path_that_is_not_a_plain_file_is_refused_at_once_and_the_line_is_lost() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 5);
+    // A named pipe, where nothing ever writes: a blocking open or read of it never returns.
+    let made =
+        crate::forklock::status(std::process::Command::new("mkfifo").arg(file_for(&spool, 5)))
+            .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo");
+
+    let answered = appended_within_two_seconds(&spool, 5, token).expect("the hook answered");
+    let refused = answered.expect_err("nothing is spooled into a pipe");
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{refused}");
+}
+
+#[test]
+fn a_spool_that_is_not_a_plain_file_is_reported_and_the_drain_reads_the_others() {
+    /// What sits at the spool path, and how it is put there.
+    type Planted<'a> = (&'a str, &'a dyn Fn(&Path));
+    let plant: [Planted<'_>; 4] = [
+        ("a pipe", &|at: &Path| {
+            let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(at))
+                .expect("mkfifo runs");
+            assert!(made.success(), "mkfifo");
+        }),
+        ("a directory", &|at: &Path| {
+            std::fs::create_dir(at).expect("mkdir")
+        }),
+        ("a dangling link", &|at: &Path| {
+            std::os::unix::fs::symlink(at.with_extension("gone"), at).expect("a link");
+        }),
+        ("a live link", &|at: &Path| {
+            let to = at.with_extension("real");
+            std::fs::write(&to, b"").expect("its target");
+            std::os::unix::fs::symlink(&to, at).expect("a link");
+        }),
+    ];
+    for (what, plant) in plant {
+        let dir = tempfile::tempdir().expect("a directory");
+        let spool = dir.path().join(".charter/app").join(DIR);
+        let token = issued(&spool, 7);
+        issued(&spool, 5);
+        append(&spool, 7, &token, &call(7, "a")).expect("the line is spooled");
+        plant(&file_for(&spool, 5));
+
+        let all = drained(&spool);
+        assert!(
+            all.contains(&Drained::Rejected {
+                chat: 5,
+                seq: None,
+                why: why::UNREADABLE
+            }),
+            "{what}: {all:?}"
+        );
+        assert_eq!(tools(&all), [(7, 1, "a".to_owned())], "{what}");
+    }
+}

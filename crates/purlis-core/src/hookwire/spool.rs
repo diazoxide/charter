@@ -60,6 +60,15 @@ const VERSION: u32 = 1;
 /// cannot be spooled in it is lost and said to be lost, never waited on.
 const A_LOCK_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_millis(250);
 
+/// How long [`append`] waits for a new spool's directory to be made durable, for the same
+/// reason as the lock.
+const A_DIRECTORY_SYNC_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_millis(250);
+
+/// The most of a chat's spool [`append`] reads to choose the next number. A spool the host has
+/// not drained grows by one hook line at a time, so this is many thousands of lines; one past it
+/// is refused rather than read for as long as it takes, and the line is said to be lost.
+const A_SPOOL_IS_READ_UP_TO: u64 = 16 * 1024 * 1024;
+
 /// How long [`lock_within`] sleeps between tries.
 const A_TRY_EVERY: Duration = Duration::from_millis(5);
 
@@ -191,14 +200,71 @@ fn private(dir: &Path) -> io::Result<()> {
     crate::secrets::make_private_dir(dir)
 }
 
-/// Opens `path` for reading and appending, made 0600 if it is new, and never through a link.
+/// Opens `path` for reading and appending, made 0600 if it is new, never through a link and
+/// never blocking: the open does not wait ([`crate::contain::nofollow`] opens non-blocking),
+/// and anything at the path but a plain file is refused as [`io::ErrorKind::InvalidInput`]
+/// before it is locked or read. A named pipe planted there would otherwise hold the hook on a
+/// read that never ends.
 fn open_spool(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
     let mut options = std::fs::OpenOptions::new();
     options.read(true).append(true).create(true).mode(0o600);
-    crate::contain::nofollow(&mut options)
+    let file = crate::contain::nofollow(&mut options)
         .open(path)
-        .map_err(crate::rewrite::refused_at(path))
+        .map_err(crate::rewrite::refused_at(path))?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is not a plain file, so nothing is spooled there",
+                path.display()
+            ),
+        ));
+    }
+    Ok(file)
+}
+
+/// `fsync`s the directory `dir`, opened without blocking and only as a directory, and answers
+/// [`io::ErrorKind::TimedOut`] once `wait` has passed with the sync still running. The sync then
+/// finishes, or not, on a thread of its own, which the hook's exit ends.
+fn sync_dir_within(dir: &Path, wait: Duration) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let flags = rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NONBLOCK;
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags.bits() as i32)
+        .open(dir)?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(rustix::fs::fsync(&held).map_err(io::Error::from));
+    });
+    rx.recv_timeout(wait).unwrap_or_else(|_| {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "the spool's directory was not made durable within {} ms",
+                wait.as_millis()
+            ),
+        ))
+    })
+}
+
+/// All of `file`, read from where it stands, refused as [`io::ErrorKind::InvalidData`] past
+/// [`A_SPOOL_IS_READ_UP_TO`] bytes.
+fn read_bounded(file: &mut impl Read) -> io::Result<Vec<u8>> {
+    let mut text = Vec::new();
+    file.take(A_SPOOL_IS_READ_UP_TO + 1)
+        .read_to_end(&mut text)?;
+    if text.len() as u64 > A_SPOOL_IS_READ_UP_TO {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "this chat's spool is past {} MiB, more than a hook reads",
+                A_SPOOL_IS_READ_UP_TO / 1024 / 1024
+            ),
+        ));
+    }
+    Ok(text)
 }
 
 /// Appends `what`, chat `chat`'s line, to its spool in `dir`, under `token`'s key and the next
@@ -216,6 +282,12 @@ fn open_spool(path: &Path) -> io::Result<File> {
 /// [`io::ErrorKind::TimedOut`], nothing is written and no number is taken, and the hook says on
 /// stderr that the line is lost.
 ///
+/// **So is everything else before the line is written**: the open never blocks and takes only a
+/// plain file ([`open_spool`]), a new file's directory sync is waited for at most
+/// [`A_DIRECTORY_SYNC_IS_WAITED_FOR_AT_MOST`], and the read is of a plain file and at most
+/// [`A_SPOOL_IS_READ_UP_TO`]. Each one past its bound is an error the hook reports as the line
+/// lost.
+///
 /// Refused where the sandbox's integrity denial does not reach ([`covered`]).
 pub fn append(
     dir: &Path,
@@ -232,12 +304,11 @@ pub fn append(
     let new = !path.exists();
     let file = open_spool(&path)?;
     if new {
-        rustix::fs::fsync(File::open(dir)?)?;
+        sync_dir_within(dir, A_DIRECTORY_SYNC_IS_WAITED_FOR_AT_MOST)?;
     }
     lock_within(&file, A_LOCK_IS_WAITED_FOR_AT_MOST)?;
     let mut file = crate::filelock::Held::locked(file);
-    let mut text = Vec::new();
-    file.read_to_end(&mut text)?;
+    let text = read_bounded(&mut &*file)?;
     let last = lines_of(&text)
         .filter_map(Result::ok)
         .filter_map(|it| serde_json::from_str::<OnDisk>(it).ok())
@@ -473,7 +544,19 @@ fn drain_one(
     taken: &HashMap<String, Held>,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
 ) -> io::Result<()> {
-    let file = open_spool(&file_for(dir, chat))?;
+    // A spool path that does not open as a plain file (a directory, a link, live or dangling,
+    // a pipe) holds no line to read, and must not stop the drain of every chat after it: it is
+    // reported as one unreadable line, and left for its owner to look at.
+    let file = match open_spool(&file_for(dir, chat)) {
+        Err(why) if why.kind() != io::ErrorKind::NotFound => {
+            return each(Drained::Rejected {
+                chat,
+                seq: None,
+                why: why::UNREADABLE,
+            });
+        }
+        opened => opened?,
+    };
     file.lock()?;
     let mut file = crate::filelock::Held::locked(file);
     let mut bytes = Vec::new();
