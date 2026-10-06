@@ -193,6 +193,24 @@ impl Instances {
     }
 }
 
+/// The app under a name it had before, running beside this one (RN-9), asked by the app whose
+/// identifier is `own` at its launch: its old identifier's single-instance endpoint answering
+/// (the socket on macOS, the lock on Linux). The two identifiers are two single-instance names,
+/// so neither app hands a launch to the other, and two apps would run chats on one project.
+/// Only the purlis app asks: a scenario build's own identifier (`dev.purlis.app.e2e`) asks
+/// nothing, so the operator's app never stops a test run.
+pub fn older_app(places: &Places, own: &str) -> Option<String> {
+    if own != BUNDLE_ID.write {
+        return None;
+    }
+    Instances::of(places, Some(own)).running()
+}
+
+/// What a launch that found the old app running says before it ends.
+pub const OLDER_APP_RUNNING: &str = "charter: the app is already running under its old name \
+     (charter.app). Quit it, then open purlis.app again. If you installed purlis.app beside it, \
+     delete charter.app: purlis.app takes its place.";
+
 /// Whether the lock file at `path` is held by a process: it exists and cannot be taken.
 pub fn lock_held(path: &Path) -> bool {
     let Ok(file) = std::fs::OpenOptions::new().read(true).open(path) else {

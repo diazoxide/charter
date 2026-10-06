@@ -5089,7 +5089,7 @@ vault or record whose items would ask stays on `charter/…` and waits, held onl
 memory, until the window's *Finish moving* copies it with the Keychain's dialogs on; a terminal
 copies only a vault whose index marks no key `held`. `.purlis.lock`, beside `<config>` in the config root, is an empty advisory lock:
 the app and `mcp` hold it shared while they run, and `rename-local` takes it exclusively, so it
-never moves the folders under them. The Tauri directories are the app's, identifier `dev.charter.app`. The keyring rows are the operating system's store (ADR 0047).
+never moves the folders under them. The Tauri directories are the app's, identifier `dev.purlis.app` (`dev.charter.app` before RN-9). The keyring rows are the operating system's store (ADR 0047).
 `<data>` is charter's data home (ADR 0075, amending ADR 0069): `$CHARTER_DATA_HOME`, else
 `$XDG_DATA_HOME/charter`, else the OS data directory's `charter/` (`~/Library/Application
 Support/charter` on macOS, `~/.local/share/charter` on Linux). The host's event log is written

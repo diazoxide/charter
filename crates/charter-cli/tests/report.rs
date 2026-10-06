@@ -20,7 +20,7 @@ struct World {
 }
 
 /// What the stand-in answers `gh issue create` with, and how `gh search issues` does.
-const FILED: &str = "https://github.com/diazoxide/charter/issues/999";
+const FILED: &str = "https://github.com/purlis/purlis/issues/999";
 
 impl World {
     fn new() -> World {
@@ -109,7 +109,7 @@ fn a_bare_run_shows_the_draft_and_the_duplicates_and_sends_nothing() {
     let w = World::with_gh(
         "exit 0",
         "echo '[{\"number\":7,\"title\":\"Status line is wrong\",\"state\":\"OPEN\",\
-         \"url\":\"https://github.com/diazoxide/charter/issues/7\"}]'; exit 0",
+         \"url\":\"https://github.com/purlis/purlis/issues/7\"}]'; exit 0",
     );
     let o = w.charter(
         &["report", "bug", "The status line is wrong\n\nIt says 3."],
@@ -129,7 +129,7 @@ fn a_bare_run_shows_the_draft_and_the_duplicates_and_sends_nothing() {
     assert!(text.contains(&format!("--yes {}", digest(&o))), "{text}");
     let calls = w.calls();
     assert!(
-        calls.contains("search\nissues\n--repo\ndiazoxide/charter\n"),
+        calls.contains("search\nissues\n--repo\npurlis/purlis\n"),
         "{calls}"
     );
     assert!(
@@ -155,7 +155,7 @@ fn yes_with_the_digest_that_was_shown_files_exactly_that_draft_on_the_reporters_
     let calls = w.calls();
     assert!(
         calls.contains(
-            "issue\ncreate\n--repo\ndiazoxide/charter\n--title=charter should report its own bugs\n--body=charter should report its own bugs\n"
+            "issue\ncreate\n--repo\npurlis/purlis\n--title=charter should report its own bugs\n--body=charter should report its own bugs\n"
         ),
         "{calls}"
     );
@@ -287,8 +287,7 @@ fn when_gh_cannot_file_the_prefilled_link_is_printed_and_the_exit_says_it_failed
     assert_eq!(o.status.code(), Some(1));
     assert!(err(&o).contains("Bad credentials"), "{}", err(&o));
     assert!(
-        err(&o)
-            .contains("https://github.com/diazoxide/charter/issues/new?title=one%20more%20thing"),
+        err(&o).contains("https://github.com/purlis/purlis/issues/new?title=one%20more%20thing"),
         "{}",
         err(&o)
     );

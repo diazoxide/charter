@@ -298,7 +298,7 @@ pub(super) fn copy_plane(
     let named = |vault: &str, identity: bool| {
         only.is_none_or(|only| {
             only.iter()
-                .any(|w| w.plane == plane && w.vault == vault && w.identity == identity)
+                .any(|w| !w.hold && w.plane == plane && w.vault == vault && w.identity == identity)
         })
     };
     let vaults: Vec<OldVault> = on_the_old_prefix(&ctx)
@@ -368,6 +368,239 @@ pub(super) fn still_waits(waiting: &Waiting) -> bool {
     }
 }
 
+// ---- holding the items again under a new identity (RN-9) -------------------------------- //
+
+/// The machine record of the app identity this machine's keychain items are all held to (RN-9),
+/// in charter's folder of the config home beside the journal: the identifier alone. Written only
+/// once nothing waits.
+pub const HELD_TO: &str = "rename-local/held-to";
+
+/// What is held again so far under the identifier on its first line: one line per vault or
+/// identity record done, so a later launch, or the person's press, never makes those items
+/// again while others still wait.
+pub const HELD_AGAIN: &str = "rename-local/held-again";
+
+/// The identifier [`HELD_TO`] names, or `None` when there is no record yet.
+pub(super) fn held_to(local: &Local) -> Option<String> {
+    std::fs::read_to_string(local.home().join(HELD_TO))
+        .ok()
+        .map(|text| text.trim().to_owned())
+        .filter(|id| !id.is_empty())
+}
+
+/// Every item is held to the app `own` now: the record written, the progress let go of.
+pub(super) fn record_held_to(local: &Local, own: &str) -> std::io::Result<()> {
+    super::write_record(&local.home().join(HELD_TO), &[own.to_owned()])?;
+    super::write_record(&local.home().join(HELD_AGAIN), &[])
+}
+
+/// What [`HELD_AGAIN`] says is held again by `own` so far.
+pub(super) fn done_for(local: &Local, own: &str) -> Vec<String> {
+    let text = std::fs::read_to_string(local.home().join(HELD_AGAIN)).unwrap_or_default();
+    let mut lines = text.lines();
+    if lines.next() != Some(own) {
+        return Vec::new();
+    }
+    lines.map(str::to_owned).collect()
+}
+
+/// Keep `done` as what `own` has held again so far.
+pub(super) fn record_done(local: &Local, own: &str, done: &[String]) -> std::io::Result<()> {
+    let mut lines = vec![own.to_owned()];
+    lines.extend(done.iter().cloned());
+    super::write_record(&local.home().join(HELD_AGAIN), &lines)
+}
+
+/// One vault's items, or its identity record's, as [`HELD_AGAIN`] names them.
+fn unit(plane: &Path, vault: &str, identity: bool) -> String {
+    format!("{}\t{vault}\t{}", plane.display(), u8::from(identity))
+}
+
+/// Whether a re-hold that waited is done by now (see [`HELD_AGAIN`]).
+pub(super) fn hold_still_waits(local: &Local, waiting: &Waiting) -> bool {
+    let Some(own) = local.own_app.as_deref() else {
+        return true;
+    };
+    !done_for(local, own).contains(&unit(&waiting.plane, &waiting.vault, waiting.identity))
+}
+
+/// The keyring vaults of the project at `ctx` read under the purlis prefix, with items to hold.
+fn on_the_purlis_prefix(ctx: &Ctx) -> Vec<Vault> {
+    let Ok(doc) = registry::load_registry(ctx) else {
+        return Vec::new();
+    };
+    registry::vaults(&doc)
+        .keys()
+        .filter_map(|name| registry::vault_in(&doc, name).ok())
+        .filter(|vault| vault.provider == "keyring")
+        .filter(|vault| {
+            keyring::load_index(ctx, vault).is_ok_and(|index| {
+                !index.keys.is_empty()
+                    && index
+                        .service
+                        .is_some_and(|service| keyring::renamed(&service).is_none())
+            })
+        })
+        .collect()
+}
+
+/// Hold every keychain item of the project at `plane` read under the purlis prefix again, by
+/// the app `own` (RN-9): its first launch under an identity the items' access does not name.
+///
+/// **At launch nothing asks** ([`Asking::Never`]: the Keychain's dialogs are off, #1306). An
+/// item the app cannot read or write without the system asking is left exactly as it was, and
+/// its vault or record waits, as the copy's do, for the person to finish it ([`super::finish`],
+/// [`Asking::Allowed`]). Each vault and record done is added to `done` and never made again.
+/// `false` when something failed otherwise; a later launch tries that again, quietly.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn hold_again(
+    seams: &Seams,
+    moved: &mut Moved,
+    plane: &Path,
+    own: &str,
+    asking: Asking,
+    only: Option<&[Waiting]>,
+    done: &mut Vec<String>,
+) -> bool {
+    if matches!(
+        crate::compat::read(plane),
+        crate::compat::Compat::ReadOnly(_)
+    ) {
+        return true;
+    }
+    let ctx = ctx_of(plane);
+    let wanted = |vault: &str, identity: bool| {
+        !done.contains(&unit(plane, vault, identity))
+            && only.is_none_or(|only| {
+                only.iter().any(|w| {
+                    w.hold && w.plane == plane && w.vault == vault && w.identity == identity
+                })
+            })
+    };
+    let vaults: Vec<Vault> = on_the_purlis_prefix(&ctx)
+        .into_iter()
+        .filter(|vault| wanted(&vault.name, false))
+        .collect();
+    let records: Vec<(String, BTreeMap<String, String>)> = identity::on_the_purlis_base(&ctx)
+        .into_iter()
+        .filter(|(vault, _)| wanted(vault, true))
+        .collect();
+    if vaults.is_empty() && records.is_empty() {
+        return true;
+    }
+    let reach = match (seams.keyring)(&ctx, asking) {
+        Some(Reach::Every(store)) => store,
+        // Only the app holds an item to itself; a terminal leaves it to the app's launch.
+        _ => {
+            moved.note(format!(
+                "{}: its keychain items are held again by the app at its next launch",
+                plane.display()
+            ));
+            return false;
+        }
+    };
+    let store = &*reach;
+    if !store.holds() {
+        for vault in &vaults {
+            done.push(unit(plane, &vault.name, false));
+        }
+        for (vault, _) in &records {
+            done.push(unit(plane, vault, true));
+        }
+        return true;
+    }
+    let mut whole = true;
+    let waits = |moved: &mut Moved, what: &str, vault: &str, identity: bool, items: usize| {
+        moved.waits(
+            Waiting {
+                plane: plane.to_path_buf(),
+                vault: vault.to_owned(),
+                identity,
+                items,
+                hold: true,
+            },
+            format!(
+                "{what}: waits to be held by {own}: reading its items would make the system ask \
+                 you for each, so it was left for you to finish; it keeps working meanwhile"
+            ),
+        );
+    };
+    for vault in vaults {
+        let what = format!("{}: vault '{}'", plane.display(), vault.name);
+        match keyring::hold_again_with(store, &ctx, &vault) {
+            Ok(again) => {
+                if !again.failed.is_empty() {
+                    whole = false;
+                    moved.failed(format!(
+                        "{what}: not held again by {own}: {}",
+                        again.failed.join("; ")
+                    ));
+                }
+                if again.would_ask > 0 {
+                    waits(moved, &what, &vault.name, false, again.would_ask);
+                } else if again.failed.is_empty() {
+                    done.push(unit(plane, &vault.name, false));
+                }
+                if again.held == again.keys {
+                    moved.done(format!(
+                        "{what}: {} secret(s) held again by {own}",
+                        again.keys
+                    ));
+                } else if again.would_ask == 0 && again.failed.is_empty() {
+                    moved.note(format!(
+                        "{what}: {} of {} secret(s) held again by {own}; the others are held \
+                         again the next time they are read",
+                        again.held, again.keys
+                    ));
+                }
+            }
+            Err(e) => {
+                whole = false;
+                moved.failed(format!("{what}: not held again by {own} ({})", e.message));
+            }
+        }
+    }
+    for (vault, ids) in records {
+        let what = format!("{}: vault '{vault}''s identity", plane.display());
+        let mut asks = 0;
+        let mut failed = false;
+        let mut held = 0;
+        for (source, id) in &ids {
+            let (_, service) = identity::item_services(id);
+            let outcome = match store.get(&service, source) {
+                Ok(Some(value)) => store.rehold(&service, source, &value.into_inner()),
+                Ok(None) => continue,
+                Err(e) => Err(e),
+            };
+            match outcome {
+                Ok(Held::ToTheApp) => held += 1,
+                Ok(_) => moved.note(format!(
+                    "{what}: '{source}' could not be held again by {own}; put the token in \
+                     again from the vault's tab to hold it"
+                )),
+                Err(e) if e.kind == Kind::WouldAsk => asks += 1,
+                Err(e) => {
+                    failed = true;
+                    whole = false;
+                    moved.failed(format!(
+                        "{what}: '{source}' not held again by {own} ({})",
+                        e.message
+                    ));
+                }
+            }
+        }
+        if asks > 0 {
+            waits(moved, &what, &vault, true, asks);
+        } else if !failed {
+            done.push(unit(plane, &vault, true));
+        }
+        if held > 0 {
+            moved.done(format!("{what}: held again by {own}"));
+        }
+    }
+    whole
+}
+
 struct Copy<'a> {
     local: &'a Local,
     store: &'a dyn Store,
@@ -416,6 +649,7 @@ impl Copy<'_> {
                         vault: vault.name.clone(),
                         identity: false,
                         items: keys.len(),
+                        hold: false,
                     };
                     return waits(moved, waiting, &what, &stays, self.its_own);
                 }
@@ -475,6 +709,7 @@ impl Copy<'_> {
                         vault: vault.to_owned(),
                         identity: true,
                         items: ids.len(),
+                        hold: false,
                     };
                     return waits(moved, waiting, &what, &stays, self.its_own);
                 }

@@ -29,8 +29,12 @@ browser marks what it downloads as quarantined, so macOS refuses the first launc
 one instruction that works for both kinds of signature, before that first launch:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/charter.app
+xattr -dr com.apple.quarantine /Applications/purlis.app
 ```
+
+purlis was called charter before. If `charter.app` is in Applications, delete it once
+`purlis.app` is there: purlis replaces it and will not start while the old app runs. An install
+that updated itself keeps the folder name `charter.app` and needs nothing.
 
 On a build with a Developer ID, **System Settings → Privacy & Security → Open Anyway** also
 works. Updates never meet this: the updater downloads into memory and unpacks the new bundle

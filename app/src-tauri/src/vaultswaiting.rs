@@ -170,6 +170,7 @@ mod tests {
             vault: vault.to_owned(),
             identity,
             items,
+            hold: false,
         }
     }
 

@@ -182,6 +182,9 @@ pub struct Waiting {
     pub identity: bool,
     /// How many items it has: how many times the system may ask when it is finished.
     pub items: usize,
+    /// Whether it already reads under `purlis/…` and waits to be held again by the app under
+    /// its new identity (RN-9), rather than to be copied there.
+    pub hold: bool,
 }
 
 impl Moved {
@@ -441,6 +444,39 @@ pub fn run(local: &Local, seams: &Seams) -> Moved {
     }
     for plane in &planes {
         move_plane(local, seams, &mut moved, plane);
+    }
+    // The app, at its first launch under an identity its keychain items were not held to (RN-9,
+    // `dev.charter.app` → `dev.purlis.app`), holds the items under the purlis prefix again,
+    // with the Keychain's dialogs off: one that would ask waits for the person, as the copy's
+    // do. Before the copy, whose items the app makes fresh and so holds already.
+    if let Some(own) = local.own_app.as_deref()
+        && keychain::held_to(local).as_deref() != Some(own)
+    {
+        let mut done = keychain::done_for(local, own);
+        let waited = moved.waiting.len();
+        let mut whole = true;
+        for plane in &planes {
+            whole &= keychain::hold_again(
+                seams,
+                &mut moved,
+                plane,
+                own,
+                keychain::Asking::Never,
+                None,
+                &mut done,
+            );
+        }
+        let written = if whole && moved.waiting.len() == waited {
+            keychain::record_held_to(local, own)
+        } else {
+            keychain::record_done(local, own, &done)
+        };
+        if let Err(e) = written {
+            moved.failed(format!(
+                "what is held again by {own} could not be recorded ({e}), so the app looks \
+                 again at its next launch"
+            ));
+        }
     }
     // After every move, so the journal is read where it is now and each project's state folder
     // is the one it reads.
@@ -1125,7 +1161,7 @@ pub fn finish(local: &Local, seams: &Seams, waiting: &[Waiting]) -> Moved {
             planes.push(&waits.plane);
         }
     }
-    for plane in planes {
+    for plane in &planes {
         keychain::copy_plane(
             local,
             seams,
@@ -1136,11 +1172,42 @@ pub fn finish(local: &Local, seams: &Seams, waiting: &[Waiting]) -> Moved {
             Some(waiting),
         );
     }
-    // What the person may finish again: each that is still on the old prefix, for whatever
-    // reason (an item the person did not allow is one).
+    // The items that wait to be held again by this app (RN-9), the same way: asked for once
+    // each, and only those.
+    if let Some(own) = local.own_app.as_deref()
+        && waiting.iter().any(|waits| waits.hold)
+    {
+        let mut done = keychain::done_for(local, own);
+        for plane in &planes {
+            keychain::hold_again(
+                seams,
+                &mut moved,
+                plane,
+                own,
+                keychain::Asking::Allowed,
+                Some(waiting),
+                &mut done,
+            );
+        }
+        if let Err(e) = keychain::record_done(local, own, &done) {
+            moved.failed(format!(
+                "what is held again by {own} could not be recorded ({e}); the next launch \
+                 looks again"
+            ));
+        }
+    }
+    // What the person may finish again: each that is still on the old prefix, or not held
+    // again yet, for whatever reason (an item the person did not allow is one). Only what
+    // waited is offered: the press never brings back anything else.
     moved.waiting = waiting
         .iter()
-        .filter(|waits| keychain::still_waits(waits))
+        .filter(|waits| {
+            if waits.hold {
+                keychain::hold_still_waits(local, waits)
+            } else {
+                keychain::still_waits(waits)
+            }
+        })
         .cloned()
         .collect();
     if moved.changed {
@@ -1157,7 +1224,8 @@ pub fn finish(local: &Local, seams: &Seams, waiting: &[Waiting]) -> Moved {
 ///
 /// **The log folder is left where it is** (D-RN5-12): the app has its own log file open in it
 /// by now, and a move under the open file would have the next day's file made under the old
-/// name again. `purlis migrate` and the `rename-local` fix move it, with the app closed.
+/// name again. [`logs_at_launch`] moved it already, before the file was opened; `purlis migrate`
+/// and the `rename-local` fix move it too, with the app closed.
 ///
 /// `plugin` is what the plugin's step installs from (the app's own `charter` and bundled plugin,
 /// or no bundle to only keep the registration pointing at the moved copy), or `None` to leave
@@ -1179,4 +1247,40 @@ pub fn at_launch(
     let moved = run(&local, &Seams::real());
     (moved.changed || !moved.complete || moved.refused.is_some() || !moved.waiting.is_empty())
         .then_some(moved)
+}
+
+/// The app's log folder moved to its purlis identifier's name at the app's launch (RN-9, V93e),
+/// **before the app opens its log file** in it: the first thing `run()` does after its panic
+/// hook, so the file this launch writes is already under the new name. `None` when there is
+/// nothing to move (no old folder, or both there: `purlis migrate` says that one), the last
+/// thing done was an undo, or the environment names the project twice over.
+///
+/// Asked as a terminal asks, with no identifier of its own: it runs before the single-instance
+/// handoff, so a socket or lock under the purlis identifier is a second app's, never this one's.
+/// What was said is for the app's log, once it is open.
+pub fn logs_at_launch() -> Option<Moved> {
+    if crate::envvar::disagreement().is_some() {
+        return None;
+    }
+    logs_at_launch_with(&Local::of_this_machine(&[])?, &Seams::real())
+}
+
+/// [`logs_at_launch`] on `local`, through `seams`.
+pub fn logs_at_launch_with(local: &Local, seams: &Seams) -> Option<Moved> {
+    let logs = local.logs.as_ref()?;
+    if !there(&logs.old) || there(&logs.new) || undone(local) {
+        return None;
+    }
+    let _lock = match quiet(local, seams, &[], "purlis migrate") {
+        Ok(lock) => lock,
+        Err(why) => return Some(Moved::refused(why)),
+    };
+    let mut moved = Moved::new();
+    move_logs(local, seams, &mut moved, logs);
+    if moved.changed {
+        moved.note(format!(
+            "every move is journalled; `{UNDO_COMMAND}` puts them back"
+        ));
+    }
+    Some(moved)
 }

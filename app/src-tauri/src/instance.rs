@@ -29,7 +29,7 @@ pub enum NotHeld {
 /// directory when even that cannot be named.
 ///
 /// Keyed by the app's identifier, as the single-instance name is, so a scenario build
-/// (`dev.charter.app.e2e`) and the operator's charter do not refuse each other; and in the
+/// (`dev.purlis.app.e2e`) and the operator's charter do not refuse each other; and in the
 /// fallback by `user` too, because the temporary directory is every user's.
 pub fn path_for(
     identifier: &str,
@@ -196,14 +196,65 @@ mod tests {
         let fallback = Path::new("/tmp");
 
         assert_eq!(
-            path_for("dev.charter.app", 1000, Some(runtime.path()), fallback),
-            runtime.path().join("dev.charter.app.lock")
+            path_for("dev.purlis.app", 1000, Some(runtime.path()), fallback),
+            runtime.path().join("dev.purlis.app.lock")
         );
         assert_ne!(
-            path_for("dev.charter.app", 1000, Some(runtime.path()), fallback),
-            path_for("dev.charter.app.e2e", 1000, Some(runtime.path()), fallback),
+            path_for("dev.purlis.app", 1000, Some(runtime.path()), fallback),
+            path_for("dev.purlis.app.e2e", 1000, Some(runtime.path()), fallback),
             "a scenario build and the operator's charter would refuse each other"
         );
+    }
+
+    /// The app's identity is the purlis one (RN-9): the identifier its lock, its single-instance
+    /// name (a D-Bus name on Linux, `/tmp/dev_purlis_app_si.sock` on macOS) and its log folder
+    /// are keyed by, the product name its bundle and `.deb` are called by, and the old
+    /// identifier the rename-local busy check still asks about.
+    #[test]
+    fn the_app_is_dev_purlis_app_and_its_scenario_build_beside_it() {
+        let conf = |name: &str| -> serde_json::Value {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/").to_owned() + name;
+            serde_json::from_str(&std::fs::read_to_string(path).expect("beside the crate"))
+                .expect("json")
+        };
+        let release = conf("tauri.conf.json");
+        assert_eq!(release["identifier"], charter_core::names::BUNDLE_ID.write);
+        assert_eq!(release["productName"], charter_core::names::BINARY.write);
+        assert_eq!(
+            conf("tauri.e2e.conf.json")["identifier"],
+            format!("{}.e2e", charter_core::names::BUNDLE_ID.write)
+        );
+        let runtime = tempfile::tempdir().expect("a directory");
+        assert_eq!(
+            path_for(
+                release["identifier"].as_str().unwrap(),
+                1000,
+                Some(runtime.path()),
+                Path::new("/tmp")
+            ),
+            runtime.path().join("dev.purlis.app.lock")
+        );
+        let old = charter_core::renamelocal::busy::Instances::of(
+            &charter_core::renamelocal::busy::Places {
+                linux: true,
+                runtime: Some(runtime.path().to_owned()),
+                ..Default::default()
+            },
+            Some(charter_core::names::BUNDLE_ID.write),
+        );
+        assert_eq!(old.locks, [runtime.path().join("dev.charter.app.lock")]);
+    }
+
+    /// The `.deb` takes the old package's place: `apt` removes `charter` rather than
+    /// refusing two packages that both ship the app's files.
+    #[test]
+    fn the_deb_replaces_the_package_it_was_called_before() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("json");
+        let deb = &conf["bundle"]["linux"]["deb"];
+        let old = charter_core::names::BINARY.reads[0];
+        assert_eq!(deb["replaces"], serde_json::json!([old]));
+        assert_eq!(deb["conflicts"], serde_json::json!([old]));
     }
 
     /// The fallback can be a directory every user shares — the temporary directory, when the
@@ -213,26 +264,26 @@ mod tests {
         let fallback = Path::new("/tmp");
 
         assert_eq!(
-            path_for("dev.charter.app", 1000, None, fallback),
-            fallback.join("dev.charter.app-1000.lock")
+            path_for("dev.purlis.app", 1000, None, fallback),
+            fallback.join("dev.purlis.app-1000.lock")
         );
         assert_eq!(
             path_for(
-                "dev.charter.app",
+                "dev.purlis.app",
                 1000,
                 Some(Path::new("relative")),
                 fallback
             ),
-            fallback.join("dev.charter.app-1000.lock")
+            fallback.join("dev.purlis.app-1000.lock")
         );
         assert_ne!(
-            path_for("dev.charter.app", 1000, None, fallback),
-            path_for("dev.charter.app", 1001, None, fallback),
+            path_for("dev.purlis.app", 1000, None, fallback),
+            path_for("dev.purlis.app", 1001, None, fallback),
             "two users on one machine would refuse each other"
         );
         assert_ne!(
-            path_for("dev.charter.app", 1000, None, fallback),
-            path_for("dev.charter.app.e2e", 1000, None, fallback),
+            path_for("dev.purlis.app", 1000, None, fallback),
+            path_for("dev.purlis.app.e2e", 1000, None, fallback),
         );
     }
 }

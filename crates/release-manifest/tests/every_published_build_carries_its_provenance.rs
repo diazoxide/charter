@@ -168,9 +168,9 @@ fn the_workflow_default_stays_read_only() {
 
 /// What each build job uploads, by the exact name `build` and `sbom` give it.
 const BUILD_ARTIFACTS: [&str; 3] = [
-    "charter-linux-x86_64-${{ needs.plan.outputs.version }}",
-    "charter-macos-arm64-${{ needs.plan.outputs.version }}",
-    "charter-sbom-${{ needs.plan.outputs.version }}",
+    "purlis-linux-x86_64-${{ needs.plan.outputs.version }}",
+    "purlis-macos-arm64-${{ needs.plan.outputs.version }}",
+    "purlis-sbom-${{ needs.plan.outputs.version }}",
 ];
 
 #[test]
@@ -206,7 +206,7 @@ fn provenance_and_publish_take_only_the_build_artifacts_by_their_exact_names() {
         r#"echo "triple=$triple""#,
         r#"echo "slug=$slug""#,
         r#"echo "updater=$updater""#,
-        r#"echo "artifact=charter-$slug-${VERSION}""#,
+        r#"echo "artifact=purlis-$slug-${VERSION}""#,
         r#"} >> "$GITHUB_OUTPUT""#,
     ];
     assert!(

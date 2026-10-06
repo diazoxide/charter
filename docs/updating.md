@@ -217,7 +217,7 @@ quarantined, so a first launch is refused once. What differs is only how it is r
 **The one instruction that works in both cases**, before the first launch:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/charter.app
+xattr -dr com.apple.quarantine /Applications/purlis.app
 ```
 
 Quarantine is the flag Gatekeeper assesses. Remove it and there is nothing left to refuse.

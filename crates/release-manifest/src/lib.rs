@@ -467,7 +467,7 @@ mod tests {
                     Entry {
                         target: (*target).to_owned(),
                         url: format!(
-                            "https://github.com/diazoxide/charter/releases/download/v{version}/{target}"
+                            "https://github.com/purlis/purlis/releases/download/v{version}/{target}"
                         ),
                         signature: self.sign(&artifact, Some(version)),
                         artifact,

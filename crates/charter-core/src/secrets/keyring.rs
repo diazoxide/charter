@@ -774,6 +774,105 @@ pub fn left_unheld_in(store: &dyn Store, ctx: &Ctx, vault: &Vault, key: &str) ->
             .unwrap_or(false)
 }
 
+/// What holding a vault's items again came to ([`hold_again_with`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeldAgain {
+    /// How many keys the vault has.
+    pub keys: usize,
+    /// How many of them are held to this app now (or have no item to hold).
+    pub held: usize,
+    /// How many could not be read or written without the system asking the person: left
+    /// exactly as they were, for the person to finish.
+    pub would_ask: usize,
+    /// Why each of the others was not held, said. Each is left as it was.
+    pub failed: Vec<String>,
+}
+
+/// Every key of `vault` held again by this app (RN-9): what the app does at its first launch
+/// under a new identity, whose code signature the items' access does not name.
+///
+/// **One key at a time, and only after its value was read.** A key is read, then written again
+/// through [`Store::rehold`] (the ruling V90d move: deleted and made again by the app, add-only).
+/// Its index entry changes only for that key and only by what the write answered: held to the
+/// app, or not held, so the next read through the command tries again quietly. A key that
+/// could not be read, or whose write would have asked the person ([`Kind::WouldAsk`]), is left
+/// exactly as it was, and the next key is tried. A newer write of a key since it was read is
+/// never undone.
+///
+/// [`Kind::WouldAsk`]: super::Kind::WouldAsk
+pub fn hold_again_with(
+    store: &dyn Store,
+    ctx: &Ctx,
+    vault: &Vault,
+) -> Result<HeldAgain, VaultError> {
+    let index = load_index(ctx, vault)?;
+    let mut out = HeldAgain {
+        keys: index.keys.len(),
+        ..HeldAgain::default()
+    };
+    let Some(service) = index.service.clone() else {
+        out.held = out.keys;
+        return Ok(out);
+    };
+    if !store.holds() {
+        out.held = out.keys;
+        return Ok(out);
+    }
+    let would_ask = |e: &VaultError| e.kind == super::Kind::WouldAsk;
+    for (key, entry) in &index.keys {
+        let value = match store.get(&service, key) {
+            Ok(Some(value)) => value.into_inner(),
+            Ok(None) => {
+                out.held += 1;
+                continue;
+            }
+            Err(e) if would_ask(&e) => {
+                out.would_ask += 1;
+                continue;
+            }
+            Err(e) => {
+                out.failed.push(format!("'{key}': {}", e.message));
+                continue;
+            }
+        };
+        let still = |index: &Index| {
+            index.service.as_deref() == Some(service.as_str())
+                && index
+                    .keys
+                    .get(key)
+                    .is_some_and(|now| now.updated == entry.updated)
+        };
+        // Written since it was read: that write is the newer one, made by this app's writer.
+        if !load_index(ctx, vault).is_ok_and(|index| still(&index)) {
+            out.held += 1;
+            continue;
+        }
+        let held = match store.rehold(&service, key, &value) {
+            Ok(held) => held == Held::ToTheApp,
+            Err(e) if would_ask(&e) => {
+                out.would_ask += 1;
+                continue;
+            }
+            Err(e) => {
+                out.failed.push(format!("'{key}': {}", e.message));
+                continue;
+            }
+        };
+        if held {
+            out.held += 1;
+        }
+        let mut now = load_index(ctx, vault)?;
+        if still(&now)
+            && let Some(marked) = now.keys.get_mut(key)
+            && marked.held != held
+        {
+            marked.held = held;
+            save_index(ctx, vault, &now)?;
+        }
+    }
+    Ok(out)
+}
+
 /// What `secret set` says when the item it wrote could not be held to charter's app.
 pub fn unheld_sentence(key: &str) -> String {
     format!(

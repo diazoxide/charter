@@ -218,6 +218,27 @@ pub fn on_the_old_base(ctx: &Ctx) -> Vec<(String, BTreeMap<String, String>)> {
         .collect()
 }
 
+/// Every record in this machine's half read under the purlis base, by vault name, with its
+/// items' ids by source: what the app holds again at its first launch under a new identity
+/// (RN-9). Reads no keyring.
+pub fn on_the_purlis_base(ctx: &Ctx) -> Vec<(String, BTreeMap<String, String>)> {
+    let Ok(local) = registry::load_local(ctx) else {
+        return Vec::new();
+    };
+    registry::usable_vaults(&local)
+        .iter()
+        .filter_map(|(name, entry)| {
+            let rec = entry.get("config")?.get(MARK)?.as_object()?;
+            if rec.get("held").and_then(Value::as_str) != Some(IN_KEYRING)
+                || rec.get(BASE).and_then(Value::as_str) != Some(BASE_NOW)
+            {
+                return None;
+            }
+            Some((name.clone(), ids_of(rec)?))
+        })
+        .collect()
+}
+
 /// A record's `ids`, when every one is a string that can end a service.
 fn ids_of(rec: &Map<String, Value>) -> Option<BTreeMap<String, String>> {
     rec.get("ids")?

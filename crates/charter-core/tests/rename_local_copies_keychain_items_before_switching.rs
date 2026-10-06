@@ -1091,6 +1091,7 @@ fn at_launch_a_vault_whose_items_would_ask_waits_on_the_old_prefix_and_keeps_wor
             vault: "ops".to_owned(),
             identity: false,
             items: 2,
+            hold: false,
         }]
     );
     assert!(
