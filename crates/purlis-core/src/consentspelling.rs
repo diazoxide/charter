@@ -113,43 +113,266 @@ struct At<'a> {
     anchors: &'a [&'a Path],
 }
 
-/// The first segment of `text` that runs a consent-gated command `keep` accepts — in the words
-/// as written, or in a substitution a `"…"` holds ([`quoted_substitutions`]), which the word
-/// reader keeps whole inside its quoted word.
-fn gated(text: &str, keep: impl Fn(&Gated) -> bool) -> Option<Gated> {
-    gated_in(text, &keep).or_else(|| {
+/// What a segment runs, as a rule reads it: the program's name and the words after it. The one
+/// reading every spelling backstop shares — this one for the project's consent rules, and
+/// [`crate::rulespelling`] for the operator's own (#1286).
+pub(crate) struct Reading {
+    /// The program's file name, case-folded ([`base_lower`]): a path, another case, a `VAR=`
+    /// prefix and a wrapper ([`shellwrap::split_env`]) all read as the bare name. For the
+    /// command line itself, the name it was called by, `python -m` included ([`name_used`]).
+    pub name: String,
+    /// The words after the program: for the command line, its words as [`charter_words`] reads
+    /// them.
+    pub words: Vec<String>,
+}
+
+/// [`Reading`] of one segment's words, or `None` for a segment that names no program: the
+/// program it finally runs, every wrapper in front of it taken off.
+fn reading_of(toks: &[String]) -> Option<Reading> {
+    let (prog, _env, argv) = shellwrap::split_env(toks);
+    reading_of_argv(&prog, &argv)
+}
+
+/// [`Reading`] of a program and its argv.
+fn reading_of_argv(prog: &str, argv: &[String]) -> Option<Reading> {
+    if let Some(words) = charter_words(prog, argv) {
+        let name = name_used(prog, argv)?;
+        return Some(Reading { name, words });
+    }
+    let name = base_lower(prog);
+    (!name.is_empty()).then(|| Reading {
+        name,
+        words: argv.iter().skip(1).cloned().collect(),
+    })
+}
+
+/// Every [`Reading`] of one segment's words that `wanted` asks for by name: each wrapper the
+/// shell runs on the way ([`shellwrap::Invocation::layers`] — `sudo`, `env`, `timeout`, the
+/// command line's `secret exec`), outermost first, then the program it finally runs, which is
+/// always read. A wrapper's reading is built only when `wanted` names it, so a long chain of
+/// wrappers no rule names costs nothing more than reading it. `true` beside them when more
+/// wrappers stand in front than are read ([`shellwrap::MAX_LAYERS`]).
+fn readings_of(toks: &[String], wanted: &impl Fn(&str) -> bool) -> (Vec<Reading>, bool) {
+    let it = shellwrap::split_env_chdir(toks);
+    let mut out: Vec<Reading> = (0..it.layers.len())
+        .filter(|&k| {
+            it.layer_program(k)
+                .is_some_and(|prog| wanted(&base_lower(prog)))
+        })
+        .filter_map(|k| {
+            let argv = it.layer(k);
+            reading_of_argv(argv.first()?, &argv)
+        })
+        .collect();
+    out.extend(reading_of_argv(&it.prog, &it.argv));
+    (out, it.too_deep)
+}
+
+/// Every [`Reading`] in `text` ([`readings_of`], with `wanted` choosing the wrapper layers):
+/// each segment's, and each substitution's a `"…"` holds ([`quoted_substitutions`]), less any
+/// heredoc body a reader takes as data. `true` beside them when a segment has more wrappers in
+/// front of its program than are read.
+pub(crate) fn every_reading_in(text: &str, wanted: &impl Fn(&str) -> bool) -> (Vec<Reading>, bool) {
+    let mut out: Vec<Reading> = Vec::new();
+    let mut too_deep = false;
+    let mut read = |text: &str| {
+        for toks in shellseg::segment_argv(text) {
+            let (readings, deep) = readings_of(&toks, wanted);
+            out.extend(readings);
+            too_deep |= deep;
+        }
+    };
+    read(text);
+    for inner in quoted_substitutions(text) {
+        read(&lines_it_runs(&inner));
+    }
+    (out, too_deep)
+}
+
+/// What `find` makes of the first segment of `text` it answers for — in the words as written, or
+/// in a substitution a `"…"` holds ([`quoted_substitutions`]).
+fn found<T>(text: &str, find: &impl Fn(&Reading) -> Option<T>) -> Option<T> {
+    found_in(text, find).or_else(|| {
         quoted_substitutions(text)
             .iter()
-            .find_map(|inner| gated_in(&lines_it_runs(inner), &keep))
+            .find_map(|inner| found_in(&lines_it_runs(inner), find))
     })
+}
+
+/// [`found`] over the words as written.
+fn found_in<T>(text: &str, find: &impl Fn(&Reading) -> Option<T>) -> Option<T> {
+    shellseg::segment_argv(text)
+        .iter()
+        .find_map(|toks| find(&reading_of(toks)?))
 }
 
 /// The text of each `$( … )` and backtick inside double quotes in `text`: the shell runs it,
 /// though the word it sits in is quoted ([`shellseg::quote_map`] opens a command context there).
 fn quoted_substitutions(text: &str) -> Vec<String> {
-    let quoted = shellseg::quote_map(text);
     let chars: Vec<char> = text.chars().collect();
-    let quoted_at = |i: usize| quoted.get(i).copied().unwrap_or(true);
+    let found = closes(&chars, &body_chars(text));
+    // Read lazily: only a substitution left open falls back to it.
+    let mut quoted: Option<Vec<bool>> = None;
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        let body = match chars[i] {
-            '$' if quoted_at(i) && chars.get(i + 1) == Some(&'(') && !quoted_at(i + 2) => {
-                Some(i + 2)
-            }
-            '`' if quoted_at(i) && !quoted_at(i + 1) => Some(i + 1),
-            _ => None,
-        };
-        let Some(from) = body else {
-            i += 1;
+    let mut taken_to = 0usize;
+    for &from in &found.quoted {
+        if from < taken_to {
+            continue; // inside a body already taken
+        }
+        // Balanced, the body runs to its close. Never closed — which a shell refuses to run at
+        // all — it runs only to where the quote map is back in the quoted context, so a crafted
+        // line of unclosed substitutions is not read again from each one to its end.
+        let to = found.closes.get(&from).copied().unwrap_or_else(|| {
+            let quoted = quoted.get_or_insert_with(|| shellseg::quote_map(text));
+            (from..chars.len())
+                .find(|&k| quoted.get(k).copied().unwrap_or(true))
+                .unwrap_or(chars.len())
+                .saturating_sub(1)
+                .max(from)
+        });
+        out.push(chars[from..to].iter().collect());
+        taken_to = to + 1;
+    }
+    out
+}
+
+/// What [`closes`] finds: where each substitution closes, keyed by where its body starts, and
+/// the body starts of the ones that open inside double quotes, in order.
+#[derive(Default)]
+struct Closes {
+    closes: std::collections::HashMap<usize, usize>,
+    quoted: Vec<usize>,
+}
+
+/// Which characters of `text` stand on a heredoc body's line or its terminator's
+/// ([`heredoc::heredoc_layout`], the walk every guard reads bodies with): text, not brackets or
+/// quotes, to the shells that end the body only at its delimiter.
+fn body_chars(text: &str) -> Vec<bool> {
+    if !text.contains("<<") {
+        return Vec::new();
+    }
+    let layout = heredoc::heredoc_layout(text);
+    // Read only where the layout is the text, line for line; otherwise no body is skipped.
+    if !layout.iter().map(|l| l.text.as_str()).eq(text.split('\n')) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (k, line) in layout.iter().enumerate() {
+        if k > 0 {
+            out.push(false); // the newline
+        }
+        out.extend(std::iter::repeat_n(line.body, line.text.chars().count()));
+    }
+    out
+}
+
+/// Where each command substitution in `chars` closes, keyed by where its body starts: the `)`
+/// that balances a `$(`, or the backtick that ends one, with quotes inside a body read as
+/// quotes — so `'rm'` or `"a)b"` inside it does not end it early — and a heredoc body
+/// (`in_body`) and a `${ … }` stepped over whole, so a quote or a `)` in either does not either.
+/// One pass over the text, a stack of the contexts it is in, so the cost grows with the text and
+/// never with how many substitutions are left open. One left open has no entry.
+fn closes(chars: &[char], in_body: &[bool]) -> Closes {
+    /// A context the pass is inside.
+    enum Ctx {
+        Single,
+        Double,
+        /// A `${ … }`.
+        Brace,
+        /// A `$(` whose body starts here.
+        Sub(usize),
+        /// A plain `(` inside a command context.
+        Group,
+        /// A backtick whose body starts here.
+        Tick(usize),
+    }
+    let mut out = Closes::default();
+    let mut stack: Vec<Ctx> = Vec::new();
+    let mut k = 0;
+    while k < chars.len() {
+        if in_body.get(k).copied().unwrap_or(false) {
+            k += 1;
             continue;
-        };
-        // Back in the quoted context one past the closing `)` or backtick.
-        let to = (from..chars.len())
-            .find(|&k| quoted_at(k))
-            .unwrap_or(chars.len());
-        out.push(chars[from..to.saturating_sub(1).max(from)].iter().collect());
-        i = to.max(i + 1);
+        }
+        let c = chars[k];
+        let next = chars.get(k + 1).copied();
+        match stack.last() {
+            Some(Ctx::Single) => {
+                if c == '\'' {
+                    stack.pop();
+                }
+            }
+            Some(Ctx::Tick(from)) => match c {
+                '\\' => k += 1,
+                '`' => {
+                    out.closes.insert(*from, k);
+                    stack.pop();
+                }
+                _ => {}
+            },
+            Some(Ctx::Double) => match c {
+                '\\' => k += 1,
+                '"' => {
+                    stack.pop();
+                }
+                '$' if next == Some('(') => {
+                    stack.push(Ctx::Sub(k + 2));
+                    out.quoted.push(k + 2);
+                    k += 1;
+                }
+                '$' if next == Some('{') => {
+                    stack.push(Ctx::Brace);
+                    k += 1;
+                }
+                '`' => {
+                    stack.push(Ctx::Tick(k + 1));
+                    out.quoted.push(k + 1);
+                }
+                _ => {}
+            },
+            Some(Ctx::Brace) => match c {
+                '\\' => k += 1,
+                '}' => {
+                    stack.pop();
+                }
+                '\'' => stack.push(Ctx::Single),
+                '"' => stack.push(Ctx::Double),
+                '`' => stack.push(Ctx::Tick(k + 1)),
+                '$' if next == Some('(') => {
+                    stack.push(Ctx::Sub(k + 2));
+                    k += 1;
+                }
+                '$' if next == Some('{') => {
+                    stack.push(Ctx::Brace);
+                    k += 1;
+                }
+                _ => {}
+            },
+            // A command context: the top level, a substitution's body or a group in one.
+            _ => match c {
+                '\\' => k += 1,
+                '\'' => stack.push(Ctx::Single),
+                '"' => stack.push(Ctx::Double),
+                '`' => stack.push(Ctx::Tick(k + 1)),
+                '$' if next == Some('(') => {
+                    stack.push(Ctx::Sub(k + 2));
+                    k += 1;
+                }
+                '$' if next == Some('{') => {
+                    stack.push(Ctx::Brace);
+                    k += 1;
+                }
+                '(' if !stack.is_empty() => stack.push(Ctx::Group),
+                ')' => {
+                    // A group's `)`, or one at the top level that closes nothing, records none.
+                    if let Some(Ctx::Sub(from)) = stack.pop() {
+                        out.closes.insert(from, k);
+                    }
+                }
+                _ => {}
+            },
+        }
+        k += 1;
     }
     out
 }
@@ -166,22 +389,25 @@ fn lines_it_runs(text: &str) -> String {
 
 /// [`gated`] over the words as written.
 fn gated_in(text: &str, keep: &impl Fn(&Gated) -> bool) -> Option<Gated> {
-    shellseg::segment_argv(text).iter().find_map(|toks| {
-        let (prog, _env, argv) = shellwrap::split_env(toks);
-        let words = charter_words(&prog, &argv)?;
-        let name = name_used(&prog, &argv)?;
-        let as_the_rule_reads = format!("{RULES_NAME} {}", words.join(" "));
-        let pattern = CONSENT_PATTERNS
-            .iter()
-            .copied()
-            .find(|pattern| matches(&as_the_rule_reads, pattern))?;
-        let it = Gated {
-            name,
-            words,
-            pattern,
-        };
-        keep(&it).then_some(it)
-    })
+    found_in(text, &|it: &Reading| consent_gated(it, keep))
+}
+
+/// The consent-gated command `it` runs under the command line's name, if `keep` accepts it.
+fn consent_gated(it: &Reading, keep: &impl Fn(&Gated) -> bool) -> Option<Gated> {
+    if !cliname::is_installed(&it.name) {
+        return None;
+    }
+    let as_the_rule_reads = format!("{RULES_NAME} {}", it.words.join(" "));
+    let pattern = CONSENT_PATTERNS
+        .iter()
+        .copied()
+        .find(|pattern| matches(&as_the_rule_reads, pattern))?;
+    let it = Gated {
+        name: it.name.clone(),
+        words: it.words.clone(),
+        pattern,
+    };
+    keep(&it).then_some(it)
 }
 
 /// What a command a shell runs from a string or a heredoc body is told, under either name.
@@ -200,6 +426,14 @@ fn shell_string_refusal(it: &Gated) -> String {
 /// One level into each string a segment of `text` hands a shell: a consent-gated command there
 /// under either name.
 fn in_a_shell_string(text: &str) -> Option<String> {
+    let find = |it: &Reading| consent_gated(it, &Gated::not_a7s);
+    in_a_shell_string_by(text, &|text: &str| found(text, &find)).map(|it| shell_string_refusal(&it))
+}
+
+/// What `look` finds one level into a string a segment of `text` hands a shell to run
+/// (`sh -c '…'`, `eval '…'`, [`shellwrap::shell_scripts`]): the host's rule reads only the
+/// outer command.
+pub(crate) fn in_a_shell_string_by<T>(text: &str, look: &impl Fn(&str) -> Option<T>) -> Option<T> {
     let toks = shellseg::split_punctuation(shellseg::lex(text).ok()?);
     heredoc::segments_of(&toks)
         .iter()
@@ -207,29 +441,51 @@ fn in_a_shell_string(text: &str) -> Option<String> {
             let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
             shellwrap::shell_scripts(&words)
                 .iter()
-                .find_map(|inner| gated(&as_the_shell_reads(inner), Gated::not_a7s))
+                .find_map(|inner| look(&as_the_shell_reads(inner)))
         })
-        .map(|it| shell_string_refusal(&it))
 }
 
 /// A consent-gated command under either name on a line a heredoc feeds a shell
 /// ([`leakguard::lines_a_command_could_run`], the plan the leak guard and A7 share): the rule
 /// saw only the `bash` that opened it.
 fn in_a_shells_heredoc(cmd: &str) -> Option<String> {
-    leakguard::lines_a_command_could_run(cmd)
-        .iter()
-        .filter(|(_, in_a_shells_body)| *in_a_shells_body)
-        .find_map(|(row, _)| gated(&as_the_shell_reads(row), Gated::not_a7s))
+    let find = |it: &Reading| consent_gated(it, &Gated::not_a7s);
+    in_a_shells_heredoc_by(cmd, &|text: &str| found(text, &find))
         .map(|it| shell_string_refusal(&it))
 }
 
+/// What `look` finds on a line a heredoc feeds a shell (`bash <<'EOF'`, `cat <<EOF | sh`).
+pub(crate) fn in_a_shells_heredoc_by<T>(cmd: &str, look: &impl Fn(&str) -> Option<T>) -> Option<T> {
+    leakguard::lines_a_command_could_run(cmd)
+        .iter()
+        .filter(|(_, in_a_shells_body)| *in_a_shells_body)
+        .find_map(|(row, _)| look(&as_the_shell_reads(row)))
+}
+
 /// A segment of `text` that runs a consent-gated command under the rules' own name, whose
-/// source a rule does not match. Text the lexer cannot read is judged whole, and refused if it
-/// holds such a command at all.
+/// source a rule does not match.
 fn not_as_the_rule_spells_it(text: &str) -> Option<String> {
-    let rules_name = |it: &Gated| !it.under_a_new_name() && it.not_a7s();
+    let find =
+        |it: &Reading| consent_gated(it, &|it: &Gated| !it.under_a_new_name() && it.not_a7s());
+    let asked = |source: &str, _: &Gated| {
+        CONSENT_PATTERNS
+            .iter()
+            .any(|pattern| pypath::fnmatch(source, pattern))
+    };
+    not_as_written_by(text, &|text: &str| found(text, &find), asked)
+        .map(|(it, _)| spelling_refusal(&it))
+}
+
+/// What `look` finds in the first segment of `text` whose source as written `asked` says no
+/// rule of the host's matches, with that source. Text the lexer cannot read, or a segment it
+/// measured no offsets for, is judged on its words and never as asked: it fails closed.
+pub(crate) fn not_as_written_by<T>(
+    text: &str,
+    look: &impl Fn(&str) -> Option<T>,
+    asked: impl Fn(&str, &T) -> bool,
+) -> Option<(T, String)> {
     let Ok(toks) = shellseg::lex(text) else {
-        return gated(text, rules_name).map(|it| spelling_refusal(&it));
+        return look(text).map(|it| (it, String::new()));
     };
     let toks = shellseg::split_punctuation(toks);
     let chars: Vec<char> = text.chars().collect();
@@ -238,15 +494,11 @@ fn not_as_the_rule_spells_it(text: &str) -> Option<String> {
         .find_map(|(seg, _before)| {
             let (first, last) = (seg.first()?, seg.last()?);
             let Some(source) = source_of(&chars, first.start, last.end) else {
-                // No offsets to read the spelling off: judged on the words, and never as asked.
                 let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
-                return gated(&words.join(" "), rules_name).map(|it| spelling_refusal(&it));
+                return look(&words.join(" ")).map(|it| (it, String::new()));
             };
-            let it = gated(&source, rules_name)?;
-            let asked = CONSENT_PATTERNS
-                .iter()
-                .any(|pattern| pypath::fnmatch(&source, pattern));
-            (!asked).then(|| spelling_refusal(&it))
+            let it = look(&source)?;
+            (!asked(&source, &it)).then_some((it, source))
         })
 }
 
@@ -359,7 +611,7 @@ fn name_used(prog: &str, argv: &[String]) -> Option<String> {
 
 /// Whether `line` is one the host's glob `pattern` asks about. A trailing ` *` also matches
 /// the bare command, the wider reading, because asking once too often is the safe side.
-fn matches(line: &str, pattern: &str) -> bool {
+pub(crate) fn matches(line: &str, pattern: &str) -> bool {
     pypath::fnmatch(line, pattern)
         || pattern
             .strip_suffix(" *")

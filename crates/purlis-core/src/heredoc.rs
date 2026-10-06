@@ -1550,19 +1550,37 @@ enum Enclosed {
     ClosedOnItsLine,
     /// In one still open when the header's line ends: the characters that end the kinds of
     /// substitution it is in, `)` for `$( … )` and the process substitutions and a backtick for a
-    /// backtick's.
-    SpansLines(&'static [char]),
+    /// backtick's; and whether it is one `"$( … )"` alone, nothing else open around it but the
+    /// double quotes ([`Enclosed::quoted_alone`]).
+    SpansLines(&'static [char], bool),
 }
 
 impl Enclosed {
+    /// Whether a body in this substitution is text to every shell although it holds a `)`.
+    ///
+    /// GNU bash 3.2.57 ends a `$( … )` at a `)` in the body, but where that substitution is a
+    /// `"$( … )"` with nothing else open around it, what follows the `)` is still inside the
+    /// double quotes, and stays text up to the quote that ends them. So a body with no `"`, no
+    /// backtick and no `$(` — nothing that would end the quotes or run a command inside them —
+    /// is text to GNU bash 3.2.57 as it is to GNU bash 5 and zsh 5.9: a commit or pull request
+    /// message in `"$(cat <<'EOF' … EOF\n)"` that says `1) Build first` (#1286). Measured with
+    /// a `touch` marker on the line after such a `)` against /bin/bash 3.2.57 and zsh 5.9: never
+    /// run; and run by GNU bash 3.2.57 the moment the body holds a `"`, a backtick or a `$(`
+    /// after the `)`, or the substitution is not in double quotes.
+    fn quoted_alone(body: &[&str]) -> bool {
+        !body
+            .iter()
+            .any(|l| l.contains(['"', '`']) || l.contains("$("))
+    }
+
     /// The answer that reads more of the two: a body either reading runs is run.
     fn either(self, other: Self) -> Self {
         use Enclosed::*;
         match (self, other) {
             (ClosedOnItsLine, _) | (_, ClosedOnItsLine) => ClosedOnItsLine,
             (No, x) | (x, No) => x,
-            (SpansLines(a), SpansLines(b)) if a == b => SpansLines(a),
-            (SpansLines(_), SpansLines(_)) => SpansLines(&[')', '`']),
+            (SpansLines(a, qa), SpansLines(b, qb)) if a == b => SpansLines(a, qa && qb),
+            (SpansLines(..), SpansLines(..)) => SpansLines(&[')', '`'], false),
         }
     }
 }
@@ -1623,21 +1641,31 @@ impl SubstitutionContext {
         // The substitutions open at each asked offset, and where each one closed. An offset the
         // walk steps over takes what is open at the next character it reads.
         let mut open_at: Vec<Vec<(Frame, usize)>> = Vec::with_capacity(at.len());
+        // Whether, at each asked offset, the only substitution open is one `$(` directly inside
+        // double quotes.
+        let mut quoted_alone: Vec<bool> = Vec::with_capacity(at.len());
         let mut closed_at: HashMap<usize, usize> = HashMap::new();
-        let note = |i: usize, stack: &[(Frame, usize)], open_at: &mut Vec<Vec<(Frame, usize)>>| {
+        let note = |i: usize,
+                    stack: &[(Frame, usize)],
+                    open_at: &mut Vec<Vec<(Frame, usize)>>,
+                    quoted_alone: &mut Vec<bool>| {
             while open_at.len() < at.len() && at[open_at.len()] <= i {
-                open_at.push(
-                    stack
-                        .iter()
-                        .filter(|(f, _)| matches!(f, Frame::Sub | Frame::Tick))
-                        .copied()
-                        .collect(),
-                );
+                let subs: Vec<(Frame, usize)> = stack
+                    .iter()
+                    .filter(|(f, _)| matches!(f, Frame::Sub | Frame::Tick))
+                    .copied()
+                    .collect();
+                let alone = subs.len() == 1
+                    && stack.len() >= 2
+                    && stack[stack.len() - 1].0 == Frame::Sub
+                    && stack[stack.len() - 2].0 == Frame::DoubleQuoted;
+                open_at.push(subs);
+                quoted_alone.push(alone);
             }
         };
         let mut i = 0usize;
         while i < n {
-            note(i, &self.stack, &mut open_at);
+            note(i, &self.stack, &mut open_at, &mut quoted_alone);
             let c = chars[i];
             let in_dq = self
                 .stack
@@ -1703,10 +1731,11 @@ impl SubstitutionContext {
             }
             i += 1;
         }
-        note(usize::MAX, &self.stack, &mut open_at);
+        note(usize::MAX, &self.stack, &mut open_at, &mut quoted_alone);
         at.iter()
             .zip(open_at)
-            .map(|(&a, around)| {
+            .zip(quoted_alone)
+            .map(|((&a, around), alone)| {
                 // Closed on the header's own line: a newline kept in the folded line for an
                 // open quote puts the close on a later line, where the body is inside it.
                 let closes_here = around.iter().any(|(_, id)| {
@@ -1718,9 +1747,9 @@ impl SubstitutionContext {
                 match (closes_here, inside(Frame::Sub), inside(Frame::Tick)) {
                     (true, _, _) => Enclosed::ClosedOnItsLine,
                     (false, false, false) => Enclosed::No,
-                    (false, true, false) => Enclosed::SpansLines(&[')']),
-                    (false, false, true) => Enclosed::SpansLines(&['`']),
-                    (false, true, true) => Enclosed::SpansLines(&[')', '`']),
+                    (false, true, false) => Enclosed::SpansLines(&[')'], alone),
+                    (false, false, true) => Enclosed::SpansLines(&['`'], false),
+                    (false, true, true) => Enclosed::SpansLines(&[')', '`'], false),
                 }
             })
             .collect()
@@ -1777,7 +1806,9 @@ pub struct LayoutLine {
 ///   after it if the delimiter was misread;
 /// - a body the shells read differently is not dropped either, and is read as lines a shell
 ///   runs: one opened in a substitution closed on the header's line, or in one that spans lines
-///   when the body holds a `)` or a backtick ([`SubstitutionContext`]), one whose delimiter the
+///   when the body holds a `)` or a backtick ([`SubstitutionContext`]) — unless it is a
+///   `"$( … )"` alone whose body stays inside its quotes ([`Enclosed::quoted_alone`]) — one whose
+///   delimiter the
 ///   shells read differently ([`Header::shells_disagree`]), and one opened by a `<<` that may be
 ///   a shift ([`Opener::maybe_shift`]);
 /// - nor is any body after one of those: where one shell runs the lines another reads as a
@@ -1898,7 +1929,10 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
                 let differ = match within {
                     Enclosed::No => false,
                     Enclosed::ClosedOnItsLine => true,
-                    Enclosed::SpansLines(closers) => body_ends_it(closers),
+                    Enclosed::SpansLines(closers, quoted) => {
+                        body_ends_it(closers)
+                            && !(quoted && Enclosed::quoted_alone(&lines[i..(i + len).min(n)]))
+                    }
                 };
                 if m.maybe_shift || h.shells_disagree || differ {
                     read_both_ways.insert(idx);

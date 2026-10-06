@@ -123,12 +123,9 @@ fn claude_decision(root: &Path, pattern: &str) -> Option<String> {
 
 /// [`claude_decision`] of the settings file at `path`.
 fn claude_decision_in(path: &Path, pattern: &str) -> Option<String> {
-    if !path.exists() {
-        return None;
-    }
     let rule = format!("Bash({pattern})");
-    let map = read(path).map?;
-    let perms = map.get("permissions")?.as_object()?;
+    let doc = pyjson::loads_strict(&read_for_the_guard(path)?)?;
+    let perms = doc.get("permissions")?.as_object()?;
     ["deny", "ask"]
         .into_iter()
         .find(|bucket| {
@@ -142,7 +139,7 @@ fn claude_decision_in(path: &Path, pattern: &str) -> Option<String> {
 
 /// What opencode's `permission.bash` decides for `pattern`, or `None`.
 fn opencode_decision(root: &Path, pattern: &str) -> Option<String> {
-    let raw = std::fs::read_to_string(root.join(OPENCODE)).ok()?;
+    let raw = read_for_the_guard(&root.join(OPENCODE))?;
     let doc = pyjson::loads_strict(&raw)?;
     doc.get("permission")?
         .get("bash")?
@@ -209,10 +206,42 @@ pub fn twin_in_force(plane: &Path, anchors: &[&Path], pattern: &str, name: &str)
     )
 }
 
+/// The most a settings file the guard reads on a tool call may hold: far past any real one.
+const GUARD_READ_MAX: u64 = 1024 * 1024;
+
+/// The text of a host settings file the guard reads on a tool call, or `None` for one that is
+/// missing, not a plain file (a FIFO would hang the hook), larger than [`GUARD_READ_MAX`] or not
+/// UTF-8 (#1286). A link is followed, as the host follows it — an operator who keeps
+/// `.claude/settings.json` in a dotfiles tool has one there, and its rules are in force — and
+/// what it names must be a plain file too. Opened `O_NONBLOCK`, so a FIFO cannot hold the open,
+/// and its kind and size are asked of the open file, so nothing swapped in after a check is
+/// read instead.
+pub(crate) fn read_for_the_guard(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let open = options.open(path).ok()?;
+    let meta = open.metadata().ok()?;
+    if !meta.is_file() || meta.len() > GUARD_READ_MAX {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    open.take(GUARD_READ_MAX + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > GUARD_READ_MAX {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
 /// The settings file of the layer a call in `cwd` runs under: the nearest
 /// `.claude/settings.json` at or above `cwd` and below the project root. `Some(None)` when there
 /// is none (the root's own applies), `None` when `cwd` cannot be placed inside the project.
-fn layer_settings(plane: &Path, cwd: &Path) -> Option<Option<std::path::PathBuf>> {
+pub(crate) fn layer_settings(plane: &Path, cwd: &Path) -> Option<Option<std::path::PathBuf>> {
     if cwd.as_os_str().is_empty() {
         return Some(None);
     }
@@ -222,7 +251,10 @@ fn layer_settings(plane: &Path, cwd: &Path) -> Option<Option<std::path::PathBuf>
     let mut dir = plane.join(below);
     while dir != plane {
         let file = dir.join(SETTINGS);
-        if file.exists() {
+        // Asked of the entry itself, so asking cannot block: a link there is the layer, read
+        // through as the host reads it, and a FIFO is the layer [`read_for_the_guard`] refuses
+        // to read, which fails closed.
+        if std::fs::symlink_metadata(&file).is_ok() {
             return Some(Some(file));
         }
         if !dir.pop() {
@@ -1106,6 +1138,50 @@ fn dispatches_guard(install_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A settings file the guard reads on every tool call is read only when it is, or a link
+    /// names, a plain file of a sane size: a FIFO would hang the hook and a huge file would
+    /// stall it (#1286).
+    #[cfg(unix)]
+    #[test]
+    fn the_guard_reads_a_plain_settings_file_through_a_link_and_nothing_else() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let plain = dir.path().join("plain.json");
+        std::fs::write(&plain, "{}").expect("a file");
+        assert_eq!(read_for_the_guard(&plain).as_deref(), Some("{}"));
+
+        let fifo = dir.path().join("fifo.json");
+        let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(&fifo))
+            .expect("mkfifo runs");
+        assert!(made.success());
+        assert_eq!(read_for_the_guard(&fifo), None, "a FIFO is not read");
+
+        let big = dir.path().join("big.json");
+        let file = std::fs::File::create(&big).expect("a file");
+        file.set_len(GUARD_READ_MAX + 1).expect("sized");
+        assert_eq!(
+            read_for_the_guard(&big),
+            None,
+            "an oversized file is not read"
+        );
+
+        // A link is followed, as the host follows it; what it names must be a plain file too.
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&plain, &link).expect("a link");
+        assert_eq!(read_for_the_guard(&link).as_deref(), Some("{}"));
+        let to_fifo = dir.path().join("to-fifo.json");
+        std::os::unix::fs::symlink(&fifo, &to_fifo).expect("a link");
+        assert_eq!(
+            read_for_the_guard(&to_fifo),
+            None,
+            "a link to a FIFO is not read"
+        );
+        let dangling = dir.path().join("dangling.json");
+        std::os::unix::fs::symlink(dir.path().join("gone"), &dangling).expect("a link");
+        assert_eq!(read_for_the_guard(&dangling), None);
+
+        assert_eq!(read_for_the_guard(&dir.path().join("missing.json")), None);
+    }
 
     /// Verified against CPython 3.14: `hooks._HOOK_CMD_RE.findall(command)`.
     #[test]

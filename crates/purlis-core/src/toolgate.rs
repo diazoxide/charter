@@ -57,6 +57,7 @@ use crate::forge::Forge;
 use crate::handoffguard::{self, Caller};
 use crate::{
     commitguard, consentspelling, credguard, floorguard, leakguard, planeroot, proseguard, pyjson,
+    rulespelling,
 };
 
 /// What to do when a guard is WRONG about your case (charter#370) — `_OVERRIDE_NOTE`.
@@ -272,6 +273,18 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
     {
         return Some(Verdict::new(consentspelling::REASON, None, why));
     }
+    // A7c: the same backstop for the operator's own ask and deny rules (#1286): a program a rule
+    // names, spelt so the host's glob would not see it. GATED, as A7b is: the rules are a
+    // plane's settings.
+    if let Some(plane) = plane
+        && let Some(why) = rulespelling::refusal(
+            cmd,
+            Path::new(plane.root),
+            &[Path::new(plane.session_dir), Path::new(call.cwd)],
+        )
+    {
+        return Some(Verdict::new(rulespelling::REASON, None, why));
+    }
     // A8: a commit that would skip the hooks a chat's git runs charter's scan in (SQ-16, ADR
     // 0074). UNGATED: a chat commits in repositories outside any plane. charter's own, after
     // every arm the Python had, so no recorded answer moves.
@@ -388,6 +401,25 @@ mod tests {
             );
         }
         assert_eq!(verdict_of("charter report bug --yes x", &fix, true), None);
+    }
+
+    /// A7c stands behind the operator's own rules, in a plane only.
+    #[test]
+    fn an_operators_rule_spelt_around_is_refused_in_a_plane() {
+        let fix = Fixture::new();
+        std::fs::create_dir_all(fix.dir.path().join(".claude")).expect(".claude");
+        std::fs::write(
+            fix.dir.path().join(".claude/settings.json"),
+            r#"{"permissions": {"ask": ["Bash(terraform apply *)"]}}"#,
+        )
+        .expect("settings");
+        let cmd = "/usr/local/bin/terraform apply";
+        assert_eq!(verdict_of(cmd, &fix, false), None, "A7c is gated");
+        assert_eq!(
+            verdict_of(cmd, &fix, true).map(|v| v.reason),
+            Some(rulespelling::REASON.to_string())
+        );
+        assert_eq!(verdict_of("terraform apply", &fix, true), None);
     }
 
     #[test]
