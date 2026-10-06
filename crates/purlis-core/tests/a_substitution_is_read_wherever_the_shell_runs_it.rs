@@ -63,14 +63,29 @@ fn nested(inner: &str, depth: usize) -> String {
     (0..depth).fold(inner.to_string(), |s, _| format!("echo \"$({s})\""))
 }
 
+/// A shell the corpus knows, by name and major version: the ones whose readings of the grammar
+/// corners differ.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Shell {
+    /// macOS's `/bin/bash`.
+    Bash3,
+    /// Linux's `bash`.
+    Bash5,
+    Zsh,
+}
+
+use Shell::{Bash3, Bash5, Zsh};
+
 /// What the shells do with a shape.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Shells {
     /// Every shell prints the marker.
     Read,
-    /// Some shells print it and others do not (bash 3.2 and bash 5 and zsh differ on a few
-    /// grammar corners): at least one installed shell must, and the guard refuses.
-    SomeRead,
+    /// Only these shells print it (bash 3.2, bash 5 and zsh differ on a few grammar corners).
+    /// One shell somewhere reads it, so the guard refuses it on every machine. A listed shell
+    /// installed here must print the marker and a known one not listed must not; a shell the
+    /// corpus does not know is not asked (D-T56-2).
+    SomeRead(&'static [Shell]),
     /// No shell prints it: a mention, which the guard lets through.
     Mention,
 }
@@ -99,7 +114,7 @@ fn shapes() -> Vec<(String, Shells)> {
         ("echo \"${unset_1412:-'`cat {V}`'}\"", Read),
         (
             "echo \"${unset_1412-'}$(cat {V})${unset_1412-'}\"",
-            SomeRead,
+            SomeRead(&[Zsh]),
         ),
         // ANSI-C quoting, whose escaped quote does not end it.
         ("echo $'\\'' \"$(cat {V})\" $'\\''", Read),
@@ -108,12 +123,27 @@ fn shapes() -> Vec<(String, Shells)> {
         ("echo \"$(echo hi # )\ncat {V}\n)\"", Read),
         ("echo \"$(: # )\n{R})\"", Read),
         // A heredoc body inside a substitution, holding a `)`.
-        ("echo \"$(cat <<'EOF'\n)\nEOF\ncat {V})\"", SomeRead),
-        ("echo \"$(cat <<EOF\n)\nEOF\ncat {V})\"", SomeRead),
-        ("echo \"$(cat <<'EOF'\n)\nEOF\n{R})\"", SomeRead),
+        (
+            "echo \"$(cat <<'EOF'\n)\nEOF\ncat {V})\"",
+            SomeRead(&[Bash5, Zsh]),
+        ),
+        (
+            "echo \"$(cat <<EOF\n)\nEOF\ncat {V})\"",
+            SomeRead(&[Bash5, Zsh]),
+        ),
+        (
+            "echo \"$(cat <<'EOF'\n)\nEOF\n{R})\"",
+            SomeRead(&[Bash5, Zsh]),
+        ),
         // A `case` pattern's `)`.
-        ("echo \"$(case x in x) cat {V};; esac)\"", SomeRead),
-        ("echo $(case x in x) cat {V};; esac)", SomeRead),
+        (
+            "echo \"$(case x in x) cat {V};; esac)\"",
+            SomeRead(&[Bash5, Zsh]),
+        ),
+        (
+            "echo $(case x in x) cat {V};; esac)",
+            SomeRead(&[Bash5, Zsh]),
+        ),
         // Backticks around a quoted substitution, and the other way about.
         ("echo `echo \"$(cat {V})\"`", Read),
         ("echo \"$(echo `cat {V}`)\"", Read),
@@ -130,9 +160,12 @@ fn shapes() -> Vec<(String, Shells)> {
         ("echo \"$(echo $'it\\'s'; grep -rn MARKER .)\"", Read),
         (
             "echo \"$(cd .purlis; cat <<EOF\nit's\nEOF\ncat vaults/f.json)\"",
-            SomeRead,
+            SomeRead(&[Bash5, Zsh]),
         ),
-        ("echo \"$(echo `echo '`; grep -rn MARKER .)\"", SomeRead),
+        (
+            "echo \"$(echo `echo '`; grep -rn MARKER .)\"",
+            SomeRead(&[Bash3, Bash5]),
+        ),
         // Past the directories read: refused as too big to check.
         (
             "cd /usr; cd /bin; cd /usr; cd /bin; cd /usr; cd /bin; cd /usr; cd /bin; cd /usr; \
@@ -151,12 +184,15 @@ fn shapes() -> Vec<(String, Shells)> {
         ("cat <<EOF\n'$(cat {V})'\nEOF", Read),
         // A line continuation inside what only becomes a substitution, a `case` or a heredoc
         // once the shell takes the backslash-newline out.
-        ("echo \"$\\\n(cat {V})\"", SomeRead),
+        ("echo \"$\\\n(cat {V})\"", SomeRead(&[Bash3, Bash5])),
         ("echo $\\\n(cat {V})", Read),
-        ("echo \"$\\\n({R})\"", SomeRead),
+        ("echo \"$\\\n({R})\"", SomeRead(&[Bash3, Bash5])),
         ("echo \"`ca\\\nt {V}`\"", Read),
-        ("echo \"$(ca\\\nse x in x) cat {V};; esac)\"", SomeRead),
-        ("cat <\\\n<EOF\n$(cat {V})\nEOF", SomeRead),
+        (
+            "echo \"$(ca\\\nse x in x) cat {V};; esac)\"",
+            SomeRead(&[Bash5, Zsh]),
+        ),
+        ("cat <\\\n<EOF\n$(cat {V})\nEOF", SomeRead(&[Bash3, Bash5])),
         ("echo \"$\\\n{unset_1412:-$(cat {V})}\"", Read),
         // A relocation into the vault folder and back out again, spelt so its directories
         // differ only before they are normalised.
@@ -240,6 +276,23 @@ fn shells() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Which [`Shell`] `shell` is, or `None` for one the corpus does not know (bash 4, say).
+fn kind(shell: &Path) -> Option<Shell> {
+    let mut command = Command::new(shell);
+    command
+        .arg("-c")
+        .arg("echo \"${BASH_VERSINFO[0]}:${ZSH_VERSION}\"")
+        .env_clear();
+    let out = purlis_core::forklock::output(&mut command).ok()?;
+    let said = String::from_utf8_lossy(&out.stdout);
+    match said.trim().split_once(':')? {
+        ("3", "") => Some(Bash3),
+        ("5", "") => Some(Bash5),
+        ("", zsh) if !zsh.is_empty() => Some(Zsh),
+        _ => None,
+    }
+}
+
 #[test]
 fn every_shape_a_shell_reads_a_secret_with_is_refused_and_no_other() {
     purlis_core::unsteered!();
@@ -247,6 +300,7 @@ fn every_shape_a_shell_reads_a_secret_with_is_refused_and_no_other() {
     let state = f.root.join(".purlis");
     let cwd = f.root.to_string_lossy().into_owned();
     let installed = shells();
+    let kinds: Vec<Option<Shell>> = installed.iter().map(|shell| kind(shell)).collect();
     let mut wrong = Vec::new();
     for (shape, expected) in shapes() {
         let cmd = spell(&shape, &f);
@@ -256,12 +310,15 @@ fn every_shape_a_shell_reads_a_secret_with_is_refused_and_no_other() {
             .collect();
         let agrees = match expected {
             Read => read.iter().all(|&r| r),
-            SomeRead => read.iter().any(|&r| r),
+            SomeRead(readers) => kinds
+                .iter()
+                .zip(&read)
+                .all(|(kind, &r)| kind.is_none_or(|kind| readers.contains(&kind) == r)),
             Mention => !read.iter().any(|&r| r),
         };
         if !installed.is_empty() && !agrees {
             wrong.push(format!(
-                "the shells ({installed:?}) printed the marker {read:?} for {shape:?}; the \
+                "the shells ({installed:?}) ({kinds:?}) printed the marker {read:?} for {shape:?}; the \
                  corpus says {expected:?}"
             ));
         }
