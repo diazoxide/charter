@@ -1276,7 +1276,9 @@ impl Uncompilable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Applied {
     harness: Harness,
-    form: Form,
+    /// Boxed: a wrap carries its grants and widenings, and [`Decided`] carries this beside a
+    /// variant of a few words.
+    form: Box<Form>,
     /// The plane it was compiled for, which the chat's folder must be inside.
     root: PathBuf,
     /// The paths it denies, which must not cover the chat's folder ([`covering`]).
@@ -1308,7 +1310,7 @@ impl Applied {
     /// opencode's own data, or what a Codex turn writes in Codex's home, under charter's wrap;
     /// and, for every harness, what the project's package caches let a chat write.
     pub fn writable(&self) -> Vec<PathBuf> {
-        let mut out = match &self.form {
+        let mut out = match &*self.form {
             Form::Opencode(wrap) => wrap.data.iter().cloned().collect(),
             Form::Codex(wrap) => wrap.writable(),
             Form::ClaudeCode(_) => Vec::new(),
@@ -1382,7 +1384,7 @@ impl Applied {
 
     /// The compiled form with `more` denied too.
     fn with(&self, more: Vec<Denial>) -> Form {
-        let mut form = self.form.clone();
+        let mut form = (*self.form).clone();
         match &mut form {
             Form::ClaudeCode(settings) => *settings = settings.denying(&more),
             Form::Codex(codex::Wrap { denied, .. })
@@ -1395,7 +1397,7 @@ impl Applied {
     /// egress proxy and the chat's own temp directory, for a harness charter wraps ([`Form::
     /// Opencode`], [`Form::Codex`]); `None` for a harness whose own sandbox holds the policy.
     pub fn confine(&self) -> std::io::Result<Option<Confinement>> {
-        match &self.form {
+        match &*self.form {
             Form::Opencode(wrap) => Confinement::start(wrap.hosts.clone()).map(Some),
             Form::Codex(wrap) => Confinement::start(wrap.hosts.clone()).map(Some),
             Form::ClaudeCode(_) => Ok(None),
@@ -2058,7 +2060,7 @@ pub(crate) fn applied_of(
     }
     Ok(Applied {
         harness,
-        form,
+        form: Box::new(form),
         root: root.to_path_buf(),
         denied,
         caches: compiled.widened.caches.clone().map(Box::new),
