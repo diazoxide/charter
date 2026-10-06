@@ -511,15 +511,44 @@ pub fn kind_as_read(form: Option<Structured>, text: &str) -> Option<&'static str
 /// The parse reads a quoted key as the bare key it is, so a key and its value still form an
 /// assignment; the lexical pass reads what the parse refuses or drops — comments, a trailing
 /// comma, JSON5, JSON lines, a key given twice — and a file of any name (#1304).
+///
+/// A reading that joins a line ending in a backslash to the next ([`joined_line_at`]) is asked
+/// only [`token_kind`]'s rules, never the credential-assignment rule (D-1315-6): a Markdown
+/// hard line break (`token:\` and a word on the next line) is prose, and an assignment whose
+/// value starts before the break is read as written already.
 pub fn decoded_kind(form: Option<Structured>, text: &str) -> Option<&'static str> {
     form.and_then(|form| parsed_kind(form, text))
         .or_else(|| readings(text).iter().find_map(|read| secret_kind(read)))
+        .or_else(|| {
+            joined_readings(text)
+                .iter()
+                .find_map(|read| token_kind(read))
+        })
+}
+
+/// [`found`] in `text` as written — its kind, and the line it starts on — then
+/// [`decoded_kind`] of what it spells, with no line, since the decoded text's lines are not the
+/// text's. What a project save refuses a staged file for, and what every guard that names a
+/// line asks, so the first guard gives the answer the save gives last (#1315).
+pub fn found_as_read(
+    form: Option<Structured>,
+    text: &str,
+) -> Option<(Option<usize>, &'static str)> {
+    if let Some(found) = found(text) {
+        return Some((Some(found.line), found.kind));
+    }
+    decoded_kind(form, text).map(|kind| (None, kind))
 }
 
 /// [`token_kind`] of `text` as written, then of each reading with its escapes decoded
 /// ([`readings`]). What a workspace repo's save refuses a staged file for.
 pub fn token_kind_as_read(text: &str) -> Option<&'static str> {
-    token_kind(text).or_else(|| readings(text).iter().find_map(|read| token_kind(read)))
+    token_kind(text).or_else(|| {
+        readings(text)
+            .iter()
+            .chain(joined_readings(text).iter())
+            .find_map(|read| token_kind(read))
+    })
 }
 
 /// How many times the escapes of a text are decoded, each time from the last reading: twice
@@ -527,23 +556,53 @@ pub fn token_kind_as_read(text: &str) -> Option<&'static str> {
 /// are escaped once more (D-1304-10). Each round is one linear pass.
 const ROUNDS: usize = 2;
 
-/// Each reading of `text` with its escapes decoded ([`unescaped`]), up to [`ROUNDS`] deep,
+/// Each reading of `text` with its escapes decoded and no line joined, up to [`ROUNDS`] deep,
 /// stopping at the first that decodes nothing more.
 fn readings(text: &str) -> Vec<String> {
-    mapped_readings(text, false)
+    mapped_readings(text, false, Joins::Kept)
         .into_iter()
         .map(|(read, _)| read)
         .collect()
 }
 
-/// [`readings`], each with — when `mapped` — where each of its bytes sits in `text` (see
-/// [`decode`]).
-fn mapped_readings(text: &str, mapped: bool) -> Vec<(String, Vec<usize>)> {
+/// Each reading of `text` with its escapes decoded and every line that ends in a backslash
+/// joined to the next ([`joined_line_at`]), where that reads otherwise than [`readings`]. Kept
+/// apart, so a join only ever adds what is found: joining `abc\` to a token on the next line
+/// makes one word of them, which the reading without the join still reads apart (#1315).
+fn joined_readings(text: &str) -> Vec<String> {
+    with_joins(text, false)
+        .into_iter()
+        .map(|(read, _)| read)
+        .collect()
+}
+
+/// The readings of `text` with lines joined, mapped when `mapped`, that differ from those
+/// without.
+fn with_joins(text: &str, mapped: bool) -> Vec<(String, Vec<usize>)> {
+    let apart = mapped_readings(text, false, Joins::Kept);
+    mapped_readings(text, mapped, Joins::Made)
+        .into_iter()
+        .enumerate()
+        .filter(|(at, (read, _))| apart.get(*at).is_none_or(|(other, _)| other != read))
+        .map(|(_, reading)| reading)
+        .collect()
+}
+
+/// Whether a reading joins a line that ends in a backslash to the next.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Joins {
+    Kept,
+    Made,
+}
+
+/// [`readings`] (or, with [`Joins::Made`], every reading with lines joined), each with — when
+/// `mapped` — where each of its bytes sits in `text` (see [`decode`]).
+fn mapped_readings(text: &str, mapped: bool, joins: Joins) -> Vec<(String, Vec<usize>)> {
     let mut out: Vec<(String, Vec<usize>)> = Vec::new();
     for _ in 0..ROUNDS {
         let last = out.last().map_or(text, |(read, _)| read.as_str());
         let mut map = Vec::new();
-        let Some(read) = decode(last, mapped.then_some(&mut map)) else {
+        let Some(read) = decode(last, mapped.then_some(&mut map), joins) else {
             break;
         };
         if let Some((_, before)) = out.last() {
@@ -565,15 +624,17 @@ fn mapped_readings(text: &str, mapped: bool) -> Vec<(String, Vec<usize>)> {
 /// characters it shows; a lone surrogate reads as U+FFFD. A backslash and a letter or digit
 /// that spell no character this knows — YAML's `\v`, `\a`, `\N`, `\L`, a malformed `\u` —
 /// read as one space (D-1304-9): whatever the character, it is not part of the word after it,
-/// so a credential behind it starts a word. Any other backslash stays as written.
+/// so a credential behind it starts a word. A backslash that ends its line joins that line to
+/// the next, as in a TOML `"""` string ([`joined_line_at`]). Any other backslash stays as
+/// written.
 pub fn unescaped(text: &str) -> Option<String> {
-    decode(text, None)
+    decode(text, None, Joins::Made)
 }
 
 /// [`unescaped`], with where each byte of the result came from: `map[i]` is the offset in
 /// `text` of the escape (or character) that byte `i` was read from, and one more entry,
 /// `text.len()`, closes the last.
-fn decode(text: &str, mut map: Option<&mut Vec<usize>>) -> Option<String> {
+fn decode(text: &str, mut map: Option<&mut Vec<usize>>, joins: Joins) -> Option<String> {
     if !text.contains('\\') {
         return None;
     }
@@ -581,6 +642,14 @@ fn decode(text: &str, mut map: Option<&mut Vec<usize>>) -> Option<String> {
     let mut changed = false;
     let mut at = 0;
     while at < text.len() {
+        if let Some(len) = (joins == Joins::Made)
+            .then(|| joined_line_at(&text[at..]))
+            .flatten()
+        {
+            changed = true;
+            at += len;
+            continue;
+        }
         let (ch, len) = match escape_at(&text[at..]) {
             Some(read) => {
                 changed = true;
@@ -601,6 +670,31 @@ fn decode(text: &str, mut map: Option<&mut Vec<usize>>) -> Option<String> {
         map.push(text.len());
     }
     changed.then_some(out)
+}
+
+/// How many bytes TOML's line-ending backslash at the start of `s` takes, when one is there:
+/// the backslash, the blanks after it on its line, the line break, and every blank and line
+/// break after that — all of which a `"""` string reads as nothing, joining its line to the
+/// next (#1315). Each byte is looked at once more at most, so a text stays one linear pass.
+fn joined_line_at(s: &str) -> Option<usize> {
+    let rest = s.strip_prefix('\\')?;
+    let blank = |b: &u8| *b == b' ' || *b == b'\t';
+    let after_blanks = &rest[rest.bytes().take_while(blank).count()..];
+    let after_break = after_blanks
+        .strip_prefix('\n')
+        .or_else(|| after_blanks.strip_prefix("\r\n"))?;
+    let gap = after_break
+        .bytes()
+        .take_while(|b| blank(b) || *b == b'\n' || *b == b'\r')
+        .count();
+    Some(s.len() - after_break.len() + gap)
+}
+
+/// Whether `line`'s last character other than a blank is a backslash: one a TOML `"""` string
+/// joins to the next line ([`joined_line_at`]). For a caller that reads a text a line at a
+/// time and has to know which lines read as one.
+pub fn joins_the_next_line(line: &str) -> bool {
+    line.trim_end_matches([' ', '\t', '\r']).ends_with('\\')
 }
 
 /// The longest `\u{…}` this reads: six hex digits and the closing brace. Looking no further
@@ -677,7 +771,8 @@ fn spelled(rest: &str) -> Option<(char, usize)> {
     }
 }
 
-/// What [`leaks`] finds on `line` only once its escapes are decoded ([`readings`]): each with
+/// What [`leaks`] finds on `line` only once its escapes are decoded ([`readings`], then
+/// [`joined_readings`]): each with
 /// the span of `line` it was read from — escapes and all, for a caller that names where it is —
 /// and the value it spells, which is what a caller masks and fingerprints, so an allowlist
 /// entry names a value however it is spelled. A hit whose rule and value the line as written,
@@ -685,21 +780,19 @@ fn spelled(rest: &str) -> Option<(char, usize)> {
 /// any character is its own, so a value read as written never answers for a longer one its
 /// escapes spell.
 pub fn escaped_leaks(line: &str) -> Vec<(Leak, String)> {
-    let mut seen: Vec<(&'static str, String)> = leaks(line)
+    // A set, so a line of many values is still read in one pass.
+    let mut seen: std::collections::HashSet<(&'static str, String)> = leaks(line)
         .into_iter()
         .map(|leak| (leak.rule, line[leak.span].to_owned()))
         .collect();
     let mut out = Vec::new();
-    for (read, map) in mapped_readings(line, true) {
+    let apart = mapped_readings(line, true, Joins::Kept);
+    for (read, map) in apart.into_iter().chain(with_joins(line, true)) {
         for leak in leaks(&read) {
             let value = read[leak.span.clone()].to_owned();
-            if seen
-                .iter()
-                .any(|(rule, v)| *rule == leak.rule && *v == value)
-            {
+            if !seen.insert((leak.rule, value.clone())) {
                 continue;
             }
-            seen.push((leak.rule, value.clone()));
             let span = map[leak.span.start]..map[leak.span.end];
             out.push((Leak { span, ..leak }, value));
         }
@@ -983,12 +1076,15 @@ pub fn leaks(line: &str) -> Vec<Leak> {
     kept
 }
 
-/// Every stretch of `line` that any of [`leaks`]' rules matches, overlapping ones joined into
-/// one, in order, each with the kind of the rule that starts it. For a caller that masks:
-/// [`leaks`] keeps the earlier of two overlapping hits whole, which can leave the tail of the
-/// later one outside every span.
+/// Every stretch of `line` that any of [`leaks`]' rules matches, as written and through its
+/// escapes ([`escaped_leaks`], escapes and all, #1315), overlapping ones joined into one, in
+/// order, each with the kind of the rule that starts it. For a caller that masks: [`leaks`]
+/// keeps the earlier of two overlapping hits whole, which can leave the tail of the later one
+/// outside every span.
 pub fn leak_spans(line: &str) -> Vec<(std::ops::Range<usize>, &'static str)> {
-    joined(every_leak(line))
+    let mut all = every_leak(line);
+    all.extend(escaped_leaks(line).into_iter().map(|(leak, _)| leak));
+    joined(all)
 }
 
 /// `all`'s spans in order, each run of overlapping ones joined into one.
@@ -1977,6 +2073,29 @@ pub(crate) mod escaped {
                 FORGE,
                 true,
             ),
+            // #1315: TOML's line-ending backslash in a `"""` string joins its line to the
+            // next, so a credential split across it reads whole — in a file with no extension,
+            // and in a TOML file that does not parse.
+            one(
+                "deploy/settings",
+                format!(
+                    "[deploy]\nnote = \"\"\"{}\\\n    {}\"\"\"\n",
+                    &token[..8],
+                    &token[8..]
+                ),
+                FORGE,
+                true,
+            ),
+            one(
+                "deploy.toml",
+                format!(
+                    "[deploy]\nnote = \"\"\"{}\\  \n\n    {}\"\"\"\nnote = 1\n",
+                    &token[..8],
+                    &token[8..]
+                ),
+                FORGE,
+                true,
+            ),
         ]
     }
 
@@ -1997,6 +2116,11 @@ pub(crate) mod escaped {
             (
                 "src/main.rs",
                 "fn main() {\n    println!(\"caf\\u{e9}\\n\\t\\\\done\");\n}\n".into(),
+            ),
+            // D-1315-6: a Markdown hard line break is no assignment across the break.
+            (
+                "workspaces/alpha/memory/rotation.md",
+                "Rotate the token:\\\nrotated-weekly\n\npassword:\\\n  hunter22x\n".into(),
             ),
         ]
     }
@@ -2040,6 +2164,27 @@ mod escaped_tests {
     }
 
     #[test]
+    fn every_escaped_spelling_is_a_secret_with_no_form_to_parse_it_by() {
+        // A field, a title, a log line: text no parse is asked of still reads through its
+        // escapes, so a guard that has no file name answers as the save does (#1315). Every
+        // bare credential; a quoted key is an assignment only to the parse.
+        for shape in escaped::shapes().into_iter().filter(|shape| shape.token) {
+            assert!(kind_as_read(None, &shape.text).is_some(), "{}", shape.text);
+            let line = found_as_read(None, &shape.text);
+            assert!(
+                line.is_some_and(|(line, _)| line.is_none()),
+                "{}",
+                shape.text
+            );
+        }
+        let token = escaped::token();
+        assert_eq!(
+            found_as_read(None, &format!("one\ntoken {token}\n")),
+            Some((Some(2), "a token by its forge's prefix"))
+        );
+    }
+
+    #[test]
     fn a_file_with_escapes_and_no_secret_is_clean_as_it_reads() {
         for (path, text) in escaped::clean() {
             let form = Structured::of(path);
@@ -2067,6 +2212,12 @@ mod escaped_tests {
             (r"a\qb \u00zz \U0011FFFF", "a b  00zz  0011FFFF"),
             (r"\N{LINE FEED}", " {LINE FEED}"),
             (r"\% \~", r"\% \~"),
+            // TOML's line-ending backslash: it, the line break and the blanks after it read as
+            // nothing; one with more on its line, or an escaped one, is not one.
+            ("one\\\n    two", "onetwo"),
+            ("one\\ \t\r\n\n\t  two", "onetwo"),
+            ("one\\ two", "one\\ two"),
+            ("one\\\\\ntwo", "one\\\ntwo"),
         ] {
             assert_eq!(unescaped(text).as_deref().unwrap_or(text), read, "{text}");
         }
@@ -2076,12 +2227,53 @@ mod escaped_tests {
     #[test]
     fn a_long_run_of_open_escapes_reads_in_linear_time() {
         // `\u{` with no `}` near it: each one looks a few bytes ahead, never to the end.
-        let text = "\\u{".repeat(1 << 18);
+        // And backslashes that look for the end of their line: each looks past its own blanks.
         let started = std::time::Instant::now();
-        assert!(unescaped(&text).is_some());
-        assert_eq!(kind_as_read(None, &text), None);
-        assert_eq!(token_kind_as_read(&text), None);
-        assert_eq!(escaped_leaks(&text), Vec::new());
+        for text in [
+            "\\u{".repeat(1 << 18),
+            "\\  ".repeat(1 << 18),
+            "\\ \n".repeat(1 << 18),
+        ] {
+            assert!(unescaped(&text).is_some() || !text.contains('\n'));
+            assert_eq!(kind_as_read(None, &text), None);
+            assert_eq!(token_kind_as_read(&text), None);
+            assert_eq!(escaped_leaks(&text), Vec::new());
+        }
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn a_line_join_only_ever_adds_what_is_found() {
+        // Joining `abc\` to the next line makes one word of `abc` and a token; the reading
+        // without the join still finds the token (#1315).
+        let token = escaped::token();
+        let tail = &token[1..];
+        for text in [
+            format!("note = \"\"\"abc\\\n{token}\"\"\"\n"),
+            format!("note = \"\"\"abc\\\n\\u0067{tail}\"\"\"\n"),
+        ] {
+            for form in [None, Some(Structured::Toml)] {
+                assert!(kind_as_read(form, &text).is_some(), "{form:?}: {text}");
+            }
+            assert!(token_kind_as_read(&text).is_some(), "{text}");
+        }
+        let escaped_only = format!("abc\\\n\\u0067{tail}");
+        assert_eq!(found(&escaped_only), None);
+        assert!(decoded_kind(None, &escaped_only).is_some());
+        let line = format!("abc\\ \\u0067{tail}");
+        assert_eq!(escaped_leaks(&line).len(), 1, "{line}");
+    }
+
+    #[test]
+    fn a_line_of_many_distinct_values_reads_in_linear_time() {
+        // Every value its own, so no seen list is short-cut by a repeat: each address is read
+        // as written (`nb0x@…`) and as it reads (`b0x@…`).
+        let line: String = (0..1 << 15)
+            .map(|i| format!("\\nb{i}x@lovelace{i}.dev "))
+            .collect();
+        let started = std::time::Instant::now();
+        assert_eq!(escaped_leaks(&line).len(), 1 << 15);
         let took = started.elapsed();
         assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }

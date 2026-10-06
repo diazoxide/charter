@@ -213,6 +213,22 @@ fn a_pasted_secret_is_refused_under_its_field_and_points_to_the_vault() {
 }
 
 #[test]
+fn a_secret_pasted_through_its_escapes_is_refused_as_the_save_would_refuse_it() {
+    let dir = plane(Some(LOCAL));
+    let tail = &crate::secretshape::escaped::token()[1..];
+    let spelled = format!("\\u0067{tail}");
+    let refusal = add(
+        dir.path(),
+        Some(LOCAL),
+        &entry("work", "claude", &["claude", "--token", &spelled]),
+    )
+    .unwrap_err();
+    assert_eq!(fields(&refusal), ["command"]);
+    assert!(!refusal.fields[0].why.contains(tail));
+    assert_eq!(local(dir.path()), LOCAL);
+}
+
+#[test]
 fn a_file_changed_since_it_was_read_is_not_written() {
     let dir = plane(Some(LOCAL));
     let refusal = add(

@@ -326,11 +326,22 @@ fn read(repo: &str, clone: &Path, file: &str) -> Found {
     let Ok(text) = String::from_utf8(bytes) else {
         return left_out("it is not text".to_owned());
     };
-    if let Some(found) = crate::secretshape::found(&text) {
-        return left_out(format!(
-            "line {} holds what looks like a secret ({}), and a secret never goes into memory",
-            found.line, found.kind
-        ));
+    // As the project save reads the memory it would become: as written, then through its
+    // escapes (#1315).
+    match crate::secretshape::found_as_read(crate::secretshape::Structured::of(file), &text) {
+        Some((Some(line), kind)) => {
+            return left_out(format!(
+                "line {line} holds what looks like a secret ({kind}), and a secret never goes \
+                 into memory"
+            ));
+        }
+        Some((None, kind)) => {
+            return left_out(format!(
+                "it spells what looks like a secret ({kind}) through its escapes, and a secret \
+                 never goes into memory"
+            ));
+        }
+        None => {}
     }
     if let Some(line) = password_in_a_url(&text) {
         return left_out(format!(
@@ -767,6 +778,18 @@ mod tests {
             let why = caution(&found, file).unwrap_or_else(|| panic!("{file} is ticked"));
             assert!(why.contains(code) && why.contains(line), "{file}: {why}");
         }
+    }
+
+    #[test]
+    fn a_file_that_spells_a_secret_through_its_escapes_is_left_out() {
+        let tail = &["ghp", "_0123456789abcdefABCDEF0123456789abcd"].concat()[1..];
+        let text = format!("# Tokens\n\nUse \"\\u0067{tail}\".\n");
+        let (_dir, root) = a_workspace(&[("AGENTS.md", &text)]);
+
+        let why = left_out(&found(&root, "svc").expect("read"), "AGENTS.md");
+
+        assert!(why.contains("a secret never goes into memory"), "{why}");
+        assert!(!why.contains(tail), "{why}");
     }
 
     #[test]

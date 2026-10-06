@@ -782,3 +782,17 @@ fn whether_a_chat_ran_unsandboxed_comes_from_the_apps_record_of_it() {
     assert!(chat_facts(dir.path(), 7).unsandboxed);
     assert!(!chat_facts(dir.path(), 8).unsandboxed);
 }
+
+#[test]
+fn a_record_that_spells_a_credential_through_its_escapes_is_refused() {
+    let tail = &crate::secretshape::escaped::token()[1..];
+    let spelled = format!("the deploy key \\u0067{tail}");
+    let body = BODY.replace("Nothing.", &spelled);
+    let refused = check("Ship it", &body).unwrap_err();
+    assert!(
+        refused.contains("looks like it holds a credential"),
+        "{refused}"
+    );
+    assert!(!refused.contains(tail), "{refused}");
+    assert!(check(&spelled, BODY).is_err());
+}
