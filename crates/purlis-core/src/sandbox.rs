@@ -468,6 +468,16 @@ pub struct Denial {
     pub class: Class,
     pub path: PathBuf,
     pub access: Access,
+    /// The file and the word in it that named the path, for one a config named
+    /// ([`Class::LaterCode`]); `None` for one charter names itself.
+    pub named: Option<Named>,
+}
+
+/// Where a config named a denied path: the file, and the word in it as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    pub file: PathBuf,
+    pub word: String,
 }
 
 /// A class that is held by a service rather than a path: the compiler of each harness either
@@ -541,6 +551,9 @@ impl Machine {
 pub struct Denied {
     pub paths: Vec<Denial>,
     pub services: Vec<Service>,
+    /// A config whose commands purlis stopped reading ([`planted::Unread`]), so what they run
+    /// is not known and the chat is refused ([`NotStarted::Unread`]).
+    pub unread: Option<Named>,
 }
 
 impl Denied {
@@ -553,6 +566,7 @@ impl Denied {
                 class,
                 path,
                 access,
+                named: None,
             })
         };
 
@@ -660,8 +674,21 @@ impl Denied {
             .map(PathBuf::from)
             .filter(|dir| dir.is_absolute())
             .or_else(|| machine.home.as_ref().map(|home| home.join(".config")));
-        for path in planted::resolved(root, machine.home.as_deref(), xdg_config.as_deref()) {
-            deny(Class::LaterCode, path, Access::Write);
+        let (resolved, unread) =
+            match planted::resolved(root, machine.home.as_deref(), xdg_config.as_deref()) {
+                Ok(resolved) => (resolved, None),
+                Err(unread) => (Vec::new(), Some(unread)),
+            };
+        for it in resolved {
+            paths.push(Denial {
+                class: Class::LaterCode,
+                path: it.path,
+                access: Access::Write,
+                named: Some(Named {
+                    file: it.file,
+                    word: it.word,
+                }),
+            });
         }
 
         Self {
@@ -671,6 +698,7 @@ impl Denied {
             } else {
                 Vec::new()
             },
+            unread,
         }
     }
 }
@@ -944,6 +972,8 @@ pub struct Applied {
     form: Form,
     /// The plane it was compiled for, which the chat's folder must be inside.
     root: PathBuf,
+    /// The paths it denies, which must not cover the chat's folder ([`covering`]).
+    denied: Vec<Denial>,
 }
 
 impl Applied {
@@ -990,6 +1020,11 @@ impl Applied {
         };
         if let Some(why) = folder_refusal(&self.root, cwd) {
             return Err(why.to_owned());
+        }
+        // #1327: never a chat whose own folder, or one above it, it may not write.
+        let ground: Vec<PathBuf> = cwd.ancestors().map(Path::to_path_buf).collect();
+        if let Some(refused) = covering(&self.denied, &ground) {
+            return Err(refused.to_string());
         }
         self.harness.adapter().sandboxed_line(&self.form, words, at)
     }
@@ -1079,6 +1114,44 @@ pub enum Form {
     ClaudeCode(claude::Settings),
     Codex(codex::Wrap),
     Opencode(opencode::Wrap),
+}
+
+impl Form {
+    /// Every path a wrap charter applies denies, with what its compiler added to the neutral
+    /// list ([`Compiled::denied`]); `None` for a harness whose own sandbox holds the policy.
+    pub fn denied(&self) -> Option<&[Denial]> {
+        match self {
+            Self::Codex(wrap) => Some(&wrap.denied),
+            Self::Opencode(wrap) => Some(&wrap.denied),
+            Self::ClaudeCode(_) => None,
+        }
+    }
+}
+
+/// `compiled`, by `compile`, for a chat in the plane at `root` on `machine`, with every path
+/// it denies, or why it does not start: [`covering`]'s refusal among the reasons, held to the
+/// list a wrap applies as well as the neutral one.
+fn compile_checked(
+    compile: Compiler,
+    compiled: &Compiled,
+    root: &Path,
+    machine: &Machine,
+) -> Result<(Form, Vec<Denial>), NotStarted> {
+    if let Some(unread) = &compiled.denied.unread {
+        return Err(NotStarted::Unread(unread.clone()));
+    }
+    let ground = ground(root, machine.home.as_deref());
+    if let Some(refused) = covering(&compiled.denied.paths, &ground) {
+        return Err(refused);
+    }
+    let form = compile(compiled).map_err(NotStarted::Uncompilable)?;
+    let denied = form
+        .denied()
+        .map_or_else(|| compiled.denied.paths.clone(), <[Denial]>::to_vec);
+    if let Some(refused) = covering(&denied, &ground) {
+        return Err(refused);
+    }
+    Ok((form, denied))
 }
 
 /// A harness's compiler.
@@ -1181,6 +1254,42 @@ pub fn folder_refusal(root: &Path, cwd: &Path) -> Option<&'static str> {
     }
 }
 
+/// The ground a chat in the plane at `root` stands on, whatever its folder: `/` and every
+/// folder down to the plane's own, and the home directory.
+fn ground(root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
+    root.ancestors()
+        .map(Path::to_path_buf)
+        .chain(home.map(Path::to_path_buf))
+        .collect()
+}
+
+/// The refusal for the first of `denied` that covers a folder of `ground` — is it, or is above
+/// it — by the name it is written with or the one the kernel gives it; `None` where none does.
+///
+/// **Fail closed** (#1327). A rule that covers the ground a chat stands on (`/`, the home
+/// directory, the project, or the chat's own folder or one above it) leaves it read-only
+/// everywhere it works. That is never what a class means, so the chat is refused, naming what
+/// named the path, rather than started read-only or started with the rule left out.
+pub fn covering(denied: &[Denial], ground: &[PathBuf]) -> Option<NotStarted> {
+    // Each spelling of `path` a sandbox or a tool may compare: as written, with `..` taken
+    // off, and as the kernel names either.
+    fn names_of(path: &Path) -> [PathBuf; 4] {
+        let lexical = planted::lexical(path);
+        [path.to_path_buf(), real(path), real(&lexical), lexical]
+    }
+    let ground: Vec<PathBuf> = ground.iter().flat_map(|folder| names_of(folder)).collect();
+    denied.iter().find_map(|denial| {
+        let covers = names_of(&denial.path)
+            .iter()
+            .any(|name| ground.iter().any(|folder| folder.starts_with(name)));
+        covers.then(|| NotStarted::CoversItsGround {
+            path: denial.path.clone(),
+            class: denial.class,
+            named: denial.named.clone(),
+        })
+    })
+}
+
 /// Whether a plane manifest above `start`, under either name (`charter.toml` or
 /// `purlis.toml`), is there and is not a regular file — a link, a FIFO, a socket, a device or a
 /// directory — which the plane's own walk does not take for a plane at all. A sandboxed start
@@ -1254,6 +1363,16 @@ pub enum NotStarted {
     /// The plane's `charter.toml` cannot be read, so whether it turns the sandbox on is
     /// unknown, and the chat is not started rather than started unsandboxed.
     PlaneUnreadable,
+    /// A path the sandbox would deny covers the ground the chat stands on ([`covering`]), so
+    /// it would start unable to write where it works (#1327).
+    CoversItsGround {
+        path: PathBuf,
+        class: Class,
+        named: Option<Named>,
+    },
+    /// A config's commands change folder or name scripts more often than purlis follows
+    /// ([`planted::MOST_MOVES`], [`planted::MOST_NAMED`]), so what they run is not known.
+    Unread(Named),
 }
 
 impl fmt::Display for NotStarted {
@@ -1319,6 +1438,40 @@ impl fmt::Display for NotStarted {
                 "{FILE} in this plane cannot be read as TOML, so purlis cannot tell whether it \
                  runs chats sandboxed, and nothing was started. Fix {FILE} and start the chat \
                  again."
+            ),
+            Self::CoversItsGround {
+                path,
+                named: Some(named),
+                ..
+            } => write!(
+                f,
+                "{lead}, and `{}` in {} reads as a script purlis keeps this chat from changing, \
+                 which would leave it unable to write {}, so nothing was started. Change that \
+                 word in {}, or start this chat without the sandbox from the new-chat picker.",
+                named.word,
+                named.file.display(),
+                path.display(),
+                named.file.display()
+            ),
+            Self::CoversItsGround {
+                path,
+                class,
+                named: None,
+            } => write!(
+                f,
+                "{lead}, and its {} rules would keep the chat from writing {}, so nothing was \
+                 started. Start this chat without the sandbox from the new-chat picker.",
+                class.word(),
+                path.display()
+            ),
+            Self::Unread(named) => write!(
+                f,
+                "{lead}, and a command in {} changes folder or names scripts more often than \
+                 purlis follows, from `{}` on, so purlis cannot tell what it runs, and nothing \
+                 was started. Move that command into a script of its own, or start this chat \
+                 without the sandbox from the new-chat picker.",
+                named.file.display(),
+                named.word
             ),
             Self::NoBackend(missing) => write!(
                 f,
@@ -1398,12 +1551,13 @@ pub fn for_start(
     if let Some(missing) = backend::missing(machine.os, has) {
         return Err(NotStarted::NoBackend(missing));
     }
-    let form =
-        compile(&Compiled::of(&policy, &plane, root, machine)).map_err(NotStarted::Uncompilable)?;
+    let compiled = Compiled::of(&policy, &plane, root, machine);
+    let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
     Ok(Some(Applied {
         harness,
         form,
         root: root.to_path_buf(),
+        denied,
     }))
 }
 
@@ -1420,12 +1574,13 @@ pub(crate) fn compiled_anyway(
         .policy
         .expect("a plane that turned the sandbox on");
     let compile = compiler(harness).ok_or(NotStarted::NoCompiler(harness))?;
-    let form =
-        compile(&Compiled::of(&policy, &plane, root, machine)).map_err(NotStarted::Uncompilable)?;
+    let compiled = Compiled::of(&policy, &plane, root, machine);
+    let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
     Ok(Applied {
         harness,
         form,
         root: root.to_path_buf(),
+        denied,
     })
 }
 
@@ -1661,6 +1816,8 @@ pub fn ahead(
             | NotStarted::NotTheHarness(_)
             | NotStarted::ProbeTimedOut(_)
             | NotStarted::Uncompilable(_)
+            | NotStarted::CoversItsGround { .. }
+            | NotStarted::Unread(_)
             | NotStarted::PlaneUnreadable => None,
         },
     };

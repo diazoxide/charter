@@ -441,6 +441,7 @@ fn one(class: Class, path: &str, access: Access) -> Denial {
         class,
         path: std::path::PathBuf::from(path),
         access,
+        named: None,
     }
 }
 
@@ -498,6 +499,7 @@ fn a_path_denied_to_read_is_denied_to_the_sandbox_and_to_claude_codes_own_tools(
     let denied = Denied {
         paths: vec![one(Class::Vaults, "/p/.charter/vaults", Access::ReadWrite)],
         services: vec![],
+        unread: None,
     };
     let settings = claude::settings(&compiled(denied, Os::Linux)).expect("compiles");
     assert_eq!(
@@ -523,6 +525,7 @@ fn a_path_denied_to_write_stays_readable() {
     let denied = Denied {
         paths: vec![one(Class::Integrity, "/p/.charter/app", Access::Write)],
         services: vec![],
+        unread: None,
     };
     let settings = claude::settings(&compiled(denied, Os::Linux)).expect("compiles");
     assert_eq!(
@@ -598,6 +601,7 @@ fn on_macos_the_store_holds_the_credential_store_so_a_claude_code_chat_compiles(
     let denied = Denied {
         paths: vec![],
         services: vec![Service::CredentialStore],
+        unread: None,
     };
     claude::settings(&compiled(denied, Os::MacOs)).expect("compiles on macOS");
 }
@@ -609,6 +613,7 @@ fn on_linux_claude_code_cannot_hold_the_credential_store_so_the_chat_does_not_st
     let denied = Denied {
         paths: vec![],
         services: vec![Service::CredentialStore],
+        unread: None,
     };
     let refused = claude::settings(&compiled(denied, Os::Linux)).expect_err("refused");
     assert_eq!(refused.class(), Some(Class::Vaults));
@@ -1908,4 +1913,340 @@ fn charters_own_wrap_never_lets_a_chat_ask_the_keychains_service() {
             assert_eq!(line, "(allow mach-lookup", "a lookup not by name: {line}");
         }
     }
+}
+
+// -------------------------------------------------------------------------------------
+// The ground a chat stands on is never denied (#1327)
+// -------------------------------------------------------------------------------------
+
+fn later_code(path: &str, file: &str, word: &str) -> Denial {
+    Denial {
+        named: Some(Named {
+            file: std::path::PathBuf::from(file),
+            word: word.to_owned(),
+        }),
+        ..one(Class::LaterCode, path, Access::Write)
+    }
+}
+
+/// `/`, the home directory, and the chat's folder with every folder above it.
+fn ground_of(cwd: &str) -> Vec<std::path::PathBuf> {
+    let mut ground: Vec<_> = std::path::Path::new(cwd)
+        .ancestors()
+        .map(std::path::Path::to_path_buf)
+        .collect();
+    ground.push(std::path::PathBuf::from("/home/op"));
+    ground
+}
+
+#[test]
+fn a_denial_that_covers_the_chat_s_ground_refuses_it_naming_the_file_and_the_word() {
+    let ground = ground_of("/plane/ws/repo");
+    for path in [
+        "/",
+        "/home/op",
+        "/plane",
+        "/plane/ws",
+        "/plane/ws/repo",
+        "/plane/ws/repo/..",
+        "/plane/ws/repo/nowhere/../..",
+    ] {
+        let denied = [later_code(path, "/plane/.claude/settings.json", "./")];
+        assert_eq!(
+            covering(&denied, &ground),
+            Some(NotStarted::CoversItsGround {
+                path: std::path::PathBuf::from(path),
+                class: Class::LaterCode,
+                named: Some(Named {
+                    file: std::path::PathBuf::from("/plane/.claude/settings.json"),
+                    word: "./".to_owned(),
+                }),
+            }),
+            "{path}"
+        );
+    }
+    assert_eq!(
+        covering(
+            &[later_code("/plane/ws", "/plane/ws/.mcp.json", "../ws")],
+            &ground
+        )
+        .map(|it| it.to_string()),
+        Some(
+            "this plane runs every chat sandboxed, and `../ws` in /plane/ws/.mcp.json reads as \
+             a script purlis keeps this chat from changing, which would leave it unable to \
+             write /plane/ws, so nothing was started. Change that word in /plane/ws/.mcp.json, \
+             or start this chat without the sandbox from the new-chat picker."
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        covering(
+            &[one(Class::Vaults, "/home/op", Access::ReadWrite)],
+            &ground
+        )
+        .map(|it| it.to_string()),
+        Some(
+            "this plane runs every chat sandboxed, and its vaults rules would keep the chat \
+             from writing /home/op, so nothing was started. Start this chat without the \
+             sandbox from the new-chat picker."
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_denial_below_or_beside_the_chat_s_ground_is_kept() {
+    let ground = ground_of("/plane/ws/repo");
+    let denied = [
+        later_code("/plane/ws/repo/scripts/x.sh", "/f", "./scripts/x.sh"),
+        later_code("/plane/other", "/f", "../other"),
+        later_code("/home/op/.config/x", "/f", "~/.config/x"),
+        one(Class::Integrity, "/plane/.charter/app", Access::Write),
+    ];
+    assert_eq!(covering(&denied, &ground), None);
+}
+
+/// A plane with the sandbox on whose `dir` has a Claude Code hook running `command`.
+fn plane_with_hook(dir: &str, command: &str) -> tempfile::TempDir {
+    let plane = plane_saying(ON);
+    let at = plane.path().join(dir);
+    std::fs::create_dir_all(at.join(".claude")).expect(".claude");
+    let settings = serde_json::json!({"hooks": {"PostToolUse": [{"hooks": [
+        {"type": "command", "command": command}
+    ]}]}});
+    std::fs::write(at.join(".claude/settings.json"), settings.to_string()).expect("settings");
+    plane
+}
+
+#[test]
+fn what_a_wrap_adds_is_held_to_the_same_ground() {
+    // A compiler's own denials, after the neutral ones: the operator's Codex home where
+    // `CODEX_HOME` is the home directory.
+    let compiled = Compiled {
+        homes: Homes {
+            home: Some(std::path::PathBuf::from("/home/op")),
+            codex: Some(std::path::PathBuf::from("/home/op")),
+            codex_project: Some(std::path::PathBuf::from("/data/codex-homes/x")),
+            ..Homes::default()
+        },
+        ..compiled(Denied::default(), Os::MacOs)
+    };
+    let form = Form::Codex(codex::wrap(&compiled).expect("wraps"));
+    assert_eq!(
+        covering(
+            form.denied().expect("a wrap's own list"),
+            &ground_of("/plane/ws/repo")
+        ),
+        Some(NotStarted::CoversItsGround {
+            path: std::path::PathBuf::from("/home/op"),
+            class: Class::LaterCode,
+            named: None,
+        })
+    );
+}
+
+#[test]
+fn a_codex_home_that_is_the_home_directory_refuses_the_chat() {
+    let plane = plane_saying(ON);
+    let root = plane.path().canonicalize().expect("the plane");
+    let machine = Machine {
+        env: crate::secrets::Env::of(&[("CODEX_HOME", "/home/op")]),
+        ..machine(Os::MacOs)
+    };
+    assert_eq!(
+        for_start(Harness::Codex, &root, &machine, &|_| true),
+        Err(NotStarted::CoversItsGround {
+            path: std::path::PathBuf::from("/home/op"),
+            class: Class::LaterCode,
+            named: None,
+        })
+    );
+}
+
+#[test]
+fn a_config_that_names_the_project_refuses_the_chat_rather_than_starting_it_read_only() {
+    let plane = plane_saying(ON);
+    let root = plane.path().canonicalize().expect("the plane");
+    let clone = root.join("ws/repo");
+    std::fs::create_dir_all(clone.join(".git")).expect("a clone");
+    std::fs::write(clone.join(".git/config"), "[core]\nhooksPath = ../..\n").expect("config");
+    // Every harness purlis sandboxes: the refusal is the neutral policy's, before any compiler.
+    for harness in Harness::ALL
+        .into_iter()
+        .filter(|harness| never_on(*harness, Os::MacOs).is_none())
+    {
+        let started = for_start(harness, &root, &machine(Os::MacOs), &|_| true);
+        let Err(NotStarted::CoversItsGround { path, named, .. }) = started else {
+            panic!("{harness:?}: {started:?}");
+        };
+        assert_eq!(path, clone.join("../.."));
+        assert_eq!(
+            named,
+            Some(Named {
+                file: clone.join(".git/config"),
+                word: "../..".to_owned(),
+            })
+        );
+    }
+}
+
+#[test]
+fn a_hook_word_that_names_the_chat_s_own_folder_refuses_a_chat_there_only() {
+    let plane = plane_with_hook("ws/repo", "make -C ./tools/");
+    let root = plane.path().canonicalize().expect("the plane");
+    let tools = root.join("ws/repo/tools");
+    std::fs::create_dir_all(&tools).expect("tools");
+    let applied =
+        compiled_anyway(Harness::ClaudeCode, &root, &machine(Os::MacOs)).expect("compiles");
+    let words = Words {
+        program: "claude".to_owned(),
+        command: Vec::new(),
+        armed: Vec::new(),
+        charters: Vec::new(),
+    };
+    let line = |cwd: &std::path::Path| {
+        applied.line(
+            words.clone(),
+            &At {
+                cwd: Some(cwd),
+                ..At::default()
+            },
+        )
+    };
+    assert_eq!(
+        line(&tools),
+        Err(NotStarted::CoversItsGround {
+            path: tools.clone(),
+            class: Class::LaterCode,
+            named: Some(Named {
+                file: root.join("ws/repo/.claude/settings.json"),
+                word: "./tools/".to_owned(),
+            }),
+        }
+        .to_string())
+    );
+    assert!(line(&root.join("ws/repo")).is_ok());
+}
+
+#[test]
+fn a_jq_hook_leaves_the_chat_s_folder_and_its_workspace_writable() {
+    // #1327, as seen: the hook below made every chat in the project read-only.
+    let plane = plane_with_hook(
+        "workspaces/w/repo",
+        "jq -r '.tool_response.filePath // .tool_input.file_path' | xargs -r prettier --write",
+    );
+    let root = plane.path().canonicalize().expect("the plane");
+    let workspace = root.join("workspaces/w");
+    let clone = workspace.join("repo");
+    let applied =
+        compiled_anyway(Harness::ClaudeCode, &root, &machine(Os::MacOs)).expect("compiles");
+    let Form::ClaudeCode(settings) = applied.form() else {
+        panic!("a Claude Code form");
+    };
+    // Whether a rule, `/`-rooted or not, holds `path`: a `**/<name>` rule names a name at any
+    // depth and holds no folder by itself; any other is the folder it names and what is below.
+    let holds = |rule: &str, path: &std::path::Path| {
+        if rule.starts_with("**/") {
+            return false;
+        }
+        let folder = rule.trim_end_matches("**").trim_end_matches('/');
+        folder.is_empty() || path.starts_with(folder)
+    };
+    let written = |path: &std::path::Path| {
+        let by_sandbox = deny_write(settings).iter().any(|it| holds(it, path));
+        let by_tools = settings.deny.iter().any(|rule| {
+            rule.strip_prefix("Edit(")
+                .and_then(|it| it.strip_suffix(')'))
+                .is_some_and(|it| holds(it.strip_prefix('/').unwrap_or(it), path))
+        });
+        !by_sandbox && !by_tools
+    };
+    // The helper holds what #1327 wrote.
+    assert!(holds("/", &root) && holds("/**", &root) && holds("**", &root));
+    assert!(holds(&format!("{}/**", workspace.display()), &clone));
+    for folder in [&clone, &workspace, &root] {
+        assert!(
+            written(folder),
+            "{} is denied: {:?} {:?}",
+            folder.display(),
+            deny_write(settings),
+            settings.deny
+        );
+    }
+    assert!(!deny_write(settings).iter().any(|it| it == "/"));
+    assert!(
+        !settings
+            .deny
+            .iter()
+            .any(|it| it == "Edit(//)" || it == "Edit(//**)")
+    );
+    let words = Words {
+        program: "claude".to_owned(),
+        command: Vec::new(),
+        armed: Vec::new(),
+        charters: Vec::new(),
+    };
+    assert!(
+        applied
+            .line(
+                words,
+                &At {
+                    cwd: Some(&clone),
+                    ..At::default()
+                }
+            )
+            .is_ok()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_denial_through_a_link_and_a_missing_folder_is_still_held_to_the_ground() {
+    let base = tempfile::tempdir().expect("a base");
+    let real_dir = base.path().join("real");
+    std::fs::create_dir_all(real_dir.join("x")).expect("a real folder");
+    std::os::unix::fs::symlink(&real_dir, base.path().join("link")).expect("a link");
+    let denied = [later_code(
+        base.path()
+            .join("link/missing/..")
+            .to_str()
+            .expect("a path"),
+        "/f",
+        "../..",
+    )];
+    let ground = [real_dir.join("x").canonicalize().expect("the folder")];
+    assert!(covering(&denied, &ground).is_some());
+}
+
+#[test]
+fn a_config_purlis_could_not_read_through_refuses_the_chat() {
+    let named = Named {
+        file: std::path::PathBuf::from("/plane/ws/.claude/settings.json"),
+        word: "./d64".to_owned(),
+    };
+    let compiled = compiled(
+        Denied {
+            unread: Some(named.clone()),
+            ..Denied::default()
+        },
+        Os::MacOs,
+    );
+    let compile = compiler(Harness::ClaudeCode).expect("a compiler");
+    let refused = compile_checked(
+        compile,
+        &compiled,
+        std::path::Path::new("/plane"),
+        &machine(Os::MacOs),
+    )
+    .map(|_| ())
+    .expect_err("refused");
+    assert_eq!(refused, NotStarted::Unread(named));
+    assert_eq!(
+        refused.to_string(),
+        "this plane runs every chat sandboxed, and a command in \
+         /plane/ws/.claude/settings.json changes folder or names scripts more often than purlis \
+         follows, from `./d64` on, so purlis cannot tell what it runs, and nothing was started. \
+         Move that command into a script of its own, or start this chat without the sandbox \
+         from the new-chat picker."
+    );
 }

@@ -124,6 +124,7 @@ pub fn wrap(compiled: &Compiled) -> Result<Wrap, Uncompilable> {
             class: Class::LaterCode,
             path: operator.clone(),
             access: Access::ReadWrite,
+            named: None,
         });
     }
     Ok(Wrap {
