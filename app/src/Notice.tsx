@@ -44,6 +44,9 @@ export type NoticeAction = {
   /** The button's words: a verb for what it does ("Undo", "Open record"). */
   label: string;
   onPress: () => void;
+  /** For a press that opens something under the line (a fix's form, #1250): the id of what
+   *  it opens and whether it is open, said to a screen reader as the button's state. */
+  opens?: { id: string; open: boolean };
 };
 
 type Ways = {
@@ -73,10 +76,13 @@ export type NoticeProps = WayOut & {
   label?: string;
   /** The sentence (and anything else the line says before its ways out). */
   children: ReactNode;
+  /** What a way out opened (a fix's form, #1250): drawn right after the line, outside its live
+   *  region, and moved with it by the band. */
+  under?: ReactNode;
 };
 
 export function Notice(props: NoticeProps) {
-  const { cause, tone = "news", at = "band", label, children } = props;
+  const { cause, tone = "news", at = "band", label, children, under } = props;
   const { fixes, link, copy, onDismiss } = props as Ways;
   const band = useContext(Band);
   const stacked = band !== null && at === "band";
@@ -91,7 +97,7 @@ export function Notice(props: NoticeProps) {
   const classes = ["notice", `notice-${at}`, tone === "trouble" ? "notice-trouble" : ""]
     .filter(Boolean)
     .join(" ");
-  const drawn = (
+  const line = (
     <div className={classes} role="status" aria-label={label} data-cause={cause}>
       <div className="notice-says">{children}</div>
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#186). */}
@@ -101,6 +107,8 @@ export function Notice(props: NoticeProps) {
           type="button"
           className="notice-fix"
           tabIndex={0}
+          aria-expanded={fix.opens?.open}
+          aria-controls={fix.opens?.open ? fix.opens.id : undefined}
           onClick={fix.onPress}
         >
           {fix.label}
@@ -129,6 +137,17 @@ export function Notice(props: NoticeProps) {
       )}
     </div>
   );
+  // What a way out opened is drawn beside the line, never inside it: the line is a live region,
+  // and a form in one would be read out again on every keystroke and every refusal.
+  const drawn =
+    under === undefined ? (
+      line
+    ) : (
+      <>
+        {line}
+        <div className={`notice-under notice-under-${at}`}>{under}</div>
+      </>
+    );
   return stacked ? createPortal(drawn, host) : drawn;
 }
 
@@ -170,10 +189,10 @@ const rank = (cause: string) => {
 /**
  * **The families of Notice that also come from the doctor** (V91i): only these count in the
  * status bar, where the doctor's button already counts them, so a Notice is never counted
- * twice and never counted as something the doctor did not find. None yet: the doctor's rows
- * become Notices with the fix registry (#1221), and that ticket adds their families here.
+ * twice and never counted as something the doctor did not find. A doctor finding that stands as
+ * a Notice (`DoctorNotices` in `Doctor.tsx`, #1250) is a `doctor-finding`.
  */
-export const FROM_THE_DOCTOR: ReadonlySet<string> = new Set();
+export const FROM_THE_DOCTOR: ReadonlySet<string> = new Set(["doctor-finding"]);
 
 /** Whether a Notice with this cause counts in the status bar. */
 export const countsInStatusBar = (cause: string): boolean => FROM_THE_DOCTOR.has(familyOf(cause));

@@ -144,7 +144,7 @@ import { Notice, NoticeBand } from "./Notice";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
-import { useDoctor } from "./Doctor";
+import { DoctorNotices, useDoctor } from "./Doctor";
 import { ChatGauge, useChatUsage } from "./ChatGauge";
 import { usePin } from "./Updates";
 import { StatusLine, runningIn, type Alerts } from "./StatusLine";
@@ -4747,6 +4747,13 @@ export const PlaneView = memo(function PlaneView({
         {/* **The sandbox's one-time offer** to a project made before it (ADR 0067 §1, V21 1):
           a notice like the one below, answered once, never a dialog. */}
         <SandboxOffer plane={plane} />
+        {/* The doctor's findings that stand as Notices, each with its fix (#1250). */}
+        <DoctorNotices
+          doctor={doctor}
+          dismissed={dismissed}
+          dismiss={dismiss}
+          settle={settleNotices}
+        />
         {savedNotice && (
           <Notice
             cause="session-saved"

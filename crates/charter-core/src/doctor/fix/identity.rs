@@ -251,6 +251,9 @@ fn name_refused(name: &str) -> Option<String> {
     if name.is_empty() {
         return Some("Give the name your commits are made under.".into());
     }
+    if let Some(why) = secret_refused(name) {
+        return Some(why);
+    }
     if name.chars().any(crate::shown::invisible) {
         return Some(
             "A name is one line of visible characters: no control, zero-width or \
@@ -261,10 +264,42 @@ fn name_refused(name: &str) -> Option<String> {
     if name.chars().count() > LIMIT {
         return Some(format!("A name is at most {LIMIT} characters."));
     }
+    if !name.chars().any(draws) {
+        return Some("A name needs at least one visible character.".into());
+    }
     if name.contains(['<', '>']) {
         return Some("A name cannot contain < or >: git keeps those for the email.".into());
     }
     None
+}
+
+/// Characters that take a column and draw nothing in it: the Hangul fillers, letters by
+/// category with no glyph of their own (Unicode's Default_Ignorable_Code_Point; U+115F is even
+/// two columns wide), and the braille blank, U+2800.
+const BLANKS: [char; 5] = ['\u{115f}', '\u{1160}', '\u{2800}', '\u{3164}', '\u{ffa0}'];
+
+/// Does `c` draw something a reader can see (#1250)? Not a space, not one of the characters
+/// [`crate::shown::invisible`] escapes, not one that takes no column (a combining or
+/// variation mark, a joiner), and not one of the [`BLANKS`]. A name made only of these reads as
+/// a blank author.
+fn draws(c: char) -> bool {
+    use unicode_width::UnicodeWidthChar;
+    !c.is_whitespace()
+        && !crate::shown::invisible(c)
+        && c.width().is_some_and(|w| w > 0)
+        && !BLANKS.contains(&c)
+}
+
+/// Why `value` cannot be written because it looks like a credential (V91m, D-1250-7), or `None`.
+/// The same check every other writer makes, said by the secret's kind and never by its value: a
+/// git identity is written to a plain file and into the author line of every commit.
+fn secret_refused(value: &str) -> Option<String> {
+    crate::secretshape::secret_kind(value).map(|kind| {
+        format!(
+            "That looks like a secret ({kind}), so nothing was written: an identity is in every \
+             commit's author line. Keep the secret in a vault."
+        )
+    })
 }
 
 /// Why `email` (trimmed) is not a plausible email, or `None`. Plausible, not verified: one
@@ -272,6 +307,9 @@ fn name_refused(name: &str) -> Option<String> {
 fn email_refused(email: &str) -> Option<String> {
     if email.is_empty() {
         return Some("Give the email your commits are made under.".into());
+    }
+    if let Some(why) = secret_refused(email) {
+        return Some(why);
     }
     if email
         .chars()
