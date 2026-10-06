@@ -1233,6 +1233,9 @@ pub struct Applied {
     denied: Vec<Denial>,
     /// The project's package caches it lets a chat write ([`Widened::caches`]).
     caches: Option<Box<caches::CacheHome>>,
+    /// What a command run on the chat's behalf is held to. Boxed: it is a list of paths, and
+    /// [`Decided`] carries this beside a variant of a few words.
+    confines: Box<Confines>,
 }
 
 impl Applied {
@@ -1244,6 +1247,11 @@ impl Applied {
     /// The plane it was compiled for.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// What a command purlis runs for this chat is held to ([`Confines`]).
+    pub fn confines(&self) -> &Confines {
+        &self.confines
     }
 
     /// The folders this sandbox lets a chat write besides its own and the temp directories:
@@ -1942,29 +1950,53 @@ pub fn for_start_as(
     if let Some(missing) = backend::missing(machine.os, has) {
         return Err(NotStarted::NoBackend(missing));
     }
-    applied(harness, compile, &policy, &plane, root, machine, persona).map(Some)
+    let compiled = Compiled::of(&policy, &plane, root, machine, persona);
+    applied_of(harness, compile, &compiled, root, machine).map(Some)
 }
 
-/// `policy` for a chat of `harness` in `plane` at `root` on `machine`, compiled by `compile`
-/// and checked against the ground the chat stands on.
-fn applied(
+/// `compiled`, compiled by `compile` for a chat of `harness` in the plane at `root` on
+/// `machine`, with what a command run for that chat is held to ([`Confines`]).
+pub(crate) fn applied_of(
     harness: Harness,
     compile: Compiler,
-    policy: &Policy,
-    plane: &Plane,
+    compiled: &Compiled,
     root: &Path,
     machine: &Machine,
-    persona: Option<&str>,
 ) -> Result<Applied, NotStarted> {
-    let compiled = Compiled::of(policy, plane, root, machine, persona);
-    let (form, denied) = compile_checked(compile, &compiled, root, machine)?;
+    let (form, denied) = compile_checked(compile, compiled, root, machine)?;
+    let mut held = denied.clone();
+    if let Some(keychains) = seatbelt::keychains(machine.home.as_deref())
+        && !held.contains(&keychains)
+    {
+        held.push(keychains);
+    }
     Ok(Applied {
         harness,
         form,
         root: root.to_path_buf(),
         denied,
-        caches: compiled.widened.caches.map(Box::new),
+        caches: compiled.widened.caches.clone().map(Box::new),
+        confines: Box::new(Confines {
+            denied: held,
+            hosts: compiled.hosts.clone(),
+            widened: compiled.widened.clone(),
+        }),
     })
+}
+
+/// What a command purlis runs on a sandboxed chat's behalf is held to (#1407): exactly what the
+/// chat's own sandbox was compiled to deny, as its harness's compiler listed it (a Codex chat's
+/// own Codex home among them, D-88q) with the credential store's files, and the hosts it may
+/// reach. Recorded when the chat starts, so a change to the project's policy afterwards does
+/// not change what a run for that chat may do. What the chat's sandbox widens (#1337) is
+/// recorded too, so the run gets the chat's certificate check and cache grants.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Confines {
+    pub denied: Vec<Denial>,
+    pub hosts: Vec<String>,
+    /// What the chat's sandbox widens (#1337): its cache grants and certificate check, so a
+    /// run for the chat gets them too.
+    pub widened: Widened,
 }
 
 /// `policy` for a chat of `harness` in `plane` at `root`, with no `charter.toml` written and no
@@ -1978,7 +2010,8 @@ pub(crate) fn applied_for(
     machine: &Machine,
 ) -> Result<Applied, NotStarted> {
     let compile = compiler(harness).expect("a harness with a compiler");
-    applied(harness, compile, policy, plane, root, machine, None)
+    let compiled = Compiled::of(policy, plane, root, machine, None);
+    applied_of(harness, compile, &compiled, root, machine)
 }
 
 /// [`for_start`] without asking this machine for a backend, for a test of a compiler alone.
@@ -1994,7 +2027,8 @@ pub(crate) fn compiled_anyway(
         .policy
         .expect("a plane that turned the sandbox on");
     let compile = compiler(harness).ok_or(NotStarted::NoCompiler(harness))?;
-    applied(harness, compile, &policy, &plane, root, machine, None)
+    let compiled = Compiled::of(&policy, &plane, root, machine, None);
+    applied_of(harness, compile, &compiled, root, machine)
 }
 
 /// A person's choice, in the window, to start one chat without the sandbox (ADR 0067 §7,

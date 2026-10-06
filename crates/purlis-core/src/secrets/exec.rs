@@ -70,6 +70,16 @@ impl Drop for Cleanup {
 /// quietly restore every other vault's credential to the child. (The registry was read a moment
 /// earlier to find this vault, so in practice this does not fail.)
 fn child_env(ctx: &Ctx, vault: &str) -> Result<Vec<(OsString, OsString)>, super::VaultError> {
+    child_env_of(ctx, vault, ctx.env.vars())
+}
+
+/// [`child_env`] of `vars`, an environment other than this process's: the one a brokered run
+/// was handed by the chat that asked ([`super::brokered`]).
+pub(crate) fn child_env_of(
+    ctx: &Ctx,
+    vault: &str,
+    vars: &[(OsString, OsString)],
+) -> Result<Vec<(OsString, OsString)>, super::VaultError> {
     let doc = registry::load_registry(ctx)?;
     let declared = registry::identity_vars(&doc);
     let own: Vec<String> = declared
@@ -82,16 +92,14 @@ fn child_env(ctx: &Ctx, vault: &str) -> Result<Vec<(OsString, OsString)>, super:
         .flat_map(|(_, names)| names.iter())
         .filter(|n| !own.contains(n))
         .collect();
-    Ok(ctx
-        .env
-        .vars()
+    Ok(vars
         .iter()
         .filter(|(k, _)| !strip.iter().any(|s| k.as_os_str() == s.as_str()))
         .cloned()
         .collect())
 }
 
-fn set_var(env: &mut Vec<(OsString, OsString)>, name: &str, value: impl Into<OsString>) {
+pub(crate) fn set_var(env: &mut Vec<(OsString, OsString)>, name: &str, value: impl Into<OsString>) {
     let value = value.into();
     match env.iter_mut().find(|(k, _)| k == name) {
         Some(slot) => slot.1 = value,
@@ -102,13 +110,21 @@ fn set_var(env: &mut Vec<(OsString, OsString)>, name: &str, value: impl Into<OsS
 /// A temp file named `charter-secret-<random>`, 0600, registered for removal before `bytes` are
 /// written into it. Never named after the vault or the key: a name is visible to every account
 /// that can list the temp directory, and a key name is a user's word that could shape a path.
-fn temp_file(cleanup: &mut Cleanup, bytes: &[u8]) -> std::io::Result<PathBuf> {
-    let (mut file, path) = tempfile::Builder::new()
-        .prefix("charter-secret-")
-        .rand_bytes(12)
-        .tempfile()?
-        .keep()
-        .map_err(|e| e.error)?;
+///
+/// In the system temp directory, or in `within` where it is given: a brokered run keeps its
+/// files where no chat can read them ([`super::brokered`]).
+fn temp_file(
+    cleanup: &mut Cleanup,
+    within: Option<&std::path::Path>,
+    bytes: &[u8],
+) -> std::io::Result<PathBuf> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("charter-secret-").rand_bytes(12);
+    let made = match within {
+        Some(dir) => builder.tempfile_in(dir),
+        None => builder.tempfile(),
+    };
+    let (mut file, path) = made?.keep().map_err(|e| e.error)?;
     cleanup.paths.push(path.clone());
     file.write_all(bytes)?;
     #[cfg(unix)]
@@ -119,8 +135,215 @@ fn temp_file(cleanup: &mut Cleanup, bytes: &[u8]) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// What the child is handed, resolved: its environment, every value to redact, the names
+/// recorded, and the temp files made, removed when this is dropped.
+pub(crate) struct Prepared {
+    pub env: Vec<(OsString, OsString)>,
+    pub secret_values: Vec<String>,
+    pub key_names: Vec<String>,
+    pub env_names: Vec<String>,
+    /// The temp files, in the order they were made.
+    pub files: Vec<PathBuf>,
+    _cleanup: Cleanup,
+}
+
+/// Why [`prepare`] stopped: a terminating signal arrived (`128+N` is the status), or a refusal
+/// with its status and its sentence.
+pub(crate) enum Stopped {
+    Signal(i32),
+    Said(i32, String),
+}
+
+/// Resolves `req`'s `--env`, `--file` and `--dotenv` from `v` into `env`, making each temp file
+/// in `within` (the system temp directory where it is `None`). `caught` is asked after every
+/// resolution whether a terminating signal arrived, and if one did nothing more is resolved.
+pub(crate) fn prepare(
+    ctx: &Ctx,
+    v: &registry::Vault,
+    req: &Request,
+    mut env: Vec<(OsString, OsString)>,
+    within: Option<&std::path::Path>,
+    caught: &dyn Fn() -> Option<i32>,
+) -> Result<Prepared, Stopped> {
+    let mut secret_values: Vec<String> = Vec::new();
+    let mut key_names: Vec<String> = Vec::new();
+    let mut env_names: Vec<String> = Vec::new();
+    // Declared before the first temp file and dropped after the child is gone, on every path.
+    let mut cleanup = Cleanup::default();
+
+    // One value, and then the question every resolution has to be followed by: did a
+    // terminating signal arrive meanwhile? If so nothing is started — the credential already
+    // read goes no further than this process, and the files made so far are removed.
+    let resolve = |key: &str| -> Result<String, Stopped> {
+        let got = cmd::get_value(ctx, v, key);
+        if let Some(sig) = caught() {
+            return Err(Stopped::Signal(128 + sig));
+        }
+        got.map_err(|e| Stopped::Said(1, e.message))
+    };
+
+    for spec in &req.env {
+        let (name, key) = match spec.split_once('=') {
+            Some((n, k)) if !n.is_empty() => (n, k),
+            _ => {
+                return Err(Stopped::Said(
+                    2,
+                    format!("--env expects NAME=key, got '{spec}'"),
+                ));
+            }
+        };
+        let val = resolve(key)?;
+        set_var(&mut env, name, val.clone());
+        secret_values.push(val);
+        key_names.push(key.to_string());
+        env_names.push(name.to_string());
+    }
+    for spec in &req.file {
+        let (name, key) = match spec.split_once('=') {
+            Some((n, k)) if !n.is_empty() => (n, k),
+            _ => {
+                return Err(Stopped::Said(
+                    2,
+                    format!("--file expects ENVVAR=key, got '{spec}'"),
+                ));
+            }
+        };
+        let val = resolve(key)?;
+        secret_values.push(val.clone());
+        key_names.push(key.to_string());
+        env_names.push(name.to_string());
+        match temp_file(&mut cleanup, within, val.as_bytes()) {
+            Ok(path) => set_var(&mut env, name, path.into_os_string()),
+            Err(e) => {
+                return Err(Stopped::Said(
+                    1,
+                    format!("cannot write the temp file for --file {name}: {e}"),
+                ));
+            }
+        }
+    }
+
+    // --dotenv ENVVAR=NAME:key, repeatable; entries sharing an ENVVAR merge into one file, in
+    // flag order, so a consumer wanting several secrets gets exactly one path.
+    let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for spec in &req.dotenv {
+        let parsed = spec.split_once('=').and_then(|(envvar, entry)| {
+            let (name, key) = entry.split_once(':')?;
+            (!envvar.is_empty() && !name.is_empty() && !key.is_empty())
+                .then(|| (envvar.to_string(), name.to_string(), key.to_string()))
+        });
+        let Some((envvar, name, key)) = parsed else {
+            return Err(Stopped::Said(
+                2,
+                format!("--dotenv expects ENVVAR=NAME:key, got '{spec}'"),
+            ));
+        };
+        let slot = match grouped.iter().position(|(e, _)| *e == envvar) {
+            Some(i) => i,
+            None => {
+                grouped.push((envvar.clone(), Vec::new()));
+                grouped.len() - 1
+            }
+        };
+        if grouped[slot].1.iter().any(|(n, _)| *n == name) {
+            return Err(Stopped::Said(
+                2,
+                format!(
+                    "--dotenv defines '{name}' twice for {envvar}; which value wins would be up \
+                     to the reader of the file. Use one entry per name."
+                ),
+            ));
+        }
+        grouped[slot].1.push((name, key));
+    }
+    for (envvar, entries) in &grouped {
+        let mut lines: Vec<String> = Vec::new();
+        env_names.push(envvar.clone());
+        for (name, key) in entries {
+            let val = resolve(key)?;
+            secret_values.push(val.clone());
+            key_names.push(key.clone());
+            let escaped = dotenv::escaped(&val);
+            if escaped != val {
+                secret_values.push(escaped);
+            }
+            match dotenv::line(name, &val) {
+                Ok(line) => lines.push(line),
+                Err(e) => return Err(Stopped::Said(2, e.0)),
+            }
+        }
+        let body = format!("{}\n", lines.join("\n"));
+        match temp_file(&mut cleanup, within, body.as_bytes()) {
+            Ok(path) => set_var(&mut env, envvar, path.into_os_string()),
+            Err(e) => {
+                return Err(Stopped::Said(
+                    1,
+                    format!("cannot write the temp file for --dotenv {envvar}: {e}"),
+                ));
+            }
+        }
+    }
+    Ok(Prepared {
+        env,
+        secret_values,
+        files: cleanup.paths.clone(),
+        key_names,
+        env_names,
+        _cleanup: cleanup,
+    })
+}
+
+/// The one record of a run handed its credentials (`secret-exec`): the vault, the key and
+/// variable names, the program and the mode, and `also` — never a value.
+pub(crate) fn record(
+    ctx: &Ctx,
+    vault: &str,
+    prepared: &Prepared,
+    argv0: &str,
+    mode: &str,
+    also: &[(&str, Value)],
+) {
+    let mut keys_sorted = prepared.key_names.clone();
+    keys_sorted.sort();
+    keys_sorted.dedup();
+    let mut envs_sorted = prepared.env_names.clone();
+    envs_sorted.sort();
+    envs_sorted.dedup();
+    let mut fields: Vec<(&str, Value)> = vec![
+        ("vault", Value::String(vault.to_owned())),
+        (
+            "key_names",
+            Value::Array(keys_sorted.into_iter().map(Value::String).collect()),
+        ),
+        (
+            "env_names",
+            Value::Array(envs_sorted.into_iter().map(Value::String).collect()),
+        ),
+        ("argv0", Value::String(argv0.to_owned())),
+        ("mode", Value::String(mode.into())),
+    ];
+    fields.extend(also.iter().cloned());
+    cmd::trace_secret_use(ctx, "secret-exec", &prepared.secret_values, &fields);
+}
+
+/// The usage line a request with no command is refused with.
+pub(crate) const NO_COMMAND: &str =
+    "No command given. Usage: purlis secret exec <vault> --env NAME=key -- <command...>";
+
 /// `cmd_secret_exec`.
 pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
+    let mut command = req.command.clone();
+    if command.first().is_some_and(|c| c == "--") {
+        command.remove(0);
+    }
+    // Inside a sandboxed chat the app runs it, and this process never reads the vault
+    // (ADR 0067 §5 class 1, #1407). Only where no app takes it does it run here.
+    if !command.is_empty()
+        && !(req.exec && req.stream)
+        && let Some(code) = super::brokered::forwarded(ctx, req, &command, io)
+    {
+        return code;
+    }
     let v = match cmd::provider(ctx, &req.vault) {
         Ok(v) => v,
         Err(e) => {
@@ -128,15 +351,8 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
             return 1;
         }
     };
-    let mut command = req.command.clone();
-    if command.first().is_some_and(|c| c == "--") {
-        command.remove(0);
-    }
     if command.is_empty() {
-        io.say(Say::Err(
-            "No command given. Usage: purlis secret exec <vault> --env NAME=key -- <command...>"
-                .into(),
-        ));
+        io.say(Say::Err(NO_COMMAND.into()));
         return 2;
     }
     if req.exec && req.stream {
@@ -165,137 +381,22 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
         return 2;
     }
 
-    let mut env = match child_env(ctx, &req.vault) {
+    let env = match child_env(ctx, &req.vault) {
         Ok(env) => env,
         Err(e) => {
             io.say(Say::Err(e.message));
             return 1;
         }
     };
-    let mut secret_values: Vec<String> = Vec::new();
-    let mut key_names: Vec<String> = Vec::new();
-    let mut env_names: Vec<String> = Vec::new();
-    // Declared before the first temp file and dropped after the child is gone, on every path.
-    let mut cleanup = Cleanup::default();
     let signals = Termination::install();
-
-    // One value, and then the question every resolution has to be followed by: did a
-    // terminating signal arrive meanwhile? If so nothing is started — the credential already
-    // read goes no further than this process, and the files made so far are removed.
-    macro_rules! resolve {
-        ($key:expr) => {{
-            let got = cmd::get_value(ctx, &v, $key);
-            if let Some(sig) = signals.caught() {
-                return 128 + sig;
-            }
-            match got {
-                Ok(val) => val,
-                Err(e) => {
-                    io.say(Say::Err(e.message));
-                    return 1;
-                }
-            }
-        }};
-    }
-
-    for spec in &req.env {
-        let (name, key) = match spec.split_once('=') {
-            Some((n, k)) if !n.is_empty() => (n, k),
-            _ => {
-                io.say(Say::Err(format!("--env expects NAME=key, got '{spec}'")));
-                return 2;
-            }
-        };
-        let val = resolve!(key);
-        set_var(&mut env, name, val.clone());
-        secret_values.push(val);
-        key_names.push(key.to_string());
-        env_names.push(name.to_string());
-    }
-    for spec in &req.file {
-        let (name, key) = match spec.split_once('=') {
-            Some((n, k)) if !n.is_empty() => (n, k),
-            _ => {
-                io.say(Say::Err(format!("--file expects ENVVAR=key, got '{spec}'")));
-                return 2;
-            }
-        };
-        let val = resolve!(key);
-        secret_values.push(val.clone());
-        key_names.push(key.to_string());
-        env_names.push(name.to_string());
-        match temp_file(&mut cleanup, val.as_bytes()) {
-            Ok(path) => set_var(&mut env, name, path.into_os_string()),
-            Err(e) => {
-                io.say(Say::Err(format!(
-                    "cannot write the temp file for --file {name}: {e}"
-                )));
-                return 1;
-            }
+    let prepared = match prepare(ctx, &v, req, env, None, &|| signals.caught()) {
+        Ok(prepared) => prepared,
+        Err(Stopped::Signal(code)) => return code,
+        Err(Stopped::Said(code, why)) => {
+            io.say(Say::Err(why));
+            return code;
         }
-    }
-
-    // --dotenv ENVVAR=NAME:key, repeatable; entries sharing an ENVVAR merge into one file, in
-    // flag order, so a consumer wanting several secrets gets exactly one path.
-    let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    for spec in &req.dotenv {
-        let parsed = spec.split_once('=').and_then(|(envvar, entry)| {
-            let (name, key) = entry.split_once(':')?;
-            (!envvar.is_empty() && !name.is_empty() && !key.is_empty())
-                .then(|| (envvar.to_string(), name.to_string(), key.to_string()))
-        });
-        let Some((envvar, name, key)) = parsed else {
-            io.say(Say::Err(format!(
-                "--dotenv expects ENVVAR=NAME:key, got '{spec}'"
-            )));
-            return 2;
-        };
-        let slot = match grouped.iter().position(|(e, _)| *e == envvar) {
-            Some(i) => i,
-            None => {
-                grouped.push((envvar.clone(), Vec::new()));
-                grouped.len() - 1
-            }
-        };
-        if grouped[slot].1.iter().any(|(n, _)| *n == name) {
-            io.say(Say::Err(format!(
-                "--dotenv defines '{name}' twice for {envvar}; which value wins would be up to the \
-                 reader of the file. Use one entry per name."
-            )));
-            return 2;
-        }
-        grouped[slot].1.push((name, key));
-    }
-    for (envvar, entries) in &grouped {
-        let mut lines: Vec<String> = Vec::new();
-        env_names.push(envvar.clone());
-        for (name, key) in entries {
-            let val = resolve!(key);
-            secret_values.push(val.clone());
-            key_names.push(key.clone());
-            let escaped = dotenv::escaped(&val);
-            if escaped != val {
-                secret_values.push(escaped);
-            }
-            match dotenv::line(name, &val) {
-                Ok(line) => lines.push(line),
-                Err(e) => {
-                    io.say(Say::Err(e.0));
-                    return 2;
-                }
-            }
-        }
-        let body = format!("{}\n", lines.join("\n"));
-        match temp_file(&mut cleanup, body.as_bytes()) {
-            Ok(path) => set_var(&mut env, envvar, path.into_os_string()),
-            Err(e) => {
-                io.say(Say::Err(format!(
-                    "cannot write the temp file for --dotenv {envvar}: {e}"
-                )));
-                return 1;
-            }
-        }
-    }
+    };
 
     // The last point before anything is started or recorded as handed out.
     if let Some(sig) = signals.caught() {
@@ -305,12 +406,6 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
 
     // ONE record, above the three ways the child is started: everything that runs a command
     // passes through here, and `--exec` never comes back to record anything after.
-    let mut keys_sorted = key_names.clone();
-    keys_sorted.sort();
-    keys_sorted.dedup();
-    let mut envs_sorted = env_names.clone();
-    envs_sorted.sort();
-    envs_sorted.dedup();
     let mode = if req.exec {
         "exec"
     } else if req.stream {
@@ -318,30 +413,13 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
     } else {
         "capture"
     };
-    cmd::trace_secret_use(
-        ctx,
-        "secret-exec",
-        &secret_values,
-        &[
-            ("vault", Value::String(req.vault.clone())),
-            (
-                "key_names",
-                Value::Array(keys_sorted.into_iter().map(Value::String).collect()),
-            ),
-            (
-                "env_names",
-                Value::Array(envs_sorted.into_iter().map(Value::String).collect()),
-            ),
-            ("argv0", Value::String(command[0].clone())),
-            ("mode", Value::String(mode.into())),
-        ],
-    );
+    record(ctx, &req.vault, &prepared, &command[0], mode, &[]);
 
     let mut child = Command::new(&command[0]);
     child
         .args(&command[1..])
         .env_clear()
-        .envs(env.iter().map(|(k, v)| (k, v)));
+        .envs(prepared.env.iter().map(|(k, v)| (k, v)));
 
     if req.exec {
         drop(signals);
@@ -354,7 +432,7 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
             Err(e) => return not_started(&command[0], &e, io),
         };
         let code = supervise(spawned, &signals, CTRL_C_GRACE);
-        drop(cleanup);
+        drop(prepared);
         return code;
     }
 
@@ -378,26 +456,26 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
     let code = supervise(spawned, &signals, CTRL_C_GRACE);
     if code >= 128 && signals.caught().is_some() {
         // Died on a signal charter caught: the child is gone and nothing it said is printed.
-        drop(cleanup);
+        drop(prepared);
         return code;
     }
     let out = out_reader.join().unwrap_or_default();
     let err = err_reader.join().unwrap_or_default();
-    let out = super::redact(&out, &secret_values);
-    let err = super::redact(&err, &secret_values);
+    let out = super::redact(&out, &prepared.secret_values);
+    let err = super::redact(&err, &prepared.secret_values);
     if !out.is_empty() {
         io.out(&out);
     }
     if !err.is_empty() {
         io.err(&err);
     }
-    drop(cleanup);
+    drop(prepared);
     code
 }
 
 /// A child that could not be started: `command not found` and 127 when there is no such
 /// program, as Python's `FileNotFoundError` arm says; any other failure named, exit 1.
-fn not_started(program: &str, e: &std::io::Error, io: &mut dyn Io) -> i32 {
+pub(crate) fn not_started(program: &str, e: &std::io::Error, io: &mut dyn Io) -> i32 {
     if e.kind() == std::io::ErrorKind::NotFound {
         io.say(Say::Err(format!("command not found: {program}")));
         127
@@ -468,7 +546,7 @@ fn supervise(mut child: std::process::Child, signals: &Termination, grace: Durat
 
 /// The exit status charter passes through: the child's own, or — for a child killed by
 /// signal `N` — what Python's `sys.exit(-N)` leaves, `256 - N`.
-fn exit_status(status: &std::process::ExitStatus) -> i32 {
+pub(crate) fn exit_status(status: &std::process::ExitStatus) -> i32 {
     let code = super::run::exit_code(status);
     // `code <= 0` would be the same function — it differs only at 0, where `(256 + 0) & 0xff`
     // is 0 as well, and an exit code is never above 255 — so `.cargo/mutants.toml` excludes it.

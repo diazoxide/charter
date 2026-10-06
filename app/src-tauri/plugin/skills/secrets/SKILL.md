@@ -67,6 +67,13 @@ Scrubbing is a literal search-and-replace for the value's own bytes. So:
 
 The credential goes wherever the command sends it, and you choose that command.
 
+**In a sandboxed chat**, `purlis secret exec` is run by the app: you run the same command.
+The app checks that the vault is tagged for this chat's persona, runs the command in this chat's
+sandbox, and streams the output back with each value's literal text masked. If it is refused
+with a sentence, tell the user that sentence. Do not try to read the vault some other way.
+Prefer `--file` for a credential the command can read from a file. The rules above still hold:
+you choose the command, so the credential goes wherever that command sends it.
+
 **To check that one is present:**
 
 ```bash

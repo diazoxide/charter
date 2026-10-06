@@ -320,13 +320,90 @@ const A_TOKEN_IS: usize = 32;
 /// **The hook channel reads no line without it.** Every line names a chat, and the listener
 /// hands a line on only when it carries that chat's token ([`ChatTokens::admits`]); anything
 /// else is dropped without a word on the connection, as a line that will not parse is.
+///
+/// **And from inside the chat** (D-1407-6). A token is in the chat's environment, and on macOS a
+/// process of the same user can read another's arguments and environment, so a token alone
+/// does not say who sent a line. Each chat's program is recorded as it starts, by pid and by
+/// when it started ([`ChatTokens::bind`]), and forgotten when it ends
+/// ([`ChatTokens::program_ended`]). A live line is read only from a process that is that
+/// program or runs inside it: in its session, or below it ([`descends`]). A chat whose program
+/// is not recorded has no line read. A line its hooks spool while the app is away is checked by
+/// its token's key alone: the spool is not bound to the program yet.
 #[derive(Debug, Default)]
 pub struct ChatTokens {
     held: std::sync::Mutex<std::collections::HashMap<u32, ChatToken>>,
+    /// Each chat's program, once it has started.
+    roots: std::sync::Mutex<std::collections::HashMap<u32, Program>>,
     /// The spool directory each token's key is recorded in as it is issued (FD-30), where
     /// this host has one.
     spool: Option<std::path::PathBuf>,
 }
+
+/// A chat's program: its pid, and when the process with that pid started, so a later process
+/// given the same number is not taken for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Program {
+    pub pid: u32,
+    pub started: String,
+}
+
+impl Program {
+    /// The process `pid` is now, or `None` where when it started cannot be read: such a program
+    /// is never recorded, so its chat has no line read.
+    pub fn of(pid: u32) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            let processes = purlis_same_user::Parents::now(crate::forklock::output).ok()?;
+            Some(Self {
+                pid,
+                started: processes.started(pid)?,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+}
+
+/// What the channel makes of a line's token and the process that sent it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    /// The chat's token, from inside the chat.
+    Admitted,
+    /// No token, a wrong one, or a chat with none: dropped without a word, as a line that will
+    /// not parse is.
+    NoToken,
+    /// The chat's token, from a process outside the chat: refused, and told so
+    /// ([`OUTSIDE_THE_CHAT`]).
+    Outside,
+    /// The chat's token, for a chat whose program purlis could not confirm as it started:
+    /// refused, and told so ([`UNCONFIRMED_PROGRAM`]).
+    Unbound,
+}
+
+impl Admission {
+    /// The sentence a refused line is answered with, where it is answered.
+    pub fn refusal(self) -> Option<&'static str> {
+        match self {
+            Self::Outside => Some(OUTSIDE_THE_CHAT),
+            Self::Unbound => Some(UNCONFIRMED_PROGRAM),
+            Self::Admitted | Self::NoToken => None,
+        }
+    }
+}
+
+/// What a line for a chat whose program purlis could not confirm is answered with: the chat's
+/// own start went wrong, not where the line came from.
+pub const UNCONFIRMED_PROGRAM: &str = "purlis couldn't confirm this chat's program when it \
+                                       started, so it can't read its lines; restart the chat.";
+
+/// What a line that carried its chat's token from outside the chat is answered with (D-1407-9):
+/// a block that says why, never a silence.
+pub const OUTSIDE_THE_CHAT: &str = "This came from a process outside the chat (for example tmux, \
+                                    nohup after its shell ended, or docker exec); run it from \
+                                    the chat's own shell.";
 
 impl ChatTokens {
     /// Tokens whose spool keys are recorded in `dir` as each is issued ([`spool::remember`]),
@@ -334,6 +411,7 @@ impl ChatTokens {
     pub fn spooling_into(dir: std::path::PathBuf) -> Self {
         Self {
             held: std::sync::Mutex::default(),
+            roots: std::sync::Mutex::default(),
             spool: Some(dir),
         }
     }
@@ -358,25 +436,98 @@ impl ChatTokens {
             );
         }
         self.held().insert(chat, token.clone());
+        self.rooted().remove(&chat);
+        Ok(token)
+    }
+
+    /// Records `program` as chat `chat`'s program: its lines are read from it and from what runs
+    /// inside it, and from nothing else.
+    pub fn bind(&self, chat: u32, program: Program) {
+        self.rooted().insert(chat, program);
+    }
+
+    /// Chat `chat`'s program `pid` has ended: its token and its program are forgotten, so a
+    /// later process given the same number speaks for nothing. A program that is not the one
+    /// recorded (an end heard after the chat started again) changes nothing.
+    pub fn program_ended(&self, chat: u32, pid: u32) {
+        let mut roots = self.rooted();
+        if roots.get(&chat).is_some_and(|program| program.pid == pid) {
+            roots.remove(&chat);
+            drop(roots);
+            self.held().remove(&chat);
+        }
+    }
+
+    /// [`Self::issue`], with this process recorded as the chat's program: for a test that
+    /// stands in for a chat's hooks itself, or starts them as its children.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn issue_to_this_process(&self, chat: u32) -> std::io::Result<ChatToken> {
+        let token = self.issue(chat)?;
+        let me = std::process::id();
+        let program = Program::of(me).unwrap_or(Program {
+            pid: me,
+            started: String::new(),
+        });
+        self.bind(chat, program);
         Ok(token)
     }
 
     /// Forgets `chat`'s token: a line for it is dropped from now on.
     pub fn forget(&self, chat: u32) {
         self.held().remove(&chat);
+        self.rooted().remove(&chat);
     }
 
-    /// Whether `token` is the one `chat` was given. No token, and a chat with none, are no.
+    fn rooted(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u32, Program>> {
+        self.roots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether a line for `chat` carrying `token` from process `peer` is read
+    /// ([`Self::admission`] is [`Admission::Admitted`]).
+    pub fn admits(&self, chat: u32, token: Option<&str>, peer: Option<u32>) -> bool {
+        self.admission(chat, token, peer) == Admission::Admitted
+    }
+
+    /// What a line for `chat` carrying `token` from process `peer` is.
     ///
-    /// Compared in constant time, so how long a wrong token takes to refuse says nothing about
-    /// how much of it was right.
-    pub fn admits(&self, chat: u32, token: Option<&str>) -> bool {
+    /// The token is compared in constant time, so how long a wrong token takes to refuse says
+    /// nothing about how much of it was right. Then `peer` must be the chat's recorded program,
+    /// still the process that started then, or run inside it ([`descends`]). No peer, and a
+    /// chat with no program recorded, are [`Admission::Outside`].
+    pub fn admission(&self, chat: u32, token: Option<&str>, peer: Option<u32>) -> Admission {
+        self.admission_by(chat, token, peer, &descends)
+    }
+
+    /// [`Self::admission`], asking `inside` whether a process runs inside a chat's program.
+    pub(crate) fn admission_by(
+        &self,
+        chat: u32,
+        token: Option<&str>,
+        peer: Option<u32>,
+        inside: &dyn Fn(u32, &Program) -> bool,
+    ) -> Admission {
         use subtle::ConstantTimeEq;
 
-        let Some(token) = token else { return false };
-        self.held()
+        let Some(token) = token else {
+            return Admission::NoToken;
+        };
+        let carried = self
+            .held()
             .get(&chat)
-            .is_some_and(|held| bool::from(held.0.as_bytes().ct_eq(token.as_bytes())))
+            .is_some_and(|held| bool::from(held.0.as_bytes().ct_eq(token.as_bytes())));
+        if !carried {
+            return Admission::NoToken;
+        }
+        let Some(program) = self.rooted().get(&chat).cloned() else {
+            return Admission::Unbound;
+        };
+        if peer.is_some_and(|peer| inside(peer, &program)) {
+            Admission::Admitted
+        } else {
+            Admission::Outside
+        }
     }
 
     fn held(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u32, ChatToken>> {
@@ -386,8 +537,46 @@ impl ChatTokens {
     }
 }
 
+/// Whether process `peer` is `program`, or runs inside it: in the session `program` leads (every
+/// chat's program leads its own), or below it in the process tree. `program` must still be the
+/// process that started when it was recorded. Asked of the kernel, in one reading of the
+/// process table and the same walk the human scopes are refused by
+/// ([`purlis_same_user::inside_a_chat`]); every doubt is no.
+///
+/// On macOS the table is one `/bin/ps` run per line, through the fork lock: reading a process's
+/// parent and start in-process there is `proc_pidinfo`, which needs an `unsafe` block this
+/// workspace allows only by the operator's ruling (D-1407-8). Linux reads `/proc`.
+pub fn descends(peer: u32, program: &Program) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(processes) = purlis_same_user::Parents::now(crate::forklock::output) else {
+            return false;
+        };
+        if processes.started(program.pid).as_deref() != Some(program.started.as_str()) {
+            return false;
+        }
+        matches!(
+            purlis_same_user::inside_a_chat(
+                peer,
+                &[program.pid],
+                |pid| processes.of(pid),
+                purlis_same_user::session_of,
+            ),
+            Ok(Some(_))
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (peer, program);
+        false
+    }
+}
+
 /// The line `what` is on the wire: its JSON with `token` beside it, and a newline.
-fn line_with(token: Option<&ChatToken>, what: &impl serde::Serialize) -> std::io::Result<Vec<u8>> {
+pub(crate) fn line_with(
+    token: Option<&ChatToken>,
+    what: &impl serde::Serialize,
+) -> std::io::Result<Vec<u8>> {
     let mut value = serde_json::to_value(what).map_err(std::io::Error::other)?;
     if let (Some(token), Some(fields)) = (token, value.as_object_mut()) {
         fields.insert(TOKEN.to_owned(), serde_json::Value::String(token.0.clone()));
@@ -785,6 +974,9 @@ enum Line {
     Touching(Touching),
     /// After every other kind: it requires `sandbox_blocked`, which none of them carries.
     Blocked(SandboxBlocked),
+    /// After every other kind: it requires `secret_exec`, which none of them carries. Held on
+    /// its connection for as long as the command runs (#1407).
+    SecretExec(crate::secrets::brokered::Ask),
 }
 
 impl Line {
@@ -805,6 +997,7 @@ impl Line {
             Self::Permission(asked) => asked.chat,
             Self::Touching(touching) => touching.chat,
             Self::Blocked(blocked) => blocked.chat,
+            Self::SecretExec(ask) => ask.chat,
         }
     }
 }
@@ -1004,6 +1197,19 @@ pub struct SandboxBlocked {
     pub harness: Option<String>,
 }
 
+/// What hears a brokered `secret exec` ([`crate::secrets::brokered`]): the ask, and its
+/// connection, which it writes every frame on and reads the asker's stdin from. It returns once
+/// the command has ended; the connection ends with it.
+pub type SecretExecuting = Box<
+    dyn Fn(
+            crate::secrets::brokered::Ask,
+            Box<dyn std::io::BufRead + Send>,
+            Box<dyn std::io::Write + Send>,
+        ) + Send
+        + Sync
+        + 'static,
+>;
+
 /// What hears a [`SandboxBlocked`]. Nothing is answered: the hook does not wait for it.
 pub type Blocked = Box<dyn Fn(SandboxBlocked) + Send + Sync + 'static>;
 
@@ -1031,6 +1237,8 @@ pub struct Hearing {
     pub touching: Touched,
     /// Every [`SandboxBlocked`].
     pub blocked: Blocked,
+    /// Every brokered `secret exec`: held on its connection while the command runs.
+    pub secret_exec: SecretExecuting,
 }
 
 /// Sends one report to the socket at `path`. Answers whether the app took it.
@@ -1118,6 +1326,9 @@ pub enum Delivered {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Taken {
     taken: bool,
+    /// Why it was refused, where it was (D-1407-9): the hook says this and spools nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refused: Option<String>,
 }
 
 /// Delivers a chat's report: taken by the host at `path`, or spooled beside it.
@@ -1181,12 +1392,19 @@ fn deliver(
             .take(256)
             .read_line(&mut said)?;
         match serde_json::from_str::<Taken>(&said) {
-            Ok(Taken { taken: true }) => Ok(()),
+            Ok(Taken { taken: true, .. }) => Ok(Ok(())),
+            Ok(Taken {
+                refused: Some(why), ..
+            }) => Ok(Err(why)),
             _ => Err(io::Error::other("the app did not say it took the line")),
         }
     });
-    let Err(why) = taken else {
-        return Ok(Delivered::Taken);
+    let why = match taken {
+        Ok(Ok(())) => return Ok(Delivered::Taken),
+        // Refused, not missed: the app is there and said no, so nothing is spooled to be read
+        // as if it had been away.
+        Ok(Err(refused)) => return Err(io::Error::new(io::ErrorKind::PermissionDenied, refused)),
+        Err(why) => why,
     };
     let Some(token) = token else {
         return Err(io::Error::new(
@@ -1212,10 +1430,10 @@ fn deliver(
 /// is frozen never does. A guard's verdict must never wait on that, so the act is let go and
 /// left to finish or fail on its own; the process is on its way out anyway.
 #[cfg(unix)]
-fn within(
+fn within<T: Send + 'static>(
     deadline: std::time::Duration,
-    act: impl FnOnce() -> io::Result<()> + Send + 'static,
-) -> io::Result<()> {
+    act: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("charter-hook-notice".into())
@@ -1494,6 +1712,9 @@ impl Listener {
             permission: Box::new(|_| None),
             blocked: Box::new(|_| {}),
             touching: Box::new(|_| {}),
+            secret_exec: Box::new(|_, _, writer| {
+                crate::secrets::brokered::not_answered(writer);
+            }),
         })
     }
 
@@ -1524,8 +1745,11 @@ impl Listener {
                 // `0600` in a `0700` directory, which keeps every other user out already; this
                 // still holds if either is ever wrong. A peer of another uid, or one the socket
                 // will not name, is closed unread, before the chat's token is even looked at.
+                // Its pid too, which a line is checked against (D-1407-6).
+                let peer = purlis_same_user::peer_process_of(&connection);
+                let pid = peer.as_ref().ok().map(|(_, pid)| *pid);
                 if let Err(refused) =
-                    purlis_same_user::admit_peer(purlis_same_user::peer_of(&connection), self.owner)
+                    purlis_same_user::admit_peer(peer.map(|(uid, _)| uid), self.owner)
                 {
                     if let Some(also) = PEER_REFUSALS.say() {
                         tracing::warn!(
@@ -1553,7 +1777,7 @@ impl Listener {
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
                     .spawn(move || {
-                        serve(connection, this, &tokens, &hearing, &serving);
+                        serve(connection, pid, this, &tokens, &hearing, &serving);
                     });
                 // A thread that will not start costs this one report. Refusing the rest of
                 // the channel over it would cost every report after it too, and so would a
@@ -1685,6 +1909,10 @@ const A_CONNECTION_SAYS_AT_MOST: usize = 4;
 #[cfg(unix)]
 const A_LINE_IS_AT_MOST: u64 = 6 * crate::handoff::FIRST_MESSAGE_MAX_BYTES as u64 + 4096;
 
+/// How long a brokered `secret exec`'s frame may take to write before its asker counts as gone.
+#[cfg(unix)]
+const A_FRAME_WRITE_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// What an app with no answerer says to an ask, so an asker never waits on a silence.
 pub const NOTHING_ANSWERS: &str = "this app does not open chats on request";
 
@@ -1695,6 +1923,7 @@ pub const NOTHING_ANSWERS: &str = "this app does not open chats on request";
 #[cfg(unix)]
 fn serve(
     connection: std::os::unix::net::UnixStream,
+    peer: Option<u32>,
     this: u64,
     tokens: &ChatTokens,
     hearing: &Hearing,
@@ -1714,15 +1943,29 @@ fn serve(
     let Ok(mut writer) = connection.try_clone() else {
         return;
     };
-    let mut reader = std::io::BufReader::new(connection);
+    let deadline = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mut reader = std::io::BufReader::new(Deadlined {
+        socket: connection,
+        until: std::sync::Arc::clone(&deadline),
+    });
     for _ in 0..A_CONNECTION_SAYS_AT_MOST {
         let mut line = String::new();
+        // One deadline for the whole line, not one per read (D-1407-6): a sender dripping a
+        // byte at a time would otherwise hold the line open while the pid it connected from is
+        // given to another process.
+        *deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(std::time::Instant::now() + A_REPORT_TAKES_AT_MOST);
         // The cap is per line: `take` on the reader would make it per connection, and a
         // brief is most of what an open carries.
         match (&mut reader).take(A_LINE_IS_AT_MOST).read_line(&mut line) {
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
+        *deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         // A line the app will not read ends this connection, never the channel, and is
         // answered with the reason first (#1333): an asker can then tell an app that refused
         // from one that never took the ask. A hook reads anything but "taken" as not taken,
@@ -1752,18 +1995,42 @@ fn serve(
         // carry it ends the connection unread, said so and never acted on. The chat's number
         // is said in the app's log (#647); the token is not.
         let chat = line.chat();
-        if !tokens.admits(chat, token.as_deref()) {
-            if let Some(also) = TOKEN_REFUSALS.say() {
-                tracing::warn!(
-                    "purlis: a line on the hook channel for chat {chat} did not carry that \
-                     chat's token, so it was dropped{also}"
+        // The peer as the socket names it now, and as it named it at the accept: both must be
+        // inside the chat, so a line finished by a process the first one handed the connection
+        // to is judged by that process too.
+        let now = purlis_same_user::peer_process_of(&writer)
+            .ok()
+            .map(|(_, pid)| pid);
+        let mut admission = tokens.admission(chat, token.as_deref(), now);
+        if admission == Admission::Admitted && now != peer {
+            admission = tokens.admission(chat, token.as_deref(), peer);
+        }
+        match admission {
+            Admission::Admitted => {}
+            Admission::NoToken => {
+                if let Some(also) = TOKEN_REFUSALS.say() {
+                    tracing::warn!(
+                        "purlis: a line on the hook channel for chat {chat} did not carry that \
+                         chat's token, so it was dropped{also}"
+                    );
+                }
+                refuse(
+                    &mut writer,
+                    format!("this line does not carry chat {chat}'s token, so nothing was done"),
                 );
+                return;
             }
-            refuse(
-                &mut writer,
-                format!("this line does not carry chat {chat}'s token, so nothing was done"),
-            );
-            return;
+            // The chat's own token from outside it, or for a chat whose program was never
+            // confirmed: refused, and told why (D-1407-9). A hook spools nothing it is told this.
+            refused @ (Admission::Outside | Admission::Unbound) => {
+                tracing::warn!(
+                    "purlis: a line for chat {chat} carried its token and was refused ({refused:?})"
+                );
+                if let Some(why) = refused.refusal() {
+                    refuse_with(&line, why, &mut writer);
+                }
+                return;
+            }
         }
         // The first line waits for the connections that arrived before this one (FD-9).
         if !turn.done {
@@ -1801,6 +2068,16 @@ fn serve(
             }
             Line::Touching(touching) => (hearing.touching)(touching),
             Line::Blocked(blocked) => (hearing.blocked)(blocked),
+            Line::SecretExec(ask) => {
+                // Held for as long as the command runs, so the turn is let go first, as an
+                // ask's is. The asker's stdin may be quiet for as long as the child is, so no
+                // read deadline; a write that cannot land in a minute is an asker gone.
+                turn.finish();
+                let _ = writer.set_read_timeout(None);
+                let _ = writer.set_write_timeout(Some(A_FRAME_WRITE_TAKES_AT_MOST));
+                (hearing.secret_exec)(ask, Box::new(reader), Box::new(writer));
+                return;
+            }
         }
         // Told as taken only once it is recorded durably: a line the hearer could not record
         // gets no answer, so its hook spools it (FD-30). An older hook has closed its end
@@ -1811,7 +2088,10 @@ fn serve(
                     "purlis: a line on the hook channel for chat {chat} was not recorded \
                      ({why}), so its hook was not told it was taken"
                 );
-            } else if let Ok(mut said) = serde_json::to_vec(&Taken { taken: true }) {
+            } else if let Ok(mut said) = serde_json::to_vec(&Taken {
+                taken: true,
+                refused: None,
+            }) {
                 said.push(b'\n');
                 let _ = writer.write_all(&said);
             }
@@ -1819,6 +2099,73 @@ fn serve(
         if first {
             turn.finish();
         }
+    }
+}
+
+/// A connection read with one deadline for a whole line: each read is given what is left of it,
+/// and none once it has passed. With no deadline set, a read waits as the socket's own timeout
+/// says.
+#[cfg(unix)]
+pub(crate) struct Deadlined {
+    socket: std::os::unix::net::UnixStream,
+    until: std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+}
+
+#[cfg(unix)]
+impl Deadlined {
+    /// The connection itself.
+    pub(crate) fn socket(&self) -> &std::os::unix::net::UnixStream {
+        &self.socket
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Read for Deadlined {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let until = *self
+            .until
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(until) = until {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the line took longer than a line may",
+                ));
+            }
+            self.socket.set_read_timeout(Some(left))?;
+        }
+        self.socket.read(buf)
+    }
+}
+
+/// The answer `why` to a line that carried its chat's token and was refused (D-1407-9): from a
+/// process outside the chat, or for a chat whose program was never confirmed. In the shape its sender waits for: a report, a tool call or a refused commit is
+/// told it was refused (so its hook prints why and spools nothing), an ask is answered no, a
+/// permission ask is given no option, and a brokered `secret exec` is refused. A line nothing
+/// waits on gets nothing.
+#[cfg(unix)]
+fn refuse_with(line: &Line, why: &str, writer: &mut std::os::unix::net::UnixStream) {
+    use std::io::Write;
+    let said = match line {
+        Line::Report(_) | Line::Tool(_) | Line::Refused(_) => serde_json::to_vec(&Taken {
+            taken: false,
+            refused: Some(why.to_owned()),
+        }),
+        Line::Ask(_) => serde_json::to_vec(&Answer::No {
+            why: why.to_owned(),
+        }),
+        Line::Permission(_) => serde_json::to_vec(&permission::Chosen { chosen: None }),
+        Line::SecretExec(_) => serde_json::to_vec(&crate::secrets::brokered::Frame::Refused {
+            why: why.to_owned(),
+            code: 1,
+        }),
+        Line::ByHand(_) | Line::Saved(_) | Line::Touching(_) | Line::Blocked(_) => return,
+    };
+    if let Ok(mut said) = said {
+        said.push(b'\n');
+        let _ = writer.write_all(&said);
     }
 }
 
@@ -2440,7 +2787,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(7).expect("a token");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report);
@@ -2476,7 +2823,7 @@ mod tests {
         let senders: Vec<_> = (0..50u32)
             .map(|chat| {
                 let path = Arc::clone(&path);
-                let token = tokens.issue(chat).expect("a token");
+                let token = tokens.issue_to_this_process(chat).expect("a token");
                 std::thread::spawn(move || {
                     send(
                         &path,
@@ -2518,7 +2865,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(7).expect("a token");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report);
@@ -2566,7 +2913,7 @@ mod tests {
         let path = dir.path().join("hooks.sock");
         let (tx, rx) = mpsc::channel();
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(7).expect("a token");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report);
         }));
@@ -2647,7 +2994,7 @@ mod tests {
         let path = dir.path().join("hooks.sock");
         let (tx, rx) = mpsc::channel();
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(7).expect("a token");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report);
         }));
@@ -3197,7 +3544,7 @@ mod tests {
         answer: Answer,
     ) -> (Reading, ChatToken) {
         let listener = Listener::bind(within, path).expect("a socket");
-        let token = listener.tokens().issue(3).expect("a token");
+        let token = listener.tokens().issue_to_this_process(3).expect("a token");
         let reading =
             listener.each_answering(Box::new(|_| {}), Box::new(move |_, _| answer.clone()));
         (reading, token)
@@ -3281,7 +3628,7 @@ mod tests {
     /// succeeds as chat 9.
     fn an_app_at(path: &std::path::Path, within: &std::path::Path) -> (Reading, ChatToken) {
         let listener = Listener::bind(within, path).expect("a socket");
-        let token = listener.tokens().issue(3).expect("a token");
+        let token = listener.tokens().issue_to_this_process(3).expect("a token");
         let tickets = Tickets::default();
         let reading = listener.each_answering(
             Box::new(|_| {}),
@@ -3368,7 +3715,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(3).expect("a token");
+        let token = listener.tokens().issue_to_this_process(3).expect("a token");
         let _reading = listener.each(Box::new(|_| {}));
 
         let answer = Asking::on(&path, Some(token))
@@ -3393,7 +3740,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(7).expect("a token");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.each_answering(
@@ -3446,7 +3793,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(4).expect("a token");
+        let token = listener.tokens().issue_to_this_process(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.each_answering_and_noticing(
@@ -3512,7 +3859,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(4).expect("a token");
+        let token = listener.tokens().issue_to_this_process(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.each_answering_noticing_and_saving(
@@ -3619,6 +3966,39 @@ mod tests {
     }
 
     #[test]
+    fn a_brokered_secret_exec_is_its_own_line_and_names_the_chat_its_token_is_checked_for() {
+        let ask = crate::secrets::brokered::Ask {
+            chat: 9,
+            secret_exec: crate::secrets::brokered::Wanted {
+                vault: "devops".to_owned(),
+                command: vec!["kubectl".to_owned(), "get".to_owned(), "pods".to_owned()],
+                ..Default::default()
+            },
+        };
+        let line = line_with(Some(&ChatToken::from("t")), &ask).unwrap();
+        let (read, token) = read_line(std::str::from_utf8(&line).unwrap()).expect("a line");
+        assert!(
+            matches!(&read, Line::SecretExec(got) if *got == ask),
+            "{read:?}"
+        );
+        assert_eq!(read.chat(), 9);
+        assert_eq!(token.as_deref(), Some("t"));
+        for other in [
+            serde_json::to_string(&saved()).unwrap(),
+            r#"{"chat":4,"event":"stop"}"#.to_owned(),
+            r#"{"session_record":{"chat":4,"title":"t","body":"b"}}"#.to_owned(),
+        ] {
+            assert!(
+                !matches!(
+                    serde_json::from_str::<Line>(&other),
+                    Ok(Line::SecretExec(_))
+                ),
+                "no other line reads as a brokered exec: {other}"
+            );
+        }
+    }
+
+    #[test]
     fn a_tool_call_is_its_own_line_and_is_handed_to_the_app_with_its_chats_token() {
         let call = ToolCall {
             chat: 4,
@@ -3650,10 +4030,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(4).expect("a token");
+        let token = listener.tokens().issue_to_this_process(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
+            secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
             blocked: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             each: Box::new(|_| panic!("no report was sent")),
@@ -3702,10 +4083,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(4).expect("a token");
+        let token = listener.tokens().issue_to_this_process(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
+            secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
             each: Box::new(|_| panic!("no report was sent")),
             answer: Box::new(|_, _| panic!("no ask was sent")),
             noticed: Box::new(|_| panic!("no harness was started by hand")),
@@ -3765,10 +4147,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(4).expect("a token");
+        let token = listener.tokens().issue_to_this_process(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
+            secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
             each: Box::new(|_| panic!("no report was sent")),
             answer: Box::new(|_, _| panic!("no ask was sent")),
             noticed: Box::new(|_| panic!("no harness was started by hand")),
@@ -3847,10 +4230,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(4).expect("a token");
+        let token = listener.tokens().issue_to_this_process(4).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         let _reading = listener.hear(Hearing {
+            secret_exec: Box::new(|_, _, writer| crate::secrets::brokered::not_answered(writer)),
             blocked: Box::new(|_| {}),
             touching: Box::new(|_| {}),
             each: Box::new(|_| panic!("no report was sent")),
@@ -3882,8 +4266,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let saving = listener.tokens().issue(4).expect("a token");
-        let reporting = listener.tokens().issue(9).expect("a token");
+        let saving = listener.tokens().issue_to_this_process(4).expect("a token");
+        let reporting = listener.tokens().issue_to_this_process(9).expect("a token");
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         // What the app calls today: no listener for a saved record at all.
@@ -3940,7 +4324,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let token = listener.tokens().issue(7).expect("a token");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report);
@@ -3963,8 +4347,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let seven = listener.tokens().issue(7).expect("a token");
-        let eight = listener.tokens().issue(8).expect("a token");
+        let seven = listener.tokens().issue_to_this_process(7).expect("a token");
+        let eight = listener.tokens().issue_to_this_process(8).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report.chat);
@@ -3992,8 +4376,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let three = listener.tokens().issue(3).expect("a token");
-        let four = listener.tokens().issue(4).expect("a token");
+        let three = listener.tokens().issue_to_this_process(3).expect("a token");
+        let four = listener.tokens().issue_to_this_process(4).expect("a token");
         let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = Arc::clone(&asked);
         let _reading = listener.each_answering(
@@ -4035,8 +4419,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
-        let four = listener.tokens().issue(4).expect("a token");
-        let other = listener.tokens().issue(5).expect("a token");
+        let four = listener.tokens().issue_to_this_process(4).expect("a token");
+        let other = listener.tokens().issue_to_this_process(5).expect("a token");
         let (tx, rx) = mpsc::channel();
         let noticed = std::sync::Mutex::new(tx.clone());
         let saving = std::sync::Mutex::new(tx);
@@ -4076,7 +4460,7 @@ mod tests {
             .owned_by(purlis_same_user::Uid::from_raw(
                 ours.as_raw().wrapping_add(1),
             ));
-        let seven = listener.tokens().issue(7).expect("a token");
+        let seven = listener.tokens().issue_to_this_process(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report.chat);
@@ -4114,7 +4498,7 @@ mod tests {
         let listener = Listener::bind(dir.path(), &path)
             .expect("a socket")
             .owned_by(purlis_same_user::Uid::effective());
-        let seven = listener.tokens().issue(7).expect("a token");
+        let seven = listener.tokens().issue_to_this_process(7).expect("a token");
         let (tx, rx) = mpsc::channel();
         let _reading = listener.each(Box::new(move |report| {
             let _ = tx.send(report.chat);
@@ -4125,9 +4509,218 @@ mod tests {
         assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(7));
     }
 
+    fn program(pid: u32) -> Program {
+        Program {
+            pid,
+            started: "then".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_line_with_a_chats_token_is_read_only_from_inside_that_chat() {
+        let tokens = ChatTokens::default();
+        let token = tokens.issue(5).expect("a token");
+        let inside = |peer: u32, program: &Program| peer == program.pid || peer == 101;
+        let of = |peer| tokens.admission_by(5, Some(token.expose()), peer, &inside);
+        assert_eq!(
+            of(Some(100)),
+            Admission::Unbound,
+            "no program is recorded for the chat"
+        );
+        tokens.bind(5, program(100));
+        assert_eq!(of(Some(100)), Admission::Admitted);
+        assert_eq!(
+            of(Some(101)),
+            Admission::Admitted,
+            "a process inside the chat"
+        );
+        assert_eq!(
+            of(Some(200)),
+            Admission::Outside,
+            "the chat's token, read by a process outside it"
+        );
+        assert_eq!(of(None), Admission::Outside);
+        assert_eq!(
+            tokens.admission_by(5, Some("not-it"), Some(100), &inside),
+            Admission::NoToken,
+            "a wrong token is dropped, not answered"
+        );
+        tokens.issue(5).expect("a new token");
+        assert_eq!(
+            tokens.admission_by(5, Some(token.expose()), Some(100), &inside),
+            Admission::NoToken,
+            "a new start's token is its own"
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_its_own_cause() {
+        assert_eq!(Admission::Outside.refusal(), Some(OUTSIDE_THE_CHAT));
+        assert_eq!(
+            Admission::Unbound.refusal(),
+            Some(UNCONFIRMED_PROGRAM),
+            "an unconfirmed program is the chat's start, not tmux or nohup"
+        );
+        assert!(!UNCONFIRMED_PROGRAM.contains("tmux"));
+        assert_eq!(
+            Admission::NoToken.refusal(),
+            None,
+            "a wrong token gets silence"
+        );
+        assert_eq!(Admission::Admitted.refusal(), None);
+    }
+
+    #[test]
+    fn a_chat_whose_program_ended_speaks_for_nothing_and_a_late_end_changes_nothing() {
+        let tokens = ChatTokens::default();
+        let inside = |peer: u32, program: &Program| peer == program.pid;
+        let first = tokens.issue(5).expect("a token");
+        tokens.bind(5, program(100));
+        tokens.program_ended(5, 100);
+        assert_eq!(
+            tokens.admission_by(5, Some(first.expose()), Some(100), &inside),
+            Admission::NoToken,
+            "a process later given the program's number"
+        );
+        // Started again under the same number: the first program's end, heard late, is not
+        // the second's.
+        let second = tokens.issue(5).expect("a token");
+        tokens.bind(5, program(300));
+        tokens.program_ended(5, 100);
+        assert_eq!(
+            tokens.admission_by(5, Some(second.expose()), Some(300), &inside),
+            Admission::Admitted
+        );
+    }
+
+    #[test]
+    fn a_process_is_inside_the_chat_it_descends_from_and_not_one_beside_it() {
+        let me = Program::of(std::process::id()).expect("this process, read");
+        let mut child = crate::forklock::spawn(
+            std::process::Command::new("/bin/sleep")
+                .arg("5")
+                .stdin(std::process::Stdio::null()),
+        )
+        .expect("a child");
+        let them = Program::of(child.id()).expect("the child, read");
+        assert!(descends(me.pid, &me));
+        assert!(
+            descends(child.id(), &me),
+            "a child of this process is inside it"
+        );
+        assert!(
+            !descends(me.pid, &them),
+            "this process is not inside its own child"
+        );
+        let reused = Program {
+            pid: me.pid,
+            started: "a process that had this number before".to_owned(),
+        };
+        assert!(
+            !descends(me.pid, &reused),
+            "the same number, started at another time, is another process"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// A chat whose program is a process this one is not inside: a sleeping child.
+    fn a_chat_elsewhere(tokens: &ChatTokens, chat: u32) -> (ChatToken, std::process::Child) {
+        let child = crate::forklock::spawn(
+            std::process::Command::new("/bin/sleep")
+                .arg("30")
+                .stdin(std::process::Stdio::null()),
+        )
+        .expect("a child");
+        let token = tokens.issue(chat).expect("a token");
+        tokens.bind(chat, Program::of(child.id()).expect("the child, read"));
+        (token, child)
+    }
+
+    #[test]
+    fn a_report_with_its_chats_token_from_outside_the_chat_is_refused_with_why_and_not_spooled() {
+        let dir = tempfile::tempdir().expect("a directory");
+        // Where a project's socket is, so a line the host did not take would be spooled.
+        let app = dir.path().join(".purlis/app");
+        std::fs::create_dir_all(&app).expect("the state folder");
+        let path = app.join("hooks.sock");
+        assert!(
+            spool::covered(&spool::dir_for(&path)),
+            "a spool here is one hooks write"
+        );
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let (token, mut child) = a_chat_elsewhere(&listener.tokens(), 7);
+        let _reading = listener.each(Box::new(|_| panic!("no report is read")));
+        let report = Report {
+            chat: 7,
+            event: Event::Notification,
+            conversation: Conversation::Named("abc".to_owned()),
+            pid: Some(99),
+            agent: None,
+            detail: Detail::default(),
+        };
+        let refused = deliver_report(&path, Some(&token), &report).expect_err("refused");
+        assert_eq!(refused.to_string(), OUTSIDE_THE_CHAT);
+        assert!(
+            !spool::dir_for(&path).join("7.jsonl").exists(),
+            "nothing spooled as if the app were away"
+        );
+        let mut asking = Asking::on(&path, Some(token.clone())).expect("connects");
+        assert_eq!(
+            asking
+                .ask(&Ask::Ticket { chat: 7 }, std::time::Duration::from_secs(5))
+                .expect("an answer"),
+            Answer::No {
+                why: OUTSIDE_THE_CHAT.to_owned()
+            }
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn a_line_dripped_past_its_deadline_is_never_read() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let token = listener.tokens().issue_to_this_process(7).expect("a token");
+        let (tx, rx) = mpsc::channel();
+        let _reading = listener.each(Box::new(move |report| {
+            let _ = tx.send(report);
+        }));
+        let report = Report {
+            chat: 7,
+            event: Event::Notification,
+            conversation: Conversation::Named("abc".to_owned()),
+            pid: Some(99),
+            agent: None,
+            detail: Detail::default(),
+        };
+        let line = line_with(Some(&token), &report).expect("a line");
+        let mut socket = std::os::unix::net::UnixStream::connect(&path).expect("connects");
+        // A byte every half second for four seconds: each read is quick, the line is not.
+        let (dripped, rest) = line.split_at(8);
+        for byte in dripped {
+            let _ = socket.write_all(&[*byte]);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let _ = socket.write_all(rest);
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).is_err(),
+            "the line was read after its deadline"
+        );
+    }
+
     #[test]
     fn each_chat_is_issued_a_token_of_its_own_and_only_its_latest_counts() {
         let tokens = ChatTokens::default();
+        // The token alone: every process counts as inside here, which the binding's own tests
+        // take apart.
+        let admitted = |tokens: &ChatTokens, chat: u32, token: Option<&str>, peer: Option<u32>| {
+            tokens.bind(chat, program(1));
+            tokens.admission_by(chat, token, peer, &|_, _| true) == Admission::Admitted
+        };
         let one = tokens.issue(1).expect("a token");
         let two = tokens.issue(2).expect("a token");
 
@@ -4137,34 +4730,39 @@ mod tests {
             assert_eq!(token.expose().len(), 64);
             assert!(token.expose().bytes().all(|b| b.is_ascii_hexdigit()));
         }
-        assert!(tokens.admits(1, Some(one.expose())));
-        assert!(!tokens.admits(1, Some(two.expose())));
-        assert!(!tokens.admits(1, None));
+        assert!(admitted(&tokens, 1, Some(one.expose()), Some(1)));
+        assert!(!admitted(&tokens, 1, Some(two.expose()), Some(1)));
+        assert!(!admitted(&tokens, 1, None, Some(1)));
         assert!(
-            !tokens.admits(3, Some(one.expose())),
+            !admitted(&tokens, 3, Some(one.expose()), Some(1)),
             "a chat with no token"
         );
         // A prefix, and the right length with one byte wrong.
-        assert!(!tokens.admits(1, Some(&one.expose()[..63])));
+        assert!(!admitted(&tokens, 1, Some(&one.expose()[..63]), Some(1)));
         let mut near = one.expose().to_owned().into_bytes();
         near[63] = if near[63] == b'0' { b'1' } else { b'0' };
-        assert!(!tokens.admits(1, Some(std::str::from_utf8(&near).unwrap())));
+        assert!(!admitted(
+            &tokens,
+            1,
+            Some(std::str::from_utf8(&near).unwrap()),
+            Some(1)
+        ));
 
         let again = tokens.issue(1).expect("a token");
         assert!(
-            !tokens.admits(1, Some(one.expose())),
+            !admitted(&tokens, 1, Some(one.expose()), Some(1)),
             "the old one still counts"
         );
-        assert!(tokens.admits(1, Some(again.expose())));
+        assert!(admitted(&tokens, 1, Some(again.expose()), Some(1)));
 
         tokens.forget(1);
-        assert!(!tokens.admits(1, Some(again.expose())));
+        assert!(!admitted(&tokens, 1, Some(again.expose()), Some(1)));
     }
 
     #[test]
     fn a_token_is_never_written_out_by_debug() {
         let tokens = ChatTokens::default();
-        let token = tokens.issue(1).expect("a token");
+        let token = tokens.issue_to_this_process(1).expect("a token");
 
         assert!(!format!("{token:?}").contains(token.expose()));
         assert!(!format!("{tokens:?}").contains(token.expose()));

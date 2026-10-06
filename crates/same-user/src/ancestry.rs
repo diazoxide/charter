@@ -26,15 +26,18 @@ pub const MOST_GENERATIONS: usize = 64;
 pub enum Parents {
     /// Linux: `/proc`, asked one pid at a time.
     Proc,
-    /// Everywhere else: every process's parent, as `ps` listed them once.
-    Table(HashMap<u32, u32>),
+    /// Everywhere else: every process's parent and when it started, as `ps` listed them once.
+    Table {
+        parent: HashMap<u32, u32>,
+        started: HashMap<u32, String>,
+    },
 }
 
-/// The command that lists every process and its parent: `/bin/ps` by its full path, with no
-/// environment.
+/// The command that lists every process, its parent and when it started: `/bin/ps` by its full
+/// path, with no environment.
 pub fn ps_command() -> Command {
     let mut ps = Command::new("/bin/ps");
-    ps.args(["-A", "-o", "pid=", "-o", "ppid="])
+    ps.args(["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="])
         .env_clear()
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -52,16 +55,27 @@ impl Parents {
         if !out.status.success() {
             return Err(io::Error::other("ps did not list the processes"));
         }
-        Ok(Parents::Table(ps_lines(&String::from_utf8_lossy(
-            &out.stdout,
-        ))))
+        let text = String::from_utf8_lossy(&out.stdout);
+        Ok(Parents::Table {
+            parent: ps_lines(&text),
+            started: ps_started(&text),
+        })
     }
 
     /// The parent of `pid`, where it is known.
     pub fn of(&self, pid: u32) -> Option<u32> {
         match self {
             Parents::Proc => proc_parent(pid),
-            Parents::Table(table) => table.get(&pid).copied(),
+            Parents::Table { parent, .. } => parent.get(&pid).copied(),
+        }
+    }
+
+    /// When `pid` started, as the kernel says, where it is known: what tells the process with
+    /// that number now from one that had it before. Only ever compared for equality.
+    pub fn started(&self, pid: u32) -> Option<String> {
+        match self {
+            Parents::Proc => proc_started(pid),
+            Parents::Table { started, .. } => started.get(&pid).cloned(),
         }
     }
 
@@ -157,6 +171,14 @@ pub fn inside_a_chat(
     )))
 }
 
+/// When `pid` started, in clock ticks since boot: the 22nd field of `/proc/<pid>/stat`.
+fn proc_started(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (_, after) = stat.rsplit_once(')')?;
+    // Field 3 is the first after the command; the start time is field 22.
+    after.split_whitespace().nth(19).map(str::to_owned)
+}
+
 /// The parent `/proc/<pid>/stat` names.
 fn proc_parent(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -170,7 +192,22 @@ pub fn stat_parent(stat: &str) -> Option<u32> {
     after.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// `pid ppid` lines, as [`ps_command`] prints them; a line that is not two numbers is skipped.
+/// When each process started, from `pid ppid <start>` lines as [`ps_command`] prints them: the
+/// rest of the line after the two numbers, as written. A line with no start is skipped.
+pub fn ps_started(text: &str) -> HashMap<u32, String> {
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid = words.next()?.parse().ok()?;
+            words.next()?.parse::<u32>().ok()?;
+            let start = words.collect::<Vec<_>>().join(" ");
+            (!start.is_empty()).then_some((pid, start))
+        })
+        .collect()
+}
+
+/// `pid ppid` lines, as [`ps_command`] prints them; a line that does not begin with two numbers
+/// is skipped, and what follows them is not read here.
 pub fn ps_lines(text: &str) -> HashMap<u32, u32> {
     text.lines()
         .filter_map(|line| {
@@ -473,6 +510,20 @@ mod tests {
         assert_eq!(
             ps_lines("  1     0\n 4242   17\nnot a line\n"),
             [(1, 0), (4242, 17)].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn ps_lines_read_the_start_after_the_parent_and_ignore_it_for_the_parent() {
+        let text = "  1     0 Mon Oct  6 09:00:01 2026\n 4242   17 Tue Oct  7 10:11:12 2026\n";
+        assert_eq!(ps_lines(text), [(1, 0), (4242, 17)].into_iter().collect());
+        assert_eq!(
+            ps_started(text).get(&4242).map(String::as_str),
+            Some("Tue Oct 7 10:11:12 2026")
+        );
+        assert!(
+            ps_started("  9 1\n").is_empty(),
+            "no start, nothing to compare"
         );
     }
 

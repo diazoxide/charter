@@ -81,6 +81,45 @@ fn count(ctx: &Ctx, v: &Vault) -> Option<u32> {
     Some(counted(n))
 }
 
+/// Runs a brokered `secret exec` for one of `held`'s chats (#1407): the chat's persona and
+/// folder are this app's record of the chat whose token the line carried, never the line's, and
+/// the sandbox the command runs under is the one the chat's own was compiled to as it started.
+/// A chat this app does not have open is refused.
+pub(crate) fn run_brokered(
+    held: &crate::planes::Held,
+    ask: purlis_core::secrets::brokered::Ask,
+    reader: Box<dyn std::io::BufRead + Send>,
+    writer: Box<dyn std::io::Write + Send>,
+) {
+    use purlis_core::secrets::brokered;
+    let Some(open) = held
+        .chats()
+        .open_now()
+        .into_iter()
+        .find(|open| open.session == ask.chat)
+    else {
+        tracing::warn!(
+            "purlis: chat {} asked for `secret exec` and is not one this app has open",
+            ask.chat
+        );
+        return brokered::refused(
+            writer,
+            format!("chat {} is not one this app has open", ask.chat),
+        );
+    };
+    let asker = brokered::Asker {
+        root: held.root().to_path_buf(),
+        env: Env::from_process(),
+        chat: ask.chat,
+        persona: open.persona,
+        folder: open.cwd,
+        // Recorded as the chat started, so the run is held to what the chat itself is held to
+        // and a policy changed since does not change it.
+        confines: held.chats().confines_of(ask.chat),
+    };
+    brokered::serve(&asker, ask.secret_exec, reader, writer);
+}
+
 /// Every vault the plane registers, by name.
 pub(crate) fn list(ctx: &Ctx) -> Result<Vec<VaultSummary>, String> {
     let doc = registry::load_registry(ctx).map_err(message_of)?;

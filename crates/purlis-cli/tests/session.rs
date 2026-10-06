@@ -95,7 +95,7 @@ fn a_record_is_written_indexed_and_pointed_at_and_the_app_is_told_which_chat_sav
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     let listener = Listener::bind(tmp.path(), &socket).expect("a socket");
-    let token = listener.tokens().issue(3).expect("a token");
+    let token = listener.tokens().issue_to_this_process(3).expect("a token");
     let _reading = listener.each_answering_noticing_and_saving(
         Box::new(|_| panic!("a saved record is not a report")),
         Box::new(|_, _| panic!("a saved record is not an ask")),
@@ -156,7 +156,9 @@ fn stop(
     chat: &str,
     tokens: &hookwire::ChatTokens,
 ) -> Output {
-    let token = tokens.issue(chat.parse().unwrap()).expect("a token");
+    let token = tokens
+        .issue_to_this_process(chat.parse().unwrap())
+        .expect("a token");
     charter(
         tmp,
         &["hook", "stop"],
@@ -448,7 +450,7 @@ fn an_app_answering(
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     let listener = Listener::bind(tmp.path(), socket).expect("a socket");
-    let token = listener.tokens().issue(3).expect("a token");
+    let token = listener.tokens().issue_to_this_process(3).expect("a token");
     let reading = listener.each_answering(
         Box::new(|_| {}),
         Box::new(move |_, ask| {

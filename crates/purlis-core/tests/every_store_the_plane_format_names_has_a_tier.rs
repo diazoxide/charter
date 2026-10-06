@@ -561,7 +561,7 @@ fn a_chat_touches_a_file(run: &Path) {
     std::fs::create_dir_all(&root).expect("a project");
     let token = {
         let listener = Listener::bind(&root, &socket).expect("a socket");
-        listener.tokens().issue(2).expect("a token")
+        listener.tokens().issue_to_this_process(2).expect("a token")
     };
     deliver_tool(&socket, Some(&token), &call).expect("spooled");
     assert!(touch(&socket, Some(&token), &touching).is_err());
@@ -570,7 +570,7 @@ fn a_chat_touches_a_file(run: &Path) {
     // without the chat's token refused in the diagnostic log.
     let _ = std::fs::remove_file(&socket);
     let listener = Listener::bind(&root, &socket).expect("a socket");
-    let token = listener.tokens().issue(2).expect("a token");
+    let token = listener.tokens().issue_to_this_process(2).expect("a token");
     let recorder = Arc::new(Mutex::new(Recorder::new(
         Log::open(&events, "DEVICE").expect("a log"),
         ArgsKey::open(&events).expect("a key"),
@@ -578,6 +578,7 @@ fn a_chat_touches_a_file(run: &Path) {
     let (tx, heard) = mpsc::channel();
     let tx = Mutex::new(tx);
     let reading = listener.hear(Hearing {
+        secret_exec: Box::new(|_, _, writer| purlis_core::secrets::brokered::not_answered(writer)),
         each: Box::new(|_| Ok(())),
         answer: Box::new(|_, _| panic!("no ask")),
         noticed: Box::new(|_| {}),
