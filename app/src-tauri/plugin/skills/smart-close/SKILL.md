@@ -42,7 +42,7 @@ Title it in one line. Pass the pieces this session worked in that you are not st
 sections, in this order, each with at least one line:
 
 ```bash
-charter session record --title "<one-line title>" <<'RECORD'
+purlis session record --title "<one-line title>" <<'RECORD'
 ## Goal
 
 <what this session set out to do>
