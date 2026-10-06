@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791250220163,
+  "lastUpdate": 1791253181456,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2646,6 +2646,48 @@ window.BENCHMARK_DATA = {
             "value": 102.72969,
             "unit": "ms",
             "extra": "median of 5 runs: 102.026, 102.263, 102.730, 103.283, 104.473 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "d1c462a6108b968446a45432ee37b6f033211b1e",
+          "message": "locks: a kept store lock unlocks on drop; the 972 test models an exited host\n\nReview of the first commit for issue 1316:\n\n- held::Store::locked() forgot its guard on purpose, so memstore::lock_store\n  let go only when the descriptor closed: the same leak to a forked child.\n  It now returns a LockedStore that unlocks in Drop, and StoreLock::Held keeps\n  that. A new held test hands a copy of the store's descriptor to a sleeping\n  child, drops the kept lock and takes it again; it failed (refused after\n  the 5 s wait) before this change.\n- The issue-972 event log test passed trivially once Log unlocks on drop. It\n  now models a host that exits without unlocking: a plain File on LOCK,\n  locked, a copy given to `sleep 0.4` as stdin, the File dropped unlocked,\n  and Log::open must succeed after waiting at least 100 ms. It no longer\n  clears close-on-exec, which leaked the lock into parallel tests' children.\n  Setting LOCK_WAIT to zero makes it fail.\n- Log::_lock is declared last, so it drops after the log's own files.\n- filelock's module doc now names which locks use Held and which unlock in\n  guards of their own.\n\nDecided in implementation:\n- D-1316-6: a kept lock is its own type (LockedStore, returned by\n  Store::locked) rather than a Drop on Store. An unlocked Store is held and\n  dropped all the time, and the type says which stores hold a lock until\n  dropped, the way Locked already does for one taken in scope.\n\nRefs #1316\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-06T06:16:05+04:00",
+          "tree_id": "1feae52f1b8c17087cf5016a30a7d4f63c699175",
+          "url": "https://github.com/purlis/purlis/commit/d1c462a6108b968446a45432ee37b6f033211b1e"
+        },
+        "date": 1791253180210,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5059530000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.495, 0.498, 0.506, 0.528, 0.541 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.125711000000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.486, 16.722, 17.126, 17.132, 17.324 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.6045575,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.701, 103.057, 103.605, 104.224, 104.956 ms"
           }
         ]
       }
