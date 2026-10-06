@@ -51,6 +51,7 @@ pub mod gitpolicy;
 pub mod gitstate;
 pub mod glrefresh;
 pub mod glstate;
+pub mod guardcaps;
 pub mod guardcmd;
 pub mod guest;
 pub mod halt;

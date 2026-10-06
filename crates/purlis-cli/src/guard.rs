@@ -43,7 +43,7 @@
 
 use std::io::Write;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use purlis_core::handoffguard::Caller;
 use purlis_core::toolgate::{self, Call, Launched, Plane};
@@ -131,15 +131,19 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
             permission_mode: permission_mode.as_deref(),
         },
     };
-    if let Some(verdict) = judged_on_a_deep_stack(|| toolgate::verdict(&call, plane.as_ref())) {
+    if let Some(verdict) = toolgate::verdict(&call, plane.as_ref()) {
         return crate::hooks::Answered::of(Answer::Deny(verdict));
     }
     // Nothing refused, so the persona tool gate is asked. Its answer is an allow or nothing;
-    // one it could not print is simply the ordinary prompt.
-    crate::hooks::Answered::of(
+    // one it could not print is simply the ordinary prompt. It reads the command too, so a
+    // reading of it nested too deep to read whole is the refusal the guards give (#1355).
+    let (allowed, too_deep) = purlis_core::shellseg::too_deep_within(|| {
         crate::hooks::with_hook(payload, now, purlis_core::toolhooks::persona_allow)
-            .map_or(Answer::Nothing, Answer::Say),
-    )
+    });
+    if too_deep {
+        return crate::hooks::Answered::of(Answer::Deny(toolgate::too_deep()));
+    }
+    crate::hooks::Answered::of(allowed.map_or(Answer::Nothing, Answer::Say))
 }
 
 /// The stack the guards run on: far more than any of them needs.
@@ -150,60 +154,94 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> crate::hooks::Answered {
 /// touches are ever committed, so the reservation costs nothing a person could notice.
 const GUARD_STACK: usize = 256 * 1024 * 1024;
 
-/// How long the guards may take to answer one tool call before it is refused.
+/// The time every `PreToolUse` hook decides within, from the moment it starts: reading the
+/// payload, then every guard and gate it runs (#1355).
 ///
-/// A harness gives a hook a deadline of its own and runs the tool when it passes, so a guard
-/// still reading then is an allow. So this is derived from the registry: seven tenths of what is
-/// left of the smallest `PreToolUse` timeout once the payload has had its own deadline to arrive.
-/// `the_guard_deadline_is_always_inside_the_harness_deadline` ties the two together.
-fn guard_deadline() -> Duration {
-    let smallest = purlis_core::hookreg::HANDLERS
-        .iter()
-        .filter(|hook| hook.event == "PreToolUse")
-        .map(|hook| hook.timeout)
-        .min()
-        .unwrap_or(1);
-    Duration::from_secs(u64::from(smallest)).saturating_sub(crate::PAYLOAD_DEADLINE) * 7 / 10
-}
+/// A harness gives a hook a timeout of its own, and whether the tool call runs when it passes is
+/// the harness's choice: Codex and Claude Code run it (see `docs/hooks.md` → When a hook runs
+/// out of time). So purlis never lets a harness time a guard out. It decides inside this budget,
+/// and a decision not made in time is a refusal. Two seconds, well inside the smallest
+/// `PreToolUse` timeout purlis registers (`the_budget_is_well_inside_every_harness_timeout`),
+/// and far more than an ordinary command takes. The caps in front of the guards
+/// ([`purlis_core::guardcaps`]) bound how slow a command inside them can be, and purlis-core's
+/// `the_whole_verdict_at_the_largest_and_deepest_command_stays_well_inside_the_budget` holds
+/// the slowest shapes known under this; the budget is the backstop for one nobody has found.
+///
+/// It starts in `hook`, not when the process does: the time to start the process is outside it
+/// (`docs/hooks.md` → When a hook runs out of time).
+pub(crate) const BUDGET: Duration = Duration::from_secs(2);
 
-/// What sets [`guard_deadline`] in milliseconds instead, in a debug build, for the test that
-/// reaches it.
+/// What sets the budget in milliseconds instead, in a debug build, for the tests that reach it.
 #[cfg(debug_assertions)]
-const DEADLINE_ON_PURPOSE_ENV: &str = "CHARTER_TEST_GUARD_DEADLINE_MS";
+const BUDGET_ON_PURPOSE_ENV: &str = "CHARTER_TEST_GUARD_DEADLINE_MS";
 
-/// The panic payload that says the guard ran out of time, rather than that it crashed.
+/// Set in a debug build, the judging thread stalls before it judges: the tests' way to reach
+/// the budget on every hook word without a command crafted for each.
+#[cfg(debug_assertions)]
+const STALLS_ON_PURPOSE_ENV: &str = "CHARTER_TEST_GUARD_STALLS";
+
+/// The panic payload that says the hook ran out of its budget, rather than that it crashed.
 const UNANSWERED: &str = "the guard did not answer in time";
 
-fn deadline() -> Duration {
+/// One hook's budget, started when the hook is.
+pub(crate) struct Budget {
+    ends: Instant,
+}
+
+impl Budget {
+    /// The budget, from now.
+    pub(crate) fn start() -> Self {
+        Self {
+            ends: Instant::now() + budget(),
+        }
+    }
+
+    /// What is left of it.
+    pub(crate) fn left(&self) -> Duration {
+        self.ends.saturating_duration_since(Instant::now())
+    }
+}
+
+fn budget() -> Duration {
     #[cfg(debug_assertions)]
-    if let Some(ms) = std::env::var(DEADLINE_ON_PURPOSE_ENV)
+    if let Some(ms) = std::env::var(BUDGET_ON_PURPOSE_ENV)
         .ok()
         .and_then(|ms| ms.parse().ok())
     {
         return Duration::from_millis(ms);
     }
-    guard_deadline()
+    BUDGET
 }
 
-/// Runs `judge` on a thread with [`GUARD_STACK`] of stack, and waits at most [`deadline`] for
-/// its answer. A panic on that thread, a thread that cannot start, and an answer that does not
-/// come in time are all the panic hook's refusal ([`refuse_on_a_crash`]), which ends the
+/// The hook ran out of its budget: refused, by the panic hook ([`refuse_on_a_crash`]), which
+/// ends the process with the sentence that says so.
+pub(crate) fn out_of_time() -> ! {
+    std::panic::panic_any(UNANSWERED)
+}
+
+/// Runs `judge` on a thread with [`GUARD_STACK`] of stack, and waits for its answer for what is
+/// left of `budget`. A panic on that thread, a thread that cannot start, and an answer that does
+/// not come in time are all the panic hook's refusal ([`refuse_on_a_crash`]), which ends the
 /// process.
-fn judged_on_a_deep_stack<T: Send>(judge: impl FnOnce() -> T + Send) -> T {
+pub(crate) fn decided_within<T: Send>(budget: &Budget, judge: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         let (answer, answered) = std::sync::mpsc::channel();
         let started = std::thread::Builder::new()
             .name("guard".into())
             .stack_size(GUARD_STACK)
             .spawn_scoped(scope, move || {
+                #[cfg(debug_assertions)]
+                if std::env::var_os(STALLS_ON_PURPOSE_ENV).is_some() {
+                    std::thread::sleep(Duration::from_secs(3600));
+                }
                 let _ = answer.send(judge());
             });
         if let Err(why) = started {
             panic!("the guard's thread did not start: {why}");
         }
-        match answered.recv_timeout(deadline()) {
+        match answered.recv_timeout(budget.left()) {
             Ok(verdict) => verdict,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => std::panic::panic_any(UNANSWERED),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => out_of_time(),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the guard's thread ended without answering")
             }
@@ -245,8 +283,9 @@ pub(crate) fn refuse_on_a_crash(tell_the_host: fn(&str, bool)) {
         if unanswered {
             let _ = writeln!(
                 err,
-                "purlis guard: this tool call is refused because the guard did not answer in \
-                 time, and a guard that could not answer does not allow."
+                "purlis guard: this tool call is refused because purlis could not check it in \
+                 time: the command is too long or too deeply nested, so split it into smaller \
+                 commands."
             );
         } else {
             let _ = writeln!(
@@ -281,25 +320,22 @@ pub(crate) fn deny(verdict: &toolgate::Verdict) -> ExitCode {
 }
 
 #[cfg(test)]
-mod deadline_tests {
+mod budget_tests {
     use super::*;
 
-    /// Whatever the registry says, the guard gives up before any harness does: the payload's
-    /// deadline and the guard's together stay inside every `PreToolUse` hook's timeout.
+    /// The budget, and the bounded wait to tell the app after it, end well before any harness
+    /// would time a `PreToolUse` hook out: the hook always decides, and is never decided for.
     #[test]
-    fn the_guard_deadline_is_always_inside_the_harness_deadline() {
-        assert!(guard_deadline() > Duration::ZERO);
+    fn the_budget_is_well_inside_every_harness_timeout() {
         for hook in purlis_core::hookreg::HANDLERS
             .iter()
             .filter(|hook| hook.event == "PreToolUse")
         {
             let harness = Duration::from_secs(u64::from(hook.timeout));
             assert!(
-                crate::PAYLOAD_DEADLINE + guard_deadline() < harness,
-                "{}: {:?} + {:?} >= {harness:?}",
-                hook.name,
-                crate::PAYLOAD_DEADLINE,
-                guard_deadline()
+                BUDGET * 2 <= harness,
+                "{}: {BUDGET:?} of {harness:?}",
+                hook.name
             );
         }
     }

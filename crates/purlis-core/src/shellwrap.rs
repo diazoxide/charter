@@ -732,8 +732,9 @@ fn take(toks: &mut VecDeque<String>, taken: &mut Vec<String>) -> Option<String> 
     Some(front)
 }
 
-/// The most wrapper layers one segment is read through; past it [`Invocation::too_deep`].
-pub const MAX_LAYERS: usize = 64;
+/// The most wrapper layers one segment is read through; past it [`Invocation::too_deep`]. The
+/// same cap [`crate::guardcaps`] applies to the whole line before any guard reads it.
+pub const MAX_LAYERS: usize = crate::guardcaps::MAX_LAYERS;
 
 /// Record a wrapper layer starting at `at` in the taken tokens, or mark the segment too deep.
 fn record_layer(layers: &mut Vec<usize>, too_deep: &mut bool, at: usize) {
@@ -931,15 +932,21 @@ pub fn shell_string(toks: &[String]) -> Option<String> {
 /// differ by shell and by version, so both readings are kept and a guard asks of each.
 pub fn shell_scripts(toks: &[String]) -> Vec<String> {
     let (prog, _env, argv) = split_env(toks);
-    if basename(&prog) == "eval" {
+    shell_scripts_of(&prog, &argv)
+}
+
+/// [`shell_scripts`] of a segment already read by [`split_env`]: its program and argv. For a
+/// reader that has split the segment for its own reasons and need not split it again (#1355).
+pub fn shell_scripts_of(prog: &str, argv: &[String]) -> Vec<String> {
+    if basename(prog) == "eval" {
         return vec![argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" ")];
     }
-    if !is_string_shell(&prog) {
+    if !is_string_shell(prog) {
         return Vec::new();
     }
     let mut out: Vec<String> = Vec::new();
     for unknown_takes_a_value in [false, true] {
-        if let (true, Some(script)) = shell_options(&argv, unknown_takes_a_value)
+        if let (true, Some(script)) = shell_options(argv, unknown_takes_a_value)
             && !out.contains(script)
         {
             out.push(script.clone());

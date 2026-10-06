@@ -63,6 +63,7 @@
 //! this file is stage 1 unchanged: the lexer now reads its three tables off a `Cfg` so the two
 //! `shlex` configurations the oracle uses are one state machine rather than two.
 
+use crate::guardcaps::MAX_NESTING;
 use crate::memstore::is_python_space;
 
 /// The characters [`Lexer`] treats as punctuation, and which it emits as a glued RUN.
@@ -1028,6 +1029,44 @@ pub struct JoinedSegment {
 /// [`JoinedSegment::after`]. The argv are exactly [`segment_tokens`]' — that function is this
 /// one with the operators dropped.
 pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
+    walk_segments(toks).0
+}
+
+std::thread_local! {
+    /// Whether a walk on this thread has met a string nested past [`MAX_NESTING`] since the
+    /// innermost [`too_deep_within`] began: [`walk_segments`] sets it, and only that reads it.
+    static TOO_DEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `read`, and says whether any walk inside it met a string whose substitutions nest past
+/// [`MAX_NESTING`] (#1355).
+///
+/// Such a walk is not read whole ([`walk_segments`]), so whatever was decided on it is not a
+/// decision: the caller refuses the call as too big to check, whatever `read` answered. Every
+/// guard is run inside this ([`crate::toolgate::verdict`]), so a string a guard derives from a
+/// command and reads in turn (heredocs stripped, a double-quoted body, a shell's `-c` script)
+/// is held to the cap as the command itself is, with no derivation to keep in step. Nests: an
+/// inner call reports its own walks and leaves the outer one's answer standing.
+pub fn too_deep_within<T>(read: impl FnOnce() -> T) -> (T, bool) {
+    let before = TOO_DEEP.with(|flag| flag.replace(false));
+    let answer = read();
+    let met = TOO_DEEP.with(|flag| {
+        let met = flag.get();
+        flag.set(before || met);
+        met
+    });
+    (answer, met)
+}
+
+/// [`joined_segments`], and how many substitutions were open at once at the deepest.
+///
+/// **Linear in the tokens, however deep they nest** (#1355). Each token goes to every segment
+/// still open around it, which made a line `n` tokens long and `n` deep cost `n²`. So a token
+/// goes to the [`MAX_NESTING`] innermost substitutions and the segment around them, and no
+/// further out. **A walk that has to stop short like that fails closed**: it is reported to
+/// [`too_deep_within`], and every guard's caller refuses the call as too big to check. An outer
+/// segment that never received a token is not a reading anyone may decide on, so none does.
+fn walk_segments(toks: Vec<Tok>) -> (Vec<JoinedSegment>, usize) {
     /// What is open at this point, innermost last.
     enum Open {
         Subst,
@@ -1041,6 +1080,7 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
     // What ended the last segment at each open level, parallel to `open_segs`.
     let mut befores: Vec<Option<String>> = vec![None];
     let mut stack: Vec<Open> = Vec::new();
+    let mut deepest = 0usize;
     let mut close = |seg: Vec<Tok>, before: &mut Option<String>, after: &str| {
         out.push(JoinedSegment {
             argv: seg.into_iter().map(|t| t.text).collect(),
@@ -1062,6 +1102,7 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
                 open_segs.push(Vec::new());
                 befores.push(None);
                 stack.push(Open::Subst);
+                deepest = deepest.max(open_segs.len() - 1);
                 continue;
             }
             if open_segs.last().is_some_and(|s| s.is_empty()) {
@@ -1115,8 +1156,9 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
         // contents are. An older bash refuses the line as a bad substitution, so reading it as
         // one only ever shows the guards more.
         let funsub = t.bare && t.text.ends_with("${");
-        for seg in open_segs.iter_mut() {
-            // every open segment, the outer ones included
+        // every open segment, the outer ones included, as far out as the cap reaches
+        let from = open_segs.len().saturating_sub(MAX_NESTING + 1);
+        for seg in open_segs[from..].iter_mut() {
             seg.push(t.clone());
         }
         if funsub {
@@ -1124,6 +1166,7 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
             befores.push(None);
             stack.push(Open::Funsub);
         }
+        deepest = deepest.max(open_segs.len() - 1);
     }
     for (seg, before) in open_segs.into_iter().zip(befores) {
         out.push(JoinedSegment {
@@ -1132,7 +1175,11 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
             after: None,
         });
     }
-    out.into_iter().filter(|c| !c.argv.is_empty()).collect()
+    if deepest > MAX_NESTING {
+        TOO_DEEP.with(|flag| flag.set(true));
+    }
+    let out = out.into_iter().filter(|c| !c.argv.is_empty()).collect();
+    (out, deepest)
 }
 
 /// Split an already-whitespace-split token list on shell operators — the unparseable path only,
@@ -1145,7 +1192,7 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
 /// Every piece is marked bare, because on this path nothing knows what was quoted — the quoting
 /// is what failed to parse. That is a guess in BOTH directions, which is why
 /// [`segment_argv_parsed`] reports the failure and the leak guard scans the raw string as well.
-fn resegment(toks: &[String]) -> Vec<Vec<String>> {
+fn resegment(toks: &[String]) -> Vec<Tok> {
     let mut pieces: Vec<Tok> = Vec::new();
     for tok in toks {
         let chars: Vec<char> = tok.chars().collect();
@@ -1155,7 +1202,7 @@ fn resegment(toks: &[String]) -> Vec<Vec<String>> {
             }
         }
     }
-    segment_tokens(pieces)
+    pieces
 }
 
 /// Index just past `pat` matched at `i` the way the shell reads it: with any number of
@@ -1350,11 +1397,12 @@ pub fn splice_continuations(cmd: &str) -> String {
 /// spliced away ([`splice_continuations`], run first as bash runs it). Each resulting logical
 /// line is then lexed on its OWN, and only a line that still will not lex falls back to the
 /// crude [`resegment`], whose stranding is confined to that one line.
-fn fallback_segments(cmd: &str) -> Vec<Vec<String>> {
+fn fallback_segments(cmd: &str) -> (Vec<Vec<String>>, usize) {
     let spliced = splice_continuations(cmd);
     let chars: Vec<char> = spliced.chars().collect();
     let q = quote_map(&spliced);
     let mut out: Vec<Vec<String>> = Vec::new();
+    let mut deepest = 0usize;
     let mut bounds: Vec<usize> = (0..chars.len())
         .filter(|&i| chars[i] == '\n' && !q[i])
         .collect();
@@ -1372,12 +1420,14 @@ fn fallback_segments(cmd: &str) -> Vec<Vec<String>> {
         if line.chars().all(is_python_space) {
             continue;
         }
-        match lex(&line) {
-            Ok(toks) => out.extend(segment_tokens(toks)),
-            Err(_) => out.extend(resegment(&py_split(&line))),
-        }
+        let (segments, depth) = match lex(&line) {
+            Ok(toks) => walk_segments(toks),
+            Err(_) => walk_segments(resegment(&py_split(&line))),
+        };
+        out.extend(argvs(segments));
+        deepest = deepest.max(depth);
     }
-    out
+    (out, deepest)
 }
 
 /// Python's `str.split()` with no argument: split on RUNS of Python whitespace, no empty pieces.
@@ -1414,16 +1464,35 @@ pub fn py_split(text: &str) -> Vec<String> {
 /// valid bash, trips `shlex`, and printed a vault through the shipped hook. A fallback that
 /// drops guards is worse than no fallback, because the guard still looks present.
 pub fn segment_argv_parsed(cmd: &str) -> (Vec<Vec<String>>, bool) {
+    let (segments, parsed, _) = read(cmd);
+    (segments, parsed)
+}
+
+/// [`segment_argv_parsed`], and how deeply the substitutions nested ([`substitution_depth`]).
+fn read(cmd: &str) -> (Vec<Vec<String>>, bool, usize) {
     let cmd = unbacktick(cmd);
     match lex(&cmd) {
-        Ok(toks) => (segment_tokens(toks), true),
+        // A walk too deep to read whole is not a parse either: the caller that falls back to
+        // the raw string on `false` does so here too (#1355).
+        Ok(toks) => {
+            let (segments, deepest) = walk_segments(toks);
+            (argvs(segments), deepest <= MAX_NESTING, deepest)
+        }
         // Tokenized, and segmented: the leak guard has to see `--reveal` among the arguments AND
         // has to see the second command at all. Quoting is not honoured on this path — it is
         // what failed to parse — so the boundaries here are a guess, and a guess is wrong in
         // both directions. Neither is survivable on its own, so this path is not relied on
         // alone: the flag is `false`, and the caller matches the raw string as well.
-        Err(_) => (fallback_segments(&cmd), false),
+        Err(_) => {
+            let (segments, deepest) = fallback_segments(&cmd);
+            (segments, false, deepest)
+        }
     }
+}
+
+/// The argv of each segment.
+fn argvs(segments: Vec<JoinedSegment>) -> Vec<Vec<String>> {
+    segments.into_iter().map(|s| s.argv).collect()
 }
 
 /// [`segment_argv_parsed`]'s segments with the operators around each ([`joined_segments`]), or
@@ -1431,6 +1500,24 @@ pub fn segment_argv_parsed(cmd: &str) -> (Vec<Vec<String>>, bool) {
 /// that fails open on a guess, as the plane-root guards do.
 pub fn joined_argv(cmd: &str) -> Option<Vec<JoinedSegment>> {
     lex(&unbacktick(cmd)).ok().map(joined_segments)
+}
+
+/// How deeply the substitutions of `cmd` nest at their deepest, as [`segment_argv`] reads them:
+/// the most `$( … )`, `<( … )`, `=( … )` and `${ …; }` open at once.
+///
+/// [`joined_segments`] hands every token to each segment still open around it, as far out as
+/// [`MAX_NESTING`], so reading a line costs its length times this at most; [`crate::guardcaps`]
+/// refuses a command whose depth is past that before any guard reads it (#1355). Read by the
+/// very walk that segments, so the two cannot disagree.
+pub fn substitution_depth(cmd: &str) -> usize {
+    read(cmd).2
+}
+
+/// [`segment_argv`] and [`substitution_depth`] from one reading: what [`crate::guardcaps`]
+/// measures a command by.
+pub fn segments_and_depth(cmd: &str) -> (Vec<Vec<String>>, usize) {
+    let (segments, _, depth) = read(cmd);
+    (segments, depth)
 }
 
 /// [`segment_argv_parsed`] without the flag.

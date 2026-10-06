@@ -660,7 +660,8 @@ wedging a session over.
 **A denial is the exception, and it is load-bearing.** A guard refuses by printing one JSON
 object on stdout, so a hook that cannot write has said nothing, and a `PreToolUse` hook that
 says nothing is an *allow*. Deciding is still allowed to fail: a payload purlis cannot parse
-is judged as an empty command, and no guard fires on that. Refusing is not allowed to fail.
+is judged as an empty command, and no guard fires on that (a payload that has not arrived in
+time is refused instead: *When a hook runs out of time*, below). Refusing is not allowed to fail.
 When the verdict is deny and the write fails, the process exits **2** with the reason on
 stderr, which is the harness's other refusal channel; every other non-zero status is a
 non-blocking error and the tool call goes ahead. The verdict is flushed inside the guard, so
@@ -668,3 +669,50 @@ non-blocking error and the tool call goes ahead. The verdict is flushed inside t
 
 **There is no version skew to report.** The plugin, the hooks it declares and the binary
 they call ship in one bundle and move together when the app updates.
+
+## When a hook runs out of time
+
+A harness gives every hook a timeout, and what it does when a `PreToolUse` hook reaches it is
+the harness's choice. Read from each harness's own source and changelog (2026-10-06):
+
+| Harness | Timeout when none is set | The timeout purlis sets | When it passes |
+| --- | --- | --- | --- |
+| Claude Code (2.1.291) | 10 minutes for a tool hook (60 seconds before 2.1.3) | 10 s on `Bash`, 5 s on the others (the plugin's `timeout`) | the hook is cancelled (`hook_cancelled`, `timedOut: true`), which is not a block: **the tool call runs** |
+| Codex (0.147.0) | 600 seconds (`timeout`, in seconds) | the same, through `-c hooks.PreToolUse=…` | the run is marked failed and the hook killed; only a block stops the call, so **the tool call runs** |
+| opencode (1.18) | none: a plugin's `tool.execute.before` is awaited for as long as it takes | the same, enforced by purlis's own plugin | purlis's plugin kills the hook and **refuses the call**; a hook opencode itself waited on for ever would hold the call for ever |
+
+So a guard that is still reading when the harness gives up is an allow on two of the three.
+purlis never lets it come to that:
+
+- **Every `PreToolUse` hook decides within one budget of two seconds**, counted from the moment
+  purlis's `hook` entry point starts: reading its payload, then every guard and gate it runs,
+  on a thread with a deep stack. Two seconds is well inside the smallest timeout purlis sets
+  (five), and far more than an ordinary command takes.
+- **The budget starts when `hook` does, not when the process does.** What comes before it,
+  starting the process, is outside it, and on macOS the first run of a binary just installed or
+  updated can wait seconds while the system assesses it. Nothing inside the process can bound
+  that wait, so on Claude Code and Codex a call made in those first seconds after an update may
+  still meet the harness's timeout.
+- **A decision not made in time is a refusal**: exit 2, with one sentence on stderr — purlis
+  could not check the call in time, the command is too long or too deeply nested, so split it.
+  A payload that has not all arrived within the budget is refused the same way; it is never
+  judged as an empty command.
+- **Before any guard reads a command, three caps are checked**, each in one pass, and a command
+  past one is refused with a sentence saying to split it:
+  - its size, 128 KB: an ASCII pull request body at a forge's largest (65,536 characters) is
+    under 70 KB in a heredoc, while a body in a script of several bytes a character is not,
+    and goes in a file instead (`--body-file`);
+  - how deeply its substitutions nest, 8: the deepest any real commit message measured reaches
+    is 3. A string a guard derives from the command and reads in turn (heredocs taken out, a
+    quoted body, a shell's `-c` script) is held to the same cap, and a reading that meets one
+    nested deeper refuses the call rather than deciding on part of it;
+  - how many wrapper programs (`env`, `nice`, `eval`, a shell's `-c`, …) stand in front of one
+    program, 64, counted where a program stands, so prose that names them is never counted.
+
+  These keep every guard's cost in proportion to the command's length, and a test holds the
+  whole verdict on the slowest shapes known, at the largest size and the deepest nesting
+  allowed, well inside the budget. The budget is the backstop behind them for any shape that
+  is slow anyway.
+
+The remedy for either refusal is the one it names: split the command, or put the long text in a
+file and pass the file (`--body-file`, `git commit -F`).

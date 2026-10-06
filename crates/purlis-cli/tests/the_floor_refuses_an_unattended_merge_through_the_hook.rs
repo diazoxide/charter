@@ -263,12 +263,18 @@ fn reads_that_are_merely_named_merge_and_the_login_without_its_token_stay_allowe
 }
 
 /// A line nested far past any depth the guard reads is answered, never crashed on: a guard that
-/// dies without answering is an allow.
+/// dies without answering is an allow. Past the caps it is refused before any guard reads it,
+/// in either mode, at once rather than near the budget (#1355, which made this steady under load).
 #[test]
 fn nesting_far_past_the_floors_depth_is_answered_and_refused_unattended() {
     let deep = format!("{}echo hi", "eval ".repeat(6000));
     let plane = Plane::new();
-    plane.refused_unattended_only(&[deep.as_str()]);
+    for mode in ["bypassPermissions", "default"] {
+        let reason = plane
+            .denial(&deep, mode)
+            .unwrap_or_else(|| panic!("{mode}: not refused"));
+        assert!(reason.contains("split it"), "{mode}: {reason}");
+    }
     // Every guard answers a deeply nested line in both modes, with a verdict or a refusal: the
     // hook never dies without answering.
     for nested in [
@@ -327,11 +333,12 @@ fn a_command_that_reads_a_stored_secret_is_refused_unattended() {
 
 /// A guard still reading when its deadline passes refuses the call, in either mode: a harness
 /// runs the tool once its own hook deadline passes, so a guard that never answers is an allow.
-/// The deadline is shortened for the test; the line is one the guards read slowly.
+/// The budget is shortened for the test, and the guard is made to stall: a guard that has not
+/// decided when its budget runs out refuses the call.
 #[test]
 fn a_guard_that_does_not_answer_in_time_refuses_the_call() {
     let plane = Plane::new();
-    let slow = format!("{}1{}", "$((".repeat(3000), "))".repeat(3000));
+    let merge = "gh pr merge 12";
     for mode in ["bypassPermissions", "default"] {
         let payload = serde_json::json!({
             "session_id": "11111111-2222-4333-8444-555555555555",
@@ -339,7 +346,7 @@ fn a_guard_that_does_not_answer_in_time_refuses_the_call() {
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "permission_mode": mode,
-            "tool_input": {"command": slow},
+            "tool_input": {"command": merge},
         })
         .to_string();
         let mut child = Command::new(env!("CARGO_BIN_EXE_purlis"))
@@ -351,6 +358,7 @@ fn a_guard_that_does_not_answer_in_time_refuses_the_call() {
             .env("CHARTER_HARNESS", "claude-code")
             .env("PATH", "/usr/bin:/bin")
             .env("CHARTER_TEST_GUARD_DEADLINE_MS", "200")
+            .env("CHARTER_TEST_GUARD_STALLS", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -365,7 +373,7 @@ fn a_guard_that_does_not_answer_in_time_refuses_the_call() {
         let out = child.wait_with_output().expect("the hook finishes");
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(2), "{mode}: {err}");
-        assert!(err.contains("did not answer in time"), "{mode}: {err}");
+        assert!(err.contains("could not check it in time"), "{mode}: {err}");
     }
 }
 

@@ -1364,14 +1364,22 @@ const CORE_WARNS_ON_PURPOSE_ENV: &str = "CHARTER_TEST_CORE_WARNS";
 /// would otherwise hang the turn for good. Two seconds is well under the plugin's own 5 s
 /// hook timeout, so the harness's deadline is still the one that fires first, and no ordinary
 /// payload can reach this one.
-pub(crate) const PAYLOAD_DEADLINE: Duration = Duration::from_secs(2);
+///
+/// A reporting hook only. A `PreToolUse` hook reads its payload inside its budget, and one that
+/// does not arrive in time is a refusal, never an empty payload (#928).
+const PAYLOAD_DEADLINE: Duration = Duration::from_secs(2);
 
-/// Reads the harness's payload, or gives up on it.
+/// Reads the harness's payload, or gives up on it as empty.
+fn payload() -> String {
+    payload_within(PAYLOAD_DEADLINE).unwrap_or_default()
+}
+
+/// Reads the harness's payload, or `None` when it has not all arrived within `limit`.
 ///
 /// On its own thread, because a read from a pipe nobody is writing to cannot be interrupted.
 /// The thread is left behind when the deadline passes: the process is about to exit, and
 /// waiting for it is the very thing being avoided.
-fn payload() -> String {
+fn payload_within(limit: Duration) -> Option<String> {
     use std::io::Read;
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -1380,7 +1388,7 @@ fn payload() -> String {
         let _ = std::io::stdin().read_to_string(&mut text);
         let _ = tx.send(text);
     });
-    rx.recv_timeout(PAYLOAD_DEADLINE).unwrap_or_default()
+    rx.recv_timeout(limit).ok()
 }
 
 /// The rule a refused tool hook word this binary does not answer is recorded under.
@@ -1573,10 +1581,24 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
     let handler = hooks::handler(name);
     if guarded || handler.is_some() {
         let began = std::time::Instant::now();
-        let text = payload();
-        let answered = match handler {
-            Some(handler) if !guarded => hooks::run(handler, &text, now),
-            _ => guard::pretooluse(&text, now),
+        let decide = |text: &str| match handler {
+            Some(handler) if !guarded => hooks::run(handler, text, now),
+            _ => guard::pretooluse(text, now),
+        };
+        // A `PreToolUse` hook decides inside one budget, payload and all, on a deep stack, and
+        // a decision not made in time is a refusal (#1355, #928). The budget is what keeps the
+        // harness's own timeout, which may run the tool, from ever being reached.
+        let (text, answered) = if is_a_pretooluse_hook(name) {
+            let budget = guard::Budget::start();
+            let Some(text) = payload_within(budget.left()) else {
+                guard::out_of_time()
+            };
+            let answered = guard::decided_within(&budget, || decide(&text));
+            (text, answered)
+        } else {
+            let text = payload();
+            let answered = decide(&text);
+            (text, answered)
         };
         tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
         tell_the_host_about_blocks(name, &text);
