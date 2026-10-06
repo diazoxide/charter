@@ -2110,8 +2110,22 @@ fn without_channel_commands(bindings: &str) -> String {
 /// The shared lock this app holds on the config home for its life (`renamelocal::busy::LOCK`).
 struct HoldsTheConfigHome(#[allow(dead_code)] purlis_core::filelock::Held);
 
+/// The variable the upgrade scenario sets to have the `e2e` build migrate at its launch
+/// (RN-10, #1268). Read only by that build; `e2e/upgrade.test.ts` holds the spec's spelling
+/// to this one.
+#[cfg(feature = "e2e")]
+const SCENARIO_MIGRATES: &str = "PURLIS_E2E_RENAME_LOCAL";
+
+/// Whether the `e2e` build runs the launch's rename-local, given [`SCENARIO_MIGRATES`]'s value.
+///
+/// Off unless it is exactly `1`. The scenario specs name the old folders (D-RN5-7), so every run
+/// but the upgrade spec's (`wdio.upgrade.conf.ts`) keeps them where they are.
+#[cfg(any(test, feature = "e2e"))]
+fn scenario_migrates_at_launch(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 /// What the launch's rename-local said, for the app's log.
-#[cfg(not(feature = "e2e"))]
 fn log_the_rename(renamed: &purlis_core::renamelocal::Moved) {
     match &renamed.refused {
         Some(why) => tracing::warn!("purlis: the local rename waits: {why}"),
@@ -2336,9 +2350,9 @@ pub fn run() {
             // single-instance handoff and the one-per-user lock, so a second launch never
             // migrates, and before any project, chat or watch opens a file under one. Anything
             // else of charter's still running makes it wait for the next launch (D-RN5-11).
-            // Off in the scenario build, whose specs name the old folders (D-RN5-7).
-            // The vaults it left waiting, because macOS would have asked about their items, are
-            // the window's to offer (`vaultswaiting.rs`, #1306).
+            // Off in the scenario build, whose specs name the old folders (D-RN5-7), unless its
+            // upgrade spec asks (RN-10). The vaults it left waiting, because macOS would have
+            // asked about their items, are the window's to offer (`vaultswaiting.rs`, #1306).
             #[cfg(not(feature = "e2e"))]
             let waiting = match purlis_core::renamelocal::at_launch(
                 &app.config().identifier,
@@ -2350,8 +2364,23 @@ pub fn run() {
                 }
                 None => Vec::new(),
             };
+            // The upgrade scenario turns it on for its one app (RN-10). Fenced, so its busy
+            // check asks only the project's own sockets, its keychain is the stub, and the
+            // harnesses are left alone (no plugin to move).
             #[cfg(feature = "e2e")]
-            let waiting = Vec::new();
+            let waiting = if scenario_migrates_at_launch(
+                purlis_core::envvar::var(SCENARIO_MIGRATES).as_deref(),
+            ) {
+                match purlis_core::renamelocal::at_launch(&app.config().identifier, None) {
+                    Some(renamed) => {
+                        log_the_rename(&renamed);
+                        renamed.waiting
+                    }
+                    None => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
             // From here on this app holds the config home: no rename-local of a later launch,
             // or of a terminal, moves it while the app runs.
             let mut holds_the_config_home = false;
@@ -2712,6 +2741,23 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_scenario_build_migrates_at_launch_only_where_its_one_spec_says_so() {
+        // RN-10 (#1268, D-RN5-7): the e2e build skips the launch's rename-local, because its
+        // specs name the old folders; the upgrade spec alone turns it on, with `1`.
+        assert!(scenario_migrates_at_launch(Some("1")));
+        for off in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("yes"),
+            Some("true"),
+            Some(" 1"),
+        ] {
+            assert!(!scenario_migrates_at_launch(off), "{off:?}");
+        }
+    }
 
     /// A git repo at a fresh temp dir holding the local settings file and nothing ignoring it.
     fn plane_carrying_local_settings() -> tempfile::TempDir {

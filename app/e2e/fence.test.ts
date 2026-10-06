@@ -40,7 +40,12 @@ function inside(path: string, tree: string): boolean {
   return step === "" || (!step.startsWith(`..${sep}`) && step !== ".." && !step.startsWith(sep));
 }
 
-const launchers = ["wdio.conf.js", "wdio.state.conf.js", "wdio.bench.conf.js"];
+const launchers = [
+  "wdio.conf.js",
+  "wdio.state.conf.js",
+  "wdio.bench.conf.js",
+  "wdio.upgrade.conf.js",
+];
 
 describe("every launcher starts the app inside a plane the run made", () => {
   it.each(launchers)("%s pins the plane, its machine store and the fence", async (config) => {
