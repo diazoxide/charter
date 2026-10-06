@@ -265,19 +265,38 @@ fn a_state_folder_name_held_by_a_file_or_a_link_is_still_not_the_chats_to_make()
     assert!(write.contains(&plane.path().join(".purlis")), "{write:?}");
 }
 
+/// Both names of the committed manifest and of the machine's local one.
+const MANIFEST_NAMES: [&str; 4] = [
+    "charter.toml",
+    "purlis.toml",
+    "charter.local.toml",
+    "purlis.local.toml",
+];
+
 #[test]
-fn a_chat_never_plants_either_name_of_the_settings_files() {
-    for name in [
-        "charter.toml",
-        "purlis.toml",
-        "charter.local.toml",
-        "purlis.local.toml",
-    ] {
+fn no_manifest_is_held_by_name_at_any_depth() {
+    // ADR 0067 §5 as amended on 2026-10-06: held only where it could change a chat's
+    // sandbox, so a clone's fixtures and a temp folder may carry one.
+    for name in MANIFEST_NAMES {
         assert!(
-            PLANTED
-                .iter()
-                .any(|planted| planted.path == name && planted.reach == Reach::AndBelow),
+            !PLANTED.iter().any(|planted| planted.path == name),
             "{name}"
+        );
+    }
+}
+
+#[test]
+fn the_project_roots_manifests_are_denied_under_every_name_whatever_the_chats_folder() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let denied = Denied::of(plane.path(), &machine(Os::Linux));
+    for name in MANIFEST_NAMES {
+        let want = plane.path().join(name);
+        assert!(
+            denied.paths.iter().any(|it| it.path == want
+                && it.class == Class::LaterCode
+                && it.access == Access::Write),
+            "{name}: {:?}",
+            denied.paths
         );
     }
 }
@@ -1289,6 +1308,162 @@ fn every_harness_is_compiled_against_the_plane_as_the_kernel_names_it() {
         "{write}"
     );
     assert!(!write.contains(&linked.display().to_string()), "{write}");
+}
+
+/// The Claude Code settings a chat in `cwd` of the sandboxed plane at `root` is armed with.
+fn claude_settings_in(root: &Path, cwd: &Path) -> claude::Settings {
+    let applied = for_start(Harness::ClaudeCode, root, &machine(Os::MacOs), &|_| true)
+        .expect("starts")
+        .expect("sandboxed");
+    let Form::ClaudeCode(settings) = applied.form_in(Some(cwd)) else {
+        panic!("compiled for Claude Code");
+    };
+    settings
+}
+
+/// Whether `settings` deny writing `path`, to Claude Code's sandbox and to its Edit tool.
+fn claude_holds(settings: &claude::Settings, path: &Path) -> bool {
+    let path = path.display().to_string();
+    deny_write(settings).contains(&path)
+        && settings.deny.contains(&format!("Edit(/{path})"))
+        && settings.deny.contains(&format!("Edit(/{path}/**)"))
+}
+
+#[test]
+fn a_claude_code_chat_writes_a_manifest_only_where_it_cannot_change_a_chats_sandbox() {
+    // #1336: a chat in `ws/repo` is denied the manifests of the root, `ws` and its own folder,
+    // and may write one below its folder or in a temp folder.
+    let plane = plane_saying(ON);
+    let root = plane.path().canonicalize().expect("real");
+    let repo = root.join("ws/repo");
+    std::fs::create_dir_all(repo.join("sub")).expect("a repo");
+    let settings = claude_settings_in(&root, &repo);
+    for name in MANIFEST_NAMES {
+        for folder in [root.clone(), root.join("ws"), repo.clone()] {
+            let path = folder.join(name);
+            assert!(
+                claude_holds(&settings, &path),
+                "{} is writable",
+                path.display()
+            );
+        }
+        let fixture = repo.join("sub").join(name);
+        assert!(!claude_holds(&settings, &fixture), "{}", fixture.display());
+        // No rule names a manifest by name alone, nor outside the project.
+        let rules = deny_write(&settings)
+            .into_iter()
+            .chain(settings.deny.iter().cloned())
+            .filter(|rule| rule.contains(name))
+            .collect::<Vec<_>>();
+        assert!(
+            rules
+                .iter()
+                .all(|rule| !rule.contains("**/") && rule.contains(&root.display().to_string())),
+            "{rules:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_claude_code_chat_reached_through_a_link_is_denied_its_manifests_by_both_names() {
+    let base = tempfile::tempdir().expect("a base");
+    std::fs::create_dir_all(base.path().join("real/plane/ws/repo")).expect("a plane");
+    std::fs::write(base.path().join("real/plane/charter.toml"), ON).expect("charter.toml");
+    std::os::unix::fs::symlink(base.path().join("real"), base.path().join("linked"))
+        .expect("a linked parent");
+    let linked = base.path().join("linked/plane");
+    let real = linked.canonicalize().expect("real");
+    assert_ne!(linked, real);
+    let settings = claude_settings_in(&linked, &linked.join("ws/repo"));
+    for name in MANIFEST_NAMES {
+        for folder in ["", "ws", "ws/repo"] {
+            for spelled in [&real, &linked] {
+                let path = spelled.join(folder).join(name);
+                assert!(
+                    claude_holds(&settings, &path),
+                    "{} is writable",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_root_manifest_that_is_a_link_is_denied_to_claude_code_by_its_own_name_and_its_target() {
+    // #1336: the link itself, so it is never removed and replaced, and what it points at.
+    let plane = plane_saying(ON);
+    let root = plane.path().canonicalize().expect("real");
+    let dotfiles = tempfile::tempdir().expect("a dotfiles repository");
+    let target = dotfiles.path().join("purlis.local.toml");
+    std::fs::write(&target, "").expect("the operator's settings");
+    std::os::unix::fs::symlink(&target, root.join("purlis.local.toml")).expect("a link");
+    let settings = claude_settings_in(&root, &root);
+    for path in [
+        root.join("purlis.local.toml"),
+        target.canonicalize().expect("real"),
+    ] {
+        assert!(
+            claude_holds(&settings, &path),
+            "{} is writable",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn a_manifest_planted_below_a_workspace_names_no_project_of_its_own() {
+    // Why a manifest below the chat's folder is left writable: the walk re-roots a marker
+    // inside a project's `workspaces/` to that project (`plane::outermost`).
+    let plane = plane_saying(ON);
+    let root = plane.path().canonicalize().expect("real");
+    let sub = root.join("workspaces/w/sub");
+    std::fs::create_dir_all(&sub).expect("a folder");
+    std::fs::write(sub.join("purlis.toml"), "[sandbox]\n").expect("a planted manifest");
+    assert_eq!(crate::plane::find_root(&sub).expect("a plane"), root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_manifest_of_the_chats_folders_linked_to_its_ground_refuses_the_chat() {
+    // #1327's backstop over the manifests #1336 adds: a link a chat planted in its folder, to
+    // that folder or to `/`, would leave a later chat there read-only, so it is refused.
+    for target in ["sub", "/"] {
+        let plane = plane_saying(ON);
+        let root = plane.path().canonicalize().expect("real");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).expect("a folder");
+        let target = if target == "/" {
+            std::path::PathBuf::from("/")
+        } else {
+            sub.clone()
+        };
+        std::os::unix::fs::symlink(&target, sub.join("purlis.local.toml")).expect("a link");
+        let applied = for_start(Harness::ClaudeCode, &root, &machine(Os::MacOs), &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+        let line = applied.line(
+            Words {
+                program: "claude".to_owned(),
+                command: Vec::new(),
+                armed: Vec::new(),
+                charters: Vec::new(),
+            },
+            &At {
+                cwd: Some(&sub),
+                hook_socket: None,
+                confinement: None,
+            },
+        );
+        let why = line.expect_err("refused");
+        assert!(
+            why.contains("purlis.local.toml") && why.contains("nothing was started"),
+            "{}: {why}",
+            target.display()
+        );
+    }
 }
 
 #[test]

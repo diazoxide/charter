@@ -332,7 +332,8 @@ pub enum Class {
     RunnerInternals,
     /// What a program run later, outside any sandbox, loads code or settings from: git's
     /// config and hooks, shell startup files, and each harness's and editor's project config
-    /// ([`PLANTED`], ruling V73b). Never written by a chat, wherever it may write.
+    /// ([`PLANTED`], ruling V73b), never written by a chat wherever it may write; and the
+    /// project's manifests where they could change a chat's sandbox ([`manifests_held`]).
     LaterCode,
 }
 
@@ -395,10 +396,11 @@ impl Planted {
 
 /// What a program run later, outside any sandbox, loads code or settings from (ADR 0067 §5,
 /// class 5, ruling V73b): git's config and hooks, in every clone and worktree; shell startup
-/// files; the project config of every harness and editor; and `charter.toml`, which turns the
-/// sandbox on. A chat writing one of these could have code run outside its sandbox the next
-/// time a person, an editor or another chat opens the directory.
-pub const PLANTED: [Planted; 40] = [
+/// files; and the project config of every harness and editor. A chat writing one of these could
+/// have code run outside its sandbox the next time a person, an editor or another chat opens
+/// the directory. The project's manifests are held only where they could change a chat's
+/// sandbox ([`MANIFESTS`]).
+pub const PLANTED: [Planted; 36] = [
     // A `.git` moved into place brings its own config and hooks.
     Planted::itself(".git"),
     Planted::and_below(".git/config"),
@@ -443,15 +445,68 @@ pub const PLANTED: [Planted; 40] = [
     Planted::and_below(".zshenv"),
     Planted::and_below(".zprofile"),
     Planted::and_below(".zlogin"),
-    // A chat at the plane root could otherwise take `[sandbox]` out of it — under either name,
-    // since the purlis one is read when it is there (RN-2a).
-    Planted::and_below(crate::names::PLANE_MANIFEST.write),
-    Planted::and_below(crate::names::PLANE_MANIFEST.reads[0]),
-    // What the machine adds to the plane, which charter reads at every later start: the
-    // variables passed to chats, plugins and extensions.
-    Planted::and_below(crate::names::LOCAL_SETTINGS.write),
-    Planted::and_below(crate::names::LOCAL_SETTINGS.reads[0]),
 ];
+
+/// The project's manifests, under both names (RN-2a): `purlis.toml`, which turns the sandbox
+/// on, and `purlis.local.toml`, what the machine adds to the project and purlis reads at every
+/// later start (the variables passed to chats, plugins and extensions).
+///
+/// Not [`PLANTED`]: a manifest is held only where it could change a chat's sandbox
+/// ([`manifests_held`]), and elsewhere, in a clone's fixtures or a temp folder, it is an
+/// ordinary file (ADR 0067 §5 as amended on 2026-10-06).
+pub const MANIFESTS: [&str; 4] = [
+    crate::names::PLANE_MANIFEST.write,
+    crate::names::PLANE_MANIFEST.reads[0],
+    crate::names::LOCAL_SETTINGS.write,
+    crate::names::LOCAL_SETTINGS.reads[0],
+];
+
+/// The manifests a chat of the project at `root`, working in `cwd`, is denied writing (ADR 0067
+/// §5 as amended on 2026-10-06): every [`MANIFESTS`] name at the project root and in each
+/// folder from the chat's own up to the root, both ends included. Those are the files purlis
+/// reads when it starts a chat there. With no `cwd`, or one outside the project, only the
+/// root's.
+///
+/// Each as the folder is spelled and as the kernel names the folder, the name itself never
+/// resolved: a manifest that is a link (a `purlis.local.toml` kept in a dotfiles repository) is
+/// held by its own path, so it is neither removed nor replaced, as well as by its target.
+///
+/// **A manifest lower down changes no chat's sandbox.** A chat's project is the root its sandbox
+/// was compiled for ([`Applied::root`]), never the nearest manifest to its folder, and every
+/// reader of the project's settings reads them at that root. A marker the walk finds inside
+/// another project's `workspaces/` re-roots to that project (`plane::outermost`), so a manifest
+/// a chat writes in a clone's fixtures names no project of its own.
+pub fn manifests_held(root: &Path, cwd: Option<&Path>) -> Vec<Denial> {
+    let real_root = real(root);
+    let mut folders = vec![root.to_path_buf()];
+    if let Some(cwd) = cwd {
+        let mut chain = Vec::new();
+        for folder in cwd.ancestors() {
+            chain.push(folder.to_path_buf());
+            if real(folder) == real_root {
+                folders.extend(chain);
+                break;
+            }
+        }
+    }
+    let mut out: Vec<Denial> = Vec::new();
+    for folder in folders {
+        for spelled in [real(&folder), folder] {
+            for name in MANIFESTS {
+                let denial = Denial {
+                    class: Class::LaterCode,
+                    path: spelled.join(name),
+                    access: Access::Write,
+                    named: None,
+                };
+                if !out.contains(&denial) {
+                    out.push(denial);
+                }
+            }
+        }
+    }
+    out
+}
 
 /// Whether this process runs in a chat the app started under a sandbox
 /// ([`crate::hookwire::SANDBOXED_ENV`] is `1`): a tool hook of that chat inherits it.
@@ -678,7 +733,11 @@ impl Denied {
             }
         }
 
-        // 5. Later code: what a protected config points at elsewhere, resolved now (V73d).
+        // 5. Later code: the project root's manifests, under every name (#1336); those between
+        // the root and the chat's folder are added where the folder is known
+        // ([`Applied::form_in`]).
+        paths.extend(manifests_held(root, None));
+        // …and what a protected config points at elsewhere, resolved now (V73d).
         let xdg_config = machine
             .env
             .get("XDG_CONFIG_HOME")
@@ -1008,7 +1067,8 @@ impl Applied {
         }
     }
 
-    /// What that harness is handed.
+    /// The form as compiled for the project, before the manifests of a chat's own folders are
+    /// added: what a chat is handed is [`Self::form_in`] its folder.
     pub fn form(&self) -> &Form {
         &self.form
     }
@@ -1032,12 +1092,43 @@ impl Applied {
         if let Some(why) = folder_refusal(&self.root, cwd) {
             return Err(why.to_owned());
         }
-        // #1327: never a chat whose own folder, or one above it, it may not write.
+        // #1327: never a chat whose own folder, or one above it, it may not write — by what
+        // was compiled, or by a manifest of its folders that is a link to one of them (#1336).
         let ground: Vec<PathBuf> = cwd.ancestors().map(Path::to_path_buf).collect();
-        if let Some(refused) = covering(&self.denied, &ground) {
+        let chain = self.chain(Some(cwd));
+        if let Some(refused) = covering(&self.denied, &ground).or_else(|| covering(&chain, &ground))
+        {
             return Err(refused.to_string());
         }
-        self.harness.adapter().sandboxed_line(&self.form, words, at)
+        self.harness
+            .adapter()
+            .sandboxed_line(&self.with(chain), words, at)
+    }
+
+    /// What that harness is handed for a chat in `cwd`: [`Self::form`], with the manifests in
+    /// each folder from `cwd` up to the project root denied too ([`manifests_held`], #1336).
+    /// The one form a chat is armed with and opened under, so both name the same folders.
+    pub fn form_in(&self, cwd: Option<&Path>) -> Form {
+        self.with(self.chain(cwd))
+    }
+
+    /// The manifests a chat in `cwd` is denied that the compiled form does not already deny.
+    fn chain(&self, cwd: Option<&Path>) -> Vec<Denial> {
+        manifests_held(&self.root, cwd)
+            .into_iter()
+            .filter(|denial| !self.denied.contains(denial))
+            .collect()
+    }
+
+    /// The compiled form with `more` denied too.
+    fn with(&self, more: Vec<Denial>) -> Form {
+        let mut form = self.form.clone();
+        match &mut form {
+            Form::ClaudeCode(settings) => *settings = settings.denying(&more),
+            Form::Codex(codex::Wrap { denied, .. })
+            | Form::Opencode(opencode::Wrap { denied, .. }) => denied.extend(more),
+        }
+        form
     }
 
     /// What has to run for as long as a chat under this sandbox does, started now: charter's
