@@ -224,8 +224,14 @@ function core({
           return [];
         case "sandbox_state":
           return sandboxOn
-            ? { on: true, offer: false, said: "No chat started without it", never: [] }
-            : { on: false, offer: false, said: null, never: [] };
+            ? {
+                on: true,
+                offer: false,
+                said: "No chat started without it",
+                never: [],
+                hosts_changed: null,
+              }
+            : { on: false, offer: false, said: null, never: [], hosts_changed: null };
         case "save_project_settings": {
           const which = given.which as SettingsWhich;
           const change = given.change as { kind: "edits"; edits: SettingsEdit[] };
@@ -321,6 +327,7 @@ describe("the Project level", () => {
         "Harness & profiles",
         "work",
         "Sandbox",
+        "Your hosts",
         "Forges",
         "Extensions",
         "Appearance",
@@ -942,7 +949,8 @@ describe("one form for Shared and Local (SE-18)", () => {
     const labels: string[] = [];
     for (const name of groups() as string[]) {
       await open(name);
-      for (const label of within(shown()).getAllByText(/./, { selector: ".ui-setting-label" }))
+      // A page that is a collection alone (Your hosts, #1341) has no rows of its own.
+      for (const label of within(shown()).queryAllByText(/./, { selector: ".ui-setting-label" }))
         labels.push(label.textContent ?? "");
     }
     expect(labels.filter((one, at) => labels.indexOf(one) !== at)).toEqual([]);

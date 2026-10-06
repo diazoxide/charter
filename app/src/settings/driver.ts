@@ -61,11 +61,20 @@ export type EntryOp =
   | { collection: string; base: string | null; remove: string }
   /** A rename of the entry `rename` to `to` (ST-4, V91k): refused, naming them, while
    *  something uses the entry. Its Undo is the rename back. */
-  | { collection: string; base: string | null; rename: string; to: string };
+  | { collection: string; base: string | null; rename: string; to: string }
+  /** A confirm of the entry `confirm` (#1341): your own sandbox host, which reaches nothing
+   *  until Settings confirms it on this machine. It has no Undo. */
+  | { collection: string; base: string | null; confirm: string };
 
 /** The entry an op is about, when it is about one already there: a remove's or a rename's. */
 export function entryOf(op: EntryOp): string | undefined {
-  return "remove" in op ? op.remove : "rename" in op ? op.rename : undefined;
+  return "remove" in op
+    ? op.remove
+    : "rename" in op
+      ? op.rename
+      : "confirm" in op
+        ? op.confirm
+        : undefined;
 }
 
 /** Something that uses an entry, which stops its removal, and the group it is changed in. */
@@ -94,7 +103,8 @@ export type EntryUndo =
  * its Undo) and what undoes it; or why nothing was written.
  */
 export type EntryWrote<T> =
-  { saved: T; file: SettingsFileId; said: string; undo: EntryUndo } | { refused: EntryRefusal };
+  | { saved: T; file: SettingsFileId; said: string; undo: EntryUndo | undefined }
+  | { refused: EntryRefusal };
 
 /** A collection's last refused Remove, Rename or Undo: the entry it was for (none for an
  *  Undo), and which it was. */
@@ -102,7 +112,7 @@ export type EntryRefused = {
   collection: string;
   entry: string | undefined;
   /** What was refused, in the words the refusal is said in: `removed` or `renamed`. */
-  verb?: "removed" | "renamed";
+  verb?: "removed" | "renamed" | "confirmed";
   refusal: EntryRefusal;
 };
 
@@ -424,7 +434,7 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
           setEntryRefused({
             collection: id,
             entry: undoing ? undefined : entryOf(op),
-            verb: "rename" in op ? "renamed" : "removed",
+            verb: "rename" in op ? "renamed" : "confirm" in op ? "confirmed" : "removed",
             refusal: wrote.refused,
           });
         // What is shown is what is on disk: a refusal may be the file having moved.
@@ -434,7 +444,12 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
       took(wrote.saved);
       setRefused((before) => without(before, id));
       // One level: an Undo is not itself undone.
-      setLast(undoing ? undefined : { setting: id, undo: wrote.undo, said: wrote.said });
+      // A write with no Undo (a confirm) leaves none to offer.
+      setLast(
+        undoing || wrote.undo === undefined
+          ? undefined
+          : { setting: id, undo: wrote.undo, said: wrote.said },
+      );
       return undefined;
     },
     [readFiles, took],
