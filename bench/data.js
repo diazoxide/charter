@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791260089164,
+  "lastUpdate": 1791261032105,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -2814,6 +2814,48 @@ window.BENCHMARK_DATA = {
             "value": 101.675401,
             "unit": "ms",
             "extra": "median of 5 runs: 100.334, 101.624, 101.675, 101.792, 102.265 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "e63fd8affbef57f60e0c43f079e51d893a591a95",
+          "message": "Bump smol-toml from 1.8.0 to 1.9.0 in /app\n\nBumps [smol-toml](https://github.com/squirrelchat/smol-toml) from 1.8.0 to 1.9.0.\n- [Release notes](https://github.com/squirrelchat/smol-toml/releases)\n- [Commits](https://github.com/squirrelchat/smol-toml/compare/v1.8.0...v1.9.0)\n\n---\nupdated-dependencies:\n- dependency-name: smol-toml\n  dependency-version: 1.9.0\n  dependency-type: indirect\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-10-06T08:13:35+04:00",
+          "tree_id": "5ee5c8d4594bea953298ef834a78deeb875ba485",
+          "url": "https://github.com/purlis/purlis/commit/e63fd8affbef57f60e0c43f079e51d893a591a95"
+        },
+        "date": 1791261031035,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.526898,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.499, 0.505, 0.527, 0.536, 0.537 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.955509,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.882, 16.938, 16.956, 16.964, 17.349 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.68939750000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.990, 103.377, 103.689, 104.005, 104.262 ms"
           }
         ]
       }
