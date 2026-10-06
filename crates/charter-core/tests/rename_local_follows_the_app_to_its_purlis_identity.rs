@@ -579,3 +579,33 @@ fn the_purlis_app_sees_the_old_app_running_beside_it_and_a_scenario_build_does_n
     drop(old);
     assert!(renamelocal::busy::OLDER_APP_RUNNING.contains("delete charter.app"));
 }
+
+#[test]
+fn the_update_restart_from_the_old_app_is_not_stopped_by_the_old_app() {
+    charter_core::unsteered!();
+    use renamelocal::busy::{Places, older_app_at_launch, started_by_the_app};
+    let dir = tempfile::tempdir().unwrap();
+    let places = Places {
+        linux: true,
+        runtime: Some(dir.path().to_path_buf()),
+        uid: 501,
+        ..Default::default()
+    };
+    let old = std::fs::File::create(dir.path().join("dev.charter.app.lock")).unwrap();
+    old.lock().unwrap();
+
+    // Started by the old app's own program: the update's restart, let through.
+    for parent in [
+        "/Applications/charter.app/Contents/MacOS/charter-app",
+        "charter-app",
+    ] {
+        assert!(started_by_the_app(Some(parent)), "{parent}");
+        assert_eq!(older_app_at_launch(&places, NEW_APP, Some(parent)), None);
+    }
+    // Started any other way, the old app running beside it stops this launch.
+    for parent in [Some("/bin/zsh"), Some("launchd"), None] {
+        assert!(!started_by_the_app(parent), "{parent:?}");
+        assert!(older_app_at_launch(&places, NEW_APP, parent).is_some());
+    }
+    drop(old);
+}

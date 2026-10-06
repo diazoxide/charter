@@ -836,6 +836,7 @@ dependencies = [
  "chrono",
  "dunce",
  "notify",
+ "rfd",
  "rustix",
  "serde",
  "serde_json",

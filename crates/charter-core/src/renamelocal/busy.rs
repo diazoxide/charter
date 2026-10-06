@@ -206,6 +206,42 @@ pub fn older_app(places: &Places, own: &str) -> Option<String> {
     Instances::of(places, Some(own)).running()
 }
 
+/// [`older_app`] at the app's launch, unless the process that started this one is the app's own
+/// program (`parent`, its program as `ps` names it): that is the update's restart, where the old
+/// app is this one's parent, still letting go as it exits, and never a second app.
+pub fn older_app_at_launch(places: &Places, own: &str, parent: Option<&str>) -> Option<String> {
+    if started_by_the_app(parent) {
+        return None;
+    }
+    older_app(places, own)
+}
+
+/// Whether `parent`, a program as `ps` names it (a path or a bare name), is the app's own
+/// binary ([`crate::secrets::keyhold::APP_BINARY`]).
+pub fn started_by_the_app(parent: Option<&str>) -> bool {
+    parent
+        .and_then(|program| Path::new(program.trim()).file_name())
+        .is_some_and(|name| name == crate::secrets::keyhold::APP_BINARY)
+}
+
+/// The program of the process that started this one, as `ps` names it, or `None` when it
+/// cannot be told.
+pub fn parent_program() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let parent = rustix::process::getppid()?.as_raw_nonzero().get();
+        let mut ps = std::process::Command::new("ps");
+        ps.args(["-o", "comm=", "-p", &parent.to_string()]);
+        let out = crate::forklock::output(&mut ps).ok()?;
+        let program = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        (out.status.success() && !program.is_empty()).then_some(program)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 /// What a launch that found the old app running says before it ends.
 pub const OLDER_APP_RUNNING: &str = "charter: the app is already running under its old name \
      (charter.app). Quit it, then open purlis.app again. If you installed purlis.app beside it, \
