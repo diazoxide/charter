@@ -48,6 +48,11 @@ pub const ASK_OPERATOR: &str = "ask_operator";
 /// itself. One operation behind both, in the CLI that serves the tools.
 pub const SESSION_RECORD: &str = "session_record";
 
+/// The tool that writes one memory of this chat's persona, or of shared memory, which [`call`]
+/// does not answer either: like [`SESSION_RECORD`] it is a brokered write the server hands to
+/// the app (#1333), the one operation `purlis persona remember` run in the chat performs.
+pub const PERSONA_REMEMBER: &str = "persona_remember";
+
 /// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
 /// the five that only read. Named one by one, never derived from [`Tool::read_only`]:
 /// `ask_operator` is marked read-only too and still asks, and a tool added later is asked
@@ -193,7 +198,7 @@ fn one_string(key: &str, description: &str) -> Value {
 }
 
 /// Every tool, in the order a harness lists them.
-pub static TOOLS: [Tool; 10] = [
+pub static TOOLS: [Tool; 11] = [
     Tool {
         name: "todo_list",
         description: "List the open todos of the workspace this chat works in, oldest first, \
@@ -233,6 +238,35 @@ pub static TOOLS: [Tool; 10] = [
         description: "Record one durable fact in the memory of the workspace this chat works \
                       in. Never a secret: memory is read by every later chat here.",
         schema: || one_string("text", "The fact. The first line is its title."),
+        read_only: false,
+    },
+    Tool {
+        name: PERSONA_REMEMBER,
+        description: "Record one durable fact in the memory of the persona this chat runs as, \
+                      or with shared in the memory every persona reads. Never a secret: \
+                      persona and shared memory are published with the project.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The fact. The first line is its title.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "A short title, when the first line is not one.",
+                    },
+                    "shared": {
+                        "type": "boolean",
+                        "description": "Write it to shared memory, which every persona reads, \
+                                        instead of this chat's persona's own.",
+                    },
+                },
+                "required": ["text"],
+                "additionalProperties": false,
+            })
+        },
         read_only: false,
     },
     Tool {
@@ -334,9 +368,9 @@ pub fn call(
             "{ASK_OPERATOR} is asked through the harness by purlis's MCP server, not here"
         ));
     }
-    if tool == SESSION_RECORD {
+    if tool == SESSION_RECORD || tool == PERSONA_REMEMBER {
         return Err(format!(
-            "{SESSION_RECORD} is handed to the app by purlis's MCP server, not written here"
+            "{tool} is handed to the app by purlis's MCP server, not written here"
         ));
     }
     // FR-24, at every write and not only when the server started: the server lives as long
@@ -517,6 +551,23 @@ pub fn record_args(args: &Map<String, Value>) -> Result<(String, String, Vec<Str
         Some(_) => return Err("`pieces` is a list of strings".to_owned()),
     };
     Ok((title, body, pieces))
+}
+
+/// What a `persona_remember` call hands over: its text, its title and whether it is shared,
+/// or why it hands over nothing.
+pub fn persona_remember_args(
+    args: &Map<String, Value>,
+) -> Result<(String, Option<String>, bool), String> {
+    let shared = match args.get("shared") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(shared)) => *shared,
+        Some(_) => return Err("`shared` is true or false".to_owned()),
+    };
+    Ok((
+        string(args, "text")?.to_owned(),
+        optional_string(args, "title")?.map(str::to_owned),
+        shared,
+    ))
 }
 
 /// The question an `ask_operator` call puts, trimmed, or why it puts none.

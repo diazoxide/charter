@@ -34,6 +34,7 @@ use purlis_core::shown;
 use purlis_core::state::Event;
 use purlis_core::workspaces::Plane;
 
+mod brokered;
 mod change;
 mod curation;
 mod extcmd;
@@ -2679,9 +2680,9 @@ fn run(command: Command) -> Result<u8, String> {
             no_sync,
             common,
         }) => {
-            return memory::workspace_remember(
-                &here.plane,
-                &here.active_workspace(common.workspace.as_deref())?,
+            return memory::workspace_remember_typed(
+                &here,
+                common.workspace.as_deref(),
                 text.as_deref(),
                 title.as_deref(),
                 no_sync,
@@ -2693,9 +2694,9 @@ fn run(command: Command) -> Result<u8, String> {
             no_sync,
             common,
         }) => {
-            return memory::workspace_remember(
-                &here.plane,
-                &here.active_workspace(common.workspace.as_deref())?,
+            return memory::workspace_remember_typed(
+                &here,
+                common.workspace.as_deref(),
                 message.as_deref(),
                 None,
                 no_sync,
@@ -2782,6 +2783,23 @@ fn run(command: Command) -> Result<u8, String> {
             repo,
             common,
         }) => {
+            // In a chat the app started, a todo for the chat's own workspace is the app's to
+            // write (#1333). Closing, listing and promoting are not brokered yet.
+            if let [text] = words.as_slice()
+                && !["done", "forget", "promote"].contains(&text.as_str())
+                && repo.is_none()
+                && common.workspace.is_none()
+                && common.now.is_none()
+            {
+                let write = purlis_core::brokered::Write::Todo { text: text.clone() };
+                if let Some(code) =
+                    memory::said_forwarded(brokered::forwarded(write), |to, path| {
+                        said_todo_recorded(&here.plane, to, path);
+                    })
+                {
+                    return Ok(code);
+                }
+            }
             let ws = here.workspace(common.workspace.as_deref())?;
             let stamp = common.stamp()?;
             return Ok(todo(&here.plane, &ws, &words, repo.as_deref(), stamp));
@@ -2935,15 +2953,7 @@ fn todo(
             // refuses the same todos in the same words.
             match ws.record_todo(text, stamp) {
                 Ok(path) => {
-                    voice::ok(&format!(
-                        "Todo recorded in '{name}' → workspaces/{name}/todos/{}",
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    ));
-                    if !plane.is_live(name) {
-                        voice::info(&format!(
-                            "  '{name}' is LOCAL (private) — todos stay on disk, not committed."
-                        ));
-                    }
+                    said_todo_recorded(plane, name, &path.to_string_lossy());
                     0
                 }
                 Err(refused @ purlis_core::workspaces::RecordRefused::AlreadyListed(_)) => {
@@ -2964,6 +2974,22 @@ fn todo(
             );
             1
         }
+    }
+}
+
+/// What `ws todo "<text>"` says once the todo is recorded in workspace `name`, at `path`.
+fn said_todo_recorded(plane: &Plane, name: &str, path: &str) {
+    voice::ok(&format!(
+        "Todo recorded in '{name}' → workspaces/{name}/todos/{}",
+        std::path::Path::new(path)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+    ));
+    if !plane.is_live(name) {
+        voice::info(&format!(
+            "  '{name}' is LOCAL (private) — todos stay on disk, not committed."
+        ));
     }
 }
 

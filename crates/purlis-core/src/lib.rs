@@ -7,6 +7,7 @@ pub mod alerts;
 pub mod applog;
 pub mod autosave;
 pub mod briefing;
+pub mod brokered;
 pub mod browser;
 pub mod change;
 pub mod chatenv;

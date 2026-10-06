@@ -105,6 +105,7 @@ fn the_tools_are_the_ones_charter_names_and_each_says_what_it_does() {
             "todo_done",
             "memory_search",
             "memory_add",
+            "persona_remember",
             "session_record_list",
             "session_record_read",
             "session_record",
