@@ -20,6 +20,13 @@
 //! this chat only". That record is the tmux frame's, which this charter neither reads nor
 //! writes (`docs/plane-format.md`; [`crate::wscmd::select`] declares the same for
 //! `workspace use`), so a chat here is treated as the terminal it runs in.
+//!
+//! # Inside a chat the app started, it is refused
+//!
+//! A chat's persona is fixed for its life (ADR 0090 as amended, #1435). [`Asking::in_chat`]
+//! says the command runs in such a chat, and there it writes nothing and names the two ways
+//! forward: the operator allows the vault on the chat's tab, or the chat dispatches to that
+//! persona. `persona create --use` is refused there in the same words.
 
 use std::path::Path;
 
@@ -94,6 +101,9 @@ pub(super) fn scope_note(root: &Path, scope: Scope) -> String {
 pub struct Asking<'a> {
     pub ids: &'a Ids,
     pub env_persona: Option<&'a str>,
+    /// Whether this runs inside a chat the app started ([`crate::hookwire::CHAT_ENV`]), whose
+    /// persona is fixed for its life (ADR 0090 as amended, #1435).
+    pub in_chat: bool,
     pub bucket: &'a str,
     pub now: chrono::NaiveDateTime,
 }
@@ -103,6 +113,9 @@ pub fn use_persona(root: &Path, name: &str, asking: &Asking, say: Sink) -> u8 {
     if let Some(refused) = crate::personas::name_refusal(root, name) {
         say(Say::Fail(refused));
         return 1;
+    }
+    if asking.in_chat {
+        return refuse_in_chat(name, asking.env_persona, say);
     }
     let scope = set_active(root, name, asking.ids);
     crate::trace::record(
@@ -191,6 +204,58 @@ pub(super) fn warn_env(name: &str, env: Option<&str>, say: Sink) {
     )));
 }
 
+/// How a chat the app started is said to run: as its persona, or with none.
+fn chat_runs(env: &str) -> String {
+    if env.is_empty() {
+        "with no persona".into()
+    } else {
+        format!("as '{}'", crate::personas::one_line(env))
+    }
+}
+
+/// `persona use` inside a chat the app started (#1435): a chat's persona is fixed for its
+/// life (ADR 0090 as amended), so nothing is written, and the two ways to work with another
+/// persona are named. The exit code is the refusal's, or 0 for a chat that names the persona
+/// it already runs as, which has nothing to select.
+fn refuse_in_chat(name: &str, env: Option<&str>, say: Sink) -> u8 {
+    let env = crate::memstore::py_strip(env.unwrap_or_default());
+    if env == name {
+        say(Say::Info(format!(
+            "This chat already runs as '{name}', and a chat's persona is fixed for its life: \
+             there is nothing to select."
+        )));
+        return 0;
+    }
+    let still = if env.is_empty() {
+        "have none".to_owned()
+    } else {
+        let shown = crate::personas::one_line(env);
+        format!("use '{shown}', with the vaults of '{shown}'")
+    };
+    say(Say::Fail(format!(
+        "This chat runs {}, and a chat's persona is fixed for its life: nothing was changed, \
+         and commands here still {still}.",
+        chat_runs(env)
+    )));
+    say(Say::Info(format!(
+        "To use a vault of '{name}' here, run the command that needs it and ask the operator to \
+         press Allow in the notice on this chat's tab. To have '{name}' do the work, dispatch \
+         to it: `purlis handoff <workspace> --persona {name}`."
+    )));
+    1
+}
+
+/// What `persona create --use` says inside a chat the app started (#1435), where it selects
+/// nothing for the same reason, before anything is made.
+pub(super) fn create_use_refusal(name: &str, env: Option<&str>) -> String {
+    let runs = chat_runs(crate::memstore::py_strip(env.unwrap_or_default()));
+    format!(
+        "This chat runs {runs}, and a chat's persona is fixed for its life, so --use cannot \
+         select '{name}' here and nothing was made. Create it without --use; to have it do \
+         work, dispatch to it: `purlis handoff <workspace> --persona {name}`."
+    )
+}
+
 /// `_say_tool_ceiling`: the tools declared since this session froze its ceiling still
 /// prompt here, and the reason is said rather than left to be discovered.
 fn say_tool_ceiling(root: &Path, name: &str, sid: Option<&str>, say: Sink) {
@@ -268,16 +333,88 @@ mod tests {
     }
 
     fn run(plane: &Plane, name: &str, ids: &Ids, env: Option<&str>) -> (u8, Heard) {
+        run_where(plane, name, ids, env, false)
+    }
+
+    fn run_where(
+        plane: &Plane,
+        name: &str,
+        ids: &Ids,
+        env: Option<&str>,
+        in_chat: bool,
+    ) -> (u8, Heard) {
         let bucket = ids.session.clone().unwrap_or_else(|| "nosession".into());
         let asking = Asking {
             ids,
             env_persona: env,
+            in_chat,
             bucket: &bucket,
             now: now(),
         };
         let mut heard = Heard::default();
         let rc = use_persona(plane.root(), name, &asking, &mut heard.sink());
         (rc, heard)
+    }
+
+    #[test]
+    fn inside_a_chat_it_is_refused_writes_nothing_and_names_both_ways_forward() {
+        // persona-use-inside-a-chat-says-its-persona-is-fixed (#1435)
+        let plane = Plane::fixture("daily");
+        let ids = ids(Some("s-1"), Some("pane-1"));
+        let (rc, heard) = run_where(&plane, "devops", &ids, Some("steward"), true);
+        assert_eq!((rc, heard.out.as_str()), (1, ""));
+        assert_eq!(
+            heard.err,
+            concat!(
+                "✗ This chat runs as 'steward', and a chat's persona is fixed for its life: ",
+                "nothing was changed, and commands here still use 'steward', with the vaults of ",
+                "'steward'.\n",
+                "• To use a vault of 'devops' here, run the command that needs it and ask the ",
+                "operator to press Allow in the notice on this chat's tab. To have 'devops' do ",
+                "the work, dispatch to it: `purlis handoff <workspace> --persona devops`.\n",
+            )
+        );
+        assert!(!plane.path(".charter/sessions/s-1.persona").exists());
+        assert!(!plane.path(".charter/terminals").exists());
+        assert!(!plane.path(".charter/active-persona").exists());
+        assert!(
+            !plane
+                .path(".charter/persona-state/trace/s-1.jsonl")
+                .exists()
+        );
+        // A chat with no persona is refused one too, in its own words.
+        let (rc, heard) = run_where(&plane, "devops", &ids, None, true);
+        assert_eq!(rc, 1);
+        assert!(
+            heard.err.starts_with(
+                "✗ This chat runs with no persona, and a chat's persona is fixed for its life: \
+                 nothing was changed, and commands here still have none.\n"
+            ),
+            "{}",
+            heard.err
+        );
+        assert!(!plane.path(".charter/sessions").exists());
+        // A name the project does not define is refused as it is anywhere.
+        let (rc, heard) = run_where(&plane, "ghost", &ids, Some("steward"), true);
+        assert_eq!(rc, 1);
+        assert_eq!(
+            heard.err,
+            "✗ no persona 'ghost' (create it: purlis persona create ghost)\n"
+        );
+    }
+
+    #[test]
+    fn a_chat_naming_the_persona_it_runs_as_is_told_so_and_nothing_is_written() {
+        let plane = Plane::fixture("daily");
+        let ids = ids(Some("s-1"), None);
+        let (rc, heard) = run_where(&plane, "devops", &ids, Some(" devops "), true);
+        assert_eq!(rc, 0);
+        assert_eq!(
+            heard.err,
+            "• This chat already runs as 'devops', and a chat's persona is fixed for its life: \
+             there is nothing to select.\n"
+        );
+        assert!(!plane.path(".charter/sessions").exists());
     }
 
     const TRACED: &str = "{\"ts\": \"2026-05-04T11:32:17\", \"event\": \"persona-use\", \

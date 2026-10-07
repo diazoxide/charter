@@ -131,6 +131,12 @@ neither id writes the plane-wide `.charter/active-persona`. It says which of the
 wrote, and warns when `$PURLIS_PERSONA` is set to something else, because that outranks
 every pointer. Selecting a persona opens no vault.
 
+Inside a chat the app started, `purlis persona use` is refused and writes nothing: a chat's
+persona is fixed for its life (ADR 0090). The refusal names the two ways forward. To use
+another persona's vault in this chat, run the command that needs it and ask the operator to
+allow the vault on the chat's tab. To have another persona do the work, dispatch to it.
+`purlis persona create --use` is refused there for the same reason.
+
 ### The front door
 
 A plane declares its default persona in `charter.toml`:
