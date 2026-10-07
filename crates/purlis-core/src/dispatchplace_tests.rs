@@ -304,25 +304,27 @@ fn what_the_chats_are_told_names_the_branch_and_says_nothing_merges() {
          main. Nothing is merged for it: its report names the branch, and merging is yours or \
          the person's decision"
     );
-    // #1453 review, M3. A sandboxed chat writes its own folder and nothing of its repo's
-    // `.git`, where a worktree's git data is: it is never told to commit, and neither chat is
-    // told that it will.
+    // #1453 review, M3, and #1055. A sandboxed chat writes its own folder and nothing of its
+    // repo's `.git`, where a worktree's git data is: it is told the command that commits for
+    // it, never only to commit.
     let told = told_the_chat("api", "check-the-queue-b5rc0def", true);
     assert_eq!(
         told,
         "you work in a worktree of api that purlis cut for this task, on the branch \
-         `check-the-queue-b5rc0def`, which is yours alone. You can edit in this folder. You \
-         cannot commit there yet: this chat is sandboxed, and a worktree's git data is outside \
-         the folder it may write (purlis issue 1055). Leave your changes in the folder and \
-         list the files you changed in your report. Nothing is merged for you"
+         `check-the-queue-b5rc0def`, which is yours alone. This chat is sandboxed, and a \
+         worktree's git data is outside the folder it may write, so `git add` and `git commit` \
+         are refused here: commit your work with `purlis worktree commit -m \"<message>\" \
+         --all` (or paths in place of `--all`; a new file must be named). It only commits. \
+         Nothing is merged for you: your report names the branch, and merging it is the asking \
+         chat's or the person's decision"
     );
     assert!(!told.contains("Commit your work"), "{told}");
     assert_eq!(
         said_to_the_asker(&ground, Some(&cut), true),
         "in a worktree of its own, on the branch `check-the-queue-b5rc0def` in api, cut from \
-         main. It is sandboxed, so it can edit there and cannot commit yet (purlis issue \
-         1055): its changes stay uncommitted in that folder, and its report should list them. \
-         Nothing is merged for it"
+         main. It is sandboxed, so it commits there with `purlis worktree commit`, which the \
+         app runs for it. Nothing is merged for it: its report names the branch, and merging \
+         is yours or the person's decision"
     );
     assert_eq!(
         fell_back_note("web"),

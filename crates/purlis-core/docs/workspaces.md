@@ -282,6 +282,7 @@ one done, and removes one. Cutting a piece from the app is not in this version y
 From a terminal or a chat, `purlis worktree` (alias `wt`):
 
     charter wt add <repo> <piece> [-w <ws>]   # cut it off the clone's HEAD; exit 2 if taken
+    purlis worktree commit -m "<message>" [--all | <path>…]   # from a sandboxed chat inside the piece
     charter wt done                          # from inside the piece: it is finished
     charter wt abandon "<why you stopped>"   # from inside the piece: it is given up
     charter wt list [<repo>] [-w <ws>]       # what git has, and what each piece said
@@ -293,6 +294,36 @@ From a terminal or a chat, `purlis worktree` (alias `wt`):
 with an age, in `list`, the footer and the session briefing. `remove` runs `git worktree
 remove`. It refuses a piece with uncommitted changes or commits no other ref reaches, and it
 names those files and commits, until `--force` says to discard them.
+
+**Committing in a piece from a sandboxed chat.** A worktree keeps its index and its objects
+in its clone's `.git`, which a sandboxed chat may not write, so `git add` and `git commit`
+are refused there. `purlis worktree commit` asks the app that started the chat to do it: the
+app stages what you name (`--all` is every change to a tracked file; a new file must be named
+by path) and commits on the branch the piece is on, with your git identity and the chat's
+trailers. It names no repository or branch: the app uses the folder it started the chat in.
+
+- It only commits. It never amends, resets, rebases, merges or pushes.
+- The repository's own hooks are not run, and the answer says so for each one that is there.
+  purlis's scan for secrets and personal data does run.
+- Git run this way reads none of your global or system git config but your name and email. A
+  repository whose own config names a program (a filter, a diff or merge driver, an include,
+  a helper), one that signs its commits, and one that borrows objects from another are
+  refused, each with what to do instead.
+- A folder inside the piece that is a repository of its own, a change to `.gitmodules`, a
+  path reached through a link, and a name that differs from another only by case are refused.
+  A link is committed as a link; what it points at is never read.
+- A file your attributes mark for a content filter (Git LFS, most often) is refused: your
+  filters are in the config this commit does not read, so it would be stored unfiltered.
+  Commit such a file from your own terminal.
+- One commit runs in a piece at a time. If the app was stopped in the middle of one, the next
+  `purlis worktree commit` unstages what it had staged and carries on.
+- A chat that is not sandboxed, and any chat in a clone, uses `git commit` as before.
+
+**What purlis's own git reads in a piece.** Before purlis runs git in a folder whose `.git` is
+a file, it reads that file itself and tells git which repository to use. A piece is read only
+as a worktree of the clone it was cut from; a piece moved by hand is refused until `git
+worktree repair` is run in it. And git that purlis runs starts no git inside a submodule, so
+uncommitted work inside a submodule does not show in purlis; a new commit there does.
 
 A relocated worktree root — `[plane] worktrees` or `$PURLIS_WORKTREES` — is not followed in
 this version yet: unset it to keep worktrees in the plane.

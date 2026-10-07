@@ -1463,6 +1463,64 @@ fn a_clone_the_app_made_for_a_chat_keeps_its_git_config_hooks_and_editor_setting
 }
 
 #[test]
+fn a_chat_in_a_branch_folder_is_given_nothing_under_its_clones_git_directory() {
+    // #1055, ruling V99h: a sandboxed chat in a linked worktree commits through the app, and
+    // its sandbox is not widened for it. The worktree's git directory is in its clone's
+    // `.git/worktrees`, which stays a later-code name on every harness, and the clone is
+    // outside what a chat standing in the branch folder writes.
+    for name in [
+        ".git",
+        ".git/worktrees",
+        ".git/commondir",
+        ".git/config.worktree",
+    ] {
+        assert!(PLANTED.iter().any(|planted| planted.path == name), "{name}");
+    }
+    let cwd = Path::new("/project/workspaces/w/.worktrees/repo/piece");
+    let tmp = Path::new("/tmp-of/the-chat");
+    let profile =
+        seatbelt::profile(&[], &seatbelt::Own::default(), cwd, tmp, 4040, None).expect("a profile");
+    // The wrap (Codex, opencode): the two folders it may write, and no other folder of the
+    // project, the clone least of all.
+    let subpaths: Vec<&str> = profile
+        .lines()
+        .skip_while(|line| *line != "(allow file-write*")
+        .skip(1)
+        .take_while(|line| line.trim_start().starts_with('('))
+        .filter(|line| line.contains("subpath"))
+        .collect();
+    assert_eq!(
+        subpaths,
+        [
+            "  (subpath \"/project/workspaces/w/.worktrees/repo/piece\")",
+            "  (subpath \"/tmp-of/the-chat\")",
+        ],
+        "{profile}"
+    );
+    assert!(!profile.contains("/project/workspaces/w/repo"), "{profile}");
+    // And the folder's own `.git` file is held there, so the link cannot be rewritten.
+    let rules = seatbelt::planted_rules(cwd).expect("rules");
+    assert!(
+        rules.iter().any(|rule| rule.contains("\\\\.git$")),
+        "{rules:?}"
+    );
+    // Claude Code: no write is added, and the worktree's git directory stays denied by name.
+    let settings = claude::settings(&compiled(Denied::default(), Os::MacOs)).expect("compiles");
+    let filesystem = &settings.sandbox["filesystem"];
+    assert!(
+        deny_write(&settings)
+            .iter()
+            .any(|it| it == "**/.git/worktrees"),
+        "{filesystem}"
+    );
+    assert!(
+        !filesystem.to_string().contains("allowWrite")
+            || !filesystem["allowWrite"].to_string().contains(".git"),
+        "{filesystem}"
+    );
+}
+
+#[test]
 fn what_a_hooks_path_or_a_project_config_names_is_denied_to_every_harness_from_the_start() {
     // Ruling V73d: resolved when the chat starts, as path denials of the later-code class.
     let plane = plane_saying(ON);
@@ -2719,8 +2777,8 @@ fn a_chat_started_in_a_worktree_writes_that_folder_and_nothing_of_the_clone_it_w
     // is the one every chat in a branch folder has, and this is what it compiles to: the
     // worktree is the ground, and the clone it was cut from, that clone's `.git` and the
     // worktree's own git data there (`.git/worktrees/<piece>`) are not writable. That last one
-    // is why such a chat cannot commit (purlis issue 1055), and it is the rule that issue
-    // will change: a change there fails here first.
+    // is why such a chat's own `git commit` is refused and the app commits for it (#1055,
+    // ruling V99h): the rule was kept, and a change to it fails here first.
     let dir = tempfile::tempdir().expect("a directory");
     let root = std::fs::canonicalize(dir.path()).expect("resolved");
     let clone = root.join("workspaces/alpha/api");

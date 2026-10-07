@@ -203,6 +203,10 @@ pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
     // a sandbox, which is the one place the variable is set.
     if let Some(note) = sandboxed_note(ask.env) {
         parts.push(note.to_owned());
+        // And how it commits where its own git cannot (#1055): in a branch folder.
+        if crate::worktree::locate(ask.root, ask.cwd).is_some() {
+            parts.push(BRANCH_FOLDER_COMMIT_NOTE.to_owned());
+        }
     }
     // Last: charter's skills, for a chat whose harness cannot load them (ADR 0063). Only such a
     // chat is started with the variable, so a harness that loads them is not told twice.
@@ -227,6 +231,17 @@ pub const SANDBOXED_NOTE: &str = "⬢ **This chat runs in purlis's sandbox.** Wh
      apply here: purlis's own settings outrank them, so never suggest them. A credential is \
      never granted to a chat: run the command through `purlis secret exec <vault> -- <command>` \
      instead.";
+
+/// **What a sandboxed chat standing in a branch folder is told about committing** (#1055,
+/// ruling V99h). A linked worktree keeps its index and objects in its clone's `.git`, which
+/// the sandbox does not let the chat write, so its own `git add` and `git commit` are refused.
+/// Telling it the command first keeps it from a refusal it cannot get round.
+pub const BRANCH_FOLDER_COMMIT_NOTE: &str = "⬢ **Committing here.** This folder is a git \
+     worktree, and the sandbox refuses `git add` and `git commit` in one. Commit with `purlis \
+     worktree commit -m \"<message>\" --all` (every change to a tracked file) or with paths \
+     in place of `--all` (a new file must be named). purlis stages and commits on this \
+     folder's branch, outside the sandbox. It only commits: no amend, reset, rebase, merge \
+     or push, and the repository's own hooks are not run.";
 
 /// [`SANDBOXED_NOTE`] for a chat the app started under a sandbox, read through `env`; none for
 /// any other.

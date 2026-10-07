@@ -414,8 +414,8 @@ pub static TOOLS: [Tool; 15] = [
                                         workspace of the project, or `worktree` for a new \
                                         worktree of the repo this chat works in, on a new \
                                         branch purlis names, which nothing merges. A \
-                                        sandboxed chat can edit there and cannot commit yet: \
-                                        its changes stay in that folder. Leave it out for \
+                                        sandboxed chat commits there with `purlis worktree \
+                                        commit`. Leave it out for \
                                         this chat's folder.",
                     },
                     "wait": {

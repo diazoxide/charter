@@ -270,6 +270,7 @@ fn opens_as_nine(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
         Ask::SessionRecord(_)
         | Ask::Write(_)
         | Ask::Git(_)
+        | Ask::Commit(_)
         | Ask::Vaults { .. }
         | Ask::WhereWorking(_)
         | Ask::Dispatch(_)

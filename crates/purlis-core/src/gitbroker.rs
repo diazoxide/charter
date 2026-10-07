@@ -440,5 +440,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     real(a) == real(b)
 }
 
+pub mod commit;
+
 #[cfg(test)]
 mod tests;
