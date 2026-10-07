@@ -134,6 +134,7 @@ fn a_plane() -> Plane {
         workspace: crate::active::Place::Workspace("alpha".into()),
         report: Owed::Due,
         mode: crate::reopen::Mode::Handoff,
+        depth: 0,
     });
     crate::reopen::write(
         &root,

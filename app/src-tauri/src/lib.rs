@@ -847,8 +847,12 @@ fn resume_session(
     let size = Size { columns, rows };
     let session = match instead_of {
         Some(instead_of) => {
-            held.chats()
-                .start_ready_instead_of(instead_of, &chat, &resumed.ready, size)?
+            let started =
+                held.chats()
+                    .start_ready_instead_of(instead_of, &chat, &resumed.ready, size)?;
+            // The same chat under a new number: its tasks and its waiting reports follow it.
+            held.followed(instead_of, started);
+            started
         }
         None => held.chats().start_ready(&chat, &resumed.ready, size)?,
     };

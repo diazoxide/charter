@@ -199,6 +199,36 @@ fn dispatch_of(agent: &str) -> Value {
 }
 
 #[test]
+fn a_sub_agent_calling_purlis_s_dispatch_tool_is_refused_and_the_chat_itself_is_not() {
+    // #1436: a persona chat belongs to a chat the person can see. Only the hook's payload
+    // says a sub-agent made the call, so it is refused here, before the tool runs.
+    let p = Plane::new().with_env(crate::hookwire::HARNESS_ENV, "claude-code");
+    let call = |agent_id: Option<&str>| {
+        let mut payload = serde_json::json!({"tool_name": "mcp__purlis__dispatch",
+            "session_id": "s",
+            "tool_input": {"name": "check the queue", "brief": "look at it"}});
+        if let Some(agent_id) = agent_id {
+            payload["agent_id"] = agent_id.into();
+        }
+        p.ask(payload, pretooluse_dispatch)
+    };
+
+    assert_eq!(
+        denied(&call(Some("sub-1"))),
+        "a dispatch is refused from inside a sub-agent. A persona chat belongs to a chat the \
+         person can see, open and stop, and a sub-agent is not one. Return what you found to \
+         your chat, and let that chat dispatch."
+    );
+    assert_eq!(call(None), Answer::Nothing);
+    assert_eq!(call(Some("")), Answer::Nothing, "the main conversation");
+    // And nothing is recorded as an agent in flight: the tool is not a harness's sub-agent.
+    assert_eq!(
+        p.ask(dispatch_of("web"), pretooluse_dispatch),
+        Answer::Nothing
+    );
+}
+
+#[test]
 fn a_code_writing_persona_dispatched_beside_a_running_agent_is_asked_about() {
     let p = Plane::new();
     p.persona("web", "role: Web\ndispatch-isolation: worktree");

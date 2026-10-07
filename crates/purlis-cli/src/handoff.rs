@@ -413,12 +413,12 @@ enum Host {
 
 /// How long the app has to mint a ticket. It is a map insert; two seconds is an app that is
 /// not going to answer.
-const A_TICKET_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(2);
+pub(crate) const A_TICKET_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// How long the app has to open the chat. It resolves a profile, which can run a subprocess
 /// to ask whether a file is tracked, and spawns a harness, so this is generous. It is still a
 /// bound, because the operator is waiting on a Bash tool call that has to end.
-const AN_OPEN_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(20);
+pub(crate) const AN_OPEN_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Asks the app that started this chat to open the handoff (charter-app#204).
 ///
@@ -466,14 +466,16 @@ fn in_the_app(
             | Answer::Written { .. }
             | Answer::Said { .. }
             | Answer::Vaults { .. }
-            | Answer::Working(_),
+            | Answer::Working(_)
+            | Answer::Dispatched { .. }
+            | Answer::NeedsGrant { .. },
         )
         | Err(_) => Host::None,
     }
 }
 
 /// A ticket from the app that started this chat, on the connection it must be spent on.
-enum Ticketed {
+pub(crate) enum Ticketed {
     Yes(purlis_core::hookwire::Asking, u32, String),
     /// The app answered, and would not mint one.
     Refused(String),
@@ -483,7 +485,7 @@ enum Ticketed {
 
 /// The first of the two lines every ask on the socket is (charter-app#204): a ticket for the
 /// chat this process runs in, which `$CHARTER_CHAT` names.
-fn ticketed() -> Ticketed {
+pub(crate) fn ticketed() -> Ticketed {
     use purlis_core::hookwire::{Answer, Ask, Asking, CHAT_ENV, ChatToken, SOCKET_ENV};
 
     let Some(socket) = purlis_core::envvar::var_os(SOCKET_ENV).filter(|s| !s.is_empty()) else {
@@ -506,7 +508,9 @@ fn ticketed() -> Ticketed {
             | Answer::Written { .. }
             | Answer::Said { .. }
             | Answer::Vaults { .. }
-            | Answer::Working(_),
+            | Answer::Working(_)
+            | Answer::Dispatched { .. }
+            | Answer::NeedsGrant { .. },
         )
         | Err(_) => Ticketed::NoApp,
     }
@@ -544,6 +548,7 @@ fn report_back(summary: &str) -> ExitCode {
         chat,
         summary,
         ticket,
+        task: None,
     };
     match asking.ask(&Ask::Report(Box::new(back)), A_TICKET_TAKES_AT_MOST) {
         Ok(Answer::Reported { to, kept_for: None }) => {
@@ -579,7 +584,9 @@ fn report_back(summary: &str) -> ExitCode {
             | Answer::Written { .. }
             | Answer::Said { .. }
             | Answer::Vaults { .. }
-            | Answer::Working(_),
+            | Answer::Working(_)
+            | Answer::Dispatched { .. }
+            | Answer::NeedsGrant { .. },
         )
         | Err(_) => {
             voice::err(
