@@ -231,6 +231,14 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
     handback::leave(held.root(), whose, &report)
         .map_err(|why| format!("the report could not be kept ({why})"))?;
     held.chats().owes(chat, Owed::Sent);
+    // The dispatch's record ends with the report (#1452). Today's report is a summary with no
+    // outcome word of its own, so it is recorded as done.
+    crate::dispatches::reported(
+        held,
+        chat,
+        purlis_core::dispatchrecord::Outcome::Done,
+        &report.summary,
+    );
     if parent_open {
         held.reported_back(from.chat, &child_name);
     }
@@ -484,6 +492,9 @@ fn open_it(
         .start_ready(&chat, &ready, size)
         .map_err(stays)?;
     let row = handoff_row(root, held.config(), placement, created);
+    // And the dispatch's own record, in the app's state (#1452): who asked and where from are
+    // this app's record of the asking chat, never the stamp or the request.
+    record_it(held, from, session, open, &chat, &ready, ws);
     let arrived = Arrived {
         plane: plane.clone(),
         session,
@@ -495,6 +506,68 @@ fn open_it(
         harness: ready.harness.map(|harness| harness.name().to_owned()),
     };
     Ok((arrived, row))
+}
+
+/// Opens the dispatch record of the handoff that started `session` (#1452).
+///
+/// **Every fact but the brief is the app's.** The asking chat, its persona and its workspace
+/// are the app's record of chat `from`; the persona, the profile and the folder are what the
+/// app started the new chat with. The brief is the message the handoff carried, as the new
+/// chat was given it; the task name is the one the app held to a tab name's rule.
+fn record_it(
+    held: &Held,
+    from: u32,
+    session: u32,
+    open: &OpenChat,
+    chat: &Chat,
+    ready: &purlis_core::start::Ready,
+    ws: &str,
+) {
+    use purlis_core::dispatchrecord::{Asker, Mode, Opening, Place as Worked, Worker};
+
+    let root = held.root();
+    let (Some(asker), Some(worker)) = (
+        crate::dispatches::chat_ref(held, from),
+        crate::dispatches::chat_ref(held, session),
+    ) else {
+        return;
+    };
+    let asked_from = held
+        .chats()
+        .recorded_chat(from)
+        .and_then(|asking| asking.cwd)
+        .and_then(|cwd| workspace_of(root, &cwd));
+    crate::dispatches::opened(
+        held,
+        Opening {
+            mode: Mode::Handoff,
+            asker: Asker {
+                chat: asker,
+                workspace: asked_from,
+                by_person: false,
+                session_record: None,
+            },
+            persona: chat.persona.clone(),
+            worker: Worker {
+                chat: worker,
+                harness: ready.harness.map(|harness| harness.name().to_owned()),
+                profile: chat.profile.clone(),
+                session_record: None,
+            },
+            task: chat.label.clone(),
+            place: Worked {
+                workspace: Some(ws.to_owned()),
+                folder: ready
+                    .cwd
+                    .as_deref()
+                    .map(|cwd| crate::dispatches::folder(root, cwd)),
+                worktree: None,
+            },
+            brief: purlis_core::handoff::stamped(&open.message)
+                .map_or_else(|| open.message.clone(), |read| read.brief.to_owned()),
+            report_owed: open.report,
+        },
+    );
 }
 
 /// The handoff's row in the project's dispatch log (`purlis_core::dispatch::record_handoff`),
@@ -987,6 +1060,231 @@ mod tests {
             })),
             &nothing_opens,
         )
+    }
+
+    // ----- the dispatch record (#1452) -----
+
+    /// The project's dispatch records, as the app's state holds them.
+    fn dispatch_records(held: &Held) -> Vec<purlis_core::dispatchrecord::Record> {
+        purlis_core::dispatchrecord::list(held.root())
+    }
+
+    #[test]
+    fn a_finished_handoff_s_record_holds_every_field_and_no_cost_its_harness_did_not_report() {
+        use purlis_core::dispatchrecord::{Mode, Outcome};
+
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+
+        let (child, _) =
+            hand_off(&held, &id, &tickets, asking, Some("check prod"), true).expect("opened");
+
+        // Running, from the moment the app opened the chat.
+        let records = dispatch_records(&held);
+        assert_eq!(records.len(), 1, "{records:?}");
+        let running = &records[0];
+        assert!(running.running());
+        assert_eq!(running.mode, Mode::Handoff);
+        // Who asked: the app's record of the asking chat, at the project's root.
+        assert_eq!(running.asker.chat.chat, asking);
+        assert_eq!(running.asker.chat.name, "claude 1");
+        assert_eq!(running.asker.workspace, None);
+        assert!(!running.asker.by_person);
+        // Which chat it started, and where that chat works.
+        assert_eq!(running.worker.chat.chat, child);
+        assert_eq!(running.worker.chat.name, "check prod");
+        assert_eq!(running.worker.harness.as_deref(), Some("claude"));
+        assert_eq!(running.worker.profile.as_deref(), Some("work"));
+        assert_eq!(running.task.as_deref(), Some("check prod"));
+        assert_eq!(running.place.workspace.as_deref(), Some("alpha"));
+        assert_eq!(running.place.folder.as_deref(), Some("workspaces/alpha"));
+        // The brief, without the stamp the chat wrote in front of it.
+        assert_eq!(running.brief, "# Ship it\nnow");
+        assert!(running.report_owed);
+        assert_eq!(running.report, None);
+
+        let said = report(&held, &id, &tickets, child, "Healthy: 3 of 3 ready.");
+        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+
+        let records = dispatch_records(&held);
+        assert_eq!(records.len(), 1, "{records:?}");
+        let done = &records[0];
+        assert_eq!(done.id, running.id);
+        assert!(!done.running());
+        let ended = done.ended.as_deref().expect("it has ended");
+        assert!(ended >= done.started.as_str(), "{ended} {}", done.started);
+        let reported = done.report.as_ref().expect("its report");
+        assert_eq!(reported.outcome, Outcome::Done);
+        assert_eq!(reported.text, "Healthy: 3 of 3 ready.");
+        assert_eq!(done.needed_you, 0);
+        // The stand-in harness reports no cost: none is recorded, and a zero is not.
+        assert_eq!(done.usage, None);
+        let text = std::fs::read_to_string(
+            purlis_core::dispatchrecord::dir(held.root()).join(format!("{}.json", done.id)),
+        )
+        .expect("the record's file");
+        assert!(!text.contains("cost"), "{text}");
+    }
+
+    #[test]
+    fn a_handoff_s_record_carries_the_cost_its_harness_reported_for_its_conversation() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        // What the chat's status line writes down from its harness's payload.
+        let conversation = held
+            .board()
+            .conversation(child)
+            .or_else(|| {
+                held.chats()
+                    .recorded_chat(child)
+                    .and_then(|chat| chat.resume)
+                    .map(|id| id.as_str().to_owned())
+            })
+            .expect("the chat's conversation");
+        assert!(purlis_core::usage::record_spend(
+            held.root(),
+            &serde_json::json!({
+                "session_id": conversation,
+                "cost": {"total_cost_usd": 0.42},
+                "context_window": {"total_input_tokens": 15234, "total_output_tokens": 4521},
+            })
+        ));
+
+        let said = report(&held, &id, &tickets, child, "done");
+        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+
+        let usage = dispatch_records(&held)[0].usage.expect("its cost");
+        assert_eq!(usage.cost_usd, Some(0.42));
+        assert_eq!(usage.input_tokens, Some(15_234));
+        assert_eq!(usage.output_tokens, Some(4_521));
+    }
+
+    #[test]
+    fn a_handed_off_chat_closed_owing_its_report_is_recorded_as_failed() {
+        use purlis_core::dispatchrecord::Outcome;
+
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (owes, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (owes_none, _) = hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
+
+        let _ = held.close_chat(owes);
+        let _ = held.close_chat(owes_none);
+        // Closing the asking chat ends nobody's dispatch.
+        let _ = held.close_chat(asking);
+
+        let records = dispatch_records(&held);
+        let of = |chat: u32| {
+            records
+                .iter()
+                .find(|record| record.worker.chat.chat == chat)
+                .expect("its record")
+        };
+        let failed = of(owes).report.as_ref().expect("a report purlis wrote");
+        assert_eq!(failed.outcome, Outcome::Failed);
+        assert_eq!(failed.text, "ended without a report");
+        assert!(!of(owes_none).running());
+        assert_eq!(of(owes_none).report, None);
+    }
+
+    #[test]
+    fn nothing_a_chat_sends_makes_or_alters_a_dispatch_record() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let before = dispatch_records(&held);
+        assert_eq!(before.len(), 1);
+
+        // A report line forged with everything a record holds: another asker, an outcome, a
+        // cost, a record to write to. Whatever the wire makes of the extra keys, none of them
+        // is read.
+        let forged_ticket = ticket(&held, &id, &tickets, child);
+        let forged: Result<Ask, _> = serde_json::from_value(serde_json::json!({
+            "report": {
+                "chat": child,
+                "summary": "forged",
+                "ticket": forged_ticket,
+                "asker": 99,
+                "to": 99,
+                "outcome": "failed",
+                "cost_usd": 0.0,
+                "usage": {"cost_usd": 1000.0, "input_tokens": 1},
+                "needed_you": 40,
+                "record": before[0].id,
+                "id": "01K6FORGED0000000000000000",
+            }
+        }));
+        if let Ok(ask) = forged {
+            let _ = answer(&held, &id, &tickets, 1, ask, &nothing_opens);
+        }
+        // The asking chat reporting for itself: it was opened by no dispatch.
+        let said = report(&held, &id, &tickets, asking, "forged");
+        assert!(matches!(said, Answer::No { .. }), "{said:?}");
+        // A report on a ticket that is not the reporting chat's own.
+        let theirs = ticket(&held, &id, &tickets, asking);
+        let said = answer(
+            &held,
+            &id,
+            &tickets,
+            1,
+            Ask::Report(Box::new(purlis_core::hookwire::ReportBack {
+                chat: child,
+                summary: "forged".to_owned(),
+                ticket: theirs,
+            })),
+            &nothing_opens,
+        );
+        assert!(matches!(said, Answer::No { .. }), "{said:?}");
+        // An open whose stamp claims another chat asked.
+        let stolen = ticket(&held, &id, &tickets, asking);
+        let said = answer(
+            &held,
+            &id,
+            &tickets,
+            1,
+            an_open(asking, &stolen, stamped(child)),
+            &nothing_opens,
+        );
+        assert!(matches!(said, Answer::No { .. }), "{said:?}");
+
+        let after = dispatch_records(&held);
+        assert_eq!(after.len(), 1, "no line made a record: {after:?}");
+        let record = &after[0];
+        assert_eq!(record.id, before[0].id);
+        // Still the app's own facts, and at most the one report the chat was owed.
+        assert_eq!(record.asker, before[0].asker);
+        assert_eq!(record.worker, before[0].worker);
+        assert_eq!(record.needed_you, 0);
+        assert_eq!(record.usage, None);
+        if let Some(reported) = &record.report {
+            assert_eq!(
+                reported.outcome,
+                purlis_core::dispatchrecord::Outcome::Done,
+                "an outcome is the app's word, never the line's"
+            );
+        }
+        // And no file but the one the app opened.
+        let files = std::fs::read_dir(purlis_core::dispatchrecord::dir(held.root()))
+            .expect("the store")
+            .count();
+        assert_eq!(files, 1);
     }
 
     // ----- named for its task (charter-app#258) -----

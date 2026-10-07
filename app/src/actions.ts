@@ -36,6 +36,7 @@ import type {
   RowAction,
   SubjectCurations,
 } from "./bindings";
+import { DISPATCHES_TITLE, DISPATCHES_VIEW } from "./dispatches";
 import { MAIN } from "./here";
 import {
   DRAFT,
@@ -982,6 +983,9 @@ function isPinned<T>(held: readonly T[], one: T): boolean {
   return held.includes(one);
 }
 
+/** The catalogue's id for the row that opens the project's Dispatches tab (#1452). */
+export const DISPATCHES_SHOW = "dispatches.show";
+
 /** An offer that can run, spelled once so `reason` cannot drift from `available`. */
 function can(id: string, title: string, does: Does, name?: string): Offer {
   return { id, title, available: true, reason: "", does, name };
@@ -1494,6 +1498,17 @@ export function catalogue(now: Now): Offer[] {
         note: "What every persona on this plane reads, in a tab of its own.",
       },
     );
+    // **The project's dispatches, in a tab of their own** (#1452): every dispatch its chats
+    // made, with who asked, which persona, the outcome and the cost. The Sessions panel's
+    // heading draws this row as a button.
+    offers.push({
+      ...can(DISPATCHES_SHOW, "Open dispatches", {
+        verb: "openView",
+        view: DISPATCHES_VIEW,
+        title: DISPATCHES_TITLE,
+      }),
+      note: "The work this project's chats handed to other chats, in a tab of its own.",
+    });
   }
 
   // **Curation actions (ADR 0061)**: one row per action a workspace, a persona or the plane is

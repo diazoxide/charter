@@ -703,6 +703,9 @@ pub fn record(held: &Held, ask: &purlis_core::hookwire::RecordAsk) -> Answer {
         Ok(recorded) => recorded,
         Err(why) => return Answer::No { why },
     };
+    // The dispatches this chat asked for are listed on its record, and the one it worked on
+    // names it (#1452): from the app's record of the chat, never from the request.
+    crate::dispatches::session_recorded(held, ask.chat, &recorded.shown);
     let title = purlis_core::sessionrecord::saved(held.root(), &recorded.path)
         .map_or_else(|| ask.title.trim().to_owned(), |listed| listed.title);
     let saved = SavedRecord {

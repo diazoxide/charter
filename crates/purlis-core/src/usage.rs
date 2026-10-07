@@ -356,6 +356,95 @@ fn write_row(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.write_all(bytes)
 }
 
+// ---- what a session has cost in all ----------------------------------------------------------
+
+/// What a harness said a whole session has cost so far (#1452): its tokens in and out, and its
+/// own cost figure. **Every part is absent where the harness did not say it, never a zero.**
+///
+/// **A reported figure, which a chat can alter.** It is kept in the project's per-session
+/// state, where a chat writes its own pointers, so a chat can write this file too, for its own
+/// conversation or another's. Show it as reported; decide nothing by it until its source is
+/// out of a chat's reach.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Spent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    /// The harness's own figure, in US dollars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+}
+
+impl Spent {
+    /// Whether the harness said nothing at all.
+    pub fn is_empty(&self) -> bool {
+        self.input_tokens.is_none() && self.output_tokens.is_none() && self.cost_usd.is_none()
+    }
+}
+
+/// The spend file for `sid`, beside its usage file and held to the same rule ([`file_for`]).
+pub fn spend_file_for(plane: &Path, sid: &str) -> Option<PathBuf> {
+    contain::mintable(sid)
+        .is_ok()
+        .then(|| sessions_dir(plane).join(format!("{sid}.spend")))
+}
+
+/// The session a status-line payload names and what it says the session has cost in all, or
+/// `None` for a payload that names no session or says nothing of cost or tokens.
+///
+/// Claude Code's payload carries `cost.total_cost_usd` and `context_window.total_input_tokens`
+/// and `total_output_tokens`, to its `statusLine` command and nowhere else. A harness whose
+/// payload has none of the three has reported nothing, and nothing is recorded for it.
+pub fn spend(payload: &Value) -> Option<(String, Spent)> {
+    let session = payload.get("session_id").and_then(Value::as_str)?;
+    let tokens = |key: &str| {
+        payload
+            .get("context_window")
+            .and_then(|window| window.get(key))
+            .and_then(Value::as_u64)
+    };
+    let spent = Spent {
+        input_tokens: tokens("total_input_tokens"),
+        output_tokens: tokens("total_output_tokens"),
+        cost_usd: payload
+            .get("cost")
+            .and_then(|cost| cost.get("total_cost_usd"))
+            .and_then(Value::as_f64)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0),
+    };
+    (!session.is_empty() && !spent.is_empty()).then(|| (session.to_owned(), spent))
+}
+
+/// Write down what `payload` says its session has cost so far, over what was written before:
+/// the figure is a running total, so the last one said is the one kept. Whether it was
+/// written. Best effort, as [`record`] is.
+pub fn record_spend(plane: &Path, payload: &Value) -> bool {
+    let Some((session, spent)) = spend(payload) else {
+        return false;
+    };
+    let Some(path) = spend_file_for(plane, &session) else {
+        return false;
+    };
+    let Ok(text) = serde_json::to_string(&spent) else {
+        return false;
+    };
+    write_row(plane, &path, format!("{text}\n").as_bytes()).is_ok()
+}
+
+/// What session `sid`'s harness last said it has cost in all, or `None` where it said nothing:
+/// no file, a file that does not read, or one that holds no figure. Read through the same gate
+/// as the usage rows ([`rows_at`]).
+pub fn spent(plane: &Path, sid: &str) -> Option<Spent> {
+    let path = spend_file_for(plane, sid)?;
+    let rows = rows_at(plane, &path);
+    let spent: Spent = serde_json::from_str(rows.first()?).ok()?;
+    let sane = spent
+        .cost_usd
+        .is_none_or(|cost| cost.is_finite() && cost >= 0.0);
+    (sane && !spent.is_empty()).then_some(spent)
+}
+
 // ---- reading it back ------------------------------------------------------------------------
 //
 // Everything above WRITES the record. What follows is the first reader outside the writer:
@@ -1182,5 +1271,90 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, file_for(&plane, "s1").unwrap()).unwrap();
 
         assert!(history(&plane, "s1").is_empty());
+    }
+
+    // ----- what a session has cost in all (#1452) -----
+
+    #[test]
+    fn a_harness_that_reports_its_cost_has_it_recorded_and_the_last_figure_is_the_one_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        let said = |cost: f64, input: u64, output: u64| {
+            json!({
+                "session_id": "s1",
+                "cost": {"total_cost_usd": cost},
+                "context_window": {
+                    "total_input_tokens": input,
+                    "total_output_tokens": output,
+                },
+            })
+        };
+
+        assert!(record_spend(&plane, &said(0.10, 1_000, 200)));
+        assert!(record_spend(&plane, &said(0.42, 15_234, 4_521)));
+
+        assert_eq!(
+            spent(&plane, "s1"),
+            Some(Spent {
+                input_tokens: Some(15_234),
+                output_tokens: Some(4_521),
+                cost_usd: Some(0.42),
+            })
+        );
+    }
+
+    #[test]
+    fn a_harness_that_reports_no_cost_has_none_and_never_a_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+
+        // A turn's usage, and nothing of the session's cost or totals.
+        assert!(!record_spend(&plane, &payload(90, 10)));
+        assert!(!record_spend(
+            &plane,
+            &json!({"session_id": "s1", "cost": {}})
+        ));
+        assert!(!record_spend(
+            &plane,
+            &json!({"cost": {"total_cost_usd": 1.5}})
+        ));
+
+        assert_eq!(spent(&plane, "s1"), None);
+        assert!(!spend_file_for(&plane, "s1").unwrap().exists());
+        // Tokens without a cost are tokens without a cost.
+        assert!(record_spend(
+            &plane,
+            &json!({"session_id": "s2", "context_window": {"total_input_tokens": 7}})
+        ));
+        assert_eq!(
+            spent(&plane, "s2"),
+            Some(Spent {
+                input_tokens: Some(7),
+                output_tokens: None,
+                cost_usd: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_spend_file_named_outside_the_sessions_directory_is_neither_written_nor_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+
+        assert!(!record_spend(
+            &plane,
+            &json!({"session_id": "../../escape", "cost": {"total_cost_usd": 1.0}})
+        ));
+
+        assert!(!plane.join("escape.spend").exists());
+        assert_eq!(spent(&plane, "../../escape"), None);
+        // A figure that is not a cost reads as none.
+        std::fs::create_dir_all(sessions_dir(&plane)).unwrap();
+        std::fs::write(
+            spend_file_for(&plane, "s3").unwrap(),
+            "{\"cost_usd\": -4.0}\n",
+        )
+        .unwrap();
+        assert_eq!(spent(&plane, "s3"), None);
     }
 }

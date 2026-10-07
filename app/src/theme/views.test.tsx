@@ -44,6 +44,7 @@ import { OWN_MARKS, ViewPane } from "../Views";
 import type { Offer } from "../actions";
 import { DRAFT, forgetDrafts, wantEdit } from "../memories";
 import type {
+  DispatchRow,
   HarnessPlugins,
   InstructionFile,
   MemoryView,
@@ -587,7 +588,60 @@ const RECORD: SessionRecordView = {
   persona_hosts: [],
   resume_holds: false,
   persona_hosts_locked: null,
+  dispatches: [{ persona: "devops", task: "check prod", outcome: "done" }],
 };
+
+/** One dispatch that ran and reported, and one still running (#1452). */
+const DISPATCHES: DispatchRow[] = [
+  {
+    id: "01K6B",
+    mode: "handoff",
+    persona: "devops",
+    task: "check prod",
+    asker: "steward 3",
+    asker_key: "01K6STEWARD",
+    asker_persona: "steward",
+    by_person: false,
+    place: "web",
+    folder: "workspaces/web",
+    outcome: "running",
+    started: "2026-10-07T12:00:00+00:00",
+    ended: null,
+    duration: "2m 5s",
+    needed_you: 1,
+    messages: 0,
+    cost: null,
+    tokens: null,
+    brief: "Is the rollout healthy?",
+    report: null,
+    open_session: 7,
+    session_record: null,
+  },
+  {
+    id: "01K6A",
+    mode: "handoff",
+    persona: null,
+    task: "tidy the notes",
+    asker: "steward 3",
+    asker_key: "01K6STEWARD",
+    asker_persona: "steward",
+    by_person: false,
+    place: "project root",
+    folder: ".",
+    outcome: "done",
+    started: "2026-10-07T11:00:00+00:00",
+    ended: "2026-10-07T11:00:45+00:00",
+    duration: "45s",
+    needed_you: 0,
+    messages: 0,
+    cost: "$0.42",
+    tokens: "15k in, 4k out",
+    brief: "Tidy the notes.",
+    report: "Tidied.",
+    open_session: null,
+    session_record: "sessions/20261007-110100-tidy.md",
+  },
+];
 
 const MEMORY: MemoryView = {
   scope: { kind: "shared" },
@@ -670,6 +724,7 @@ const ORDINARY: Answers = {
   plane_saving: PLANE_SAVING,
   workspace_saving: REPO_SAVING,
   session_record: RECORD,
+  dispatches: { rows: DISPATCHES, undrawn: 1 },
   memory_read: MEMORY,
   todo_read: {
     workspace: "alpha",
@@ -837,6 +892,24 @@ const STATES: State[] = [
       expect(await screen.findByRole("button", { name: /Push tokens/ })).toBeInTheDocument();
       await userEvent.click((await screen.findAllByRole("button", { name: "Land…" }))[0]);
     },
+  },
+  {
+    name: "the project's dispatches, one read",
+    view: { from: null, view: "dispatches", key: "" },
+    drawn: /Tidied\./,
+    then: async () => {
+      await userEvent.click(
+        await screen.findByRole("button", {
+          name: "Show the brief and report of tidy the notes",
+        }),
+      );
+    },
+  },
+  {
+    name: "the project's dispatches, none yet",
+    view: { from: null, view: "dispatches", key: "" },
+    answers: { dispatches: { rows: [], undrawn: 0 } },
+    drawn: /No dispatches yet/,
   },
   {
     name: "a session record",

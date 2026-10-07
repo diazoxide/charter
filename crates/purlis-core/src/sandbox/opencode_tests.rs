@@ -655,6 +655,97 @@ mod live {
         }
     }
 
+    /// The dispatch records hold briefs and reports (#1452, D-1452-11): under the profile a
+    /// chat can neither read one, list the store, nor write or remove one, under either name
+    /// of the state folder. The record is a real one, opened as the app opens it.
+    #[test]
+    fn a_dispatch_record_is_neither_read_listed_nor_written_under_the_wrap() {
+        use crate::dispatchrecord::{Asker, ChatRef, Mode, Opening, Place, Worker};
+
+        let plane = plane_saying(ON);
+        let cwd = plane.path().join("work");
+        std::fs::create_dir(&cwd).expect("a workspace");
+        let chat = |chat: u32| ChatRef {
+            chat,
+            id: None,
+            name: format!("chat {chat}"),
+            persona: Some("devops".to_owned()),
+        };
+        let record = crate::dispatchrecord::open(
+            plane.path(),
+            Opening {
+                mode: Mode::Handoff,
+                asker: Asker {
+                    chat: chat(1),
+                    ..Asker::default()
+                },
+                persona: Some("devops".to_owned()),
+                worker: Worker {
+                    chat: chat(2),
+                    ..Worker::default()
+                },
+                task: None,
+                place: Place::default(),
+                brief: "a brief for devops alone".to_owned(),
+                report_owed: false,
+            },
+            chrono::Utc::now(),
+        )
+        .expect("the app opens a record");
+        let store = crate::dispatchrecord::dir(plane.path());
+        let file = store.join(format!("{}.json", record.id));
+        assert!(file.is_file(), "{}", file.display());
+        // And the store under the state folder's other name, as a project mid-rename has it.
+        let other = [".charter", ".purlis"]
+            .iter()
+            .map(|state| plane.path().join(state).join("app/dispatches"))
+            .find(|dir| *dir != store)
+            .expect("the other spelling");
+        std::fs::create_dir_all(&other).expect("the other store");
+        std::fs::write(other.join("planted.json"), "{}").expect("a file there");
+
+        let home = tempfile::tempdir().expect("a home");
+        let machine = Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: Some(home.path().to_path_buf()),
+            os: Os::MacOs,
+        };
+        let applied = for_start(Harness::Opencode, plane.path(), &machine, &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let line = line_in(&applied, &cwd, None, &confinement).expect("starts");
+        // A control: the wrap reads what no class denies.
+        let control = run(
+            &line,
+            &format!("cat '{}'", plane.path().join("charter.toml").display()),
+        );
+        assert!(control.status.success(), "{control:?}");
+
+        for script in [
+            format!("cat '{}'", file.display()),
+            format!("ls '{}'", store.display()),
+            format!("echo x >> '{}'", file.display()),
+            format!("rm '{}'", file.display()),
+            format!("echo '{{}}' > '{}/forged.json'", store.display()),
+            format!("cat '{}/planted.json'", other.display()),
+            format!("ls '{}'", other.display()),
+        ] {
+            let ran = run(&line, &script);
+            assert!(!ran.status.success(), "`{script}` under the wrap: {ran:?}");
+            assert!(
+                !String::from_utf8_lossy(&ran.stdout).contains("a brief for devops alone"),
+                "`{script}` read the brief: {ran:?}"
+            );
+        }
+        // Still there, as the app wrote it.
+        assert_eq!(
+            crate::dispatchrecord::read(plane.path(), &record.id).map(|read| read.brief),
+            Some("a brief for devops alone".to_owned())
+        );
+        assert!(!store.join("forged.json").exists());
+    }
+
     /// A file denial does not stop a connect to a unix socket, which Seatbelt judges as
     /// network: the wrap refuses it because it allows no unix socket but the hook socket. So a
     /// socket in the credentials' directory, and one anywhere else, is refused, and the hook

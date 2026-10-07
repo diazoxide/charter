@@ -237,6 +237,9 @@ pub fn run(
         serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
     if let Some(plane) = plane {
         usage::record(plane, &payload);
+        // And what the harness says the whole session has cost, which a dispatch's record
+        // reads when it ends (#1452). Absent for a payload that says nothing of it.
+        usage::record_spend(plane, &payload);
     }
     if the_app_owns_this_surface(ambient) {
         // **Draw nothing; record anyway — and do not "clean this up".** It looks like a

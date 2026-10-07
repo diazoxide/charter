@@ -26,6 +26,7 @@ mod changes;
 mod chats;
 mod clipath;
 mod curation;
+mod dispatches;
 mod doctor;
 mod extensions;
 mod filewatch;

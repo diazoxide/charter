@@ -939,6 +939,15 @@ impl Denied {
                 crate::hookwire::spool::dir_for(&app.join("hooks.sock")),
                 Access::ReadWrite,
             );
+            // Every dispatch's record, neither read nor written (#1452, D-1452-11): a brief or a
+            // report written for one persona is not for a chat running as another. A chat gets
+            // its own dispatch's report on the delivery path and its own list from the app's
+            // answer, never from the file.
+            deny(
+                Class::Integrity,
+                app.join(crate::dispatchrecord::DIR_NAME),
+                Access::ReadWrite,
+            );
         }
         // …and a state folder the project does not have as a folder is not the chat's to make
         // (D-RN2a-7): which folder holds charter's state is decided by which are there, so making

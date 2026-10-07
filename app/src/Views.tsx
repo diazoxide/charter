@@ -19,6 +19,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Send,
   Settings2,
   UserRound,
 } from "lucide-react";
@@ -64,7 +65,9 @@ import { TODO_VIEW, todoRefOf } from "./todos";
 import { pieceDiffOf, pieceOf } from "./pieceViews";
 import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
-import { SESSION_VIEW } from "./sessions";
+import { SESSION_VIEW, sessionTitle, sessionView } from "./sessions";
+import { DispatchesTab } from "./DispatchesTab";
+import { DISPATCHES_VIEW, isDispatches } from "./dispatches";
 import {
   SAVING_VIEW,
   SETTINGS_TAB_TITLE,
@@ -228,6 +231,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   saving: Save,
   changes: GitPullRequest,
   [SESSION_VIEW]: History,
+  /** The project's dispatches (#1452). */
+  [DISPATCHES_VIEW.view]: Send,
   [MEMORY_VIEW]: Brain,
   /** One todo (#1214), drawn as the Todos panel marks one. */
   [TODO_VIEW]: CircleDashed,
@@ -491,6 +496,24 @@ export function ViewPane({
               path={pieceDiff.path}
             />
           </Suspense>
+        ) : isDispatches(view) ? (
+          /* The project's dispatches (#1452), read from the app's own records. A row opens its
+             chat through the catalogue's verb, or its session record as any record opens. */
+          <DispatchesTab
+            key={plane}
+            plane={plane}
+            changed={changed + onDisk}
+            onShowChat={(session) =>
+              onPress?.({
+                id: `dispatch.chat:${session}`,
+                title: "Show its chat",
+                available: true,
+                reason: "",
+                does: { verb: "showChat", session },
+              })
+            }
+            onOpenRecord={(path, title) => onOpenView(sessionView(path), sessionTitle(title))}
+          />
         ) : isSession(view) ? (
           /* A session record (SI-8d): read-only Markdown the window renders from the core's
              `session_record`, keyed by the record so a pane that comes to show another starts

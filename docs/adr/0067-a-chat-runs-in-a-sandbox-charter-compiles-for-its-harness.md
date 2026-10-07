@@ -281,6 +281,14 @@ opt-out in section 7 lifts them, and the audit records when it does.
    and never replaces it. Where a harness's own sandbox can state a name only with what is
    below it, the `.git` itself is not held for that harness, and that gap is #1065.
 
+*Amended 2026-10-07 (#1452, D-1452-11; amends class 2):* **class 2 also holds the dispatch
+records.** `<state>/app/dispatches/`, where the app keeps one record for each dispatch with its
+brief and its report, is denied to a sandboxed chat for reading as well as writing, under every
+spelling of the state folder and in what every harness is compiled, as the hook spool is. A
+brief or a report written for one persona is not readable by a chat running as another. A chat
+gets its own dispatch's report on the delivery path, and its own list from the app's answer,
+never from the file.
+
 *Amended 2026-10-03 (rulings V87d and V87f):*
 
 - **Linked folders, every harness.** No sandboxed chat starts in a folder reached through a
