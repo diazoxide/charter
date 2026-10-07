@@ -396,14 +396,12 @@ impl Closing {
         }
     }
 
-    /// Whether the person has a line of their own in chat `session`'s prompt, or may have: bytes
-    /// typed since their last Enter, or keys since then that this could not follow
-    /// ([`line::Line::Unknown`]). A line purlis types into a chat ends in Enter, which would
-    /// send theirs with it, so none is typed while this holds (#1441).
-    pub fn person_has_a_line(&self, session: u32) -> bool {
-        self.lines()
-            .get(&session)
-            .is_some_and(|line| !line.is_empty())
+    /// How many bytes the person has typed into chat `session`'s pane since their last Enter,
+    /// where their keys could be followed ([`line::Line`]): none typed is 0, and `None` is a
+    /// line this could not follow. What tells their words in a dispatched task from their
+    /// answer to a prompt it showed them (#1442).
+    pub fn line_len(&self, session: u32) -> Option<usize> {
+        self.lines().get(&session).map_or(Some(0), line::Line::len)
     }
 
     /// Takes the person's `/smart-close` in chat `session`, answering whether they submitted

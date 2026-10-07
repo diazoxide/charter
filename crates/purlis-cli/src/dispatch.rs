@@ -11,6 +11,11 @@
 //! purlis dispatch wait <chat> [--timeout <seconds>]
 //! purlis dispatch list
 //! purlis dispatch cancel <chat>
+//!
+//! purlis dispatch tell <chat> "<text>"        (the asking chat, to a task still working)
+//! purlis dispatch answer <chat> "<text>"      (the asking chat, to a task's question)
+//! purlis dispatch note "<text>"               (a task, to its asking chat)
+//! purlis dispatch ask "<question>"            (a task, to its asking chat; it waits)
 //! ```
 //!
 //! A dispatch is one chat starting another, which runs as a persona for its whole life
@@ -34,6 +39,12 @@
 //! for it. Whether that chat is this chat's task is the app's record, never anything said here
 //! ([`purlis_core::dispatched`]).
 //!
+//! **Messages** (#1442): `tell` and `answer` go down, to a task this chat dispatched; `note`
+//! and `ask` go up, and name nobody, because the chat they go to is the one the app recorded as
+//! this chat's asker. Each is one ask with no ticket. Who may send to whom, the limit a minute
+//! and the text's bounds are the app's to judge ([`purlis_core::dispatchtalk`]); the text is
+//! checked here too, so an empty or oversized one is refused before anything is asked.
+//!
 //! **Nothing here decides.** The checks in front of the ask are the ones that need no app: a
 //! name purlis would draw, a brief that is there and carries no secret, a persona this project
 //! defines. The persona is asked again by the app, with everything else.
@@ -42,7 +53,8 @@ use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 
 use purlis_core::dispatchdecision::{self, Persona, Refused};
-use purlis_core::dispatched::{self, Answered, Asked, Waited, What};
+use purlis_core::dispatched::{self, Answered, Asked, Reply, Waited, What};
+use purlis_core::dispatchtalk::{self, Kind, Message};
 use purlis_core::handback::Outcome;
 use purlis_core::handoff;
 use purlis_core::hookwire::{Answer, Ask, DispatchAsk, ReportBack, TaskReport};
@@ -97,6 +109,38 @@ pub enum DispatchCommand {
     Cancel {
         /// The task's chat, by its number in `purlis dispatch list`.
         chat: u32,
+    },
+    /// Send a follow-up to a task this chat dispatched that is still working. It reaches that
+    /// chat's next turn, quoted as data from this chat. Refused, with the task's state, once
+    /// the task has finished.
+    Tell {
+        /// The task's chat, by its number in `purlis dispatch list`.
+        chat: u32,
+        /// What to add or correct, in a few lines.
+        text: String,
+    },
+    /// Answer the question a task this chat dispatched asked it. Only a question that task
+    /// asked this chat can be answered: one it put to the person is the person's.
+    Answer {
+        /// The task's chat, by its number in `purlis dispatch list`.
+        chat: u32,
+        /// The answer, in a few lines.
+        text: String,
+    },
+    /// From a dispatched task: send the chat that asked a progress note. It reads it on its
+    /// next turn, and nothing waits on it.
+    Note {
+        /// Where the task has got to, in a few lines.
+        text: String,
+    },
+    /// From a dispatched task: ask the chat that asked a question, and wait for its answer.
+    /// A question only the person can answer is not asked this way: ask them in this chat.
+    Ask {
+        /// The question, in a few lines.
+        question: String,
+        /// How long to wait for the answer, in seconds (default 100, at most 540).
+        #[arg(long)]
+        timeout: Option<u32>,
     },
 }
 
@@ -472,6 +516,127 @@ pub fn run(command: &DispatchCommand) -> ExitCode {
         DispatchCommand::Wait { chat, timeout } => said(wait(*chat, *timeout)),
         DispatchCommand::List => said(list()),
         DispatchCommand::Cancel { chat } => said(cancel(*chat)),
+        DispatchCommand::Tell { chat, text } => said(tell(*chat, text)),
+        DispatchCommand::Answer { chat, text } => said(answer(*chat, text)),
+        DispatchCommand::Note { text } => said(note(text)),
+        DispatchCommand::Ask { question, timeout } => said(ask(question, *timeout)),
+    }
+}
+
+/// A message's text as the app will take it, or the refusal, said before anything is asked.
+fn message(text: &str) -> Result<String, String> {
+    dispatchtalk::text(text).map_err(|why| format!("{SAYS} {why}"))
+}
+
+/// One message handed to the app, and what the app said became of it.
+fn sent(what: What) -> Result<(Kind, String), String> {
+    match asked(what, crate::handoff::A_TICKET_TAKES_AT_MOST)? {
+        Answered::Sent { kind, to } => Ok((kind, purlis_core::personas::one_line(&to))),
+        _ => Err(format!(
+            "{SAYS} the purlis app did not answer, so nothing was sent."
+        )),
+    }
+}
+
+/// `purlis dispatch tell <chat> "<text>"`: a follow-up to a task this chat dispatched.
+pub fn tell(to: u32, text: &str) -> Result<String, String> {
+    let text = message(text)?;
+    let (_, name) = sent(What::Tell { to, text })?;
+    Ok(format!(
+        "{SAYS} follow-up sent to '{name}' (chat {to}). It reaches that chat's next turn, \
+         quoted as data from this chat."
+    ))
+}
+
+/// `purlis dispatch answer <chat> "<text>"`: the answer to a question a task asked this chat.
+pub fn answer(to: u32, text: &str) -> Result<String, String> {
+    let text = message(text)?;
+    let (_, name) = sent(What::Answer { to, text })?;
+    Ok(format!(
+        "{SAYS} answer sent to '{name}' (chat {to}), which carries on with it."
+    ))
+}
+
+/// `purlis dispatch note "<text>"`: a progress note to the chat that dispatched this one.
+pub fn note(text: &str) -> Result<String, String> {
+    let text = message(text)?;
+    let (_, name) = sent(What::Note { text })?;
+    Ok(format!(
+        "{SAYS} progress note sent to '{name}'. It reads it on its next turn; nothing waits \
+         on it, so carry on."
+    ))
+}
+
+/// `purlis dispatch ask "<question>"`: a question to the chat that dispatched this one, and
+/// the wait for its answer.
+///
+/// **This chat pauses on it.** The command holds until the answer comes and prints it, quoted
+/// as data. If the wait runs out first, it says to end the turn: the answer is then handed to
+/// this chat's next turn, which purlis starts when the answer lands.
+pub fn ask(question: &str, within: Option<u32>) -> Result<String, String> {
+    let text = message(question)?;
+    let within = dispatched::wait_secs(within.unwrap_or(dispatched::WAITS_BY_DEFAULT));
+    let Some((mut asking, chat)) = the_app() else {
+        return Err(format!(
+            "{SAYS} no purlis app answered this call, so nothing was sent. A question goes \
+             back only from a chat a dispatch started."
+        ));
+    };
+    let asker = match answered(
+        &mut asking,
+        chat,
+        What::Question { text },
+        crate::handoff::A_TICKET_TAKES_AT_MOST,
+    )? {
+        Answered::Sent { to, .. } => purlis_core::personas::one_line(&to),
+        _ => {
+            return Err(format!(
+                "{SAYS} the purlis app did not answer, so nothing was sent."
+            ));
+        }
+    };
+    let held = std::time::Duration::from_secs(u64::from(within)) + A_WAIT_IS_ANSWERED_WITHIN;
+    let paused = format!(
+        "{SAYS} question sent to '{asker}', which has not answered after {within} seconds. \
+         This chat is paused on that question: do not guess, and end this turn now. The answer \
+         is handed to this chat's next turn as context, quoted as data."
+    );
+    let replied = answered(
+        &mut asking,
+        chat,
+        What::AwaitAnswer {
+            within_secs: within,
+        },
+        held,
+    );
+    match replied {
+        Ok(Answered::Replied {
+            what: Reply::Answered { from, text },
+        }) => {
+            // On the same connection, so the next turn is not handed the same answer again.
+            let _ = answered(
+                &mut asking,
+                chat,
+                What::GotAnswer,
+                crate::handoff::A_TICKET_TAKES_AT_MOST,
+            );
+            Ok(dispatchtalk::said(&Message {
+                kind: Kind::Answer,
+                from,
+                chat: 0,
+                text,
+            }))
+        }
+        Ok(Answered::Replied {
+            what: Reply::AskerGone,
+        }) => Ok(format!(
+            "{SAYS} '{asker}', the chat that asked for this task, has closed, so the question \
+             has nobody to answer it. Finish what you can and send the task's report, saying \
+             what the question was."
+        )),
+        // The question is asked either way: an app that stopped answering leaves this chat
+        // where a wait that ran out does.
+        Ok(_) | Err(_) => Ok(paused),
     }
 }
 
@@ -564,6 +729,24 @@ pub fn wait(of: u32, within: Option<u32>) -> Result<String, String> {
              it stands.",
             purlis_core::personas::one_line(&state)
         ),
+        Waited::Asks { question } => {
+            // Read here, so the turn after this one is not handed the question again.
+            let _ = answered(
+                &mut asking,
+                chat,
+                What::Read { of },
+                crate::handoff::A_TICKET_TAKES_AT_MOST,
+            );
+            format!(
+                "{}\nThen `purlis dispatch wait {of}` waits on for its report.",
+                dispatchtalk::said(&Message {
+                    kind: Kind::Question,
+                    from: name,
+                    chat: of,
+                    text: question,
+                })
+            )
+        }
         Waited::AlreadyRead => format!(
             "{SAYS} '{name}' (chat {of}) reported earlier, and its report was handed to this \
              chat then. The app no longer holds its text."
@@ -586,10 +769,12 @@ pub fn list() -> Result<String, String> {
 pub fn cancel(of: u32) -> Result<String, String> {
     match asked(What::Cancel { of }, crate::handoff::A_TICKET_TAKES_AT_MOST)? {
         Answered::Cancelling { of, name } => Ok(format!(
-            "{SAYS} cancelling '{}' (chat {of}). Its turn is ended and it is asked for one \
-             short report of what it did, which reaches this chat with the outcome \
-             `cancelled`. If it is showing the person a prompt, that happens once the prompt \
-             is answered. `purlis dispatch wait {of}` waits for the report here.",
+            "{SAYS} cancelling '{}' (chat {of}). Its report reaches this chat with the \
+             outcome `cancelled`. Where purlis may send its chat keys, its turn is ended now \
+             and it is asked for one short report of what it did. Where it may not (the chat \
+             has shown the person a prompt this turn, the person has typed in it, or its \
+             harness is one purlis does not type into), the cancel takes effect when that \
+             turn ends. `purlis dispatch wait {of}` waits for the report here.",
             purlis_core::personas::one_line(&name)
         )),
         _ => Err(format!("{SAYS} the purlis app did not answer the cancel.")),

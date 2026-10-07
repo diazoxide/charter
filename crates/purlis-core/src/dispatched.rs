@@ -76,6 +76,21 @@ pub enum What {
     List,
     /// Cancel task `of`.
     Cancel { of: u32 },
+    /// Send task `to` a follow-up (#1442). Refused unless this chat dispatched it and it is
+    /// still working.
+    Tell { to: u32, text: String },
+    /// Send this task's asking chat a progress note. It names no recipient: the chat it goes
+    /// to is the one the app recorded as this chat's asker.
+    Note { text: String },
+    /// Ask this task's asking chat a question, which this chat pauses on. It names no
+    /// recipient, as a note names none.
+    Question { text: String },
+    /// Answer the question task `to` asked this chat.
+    Answer { to: u32, text: String },
+    /// Wait for the answer to this task's question, for at most `within_secs`.
+    AwaitAnswer { within_secs: u32 },
+    /// The waiting command has the answer: it need not be handed to the next turn too.
+    GotAnswer,
 }
 
 /// What the app answers an [`Asked`] with.
@@ -90,6 +105,25 @@ pub enum Answered {
     Listed { rows: Vec<Row> },
     /// Task `of`, called `name`, is being cancelled; its report follows as any report does.
     Cancelling { of: u32, name: String },
+    /// A message was left for the chat called `to`, for its next turn (#1442).
+    Sent {
+        kind: crate::dispatchtalk::Kind,
+        to: String,
+    },
+    /// A wait for an answer ended.
+    Replied { what: Reply },
+}
+
+/// How a task's wait for the answer to its question ended.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reply {
+    /// The chat called `from` answered.
+    Answered { from: String, text: String },
+    /// The wait went on as long as it may, and the chat called `from` has not answered.
+    NotYet { from: String },
+    /// The chat that asked for the task has closed: nobody is left to answer.
+    AskerGone,
 }
 
 /// How a wait ended.
@@ -104,6 +138,9 @@ pub enum Waited {
     AlreadyRead,
     /// Its program ended without a report.
     Ended,
+    /// The task asks this chat a question and is paused on it (#1442). A wait is answered with
+    /// a question once; the wait after the answer waits on for the report.
+    Asks { question: String },
 }
 
 /// One task in a chat's list of the tasks it dispatched.
@@ -153,30 +190,64 @@ pub fn not_yours(of: u32) -> String {
 /// The app's record of chat `of`'s dispatch, where `asker` dispatched it as a task; else the
 /// refusal. `record` is what the app holds for `of`, or none for a chat it does not have open.
 pub fn owned(asker: u32, of: u32, record: Option<&HandedFrom>) -> Result<&HandedFrom, String> {
-    match record {
-        Some(from) if from.chat == asker && from.mode == Mode::Task && asker != of => Ok(from),
-        _ => Err(not_yours(of)),
-    }
+    record
+        .filter(|from| is_owner(asker, of, from))
+        .ok_or_else(|| not_yours(of))
+}
+
+/// **The one rule of who owns a task**: the chat its record names as its asking chat, where a
+/// dispatch started it as a task. Every power over a task (wait, read, cancel, tell, answer)
+/// is this, so a rule added here holds for all of them: a task the person started themselves
+/// gives the tab's chat none, and that is one more line here.
+fn is_owner(asker: u32, of: u32, from: &HandedFrom) -> bool {
+    from.chat == asker && from.mode == Mode::Task && asker != of
 }
 
 // ---- where a task stands ----------------------------------------------------------------------
 
-/// A chat as the app's board has it at this moment.
+/// A chat as the app has it at this moment: what its board says, and what its harness is.
+///
+/// **The default is a chat nothing is known of**, and nothing is ever typed into one: not
+/// heard from, not measured.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Seen {
     /// Its program has ended, or the chat is not open.
     pub ended: bool,
+    /// Its harness has reported to the board since the chat started. Until it has, purlis
+    /// does not know what the program is showing: a start-up dialog, a login, anything.
+    pub heard: bool,
+    /// A turn purlis heard begin is under way, and it has shown the person no prompt.
+    pub running: bool,
     /// Its turn has ended and it is waiting to be prompted.
     pub waiting: bool,
-    /// It is showing the person a prompt: a permission, or a question.
+    /// It has shown the person a prompt this turn: a permission, or a question. The board
+    /// keeps this until the turn ends, not until the prompt is answered.
     pub asking: bool,
+    /// Its harness is one purlis has measured its typed line in ([`told_by_a_line`]).
+    pub measured: bool,
 }
 
 impl Seen {
-    /// Whether a line may be typed into it: waiting for a prompt, and asking nothing. The gate
-    /// a smart close's prompt is sent through, and every line purlis types into a chat.
+    /// Whether purlis knows enough of this chat to send its pane any key at all: a measured
+    /// harness that has been heard from, still running its program, showing no prompt.
+    fn takes_keys(self) -> bool {
+        self.measured && self.heard && !self.ended && !self.asking
+    }
+
+    /// Whether a line may be typed into it: [`Self::takes_keys`], and waiting for a prompt.
+    /// The person's own keys in its pane are the ledger's to know ([`Ledger::person_keyed`]).
     pub fn takes_a_line(self) -> bool {
-        !self.ended && self.waiting && !self.asking
+        self.takes_keys() && self.waiting
+    }
+
+    /// Whether its turn may be interrupted: [`Self::takes_keys`], in a turn purlis heard begin.
+    pub fn takes_an_interrupt(self) -> bool {
+        self.takes_keys() && self.running
+    }
+
+    /// Its turn has ended, by its harness's own word, whatever its harness is.
+    fn turn_ended(self) -> bool {
+        self.heard && !self.ended && self.waiting && !self.asking
     }
 }
 
@@ -188,6 +259,8 @@ pub enum State {
     Idle,
     /// It is waiting on the person, in its own tab.
     NeedsThePerson,
+    /// It asked its asking chat a question, and is paused until that chat answers.
+    AsksYou,
     Cancelling,
     /// It reported; how, where the app still knows.
     Reported(Option<Outcome>),
@@ -201,6 +274,7 @@ impl State {
             Self::Running => "running".to_owned(),
             Self::Idle => "idle, with no report yet".to_owned(),
             Self::NeedsThePerson => "waiting on the person".to_owned(),
+            Self::AsksYou => "asking this chat a question".to_owned(),
             Self::Cancelling => "cancelling".to_owned(),
             Self::Reported(Some(outcome)) => format!("reported: {}", outcome.word()),
             Self::Reported(None) => "reported".to_owned(),
@@ -218,8 +292,38 @@ impl State {
 #[derive(Debug, Default)]
 pub struct Ledger {
     tasks: HashMap<u32, Task>,
-    /// By asking chat: the tasks whose reports landed and that it has not been told of.
-    landed: HashMap<u32, Vec<u32>>,
+    /// By chat: what was left for its next turn that it has not been told of.
+    landed: HashMap<u32, Vec<Landed>>,
+    /// The messages between asking chats and their tasks (#1442).
+    pub talk: crate::dispatchtalk::Talk,
+    /// The chats whose pane a key of the person's has gone to since the chat's last
+    /// `UserPromptSubmit` or `Stop`. They may have a harness's own picker open, which no hook
+    /// reports, so nothing is typed into one until its harness says a turn began or ended.
+    keyed: std::collections::HashSet<u32>,
+    /// Tasks whose chats have closed, oldest first: who asked, what it was called, and its
+    /// report where it sent one. So a wait on one says how it ended.
+    gone: std::collections::VecDeque<(u32, Gone)>,
+}
+
+/// A task whose chat has closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gone {
+    pub asker: u32,
+    pub name: String,
+    pub report: Option<Handback>,
+}
+
+/// Something left for a chat's next turn, which it is typed a line about when it may be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Landed {
+    /// The report of this task, which the chat dispatched.
+    Report(u32),
+    /// A question from this task, which the chat dispatched.
+    Question(u32),
+    /// A follow-up from the chat that dispatched this one.
+    FollowUp,
+    /// The answer to this chat's question, from the chat that dispatched it.
+    Answer,
 }
 
 #[derive(Debug, Default)]
@@ -227,6 +331,9 @@ struct Task {
     started: Option<SystemTime>,
     /// Its asking chat cancelled it. Kept once the cancel is over: it is the report's outcome.
     cancelled: bool,
+    /// The person typed in its pane while it worked (#1442). The fact alone: nothing they
+    /// typed is kept anywhere.
+    stepped_in: bool,
     /// How far the cancel has got, while one is under way.
     cancel: Option<Cancel>,
     report: Option<Kept>,
@@ -246,6 +353,9 @@ enum Cancel {
     Asked,
     /// Its turn was interrupted.
     Interrupted,
+    /// Its interrupted turn has had its moment to stop ([`A_TURN_STOPS_WITHIN`]). Remembered,
+    /// so a line held back then is typed when the hold lifts.
+    Settled,
     /// It was typed the line asking for a short report.
     Prompted,
     /// Its harness said that line began a turn.
@@ -257,13 +367,15 @@ enum Cancel {
 pub enum Step {
     /// Nothing is under way.
     Nothing,
-    /// Not now: the chat is showing the person a prompt, the person is typing in it, or the
+    /// Not now: purlis has not heard from the chat, its harness is not one it types into, it
+    /// has shown the person a prompt this turn, the person has pressed a key in it, or the
     /// line it was sent has not been answered yet. Asked again when the chat next moves.
     Hold,
     /// End the chat's turn ([`INTERRUPT`]), and ask again once it has had a moment to stop
     /// ([`A_TURN_STOPS_WITHIN`]).
     Interrupt,
-    /// Type [`CANCEL_PROMPT`] into it.
+    /// Type [`CANCEL_PROMPT`] into it, and ask again if no turn is heard to begin on it
+    /// ([`A_PROMPT_IS_HEARD_WITHIN`], [`Ledger::prompt_unheard`]).
     Prompt,
     /// It will send no report: write this one for it, as `cancelled`.
     Write(&'static str),
@@ -289,35 +401,95 @@ pub const ENDED_UNREPORTED: &str =
 pub const CANCELLED_UNREPORTED: &str = "The task was cancelled by the chat that asked for it. Its \
     chat was asked for a short report and ended its turn without sending one.";
 
+/// The report written for a cancelled chat purlis types nothing into, when its turn ends.
+pub const CANCELLED_UNASKED: &str = "The task was cancelled by the chat that asked for it. Its \
+    chat runs a harness purlis does not type into, so it was not asked for a report; its turn \
+    has ended.";
+
+/// How long after the cancel line is typed a turn may take to be heard to begin on it. Past
+/// it, the line counts as taken: the chat's next idle moment with no report ends the cancel.
+pub const A_PROMPT_IS_HEARD_WITHIN: Duration = Duration::from_secs(60);
+
+/// The most closed tasks remembered, so a wait on one says how it ended.
+const MOST_GONE: usize = 64;
+
 /// What an outcome of `cancelled` from a chat nobody cancelled is told.
 pub const NOT_CANCELLED: &str = "this task was not cancelled, and only a task its asking chat \
     cancelled reports that outcome. Use done, blocked or failed";
 
-/// The line typed into an asking chat that is waiting, to say reports have landed. purlis's own
-/// sentence and the app's numbers for the chats: nothing a chat wrote is in it.
-pub fn nudge(tasks: &[u32]) -> String {
-    match tasks {
-        [one] => format!(
-            "purlis: a task this chat dispatched has reported (chat {one}). Its report is \
-             attached to this turn as context, quoted as data. If it is not there, run `purlis \
-             dispatch wait {one}`."
-        ),
-        many => {
-            let chats: Vec<String> = many.iter().map(u32::to_string).collect();
-            format!(
-                "purlis: tasks this chat dispatched have reported (chats {}). Their reports are \
-                 attached to this turn as context, quoted as data. If one is not there, run \
-                 `purlis dispatch wait <chat>` for it.",
-                chats.join(", ")
-            )
-        }
+/// The line typed into a chat that is waiting, to say what was left for the turn it starts: the
+/// reports and questions of tasks it dispatched, and a message from the chat that dispatched
+/// it. purlis's own sentence and the app's numbers for the chats: nothing a chat wrote is in it.
+pub fn nudge(landed: &[Landed]) -> String {
+    let chats = |pick: fn(&Landed) -> Option<u32>| -> Vec<String> {
+        landed
+            .iter()
+            .filter_map(pick)
+            .map(|chat| chat.to_string())
+            .collect()
+    };
+    let reports = chats(|one| match one {
+        Landed::Report(chat) => Some(*chat),
+        _ => None,
+    });
+    let questions = chats(|one| match one {
+        Landed::Question(chat) => Some(*chat),
+        _ => None,
+    });
+    let from_above = landed
+        .iter()
+        .filter(|one| matches!(one, Landed::FollowUp | Landed::Answer))
+        .count();
+    let mut said = Vec::new();
+    match reports.as_slice() {
+        [] => {}
+        [one] => said.push(format!(
+            "a task this chat dispatched has reported (chat {one})"
+        )),
+        many => said.push(format!(
+            "tasks this chat dispatched have reported (chats {})",
+            many.join(", ")
+        )),
     }
+    match questions.as_slice() {
+        [] => {}
+        [one] => said.push(format!(
+            "a task this chat dispatched asks it a question (chat {one})"
+        )),
+        many => said.push(format!(
+            "tasks this chat dispatched ask it questions (chats {})",
+            many.join(", ")
+        )),
+    }
+    match from_above {
+        0 => {}
+        1 => said.push("the chat that asked for this task has sent it a message".to_owned()),
+        _ => said.push("the chat that asked for this task has sent it messages".to_owned()),
+    }
+    let one = reports.len() + questions.len() + from_above == 1;
+    let attached = if one {
+        "It is attached to this turn as context, quoted as data."
+    } else {
+        "They are attached to this turn as context, quoted as data."
+    };
+    // What a turn handed nothing can run instead: only a task's report or question can be
+    // asked for again, by the chat that dispatched it.
+    let mut asked_for: Vec<&String> = reports.iter().chain(&questions).collect();
+    asked_for.dedup();
+    let otherwise = match asked_for.as_slice() {
+        [] => String::new(),
+        [chat] if one => format!(" If it is not there, run `purlis dispatch wait {chat}`."),
+        _ => " If one is not there, run `purlis dispatch wait <chat>` for it.".to_owned(),
+    };
+    format!("purlis: {}. {attached}{otherwise}", said.join(", and "))
 }
 
-/// Whether an asking chat on `harness` is typed the line that says reports have landed: the
-/// harnesses purlis arms a `UserPromptSubmit` hook on and has measured to hand that turn its
-/// context. On any other, and in a chat with no harness, a report waits for the next turn the
-/// person starts, as it did before this line existed.
+/// Whether `harness` is one purlis types a line of its own into (D-1441-13): the harnesses
+/// purlis arms a `UserPromptSubmit` hook on and has measured to hand that turn its context,
+/// and to end a turn on Escape. Codex counts only once its hooks are trusted, which is what
+/// [`Seen::heard`] says: an untrusted Codex reports nothing. On any other harness, and in a
+/// chat with none, nothing is typed: a report or a message waits for the next turn the person
+/// starts, and a cancel takes effect when the turn ends.
 pub fn told_by_a_line(harness: Option<crate::harness::Harness>) -> bool {
     use crate::harness::Harness;
     matches!(harness, Some(Harness::ClaudeCode | Harness::Codex))
@@ -329,17 +501,104 @@ impl Ledger {
         self.tasks.entry(task).or_default().started = Some(now);
     }
 
-    /// Chat `chat` has closed: nothing is remembered of it, as a task or as an asking chat.
-    pub fn forget(&mut self, chat: u32) {
-        self.tasks.remove(&chat);
+    /// Chat `chat` has closed. `task_of` is its asking chat and its name, where it was a task:
+    /// that much is kept, with its report, so a wait on it says how it ended. Nothing else is
+    /// remembered of it, as a task or as an asking chat.
+    pub fn forget(&mut self, chat: u32, task_of: Option<(u32, &str)>) {
+        let entry = self.tasks.remove(&chat);
+        if let Some((asker, name)) = task_of {
+            if self.gone.len() >= MOST_GONE {
+                self.gone.pop_front();
+            }
+            self.gone.push_back((
+                chat,
+                Gone {
+                    asker,
+                    name: name.to_owned(),
+                    report: entry.and_then(|entry| entry.report).map(|kept| kept.report),
+                },
+            ));
+        }
         self.landed.remove(&chat);
+        self.keyed.remove(&chat);
         for told in self.landed.values_mut() {
-            told.retain(|task| *task != chat);
+            told.retain(
+                |one| !matches!(one, Landed::Report(of) | Landed::Question(of) if *of == chat),
+            );
+        }
+        self.gone.retain(|(_, gone)| gone.asker != chat);
+        self.talk.forget(chat);
+    }
+
+    /// The closed task `task`, where `asker` dispatched it.
+    pub fn gone(&self, asker: u32, task: u32) -> Option<&Gone> {
+        self.gone
+            .iter()
+            .find(|(of, gone)| *of == task && gone.asker == asker)
+            .map(|(_, gone)| gone)
+    }
+
+    /// Chat `old` is now `new`: the same chat, started again under a new number. Everything
+    /// remembered of it follows it, as a task and as an asking chat.
+    pub fn followed(&mut self, old: u32, new: u32) {
+        if old == new {
+            return;
+        }
+        if let Some(entry) = self.tasks.remove(&old) {
+            self.tasks.insert(new, entry);
+        }
+        if let Some(told) = self.landed.remove(&old) {
+            self.landed.insert(new, told);
+        }
+        for told in self.landed.values_mut() {
+            for one in told.iter_mut() {
+                match one {
+                    Landed::Report(of) | Landed::Question(of) if *of == old => *of = new,
+                    _ => {}
+                }
+            }
+        }
+        for (_, gone) in &mut self.gone {
+            if gone.asker == old {
+                gone.asker = new;
+            }
+        }
+        // A fresh program: whatever the person keyed went to the old one.
+        self.keyed.remove(&old);
+        self.talk.followed(old, new);
+    }
+
+    /// A key of the person's went to chat `chat`'s pane.
+    pub fn person_keyed(&mut self, chat: u32) {
+        self.keyed.insert(chat);
+    }
+
+    /// Whether a key of the person's has gone to chat `chat`'s pane since its harness last
+    /// said a turn began or ended.
+    pub fn keyed(&self, chat: u32) -> bool {
+        self.keyed.contains(&chat)
+    }
+
+    /// `what` was left for chat `chat`'s next turn.
+    pub fn landed(&mut self, chat: u32, what: Landed) {
+        let told = self.landed.entry(chat).or_default();
+        if !told.contains(&what) {
+            told.push(what);
         }
     }
 
+    /// The person typed in task `task`'s pane while it worked.
+    pub fn person_typed(&mut self, task: u32) {
+        self.tasks.entry(task).or_default().stepped_in = true;
+    }
+
+    /// Whether the person typed in task `task`'s pane: what its report says, and all it says.
+    pub fn stepped_in(&self, task: u32) -> bool {
+        self.tasks.get(&task).is_some_and(|task| task.stepped_in)
+    }
+
     /// Whether anything here waits for chat `chat` to move: a cancel of it under way, or
-    /// reports it has not been told of.
+    /// something it has not been told of.
     pub fn waits_on(&self, chat: u32) -> bool {
         self.tasks
             .get(&chat)
@@ -368,14 +627,17 @@ impl Ledger {
     /// next turn where that chat is open (`file` is none for one kept for a workspace). A
     /// cancel of it is over.
     pub fn reported(&mut self, task: u32, asker: u32, report: Handback, file: Option<PathBuf>) {
+        if file.is_some() {
+            self.landed(asker, Landed::Report(task));
+        }
+        // A question it had open is closed with it: an answer now would reach no turn of the
+        // work, and the chat is typed nothing about one.
+        self.talk.close(task);
+        if let Some(told) = self.landed.get_mut(&task) {
+            told.retain(|one| !matches!(one, Landed::FollowUp | Landed::Answer));
+        }
         let entry = self.tasks.entry(task).or_default();
         entry.cancel = None;
-        if file.is_some() {
-            let told = self.landed.entry(asker).or_default();
-            if !told.contains(&task) {
-                told.push(task);
-            }
-        }
         entry.report = Some(Kept { report, file });
     }
 
@@ -384,13 +646,33 @@ impl Ledger {
         self.tasks.get(&task)?.report.as_ref()
     }
 
-    /// A waiting command has `task`'s report: the file it was left in for the asking chat's
-    /// next turn, to remove, where it is still there. The asking chat is not told of it again.
-    pub fn read(&mut self, task: u32) -> Option<PathBuf> {
+    /// A waiting command has what a wait on `task` answered with, its report or its question:
+    /// the files that were left for the asking chat's next turn, to remove, where they are
+    /// still there. The asking chat is not told of them again.
+    pub fn read(&mut self, task: u32) -> Vec<PathBuf> {
+        let report = self
+            .tasks
+            .get_mut(&task)
+            .and_then(|entry| entry.report.as_mut())
+            .and_then(|kept| kept.file.take());
+        let question = self.talk.read(task);
         for told in self.landed.values_mut() {
-            told.retain(|one| *one != task);
+            told.retain(|one| match one {
+                Landed::Report(of) => *of != task || report.is_none(),
+                Landed::Question(of) => *of != task || question.is_none(),
+                Landed::FollowUp | Landed::Answer => true,
+            });
         }
-        self.tasks.get_mut(&task)?.report.as_mut()?.file.take()
+        report.into_iter().chain(question).collect()
+    }
+
+    /// The waiting command of task `task` has the answer to its question: the file it was left
+    /// in for the task's next turn, to remove. The task is not typed a line about it.
+    pub fn got_answer(&mut self, task: u32) -> Option<PathBuf> {
+        if let Some(told) = self.landed.get_mut(&task) {
+            told.retain(|one| *one != Landed::Answer);
+        }
+        self.talk.got_answer(task)
     }
 
     /// Where `task` stands, by its own record `from` and what the board says of it.
@@ -407,6 +689,8 @@ impl Ledger {
             State::Ended
         } else if entry.is_some_and(|entry| entry.cancel.is_some()) {
             State::Cancelling
+        } else if self.talk.asks(task).is_some() {
+            State::AsksYou
         } else if seen.asking {
             State::NeedsThePerson
         } else if seen.waiting {
@@ -417,7 +701,8 @@ impl Ledger {
     }
 
     /// How a wait on `task` ends now, or none while there is still something to wait for.
-    pub fn waited(&self, task: u32, from: &HandedFrom, seen: Seen) -> Option<Waited> {
+    /// A question the task asked ends one wait, and is marked shown by it.
+    pub fn waited(&mut self, task: u32, from: &HandedFrom, seen: Seen) -> Option<Waited> {
         if let Some(kept) = self.report(task) {
             return Some(Waited::Reported {
                 report: Box::new(kept.report.clone()),
@@ -426,7 +711,12 @@ impl Ledger {
         if from.report == Owed::Sent {
             return Some(Waited::AlreadyRead);
         }
-        seen.ended.then_some(Waited::Ended)
+        if seen.ended {
+            return Some(Waited::Ended);
+        }
+        self.talk
+            .show(task)
+            .map(|question| Waited::Asks { question })
     }
 
     /// The asking chat cancels `task`, called `name`, whose record is `from`. Answers whether a
@@ -454,24 +744,23 @@ impl Ledger {
 
     /// What the app does next for `task`'s cancel, and the cancel moved on by it.
     ///
-    /// `owed` is what the task's record says it owes, `seen` what the board says of its chat,
-    /// `typing` whether the person has a line of their own half typed in its pane, and
-    /// `settled` whether [`A_TURN_STOPS_WITHIN`] has passed since its turn was interrupted.
+    /// `owed` is what the task's record says it owes, `seen` what the app knows of its chat,
+    /// and `settled` whether [`A_TURN_STOPS_WITHIN`] has just passed since its turn was
+    /// interrupted.
     ///
-    /// **Nothing is typed into a chat that is showing a prompt**, nor one the person is typing
-    /// in: the step is [`Step::Hold`], and it is asked again when the chat next moves.
-    pub fn cancel_step(
-        &mut self,
-        task: u32,
-        owed: Owed,
-        seen: Seen,
-        typing: bool,
-        settled: bool,
-    ) -> Step {
+    /// **A key goes to a chat's pane only where purlis knows what the pane is showing**
+    /// (D-1441-13): its harness is one purlis has measured, the board has heard from it since
+    /// it started, it has shown the person no prompt this turn, and no key of the person's has
+    /// gone to it since its last report. Escape, further, only into a turn purlis heard
+    /// begin. Anywhere else the step is [`Step::Hold`]: the cancel is recorded, the report is
+    /// delivered as `cancelled` when it comes, and one is written when the chat's turn or
+    /// program ends without it.
+    pub fn cancel_step(&mut self, task: u32, owed: Owed, seen: Seen, settled: bool) -> Step {
+        let keyed = self.keyed.contains(&task);
         let Some(entry) = self.tasks.get_mut(&task) else {
             return Step::Nothing;
         };
-        let Some(stage) = entry.cancel else {
+        let Some(mut stage) = entry.cancel else {
             return Step::Nothing;
         };
         if owed != Owed::Due {
@@ -482,19 +771,33 @@ impl Ledger {
             entry.cancel = None;
             return Step::Write(ENDED_UNREPORTED);
         }
+        if stage == Cancel::Interrupted && settled {
+            stage = Cancel::Settled;
+            entry.cancel = Some(stage);
+        }
         match stage {
-            Cancel::Heard if seen.takes_a_line() => {
+            // The line was taken, and the turn it began has ended with no report.
+            Cancel::Heard if seen.turn_ended() => {
                 entry.cancel = None;
                 Step::Write(CANCELLED_UNREPORTED)
             }
             Cancel::Heard | Cancel::Prompted => Step::Hold,
-            Cancel::Asked | Cancel::Interrupted => {
-                if seen.asking || typing {
+            // A harness purlis types nothing into: the cancel takes effect when its turn ends.
+            Cancel::Asked | Cancel::Interrupted | Cancel::Settled if !seen.measured => {
+                if seen.turn_ended() {
+                    entry.cancel = None;
+                    Step::Write(CANCELLED_UNASKED)
+                } else {
                     Step::Hold
-                } else if seen.waiting || (stage == Cancel::Interrupted && settled) {
+                }
+            }
+            Cancel::Asked | Cancel::Interrupted | Cancel::Settled => {
+                if keyed {
+                    Step::Hold
+                } else if seen.takes_a_line() || (stage == Cancel::Settled && seen.takes_keys()) {
                     entry.cancel = Some(Cancel::Prompted);
                     Step::Prompt
-                } else if stage == Cancel::Asked {
+                } else if stage == Cancel::Asked && seen.takes_an_interrupt() {
                     entry.cancel = Some(Cancel::Interrupted);
                     Step::Interrupt
                 } else {
@@ -504,8 +807,27 @@ impl Ledger {
         }
     }
 
+    /// No turn was heard to begin on the cancel line typed into `task` within
+    /// [`A_PROMPT_IS_HEARD_WITHIN`]: the line counts as taken, so the cancel ends at the chat's
+    /// next idle moment with no report, and never stays "cancelling" for good.
+    pub fn prompt_unheard(&mut self, task: u32) {
+        if let Some(entry) = self.tasks.get_mut(&task)
+            && entry.cancel == Some(Cancel::Prompted)
+        {
+            entry.cancel = Some(Cancel::Heard);
+        }
+    }
+
+    /// Whether a cancel of `task` is under way.
+    pub fn cancelling(&self, task: u32) -> bool {
+        self.tasks
+            .get(&task)
+            .is_some_and(|entry| entry.cancel.is_some())
+    }
+
     /// Chat `chat`'s harness said a prompt began a turn. As a cancelled task, the line it was
     /// typed has been taken; as an asking chat, the turn was handed every report that waited.
+    /// And whatever the person had open in its pane is behind it.
     pub fn turn_began(&mut self, chat: u32) {
         if let Some(entry) = self.tasks.get_mut(&chat)
             && entry.cancel == Some(Cancel::Prompted)
@@ -513,17 +835,57 @@ impl Ledger {
             entry.cancel = Some(Cancel::Heard);
         }
         self.landed.remove(&chat);
+        self.keyed.remove(&chat);
+        self.talk.turn_began(chat);
     }
 
-    /// The tasks the asking chat `asker` is typed a line about now, or none: reports have
-    /// landed that it was not told of, it takes a line ([`Seen::takes_a_line`]), and the person
-    /// is not `typing` in it. Taken, so one batch of reports is one line.
-    pub fn nudge_step(&mut self, asker: u32, seen: Seen, typing: bool) -> Vec<u32> {
-        if !seen.takes_a_line() || typing {
+    /// Chat `chat`'s harness said its turn ended: whatever the person had open in its pane is
+    /// behind it.
+    pub fn turn_ended(&mut self, chat: u32) {
+        self.keyed.remove(&chat);
+    }
+
+    /// What chat `chat` is typed a line about now, or nothing: something was left for its next
+    /// turn that it was not told of, it takes a line ([`Seen::takes_a_line`]), and no key of
+    /// the person's has gone to its pane since its last report. Taken, so one batch is one
+    /// line.
+    pub fn nudge_step(&mut self, chat: u32, seen: Seen) -> Vec<Landed> {
+        if !seen.takes_a_line() || self.keyed.contains(&chat) {
             return Vec::new();
         }
-        self.landed.remove(&asker).unwrap_or_default()
+        self.landed.remove(&chat).unwrap_or_default()
     }
+}
+
+/// **Whether the person's keys in a task's pane are them stepping in** (#1442), as opposed to
+/// answering a prompt the task put to them.
+///
+/// Outside a turn that has shown them a prompt, any key is. Within one the board cannot say
+/// when the prompt was answered, so the keys are read: picking an option is a key or two and
+/// Enter, and an instruction is words. `line` is how many bytes they have typed since their
+/// last Enter, where purlis could follow them, and `bytes` what they sent now. Two bytes of
+/// text or more, typed or pasted, is stepping in.
+pub fn steps_in(asked_this_turn: bool, line: Option<usize>, bytes: &[u8]) -> bool {
+    if !asked_this_turn {
+        return true;
+    }
+    let text = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .filter(|byte| **byte >= 0x20 && **byte != 0x7f)
+            .count()
+    };
+    // A paste carries its text between markers, which are not the text.
+    let pasted = bytes
+        .strip_prefix(b"\x1b[200~")
+        .map(|rest| rest.strip_suffix(b"\x1b[201~").unwrap_or(rest));
+    let now = match pasted {
+        Some(pasted) => text(pasted),
+        // Any other escape sequence is a key (an arrow, a function key), not text.
+        None if bytes.first() == Some(&0x1b) => 0,
+        None => text(bytes),
+    };
+    now >= 2 || line.is_some_and(|line| line >= 2)
 }
 
 // ---- said to the chat -------------------------------------------------------------------------
@@ -614,31 +976,48 @@ mod tests {
                 outcome,
                 changed: None,
                 record: None,
+                stepped_in: false,
             }),
             answered: None,
         }
     }
 
-    const RUNNING: Seen = Seen {
+    /// A chat on a measured harness that purlis has heard from.
+    const KNOWN: Seen = Seen {
         ended: false,
+        heard: true,
+        running: false,
         waiting: false,
         asking: false,
+        measured: true,
+    };
+    const RUNNING: Seen = Seen {
+        running: true,
+        ..KNOWN
     };
     const WAITING: Seen = Seen {
-        ended: false,
         waiting: true,
-        asking: false,
+        ..KNOWN
     };
+    /// Mid-turn, having shown the person a prompt: the board says waiting and asking.
     const ASKING: Seen = Seen {
-        ended: false,
-        waiting: false,
+        waiting: true,
         asking: true,
+        ..KNOWN
     };
     const ENDED: Seen = Seen {
         ended: true,
-        waiting: false,
-        asking: false,
+        ..KNOWN
     };
+
+    impl Seen {
+        fn ended(self) -> Self {
+            Seen {
+                ended: true,
+                ..self
+            }
+        }
+    }
 
     // ----- whose task it is ----------------------------------------------------------------
 
@@ -732,7 +1111,7 @@ mod tests {
 
     #[test]
     fn a_wait_on_a_task_that_ended_or_reported_before_a_relaunch_says_so_at_once() {
-        let ledger = Ledger::default();
+        let mut ledger = Ledger::default();
         assert_eq!(
             ledger.waited(TASK, &dispatched_by(ASKER), ENDED),
             Some(Waited::Ended)
@@ -760,9 +1139,9 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("f.json".into()));
 
-        assert_eq!(ledger.read(TASK), Some(PathBuf::from("f.json")));
-        assert_eq!(ledger.read(TASK), None, "removed once");
-        assert_eq!(ledger.nudge_step(ASKER, WAITING, false), Vec::<u32>::new());
+        assert_eq!(ledger.read(TASK), [PathBuf::from("f.json")]);
+        assert!(ledger.read(TASK).is_empty(), "removed once");
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
         // And it can be read again by a later wait.
         assert!(ledger.report(TASK).is_some());
     }
@@ -775,10 +1154,13 @@ mod tests {
         ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
         ledger.reported(12, ASKER, a_report(Outcome::Failed), Some("b.json".into()));
 
-        assert_eq!(ledger.nudge_step(ASKER, WAITING, false), vec![TASK, 12]);
         assert_eq!(
-            ledger.nudge_step(ASKER, WAITING, false),
-            Vec::<u32>::new(),
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::Report(TASK), Landed::Report(12)]
+        );
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            Vec::new(),
             "one line a batch, so a turn that hands over nothing is not typed into again"
         );
     }
@@ -788,28 +1170,35 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
 
-        for (seen, typing) in [
-            (RUNNING, false),
-            (ASKING, false),
-            (
-                Seen {
-                    waiting: true,
-                    asking: true,
-                    ended: false,
-                },
-                false,
-            ),
-            (ENDED, false),
-            (WAITING, true),
+        for seen in [
+            RUNNING,
+            ASKING,
+            ENDED,
+            // Never heard from: a chat still starting, or a harness that reports nothing.
+            Seen {
+                heard: false,
+                ..WAITING
+            },
+            Seen::default(),
+            // A harness purlis has not measured its line in.
+            Seen {
+                measured: false,
+                ..WAITING
+            },
         ] {
-            assert_eq!(
-                ledger.nudge_step(ASKER, seen, typing),
-                Vec::<u32>::new(),
-                "{seen:?}, typing {typing}"
-            );
+            assert_eq!(ledger.nudge_step(ASKER, seen), Vec::new(), "{seen:?}");
         }
+        // M2: a key of the person's since its last report. They may have a picker open, which
+        // no hook reports, so the line is held until the harness says a turn began or ended.
+        ledger.person_keyed(ASKER);
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new(), "keyed");
+        assert!(ledger.keyed(ASKER));
+        ledger.turn_ended(ASKER);
         // Held, not dropped: its turn ends, and it is told then.
-        assert_eq!(ledger.nudge_step(ASKER, WAITING, false), vec![TASK]);
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::Report(TASK)]
+        );
     }
 
     #[test]
@@ -819,7 +1208,7 @@ mod tests {
 
         ledger.turn_began(ASKER);
 
-        assert_eq!(ledger.nudge_step(ASKER, WAITING, false), Vec::<u32>::new());
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
     }
 
     #[test]
@@ -827,22 +1216,39 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.reported(TASK, ASKER, a_report(Outcome::Done), None);
 
-        assert_eq!(ledger.nudge_step(ASKER, WAITING, false), Vec::<u32>::new());
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
     }
 
     #[test]
     fn the_line_typed_is_purlis_s_own_and_names_chats_by_number_only() {
         assert_eq!(
-            nudge(&[9]),
-            "purlis: a task this chat dispatched has reported (chat 9). Its report is attached \
-             to this turn as context, quoted as data. If it is not there, run `purlis dispatch \
+            nudge(&[Landed::Report(9)]),
+            "purlis: a task this chat dispatched has reported (chat 9). It is attached to this \
+             turn as context, quoted as data. If it is not there, run `purlis dispatch wait 9`."
+        );
+        assert_eq!(
+            nudge(&[Landed::Report(9), Landed::Report(12)]),
+            "purlis: tasks this chat dispatched have reported (chats 9, 12). They are attached \
+             to this turn as context, quoted as data. If one is not there, run `purlis dispatch \
+             wait <chat>` for it."
+        );
+        // #1442: a question from a task, and a message from the chat above.
+        assert_eq!(
+            nudge(&[Landed::Question(9)]),
+            "purlis: a task this chat dispatched asks it a question (chat 9). It is attached to \
+             this turn as context, quoted as data. If it is not there, run `purlis dispatch \
              wait 9`."
         );
         assert_eq!(
-            nudge(&[9, 12]),
-            "purlis: tasks this chat dispatched have reported (chats 9, 12). Their reports are \
-             attached to this turn as context, quoted as data. If one is not there, run `purlis \
-             dispatch wait <chat>` for it."
+            nudge(&[Landed::Answer]),
+            "purlis: the chat that asked for this task has sent it a message. It is attached to \
+             this turn as context, quoted as data."
+        );
+        assert_eq!(
+            nudge(&[Landed::Report(9), Landed::FollowUp, Landed::Answer]),
+            "purlis: a task this chat dispatched has reported (chat 9), and the chat that asked \
+             for this task has sent it messages. They are attached to this turn as context, \
+             quoted as data. If one is not there, run `purlis dispatch wait <chat>` for it."
         );
     }
 
@@ -853,6 +1259,81 @@ mod tests {
         assert!(told_by_a_line(Some(Harness::Codex)));
         assert!(!told_by_a_line(Some(Harness::Opencode)));
         assert!(!told_by_a_line(None), "a shell tab");
+    }
+
+    // ----- a question, a message and the person's keys (#1442) --------------------------------
+
+    #[test]
+    fn a_wait_is_answered_once_with_a_question_and_waits_on_after_it() {
+        let mut ledger = Ledger::default();
+        let from = dispatched_by(ASKER);
+        ledger
+            .talk
+            .ask(TASK, "Which queue?", Some("q.json".into()))
+            .expect("asked");
+        assert_eq!(ledger.state(TASK, &from, RUNNING), State::AsksYou);
+        assert_eq!(State::AsksYou.say(), "asking this chat a question");
+
+        assert_eq!(
+            ledger.waited(TASK, &from, RUNNING),
+            Some(Waited::Asks {
+                question: "Which queue?".to_owned()
+            })
+        );
+        // The command has it: the turn after is not handed it, nor typed a line about it.
+        ledger.landed(ASKER, Landed::Question(TASK));
+        assert_eq!(ledger.read(TASK), [PathBuf::from("q.json")]);
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
+        assert_eq!(ledger.waited(TASK, &from, RUNNING), None, "waits on");
+    }
+
+    #[test]
+    fn a_question_nobody_waited_for_is_what_the_asking_chat_is_typed_a_line_about() {
+        let mut ledger = Ledger::default();
+        ledger.landed(ASKER, Landed::Question(TASK));
+        ledger.landed(ASKER, Landed::Question(TASK));
+
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::Question(TASK)]
+        );
+    }
+
+    #[test]
+    fn an_answer_its_waiting_command_took_is_not_typed_about_and_a_follow_up_still_is() {
+        let mut ledger = Ledger::default();
+        ledger.talk.ask(TASK, "Which queue?", None).expect("asked");
+        ledger
+            .talk
+            .answer(
+                TASK,
+                "check the queue",
+                crate::dispatchtalk::Given {
+                    from: "steward 3".to_owned(),
+                    text: "The second.".to_owned(),
+                    file: Some("a.json".into()),
+                },
+            )
+            .expect("answered");
+        ledger.landed(TASK, Landed::Answer);
+        ledger.landed(TASK, Landed::FollowUp);
+
+        assert_eq!(ledger.got_answer(TASK), Some(PathBuf::from("a.json")));
+
+        assert_eq!(ledger.nudge_step(TASK, WAITING), vec![Landed::FollowUp]);
+    }
+
+    #[test]
+    fn the_person_typing_in_a_task_is_remembered_as_a_fact_and_nothing_else() {
+        let mut ledger = Ledger::default();
+        assert!(!ledger.stepped_in(TASK));
+
+        ledger.person_typed(TASK);
+
+        assert!(ledger.stepped_in(TASK));
+        assert!(!ledger.stepped_in(12), "another task's is its own");
+        ledger.forget(TASK, None);
+        assert!(!ledger.stepped_in(TASK));
     }
 
     // ----- the list ------------------------------------------------------------------------
@@ -964,20 +1445,20 @@ mod tests {
         );
 
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, false),
             Step::Interrupt
         );
         // No harness reports an interrupted turn: until it has had its moment, nothing more.
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, false),
             Step::Hold
         );
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, true),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, true),
             Step::Prompt
         );
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, true),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, true),
             Step::Hold,
             "typed once"
         );
@@ -988,7 +1469,7 @@ mod tests {
         let mut ledger = cancelling();
 
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, WAITING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
             Step::Prompt
         );
     }
@@ -999,26 +1480,33 @@ mod tests {
 
         // Neither the interrupt nor the line: both are keys in its pane.
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, ASKING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, ASKING, false),
             Step::Hold
         );
+        ledger.person_keyed(TASK);
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, WAITING, true, false),
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
             Step::Hold,
-            "nor while the person is typing in it"
+            "nor after a key of the person's in it"
         );
-        // The person answered and the turn went on: now it is interrupted.
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, false),
+            Step::Hold,
+            "nor is its turn interrupted then"
+        );
+        // Its harness says a turn began: the key is behind it, and the turn is interrupted.
+        ledger.turn_began(TASK);
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, false),
             Step::Interrupt
         );
         // And a prompt that appears before the line is typed holds that too.
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, ASKING, false, true),
+            ledger.cancel_step(TASK, Owed::Due, ASKING, true),
             Step::Hold
         );
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, true),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, true),
             Step::Prompt
         );
     }
@@ -1033,7 +1521,7 @@ mod tests {
         // Its report ends the cancel, and the outcome stays the app's record.
         ledger.reported(TASK, ASKER, a_report(Outcome::Cancelled), None);
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Sent, WAITING, false, true),
+            ledger.cancel_step(TASK, Owed::Sent, WAITING, true),
             Step::Nothing
         );
         assert_eq!(
@@ -1060,26 +1548,26 @@ mod tests {
     fn a_cancelled_task_that_ends_its_one_turn_without_a_report_has_one_written_for_it() {
         let mut ledger = cancelling();
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, WAITING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
             Step::Prompt
         );
         // Waiting still, because the line has not begun its turn yet: not the end of it.
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, WAITING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
             Step::Hold
         );
 
         ledger.turn_began(TASK);
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, false),
             Step::Hold
         );
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, WAITING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
             Step::Write(CANCELLED_UNREPORTED)
         );
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, WAITING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
             Step::Nothing,
             "written once"
         );
@@ -1090,7 +1578,7 @@ mod tests {
         let mut ledger = cancelling();
 
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, ENDED, false, false),
+            ledger.cancel_step(TASK, Owed::Due, ENDED, false),
             Step::Write(ENDED_UNREPORTED)
         );
         // Both sentences are ones a report may carry.
@@ -1118,7 +1606,7 @@ mod tests {
 
         let mut ledger = cancelling();
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, false),
             Step::Interrupt
         );
         assert_eq!(
@@ -1126,10 +1614,202 @@ mod tests {
             Ok(false)
         );
         assert_eq!(
-            ledger.cancel_step(TASK, Owed::Due, RUNNING, false, false),
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, false),
             Step::Hold,
             "not interrupted twice"
         );
+    }
+
+    // ----- the review's probes (red first) ------------------------------------------------
+
+    #[test]
+    fn no_key_is_sent_to_a_chat_the_board_has_never_heard_from() {
+        // M1: a task still starting, or on a harness that reports nothing, reads as neither
+        // waiting nor asking. That is not a running turn.
+        let mut ledger = cancelling();
+        for settled in [false, true, true] {
+            assert_eq!(
+                ledger.cancel_step(TASK, Owed::Due, Seen::default(), settled),
+                Step::Hold
+            );
+        }
+        // Heard from, and idle with nothing known of a turn: still no Escape, which goes only
+        // into a turn purlis heard begin.
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, KNOWN, false),
+            Step::Hold
+        );
+        // The cancel is recorded all the same: its report is `cancelled`, and one is written
+        // when the chat ends.
+        assert_eq!(
+            ledger.outcome_for(TASK, Outcome::Done),
+            Ok(Outcome::Cancelled)
+        );
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, Seen::default().ended(), false),
+            Step::Write(ENDED_UNREPORTED)
+        );
+    }
+
+    #[test]
+    fn a_task_on_a_harness_purlis_does_not_type_into_is_cancelled_when_its_turn_ends() {
+        let unmeasured = |seen: Seen| Seen {
+            measured: false,
+            ..seen
+        };
+        let mut ledger = cancelling();
+        for seen in [unmeasured(RUNNING), unmeasured(ASKING)] {
+            for settled in [false, true] {
+                assert_eq!(
+                    ledger.cancel_step(TASK, Owed::Due, seen, settled),
+                    Step::Hold,
+                    "{seen:?}"
+                );
+            }
+        }
+
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, unmeasured(WAITING), false),
+            Step::Write(CANCELLED_UNASKED)
+        );
+        assert_eq!(
+            crate::handoff::report_summary(CANCELLED_UNASKED).as_deref(),
+            Ok(CANCELLED_UNASKED)
+        );
+    }
+
+    #[test]
+    fn a_cancel_line_no_turn_is_heard_to_begin_on_does_not_leave_the_task_cancelling_for_good() {
+        // Fold 3.
+        let mut ledger = cancelling();
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
+            Step::Prompt
+        );
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
+            Step::Hold
+        );
+        assert!(ledger.cancelling(TASK));
+
+        ledger.prompt_unheard(TASK);
+
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
+            Step::Write(CANCELLED_UNREPORTED)
+        );
+        assert!(!ledger.cancelling(TASK));
+    }
+
+    #[test]
+    fn a_closed_task_is_remembered_by_how_it_ended_for_the_chat_that_asked() {
+        // M6: a wait on a task whose tab was closed is the owner's, not a stranger's.
+        let mut ledger = Ledger::default();
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), None);
+
+        ledger.forget(TASK, Some((ASKER, "check the queue")));
+        ledger.forget(12, Some((ASKER, "read the logs")));
+
+        assert_eq!(
+            ledger.gone(ASKER, TASK),
+            Some(&Gone {
+                asker: ASKER,
+                name: "check the queue".to_owned(),
+                report: Some(a_report(Outcome::Done)),
+            })
+        );
+        assert_eq!(
+            ledger.gone(ASKER, 12).and_then(|gone| gone.report.clone()),
+            None
+        );
+        assert_eq!(ledger.gone(4, TASK), None, "and nobody else's");
+        // Bounded, oldest out first; and gone with the chat that asked.
+        for task in 100..100 + u32::try_from(MOST_GONE).unwrap() {
+            ledger.forget(task, Some((ASKER, "more")));
+        }
+        assert_eq!(ledger.gone(ASKER, TASK), None);
+        ledger.forget(ASKER, None);
+        assert_eq!(ledger.gone(ASKER, 120), None);
+    }
+
+    #[test]
+    fn a_chat_started_again_under_a_new_number_keeps_what_was_remembered_of_it() {
+        // Fold 6: a restart to take a sandbox grant must not shed a cancel or a question.
+        let mut ledger = cancelling();
+        ledger.person_typed(TASK);
+        ledger.talk.ask(TASK, "Which queue?", None).expect("asked");
+        ledger.landed(ASKER, Landed::Question(TASK));
+        ledger.landed(TASK, Landed::FollowUp);
+
+        ledger.followed(TASK, 21);
+
+        assert!(ledger.cancelling(21));
+        assert!(ledger.stepped_in(21));
+        assert_eq!(
+            ledger.outcome_for(21, Outcome::Done),
+            Ok(Outcome::Cancelled)
+        );
+        assert_eq!(ledger.talk.asks(21), Some("Which queue?"));
+        assert!(!ledger.cancelling(TASK));
+        assert_eq!(
+            ledger.nudge_step(ASKER, WAITING),
+            vec![Landed::Question(21)]
+        );
+        assert_eq!(ledger.nudge_step(21, WAITING), vec![Landed::FollowUp]);
+        // And the asking chat started again still owns its tasks' news.
+        ledger.landed(ASKER, Landed::Report(21));
+        ledger.followed(ASKER, 30);
+        assert_eq!(ledger.nudge_step(30, WAITING), vec![Landed::Report(21)]);
+    }
+
+    #[test]
+    fn the_person_s_words_in_a_task_are_stepping_in_and_picking_an_option_is_not() {
+        // M4. Outside a turn that asked them something, any key.
+        assert!(steps_in(false, Some(0), b"x"));
+        assert!(steps_in(false, None, b"\x1b[A"));
+        // Within one: an option is a key or two and Enter.
+        for keys in [&b"y"[..], b"2", b"\r", b"\x1b[B", b"\x1b", b"\t"] {
+            assert!(!steps_in(true, Some(0), keys), "{keys:?}");
+        }
+        assert!(!steps_in(true, Some(1), b"\r"), "one key, then Enter");
+        assert!(!steps_in(true, None, b"\r"), "arrows, then Enter");
+        // An instruction is words: typed key by key, typed at once, or pasted.
+        assert!(steps_in(true, Some(2), b"o"));
+        assert!(steps_in(true, Some(0), b"no, use staging"));
+        assert!(steps_in(true, Some(0), b"\x1b[200~use staging\x1b[201~"));
+        assert!(steps_in(true, None, b"\x1b[200~use staging\x1b[201~"));
+    }
+
+    #[test]
+    fn a_cancel_held_when_its_turn_had_stopped_moves_on_when_the_hold_lifts() {
+        // Fold 2: the person was typing at the 1.5 s mark. The next look, with no timer behind
+        // it, must still type the line.
+        let mut ledger = cancelling();
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, false),
+            Step::Interrupt
+        );
+        ledger.person_keyed(TASK);
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, true),
+            Step::Hold
+        );
+        ledger.turn_ended(TASK);
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, WAITING, false),
+            Step::Prompt
+        );
+    }
+
+    #[test]
+    fn a_report_closes_the_question_its_task_had_open() {
+        // Fold 4: an answer after the report would reach no turn of the work.
+        let mut ledger = Ledger::default();
+        ledger.talk.ask(TASK, "Which queue?", None).expect("asked");
+
+        ledger.reported(TASK, ASKER, a_report(Outcome::Done), None);
+
+        assert_eq!(ledger.talk.asks(TASK), None);
     }
 
     #[test]
@@ -1138,9 +1818,9 @@ mod tests {
         ledger.started(TASK, SystemTime::UNIX_EPOCH);
         ledger.reported(TASK, ASKER, a_report(Outcome::Done), Some("a.json".into()));
 
-        ledger.forget(TASK);
+        ledger.forget(TASK, None);
 
         assert_eq!(ledger.report(TASK), None);
-        assert_eq!(ledger.nudge_step(ASKER, WAITING, false), Vec::<u32>::new());
+        assert_eq!(ledger.nudge_step(ASKER, WAITING), Vec::new());
     }
 }

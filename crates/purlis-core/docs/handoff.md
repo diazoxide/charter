@@ -271,25 +271,48 @@ chat that asked then has three ways to get the report.
   most, because a harness ends a command that runs longer. A wait that runs out is an answer
   and not a failure: it says the task is still running and how to look again. Nothing is lost
   by it, or by a command that is stopped while it waits: the report still reaches the chat
-  when it lands.
+  when it lands. One chat may have 16 waits under way at once, and a wait whose command has
+  gone ends by itself.
 - **Be told when it lands.** A report nobody waited for is left for the asking chat's next
-  turn, as before. If that chat is waiting for you and asking nothing when the report lands,
-  or once its turn ends, purlis types one line of its own into it, which starts that turn:
-  `purlis: a task this chat dispatched has reported (chat 9). …`. The line is purlis's sentence
-  and a chat's number. The report is never typed: it arrives as the turn's context, quoted as
-  data. Nothing is typed into a chat that is in the middle of a turn, that is showing you a
-  prompt, or in whose pane you have started typing; there the report waits for the next turn.
+  turn, as before. Where purlis may type into that chat (below), it types one line of its own
+  when the report lands, or once the chat's turn ends, which starts that turn: `purlis: a task
+  this chat dispatched has reported (chat 9). …`. The line is purlis's sentence and a chat's
+  number. The report is never typed: it arrives as the turn's context, quoted as data.
 
-What each harness does with that line:
+### When purlis types into a chat
 
-| Harness | Told without you | How the report arrives |
+purlis types three things for a dispatch, and nothing else: the line above, the line that asks
+a cancelled task for a short report, and the Escape key that ends a cancelled task's turn. None
+carries a word any chat wrote. Each goes to a chat's pane only when **all** of these hold, so
+that it cannot land in something purlis does not know is on screen:
+
+- **The harness is one purlis has measured.** Claude Code; and Codex once you have trusted
+  purlis's hooks there. On opencode, and on any other program, nothing is typed.
+- **purlis has heard from that chat since it started.** A chat whose harness has reported
+  nothing yet may be showing a start-up dialog, a login or a trust question, and an Enter
+  would answer it. An untrusted Codex never reports, so it is never typed into.
+- **It has shown you no prompt in this turn.** purlis hears that a chat asked you something,
+  and not that you answered, so the hold lasts until that turn ends.
+- **You have pressed no key in its pane since it last reported a turn beginning or ending.**
+  A local command of the harness (`/model`, `/permissions`, `/resume`) opens a picker that no
+  hook reports. Your key is the only sign of it, so after any key of yours purlis waits for the
+  chat's next turn to begin or end.
+
+The line is typed only into a chat whose turn has ended. Escape is sent only into a turn purlis
+heard begin.
+
+Where any of that fails, nothing is typed. A report or a message waits for the chat's next
+turn, as it did before this line existed. A cancel is recorded all the same.
+
+| Harness | Typed into | How a report or a message arrives |
 | --- | --- | --- |
-| Claude Code | yes | the turn's `UserPromptSubmit` hook hands it over as context |
-| Codex | yes, once you have trusted purlis's hooks in Codex | the same hook; until the hooks are trusted the line still starts a turn, with nothing attached, and it says to run `purlis dispatch wait <chat>`, which prints the report |
-| opencode | no: purlis types nothing there, because it has not measured that the turn is handed its context | on the next turn you start, as before |
+| Claude Code | yes, under the rules above | the turn's `UserPromptSubmit` hook hands it over as context |
+| Codex | only once you have trusted purlis's hooks in Codex | the same hook. Until the hooks are trusted nothing is typed and nothing is handed over: `purlis dispatch wait <chat>` prints a report, and a message waits |
+| opencode | no | on the next turn you start, as before |
 
-This was built where no app could be run, so the typed line has been tested against the app's
-own records and not yet watched in a running harness.
+Not covered: a dialog a harness raises by itself in an idle chat (an update notice, a rate
+limit menu, a new login). No hook reports one and no key of yours precedes it. This was built
+where no app could be run, so none of the typing has been watched in a running harness yet.
 
 ### Listing and cancelling
 
@@ -300,21 +323,82 @@ purlis dispatch cancel <chat>
 
 `list` prints the tasks this chat dispatched, one a line: the chat's number, the task's name,
 its persona, where it works, its state and how long ago it started. The states are `running`,
-`idle, with no report yet`, `waiting on the person`, `cancelling`, `reported: <outcome>` and
-`ended without a report`. A task is listed until its chat is closed. The `dispatch_list` tool
-prints the same list.
+`idle, with no report yet`, `waiting on the person`, `asking this chat a question`,
+`cancelling`, `reported: <outcome>` and `ended without a report`. A task is listed until its
+chat is closed. The `dispatch_list` tool prints the same list.
 
-`cancel` ends the task's turn and asks its chat for one short report of what it did, which
-arrives with the outcome `cancelled` whatever the chat calls it. A chat that ends that turn
-without reporting, or whose program had already ended, has a report written for it, so a
-cancel always ends in one. If the chat is showing you a prompt, nothing is sent to it until
-you have answered.
+`cancel` records the cancel, so the task's report arrives with the outcome `cancelled` whatever
+its chat calls it. Then, where purlis may type into that chat:
+
+- a task in the middle of a turn is sent Escape, the key you would press to stop it, and a
+  moment later the line asking for one short report of what it did;
+- a task whose turn had ended is asked at once.
+
+Where it may not, the cancel takes effect when the task's turn ends: it is asked then, or, on a
+harness purlis does not type into, a report is written for it. A task that ends the turn it was
+asked in without reporting, whose program ends, or whose tab is closed has a report written
+for it too. So a cancel always ends in a report, and `purlis dispatch wait <chat>` returns it.
 
 **A chat can wait on, list and cancel only the tasks it dispatched itself.** Which those are is
 purlis's record of each chat, written when the chat was started; the command names a chat by
 number and says nothing else. A sibling's task, the chat that dispatched this one, a chat a
 handoff opened and a number no chat has are all refused in the same sentence. A task that has
-reported cannot be cancelled.
+reported cannot be cancelled. A wait on a task whose tab you closed says how it ended.
+
+The rule is about chats. A helper sub-agent runs inside its chat and is that chat to purlis,
+so what keeps one from these commands and tools is the same hook that keeps it from
+dispatching, with the same limits: it reads the usual shapes of a command, not a script.
+
+### Follow-ups, progress notes and questions
+
+While a task works, the two chats can say more to each other.
+
+```bash
+purlis dispatch tell <chat> "<text>"        # the asking chat, to a task still working
+purlis dispatch note "<text>"               # a task, to the chat that asked
+purlis dispatch ask "<question>"            # a task, to the chat that asked; it waits
+purlis dispatch answer <chat> "<text>"      # the asking chat, to that question
+```
+
+- **A follow-up** reaches the task's next turn, as context quoted as data under a sentence
+  that says it is a request from another chat, not your word, and approves nothing. If the
+  task is mid-turn, that is the turn after this one. A follow-up to a task that has finished is
+  refused, with its state: `reported: done`, `ended without a report`, `cancelling`.
+- **A progress note** is read by the asking chat on its next turn, the way a report line is.
+  It starts no turn, and it is not a needs-you item.
+- **A question pauses the task.** `ask` holds until the asking chat answers, and prints the
+  answer, quoted as data. If the wait runs out first (100 seconds, or `--timeout`), the command
+  says to end the turn; the answer is then handed to the task's next turn, which purlis starts
+  with its one typed line where it may type into that chat. The asking chat sees the question
+  as the result of a `wait` on that task, or on its next turn, and the list shows the task as
+  `asking this chat a question`. One question at a time, and a task's report closes its
+  question: an answer after it is refused.
+- **A question for you is not asked this way.** A task that needs you asks in its own tab:
+  its harness's prompt, or purlis's `ask_operator` tool. `purlis dispatch answer` answers only
+  a question the task asked the asking chat. Where there is none, it is refused, whatever the
+  task's tab is showing, and nothing an answer says is ever typed into a chat. So no chat can
+  answer for you.
+
+**Messages travel only along the lineage.** `tell` and `answer` go to a task the sender
+dispatched itself, by purlis's record of that task. `note` and `ask` name nobody: they go to the
+chat purlis recorded as the sender's asker. A message to a sibling, to the chat above, or to
+any other chat is refused, in the sentence a wait on it would be.
+
+**Ten messages a minute for one pair**, counted both ways together, unless the project's
+`messages-per-minute` limit says otherwise (Settings › Project › Dispatch; 0 stops messages).
+The next one is refused with the limit. There is no cap on the total: two chats can keep each
+other going at that rate until the task reports. A message is held to a report's bounds: 4,096
+bytes, and no control character other than a line break.
+
+**If you typed in a task's chat, its report says so.** It carries `The operator stepped in`,
+so the chat that asked knows the result is not from its brief alone, and nothing of what you
+typed. Picking an option of a prompt the task put to you is not stepping in; words are, at a
+prompt or anywhere else.
+
+Nothing a chat wrote is typed into another chat. A message waits in `.charter/handbacks/` in
+the project, in a folder of the chat it is for, until that chat's hook takes it; a folder there
+that is a link is not read, written or emptied. Those folders can be read by any chat of the
+project today, because a chat's own hook is what reads them.
 
 ## What `purlis handoff` refuses before it changes anything
 

@@ -34,6 +34,7 @@ pub mod dispatchgrant;
 pub mod dispatchguard;
 pub mod dispatchlimits;
 pub mod dispatchrecord;
+pub mod dispatchtalk;
 pub mod dispatchunattended;
 pub mod docsrc;
 pub mod doctor;

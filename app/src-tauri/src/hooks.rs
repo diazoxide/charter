@@ -1138,6 +1138,14 @@ impl Hooks {
         self.socket.as_deref()
     }
 
+    /// Whether the asker on `connection` hung up while its ask was being answered
+    /// (`ChatTokens::asker_gone`): what ends a wait nobody is waiting for any more (#1441).
+    pub fn asker_gone(&self, connection: u64) -> bool {
+        self.tokens
+            .as_ref()
+            .is_some_and(|tokens| tokens.asker_gone(connection))
+    }
+
     /// What a chat started in this plane is told to report to: the socket and the tokens it
     /// checks, or nothing when this is not listening.
     pub fn reporting(&self) -> Option<crate::sessions::Reporting> {

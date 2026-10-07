@@ -473,6 +473,11 @@ enum Command {
     /// The chat that asked can wait for that report (`--wait`, or `purlis dispatch wait
     /// <chat>` later), list its tasks (`purlis dispatch list`) and cancel one (`purlis dispatch
     /// cancel <chat>`). A report nobody waits for reaches the chat as context when it lands.
+    ///
+    /// While a task works, the chat that asked can send it a follow-up (`purlis dispatch tell
+    /// <chat> "<text>"`), and the task can send a progress note (`purlis dispatch note
+    /// "<text>"`) or ask a question and wait for the answer (`purlis dispatch ask
+    /// "<question>"`, answered with `purlis dispatch answer <chat> "<text>"`).
     #[command(args_conflicts_with_subcommands = true)]
     Dispatch {
         /// The persona the new chat runs as (default: this chat's own).
