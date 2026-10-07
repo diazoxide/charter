@@ -873,9 +873,9 @@ pub struct ReportBack {
 /// never touches a readable surface — not the environment, not argv (which is where the brief
 /// itself travels, and which `charter handoff`'s credential refusal already calls readable by
 /// any local process), not a file, not the transcript — so nothing that can read those can
-/// produce one. And because the app mints at most one live ticket per chat and forgets it the
-/// moment it is spent or the deadline passes, one approved `charter handoff` opens at most one
-/// chat.
+/// produce one. And because a ticket belongs to the one connection it was minted on, and the app
+/// forgets it the moment it is spent or the deadline passes, one approved `charter handoff`
+/// opens at most one chat.
 ///
 /// **What it does not buy, plainly.** It does not authenticate the *approval*. A process
 /// already inside the chat's own process tree has the socket path and the chat number in its
@@ -1034,36 +1034,46 @@ pub enum Answer {
 ///
 /// `charter handoff` spends its ticket on the very next line, milliseconds after the mint, so
 /// this bounds only a ticket that was minted and abandoned: a `charter` killed between the two
-/// lines, or something that minted with no intention of spending. While one is live no second
-/// ticket is minted for that chat, so this is also how long such an abandoned mint can hold up
-/// the next handoff from the same chat. Seconds, not minutes, for that reason.
+/// lines, or something that minted with no intention of spending. An abandoned ticket holds up
+/// nothing but its own connection; it counts towards [`MOST_LIVE_TICKETS_A_CHAT`] until it
+/// expires. Seconds, not minutes, for that reason.
 pub const A_TICKET_LIVES: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The tickets an app has minted and not yet seen spent, one per chat at most.
+/// The most tickets one chat may have live at once.
+///
+/// A chat that fans out runs several commands in one step, each with a connection and a ticket
+/// of its own, minted before any is spent. This is room for the most tasks one chat may have
+/// running at the highest setting anyone has asked for, and still a bound: mints that are
+/// never spent cannot grow the map for longer than [`A_TICKET_LIVES`].
+pub const MOST_LIVE_TICKETS_A_CHAT: usize = 16;
+
+/// The tickets an app has minted and not yet seen spent: one per connection, and at most
+/// [`MOST_LIVE_TICKETS_A_CHAT`] per chat.
 ///
 /// This is the whole of the ticket's mechanism, kept in the core so that it is plain Rust
 /// with tests of its own, and so the app holds a value rather than a policy. The argument for
 /// what it is worth is on [`OpenChat`].
 #[derive(Debug, Default)]
 pub struct Tickets {
-    live: std::sync::Mutex<std::collections::HashMap<u32, Live>>,
+    /// By the chat a ticket was minted for and the connection it was minted on.
+    live: std::sync::Mutex<std::collections::HashMap<(u32, u64), Live>>,
 }
 
 #[derive(Debug)]
 struct Live {
     ticket: String,
-    connection: u64,
     until: std::time::Instant,
 }
 
 impl Tickets {
     /// A ticket for `chat`, bound to `connection`, or why not.
     ///
-    /// **One live ticket per chat.** A second mint while one is live is refused rather than
-    /// replacing it. A replacement would let a second process cancel the handoff the operator
-    /// just approved without anybody seeing why; a refusal leaves the first one standing and,
-    /// if the second mint was the real handoff, it prints the command to run with the reason
-    /// underneath, which is noisy on purpose.
+    /// **One live ticket per connection, and each run of a command is a connection.** A chat
+    /// that dispatches six tasks in one step runs six commands, and each mints and spends its
+    /// own (#1441): a ticket is the property of the run that asked for it, so no run can spend,
+    /// replace or cancel another's. A second mint on a connection that already holds a live
+    /// ticket is refused rather than replacing it, which is what keeps one run of a command to
+    /// one thing started.
     ///
     /// The value is two v4 UUIDs, 244 random bits from the operating system's generator: the
     /// same source charter already trusts for the session ids it mints (`harness::SessionId`).
@@ -1075,9 +1085,15 @@ impl Tickets {
     ) -> Result<String, String> {
         let mut live = self.held();
         live.retain(|_, one| one.until > now);
-        if live.contains_key(&chat) {
+        if live.contains_key(&(chat, connection)) {
             return Err(format!(
-                "a handoff from chat {chat} is already being opened; try again in a few seconds"
+                "this connection already holds a ticket for chat {chat}; spend it first"
+            ));
+        }
+        if live.keys().filter(|(of, _)| *of == chat).count() >= MOST_LIVE_TICKETS_A_CHAT {
+            return Err(format!(
+                "chat {chat} has {MOST_LIVE_TICKETS_A_CHAT} requests to the app under way at \
+                 once; try again in a few seconds"
             ));
         }
         let ticket = format!(
@@ -1086,10 +1102,9 @@ impl Tickets {
             uuid::Uuid::new_v4().simple()
         );
         live.insert(
-            chat,
+            (chat, connection),
             Live {
                 ticket: ticket.clone(),
-                connection,
                 until: now + A_TICKET_LIVES,
             },
         );
@@ -1098,10 +1113,12 @@ impl Tickets {
 
     /// Spends `ticket` for `chat` on `connection`, or says why it will not open anything.
     ///
-    /// **The chat's ticket is gone after this whatever the answer.** A wrong guess spends the
-    /// real ticket too, so a guesser gets one try per mint, and the mint is one per chat at a
-    /// time. The comparison runs over every byte whatever it finds, so how long a wrong
-    /// ticket takes to refuse says nothing about how much of it was right.
+    /// **The ticket this connection holds for the chat is gone after this whatever the
+    /// answer.** A wrong guess spends the real ticket too, so a guesser gets one try per mint.
+    /// A try on any other connection finds nothing to spend and costs nobody anything: a ticket
+    /// never spends off the connection it was minted on. The comparison runs over every byte
+    /// whatever it finds, so how long a wrong ticket takes to refuse says nothing about how
+    /// much of it was right.
     pub fn spend(
         &self,
         chat: u32,
@@ -1109,7 +1126,7 @@ impl Tickets {
         ticket: &str,
         now: std::time::Instant,
     ) -> Result<(), String> {
-        let Some(live) = self.held().remove(&chat) else {
+        let Some(live) = self.held().remove(&(chat, connection)) else {
             return Err(NO_TICKET.to_owned());
         };
         let same = live.ticket.len() == ticket.len()
@@ -1119,13 +1136,13 @@ impl Tickets {
                 .zip(ticket.bytes())
                 .fold(0u8, |differs, (a, b)| differs | (a ^ b))
                 == 0;
-        if !same || live.connection != connection || live.until <= now {
+        if !same || live.until <= now {
             return Err(NO_TICKET.to_owned());
         }
         Ok(())
     }
 
-    fn held(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u32, Live>> {
+    fn held(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<(u32, u64), Live>> {
         self.live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -4017,28 +4034,103 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_has_one_live_ticket_and_a_second_mint_does_not_replace_it() {
+    fn a_second_mint_for_a_chat_stands_beside_the_first_and_never_replaces_it() {
         // Replacing would let a second process cancel the handoff the operator approved,
-        // silently. Refusing leaves the first standing and says so to the second.
+        // silently. Each run of a command has its own ticket, on its own connection.
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let first = tickets.mint(3, 1, now).expect("a ticket");
+        let second = tickets.mint(3, 2, now).expect("a ticket of its own");
+
+        assert_ne!(first, second);
+        // Neither spends on the other's connection, and a try there costs the ticket that
+        // connection holds, never the other's.
+        assert_eq!(tickets.spend(3, 2, &first, now), Err(NO_TICKET.to_owned()));
+        assert_eq!(tickets.spend(3, 2, &second, now), Err(NO_TICKET.to_owned()));
+        assert_eq!(tickets.spend(3, 1, &first, now), Ok(()));
+    }
+
+    #[test]
+    fn six_dispatches_at_once_from_one_chat_each_spend_a_ticket_of_their_own_once() {
+        // Fan-out: one chat, six runs of the command, six connections, all minted before any
+        // is spent. Every one spends, in any order, and none spends twice.
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let minted: Vec<(u64, String)> = (1..=6)
+            .map(|connection| {
+                (
+                    connection,
+                    tickets.mint(3, connection, now).expect("a ticket"),
+                )
+            })
+            .collect();
+        let distinct: std::collections::HashSet<&String> =
+            minted.iter().map(|(_, ticket)| ticket).collect();
+        assert_eq!(distinct.len(), 6);
+
+        for (connection, ticket) in minted.iter().rev() {
+            assert_eq!(tickets.spend(3, *connection, ticket, now), Ok(()));
+        }
+        for (connection, ticket) in &minted {
+            assert_eq!(
+                tickets.spend(3, *connection, ticket, now),
+                Err(NO_TICKET.to_owned()),
+                "a replay opens nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn a_connection_holds_one_ticket_so_one_run_of_a_command_starts_one_chat() {
         let tickets = Tickets::default();
         let now = std::time::Instant::now();
         let first = tickets.mint(3, 1, now).expect("a ticket");
 
-        assert!(tickets.mint(3, 2, now).is_err());
-        assert_eq!(tickets.spend(3, 1, &first, now), Ok(()));
+        let again = tickets
+            .mint(3, 1, now)
+            .expect_err("one ticket a connection");
+        assert!(again.contains("already holds a ticket"), "{again}");
+        assert_eq!(tickets.spend(3, 1, &first, now), Ok(()), "the first stands");
         assert!(
-            tickets.mint(3, 2, now).is_ok(),
-            "and once it is spent, the chat can mint again"
+            tickets.mint(3, 1, now).is_ok(),
+            "and once it is spent, the connection can mint again"
         );
     }
 
     #[test]
-    fn an_abandoned_ticket_stops_holding_up_the_chat_once_it_expires() {
+    fn a_chat_s_live_tickets_are_bounded_and_the_refusal_names_no_handoff() {
+        // Abandoned mints cannot pile up without end, and the sentence is every ask's.
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        for connection in 0..MOST_LIVE_TICKETS_A_CHAT as u64 {
+            tickets.mint(3, connection, now).expect("room");
+        }
+
+        let refused = tickets.mint(3, 999, now).expect_err("full");
+        assert_eq!(
+            refused,
+            format!(
+                "chat 3 has {MOST_LIVE_TICKETS_A_CHAT} requests to the app under way at once; \
+                 try again in a few seconds"
+            )
+        );
+        assert!(
+            tickets.mint(4, 999, now).is_ok(),
+            "another chat's are its own"
+        );
+        assert!(
+            tickets.mint(3, 999, now + A_TICKET_LIVES).is_ok(),
+            "and the abandoned ones expire"
+        );
+    }
+
+    #[test]
+    fn an_abandoned_ticket_never_holds_up_the_chat_s_next_ask() {
         let tickets = Tickets::default();
         let now = std::time::Instant::now();
         let _abandoned = tickets.mint(3, 1, now).expect("a ticket");
 
-        assert!(tickets.mint(3, 2, now + A_TICKET_LIVES).is_ok());
+        assert!(tickets.mint(3, 2, now).is_ok());
     }
 
     #[test]
@@ -4189,6 +4281,31 @@ mod tests {
             Box::new(|_| {}),
             Box::new(move |connection, ask| {
                 let now = std::time::Instant::now();
+                // A dispatch and a report spend a ticket as an open does.
+                match &ask {
+                    Ask::Dispatch(dispatch) => {
+                        let spent = tickets.spend(dispatch.chat, connection, &dispatch.ticket, now);
+                        return match spent {
+                            Ok(()) => Answer::Dispatched {
+                                chat: 9,
+                                name: dispatch.name.clone(),
+                                persona: None,
+                                note: None,
+                            },
+                            Err(why) => Answer::No { why },
+                        };
+                    }
+                    Ask::Report(back) => {
+                        return match tickets.spend(back.chat, connection, &back.ticket, now) {
+                            Ok(()) => Answer::Reported {
+                                to: "steward 3".to_owned(),
+                                kept_for: None,
+                            },
+                            Err(why) => Answer::No { why },
+                        };
+                    }
+                    _ => {}
+                }
                 match ask {
                     Ask::Ticket { chat } => match tickets.mint(chat, connection, now) {
                         Ok(ticket) => Answer::Ticket { ticket },
@@ -4230,6 +4347,38 @@ mod tests {
     }
 
     #[test]
+    fn six_asks_at_once_from_one_chat_are_each_answered_on_a_ticket_of_their_own() {
+        // #1441: a chat that fans out runs six commands in one step. Every one has minted
+        // before any spends, which is the case one live ticket per chat used to refuse.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let (_reading, token) = an_app_at(&path, dir.path());
+        let all_minted = Arc::new(std::sync::Barrier::new(6));
+
+        let asked: Vec<_> = (0..6)
+            .map(|_| {
+                let path = path.clone();
+                let token = token.clone();
+                let all_minted = Arc::clone(&all_minted);
+                std::thread::spawn(move || {
+                    let mut asking = Asking::on(&path, Some(token)).expect("connected");
+                    let ticket = ticket_from(&mut asking);
+                    all_minted.wait();
+                    asking.ask(&an_open(3, &ticket), std::time::Duration::from_secs(5))
+                })
+            })
+            .collect();
+
+        for one in asked {
+            let answered = one.join().expect("it ran").expect("an answer");
+            assert!(
+                matches!(answered, Answer::Opened { chat: 9, .. }),
+                "{answered:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_mint_and_a_spend_on_one_connection_open_a_chat() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
@@ -4250,31 +4399,86 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_same_open_on_a_connection_of_its_own_opens_nothing_and_spends_the_ticket() {
+    /// **The ticket's rule, over the socket, for an ask that spends one** (#1441): it is taken
+    /// only on the connection that minted its ticket, and once; the same ask copied onto a
+    /// connection that minted none is refused and costs the real one nothing; and a wrong
+    /// guess burns the ticket of the connection it was made on, and no other's.
+    ///
+    /// A ticket used to be one a chat, and a copy elsewhere spent it. It is one a connection
+    /// now, so a copy elsewhere has nothing to spend: it can neither use the ticket nor take
+    /// it away from the run of the command that asked for it.
+    fn the_ticket_is_its_connection_s_alone(ask: impl Fn(&str) -> Ask) {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let (_reading, token) = an_app_at(&path, dir.path());
         let within = std::time::Duration::from_secs(2);
-
-        let mut asking = Asking::on(&path, Some(token.clone())).expect("connected");
-        let ticket = ticket_from(&mut asking);
-        let mut elsewhere = Asking::on(&path, Some(token)).expect("connected");
-
+        let on = || Asking::on(&path, Some(token.clone())).expect("connected");
         let refused = Answer::No {
             why: NO_TICKET.to_owned(),
         };
+
+        // A copy, on a connection that minted no ticket: refused.
+        let mut asking = on();
+        let ticket = ticket_from(&mut asking);
+        let mut elsewhere = on();
         assert_eq!(
-            elsewhere
-                .ask(&an_open(3, &ticket), within)
-                .expect("an answer"),
-            refused
-        );
-        assert_eq!(
-            asking.ask(&an_open(3, &ticket), within).expect("an answer"),
+            elsewhere.ask(&ask(&ticket), within).expect("an answer"),
             refused,
-            "the copy spent it"
+            "a copy on another connection was taken"
         );
+        // Even where that connection holds a live ticket of its own for the chat: it spends
+        // its own on the wrong guess, and the copied one is not what it was given.
+        let mut holding = on();
+        let its_own = ticket_from(&mut holding);
+        assert_eq!(
+            holding.ask(&ask(&ticket), within).expect("an answer"),
+            refused,
+            "another connection's ticket was taken"
+        );
+        assert_eq!(
+            holding.ask(&ask(&its_own), within).expect("an answer"),
+            refused,
+            "the wrong guess did not burn that connection's own ticket"
+        );
+        // Neither cost the minting connection anything: its ask is taken there, once.
+        let taken = asking.ask(&ask(&ticket), within).expect("an answer");
+        assert!(!matches!(taken, Answer::No { .. }), "{taken:?}");
+        assert_eq!(
+            asking.ask(&ask(&ticket), within).expect("an answer"),
+            refused,
+            "taken a second time"
+        );
+    }
+
+    #[test]
+    fn an_open_is_taken_only_on_the_connection_that_minted_its_ticket_and_only_once() {
+        the_ticket_is_its_connection_s_alone(|ticket| an_open(3, ticket));
+    }
+
+    #[test]
+    fn a_dispatch_is_taken_only_on_the_connection_that_minted_its_ticket_and_only_once() {
+        the_ticket_is_its_connection_s_alone(|ticket| {
+            Ask::Dispatch(Box::new(DispatchAsk {
+                chat: 3,
+                to: None,
+                name: "check the queue".to_owned(),
+                brief: "# Check the queue\nbody\n".to_owned(),
+                profile: None,
+                ticket: ticket.to_owned(),
+            }))
+        });
+    }
+
+    #[test]
+    fn a_report_is_taken_only_on_the_connection_that_minted_its_ticket_and_only_once() {
+        the_ticket_is_its_connection_s_alone(|ticket| {
+            Ask::Report(Box::new(ReportBack {
+                chat: 3,
+                summary: "Forty are stuck.".to_owned(),
+                ticket: ticket.to_owned(),
+                task: None,
+            }))
+        });
     }
 
     #[test]

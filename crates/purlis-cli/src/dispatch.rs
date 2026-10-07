@@ -182,7 +182,7 @@ pub fn send(
 
     let (mut asking, chat, ticket) = match crate::handoff::ticketed() {
         Ticketed::Yes(asking, chat, ticket) => (asking, chat, ticket),
-        Ticketed::Refused(why) => return Err(app_refused(&ticket_words(&why))),
+        Ticketed::Refused(why) => return Err(app_refused(&why)),
         Ticketed::NoApp => return Err(no_app()),
     };
     let ask = Ask::Dispatch(Box::new(DispatchAsk {
@@ -305,16 +305,6 @@ fn ask_name(ask: &Ask) -> String {
         Ask::Dispatch(dispatch) => dispatch.name.clone(),
         _ => String::new(),
     }
-}
-
-/// The app's refusal of a ticket, in a dispatch's words: the ticket is the handoff's own, and
-/// its one sentence about a ticket still live names a handoff, whatever was being asked for.
-fn ticket_words(why: &str) -> String {
-    why.replacen(
-        "a handoff from chat",
-        "a dispatch or a handoff from chat",
-        1,
-    )
 }
 
 fn app_refused(why: &str) -> String {
@@ -503,23 +493,41 @@ mod tests {
     }
 
     #[test]
-    fn a_ticket_still_live_is_said_in_a_dispatch_s_words() {
-        // The sentence the app's ticket mint says, whichever command asked for the ticket.
-        let tickets = purlis_core::hookwire::Tickets::default();
+    fn a_ticket_the_app_will_not_mint_is_said_in_a_dispatch_s_words() {
+        // A ticket is one run of a command's own (#1441): a chat that dispatches several tasks
+        // in one step mints one for each, up to as many as it may have under way at once. The
+        // refusal past that is the app's sentence, said as a dispatch's and whole. It names no
+        // other command, so there is nothing in it to reword.
+        use purlis_core::hookwire::{MOST_LIVE_TICKETS_A_CHAT, Tickets};
+        let tickets = Tickets::default();
         let now = std::time::Instant::now();
-        tickets.mint(3, 1, now).expect("the first");
-        let why = tickets.mint(3, 2, now).expect_err("one live ticket a chat");
+        for connection in 0..u64::try_from(MOST_LIVE_TICKETS_A_CHAT).expect("a small number") {
+            tickets.mint(3, connection, now).expect("under the cap");
+        }
+        let why = tickets.mint(3, 99, now).expect_err("the cap");
 
-        let said = ticket_words(&why);
+        let said = app_refused(&why);
 
-        assert!(
-            said.contains("a dispatch or a handoff from chat 3"),
-            "{said}"
-        );
-        // Any other refusal is said as the app said it.
         assert_eq!(
-            ticket_words("chat 3 is not one this app has open"),
-            "chat 3 is not one this app has open"
+            said,
+            format!(
+                "{SAYS} chat 3 has {MOST_LIVE_TICKETS_A_CHAT} requests to the app under way at \
+                 once; try again in a few seconds {NOTHING}"
+            )
+        );
+        assert!(!said.contains("handoff"), "{said}");
+        // A second ticket on one connection is refused too, and said the same way.
+        let again = Tickets::default();
+        again.mint(3, 1, now).expect("the first");
+        let why = again
+            .mint(3, 1, now)
+            .expect_err("one live ticket a connection");
+        assert_eq!(
+            app_refused(&why),
+            format!(
+                "{SAYS} this connection already holds a ticket for chat 3; spend it first \
+                 {NOTHING}"
+            )
         );
     }
 }

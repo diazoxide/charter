@@ -6791,6 +6791,79 @@ mod tests {
     }
 
     #[test]
+    fn six_dispatches_at_once_from_one_chat_start_six_chats() {
+        // #1441: fan-out. Six runs of the command, each on its own connection, all holding a
+        // ticket before any is spent.
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let tickets = Tickets::default();
+        let before = held.chats().open_now().len();
+        let minted: Vec<(u64, String)> = (1..=6)
+            .map(|connection| {
+                let said = answer(
+                    &held,
+                    &id,
+                    &tickets,
+                    connection,
+                    Ask::Ticket { chat: asking },
+                    &nobody,
+                );
+                match said {
+                    Answer::Ticket { ticket } => (connection, ticket),
+                    other => panic!("a ticket on connection {connection}, not {other:?}"),
+                }
+            })
+            .collect();
+
+        let mut started = Vec::new();
+        for (connection, ticket) in &minted {
+            let name = format!("task {connection}");
+            let said = answer(
+                &held,
+                &id,
+                &tickets,
+                *connection,
+                a_dispatch(asking, ticket, None, &name),
+                &nobody,
+            );
+            match said {
+                Answer::Dispatched {
+                    chat, name: as_, ..
+                } => {
+                    assert_eq!(as_, name);
+                    started.push(chat);
+                }
+                other => panic!("{name}: dispatched, not {other:?}"),
+            }
+        }
+
+        started.sort_unstable();
+        started.dedup();
+        assert_eq!(started.len(), 6, "six chats, each its own");
+        assert_eq!(held.chats().open_now().len(), before + 6);
+        assert_eq!(held.chats().lineage(asking, None, &|_| true).running, 6);
+        // And a ticket spends once: the same line again starts nothing.
+        let (connection, ticket) = &minted[0];
+        let again = answer(
+            &held,
+            &id,
+            &tickets,
+            *connection,
+            a_dispatch(asking, ticket, None, "again"),
+            &nothing_opens,
+        );
+        assert_eq!(
+            again,
+            Answer::No {
+                why: NO_TICKET.to_owned()
+            }
+        );
+    }
+
+    #[test]
     fn a_ticket_is_minted_only_for_a_chat_this_app_has_open() {
         let plane = Plane::new();
         let planes = planes();
