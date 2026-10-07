@@ -518,24 +518,26 @@ pub fn starts_sandboxed(root: &Path) -> bool {
         .is_some()
 }
 
-/// The issue that decides how a sandboxed chat commits in a worktree, as purlis names it to a
-/// chat and in its docs.
-pub const COMMITS_ISSUE: &str = "purlis issue 1055";
+/// The command a sandboxed chat commits with in a worktree, where its own `git commit` is
+/// refused (#1055): the app commits for it.
+pub const COMMITS_WITH: &str = "purlis worktree commit";
 
 /// What the persona chat is told under its stamp: where it works and that nothing merges.
 ///
-/// **Where it starts `sandboxed` it is told what it cannot do** (#1453 review, M3): a
+/// **Where it starts `sandboxed` it is told how it commits** (#1453 review, M3; #1055): a
 /// worktree's git data is in its repo's `.git`, outside the folder a sandboxed chat may write,
-/// so it edits and cannot commit. Telling it to commit would send it into a refusal it cannot
-/// act on.
+/// so its own `git commit` is refused and the app commits for it. Telling it only to commit
+/// would send it into a refusal it cannot act on.
 pub fn told_the_chat(repo: &str, piece: &str, sandboxed: bool) -> String {
     if sandboxed {
         return format!(
             "you work in a worktree of {repo} that purlis cut for this task, on the branch \
-             `{piece}`, which is yours alone. You can edit in this folder. You cannot commit \
-             there yet: this chat is sandboxed, and a worktree's git data is outside the \
-             folder it may write ({COMMITS_ISSUE}). Leave your changes in the folder and list \
-             the files you changed in your report. Nothing is merged for you"
+             `{piece}`, which is yours alone. This chat is sandboxed, and a worktree's git \
+             data is outside the folder it may write, so `git add` and `git commit` are \
+             refused here: commit your work with `{COMMITS_WITH} -m \"<message>\" --all` (or \
+             paths in place of `--all`; a new file must be named). It only commits. Nothing \
+             is merged for you: your report names the branch, and merging it is the asking \
+             chat's or the person's decision"
         );
     }
     format!(
@@ -575,9 +577,9 @@ pub fn said_to_the_asker(ground: &Ground, cut: Option<&Cut>, sandboxed: bool) ->
             };
             let leaves = if sandboxed {
                 format!(
-                    "It is sandboxed, so it can edit there and cannot commit yet \
-                     ({COMMITS_ISSUE}): its changes stay uncommitted in that folder, and its \
-                     report should list them. Nothing is merged for it"
+                    "It is sandboxed, so it commits there with `{COMMITS_WITH}`, which the \
+                     app runs for it. Nothing is merged for it: its report names the branch, \
+                     and merging is yours or the person's decision"
                 )
             } else {
                 "Nothing is merged for it: its report names the branch, and merging is yours \

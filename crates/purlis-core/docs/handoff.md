@@ -356,12 +356,12 @@ in that folder, as for any chat of that persona started in a worktree: it gains 
 the asking chat's tree.
 
 **What it can leave on that branch depends on the sandbox.** In a project with no sandbox,
-a worktree task commits on its branch. **Where the new chat is sandboxed it cannot commit
-there yet**: a worktree's git data is kept in its repo's `.git`, outside the one folder a
-sandboxed chat may write (purlis issue 1055). It can edit every file in its folder. Its
-changes stay there, uncommitted, and its report should list them; you or the asking chat
-commit them from outside the sandbox. purlis tells the new chat and the asking chat which of
-the two it is as the task starts.
+a worktree task commits on its branch. **Where the new chat is sandboxed it commits with
+`purlis worktree commit`**: a worktree's git data is kept in its repo's `.git`, outside the
+one folder a sandboxed chat may write, so its own `git add` and `git commit` are refused,
+and the app stages and commits for it on the task's branch (see `purlis docs show
+workspaces`). It only commits, and the repo's own hooks are not run. purlis tells the new
+chat and the asking chat which of the two it is as the task starts.
 
 The worktree is listed on its dispatch's row in the Dispatches tab, as the task's own branch
 (the window says *branch* and its *folder*, as it does everywhere), with how it stands:

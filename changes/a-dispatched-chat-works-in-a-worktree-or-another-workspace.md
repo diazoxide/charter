@@ -9,10 +9,11 @@
   the same word as `in`.
 - **A worktree task's report names its branch**, from purlis's own record of what it cut.
   Nothing is ever merged for a task: merging is the asking chat's decision or yours.
-- **In a sandboxed project a worktree task can edit and cannot commit yet.** A worktree's git
-  data is outside the folder a sandboxed chat may write (purlis issue 1055). Its changes stay
-  uncommitted in its folder and its report should list them. purlis tells the new chat and the
-  asking chat so as the task starts. With no sandbox the task commits on its branch.
+- **In a sandboxed project a worktree task commits with `purlis worktree commit`.** A
+  worktree's git data is outside the folder a sandboxed chat may write, so its own `git
+  commit` is refused there and the app commits for it on the task's branch. purlis tells the
+  new chat and the asking chat so as the task starts. With no sandbox the task commits on its
+  branch with git.
 - **A task's own branch is listed on its row in the Dispatches tab**, with **Discard**.
   Discard removes the branch's folder: it asks first and names every uncommitted file and
   every ignored path of the task's that would go, and is refused while a chat is still open in

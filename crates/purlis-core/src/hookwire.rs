@@ -750,6 +750,10 @@ pub enum Ask {
     /// #1335). The app answers [`Answer::Said`], or [`Answer::No`] with the refusal. Boxed for
     /// `Open`'s reason.
     Git(Box<GitAsk>),
+    /// Commit in the branch folder this chat stands in: a brokered git action (ADR 0067 §2,
+    /// #1055). The app answers [`Answer::Said`], or [`Answer::No`] with the refusal. Boxed: it
+    /// carries the whole message.
+    Commit(Box<CommitAsk>),
     /// List the project's vaults for this chat (#1430): `purlis vault list` from a sandboxed
     /// chat, whose sandbox denies it every provider's own files. The app answers
     /// [`Answer::Vaults`] from the registry alone: names, tags, and whether the persona it
@@ -869,6 +873,37 @@ pub struct GitAsk {
     /// The workspace, as the command resolved it.
     pub workspace: String,
     pub work: GitWork,
+}
+
+/// A commit a sandboxed chat asks the app to make in the branch folder it stands in, as
+/// `purlis worktree commit` hands it over: **a brokered git action** (ADR 0067 §2, #1055). A
+/// linked worktree keeps its index, its HEAD and its objects in its clone's `.git`, which the
+/// chat may not write; the app stages and commits ([`crate::gitbroker::commit`]).
+///
+/// **It names the message and what to stage, and nothing else, and that is the guard**: no
+/// repository, folder, branch, git directory, author, date or option. The folder is where the
+/// app recorded the chat whose token the line carries as standing, and the branch is the one
+/// that folder is on. A line that carries any other field is not read. No ticket, for a
+/// record's reason: the commit is the chat's own work on its own branch.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitAsk {
+    /// The chat that asks, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The commit message, as written.
+    pub message: String,
+    /// What to stage for it.
+    pub stage: Stage,
+}
+
+/// What a [`CommitAsk`] stages before it commits.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    /// Every change to a file git already tracks in the folder (`git add -u`).
+    Tracked,
+    /// These paths, each relative to where the chat stands and inside its folder.
+    Paths(Vec<String>),
 }
 
 /// What a [`GitAsk`] asks for: one of the two commands, with its arguments.
@@ -1290,6 +1325,7 @@ impl Line {
             Self::Ask(Ask::SessionRecord(record)) => record.chat,
             Self::Ask(Ask::Write(write)) => write.chat,
             Self::Ask(Ask::Git(git)) => git.chat,
+            Self::Ask(Ask::Commit(commit)) => commit.chat,
             Self::Ask(Ask::Vaults { chat }) => *chat,
             Self::Ask(Ask::WhereWorking(asks)) => asks.chat,
             Self::Ask(Ask::Dispatch(dispatch)) => dispatch.chat,
@@ -2902,6 +2938,70 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_ask_names_the_message_and_what_to_stage_and_nothing_else() {
+        // #1055: the whole ask. Where it commits, and on which branch, is the app's record.
+        let ask = Ask::Commit(Box::new(CommitAsk {
+            chat: 7,
+            message: "one\n\ntwo".to_owned(),
+            stage: Stage::Paths(vec!["src/a.rs".to_owned(), "-n".to_owned()]),
+        }));
+        let line = line_with(None, &ask).expect("a line");
+        let text = std::str::from_utf8(&line).expect("text");
+        assert_eq!(
+            text,
+            "{\"commit\":{\"chat\":7,\"message\":\"one\\n\\ntwo\",\
+             \"stage\":{\"paths\":[\"src/a.rs\",\"-n\"]}}}\n"
+        );
+        let (read, _) = read_line(text).expect("it reads");
+        assert_eq!(read.chat(), 7);
+        let Line::Ask(back) = read else {
+            panic!("the ask read as another kind of line");
+        };
+        assert_eq!(back, ask);
+        let tracked = "{\"commit\":{\"chat\":7,\"message\":\"m\",\"stage\":\"tracked\"}}";
+        let (read, _) = read_line(tracked).expect("it reads");
+        assert!(matches!(
+            read,
+            Line::Ask(Ask::Commit(commit)) if commit.stage == Stage::Tracked
+        ));
+        // A line that names anything else is not a commit ask: no folder, repository, branch,
+        // git directory, author, date, or option such as amend.
+        for extra in [
+            "cwd",
+            "folder",
+            "repo",
+            "workspace",
+            "branch",
+            "git_dir",
+            "author",
+            "date",
+            "amend",
+            "options",
+        ] {
+            let line = format!(
+                "{{\"commit\":{{\"chat\":7,\"message\":\"m\",\"stage\":\"tracked\",\"{extra}\":\"x\"}}}}"
+            );
+            assert!(
+                !matches!(read_line(&line), Some((Line::Ask(Ask::Commit(_)), _))),
+                "{extra} was read"
+            );
+        }
+        // And no other word for what to stage.
+        for stage in [
+            "\"all\"",
+            "{\"amend\":true}",
+            "{\"reset\":[]}",
+            "{\"push\":[]}",
+        ] {
+            let line = format!("{{\"commit\":{{\"chat\":7,\"message\":\"m\",\"stage\":{stage}}}}}");
+            assert!(
+                !matches!(read_line(&line), Some((Line::Ask(Ask::Commit(_)), _))),
+                "{stage} was read"
+            );
+        }
+    }
+
+    #[test]
     fn asking_where_a_chat_works_names_only_the_chat_its_token_must_be() {
         // #1450: the whole ask is the chat's number and why it asks.
         let ask = Ask::WhereWorking(WhereWorking {
@@ -4481,6 +4581,7 @@ mod tests {
                     | Ask::SessionRecord(_)
                     | Ask::Write(_)
                     | Ask::Git(_)
+                    | Ask::Commit(_)
                     | Ask::Vaults { .. }
                     | Ask::WhereWorking(_)
                     | Ask::Dispatch(_)

@@ -1553,4 +1553,14 @@ fn only_the_exact_mark_the_app_sets_reads_as_a_sandboxed_chat() {
     ] {
         assert!(SANDBOXED_NOTE.contains(said), "{said}");
     }
+    // #1055: what a chat in a branch folder is told names the command, and what it never does.
+    for said in [
+        "`git add` and `git commit`",
+        "purlis worktree commit -m",
+        "--all",
+        "no amend, reset, rebase, merge or push",
+        "hooks are not run",
+    ] {
+        assert!(BRANCH_FOLDER_COMMIT_NOTE.contains(said), "{said}");
+    }
 }

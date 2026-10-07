@@ -168,6 +168,14 @@ impl Provenance {
         Self::of(plane, &chat)
     }
 
+    /// Chat `number` of the project at `plane`, for a commit **the app makes for it** (#1055):
+    /// the app took the ask from a process inside that chat, on the chat's own token
+    /// (`hookwire::ChatTokens::admission`), which is the gate [`Self::in_chat`]'s walk is for a
+    /// commit the chat makes itself. Nothing else may read a chat's provenance by number.
+    pub fn of_the_chat_the_app_commits_for(plane: &Path, number: u32) -> Option<Self> {
+        Self::of(plane, &chat_numbered(plane, number)?)
+    }
+
     /// The trailer lines, `Key: value`, in V67's order, each once.
     pub fn trailers(&self, form: Form) -> Vec<String> {
         let Some(harness) = known(&self.harness) else {
@@ -335,6 +343,17 @@ fn form_at(plane: &Path, top: &Path) -> Form {
     } else {
         Form::Full
     }
+}
+
+/// The trailers of a commit the app makes for chat `number` in the work tree at `top`
+/// (#1055, ADR 0074): what [`stamp`] would have added had the chat's own git made it. Empty
+/// where the record holds no such chat on a harness.
+pub fn trailers_for(plane: &Path, top: &Path, number: u32) -> Vec<String> {
+    let Some(mut provenance) = Provenance::of_the_chat_the_app_commits_for(plane, number) else {
+        return Vec::new();
+    };
+    provenance.change = change_of(plane, top);
+    provenance.trailers(form_at(plane, top))
 }
 
 /// `commit-msg`'s work in a chat: stamp the message file git hands the hook with the

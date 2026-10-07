@@ -26,6 +26,24 @@ pub enum WorktreeCommand {
         #[arg(short = 'w', long = "workspace")]
         workspace: Option<String>,
     },
+    /// Commit in the branch folder you are standing in, from a sandboxed chat: the app that
+    /// started the chat stages what you name and commits it on that folder's branch. It only
+    /// commits: it never amends, resets, rebases, merges or pushes, and the repository's own
+    /// hooks are not run. A chat that is not sandboxed uses `git commit`.
+    Commit {
+        /// The commit message.
+        #[arg(short = 'm', long = "message", value_name = "MESSAGE")]
+        message: Option<String>,
+        /// Stage every change to a file git already tracks. A new file must be named.
+        #[arg(short = 'a', long = "all")]
+        all: bool,
+        /// Never done. Taken only so that it is refused in a sentence.
+        #[arg(long, hide = true)]
+        amend: bool,
+        /// Paths to stage, relative to where you stand, inside this folder.
+        #[arg(value_name = "PATH")]
+        paths: Vec<String>,
+    },
     /// Declare the piece you are standing in finished. Run from inside it.
     Done,
     /// Declare the piece you are standing in given up, and why. Run from inside it.
@@ -117,6 +135,12 @@ pub fn run(here: &Here, command: WorktreeCommand) -> Result<u8, String> {
                 ),
             }
         }
+        WorktreeCommand::Commit {
+            message,
+            all,
+            amend,
+            paths,
+        } => crate::gitask::commit(message, all, amend, paths, &mut say),
         WorktreeCommand::Done => {
             piececmd::declare(&root, &here.cwd, Declaration::Done, &who, now, &mut say)
         }

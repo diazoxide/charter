@@ -210,6 +210,10 @@ pub fn answer(
         // only the chat whose token it carries, and what it asks is checked against the app's
         // record of that chat.
         Ask::Git(git) => crate::gitbroker::answer(held, &git),
+        // A commit in the branch folder the asking chat stands in (#1055): no ticket, for the
+        // record's reason. The line names a message and paths; the folder and the branch are
+        // this app's record of the chat whose token it carries.
+        Ask::Commit(commit) => crate::gitbroker::commit(held, &commit),
         // `purlis vault list` from a sandboxed chat (#1430): no ticket, because it changes
         // nothing, and whose vaults it lists is the app's record of the chat the token is for.
         Ask::Vaults { chat } => crate::vaults::list_for_chat(held, chat),
@@ -5008,6 +5012,7 @@ mod tests {
                 Ask::WhereWorking(_) => 7,
                 Ask::Dispatch(_) => 8,
                 Ask::Task(_) => 9,
+                Ask::Commit(_) => 10,
             }
         }
         let asks = vec![
@@ -5049,10 +5054,16 @@ mod tests {
                 chat,
                 what: purlis_core::dispatched::What::Cancel { of: chat },
             })),
+            // A commit in the chat's own branch folder (#1055): it names a message and paths.
+            Ask::Commit(Box::new(purlis_core::hookwire::CommitAsk {
+                chat,
+                message: "stop this chat".to_owned(),
+                stage: purlis_core::hookwire::Stage::Tracked,
+            })),
         ];
         let mut kinds: Vec<usize> = asks.iter().map(kind).collect();
         kinds.dedup();
-        assert_eq!(kinds, (0..=9).collect::<Vec<_>>(), "one of every kind");
+        assert_eq!(kinds, (0..=10).collect::<Vec<_>>(), "one of every kind");
         asks
     }
 
