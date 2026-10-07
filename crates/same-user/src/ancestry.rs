@@ -621,6 +621,21 @@ mod tests {
         assert_eq!(Parents::of(child.id()), Some(me), "the child's parent");
         assert_eq!(Parents::chain(child.id()).first(), Some(&me));
         let theirs = Parents::started(child.id()).expect("the child's start");
+        assert_eq!(
+            Parents::started(child.id()).as_deref(),
+            Some(theirs.as_str()),
+            "the child's start is read the same every time"
+        );
+        // Linux counts clock ticks since boot, which no wall clock here can be held against:
+        // the child's is a count, and no earlier than this process's own.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let ticks = |started: &str| started.parse::<u64>().expect("clock ticks since boot");
+            assert!(
+                ticks(&mine) <= ticks(&theirs),
+                "the child started at {theirs}, before this process did at {mine}"
+            );
+        }
         // Exact, and inside this test's run: after this process began, and between the two
         // readings of the clock around the spawn.
         #[cfg(target_os = "macos")]
