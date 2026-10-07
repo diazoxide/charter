@@ -4,8 +4,9 @@
   no dispatch grant covers the pair, the task is held: `purlis dispatch` says `held for the
   person` and exits 0, the Notice on the asking chat's tab shows the brief, and **Allow**
   starts exactly that task on the brief you read. **Keep blocked** starts nothing. Either way
-  the asking chat is told on its next turn. A second dispatch across the same pair while you
-  are being asked is not queued beside the first. The Notice says that a grant covers the
+  the asking chat is told on its next turn, and a chat that was started again before you
+  answered is told the task was not started. A second dispatch across the same pair while
+  you are being asked is refused, not queued beside the first. The Notice says that a grant covers the
   helper sub-agents those chats run too (#1437).
 - **Dispatch runs under the limits you set.** The limits in force for a dispatch are the
   project's, for the asking chat's workspace and persona, lowered by your own and capped by an
@@ -43,5 +44,15 @@
   and only from inside the sandbox. A grant made for one chat never counts for it, nothing of
   its ask is held, and no Notice is raised (#1446).
 - **The persona chat takes its folder from the asking chat, and nothing else.** Not the hosts
-  or folders you allowed that chat alone, not its start without the sandbox, not the grants it
-  holds, and not a profile whose own command switches the prompts off.
+  or folders you allowed that chat alone, not its start without the sandbox, and not the
+  grants it holds.
+- **No chat is started for another chat on a profile that asks nobody.** A dispatch or a
+  handoff whose profile's own command switches the harness's permission prompts off is
+  refused, whoever named the profile: the dispatch, the persona's definition, or the asking
+  chat's own. Codex's `-a never`, `--ask-for-approval never` and `--full-auto` are recognised
+  beside the flags already known.
+- **What purlis tells a chat about its held dispatch names a task by a task's rule.** A file
+  in the store those lines wait in whose task name could end purlis's own heading is dropped
+  when it is read.
+- **A dispatched chat that lost its conversation keeps its place.** Started again in its own
+  place, it still owes its report, at its depth, in its lineage.

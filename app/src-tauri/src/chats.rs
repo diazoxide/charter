@@ -330,8 +330,9 @@ pub struct Chats {
     /// This device's id, the origin device of every chat minted here; `None` where the machine
     /// store has none to give (ADR 0031), which a chat records as `unknown`.
     device: Option<String>,
-    /// The ids of the chats closed this launch, by number, for a start in one's place.
-    let_go: Mutex<HashMap<u32, purlis_core::reopen::Identity>>,
+    /// What each chat closed this launch was, by number, for a start in one's place: its ids,
+    /// and where it stood in a lineage.
+    let_go: Mutex<HashMap<u32, LetGo>>,
     /// Told when a chat that was announced turned out not to start.
     #[allow(clippy::type_complexity)]
     never_started: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
@@ -575,6 +576,27 @@ type Decided = (
     Option<(purlis_core::sandbox::Applied, String)>,
     Option<purlis_core::sandbox::Lifted>,
 );
+
+/// What a chat that was closed was, kept for a start in its place
+/// ([`Chats::start_ready_instead_of`]).
+#[derive(Debug, Clone)]
+struct LetGo {
+    identity: purlis_core::reopen::Identity,
+    /// The chat that dispatched it, and where it stood in its lineage.
+    from: Option<purlis_core::reopen::HandedFrom>,
+    /// The task it was named for.
+    label: Option<String>,
+}
+
+impl LetGo {
+    fn of(chat: &Chat) -> Self {
+        Self {
+            identity: chat.identity.clone(),
+            from: chat.from.clone(),
+            label: chat.label.clone(),
+        }
+    }
+}
 
 impl Chats {
     /// Chats whose record is written by `record_it` every time what is open changes, in no
@@ -907,16 +929,26 @@ impl Chats {
         // id (#856 review F3). Its program is the close's to end.
         let taken = lock(&self.open).remove(&instead_of);
         if let Some(taken) = &taken {
-            lock(&self.let_go).insert(instead_of, taken.chat.identity.clone());
+            lock(&self.let_go).insert(instead_of, LetGo::of(&taken.chat));
         }
         let was = taken
-            .map(|one| one.chat.identity)
+            .map(|one| LetGo::of(&one.chat))
             .or_else(|| lock(&self.let_go).get(&instead_of).cloned());
-        let Some(was) = was.filter(|was| was.id.is_some()) else {
+        let Some(was) = was.filter(|was| was.identity.id.is_some()) else {
             return self.start_ready(chat, ready, size);
         };
         let again = Chat {
-            identity: purlis_core::reopen::Identity { run: None, ..was },
+            identity: purlis_core::reopen::Identity {
+                run: None,
+                ..was.identity
+            },
+            // **It is the same chat, so it stands where it stood** (#1436): the chat that
+            // dispatched it, what it owes that chat, how deep it is and which lineage it is
+            // in, and the task it is called by. Without them a dispatched chat that lost its
+            // conversation would come back as one the person started: at depth 0, in a lineage
+            // of its own, owing nobody a report.
+            from: was.from.or_else(|| chat.from.clone()),
+            label: was.label.or_else(|| chat.label.clone()),
             ..chat.clone()
         };
         self.start_ready_as(&again, ready, size, Why::Again)
@@ -1808,7 +1840,7 @@ impl Chats {
             if let_go.len() >= LET_GO_HELD {
                 let_go.clear();
             }
-            let_go.insert(session, gone.chat.identity);
+            let_go.insert(session, LetGo::of(&gone.chat));
         }
         let mut front = lock(&self.front);
         if *front == Some(session) {
@@ -6254,6 +6286,60 @@ pub(crate) mod tests {
         let last = lock(&begun).last().cloned().unwrap();
         assert_eq!((last.0, last.3), (again, Began::Fresh));
         let _ = chats.close(again);
+    }
+
+    #[test]
+    fn a_dispatched_chat_started_again_in_its_own_place_keeps_its_lineage_and_its_task() {
+        // A task chat whose conversation could not be brought back is started fresh in its
+        // place by the window, which knows neither who dispatched it nor what it is called.
+        // It is the same chat: it still owes its report, at its depth, in its lineage.
+        let chats = Chats::new();
+        let root = "01J9ZQ3V5N8X4T2K7M6P0R1S2A";
+        let lineage = purlis_core::reopen::HandedFrom {
+            chat: 1,
+            name: "steward 1".to_owned(),
+            workspace: purlis_core::active::Place::Workspace("ide".to_owned()),
+            report: purlis_core::reopen::Owed::Due,
+            mode: purlis_core::reopen::Mode::Task,
+            depth: 2,
+            root: Some(root.to_owned()),
+        };
+        let task = Chat {
+            from: Some(lineage.clone()),
+            label: Some("check the queue".to_owned()),
+            ..chat("/bin/sh", "ide.7", None)
+        };
+        let first = chats.start(&task, SIZE).unwrap();
+        // Closed first, or not: either way the start in its place is that chat.
+        for close_first in [true, false] {
+            let old = if close_first {
+                chats.close(first).unwrap();
+                first
+            } else {
+                chats.start(&task, SIZE).unwrap()
+            };
+            let again = chats
+                .start_ready_instead_of(
+                    old,
+                    &chat("/bin/sh", "ide.7", None),
+                    &a_shell_ready(),
+                    SIZE,
+                )
+                .unwrap();
+            assert_eq!(
+                chats.handed_from(again),
+                Some(lineage.clone()),
+                "{close_first}"
+            );
+            assert_eq!(
+                chats
+                    .recorded_chat(again)
+                    .and_then(|chat| chat.label)
+                    .as_deref(),
+                Some("check the queue")
+            );
+            let _ = chats.close(again);
+        }
     }
 
     #[test]

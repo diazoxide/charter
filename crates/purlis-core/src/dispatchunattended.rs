@@ -228,38 +228,91 @@ pub fn answer_of(
 
 /// The words of a harness's command line that start it with its permission prompts off, as a
 /// profile's command would carry them: Claude Code's and Codex's.
-const BYPASS_FLAGS: [&str; 3] = [
+const BYPASS_FLAGS: [&str; 4] = [
     "--dangerously-skip-permissions",
     "--dangerously-bypass-approvals-and-sandbox",
     "--yolo",
+    // Codex's low-friction mode: it runs what its own sandbox allows without asking first.
+    "--full-auto",
 ];
 
-/// The flag that names a permission mode, and the value of it that switches the prompts off.
-const MODE_FLAG: &str = "--permission-mode";
+/// The flags that name how a harness asks, and the value of each that means "ask nobody":
+/// Claude Code's permission mode, and Codex's approval policy by both its spellings.
+const MODE_FLAGS: [(&str, &str); 3] = [
+    ("--permission-mode", crate::floorguard::UNATTENDED_MODE),
+    ("--ask-for-approval", "never"),
+    ("-a", "never"),
+];
 
 /// **The word of `command` that starts a harness with its permission prompts off**, if one
 /// does. `command` is a profile's own, as this machine declares it.
 ///
-/// A recognition of the flags purlis has measured, never a reading of what a wrapper script
-/// does with its words: a profile whose command is a script that adds one is not seen. What
-/// that costs is bounded by whose file it is. A profile is declared on this machine and
-/// approved by the person before it runs, and no chat's request names one.
+/// A recognition of the flags purlis knows, never a reading of what a wrapper script does with
+/// its words: a profile whose command is a script that adds one is not seen, and neither is a
+/// harness setting kept in a file. A profile is declared on this machine and approved by the
+/// person before it runs. **A chat's dispatch may name one of them** (`--profile`), and a
+/// persona's definition may, so this is asked of whichever profile a dispatch would start on,
+/// whoever named it ([`bypass_refusal`]).
 pub fn bypass_in(command: &[String]) -> Option<&str> {
     command.iter().enumerate().find_map(|(at, word)| {
-        let mode = word
-            .strip_prefix(MODE_FLAG)
-            .and_then(|rest| rest.strip_prefix('='))
-            .or_else(|| {
-                (word == MODE_FLAG)
-                    .then(|| command.get(at + 1).map(String::as_str))
-                    .flatten()
-            });
-        (BYPASS_FLAGS.contains(&word.as_str()) || mode == Some(crate::floorguard::UNATTENDED_MODE))
-            .then_some(word.as_str())
+        let off = MODE_FLAGS.iter().any(|(flag, never)| {
+            let value = word
+                .strip_prefix(flag)
+                .and_then(|rest| rest.strip_prefix('='))
+                .or_else(|| {
+                    (word == flag)
+                        .then(|| command.get(at + 1).map(String::as_str))
+                        .flatten()
+                });
+            value == Some(*never)
+        });
+        (BYPASS_FLAGS.contains(&word.as_str()) || off).then_some(word.as_str())
     })
 }
 
-/// The profile a persona chat would take from the chat that dispatched it.
+/// Who named the profile a dispatch would start its chat on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedBy<'a> {
+    /// The asking chat, in its dispatch (`--profile`).
+    TheDispatch,
+    /// This persona's own definition.
+    ThePersona(&'a str),
+    /// Nobody: it is the profile the asking chat itself runs on.
+    TheAskingChat,
+}
+
+/// **Why no chat is started for another chat on `profile`**, where its own `command` switches
+/// the harness's permission prompts off, and `None` where it does not.
+///
+/// **Whoever named it.** A chat one chat starts for another never runs asking nobody: not on
+/// the asking chat's own profile, not on one its dispatch names, and not on one the persona's
+/// definition names, which a chat can write. A handoff is held to it as a task is.
+pub fn bypass_refusal(profile: &str, command: &[String], by: NamedBy<'_>) -> Option<String> {
+    let flag = crate::shown::short(bypass_in(command)?);
+    let profile = crate::shown::short(profile);
+    Some(match by {
+        NamedBy::TheAskingChat => format!(
+            "profile '{profile}' starts its harness with the permission prompts off ({flag}), \
+             and a persona chat never takes that from the chat that dispatched it. Dispatch \
+             from a chat on a profile that asks."
+        ),
+        NamedBy::TheDispatch => format!(
+            "the dispatch names profile '{profile}', which starts its harness with the \
+             permission prompts off ({flag}), and purlis starts no chat for another chat on \
+             such a profile. Name a profile that asks, or none."
+        ),
+        NamedBy::ThePersona(persona) => format!(
+            "persona '{}' names profile '{profile}', which starts its harness with the \
+             permission prompts off ({flag}), and purlis starts no chat for another chat on \
+             such a profile. Give the persona a profile that asks, from its view, or name one \
+             with --profile.",
+            crate::shown::short(persona)
+        ),
+    })
+}
+
+/// The profile a persona chat starts on, by its name and its command as this machine declares
+/// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Inherited<'a> {
     /// The profile's name.
@@ -274,24 +327,19 @@ pub struct Inherited<'a> {
 /// Whatever `start` held of the asking chat's own is dropped here, whoever built it: the new
 /// chat runs as `target`, holds `target`'s own grants
 /// ([`crate::dispatchgrant::grants_for_a_dispatched_chat`]), and has no grant of one chat, no
-/// opt-out and no conversation or session record to resume. `inherited` is the profile it
-/// takes from the asking chat (`None` where the profile is not the asking chat's): where that
-/// profile's own command switches the prompts off, the chat is not started on it.
+/// opt-out and no conversation or session record to resume. `on` is the profile it starts on:
+/// where that profile's own command switches the prompts off, the chat is not started on it
+/// ([`bypass_refusal`], in the words for a profile taken from the asking chat; a caller that
+/// knows who named it asks [`bypass_refusal`] first and says so in those words).
 pub fn start_of_a_persona_chat(
     start: Start,
     target: &str,
-    inherited: Option<Inherited<'_>>,
+    on: Option<Inherited<'_>>,
 ) -> Result<Start, String> {
-    if let Some(Inherited { profile, command }) = inherited
-        && let Some(flag) = bypass_in(command)
+    if let Some(Inherited { profile, command }) = on
+        && let Some(refused) = bypass_refusal(profile, command, NamedBy::TheAskingChat)
     {
-        return Err(format!(
-            "profile '{}' starts its harness with the permission prompts off ({}), and a \
-             persona chat never takes that from the chat that dispatched it. Dispatch from a \
-             chat on a profile that asks.",
-            crate::shown::short(profile),
-            crate::shown::short(flag)
-        ));
+        return Err(refused);
     }
     let with = dispatchgrant::grants_for_a_dispatched_chat(target);
     Ok(Start {

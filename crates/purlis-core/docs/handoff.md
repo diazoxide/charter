@@ -190,15 +190,19 @@ BRIEF
 ```
 
 - **The new chat runs as the persona `--to` names, or as this chat's own.** Its own needs no
-  grant. Another persona needs a **dispatch grant**, which only you give.
+  grant. Another persona needs a **dispatch grant**, which only you give where the project's
+  chats are sandboxed: a chat that runs without the sandbox runs as you, and can write the
+  files a grant is kept in.
 - **Where there is no grant, you are asked once, and the task waits for your answer.** Nothing
   starts. A Notice on the asking chat's tab says who wants to dispatch to whom and shows the
   brief, and the command says `held for the person` and exits 0: the dispatch is accepted and
   waiting, not refused. **Allow** starts it then, on the brief you read, and it is judged
   against the limits again at that moment. **Keep blocked** starts nothing and makes no grant.
-  Either way the asking chat is told on its next turn, the way it is told a report. A second
-  dispatch across the same pair while you are being asked is not queued beside the first: the
-  chat is told which task is waiting and to dispatch again once you have answered. A chat
+  Either way the asking chat is told on its next turn, the way it is told a report; and if
+  that chat was started again before you answered, the question went with its old run, so it
+  is told that the task was not started and to dispatch it again. A second
+  dispatch across the same pair while you are being asked is refused, not queued beside the
+  first: the chat is told which task is waiting and to dispatch again once you have answered. A chat
   nobody is at is never asked for; see *A dispatch from an unattended chat*, below.
 - **It is a chat of its own**, in the app, in this chat's folder. You can see it, open it, type
   in it and stop it. It is listed in the Chats section under the chat that asked for it, by
@@ -208,8 +212,14 @@ BRIEF
   the project offers on this machine and has approved: any other name is refused, and nothing
   is started in its place. Where the persona's own profile is not offered on this machine, the
   chat starts on this chat's profile, and the command and the new chat's first message say so.
-  A profile taken from the asking chat is never one whose own command switches the harness's
-  permission prompts off.
+  **No chat is started for another chat on a profile whose own command switches the harness's
+  permission prompts off**, whoever named it: the dispatch, the persona's definition, or
+  nobody, where it is the asking chat's own. A handoff is held to the same rule. purlis
+  recognises the flags it knows in the command as this machine declares it
+  (`--dangerously-skip-permissions`, `--permission-mode bypassPermissions`, Codex's
+  `--dangerously-bypass-approvals-and-sandbox`, `--yolo`, `--full-auto` and `-a never` or
+  `--ask-for-approval never`); a wrapper script that adds one, or a harness setting kept in a
+  file, is not seen.
 - **It starts with its own persona's hosts and vault**, from its first command, with nothing
   to allow on its tab: the grant was your consent to the pair.
 - **Its sandbox is the project's, for its own persona.** What you allowed the asking chat
@@ -562,7 +572,10 @@ dispatch from such a chat is never one that asks.
   routes a grant alone leaves open: a chat granting itself, and a chat arranging how the chat
   it starts will run. A dispatch to its own persona still starts. Whether a chat is sandboxed
   is purlis's own record of how it started the chat, never something the chat says.
-- **Once unattended, unattended until it starts again.** purlis keeps what a chat's harness
+- **Once unattended, unattended until it starts again.** purlis reads it from what a chat's
+  harness reports, and also from the command the chat was started with and the command its
+  profile declares on this machine, so a chat started with its prompts off is unattended
+  before its harness has said anything. purlis keeps what a chat's harness
   reported, and a chat that reported its prompts off is treated so for the rest of its life,
   whatever a later report says. The report is the harness's, sent from beside the chat's own
   commands, so a chat that hid it from its first report on would be treated as one a person
