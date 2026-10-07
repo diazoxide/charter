@@ -801,14 +801,24 @@ pub struct SandboxGrant {
 fn committed_by(root: &std::path::Path, host: &str) -> Option<(String, u64)> {
     let manifest = purlis_core::names::manifest(root);
     let file = manifest.file_name()?.to_str()?.to_owned();
-    let mut git = std::process::Command::new("git");
-    git.arg("-C")
-        .arg(root)
-        .args(["log", "-1", "--format=%an%x09%at", "-S"])
-        .arg(format!("\"{host}\""))
-        .args(["--", &file]);
-    let out = purlis_core::forklock::output(&mut git).ok()?;
-    let line = String::from_utf8(out.stdout).ok()?;
+    // Through the hardened runner: no hook, no inherited `GIT_*`, and the project's `.git`
+    // read by purlis where it is a file (#1055).
+    let quoted = format!("\"{host}\"");
+    let run = purlis_core::worktree::git::run(
+        root,
+        &[
+            "log",
+            "-1",
+            "--format=%an%x09%at",
+            "-S",
+            &quoted,
+            "--",
+            &file,
+        ],
+        purlis_core::worktree::git::READ,
+    )
+    .ok()?;
+    let line = run.out;
     let (name, at) = line.trim().split_once('\t')?;
     Some((name.to_owned(), at.parse().ok()?))
 }

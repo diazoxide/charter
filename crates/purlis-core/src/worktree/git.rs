@@ -50,6 +50,24 @@
 //! that names a program through config. A call that crosses a network ([`run_network`]) takes
 //! `credential.helper` out of config's hands too — it resets every configured helper and names
 //! the forge CLI's own — and refuses SSH outright, so `core.sshCommand` is never reached.
+//!
+//! # A folder's `.git` file is read here, not by git
+//!
+//! A linked worktree's `.git` is a file in the folder a chat works in, and git follows it to
+//! whatever git directory it names, configuration and all. So [`run`], [`run_untimed`],
+//! [`run_with_input`] and [`run_network`] read it first ([`super::link`], #1055, which says
+//! what is accepted): a call in a folder whose file names anything else is not started, and
+//! answers git's own failure status with one sentence where git's words would be; a call in
+//! one that checks is given `--git-dir` and `--work-tree`, so git reads what was checked. A
+//! clone, whose `.git` is a directory, is run as before.
+//!
+//! [`run_as_session`] and [`run_in_hook`] are not held to it: they ask what the chat's own
+//! git would answer, in layouts the check would refuse (a scratch clone often keeps its git
+//! directory beside it). Where a harness runs its hooks outside its sandbox, those calls
+//! follow whatever the folder's link names; that is not closed here.
+//!
+//! **No runner lets git start a git of its own inside a submodule** ([`NO_PROGRAMS`]), those
+//! two included: such a child finds its repository for itself, past every check above.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -208,7 +226,27 @@ pub(crate) fn path_value(dirs: &[String]) -> String {
 /// Not a general hardening list: these are the keys reachable from the verbs this module
 /// runs. `core.hooksPath` covers `post-checkout` on `worktree add` and `post-merge` on
 /// `merge`; `core.fsmonitor` covers `status`, which `dirt` runs on every guard.
-const NO_PROGRAMS: [&str; 2] = ["core.hooksPath=/dev/null", "core.fsmonitor=false"];
+///
+/// **And git starts no git of its own inside a submodule** (#1055). `status` and `diff` look
+/// into each populated submodule by running git there, a `fetch` or a checkout may recurse,
+/// and that child finds its repository through the submodule folder's own `.git`, which this
+/// module's link check never sees. So a submodule is read by its recorded commit only. What
+/// that costs: uncommitted work inside a submodule does not show in purlis. Plumbing diffs do
+/// not read `diff.ignoreSubmodules`, so they are given the option ([`PLUMBING_DIFFS`]).
+const NO_PROGRAMS: [&str; 6] = [
+    "core.hooksPath=/dev/null",
+    "core.fsmonitor=false",
+    "diff.ignoreSubmodules=dirty",
+    "status.submoduleSummary=false",
+    "submodule.recurse=false",
+    "fetch.recurseSubmodules=false",
+];
+
+/// The diff verbs that ignore `diff.ignoreSubmodules`, and are told on their own command line.
+const PLUMBING_DIFFS: [&str; 3] = ["diff-files", "diff-index", "diff-tree"];
+
+/// What a plumbing diff is told so that it starts no git inside a submodule.
+const SUBMODULES_BY_COMMIT: &str = "--ignore-submodules=dirty";
 
 /// The one-credential rule (charter `docs/git-policy.md`), put where no config file can
 /// relax it: every call that crosses a network goes over HTTPS with ONE forge CLI's token,
@@ -373,6 +411,68 @@ struct Extra {
     pass: Vec<(String, std::ffi::OsString)>,
     /// Whether git's standard input is a pipe the caller writes, rather than nothing.
     stdin: bool,
+    /// The folder's own top and the git directory its `.git` file was checked to name
+    /// ([`linked`]): the call is given both, so git reads what was checked.
+    link: Option<(PathBuf, PathBuf)>,
+}
+
+/// The work tree and git directory a call in `dir` is held to where `dir` is in a linked
+/// worktree or a submodule ([`super::link`], #1055), nothing where it is in a clone or in no
+/// repository, or the sentence that refuses the call: its `.git` file names something purlis
+/// will not follow.
+///
+/// A chat may be able to rewrite that file, and git would follow it to a configuration the
+/// chat wrote. So purlis reads the file itself, and git is told the answer rather than asked
+/// to find it.
+fn linked(dir: &Path, args: &[&str]) -> Result<Option<(PathBuf, PathBuf)>, &'static str> {
+    use super::link::{Check, Link};
+    // A call the thread's own isolation pins is held to a git directory its maker checked.
+    if isolation().is_some_and(|held| held.pin_in(dir).is_some()) {
+        return Ok(None);
+    }
+    // `worktree repair` is run in a folder that was moved, to write its new name back.
+    let repair = {
+        let mut words = args.iter().skip_while(|word| **word != "worktree");
+        words.next().is_some() && words.next() == Some(&"repair") && verb(args) == Some("worktree")
+    };
+    let check = if repair { Check::Moved } else { Check::Whole };
+    match super::link::of(dir, check)? {
+        // `clone` and `init` make a repository of their own, wherever they are run.
+        Link::Linked { top, git_dir }
+            if !repair && !matches!(verb(args), Some("clone" | "init")) =>
+        {
+            Ok(Some((top, git_dir)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// What a call [`linked`] refused answers: git's own status for "not a repository", and the
+/// sentence where git's words would be.
+fn refused(why: &str) -> Run {
+    Run {
+        code: Some(128),
+        out: String::new(),
+        err: format!("{why}\n"),
+    }
+}
+
+/// [`refused`], as bytes.
+fn refused_raw(why: &str) -> RawRun {
+    let run = refused(why);
+    RawRun {
+        code: run.code,
+        out: Vec::new(),
+        err: run.err.into_bytes(),
+    }
+}
+
+/// [`Extra`] with the folder's checked link, or the answer that refuses the call.
+fn held(dir: &Path, args: &[&str], extra: Extra) -> Result<Extra, &'static str> {
+    Ok(Extra {
+        link: linked(dir, args)?,
+        ..extra
+    })
 }
 
 /// The [`CONFIG_LOCATION_ENV`] variables `lookup` holds, with the numbered pairs
@@ -504,11 +604,20 @@ impl Isolated {
 
     /// The git directory a call run in `dir` is pinned to, if it is.
     pub fn pin_of(&self, dir: &Path) -> Option<&Path> {
+        self.pin_in(dir).map(|(_, git_dir)| git_dir)
+    }
+
+    /// The pinned work tree `dir` is in, and its git directory: `dir` is that tree's top or
+    /// any folder inside it (#1055), so a call run below a pinned top is held to the same
+    /// git directory and finds none for itself. Of two pinned trees one inside the other, the
+    /// inner one is `dir`'s.
+    pub fn pin_in(&self, dir: &Path) -> Option<(&Path, &Path)> {
         let dir = real(dir);
         self.pins
             .iter()
-            .find(|(tree, _)| *tree == dir)
-            .map(|(_, git_dir)| git_dir.as_path())
+            .filter(|(tree, _)| dir.starts_with(tree))
+            .max_by_key(|(tree, _)| tree.components().count())
+            .map(|(tree, git_dir)| (tree.as_path(), git_dir.as_path()))
     }
 
     /// One more key. **For a test's stand-in forge only** (a `url.<base>.insteadOf` that points
@@ -556,10 +665,6 @@ pub fn within<T>(isolation: Option<&Isolated>, then: impl FnOnce() -> T) -> T {
     }
 }
 
-fn spawn(dir: &Path, args: &[&str]) -> Result<Child, GitUnavailable> {
-    spawn_with(dir, args, &Extra::default())
-}
-
 fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnavailable> {
     let (binary, dirs) = git_binary();
     let mut cmd = Command::new(binary);
@@ -570,6 +675,7 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
         cmd.arg("-c").arg(setting);
     }
     let isolated = isolation();
+    let mut pinned = false;
     if let Some(held) = &isolated {
         // A bare repository is used only when named (D-1335-8): one a chat made, which no
         // `.git` path covers, is never found by discovery.
@@ -577,12 +683,34 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
         for setting in &held.config {
             cmd.arg("-c").arg(setting);
         }
-        if let Some(git_dir) = held.pin_of(dir) {
+        // Anywhere in a pinned tree: a call in a folder below its top is held to the same
+        // git directory, and nothing is found again from that folder's own `.git`.
+        if let Some((tree, git_dir)) = held.pin_in(dir) {
             cmd.arg(format!("--git-dir={}", git_dir.display()))
-                .arg(format!("--work-tree={}", real(dir).display()));
+                .arg(format!("--work-tree={}", tree.display()));
+            pinned = true;
         }
     }
-    cmd.arg("-C").arg(dir).args(args);
+    if let (false, Some((top, git_dir))) = (pinned, &extra.link) {
+        cmd.arg(format!("--git-dir={}", git_dir.display()))
+            .arg(format!("--work-tree={}", top.display()));
+    }
+    cmd.arg("-C").arg(dir);
+    match args.iter().position(|word| Some(*word) == verb(args)) {
+        Some(at)
+            if PLUMBING_DIFFS.contains(&args[at])
+                && !args
+                    .iter()
+                    .any(|word| word.starts_with("--ignore-submodules")) =>
+        {
+            cmd.args(&args[..=at])
+                .arg(SUBMODULES_BY_COMMIT)
+                .args(&args[at + 1..]);
+        }
+        _ => {
+            cmd.args(args);
+        }
+    }
     cmd.env_clear();
     for (k, v) in child_env(&dirs) {
         cmd.env(k, v);
@@ -751,8 +879,12 @@ pub(crate) use tally::of as tally;
 
 /// Run `git -C <dir> <args>` with no deadline — for a call that checks out a tree.
 pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
+    let extra = match held(dir, args, Extra::default()) {
+        Ok(extra) => extra,
+        Err(why) => return Ok(refused(why)),
+    };
     counted(dir, args, || {
-        let child = spawn(dir, args)?;
+        let child = spawn_with(dir, args, &extra)?;
         // `wait_with_output` reads both pipes as it waits, so it cannot deadlock on them.
         let out = child.wait_with_output()?;
         Ok(Run {
@@ -770,7 +902,13 @@ pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
 /// 64 KiB, which `status --porcelain` in a large dirty clone passes easily — and the symptom
 /// is a timeout that looks like a slow machine.
 pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnavailable> {
-    counted(dir, args, || Ok(wait(spawn(dir, args)?, timeout)?))
+    let extra = match held(dir, args, Extra::default()) {
+        Ok(extra) => extra,
+        Err(why) => return Ok(refused(why)),
+    };
+    counted(dir, args, || {
+        Ok(wait(spawn_with(dir, args, &extra)?, timeout)?)
+    })
 }
 
 /// What one git call answered, as the BYTES it wrote. `code` is `None` when the deadline passed.
@@ -820,6 +958,10 @@ pub fn run_with_input(
     let extra = Extra {
         stdin: true,
         ..Extra::default()
+    };
+    let extra = match held(dir, args, extra) {
+        Ok(extra) => extra,
+        Err(why) => return Ok(refused_raw(why)),
     };
     counted(dir, args, || {
         let mut child = spawn_with(dir, args, &extra)?;
@@ -886,6 +1028,10 @@ pub fn run_network(dir: &Path, helper: Option<&str>, args: &[&str]) -> Result<Ru
         config,
         credentials: true,
         ..Extra::default()
+    };
+    let extra = match held(dir, args, extra) {
+        Ok(extra) => extra,
+        Err(why) => return Ok(refused(why)),
     };
     counted(dir, args, || {
         Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?)

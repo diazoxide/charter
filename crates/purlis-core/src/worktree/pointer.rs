@@ -11,7 +11,10 @@
 //! ([`super::git::Isolated::pinned`]). A folder that names anything else is refused, and no
 //! git runs in it.
 //!
-//! [`verified`] is the whole check, and it runs no git.
+//! [`verified`] is the whole check, and it runs no git. **It is the one check of a branch
+//! folder's link in purlis** (#1055): the runner's own look at a folder before any git call
+//! ([`super::link`]) hands a folder purlis cut to it, so a call made on purlis's record of a
+//! piece and a call that merely happens to run in its folder are held to one rule.
 
 use std::path::{Path, PathBuf};
 
@@ -54,13 +57,28 @@ pub fn named_by(text: &str) -> Option<&Path> {
     Some(Path::new(path))
 }
 
-/// The one line of the file at `at`, a plain file and no link, or `None`.
-fn line_of(at: &Path) -> Option<String> {
-    let meta = at.symlink_metadata().ok()?;
+/// The text of the file at `at`, a plain file and no link, or `None`: where it is longer than
+/// a link's line is, cannot be read, or is not a regular file. Opened once, without following
+/// a link and without waiting on a name that would block (a pipe), and judged by what was
+/// opened, so nothing is swapped in between the look and the read.
+pub(super) fn line_of(at: &Path) -> Option<String> {
+    use std::io::Read as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+        options.custom_flags(i32::try_from(flags.bits()).ok()?);
+    }
+    let opened = options.open(at).ok()?;
+    let meta = opened.metadata().ok()?;
     if !meta.file_type().is_file() || meta.len() > AT_MOST {
         return None;
     }
-    std::fs::read_to_string(at).ok()
+    let mut text = String::new();
+    opened.take(AT_MOST + 1).read_to_string(&mut text).ok()?;
+    (text.len() as u64 <= AT_MOST).then_some(text)
 }
 
 /// **The git directory of `piece`'s folder, derived and checked**: `<git_dir>/worktrees/<piece>`
@@ -74,7 +92,8 @@ fn line_of(at: &Path) -> Option<String> {
 ///   temporary files, the piece's folder, another clone), and it is not inside `folder`;
 /// - `folder/.git` is a plain file, no link and no directory, holding the one line git writes,
 ///   and the path it names resolves to that directory;
-/// - that directory's own `gitdir` names `folder/.git` back.
+/// - that directory's own `gitdir` names `folder/.git` back, and its `commondir` names
+///   `git_dir`, so git run with it reads the clone's configuration and no other.
 ///
 /// The contract is the one every app-side git call in a folder a chat writes is held to: the
 /// git directory comes from the app's record, the folder only confirms it.
@@ -115,6 +134,17 @@ pub fn verified(git_dir: &Path, folder: &Path, piece: &str) -> Result<PathBuf, N
     let back = std::fs::canonicalize(own.join(back)).map_err(|_| refused())?;
     let pointer = std::fs::canonicalize(&pointer).map_err(|_| refused())?;
     if back != pointer {
+        return Err(refused());
+    }
+    // The entry's `commondir` says where git reads the repository's config and objects from:
+    // the clone's own git directory, and nowhere else.
+    let common = line_of(&own.join("commondir")).ok_or_else(refused)?;
+    let common = common.trim_end_matches(['\n', '\r']);
+    if common.is_empty() {
+        return Err(refused());
+    }
+    let common = std::fs::canonicalize(own.join(common)).map_err(|_| refused())?;
+    if common != clone_s {
         return Err(refused());
     }
     Ok(own)
@@ -177,6 +207,7 @@ mod tests {
             format!("{}\n", folder.join(".git").display()),
         )
         .unwrap();
+        std::fs::write(own.join("commondir"), "../..\n").unwrap();
         Made {
             _dir: dir,
             git_dir,
@@ -188,6 +219,60 @@ mod tests {
         let pointer = folder.join(".git");
         let _ = std::fs::remove_file(&pointer);
         std::fs::write(pointer, format!("gitdir: {}\n", at.display())).unwrap();
+    }
+
+    #[test]
+    fn the_runner_s_look_at_a_folder_and_this_check_are_one_rule() {
+        // #1055: `link::held_to` is what the runner asks before any git call in a folder
+        // purlis cut. It answers as `verified` does for every shape, because it is `verified`.
+        let agree = |made: &Made, piece: &str, shape: &str| {
+            let named = line_of(&made.folder.join(".git"))
+                .and_then(|text| named_by(&text).map(Path::to_path_buf))
+                .and_then(|named| std::fs::canonicalize(made.folder.join(named)).ok());
+            let here = verified(&made.git_dir, &made.folder, piece).is_ok();
+            let there = named.is_some_and(|named| {
+                super::super::link::held_to(&made.git_dir, &made.folder, &named).is_ok()
+            });
+            assert_eq!(here, there, "{shape}");
+            here
+        };
+        let piece = "task-0a1b2c3d";
+        let own = |made: &Made| made.git_dir.join("worktrees").join(piece);
+
+        let made_ = made(piece);
+        assert!(agree(&made_, piece, "as git lays it out"));
+
+        // The link rewritten: to a folder of the chat's own, to the clone's git directory,
+        // to another piece's entry.
+        let other = made_.git_dir.join("worktrees/other-0a1b2c3d");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("commondir"), "../..\n").unwrap();
+        std::fs::write(
+            other.join("gitdir"),
+            format!("{}\n", made_.folder.join(".git").display()),
+        )
+        .unwrap();
+        let inside = made_.folder.join("store");
+        std::fs::create_dir_all(&inside).unwrap();
+        for at in [inside, made_.git_dir.clone(), other] {
+            point(&made_.folder, &at);
+            assert!(!agree(&made_, piece, &at.display().to_string()));
+        }
+
+        // The entry's own record: naming another folder back, and another `commondir`.
+        let moved = made(piece);
+        std::fs::write(own(&moved).join("gitdir"), "/elsewhere/.git\n").unwrap();
+        assert!(!agree(&moved, piece, "names another folder back"));
+        let elsewhere = made(piece);
+        std::fs::write(
+            own(&elsewhere).join("commondir"),
+            format!("{}\n", elsewhere.folder.display()),
+        )
+        .unwrap();
+        assert!(!agree(&elsewhere, piece, "commondir names another place"));
+        let none = made(piece);
+        std::fs::remove_file(own(&none).join("commondir")).unwrap();
+        assert!(!agree(&none, piece, "no commondir"));
     }
 
     #[test]
