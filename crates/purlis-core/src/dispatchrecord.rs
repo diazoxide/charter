@@ -128,13 +128,34 @@ pub struct Worker {
     pub session_record: Option<String>,
 }
 
-/// A worktree a persona chat worked in, on a branch of its own.
+/// How a dispatch's worktree came to be gone, where purlis took it away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Removed {
+    /// purlis found its branch merged into the branch it was cut from, and took the folder
+    /// and the branch away.
+    Merged,
+    /// The same, and git would not delete the branch (the clone was not on the branch it
+    /// landed in): the folder is gone and the branch stays.
+    MergedBranchKept,
+    /// The person discarded it, from the window.
+    Discarded,
+}
+
+/// A worktree a persona chat worked in, on a branch of its own (#1453): the repo it was cut
+/// from, in the dispatch's workspace, and the folder and branch purlis named
+/// ([`crate::dispatchplace::piece_name`]). **The app's own record of what it cut**: it is what
+/// the report names as the branch, whatever the persona chat says.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Worktree {
     pub repo: String,
     pub piece: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// Set once purlis has taken the worktree away, and how. Absent while it is kept, and for
+    /// one removed by other means, which the folder's absence says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<Removed>,
 }
 
 /// Where the persona chat worked.
@@ -285,15 +306,38 @@ pub struct Ending {
     pub usage: Option<Usage>,
 }
 
+/// A new dispatch's id: a ULID. Minted apart from [`open`] where something is named for the
+/// dispatch before its record is written, as a worktree task's folder and branch are (#1453).
+pub fn mint() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
 /// Opens the record of a dispatch that started at `now`, and answers it.
 pub fn open(
     root: &Path,
     opening: Opening,
     now: chrono::DateTime<chrono::Utc>,
 ) -> io::Result<Record> {
+    open_as(root, mint(), opening, now)
+}
+
+/// [`open`], under an `id` [`mint`] gave earlier. An id that is not one of [`mint`]'s is
+/// refused, and one a record already has is too: a record is written once.
+pub fn open_as(
+    root: &Path,
+    id: String,
+    opening: Opening,
+    now: chrono::DateTime<chrono::Utc>,
+) -> io::Result<Record> {
+    if !an_id(&id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a dispatch record is named by an id purlis minted",
+        ));
+    }
     let record = Record {
         v: VERSION,
-        id: ulid::Ulid::generate().to_string(),
+        id,
         mode: opening.mode,
         asker: opening.asker,
         persona: opening.persona,
@@ -314,8 +358,32 @@ pub fn open(
     let dir = dir(root);
     crate::rewrite::create_dir_all(&dir)?;
     let _held = crate::rewrite::Lock::on(&dir);
+    if read(root, &record.id).is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a dispatch record is written once, and this id has one",
+        ));
+    }
     write(root, &record)?;
     Ok(record)
+}
+
+/// Marks the worktree of dispatch `id` as taken away, and how (#1453). `false` for a record
+/// that is not there, names no worktree, or already says how its worktree went: the first
+/// word is the one kept. A running dispatch's is never marked: its chat still works there.
+pub fn worktree_removed(root: &Path, id: &str, how: Removed) -> io::Result<bool> {
+    change(root, id, |record| {
+        if record.running() {
+            return false;
+        }
+        match record.place.worktree.as_mut() {
+            Some(tree) if tree.removed.is_none() => {
+                tree.removed = Some(how);
+                true
+            }
+            _ => false,
+        }
+    })
 }
 
 /// Appends `event` to the running dispatch `id`. `false` for a record that is not there or has
@@ -414,7 +482,8 @@ impl Live {
             .collect()
     }
 
-    fn is(&self, recorded: &ChatRef) -> bool {
+    /// Whether `recorded`, a chat as a record names it, is this one ([`named`]).
+    pub fn is(&self, recorded: &ChatRef) -> bool {
         named(recorded, self.id.as_deref(), self.number)
     }
 }
@@ -521,6 +590,7 @@ fn capped(record: &Record) -> Record {
                 repo: name(&tree.repo),
                 piece: name(&tree.piece),
                 branch: tree.branch.as_deref().map(name),
+                removed: tree.removed,
             }),
         },
         brief: cut(&record.brief, MOST_BRIEF_BYTES),
@@ -630,6 +700,13 @@ pub fn running_for(root: &Path, chat: &ChatRef) -> Option<Record> {
     list(root)
         .into_iter()
         .find(|record| record.running() && same_chat(&record.worker.chat, chat))
+}
+
+/// The newest dispatch whose persona chat is `chat`, running or ended.
+pub fn latest_for(root: &Path, chat: &ChatRef) -> Option<Record> {
+    list(root)
+        .into_iter()
+        .find(|record| same_chat(&record.worker.chat, chat))
 }
 
 /// The dispatches listed on the session record at `path`: the ones its chat asked for, of

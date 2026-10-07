@@ -418,6 +418,39 @@ fn a_dispatch_s_arguments_are_its_name_its_brief_and_a_persona_where_one_is_name
         assert_eq!(dispatch_profile(&args(given)), Ok(None));
     }
     assert!(dispatch_profile(&args(json!({"profile": ["a"]}))).is_err());
+    // Where it works is a word where one is given (#1453), and none where it is left out.
+    assert_eq!(
+        dispatch_place(&args(
+            json!({"name": "n", "brief": "b", "in": " worktree "})
+        )),
+        Ok(Some("worktree".to_owned()))
+    );
+    for given in [json!({"name": "n", "brief": "b"}), json!({"in": "  "})] {
+        assert_eq!(dispatch_place(&args(given)), Ok(None));
+    }
+    assert!(dispatch_place(&args(json!({"in": {"folder": "/"}}))).is_err());
+    // And the tool's schema offers it, and no field for a folder or a branch.
+    let dispatch = TOOLS.iter().find(|tool| tool.name == DISPATCH).unwrap();
+    let schema = (dispatch.schema)();
+    let mut offered: Vec<&str> = schema["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    offered.sort_unstable();
+    assert_eq!(
+        offered,
+        [
+            "brief",
+            "in",
+            "name",
+            "profile",
+            "to",
+            "wait",
+            "wait_seconds"
+        ]
+    );
 }
 
 #[test]

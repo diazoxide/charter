@@ -1,7 +1,22 @@
 import { createContext, useContext, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useFocusBack } from "./EndingChat";
-import { Field, SettingActions, SettingRow } from "./settings/components";
+import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
+
+/** Where the new chat works, as the dialog holds the pick. */
+type Where = "here" | "branch" | "workspace";
+
+/**
+ * **The word the core reads for where a chat works** (`ask_persona_chat`'s `place`, #1453): none
+ * for the asking chat's folder, `worktree` for a branch of its own, `workspace:<name>` for
+ * another workspace. The same two words a chat's own dispatch has, and nothing else: the dialog
+ * names no folder and no branch.
+ */
+export function placeOf(where: Where, workspace: string): string | null {
+  if (where === "branch") return "worktree";
+  if (where === "workspace" && workspace !== "") return `workspace:${workspace}`;
+  return null;
+}
 
 /**
  * **Ask a persona…**, from a chat tab's menu, the palette, or a Notice that names the persona
@@ -12,14 +27,19 @@ import { Field, SettingActions, SettingRow } from "./settings/components";
  * vaults, and nothing this chat holds. Its report comes back to this chat, marked as started
  * by you. Nothing is asked of you first, because you are the one asking.
  *
+ * **Where it works is one of three places** (#1453): this chat's folder, a branch of its own
+ * that purlis cuts from the repo this chat works in (the window says *branch*, ADR 0072 §4),
+ * or another workspace of the project. Nothing is merged for a branch of its own.
+ *
  * **It validates nothing but that there is something to send**, for `NewBranch`'s reason: what
- * a task may be called, whether the persona can run a chat and how many may run at once are
- * the core's rules (`ask_persona_chat`), so the window refuses what the core refuses and says
- * the same sentence.
+ * a task may be called, whether the persona can run a chat, how many may run at once and
+ * whether this chat works in a repo a branch can be cut from are the core's rules
+ * (`ask_persona_chat`), so the window refuses what the core refuses and says the same sentence.
  */
 export function AskPersona({
   persona,
   chat,
+  workspaces,
   prefill,
   trouble,
   asking,
@@ -34,20 +54,28 @@ export function AskPersona({
   prefill?: AskPrefill;
   /** Why the last attempt started nothing, in the core's sentence, unchanged. */
   trouble?: string;
+  /** The project's other workspaces, by name: where else the new chat can work. */
+  workspaces: readonly string[];
   /** Whether purlis is starting the chat right now, so the answer cannot be given twice. */
   asking: boolean;
-  onAsk: (name: string, ask: string) => void;
+  /** `place` is the core's word for where it works ({@link placeOf}); `null` is this chat's
+   *  folder. */
+  onAsk: (name: string, ask: string, place: string | null) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(prefill?.name ?? "");
   const [ask, setAsk] = useState(prefill?.ask ?? "");
+  const [where, setWhere] = useState<Where>("here");
+  const [workspace, setWorkspace] = useState("");
   // The dialog, so the first box can be found in it on opening: the row draws the box, and a
   // setting's field takes no ref.
   const content = useRef<HTMLDivElement>(null);
   const handBack = useFocusBack();
-  const ready = name.trim() !== "" && ask.trim() !== "" && !asking;
+  // Another workspace is a pick that needs its second half before there is something to send.
+  const placed = where !== "workspace" || workspace !== "";
+  const ready = name.trim() !== "" && ask.trim() !== "" && placed && !asking;
   const send = () => {
-    if (ready) onAsk(name, ask);
+    if (ready) onAsk(name, ask, placeOf(where, workspace));
   };
   return (
     <Dialog.Root
@@ -110,6 +138,55 @@ export function AskPersona({
                 <Field ids={ids} kind="list" value={ask} minRows={4} onChange={setAsk} />
               )}
             />
+
+            <SettingRow
+              label="Where it works"
+              control={(ids) => (
+                <Choice
+                  ids={ids}
+                  kind="radio"
+                  value={where}
+                  onValueChange={(to) => setWhere(to as Where)}
+                  options={[
+                    {
+                      value: "here",
+                      label: "This chat's folder",
+                      says: (
+                        <>
+                          Beside <code>{chat}</code>, in the same files.
+                        </>
+                      ),
+                    },
+                    {
+                      value: "branch",
+                      label: "A branch of its own",
+                      says: "purlis cuts a new branch, in a folder of its own, from the repo this chat works in. Nothing is merged for it: its report names the branch.",
+                    },
+                    {
+                      value: "workspace",
+                      label: "Another workspace",
+                      says: "In that workspace's folder, with its todos, memory and session records.",
+                      disabled: workspaces.length === 0,
+                    },
+                  ]}
+                />
+              )}
+            />
+            {where === "workspace" && (
+              <SettingRow
+                label="Workspace"
+                control={(ids) => (
+                  <Choice
+                    ids={ids}
+                    kind="select"
+                    value={workspace}
+                    unset="Choose a workspace"
+                    onValueChange={setWorkspace}
+                    options={workspaces.map((one) => ({ value: one, label: one }))}
+                  />
+                )}
+              />
+            )}
 
             {trouble && (
               <p className="trouble" role="alert">

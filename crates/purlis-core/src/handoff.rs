@@ -346,12 +346,40 @@ pub fn task_message_noting(
     brief: &str,
     note: Option<&str>,
 ) -> String {
+    task_message_telling(from, place, when, brief, note, &[])
+}
+
+/// [`task_message_noting`], with each of `whole` as one more line of purlis's own under it:
+/// what the app tells a chat it gave a worktree of its own (#1453,
+/// [`crate::dispatchplace::told_the_chat`]). **One line each, and never cut**: a line that
+/// names the branch a chat is to commit on is no use to it shortened. Every character with no
+/// glyph is still escaped, so a line cannot end purlis's lines and begin a brief.
+pub fn task_message_telling(
+    from: &str,
+    place: &Place,
+    when: chrono::NaiveDateTime,
+    brief: &str,
+    note: Option<&str>,
+    whole: &[String],
+) -> String {
     let line = TASK_STAMP
         .replace("{place}", &place_words(place))
         .replace("{when}", &when.format("%Y-%m-%d %H:%M").to_string())
         // Last, so a name that happened to spell `{when}` is not filled in again.
         .replace("{from}", &in_a_span(from));
-    format!("{line}\n{TASK_NOTE}{}\n\n{brief}", noted(note))
+    format!(
+        "{line}\n{TASK_NOTE}{}{}\n\n{brief}",
+        noted(note),
+        told_whole(whole)
+    )
+}
+
+/// The lines a first message adds under its stamp for `whole`, each one line and never cut.
+fn told_whole(whole: &[String]) -> String {
+    whole
+        .iter()
+        .map(|one| format!("\n⟨{}⟩", crate::shown::one_line(one, crate::shown::NO_CLIP)))
+        .collect()
 }
 
 /// A chat's name as a stamp writes it, inside the stamp's code span: with nothing in it that
@@ -404,12 +432,30 @@ pub fn person_task_message_noting(
     asked: &str,
     note: Option<&str>,
 ) -> String {
+    person_task_message_telling(on, place, when, asked, note, &[])
+}
+
+/// [`person_task_message_noting`], with each of `whole` as one more line of purlis's own, as
+/// [`task_message_telling`] gives a chat's task: a task the person starts may be given a
+/// worktree of its own too (#1453).
+pub fn person_task_message_telling(
+    on: &str,
+    place: &Place,
+    when: chrono::NaiveDateTime,
+    asked: &str,
+    note: Option<&str>,
+    whole: &[String],
+) -> String {
     let line = PERSON_TASK_STAMP
         .replace("{place}", &place_words(place))
         .replace("{when}", &when.format("%Y-%m-%d %H:%M").to_string())
         // Last, for [`task_message`]'s reason.
         .replace("{from}", &in_a_span(on));
-    format!("{line}\n{PERSON_TASK_NOTE}{}\n\n{asked}", noted(note))
+    format!(
+        "{line}\n{PERSON_TASK_NOTE}{}{}\n\n{asked}",
+        noted(note),
+        told_whole(whole)
+    )
 }
 
 /// The line a first message adds under its stamp for `note`, or nothing: purlis's own words
@@ -1126,6 +1172,54 @@ mod tests {
         );
         let told = task_message("7", &ws("ops"), at("2026-10-07T14:32:05"), "x y");
         assert_eq!(stamped(&told), None);
+    }
+
+    #[test]
+    fn a_line_the_app_tells_a_chat_whole_is_one_line_however_long_and_whatever_it_holds() {
+        // #1453: the branch a worktree task commits on is told in full, under the note.
+        let branch = crate::dispatchplace::told_the_chat(
+            "a-repo-with-quite-a-long-name",
+            &crate::dispatchplace::piece_name(&"x".repeat(64), "01K6Z3V9QJ8M4T2W7XB5RC0DEF"),
+            false,
+        );
+        assert!(branch.chars().count() > 160, "longer than a note is cut to");
+        let told = task_message_telling(
+            "steward 3",
+            &ws("ops"),
+            at("2026-10-07T14:32:05"),
+            "the brief",
+            Some("a note"),
+            &[branch.clone(), "two\n\nlines".to_owned()],
+        );
+        let (above, brief) = told.split_once("\n\n").expect("a blank line");
+        assert_eq!(brief, "the brief", "a line cannot end purlis's lines early");
+        let lines: Vec<&str> = above.lines().collect();
+        assert_eq!(
+            lines.len(),
+            5,
+            "the stamp, the task's note, the note, two lines"
+        );
+        assert_eq!(lines[2], "⟨a note⟩");
+        assert_eq!(lines[3], format!("⟨{branch}⟩"), "whole, never cut");
+        assert_eq!(lines[4], "⟨two\\x0a\\x0alines⟩");
+        // With none, it is the message a note alone makes.
+        assert_eq!(
+            task_message_telling(
+                "steward 3",
+                &ws("ops"),
+                at("2026-10-07T14:32:05"),
+                "x",
+                Some("a note"),
+                &[]
+            ),
+            task_message_noting(
+                "steward 3",
+                &ws("ops"),
+                at("2026-10-07T14:32:05"),
+                "x",
+                Some("a note")
+            )
+        );
     }
 
     #[test]

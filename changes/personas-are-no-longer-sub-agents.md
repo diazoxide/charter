@@ -16,10 +16,11 @@
   more or less. Name the profile a persona's chats start on with `profile:`. The fix and
   `purlis persona lint` say this for each persona it applies to. A `model:` that is the name of
   a profile the project carries is rewritten to `profile:` (#1451).
-- **`agent-tools:`, `skills:`, `memory:` and `dispatch-isolation:` are read by nothing.** A
+- **`agent-tools:`, `skills:` and `memory:` are read by nothing.** A
   persona chat has every tool of its harness, so a persona that listed no editing tool could
   not edit files as a sub-agent and can as a chat. Nothing asks before two persona chats write
-  in one tree. `purlis persona lint` and the fix say what widened for each persona and leave
+  in one tree; `dispatch-isolation: worktree` now gives a dispatched chat a worktree of its own
+  instead (#1453). `purlis persona lint` and the fix say what widened for each persona and leave
   the lines. To keep a persona from a tool, name it in `disallowed-tools:`. The hooks no longer
   log a returned sub-agent or a message to one in the dispatch log (#1451).
 

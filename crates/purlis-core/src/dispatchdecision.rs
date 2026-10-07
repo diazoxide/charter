@@ -289,6 +289,10 @@ pub struct Moment<'a> {
     pub profile: Option<&'a crate::personaprofile::Refused>,
     /// Whether the chat asks, or the person does from its tab.
     pub by: By,
+    /// The workspace the new chat is to work in, where the dispatch names one or cuts a
+    /// worktree in one (#1453, [`crate::dispatchplace::Ground::workspace`]). `None` is the
+    /// asking chat's own.
+    pub works_in: Option<&'a str>,
 }
 
 /// What a chat's dispatch comes to: the decision, and the facts the app starts the persona
@@ -314,6 +318,15 @@ pub struct Asked {
 /// force are read from the project's files and this machine's policy as they stand now
 /// ([`crate::dispatchlimits::of`]), and the grant from `moment.grants` under the same policy
 /// ([`crate::dispatchgrant::covers`]).
+///
+/// **A dispatch into another workspace is held to both workspaces' limits** (#1453): the one
+/// the asking chat works in, as every dispatch is, and then the one the new chat is to work
+/// in (`moment.works_in`). The first that refuses is the answer. Read for the asking chat's
+/// alone, a workspace that switched dispatch off would still be worked in by any chat that
+/// named it; read for the other alone, a chat in a workspace with dispatch off would dispatch
+/// by naming another. **A 0 in the destination's own row holds against a persona's value too**
+/// ([`crate::dispatchlimits::off_in`], D-1453-17): elsewhere a persona's row is the more
+/// specific and wins.
 pub fn asked_by_a_chat(
     root: &std::path::Path,
     number: u32,
@@ -364,8 +377,31 @@ pub fn asked_by_a_chat(
         limits: &limits,
         lineage: &lineage,
     };
+    let mut decision = decide(&request);
+    let elsewhere = moment
+        .works_in
+        .filter(|there| Some(*there) != workspace.as_deref());
+    if let (Some(there), false) = (elsewhere, matches!(decision, Decision::Refused(_))) {
+        let theirs = crate::dispatchlimits::of(
+            root,
+            Some(there),
+            pair.asking.as_deref(),
+            pair.to.as_deref(),
+        );
+        let held_there = decide(&Request {
+            limits: &theirs,
+            ..request
+        });
+        // **Off at the destination is off** (D-1453-17), whatever the asking persona's own
+        // row says: said first, since it is the plainer answer.
+        if let Some(off) = crate::dispatchlimits::off_in(root, there, pair.to.as_deref()) {
+            decision = Decision::Refused(Refused::Limit(off));
+        } else if matches!(held_there, Decision::Refused(_)) {
+            decision = held_there;
+        }
+    }
     Asked {
-        decision: decide(&request),
+        decision,
         depth: lineage.depth.saturating_add(1).min(DEEPEST),
         root: root_of(number, moment.open),
         to: pair.to,
@@ -1001,6 +1037,7 @@ mod tests {
                 grants,
                 profile: None,
                 by,
+                works_in: None,
             },
         )
     }
@@ -1020,6 +1057,7 @@ mod tests {
                 grants: &InForce::default(),
                 profile: None,
                 by: By::Chat,
+                works_in: None,
             },
         )
     }
@@ -1203,6 +1241,71 @@ mod tests {
         // And the defaults hold where the project says nothing.
         assert_eq!(
             asked_in("", 1, &open, None, &none, By::Chat).decision,
+            Decision::Start
+        );
+    }
+
+    #[test]
+    fn a_dispatch_into_another_workspace_is_held_to_that_workspace_s_limits_and_its_own() {
+        // #1453. The asking chat works in `alpha` and dispatches into `works_in`.
+        let ask = |manifest: &str, works_in: Option<&str>| {
+            let root = a_project(manifest);
+            std::fs::create_dir_all(root.path().join("workspaces/beta")).unwrap();
+            let asking = Chat {
+                cwd: Some(root.path().join("workspaces/alpha")),
+                ..chat(Some("steward"))
+            };
+            asked_by_a_chat(
+                root.path(),
+                1,
+                &asking,
+                None,
+                &Moment {
+                    open: &[(1, &asking)],
+                    working: &|_| true,
+                    default: None,
+                    grants: &InForce::default(),
+                    profile: None,
+                    by: By::Chat,
+                    works_in,
+                },
+            )
+        };
+        // The workspace it would work in has dispatch off: a chat elsewhere cannot work there
+        // by naming it, and one that stays where it is is not held to it.
+        let off_there = "[dispatch.workspaces.beta]\nrunning-per-chat = 0\n";
+        assert_eq!(ask(off_there, None).decision, Decision::Start);
+        assert_eq!(ask(off_there, Some("alpha")).decision, Decision::Start);
+        let said = refusal(&ask(off_there, Some("beta")));
+        assert!(
+            said.starts_with("dispatch is off in the workspace beta: running per chat is set to 0"),
+            "{said}"
+        );
+        // The asking chat's own workspace has it off: naming another is no way round it.
+        let off_here = "[dispatch.workspaces.alpha]\nrunning-per-chat = 0\n";
+        for works_in in [None, Some("beta")] {
+            let said = refusal(&ask(off_here, works_in));
+            assert!(
+                said.starts_with("dispatch is off in the workspace alpha"),
+                "{works_in:?}: {said}"
+            );
+        }
+        // And where neither says anything, a dispatch into another workspace starts.
+        assert_eq!(ask("", Some("beta")).decision, Decision::Start);
+        // D-1453-17: a persona's own value does not lift the destination's 0, though it lifts
+        // its own workspace's (ruling 9: the most specific level wins there).
+        let persona = "[dispatch.personas.steward]\nrunning-per-chat = 3\n";
+        let said = refusal(&ask(&format!("{off_there}{persona}"), Some("beta")));
+        assert!(
+            said.starts_with("dispatch is off in the workspace beta: running per chat is set to 0"),
+            "{said}"
+        );
+        assert_eq!(
+            ask(&format!("{off_here}{persona}"), Some("beta")).decision,
+            Decision::Start
+        );
+        assert_eq!(
+            ask(&format!("{off_here}{persona}"), None).decision,
             Decision::Start
         );
     }

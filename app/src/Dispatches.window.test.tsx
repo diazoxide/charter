@@ -11,7 +11,7 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { DispatchRow, OpenChat, SessionRecordRow } from "./bindings";
+import type { DispatchRow, OpenChat, SessionRecordRow, WorktreeLoss } from "./bindings";
 
 /**
  * **The Dispatches tab** (#1452) against the whole window: it is offered from the Sessions
@@ -100,6 +100,7 @@ function dispatch(over: Partial<DispatchRow> & Pick<DispatchRow, "id" | "task">)
     report: null,
     open_session: null,
     session_record: null,
+    worktree: null,
     ...over,
   };
 }
@@ -173,7 +174,16 @@ function sessionsPanel(records: SessionRecordRow[]) {
   };
 }
 
-function core(on: { rows?: DispatchRow[] | Error; undrawn?: number } = {}) {
+function core(
+  on: {
+    rows?: DispatchRow[] | Error;
+    undrawn?: number;
+    /** What the core says a discard would lose, or its refusal to ask. */
+    loss?: WorktreeLoss | Error;
+    /** The core's refusal of the discard itself. */
+    discardRefused?: string;
+  } = {},
+) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC((cmd, args) => {
     const given = (args ?? {}) as Record<string, unknown>;
@@ -210,6 +220,15 @@ function core(on: { rows?: DispatchRow[] | Error; undrawn?: number } = {}) {
       const rows = on.rows ?? ROWS;
       if (rows instanceof Error) throw rows.message;
       return { rows, undrawn: on.undrawn ?? 0 };
+    }
+    if (cmd === "dispatch_worktree_loss") {
+      if (on.loss === undefined) throw "no worktree was asked about";
+      if (on.loss instanceof Error) throw on.loss.message;
+      return on.loss;
+    }
+    if (cmd === "dispatch_worktree_discard") {
+      if (on.discardRefused !== undefined) throw on.discardRefused;
+      return null;
     }
     if (cmd === "session_record")
       return {
@@ -495,6 +514,217 @@ describe("the Dispatches tab", () => {
     await userEvent.click(within(notice).getByRole("button", { name: "Read again" }));
 
     await vi.waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+});
+
+describe("a dispatch's own branch", () => {
+  const BRANCH = "fix-the-queue-b5rc0def";
+  /** A task that worked on a branch of its own: one kept, and one purlis took away. */
+  const WITH_BRANCHES: DispatchRow[] = [
+    dispatch({
+      id: "01K6W",
+      task: "fix the queue",
+      mode: "task",
+      place: `alpha · ${BRANCH}`,
+      worktree: { repo: "api", branch: BRANCH, standing: "kept", discard: true },
+    }),
+    dispatch({
+      id: "01K6M",
+      task: "tidy the docs",
+      mode: "task",
+      place: "alpha · tidy-the-docs-00000000",
+      worktree: {
+        repo: "api",
+        branch: "tidy-the-docs-00000000",
+        standing: "merged",
+        discard: false,
+      },
+    }),
+    dispatch({ id: "01K6P", task: "plain task" }),
+  ];
+  const LOSS: WorktreeLoss = {
+    task: "fix the queue",
+    repo: "api",
+    branch: BRANCH,
+    on: BRANCH,
+    changes: ["?? scratch.txt", " M README.md"],
+    ignored: ["target/"],
+    unmerged: 1,
+    lost: [],
+  };
+  const DISCARD = "Discard the branch folder of fix the queue";
+  const ASKS = "Discard this branch's folder?";
+  const row = (id: string) => screen.getByTestId(`dispatch-${id}`);
+
+  it("is listed on its row with how it stands, and only a kept one offers Discard", async () => {
+    core({ rows: WITH_BRANCHES });
+    render(<App />);
+    await opened();
+
+    const where = (id: string) => within(row(id)).getAllByRole("cell")[3];
+    expect(where("01K6W")).toHaveTextContent(`alpha · ${BRANCH}own branch, folder kept`);
+    expect(within(row("01K6W")).getByRole("button", { name: DISCARD })).toBeInTheDocument();
+    expect(where("01K6M")).toHaveTextContent("own branch, merged and removed");
+    expect(within(row("01K6M")).queryByRole("button", { name: /Discard/ })).toBeNull();
+    // A dispatch that had no branch of its own says nothing of one.
+    expect(where("01K6P")).toHaveTextContent(/^alpha$/);
+    expect(within(row("01K6P")).queryByRole("button", { name: /Discard/ })).toBeNull();
+  });
+
+  it("asks before it discards, naming every file that would go and what the branch keeps", async () => {
+    const { asked } = core({ rows: WITH_BRANCHES, loss: LOSS });
+    render(<App />);
+    await opened();
+
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: DISCARD }));
+
+    const question = await screen.findByRole("alertdialog", { name: ASKS });
+    expect(asked.find((one) => one.cmd === "dispatch_worktree_loss")?.args).toEqual({
+      plane: PLANE,
+      id: "01K6W",
+    });
+    expect(question).toHaveTextContent(
+      `This removes the folder of the branch ${BRANCH} in api, which purlis cut for fix the queue, for good. Nothing is merged.`,
+    );
+    const lost = within(question).getByTestId("discard-loses");
+    expect(lost).toHaveTextContent("2 uncommitted files would be lost:");
+    expect(lost).toHaveTextContent("?? scratch.txt");
+    expect(lost).toHaveTextContent("M README.md");
+    expect(lost).toHaveTextContent("1 ignored path goes with it:");
+    expect(lost).toHaveTextContent("target/");
+    // The commit on the branch is not lost: the branch stays.
+    expect(within(question).getByTestId("discard-branch")).toHaveTextContent(
+      `No commit is lost: the branch ${BRANCH} holds 1 commit that exists nowhere else, so it stays.`,
+    );
+    expect(within(question).queryByTestId("discard-loses-nothing")).toBeNull();
+    // Nothing has been discarded by asking.
+    expect(asked.some((one) => one.cmd === "dispatch_worktree_discard")).toBe(false);
+
+    // Cancel discards nothing.
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(asked.some((one) => one.cmd === "dispatch_worktree_discard")).toBe(false);
+  });
+
+  it("discards what the person was shown, and reads the list again", async () => {
+    const { asked } = core({ rows: WITH_BRANCHES, loss: LOSS });
+    render(<App />);
+    await opened();
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: DISCARD }));
+    const question = await screen.findByRole("alertdialog", { name: ASKS });
+    const reads = () => asked.filter((one) => one.cmd === "dispatches").length;
+    const before = reads();
+
+    await userEvent.click(within(question).getByRole("button", { name: "Discard" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    // The core is handed back exactly what the question showed, so it removes nothing else.
+    expect(asked.find((one) => one.cmd === "dispatch_worktree_discard")?.args).toEqual({
+      plane: PLANE,
+      id: "01K6W",
+      seen: LOSS,
+    });
+    await vi.waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
+  it("says so where nothing in the folder would be lost", async () => {
+    core({
+      rows: WITH_BRANCHES,
+      loss: { ...LOSS, changes: [], ignored: [], unmerged: 0 },
+    });
+    render(<App />);
+    await opened();
+
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: DISCARD }));
+
+    const question = await screen.findByRole("alertdialog", { name: ASKS });
+    expect(within(question).getByTestId("discard-loses-nothing")).toHaveTextContent(
+      "The folder holds no uncommitted file and no ignored one, so nothing in it would be lost.",
+    );
+    expect(within(question).getByTestId("discard-branch")).toHaveTextContent(
+      `No commit is lost: the branch ${BRANCH} is removed only if it is already merged.`,
+    );
+  });
+
+  it("is not asked about while a chat is open in it: the refusal stands as a Notice", async () => {
+    const open =
+      "A chat is still open in the folder of the branch cut for 'fix the queue'. Close it first: purlis will not remove a folder a chat is working in.";
+    const { asked } = core({ rows: WITH_BRANCHES, loss: new Error(open) });
+    render(<App />);
+    await opened();
+
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: DISCARD }));
+
+    const kept = "The branch folder of fix the queue was not discarded";
+    const notice = await screen.findByRole("status", { name: kept });
+    expect(notice).toHaveTextContent(open);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(asked.some((one) => one.cmd === "dispatch_worktree_discard")).toBe(false);
+    // It has a way out.
+    await userEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(screen.queryByRole("status", { name: kept })).toBeNull());
+  });
+
+  it("names the commits a folder on no branch would lose, and never says none is lost", async () => {
+    // #1453 review, M2: its chat detached the folder and committed there.
+    core({
+      rows: WITH_BRANCHES,
+      loss: {
+        ...LOSS,
+        on: null,
+        changes: [],
+        ignored: [],
+        unmerged: 12,
+        lost: ["3a823aab fix the retry", "9f00d1c2 and its test"],
+      },
+    });
+    render(<App />);
+    await opened();
+
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: DISCARD }));
+
+    const question = await screen.findByRole("alertdialog", { name: ASKS });
+    expect(within(question).getByTestId("discard-loses-commits")).toHaveTextContent(
+      "12 commits made on no branch would be lost:",
+    );
+    const lost = within(question).getByTestId("discard-loses");
+    expect(lost).toHaveTextContent("3a823aab fix the retry");
+    expect(lost).toHaveTextContent("9f00d1c2 and its test");
+    expect(lost).toHaveTextContent("… and 10 more");
+    expect(question).not.toHaveTextContent(/No commit is lost/);
+    expect(within(question).queryByTestId("discard-loses-nothing")).toBeNull();
+    // The branch line names the branch purlis cut, which is the one the core may delete.
+    expect(within(question).getByTestId("discard-branch")).toHaveTextContent(
+      `The folder is on no branch. The branch ${BRANCH}, which purlis cut, is removed only if it is already merged.`,
+    );
+  });
+
+  it("keeps the question open with the core's refusal where the folder changed", async () => {
+    const changed =
+      "What that branch's folder holds has changed since you were asked, so nothing was removed. Press Discard again to see what would be lost now.";
+    core({ rows: WITH_BRANCHES, loss: LOSS, discardRefused: changed });
+    render(<App />);
+    await opened();
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: DISCARD }));
+    const question = await screen.findByRole("alertdialog", { name: ASKS });
+
+    await userEvent.click(within(question).getByRole("button", { name: "Discard" }));
+
+    expect(await within(question).findByRole("alert")).toHaveTextContent(changed);
+    expect(screen.getByRole("alertdialog", { name: ASKS })).toBeInTheDocument();
+  });
+
+  it("is said of a branch and its folder, never of a worktree", async () => {
+    // ADR 0072 §4: a piece is shown as its branch, and its directory is the branch's folder.
+    core({ rows: WITH_BRANCHES, loss: LOSS });
+    render(<App />);
+    const table = await opened();
+    expect(table).not.toHaveTextContent(/worktree/i);
+
+    await userEvent.click(within(row("01K6W")).getByRole("button", { name: DISCARD }));
+
+    const question = await screen.findByRole("alertdialog", { name: ASKS });
+    expect(question).not.toHaveTextContent(/worktree/i);
   });
 });
 

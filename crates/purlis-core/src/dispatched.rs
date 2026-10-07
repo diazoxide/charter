@@ -163,6 +163,13 @@ pub struct Row {
     /// this chat can wait on, tell, answer and cancel nothing of it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub by_person: bool,
+    /// The branch the app cut for it, where its dispatch gave it a worktree of its own
+    /// (#1453): the app's record, never a word the task said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// How that branch's worktree stands ([`crate::dispatchplace::Standing::said`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_stands: Option<String>,
 }
 
 // ---- how long a wait may be -------------------------------------------------------------------
@@ -971,6 +978,18 @@ pub fn list_text(rows: &[Row]) -> String {
             Some(secs) => format!("started {} ago", age_word(Duration::from_secs(secs))),
             None => "started before this app did".to_owned(),
         };
+        // Where it works in a worktree of its own: the branch purlis cut, and how it stands.
+        let place = match (&row.branch, &row.branch_stands) {
+            (Some(branch), stands) => format!(
+                "{place}, on its own branch `{}`{}",
+                crate::personas::one_line(branch),
+                stands
+                    .as_deref()
+                    .map(|stands| format!(" ({})", crate::personas::one_line(stands)))
+                    .unwrap_or_default()
+            ),
+            (None, _) => place,
+        };
         said.push_str(&format!(
             "\n- chat {} · '{}' · {} · {place} · {} · {age}{}",
             row.chat,
@@ -1026,6 +1045,7 @@ mod tests {
                 stepped_in: false,
                 by_person: false,
                 unreported: false,
+                branch: None,
             }),
             answered: None,
             stopped: None,
@@ -1134,6 +1154,8 @@ mod tests {
             state: State::NeedsThePerson.say(),
             age_secs: Some(65),
             by_person,
+            branch: None,
+            branch_stands: None,
         };
         let listed = list_text(&[row(8, false), row(9, true)]);
         assert_eq!(
@@ -1501,6 +1523,8 @@ mod tests {
                 state: State::Running.say(),
                 age_secs: Some(185),
                 by_person: false,
+                branch: None,
+                branch_stands: None,
             },
             Row {
                 chat: 12,
@@ -1510,6 +1534,8 @@ mod tests {
                 state: State::Reported(Some(Outcome::Done)).say(),
                 age_secs: None,
                 by_person: false,
+                branch: None,
+                branch_stands: None,
             },
         ];
 
@@ -1525,6 +1551,32 @@ mod tests {
             )
         );
         assert!(list_text(&[]).starts_with("This chat has no dispatched tasks open."));
+
+        // #1453: a task given a worktree of its own is listed with the branch purlis cut and
+        // how it stands, from the dispatch's record.
+        let on_a_branch = Row {
+            chat: 14,
+            name: "fix the queue".to_owned(),
+            persona: Some("devops".to_owned()),
+            place: "alpha".to_owned(),
+            state: State::Running.say(),
+            age_secs: Some(60),
+            by_person: false,
+            branch: Some("fix-the-queue-b5rc0def".to_owned()),
+            branch_stands: Some(crate::dispatchplace::Standing::Kept.said().to_owned()),
+        };
+        let listed = list_text(std::slice::from_ref(&on_a_branch));
+        assert!(
+            listed.contains(
+                " · workspace 'alpha', on its own branch `fix-the-queue-b5rc0def` (its \
+                 worktree is kept) · "
+            ),
+            "{listed}"
+        );
+        // And a row read back from the wire keeps both, while one from before has neither.
+        let wire = serde_json::to_string(&on_a_branch).unwrap();
+        assert_eq!(serde_json::from_str::<Row>(&wire).unwrap(), on_a_branch);
+        assert!(!serde_json::to_string(&rows[0]).unwrap().contains("branch"));
     }
 
     #[test]

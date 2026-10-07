@@ -779,6 +779,9 @@ impl Held {
         // Before it is off the board, while its conversation is still known: a dispatch it
         // was working on ends with it (#1452), unless a chat started in its place carries it.
         crate::dispatches::ended(self, session);
+        // And where that dispatch gave it a worktree, that is looked at once it has gone
+        // (#1453): asked now, while the app still knows the chat.
+        let worktree = crate::dispatches::worktree_to_look_at(self, session);
         let gone = self.board().closed(session);
         lock_started(&self.started_on).remove(&session);
         self.typed.forget(session);
@@ -817,6 +820,15 @@ impl Held {
         // needs-you item that says so: nobody else will read what it wrote. purlis's own word
         // that a chat was stopped is no report, and raises none.
         self.reports_have_nowhere_to_go(session, &orphaned);
+        // A worktree whose branch is merged goes with its chat (#1453). On a thread of its
+        // own, which holds no lock of this app's: it reads the dispatch's record and runs git,
+        // and neither a close nor the thread that hears a program end waits for it.
+        if let Some(id) = worktree {
+            let root = self.root.clone();
+            std::thread::spawn(move || {
+                crate::dispatches::tidy_closed(&root, &id);
+            });
+        }
         closed
     }
 
@@ -1429,6 +1441,15 @@ impl Planes {
         }
         // And a dispatch whose persona chat that record does not bring back has ended (#1452).
         purlis_core::dispatchrecord::settle_on_open(&root, chrono::Utc::now());
+        // Then the worktrees of the dispatches that have ended are looked at, once (#1453):
+        // one whose branch is merged, and that no chat coming back stands in, is taken away.
+        // **Which chats come back is read here**, beside the settle above and before this
+        // open rewrites the record; the look itself runs git, so it is on a thread of its own
+        // and opening a project does not wait for it.
+        if let Some(at_open) = purlis_core::dispatchplace::at_open(&root) {
+            let root = root.clone();
+            std::thread::spawn(move || crate::dispatches::tidy_opened(&root, &at_open));
+        }
         let held = Arc::new(self.hold(id.clone(), root));
         let _ = held.me.set(Arc::downgrade(&held));
         // A handoff from one of this plane's chats is answered by this plane, which is the

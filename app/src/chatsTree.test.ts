@@ -3,6 +3,7 @@ import {
   belowCount,
   chatsTree,
   needing,
+  ownBranch,
   parentsIn,
   startedBy,
   startedElsewhere,
@@ -22,6 +23,7 @@ function listed(session: number, parent: number | null = null): ListedChat {
     mode: parent === null ? null : "task",
     from: parent === null ? null : `chat ${parent}`,
     tab: parent === null,
+    branch: null,
   };
 }
 
@@ -66,6 +68,28 @@ describe("the project's chats as a tree", () => {
       "1:4",
       "2:3",
     ]);
+  });
+
+  it("says the branch of its own a task works on, from the folder purlis cut for it", () => {
+    // #1453. Only a task's: a chat the person started in a branch's folder is not a dispatch's.
+    const chat = (cwd: string | null, task: boolean | null) =>
+      ({
+        cwd,
+        from:
+          task === null
+            ? null
+            : { name: "steward 1", workspace: "alpha", chat: 1, task, tab: !task },
+      }) as Parameters<typeof ownBranch>[0];
+    const folder = "/p/workspaces/alpha/.worktrees/api/check-the-queue-b5rc0def";
+    expect(ownBranch(chat(folder, true))).toBe("check-the-queue-b5rc0def");
+    expect(ownBranch(chat(`${folder}/src/deep`, true))).toBe("check-the-queue-b5rc0def");
+    // A task in the asking chat's folder, or in another workspace's, has none.
+    expect(ownBranch(chat("/p/workspaces/alpha/api", true))).toBeNull();
+    expect(ownBranch(chat("/p/workspaces/beta", true))).toBeNull();
+    expect(ownBranch(chat(null, true))).toBeNull();
+    // A handoff's chat and one the person opened are not tasks.
+    expect(ownBranch(chat(folder, false))).toBeNull();
+    expect(ownBranch(chat(folder, null))).toBeNull();
   });
 
   it("lists what each chat started, by the asking chat's number, open parents only", () => {

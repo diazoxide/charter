@@ -2090,6 +2090,31 @@ fn already(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// **The paths purlis itself hides in the checkout at `tree`**: what its block of the exclude
+/// file that checkout reads lists now, the layer it wrote there (a chat's `AGENTS.md` among
+/// them) and its temp pattern. Empty where there is no block or the file cannot be read.
+///
+/// For a caller that lists what git ignores in a chat's folder and must tell what the chat
+/// left from what purlis put there (#1453).
+pub fn hidden_by_purlis(tree: &Path) -> BTreeSet<String> {
+    exclude_file(tree)
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .map(|text| already(&text))
+        .unwrap_or_default()
+}
+
+/// Whether `path`, a path of a checkout as `git status` prints it, is one of `hidden`
+/// ([`hidden_by_purlis`]): listed there itself, or a temp purlis writes beside a file of its
+/// own, whatever folder it is in.
+pub fn is_purlis_own(hidden: &BTreeSet<String>, path: &str) -> bool {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    hidden.contains(path)
+        || (hidden.iter().any(|rel| is_temp_pattern(rel))
+            && names::GENERATED_TEMP_PREFIX
+                .strip(file)
+                .is_some_and(|rest| rest.ends_with(".tmp")))
+}
+
 /// The block listing `rels`, **in the order given** — [`shared_rels`] decides both, the
 /// temp-file pattern among them, which is written unanchored. charter's `_exclude_block`.
 ///

@@ -96,7 +96,16 @@ function core(now: Core) {
           personas: ["devops", "steward"],
           persona: "steward",
           unfiled: [],
-          workspaces: [{ name: "alpha", path: ALPHA, vision: "", todos: [], chats: [CHAT] }],
+          workspaces: [
+            { name: "alpha", path: ALPHA, vision: "", todos: [], chats: [CHAT] },
+            {
+              name: "beta",
+              path: `${PLANE}/workspaces/beta`,
+              vision: "",
+              todos: [],
+              chats: [],
+            },
+          ],
         };
       if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
@@ -174,6 +183,8 @@ describe("Ask a persona from a chat's tab", () => {
           persona: "devops",
           name: "check prod",
           ask: "Is prod healthy?",
+          // Nothing was picked: this chat's folder.
+          place: null,
           columns: 80,
           rows: 24,
         },
@@ -203,6 +214,66 @@ describe("Ask a persona from a chat's tab", () => {
     });
     expect(tabs[1]).toHaveTextContent("check prod");
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("offers three places to work, and sends the core its one word for the pick", async () => {
+    // #1453: this chat's folder, a branch of its own, or another workspace. The window says
+    // branch and folder, never worktree (ADR 0072 §4); the core's word for it is `worktree`.
+    const { asked } = await aStewardChat();
+    await userEvent.click(within(await tabMenu()).getByRole("menuitem", { name: "Ask devops…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Ask devops" });
+    await userEvent.type(within(dialog).getByLabelText("Task name"), "check prod");
+    await userEvent.type(within(dialog).getByLabelText("What to ask"), "Is prod healthy?");
+
+    const places = within(dialog).getByRole("radiogroup", { name: "Where it works" });
+    expect(
+      within(places)
+        .getAllByRole("radio")
+        .map((radio) => radio.getAttribute("aria-checked")),
+    ).toEqual(["true", "false", "false"]);
+    expect(dialog).not.toHaveTextContent(/worktree/i);
+
+    await userEvent.click(within(places).getByRole("radio", { name: "A branch of its own" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Ask devops" }));
+
+    await waitFor(() =>
+      expect(asked("ask_persona_chat")).toEqual([
+        {
+          plane: PLANE,
+          session: 4,
+          persona: "devops",
+          name: "check prod",
+          ask: "Is prod healthy?",
+          place: "worktree",
+          columns: 80,
+          rows: 24,
+        },
+      ]),
+    );
+  });
+
+  it("asks which workspace before it sends a chat into another one", async () => {
+    const { asked } = await aStewardChat();
+    await userEvent.click(within(await tabMenu()).getByRole("menuitem", { name: "Ask devops…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Ask devops" });
+    await userEvent.type(within(dialog).getByLabelText("Task name"), "check prod");
+    await userEvent.type(within(dialog).getByLabelText("What to ask"), "Is prod healthy?");
+    const send = within(dialog).getByRole("button", { name: "Ask devops" });
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Another workspace" }));
+
+    // The pick has a second half, and nothing is sent without it.
+    expect(send).toBeDisabled();
+    const which = within(dialog).getByLabelText("Workspace");
+    // The workspace this chat works in is not offered: there, this chat's folder is the pick.
+    expect(within(which).queryByRole("option", { name: "alpha" })).toBeNull();
+    await userEvent.selectOptions(which, "beta");
+    expect(send).toBeEnabled();
+    await userEvent.click(send);
+
+    await waitFor(() =>
+      expect(asked("ask_persona_chat").map((args) => args.place)).toEqual(["workspace:beta"]),
+    );
   });
 
   it("keeps what you typed and says the core's sentence when the chat does not start", async () => {
@@ -253,6 +324,7 @@ describe("Ask a persona from a chat's tab", () => {
           persona: "devops",
           name: "use vault prod",
           ask: "Run the check that needs vault prod.",
+          place: null,
           columns: 80,
           rows: 24,
         },

@@ -467,6 +467,13 @@ enum Command {
     /// It starts on the persona's own harness profile where its definition names one, else on
     /// this chat's; --profile names another of the project's profiles.
     ///
+    /// --in says where else it works: `--in workspace:<name>` starts it in another workspace
+    /// of the project, and `--in worktree` gives it a new worktree of the repo this chat works
+    /// in, on a new branch purlis names. Nothing is merged for it. Where the project has no
+    /// sandbox, a worktree task commits on that branch and its report names it. Where the new
+    /// chat is sandboxed it can edit in its worktree and cannot commit there yet (purlis issue
+    /// 1055): its changes stay in that folder, and its report should list them.
+    ///
     /// `purlis dispatch report --outcome done "<text>"`, from a chat a dispatch started, sends
     /// its one report back.
     ///
@@ -498,6 +505,11 @@ enum Command {
         /// With --wait, how long to wait, in seconds (default 100, at most 540).
         #[arg(long, requires = "wait")]
         timeout: Option<u32>,
+        /// Where the new chat works: `workspace:<name>` for another workspace, or `worktree`
+        /// for a new worktree on its own branch (default: this chat's folder, or a worktree
+        /// where the persona's definition says `dispatch-isolation: worktree`).
+        #[arg(long = "in", value_name = "WHERE")]
+        place: Option<String>,
         #[command(subcommand)]
         command: Option<dispatch::DispatchCommand>,
     },
@@ -3666,6 +3678,7 @@ fn main() -> ExitCode {
         profile,
         wait,
         timeout,
+        place,
         command,
     } = &cli.command
     {
@@ -3684,7 +3697,10 @@ fn main() -> ExitCode {
             &here,
             to.as_deref(),
             name.as_deref(),
-            profile.as_deref(),
+            &dispatch::Options {
+                profile: profile.as_deref(),
+                place: place.as_deref(),
+            },
             waits,
         );
     }

@@ -135,6 +135,8 @@ macro_rules! app_commands {
                 plane_root_panels,
                 session_record,
                 dispatches::dispatches,
+                dispatches::dispatch_worktree_loss,
+                dispatches::dispatch_worktree_discard,
                 resume_session,
                 autosave::plane_fetch,
                 saving::plane_saving,

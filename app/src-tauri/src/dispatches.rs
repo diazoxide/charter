@@ -20,6 +20,26 @@
 //!
 //! What the window draws is only what passes `dispatchrecord::sound`: a record in the store
 //! holding text purlis refuses to draw is counted and not shown.
+//!
+//! # A dispatch's worktree (#1453)
+//!
+//! A dispatch that gave its persona chat a worktree lists it on its row, with how it stands:
+//! kept, merged, discarded or gone. **Nothing merges it, ever.** It goes one of two ways, and
+//! both are here:
+//!
+//! - **Discard** ([`dispatch_worktree_discard`]) is a window command, so only the person runs
+//!   it: no line on the hook channel reaches it. It asks first
+//!   ([`dispatch_worktree_loss`] reads exactly what would go), is refused while any chat
+//!   stands in the worktree, and removes the folder only where the paths it holds are still
+//!   the ones the person was shown. **It loses no commit**: the branch stays unless git finds it merged
+//!   (ADR 0072 §4).
+//! - **purlis takes a merged one away itself** ([`tidy_closed`], and
+//!   `purlis_core::dispatchplace::tidy_at_open`), looking when its chat is closed and when the
+//!   project is opened and at no other time. Only by git's safe removal: a folder holding
+//!   anything uncommitted stays exactly as it is.
+//!
+//! The window says all of this of a **branch** and its **folder**, never of a worktree
+//! (ADR 0072 §4), so the sentences here that a person reads do too.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -79,12 +99,50 @@ pub(crate) fn folder(root: &Path, cwd: &Path) -> String {
     }
 }
 
-/// The app started a persona chat: its dispatch has a record from now. A record that could not
-/// be written is said in the app's log and costs the dispatch nothing: the chat is open.
-pub(crate) fn opened(held: &Held, opening: Opening) {
-    if let Err(why) = dispatchrecord::open(held.root(), opening, chrono::Utc::now()) {
+/// The app started a persona chat: its dispatch has a record from now, under `id` where one
+/// was minted before the chat started (a worktree task's folder and branch are named for it,
+/// #1453). A record that could not be written is said in the app's log and costs the dispatch
+/// nothing: the chat is open.
+pub(crate) fn opened(held: &Held, id: Option<String>, opening: Opening) {
+    let now = chrono::Utc::now();
+    let written = match id {
+        Some(id) => dispatchrecord::open_as(held.root(), id, opening, now),
+        None => dispatchrecord::open(held.root(), opening, now),
+    };
+    if let Err(why) = written {
         tracing::warn!("purlis: a dispatch's record was not written ({why})");
     }
+}
+
+/// The worktree the app cut for the dispatch chat `session` worked on, where it cut one: this
+/// app's record, which is what the task's report names as its branch.
+///
+/// **Of its newest dispatch, running or ended**: a report sent after the record ended (a
+/// follow-up's, a stopped chat's last one) names the branch as the first did.
+pub(crate) fn worktree_of(held: &Held, session: u32) -> Option<dispatchrecord::Worktree> {
+    dispatchrecord::latest_for(held.root(), &chat_ref(held, session)?)?
+        .place
+        .worktree
+}
+
+/// The branch a report of chat `session` names: the one the app cut for its dispatch, from
+/// the record ([`worktree_of`]). For a report a chat sends and for one the app writes in a
+/// chat's place alike.
+pub(crate) fn branch_of(held: &Held, session: u32) -> Option<purlis_core::handback::Branch> {
+    let tree = worktree_of(held, session)?;
+    Some(purlis_core::handback::Branch {
+        name: tree.branch?,
+        repo: tree.repo,
+    })
+}
+
+/// What a chat's list of its tasks says of the branch task `session` was given, where it was
+/// given one: the branch, and how it stands (`purlis_core::dispatchplace::Standing::said`).
+pub(crate) fn branch_listed(held: &Held, session: u32) -> Option<(String, String)> {
+    let record = dispatchrecord::latest_for(held.root(), &chat_ref(held, session)?)?;
+    let branch = record.place.worktree.as_ref()?.branch.clone()?;
+    let stands = purlis_core::dispatchplace::standing(held.root(), &record)?;
+    Some((branch, stands.said().to_owned()))
 }
 
 /// The board took a report from chat `session`: where it has just come to wait on the person,
@@ -123,7 +181,16 @@ pub(crate) fn reported(held: &Held, session: u32, outcome: Outcome, text: &str) 
         report: Some(dispatchrecord::Report {
             outcome,
             text: text.to_owned(),
-            changed: dispatchrecord::Changed::default(),
+            // The branch is the one the app cut for it (#1453), from this record and never
+            // from the report.
+            changed: dispatchrecord::Changed {
+                branch: record
+                    .place
+                    .worktree
+                    .as_ref()
+                    .and_then(|tree| tree.branch.clone()),
+                ..Default::default()
+            },
         }),
         usage: spent(held, session),
     };
@@ -167,6 +234,66 @@ pub(crate) fn ended(held: &Held, session: u32) {
 pub(crate) fn session_recorded(held: &Held, session: u32, path: &str) {
     if let Some(chat) = chat_ref(held, session) {
         dispatchrecord::session_recorded(held.root(), &chat, path);
+    }
+}
+
+/// **The dispatch whose worktree is to be looked at once chat `session` is closed** (#1453):
+/// the newest dispatch that chat worked on, where the app cut it a worktree that is still
+/// kept. Asked before the chat is closed, while the app still knows it; `None` where a chat
+/// started again in its place carries on, or another open chat stands in that folder.
+pub(crate) fn worktree_to_look_at(held: &Held, session: u32) -> Option<String> {
+    use purlis_core::dispatchplace::{self, Standing, Tree};
+
+    held.chats().handed_from(session)?;
+    let me = chat_ref(held, session)?;
+    let record = dispatchrecord::latest_for(held.root(), &me)?;
+    if dispatchplace::standing(held.root(), &record) != Some(Standing::Kept) {
+        return None;
+    }
+    let tree = Tree::of(&record)?;
+    let in_use = held.chats().open_now().iter().any(|open| {
+        open.session != session
+            && (open
+                .cwd
+                .as_deref()
+                .is_some_and(|cwd| tree.holds(held.root(), cwd))
+                || (me.id.is_some()
+                    && held
+                        .chats()
+                        .chat_at(open.session)
+                        .is_some_and(|other| other.id == me.id)))
+    });
+    (!in_use).then_some(record.id)
+}
+
+/// Chat `session` is closed, and dispatch `id` was what it worked on: where its worktree's
+/// branch is merged, the worktree is taken away and its record says so
+/// (`purlis_core::dispatchplace::tidy_recorded`). Anything else leaves it listed, with
+/// Discard. Runs git, so the app calls it off the thread that closed the chat.
+pub(crate) fn tidy_closed(root: &Path, id: &str) -> purlis_core::dispatchplace::Tidied {
+    match dispatchrecord::read(root, id) {
+        Some(record) => {
+            purlis_core::dispatchplace::tidy_recorded(root, &record, &crate::gitbroker::isolation())
+        }
+        None => purlis_core::dispatchplace::Tidied::Kept,
+    }
+}
+
+/// The project at `root` was opened, and `at_open` is the chats its reopen record brought
+/// back as the open read it: the worktrees of its ended dispatches are looked at, once
+/// (`purlis_core::dispatchplace::tidy_at_open`). Runs git only where a record still names a
+/// worktree purlis has not taken away, so opening a project that has none costs a read of the
+/// store and no more.
+pub(crate) fn tidy_opened(root: &Path, at_open: &purlis_core::dispatchplace::AtOpen) {
+    let any = dispatchrecord::list(root).iter().any(|record| {
+        record
+            .place
+            .worktree
+            .as_ref()
+            .is_some_and(|tree| tree.removed.is_none())
+    });
+    if any {
+        purlis_core::dispatchplace::tidy_at_open(root, at_open, &crate::gitbroker::isolation());
     }
 }
 
@@ -241,6 +368,38 @@ pub(crate) struct DispatchRow {
     pub open_session: Option<u32>,
     /// Else its session record, by its project-relative path, once it wrote one.
     pub session_record: Option<String>,
+    /// The worktree the app cut for it, where the dispatch gave it one (#1453), and how it
+    /// stands. `null` for a dispatch that worked in a folder that was already there.
+    pub worktree: Option<RowWorktree>,
+}
+
+/// A dispatch's worktree, as its row lists it (#1453).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct RowWorktree {
+    /// The repo it was cut from.
+    pub repo: String,
+    /// The branch purlis cut for it.
+    pub branch: Option<String>,
+    /// `kept` while its folder is there; `merged` once purlis found its branch merged and took
+    /// folder and branch away; `merged-branch-kept` where git kept the branch; `discarded` once the person discarded its folder;
+    /// `gone` for one removed by other means.
+    pub standing: String,
+    /// Whether Discard is offered: its folder is there. Discard itself is refused while a chat
+    /// still stands in it.
+    pub discard: bool,
+}
+
+/// `record`'s worktree as its row lists it, in the project at `root`.
+pub(crate) fn worktree_row(root: &Path, record: &Record) -> Option<RowWorktree> {
+    use purlis_core::dispatchplace::{self, Standing};
+    let tree = record.place.worktree.as_ref()?;
+    let standing = dispatchplace::standing(root, record)?;
+    Some(RowWorktree {
+        repo: tree.repo.clone(),
+        branch: tree.branch.clone(),
+        standing: standing.word().to_owned(),
+        discard: standing == Standing::Kept,
+    })
 }
 
 /// A chat the app has open, as far as a row needs it.
@@ -313,6 +472,8 @@ pub(crate) fn row(
         report: record.report.as_ref().map(|report| report.text.clone()),
         open_session,
         session_record: record.worker.session_record.clone(),
+        // Read from the project by the caller that lists rows ([`worktree_row`]).
+        worktree: None,
     }
 }
 
@@ -399,7 +560,10 @@ pub(crate) fn rows(held: &Held) -> Dispatches {
         rows: drawn
             .records
             .iter()
-            .map(|record| row(record, &open, now))
+            .map(|record| DispatchRow {
+                worktree: worktree_row(held.root(), record),
+                ..row(record, &open, now)
+            })
             .collect(),
         undrawn: u32::try_from(drawn.refused).unwrap_or(u32::MAX),
     }
@@ -416,6 +580,204 @@ pub(crate) async fn dispatches(
 ) -> Result<Dispatches, String> {
     let held = planes.held(&plane)?;
     crate::off_the_window("reading the project's dispatches", move || Ok(rows(&held))).await
+}
+
+// ---------------------------------------------------------------------------------------
+// Discard
+// ---------------------------------------------------------------------------------------
+
+/// What discarding the folder of a dispatch's own branch would take with it, as the window
+/// shows it before it asks (#1453), and as the window hands it back with the answer: **the
+/// paths discarded are the ones the person was shown, or nothing is.**
+///
+/// A comparison of paths, and it says so: every uncommitted file is listed by its own path,
+/// so a new one is seen. A listed file changed again, or a file added inside a folder git
+/// ignores whole, is the same list and passes. The moment between the last read and git's
+/// removal is not covered either.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub(crate) struct WorktreeLoss {
+    /// The task, by the name its row has.
+    pub task: String,
+    /// The repo the branch is in.
+    pub repo: String,
+    /// The branch purlis cut for the task, by the dispatch's record: the one a discard may
+    /// delete, and only where git finds it merged.
+    pub branch: Option<String>,
+    /// The branch the folder is on now; `null` for a folder on no branch (a detached HEAD).
+    /// The record's, unless the chat switched its folder away from it.
+    pub on: Option<String>,
+    /// Every uncommitted path, as git prints it (`?? new.txt`, ` M a.rs`): lost with the
+    /// folder.
+    pub changes: Vec<String>,
+    /// Every path git ignores there, a folder as one entry (`target/`): build output, local
+    /// settings, and what purlis keeps hidden in a chat's folder. Deleted with the folder.
+    pub ignored: Vec<String>,
+    /// How many commits the folder holds that exist on no other branch and no remote. **Where
+    /// the folder is on a branch they are not lost**: that branch stays. Where it is on none,
+    /// nothing keeps them and they go with the folder.
+    pub unmerged: u32,
+    /// Those commits, newest first, as `<short sha> <subject>` and at most eleven of them,
+    /// **where they would be lost**: the folder is on no branch. Empty otherwise.
+    pub lost: Vec<String>,
+}
+
+/// What a discard is told of a folder that is no longer there.
+const ALREADY_GONE: &str = "That branch's folder is already gone, so there is nothing to discard.";
+
+/// Why a branch's folder is not discarded while a chat stands in it.
+fn still_open(task: &str) -> String {
+    format!(
+        "A chat is still open in the folder of the branch cut for '{task}'. Close it first: \
+         purlis will not remove a folder a chat is working in."
+    )
+}
+
+/// What stands in the way of discarding the worktree of `record`, where something does: its
+/// dispatch still runs, its chat is open, or any other open chat stands in its folder.
+fn in_the_way(
+    held: &Held,
+    record: &Record,
+    tree: &purlis_core::dispatchplace::Tree,
+) -> Option<String> {
+    let task = record
+        .task
+        .clone()
+        .unwrap_or_else(|| record.worker.chat.name.clone());
+    let open = held.chats().open_now();
+    let its_chat = open.iter().any(|chat| {
+        let id = held.chats().chat_at(chat.session).and_then(|at| at.id);
+        dispatchrecord::named(&record.worker.chat, id.as_deref(), Some(chat.session))
+    });
+    let stood_in = open.iter().any(|chat| {
+        chat.cwd
+            .as_deref()
+            .is_some_and(|cwd| tree.holds(held.root(), cwd))
+    });
+    (record.running() || its_chat || stood_in).then(|| still_open(&task))
+}
+
+/// The dispatch `id` and its worktree, where it has one that is still kept and no chat stands
+/// in the way.
+fn discardable(
+    held: &Held,
+    id: &str,
+) -> Result<(Record, purlis_core::dispatchplace::Tree), String> {
+    use purlis_core::dispatchplace::{self, Standing, Tree};
+    let record = dispatchrecord::read(held.root(), id)
+        .ok_or_else(|| "purlis has no record of that dispatch.".to_owned())?;
+    if dispatchplace::standing(held.root(), &record) != Some(Standing::Kept) {
+        return Err(ALREADY_GONE.to_owned());
+    }
+    let tree = Tree::of(&record).ok_or_else(|| ALREADY_GONE.to_owned())?;
+    if let Some(why) = in_the_way(held, &record, &tree) {
+        return Err(why);
+    }
+    Ok((record, tree))
+}
+
+/// What discarding the folder of dispatch `id`'s branch would take with it, read now.
+///
+/// Refused where git will not say what is there: a confirmation that cannot name what would
+/// be lost is not one purlis asks for.
+pub(crate) fn loss_of(held: &Held, id: &str) -> Result<WorktreeLoss, String> {
+    let (record, tree) = discardable(held, id)?;
+    let risk =
+        purlis_core::dispatchplace::at_risk(held.root(), &tree, &crate::gitbroker::isolation())
+            .map_err(|not_done| not_done.in_window(&tree.repo))?
+            .ok_or_else(|| ALREADY_GONE.to_owned())?;
+    let unread = || {
+        "purlis could not read what that branch's folder holds, so it will not discard it: it \
+         could not tell you what would be lost. Look in the folder by hand."
+            .to_owned()
+    };
+    Ok(WorktreeLoss {
+        task: record
+            .task
+            .clone()
+            .unwrap_or_else(|| record.worker.chat.name.clone()),
+        repo: tree.repo.clone(),
+        // The record's branch, never whatever the folder is on now: it is the only branch a
+        // discard touches.
+        branch: tree.branch.clone(),
+        changes: risk.changes.ok_or_else(unread)?,
+        ignored: risk.ignored.ok_or_else(unread)?,
+        unmerged: risk.unmerged.ok_or_else(unread)?,
+        // On no branch, nothing keeps the folder's own commits: they are named, as lost.
+        lost: if risk.branch.is_none() {
+            risk.commits
+        } else {
+            Vec::new()
+        },
+        on: risk.branch,
+    })
+}
+
+/// **Discards the folder of dispatch `id`'s own branch**, whatever is in it, where that is
+/// exactly what `seen` says the person was shown. Its branch goes too only where git finds it
+/// merged; one that holds a commit stays (`purlis_core::dispatchplace::discard`).
+///
+/// Read again at this moment and compared: a file written or a commit made since the question
+/// was asked is something the person did not agree to, so nothing is removed and they are
+/// asked again. And refused, as the question was, while any chat stands in the folder.
+pub(crate) fn discard(held: &Held, id: &str, seen: &WorktreeLoss) -> Result<(), String> {
+    let now = loss_of(held, id)?;
+    if now != *seen {
+        return Err(
+            "What that branch's folder holds has changed since you were asked, so nothing was \
+             removed. Press Discard again to see what would be lost now."
+                .to_owned(),
+        );
+    }
+    // Asked once more, last: a chat started there while git was read stands in the way too.
+    let (record, tree) = discardable(held, id)?;
+    purlis_core::dispatchplace::discard(held.root(), &tree, &crate::gitbroker::isolation())
+        .map_err(|not_done| not_done.in_window(&tree.repo))?;
+    if let Err(why) = dispatchrecord::worktree_removed(
+        held.root(),
+        &record.id,
+        dispatchrecord::Removed::Discarded,
+    ) {
+        tracing::warn!("purlis: a discarded worktree's record was not updated ({why})");
+    }
+    Ok(())
+}
+
+/// What discarding the folder of dispatch `id`'s own branch would take with it (#1453): every
+/// uncommitted file, every ignored one, and how many commits its branch holds that exist
+/// nowhere else, for the question the window asks before it discards. Refused while a chat is
+/// still open in the folder, and where git will not say what is there.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn dispatch_worktree_loss(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    id: String,
+) -> Result<WorktreeLoss, String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window("reading what the branch's folder holds", move || {
+        loss_of(&held, &id)
+    })
+    .await
+}
+
+/// **Discard** on a dispatch's own branch (#1453): removes its folder, for good, with every
+/// uncommitted and ignored file in it. The branch is kept unless git finds it merged, so no
+/// commit is lost. `seen` is what the window showed the person would go, as
+/// `dispatch_worktree_loss` answered it: where the folder holds anything else by now, nothing
+/// is removed. Refused while a chat is still open in the folder. Nothing is merged.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn dispatch_worktree_discard(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    id: String,
+    seen: WorktreeLoss,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window("discarding the branch's folder", move || {
+        discard(&held, &id, &seen)
+    })
+    .await
 }
 
 /// One dispatch a chat made, as its session record's tab lists it.
@@ -550,6 +912,7 @@ mod tests {
                     repo: "svc".to_owned(),
                     piece: "fix".to_owned(),
                     branch: Some("fix/rollout".to_owned()),
+                    removed: None,
                 }),
                 ..a_record().place
             },
@@ -660,6 +1023,83 @@ mod tests {
         // A chat closed while waiting starts from nothing.
         waiting.forget(7);
         assert!(waiting.began(7, true));
+    }
+
+    #[test]
+    fn a_row_lists_the_worktree_its_dispatch_was_given_and_offers_discard_only_while_it_is_kept() {
+        use purlis_core::dispatchrecord::Removed;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let given = |piece: &str, removed: Option<Removed>| Record {
+            ended: Some("2026-10-07T14:05:00+00:00".to_owned()),
+            place: Place {
+                workspace: Some("alpha".to_owned()),
+                folder: Some(format!("workspaces/alpha/.worktrees/svc/{piece}")),
+                worktree: Some(Worktree {
+                    repo: "svc".to_owned(),
+                    piece: piece.to_owned(),
+                    branch: Some(piece.to_owned()),
+                    removed,
+                }),
+            },
+            ..a_record()
+        };
+        let listed = |record: &Record| {
+            worktree_row(root, record).map(|listed| (listed.standing, listed.discard))
+        };
+        std::fs::create_dir_all(root.join("workspaces/alpha/.worktrees/svc/fix-00000000")).unwrap();
+
+        // Its folder is there and nothing has merged it: listed, with Discard.
+        let kept = given("fix-00000000", None);
+        assert_eq!(listed(&kept), Some(("kept".to_owned(), true)));
+        let row = worktree_row(root, &kept).unwrap();
+        assert_eq!(
+            (row.repo.as_str(), row.branch.as_deref()),
+            ("svc", Some("fix-00000000"))
+        );
+        // What purlis did to it is the record's word, and neither is discarded twice.
+        assert_eq!(
+            listed(&given("fix-00000000", Some(Removed::Merged))),
+            Some(("merged".to_owned(), false))
+        );
+        assert_eq!(
+            listed(&given("fix-00000000", Some(Removed::MergedBranchKept))),
+            Some(("merged-branch-kept".to_owned(), false))
+        );
+        assert_eq!(
+            listed(&given("fix-00000000", Some(Removed::Discarded))),
+            Some(("discarded".to_owned(), false))
+        );
+        // A record that names a branch folder purlis did not cut for it offers no Discard: its
+        // name does not end with the end of the record's own id.
+        std::fs::create_dir_all(root.join("workspaces/alpha/.worktrees/svc/chat-1")).unwrap();
+        assert_eq!(
+            listed(&given("chat-1", None)),
+            Some(("gone".to_owned(), false))
+        );
+        // Its folder gone by other hands, and a record whose names climb out of the project.
+        assert_eq!(
+            listed(&given("other-00000000", None)),
+            Some(("gone".to_owned(), false))
+        );
+        assert_eq!(
+            listed(&given("../../../etc", None)),
+            Some(("gone".to_owned(), false))
+        );
+        // A dispatch that worked in a folder that was already there lists none.
+        assert_eq!(listed(&a_record()), None);
+        // And the row's place names the branch, as it did.
+        assert_eq!(
+            row_of(&kept).place,
+            "alpha · fix-00000000",
+            "the workspace, then its own branch"
+        );
+    }
+
+    /// `record`'s row with nothing open, at a fixed time.
+    fn row_of(record: &Record) -> DispatchRow {
+        row(record, &[], at("2026-10-09T00:00:00Z"))
     }
 
     #[test]

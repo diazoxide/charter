@@ -833,3 +833,136 @@ fn a_line_forged_with_a_record_s_fields_carries_none_of_them_past_the_wire() {
         }
     }
 }
+
+// ----- a worktree of its own (#1453) ------------------------------------------------------
+
+/// A task that was given a worktree of `api` in `alpha`, named for the dispatch.
+fn a_worktree_task(piece: &str) -> Opening {
+    Opening {
+        mode: Mode::Task,
+        place: Place {
+            workspace: Some("alpha".to_owned()),
+            folder: Some(format!("workspaces/alpha/.worktrees/api/{piece}")),
+            worktree: Some(Worktree {
+                repo: "api".to_owned(),
+                piece: piece.to_owned(),
+                branch: Some(piece.to_owned()),
+                removed: None,
+            }),
+        },
+        ..a_handoff()
+    }
+}
+
+#[test]
+fn a_record_is_opened_under_the_id_its_worktree_was_named_for_and_only_once() {
+    let (_d, root) = project();
+    let id = mint();
+    let piece = crate::dispatchplace::piece_name("check prod", &id);
+
+    let opened = open_as(
+        &root,
+        id.clone(),
+        a_worktree_task(&piece),
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+
+    assert_eq!(opened.id, id);
+    let read = read(&root, &id).expect("the record");
+    let tree = read.place.worktree.as_ref().expect("its worktree");
+    assert_eq!(tree.repo, "api");
+    assert_eq!(tree.branch.as_deref(), Some(piece.as_str()));
+    assert_eq!(tree.removed, None);
+    assert!(
+        piece.ends_with(&id[id.len() - 8..].to_lowercase()),
+        "{piece} is named for {id}"
+    );
+    // A second record under that id is refused, and the first stays as it was.
+    let again = open_as(&root, id.clone(), a_handoff(), at("2026-10-07T12:01:00Z"));
+    assert_eq!(
+        again.expect_err("written once").kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(super::read(&root, &id), Some(read));
+    // And an id purlis did not mint names no record.
+    for forged in ["../../x", "", "not-a-ulid", "01k6z3v9qj8m4t2w7xb5rc0def"] {
+        let refused = open_as(
+            &root,
+            forged.to_owned(),
+            a_handoff(),
+            at("2026-10-07T12:00:00Z"),
+        );
+        assert!(refused.is_err(), "{forged:?}");
+    }
+    assert_eq!(list(&root).len(), 1);
+}
+
+#[test]
+fn how_a_worktree_went_is_recorded_once_and_never_for_a_dispatch_still_running() {
+    let (_d, root) = project();
+    let opened = open(
+        &root,
+        a_worktree_task("check-prod-b5rc0def"),
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    let removed = |root: &Path| {
+        read(root, &opened.id)
+            .and_then(|record| record.place.worktree)
+            .and_then(|tree| tree.removed)
+    };
+
+    // Its chat still works there.
+    assert!(!worktree_removed(&root, &opened.id, Removed::Merged).unwrap());
+    assert_eq!(removed(&root), None);
+
+    close(
+        &root,
+        &opened.id,
+        Ending::default(),
+        at("2026-10-07T12:05:00Z"),
+    )
+    .unwrap();
+    assert!(worktree_removed(&root, &opened.id, Removed::Merged).unwrap());
+    assert_eq!(removed(&root), Some(Removed::Merged));
+    // The first word is the one kept.
+    assert!(!worktree_removed(&root, &opened.id, Removed::Discarded).unwrap());
+    assert_eq!(removed(&root), Some(Removed::Merged));
+    // Written as one word, and drawn.
+    let text = std::fs::read_to_string(dir(&root).join(format!("{}.json", opened.id))).unwrap();
+    assert!(text.contains("\"removed\": \"merged\""), "{text}");
+    assert_eq!(drawn(&root).refused, 0);
+
+    // A dispatch that had no worktree has nothing to mark.
+    let plain = open(&root, a_handoff(), at("2026-10-07T12:10:00Z")).unwrap();
+    close(
+        &root,
+        &plain.id,
+        Ending::default(),
+        at("2026-10-07T12:11:00Z"),
+    )
+    .unwrap();
+    assert!(!worktree_removed(&root, &plain.id, Removed::Discarded).unwrap());
+}
+
+#[test]
+fn the_newest_dispatch_a_chat_worked_on_is_found_running_or_ended() {
+    let (_d, root) = project();
+    assert_eq!(latest_for(&root, &devops()), None);
+    let first = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    close(
+        &root,
+        &first.id,
+        Ending::default(),
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        latest_for(&root, &devops()).map(|record| record.id),
+        Some(first.id)
+    );
+    // The chat that asked is not the chat that worked.
+    assert_eq!(latest_for(&root, &steward()), None);
+}
