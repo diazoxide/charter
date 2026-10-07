@@ -4,9 +4,11 @@ import { Notice } from "./Notice";
 
 /**
  * **A chat that holds another persona's grants instead of its own** (#1362, D-1362-5 and
- * D-1362-6), on its tab. A chat handed off to a persona whose hosts reach past the asking chat's,
- * or resumed from a session record as a persona wider than the default, runs with the narrower
- * grants until the person allows its own here: no chat widens what it reaches on its own say.
+ * D-1362-6), on its tab. A chat resumed from a session record as a persona wider than the
+ * default, or one an older purlis handed off to a persona whose hosts reach past the asking
+ * chat's, runs with the narrower grants until the person allows its own here: no chat widens
+ * what it reaches on its own say. A handoff no longer starts a chat held this way (#1444): it is
+ * a dispatch, and the dispatch grant is what consents to it.
  *
  * **Allow** records it (`allow_persona_grants`). A chat's sandbox is compiled as it starts, so
  * the persona's hosts reach it from its next start; **Restart now** asks for the chat's restart

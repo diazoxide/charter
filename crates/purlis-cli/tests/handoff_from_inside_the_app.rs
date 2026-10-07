@@ -332,6 +332,87 @@ fn a_chat_the_app_started_is_opened_in_the_app_on_one_ticket() {
     assert!(message.ends_with(&format!("\n\n{BRIEF}")), "{message:?}");
 }
 
+/// The app's ticket half, and an open the app holds for the person: a dispatch grant is needed
+/// across `from` and `to`, with `waiting` already being asked about where there is one.
+fn holds_for_the_person(
+    from: Option<&'static str>,
+    waiting: Option<&'static str>,
+) -> impl Fn(&Tickets, u64, Ask) -> Answer + Send + Sync + 'static {
+    move |tickets, connection, ask| match ask {
+        Ask::Open(open) => {
+            match tickets.spend(open.chat, connection, &open.ticket, Instant::now()) {
+                Ok(()) => Answer::NeedsGrant {
+                    from: from.map(str::to_owned),
+                    to: "devops".to_owned(),
+                    waiting: waiting.map(str::to_owned),
+                },
+                Err(why) => Answer::No { why },
+            }
+        }
+        other => opens_as_nine(tickets, connection, other),
+    }
+}
+
+/// #1444: a handoff to another persona is a dispatch that needs a grant. The app holds it and
+/// asks the person; the command says so on stdout and exits 0, so the chat carries on and does
+/// not retry. Nothing was opened, so no todo and no row are written.
+#[test]
+fn a_handoff_the_person_is_asked_about_is_held_and_says_what_happens_next() {
+    let tmp = daily();
+    let (app, _reading, asked) = an_app(&tmp, holds_for_the_person(Some("steward"), None));
+    let before = alphas_todos(&root(&tmp)).len();
+
+    let out = charter(
+        &root(&tmp),
+        Some(&app),
+        &["handoff", "alpha", "--persona", "devops"],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "");
+    assert_eq!(
+        text(&out.stdout),
+        "purlis handoff: held for the person. 'steward' chats may not dispatch to 'devops' yet, \
+         so the person is being asked on this chat's tab, with this brief in front of them. \
+         Nothing has been opened. If they allow it, the chat opens in workspace 'alpha' then, \
+         started on the brief; if they keep it blocked, this chat is told on its next turn. \
+         Carry on with other work, and do not hand it off again.\n"
+    );
+    assert_eq!(
+        the_open(&asked).persona.as_deref(),
+        Some("devops"),
+        "the persona named is what the app is asked for"
+    );
+    assert_eq!(alphas_todos(&root(&tmp)).len(), before, "nothing opened");
+    assert_eq!(handoff_rows(&root(&tmp)), Vec::<serde_json::Value>::new());
+}
+
+/// The person was shown one brief. A second handoff across the same pair is dropped, not
+/// queued beside it: a refusal, on stderr, with exit 1, as a second dispatch is.
+#[test]
+fn a_second_handoff_across_a_pair_the_person_is_being_asked_about_is_refused() {
+    let tmp = daily();
+    let (app, _reading, _asked) =
+        an_app(&tmp, holds_for_the_person(None, Some("handoff to alpha")));
+
+    let out = charter(
+        &root(&tmp),
+        Some(&app),
+        &["handoff", "alpha", "--persona", "devops"],
+    );
+
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "");
+    assert_eq!(
+        text(&out.stderr),
+        "✗ purlis handoff: not held. The person is already being asked whether this chat may \
+         dispatch to 'devops', for 'handoff to alpha', and they were shown that brief, so only \
+         it starts when they allow it. Nothing was opened. Hand this off again once they have \
+         answered.\n"
+    );
+    assert_eq!(handoff_rows(&root(&tmp)), Vec::<serde_json::Value>::new());
+}
+
 #[test]
 fn an_app_that_refuses_gets_the_printed_command_and_its_reason() {
     // A refusal from the app is not a silence: the operator is handed the command, as a

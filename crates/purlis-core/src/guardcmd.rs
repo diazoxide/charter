@@ -1,4 +1,4 @@
-//! `charter guard ask|allow|handoff|report|list`: the plane's force-prompt and stop-prompting rules,
+//! `charter guard ask|allow|report|list`: the plane's force-prompt and stop-prompting rules,
 //! written in each harness's own syntax (#364).
 //!
 //! A port of the Python charter's `cmd_guard_*` (`commands.py` at `cli-final`), with its rules:
@@ -25,8 +25,20 @@ use serde_json::Value;
 
 use crate::scaffold::settings::{self, Wrote};
 
-/// The pattern a handoff's consent rule names; `charter guard handoff` writes it.
+/// The pattern the retired handoff rule names (#1444). No command writes it any more:
+/// `purlis guard handoff` answers [`HANDOFF_RETIRED`] and writes nothing.
 pub const HANDOFF_PATTERN: &str = settings::HANDOFF_PATTERN;
+
+/// What `purlis guard handoff` says, now that a handoff is a dispatch (#1444). It used to
+/// put back the ask rule `purlis init` wrote; purlis writes that rule nowhere now.
+pub const HANDOFF_RETIRED: &str = "`purlis guard handoff` is retired, and nothing was written. A \
+     handoff is a dispatch: you are asked once for a pair of personas, the same on every \
+     harness, and a chat handing off to its own persona asks nothing, so no harness rule \
+     consents to one and `purlis init` writes none. To have your harness ask as well, write \
+     a rule of your own: purlis guard ask 'purlis handoff*'. purlis holds that one under every \
+     spelling of the command. The glob `init` used to write, 'purlis handoff *', is read as \
+     the retired rule: it asks about the plain spelling only, and `purlis doctor` offers \
+     to remove it.";
 
 /// The pattern a report's consent rule names; `charter guard report` writes it.
 pub const REPORT_PATTERN: &str = settings::REPORT_PATTERN;

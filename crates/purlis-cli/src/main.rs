@@ -503,13 +503,14 @@ enum Command {
     },
 
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
-    /// heredoc on stdin. Your harness asks before it runs.
+    /// heredoc on stdin. A handoff is a dispatch: to this chat's own persona it opens at
+    /// once, and to another purlis asks you once for the pair, on this chat's tab.
     ///
     /// **The app opens the chat.** Run from a chat the purlis app started, the new chat
     /// opens there as a tab in the workspace you name. With no app running, nothing is
-    /// opened and purlis says to open the app. Every refusal in front of that is the
-    /// point: purlis refuses every shape the permission prompt in front of this command
-    /// cannot stand in front of (`purlis_core::handoff`).
+    /// opened and purlis says to open the app. In front of that purlis refuses a handoff
+    /// from a helper sub-agent, and one whose brief it cannot read as it is written
+    /// (`purlis_core::handoff`).
     ///
     /// `charter handoff report "<summary>"`, from a chat a `--report` handoff opened, sends
     /// its one report back to the chat that opened it.
@@ -534,8 +535,8 @@ enum Command {
         /// proposed as a handoff target.
         #[arg(long)]
         vision: Option<String>,
-        /// Pin the new chat's persona. Without it the chat gets whatever a new chat in that
-        /// workspace gets.
+        /// The persona the new chat runs as. Without it, this chat's own. Another persona
+        /// needs a dispatch grant, which purlis asks you for the first time.
         #[arg(long)]
         persona: Option<String>,
         /// Pin the clock the stamp, the todo and the dispatch row are written at, for tests
@@ -815,7 +816,8 @@ enum GuardCommand {
         #[arg(long)]
         local: bool,
     },
-    /// Always prompt before a handoff runs: the rule `purlis init` writes, put back.
+    /// Retired: a handoff's consent is the dispatch grant, so this writes nothing and says
+    /// what to run to have your harness ask as well.
     Handoff,
     /// Always prompt before `charter report … --yes` files an issue: the rule `purlis init`
     /// writes, put back (ADR 0059).
@@ -2700,7 +2702,10 @@ fn run(command: Command) -> Result<u8, String> {
                 Some(GuardCommand::Allow { pattern, local }) => {
                     (pattern.as_str(), Bucket::Allow, *local)
                 }
-                Some(GuardCommand::Handoff) => (guardcmd::HANDOFF_PATTERN, Bucket::Ask, false),
+                Some(GuardCommand::Handoff) => {
+                    eprintln!("purlis: {}", guardcmd::HANDOFF_RETIRED);
+                    return Ok(2);
+                }
                 Some(GuardCommand::Report) => (guardcmd::REPORT_PATTERN, Bucket::Ask, false),
             };
             let rule = match guardcmd::as_rule(pattern) {
@@ -3688,7 +3693,7 @@ fn main() -> ExitCode {
             waits,
         );
     }
-    // `handoff` says one refusal and exits 1; it never returns 0 in this charter.
+    // `handoff` answers for itself: opened or held for the person (0), or one refusal (1).
     if let Command::Handoff {
         workspace,
         summary,

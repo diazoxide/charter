@@ -958,7 +958,8 @@ mod tests {
 
     /// The tools that are not reads and that a Claude Code chat runs without asking:
     /// `session_record`, the record command's twin (#1332), and the two dispatch tools (V98b),
-    /// beside the read-only tools of `chattools::PRE_ALLOWED`.
+    /// beside the read-only tools of `chattools::PRE_ALLOWED`. A handoff has a command and no
+    /// tool, so it adds none here.
     const THE_RECORD_TOOLS_ALLOW: usize = 1 + crate::chattools::DISPATCH_TOOLS.len();
 
     #[test]
@@ -972,6 +973,7 @@ mod tests {
         // them, and a compound command holding the record command is still asked about).
         // And a dispatch, by its command and its two tools (V98b): consent to one is purlis's
         // own dispatch grant, which the app asks the person for, never the harness's prompt.
+        // A handoff is a dispatch in handoff mode, so its command is allowed beside it (#1444).
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
         let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
@@ -993,6 +995,12 @@ mod tests {
                 "Bash(purlis dispatch note *)",
                 "Bash(purlis dispatch ask *)",
                 "Bash(purlis dispatch answer *)",
+                "Bash(purlis handoff --name *)",
+                "Bash(purlis handoff --report *)",
+                "Bash(purlis handoff --persona *)",
+                "Bash(purlis handoff --create *)",
+                "Bash(purlis handoff --vision *)",
+                "Bash(purlis handoff report *)",
                 "mcp__purlis__dispatch",
                 "mcp__purlis__dispatch_report",
                 "mcp__purlis__todo_list",
@@ -1073,6 +1081,73 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_handoff_is_pre_allowed_by_each_spelling_it_has_and_by_no_wildcard_over_the_rest() {
+        // #1444, on V98b's terms as narrowed (D-T59-18): a handoff is a dispatch in handoff
+        // mode, so its command runs without the harness asking, by each flag its line can
+        // start with and by its report back. Never `handoff *`, which would also allow
+        // whatever the command grows next.
+        let empty = tempfile::tempdir().expect("a directory");
+        let (args, _) = claude("/bin/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
+        let handoff: Vec<&str> = settings["permissions"]["allow"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|rule| rule.starts_with("Bash(purlis handoff"))
+            .collect();
+        assert_eq!(
+            handoff,
+            [
+                "Bash(purlis handoff --name *)",
+                "Bash(purlis handoff --report *)",
+                "Bash(purlis handoff --persona *)",
+                "Bash(purlis handoff --create *)",
+                "Bash(purlis handoff --vision *)",
+                "Bash(purlis handoff report *)",
+            ]
+        );
+        assert_eq!(handoff, super::claude::HANDOFF_ALLOW);
+        // And the rules that name either command are the three lists, exactly and in the
+        // order they are handed over: a dispatch, what follows a task, a handoff. No fourth.
+        let commands: Vec<&str> = settings["permissions"]["allow"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|rule| {
+                rule.starts_with("Bash(purlis dispatch") || rule.starts_with("Bash(purlis handoff")
+            })
+            .collect();
+        assert_eq!(
+            commands,
+            super::claude::DISPATCH_ALLOW
+                .iter()
+                .chain(super::claude::DISPATCH_TASK_ALLOW.iter())
+                .chain(super::claude::HANDOFF_ALLOW.iter())
+                .copied()
+                .collect::<Vec<_>>(),
+            "the three lists and no fourth"
+        );
+        for rule in &handoff {
+            assert_ne!(*rule, "Bash(purlis handoff *)");
+            // And every flag the rules start with is one the command takes.
+            if let Some(flag) = rule
+                .strip_prefix("Bash(purlis handoff ")
+                .and_then(|rest| rest.split(' ').next())
+                .filter(|word| word.starts_with("--"))
+            {
+                assert!(
+                    ["--name", "--report", "--persona", "--create", "--vision"].contains(&flag),
+                    "{flag}"
+                );
+            }
+        }
+        // No `ask` for it either: `init` writes none, and a chat is handed none.
+        assert_eq!(settings["permissions"].get("ask"), None);
     }
 
     #[test]
@@ -1328,6 +1403,12 @@ mod tests {
                 "Bash(purlis dispatch note *)",
                 "Bash(purlis dispatch ask *)",
                 "Bash(purlis dispatch answer *)",
+                "Bash(purlis handoff --name *)",
+                "Bash(purlis handoff --report *)",
+                "Bash(purlis handoff --persona *)",
+                "Bash(purlis handoff --create *)",
+                "Bash(purlis handoff --vision *)",
+                "Bash(purlis handoff report *)",
                 "mcp__purlis__dispatch",
                 "mcp__purlis__dispatch_report",
                 "mcp__purlis__todo_list",

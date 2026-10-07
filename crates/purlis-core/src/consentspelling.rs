@@ -1,7 +1,7 @@
 //! A consent-gated command spelt under the command line's new name (RN-3, #1255; D-RN3-9).
 //!
 //! The host asks the operator before the commands a project's consent rules name
-//! ([`CONSENT_PATTERNS`]: a handoff, a report filed with `--yes`, a todo promoted to a forge).
+//! ([`CONSENT_PATTERNS`]: a report filed with `--yes`, a todo promoted to a forge).
 //! Those rules were spelt `charter …` alone until RN-7. The same command spelt `purlis …`
 //! matches none of them, so in a project that carries only those the host would run it with no
 //! prompt at all. This refuses it there, with the spelling to use instead.
@@ -38,8 +38,13 @@
 //! certainly asks about. The same command inside a string or a heredoc a shell runs is refused
 //! under either name, because the rule reads only the outer command.
 //!
-//! **A handoff is A7's** ([`crate::handoffguard`]), which reads its spelling and its brief more
-//! closely than this does, so the rules' name spelling a handoff is not judged here.
+//! **A handoff is A7's** ([`crate::handoffguard`]), which reads its brief more closely than
+//! this does, and no rule of the host's consents to one any more (#1444): a handoff is a
+//! dispatch, and its consent is purlis's own dispatch grant. So a handoff's name and spelling
+//! are not judged here. **Where it sits still is** ([`GUARDED`]): a handoff inside a
+//! substitution, a `case` branch, a function body, or a string or a heredoc a shell runs is
+//! one purlis cannot read the brief of or tell a helper sub-agent's from the chat's own, and
+//! it is refused there as it was, in a handoff's own words.
 
 use std::path::Path;
 
@@ -52,6 +57,7 @@ use crate::proseguard::charter_words;
 use crate::pypath;
 use crate::scaffold::settings::{
     self, CONSENT_PATTERNS, HANDOFF_PATTERN, PROMOTE_PATTERN, PURLIS_CONSENT_PATTERNS,
+    REPORT_PATTERN,
 };
 use crate::shellseg;
 use crate::shellsubst::{Inward, every_substitution, scan};
@@ -63,6 +69,11 @@ pub const REASON: &str = "consent-spelling";
 
 /// The name every project's consent rules are spelt with.
 const RULES_NAME: &str = cliname::ALIAS;
+
+/// The commands this guard reads **where they sit**: the consent rules' own
+/// ([`CONSENT_PATTERNS`]), and a handoff, which no rule consents to since #1444 and which is
+/// still refused inside a substitution, a branch, a body or a string a shell runs.
+const GUARDED: [&str; 3] = [HANDOFF_PATTERN, REPORT_PATTERN, PROMOTE_PATTERN];
 
 /// A consent-gated command a segment runs: the name it calls the command line by, the words
 /// after it, and the rule that asks about it.
@@ -81,6 +92,11 @@ impl Gated {
     /// Not a handoff under the rules' name, which is A7's to judge.
     fn not_a7s(&self) -> bool {
         self.under_a_new_name() || self.pattern != HANDOFF_PATTERN
+    }
+
+    /// A handoff, under either name: no rule of the host's consents to one (#1444).
+    fn is_a_handoff(&self) -> bool {
+        self.pattern == HANDOFF_PATTERN
     }
 
     /// What the rule asks about, as a command to type.
@@ -373,7 +389,7 @@ fn consent_gated(it: &Reading, keep: &impl Fn(&Gated) -> bool) -> Option<Gated> 
         return None;
     }
     let as_the_rule_reads = format!("{RULES_NAME} {}", it.words.join(" "));
-    let pattern = CONSENT_PATTERNS
+    let pattern = GUARDED
         .iter()
         .copied()
         .find(|pattern| matches(&as_the_rule_reads, pattern))?;
@@ -389,6 +405,9 @@ fn consent_gated(it: &Reading, keep: &impl Fn(&Gated) -> bool) -> Option<Gated> 
 fn shell_string_refusal(it: &Gated) -> String {
     let name = &it.name;
     let what = it.as_the_rule_spells_it();
+    if it.is_a_handoff() {
+        return crate::handoffguard::HANDOFF_SHELL_STRING.to_owned();
+    }
     format!(
         "`{name} {what}` is refused inside a string or a heredoc a shell runs (`sh -c '…'`, \
          `eval`, `bash <<'EOF'`). It waits for your consent through a rule spelt \
@@ -484,6 +503,9 @@ fn quoted(words: &[String]) -> String {
 /// What a consent-gated command the host's rule never sees, where it sits, is told.
 fn placed_refusal(it: &Gated, place: Place) -> String {
     let what = it.as_the_rule_spells_it();
+    if it.is_a_handoff() {
+        return crate::handoffguard::handoff_placed(place.said());
+    }
     format!(
         "`{name} {what}` is refused {where_}. It waits for your consent through a rule spelt \
          `{RULES_NAME} …`, and the host matches that rule against the command as written, which \
@@ -592,8 +614,9 @@ fn refusal_in(text: &str, at: At<'_>) -> Option<String> {
         it.name == cliname::PRIMARY && spelt_as_a_twin(text) && ruled_under(&it.words, at)
     };
     // Over the lines a shell runs: a heredoc body a reader takes as data names no command.
+    // Not a handoff (#1444): no rule consents to one, so no name it is spelt with lacks one.
     let it = gated_in(&lines_it_runs(text), &|it: &Gated| {
-        it.under_a_new_name() && !lifted(it)
+        it.under_a_new_name() && !it.is_a_handoff() && !lifted(it)
     })?;
     let (name, words) = (&it.name, &it.words);
     let verb = words.first().map_or("", String::as_str);
@@ -638,9 +661,10 @@ fn spelt_as_a_twin(text: &str) -> bool {
         let (prog, _env, argv) = shellwrap::split_env(&words);
         let source = source_of(&chars, first.start, last.end);
         // Read over the source, so a command in a `$( … )` or `( … )` the segment holds counts.
+        // Not a handoff: no twin rule matches one, and none has to (#1444).
         let gated = gated_in(
             source.as_deref().unwrap_or(&words.join(" ")),
-            &Gated::under_a_new_name,
+            &|it: &Gated| it.under_a_new_name() && !it.is_a_handoff(),
         )
         .is_some();
         let renamed = gated || name_used(&prog, &argv).is_some_and(|name| name != RULES_NAME);

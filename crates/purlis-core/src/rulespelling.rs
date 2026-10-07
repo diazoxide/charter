@@ -35,7 +35,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::consentspelling::{self, Place};
-use crate::scaffold::settings::{self, CONSENT_PATTERNS, PURLIS_CONSENT_PATTERNS};
+use crate::scaffold::settings::{
+    self, CONSENT_PATTERNS, PURLIS_CONSENT_PATTERNS, RETIRED_HANDOFF_PATTERNS,
+};
 use serde_json::Value;
 
 use crate::{cliname, heredoc, pyjson, shellwrap};
@@ -443,8 +445,16 @@ fn rule_of(glob: &str, decision: Decision) -> Rule {
     let glob = glob
         .strip_suffix(":*")
         .map_or_else(|| glob.to_owned(), |prefix| format!("{prefix} *"));
+    // The retired handoff rule too (#1444), **as the `ask` `init` wrote and nothing else**:
+    // a project that still carries it has not asked for every spelling of a handoff to be
+    // held to it. A `deny` on the same glob is an operator's own, which `init` never
+    // wrote, and is held under every spelling as any deny is: the handoff guard no longer
+    // refuses the other spellings, so nothing else would hold it.
+    let retired_ask =
+        decision == Decision::Ask && RETIRED_HANDOFF_PATTERNS.contains(&glob.as_str());
     let consent = CONSENT_PATTERNS.contains(&glob.as_str())
-        || PURLIS_CONSENT_PATTERNS.contains(&glob.as_str());
+        || PURLIS_CONSENT_PATTERNS.contains(&glob.as_str())
+        || retired_ask;
     let first = glob.split_whitespace().next().unwrap_or_default();
     let literal = !first.is_empty() && !first.contains(['*', '?', '[']);
     let program = (literal && !consent).then(|| Program {
@@ -486,5 +496,71 @@ mod tests {
             "helm uninstall x",
             "helm uninstall *"
         ));
+    }
+
+    /// The rule `init` wrote for a handoff was an `ask`, and that one is left alone (#1444).
+    /// A `deny` on the same glob is an operator's own, `init` never wrote one, and it is held
+    /// under every spelling of the command, as any deny is.
+    #[test]
+    fn a_deny_on_the_retired_handoff_glob_is_held_under_every_spelling_and_its_ask_is_not() {
+        let spelt_around = [
+            "/usr/local/bin/purlis handoff beta <<'B'\nx\nB",
+            "purlis 'handoff' beta <<'B'\nx\nB",
+            "env purlis handoff beta <<'B'\nx\nB",
+            "charter handoff beta <<'B'\nx\nB",
+        ];
+        let plain = "purlis handoff beta <<'B'\nx\nB";
+        for deny in [
+            "Bash(purlis handoff *)",
+            "Bash(purlis handoff:*)",
+            "Bash(charter handoff *)",
+        ] {
+            let rules = Rules::of_claude_settings(
+                ".claude/settings.json",
+                &format!(r#"{{"permissions": {{"deny": ["{deny}"]}}}}"#),
+            );
+            for cmd in spelt_around {
+                if deny.contains("charter") && cmd.starts_with("charter") {
+                    continue; // the spelling the rule itself matches: the host denies it.
+                }
+                assert!(rules.refusal(cmd).is_some(), "{deny}: {cmd:?} got past");
+            }
+        }
+        // The spelling the deny matches is the host's own to deny.
+        let rules = Rules::of_claude_settings(
+            ".claude/settings.json",
+            r#"{"permissions": {"deny": ["Bash(purlis handoff *)"]}}"#,
+        );
+        assert_eq!(rules.refusal(plain), None);
+
+        // The `ask` on either retired glob is what `init` wrote: no spelling is held to it.
+        let rules = Rules::of_claude_settings(
+            ".claude/settings.json",
+            r#"{"permissions": {"ask": ["Bash(purlis handoff *)", "Bash(charter handoff *)"]}}"#,
+        );
+        for cmd in spelt_around.into_iter().chain([plain]) {
+            assert_eq!(rules.refusal(cmd), None, "{cmd:?}");
+        }
+        assert_eq!(rule_of("purlis handoff *", Decision::Ask).program, None);
+        assert!(
+            rule_of("purlis handoff *", Decision::Deny)
+                .program
+                .is_some()
+        );
+
+        // And the rule purlis tells a person to write, to have their harness ask as well, is
+        // not the retired glob, so it is held under every spelling too.
+        let rules = Rules::of_claude_settings(
+            ".claude/settings.json",
+            r#"{"permissions": {"ask": ["Bash(purlis handoff*)"]}}"#,
+        );
+        assert_eq!(rules.refusal(plain), None, "the host asks about it itself");
+        assert!(
+            rules
+                .refusal("/usr/local/bin/purlis handoff beta <<'B'\nx\nB")
+                .is_some()
+        );
+        assert!(rules.refusal("purlis 'handoff' beta <<'B'\nx\nB").is_some());
+        assert!(crate::guardcmd::HANDOFF_RETIRED.contains("purlis guard ask 'purlis handoff*'"));
     }
 }

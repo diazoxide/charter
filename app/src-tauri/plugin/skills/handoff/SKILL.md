@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Hand a request that does not belong in this chat to a new chat — in this workspace or another — that starts working on a brief the operator approved. Use when a request should run somewhere other than this conversation, or when asked to hand off, open a chat for something, or move work to another workspace.
+description: Hand a request that does not belong in this chat to a new chat — in this workspace or another — that starts working on a brief you write. Use when a request should run somewhere other than this conversation, or when asked to hand off, open a chat for something, or move work to another workspace.
 ---
 
 # Handing work to a chat that is not this one
@@ -22,7 +22,7 @@ The only thing that differs is the workspace.
 **Sub-agent or chat — who reads the result?** If this chat needs the answer to continue *this
 turn*, it is a sub-agent. If the operator will read it and talk to it, it is a chat.
 
-**Fire-and-forget, or needs an answer?** Decide per handoff, and say which in the quiz:
+**Fire-and-forget, or needs an answer?** Decide per handoff, and say which:
 
 - **Fire-and-forget** (the default) — the work stands on its own and the operator reads the
   new chat directly: a bug to fix, a chore, a question for another workspace to own.
@@ -76,69 +76,87 @@ Make the first line a title somebody scanning a strip of tabs would recognise.
 any process on the machine can read it while the chat starts. purlis refuses a
 credential-shaped brief by kind, and that refusal is a backstop, not the rule.
 
-## 4. Ask, with the brief on screen
+## 4. Settle where it goes
 
-Quiz with **AskUserQuestion**, showing the brief **in full** — not a summary of it. The
-brief becomes another chat's first message and runs with the operator's authority; an
-approval of a summary is not an approval of the text that gets sent.
+Where the work runs is the operator's call, and the brief is not theirs to approve: it is a
+request from this chat to another, and the chat that gets it applies its own judgement.
 
-Say the task name and whether it reports back beside the brief. Offer:
+- **The operator already said where** ("hand this to billing", "open a chat for it here"):
+  go to step 5.
+- **Otherwise ask once**, with **AskUserQuestion**, and show the brief beside the question so
+  they see what is being sent. Offer:
+  - **this workspace**: a new chat here;
+  - **the matched workspace(s)**: one option each, named, with its vision;
+  - **`new: <name> — <vision>`**: a workspace to create;
+  - **a sub-agent instead**: when the first test was closer than you thought;
+  - **not at all**: the work is not worth a chat.
 
-- **this workspace** — a new chat here;
-- **the matched workspace(s)** — one option each, named, with its vision;
-- **`new: <name> — <vision>`** — a workspace to create;
-- **a sub-agent instead** — when the first test was closer than you thought;
-- **not at all** — the work is not worth a chat.
+Say the task name, the persona and whether it reports back beside the brief.
 
-## 5. On a yes, run exactly this
+## 5. Run exactly this
 
 ```bash
-purlis handoff billing --name "retry webhook deliveries" <<'BRIEF'
+purlis handoff --name "retry webhook deliveries" billing <<'BRIEF'
 # Retry the failed webhook deliveries
 ...the brief, verbatim...
 BRIEF
 ```
 
-If purlis refuses that spelling because this project's permission rule still names the command
-by its old name, run exactly the command the refusal names, with the same brief in the same
-heredoc. `purlis doctor --fix rename-plane` adds the rule for the `purlis` spelling.
+**`--name` comes first, then the workspace.** That is the spelling the harness lets run
+without asking; a line that starts with the workspace works too, after one more prompt.
+
+**Run it in a call of its own.** Beside any other command (`&&`, `;`, a pipe, another
+line), the operator is asked about the whole call.
 
 `billing` is the workspace from step 2, spelled out: the workspace is always named, the
-current one included, because the permission prompt has to say where the chat goes and `.`
-says nothing. Write the name, never a placeholder in angle brackets — the shell reads `<`
-as a redirect and purlis refuses the call.
+current one included. Write the name, never a placeholder in angle brackets: the shell reads
+`<` as a redirect and purlis refuses the call.
 
-**Always pass `--name`**: a short task name you write from the brief, a few words a person
-scanning a strip of tabs recognises — `drop account-console-commons`, not `handoff` and not
-the workspace's name. At most 64 characters, plain text. It is what the new chat's tab says;
-without it the tab says `<persona> <N>`, and four handoffs look alike.
+**Always pass `--name`, first**: a short task name you write from the brief, a few words a person
+scanning a strip of tabs recognises, such as `drop account-console-commons`, not `handoff` and
+not the workspace's name. At most 64 characters, plain text. It is what the new chat's tab
+says; without it the tab says `<persona> <N>`, and four handoffs look alike.
 
 Add `--report` when the second test said **needs an answer**.
 
-Add `--create --vision "<vision>"` for a workspace that does not exist yet, and
-`--persona <name>` when the quiz named one. Both are visible in the prompt.
+Add `--create --vision "<vision>"` for a workspace that does not exist yet.
 
-The brief goes on **stdin, as one quoted heredoc in the same call**. That is what makes the
-permission prompt show the exact text the new chat is sent. There is no `--brief-file`: a
-prompt that shows a path is an approval of a path.
+**The persona.** Without `--persona` the new chat runs as **this chat's own persona**, and
+nothing asks anybody. Add `--persona <name>` when the work belongs to another persona: its
+vault, its hosts, its charter.
 
-**What happens next.** Inside the purlis app, the app opens the new chat as a tab in that
-workspace, already started on the brief, and says so. Anywhere else there is no app to open
-it, so nothing is opened: purlis says to open the purlis app and exits 1 — tell the
-operator that, rather than trying to start a chat yourself.
+The brief goes on **stdin, as one quoted heredoc in the same call**, so the new chat is sent
+exactly the text you wrote. There is no `--brief-file`.
+
+## 6. Read what purlis answers
+
+A handoff is a **dispatch**, and the app decides it.
+
+- **`opened chat N in workspace '…'`**: the new chat is a tab in that workspace, already
+  started on the brief. To this chat's own persona, that is always the answer.
+- **`held for the person`**: the handoff is to another persona, and nobody has yet allowed this
+  pair. purlis is asking the operator, on this chat's tab, with the brief in front of them.
+  Nothing has opened. **Carry on with other work and do not hand it off again**: if they allow
+  it, the chat opens then; if they keep it blocked, you are told on your next turn. Once a pair
+  is allowed, later handoffs across it open at once.
+- **A refusal** names the limit, the lock or the missing grant. Say it to the operator as it
+  is. A chat that runs with its harness's permission prompts off is never asked for: it hands
+  off to its own persona, or under a grant that already stands, and is refused otherwise. It
+  cannot use `--create`, and its handoffs count toward its limit of running chats.
+- **No purlis app answered**: there is no app to open it, so nothing is opened. Tell the
+  operator that, rather than trying to start a chat yourself.
 
 ## What purlis refuses, and why
 
-The prompt your harness raises in front of the handoff **is** the consent, so purlis refuses
-every shape that prompt cannot stand in front of. Each one is the rule working:
+Consent is the app's decision above. These are refused before the app is asked:
 
 | It refuses | Because |
 |---|---|
-| any spelling but the exact one the project's permission rule names — a path to the binary, `purlis 'handoff'` | the host's permission rule does not match those, so no prompt appears |
-| a brief from a pipe, a file, a here-string, or a heredoc a shell runs | the prompt would show a path or a `bash`, not the brief |
-| a call from a sub-agent | there is no operator in a sub-agent's turn to answer the prompt |
-| an unattended run (`bypassPermissions`) | the same, and nothing would ask |
+| a call from a sub-agent | a handoff starts a chat the operator can see, open and stop, for the chat that asks; return what you found to your chat, which hands it off |
+| a handoff inside a string or a heredoc a shell runs (`bash -c '…'`, `eval`), a substitution, or with `purlis` or `handoff` behind an expansion or a glob | purlis reads a command's words and is not a shell, so it cannot read the brief there |
+| a brief from a pipe, a file, a here-string, an unquoted heredoc, or beside a live `$( … )` | the shell would change or hide the text before purlis reads it |
 | an empty brief, a brief that is not UTF-8, one past the size bound, one shaped like a credential | the command, before it changes anything |
+| a persona the project does not define, a draft, a pair or all dispatch locked by policy, a chain too deep, too many chats running | the app, as it refuses a dispatched task |
 
 ## When you are the chat a handoff opened
 
@@ -166,8 +184,11 @@ is refused — just finish the work.
   and with it exactly one report arrives on this chat's next turn, not in the middle of
   this one. For a second answer, hand off again with `--report`.
 - **The brief is the whole context.** Nothing about this conversation travels with it.
-- **The same harness.** A Claude Code chat hands off to a Claude Code chat.
-- A handed-off chat may hand off again, under the same prompt. There is no depth limit,
-  because every hop needs its own yes.
+- **The harness follows the persona's profile.** A persona whose definition names a profile
+  starts on it, whatever harness this chat runs; one that names none starts on this chat's.
+- **Nobody approves the brief.** The chat that receives it is told who asked, and every
+  command of its that asks the operator still asks, in its own tab.
+- A handed-off chat may hand off again, decided the same way. The project's depth limit holds
+  the chain.
 
 `purlis docs show handoff` has the whole of it.

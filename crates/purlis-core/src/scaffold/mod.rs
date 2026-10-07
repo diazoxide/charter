@@ -504,7 +504,8 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         }
     }
 
-    ask_gate(&mut run, root, settings_ok, &HANDOFF_ASK, "init");
+    // No ask rule for a handoff (#1444): a handoff is a dispatch, and what consents to one
+    // is purlis's own dispatch grant, which the app asks the person for on every harness.
     ask_gate(&mut run, root, settings_ok, &REPORT_ASK, "init");
     ask_gate(&mut run, root, settings_ok, &PROMOTE_ASK, "init");
     purlis_twins(&mut run, root, settings_ok, "init");
@@ -1162,13 +1163,6 @@ struct AskRule {
     pattern: &'static str,
 }
 
-/// The consent rule for a handoff (`commands.HANDOFF_ASK_PATTERN`).
-const HANDOFF_ASK: AskRule = AskRule {
-    label: "charter handoff",
-    rule: settings::HANDOFF_RULE,
-    pattern: settings::HANDOFF_PATTERN,
-};
-
 /// The consent rule for filing a report (ADR 0059, amended 2026-09-26): the harness asks the
 /// operator before `charter report … --yes <digest>` files anything.
 const REPORT_ASK: AskRule = AskRule {
@@ -1185,13 +1179,6 @@ const PROMOTE_ASK: AskRule = AskRule {
     pattern: settings::PROMOTE_PATTERN,
 };
 
-/// The consent rule for a handoff, spelt `purlis` (RN-7).
-const PURLIS_HANDOFF_ASK: AskRule = AskRule {
-    label: "purlis handoff",
-    rule: settings::PURLIS_HANDOFF_RULE,
-    pattern: settings::PURLIS_HANDOFF_PATTERN,
-};
-
 /// The consent rule for filing a report, spelt `purlis`.
 const PURLIS_REPORT_ASK: AskRule = AskRule {
     label: "purlis report --yes",
@@ -1206,16 +1193,16 @@ const PURLIS_PROMOTE_ASK: AskRule = AskRule {
     pattern: settings::PURLIS_PROMOTE_PATTERN,
 };
 
-/// Each charter consent rule with its `purlis` twin.
-const CONSENT_TWINS: [(&AskRule, &AskRule); 3] = [
-    (&HANDOFF_ASK, &PURLIS_HANDOFF_ASK),
+/// Each charter consent rule with its `purlis` twin. The handoff rule is not one (#1444):
+/// a project that still carries `charter handoff *` is not given `purlis handoff *` beside it.
+const CONSENT_TWINS: [(&AskRule, &AskRule); 2] = [
     (&REPORT_ASK, &PURLIS_REPORT_ASK),
     (&PROMOTE_ASK, &PURLIS_PROMOTE_ASK),
 ];
 
 /// The `purlis` twin of every consent rule the project asks under its `charter` spelling, in
-/// every harness (RN-7, closing D-RN3-4 and D-RN3-9): with both, `purlis handoff` waits for the
-/// operator as `charter handoff` does, and the guard lets the new spelling through
+/// every harness (RN-7, closing D-RN3-4 and D-RN3-9): with both, `purlis report --yes` waits
+/// for the operator as `charter report --yes` does, and the guard lets the new spelling through
 /// ([`crate::consentspelling`]). A `charter` rule the operator made a deny, or one the project
 /// lacks, gets no twin: an ask beside a deny would let the command through after one click.
 fn purlis_twins(run: &mut Run, root: &Path, settings_ok: bool, command: &str) {
@@ -1226,7 +1213,7 @@ fn purlis_twins(run: &mut Run, root: &Path, settings_ok: bool, command: &str) {
     }
 }
 
-/// `commands.ensure_handoff_gate`, for any of charter's default ask rules: the rule in every
+/// `commands.ensure_handoff_gate`, for each of charter's default ask rules: the rule in every
 /// harness that can hold one, or in none of them. Every file is asked first with nothing
 /// written, and one that cannot take the rule stops the whole write — a rule in force under
 /// one harness and not another is the split `charter guard` exists to prevent.
@@ -1975,7 +1962,7 @@ mod tests {
     #[test]
     fn the_consent_patterns_are_the_ask_rules_init_writes() {
         assert_eq!(
-            [HANDOFF_ASK, REPORT_ASK, PROMOTE_ASK].map(|ask| ask.pattern),
+            [REPORT_ASK, PROMOTE_ASK].map(|ask| ask.pattern),
             settings::CONSENT_PATTERNS
         );
     }
@@ -2183,12 +2170,12 @@ mod tests {
         let outcome = init(&at(&root, false), &plain());
 
         let settings_item = if guard_created {
-            ".claude/settings.json (env, ask: charter handoff, ask: charter report --yes, \
-             ask: charter ws todo promote, ask: purlis handoff, ask: purlis report --yes, \
+            ".claude/settings.json (env, ask: charter report --yes, \
+             ask: charter ws todo promote, ask: purlis report --yes, \
              ask: purlis ws todo promote, plane-root guard)"
         } else {
-            ".claude/settings.json (env, ask: charter handoff, ask: charter report --yes, ask: charter \
-             ws todo promote, ask: purlis handoff, ask: purlis report --yes, ask: purlis ws todo promote)"
+            ".claude/settings.json (env, ask: charter report --yes, ask: charter \
+             ws todo promote, ask: purlis report --yes, ask: purlis ws todo promote)"
         };
         let mut said = vec![
             Say::Ok("Initialized control plane (schema 1) — 9 item(s) written.".to_owned()),
@@ -2200,8 +2187,8 @@ mod tests {
             Say::Info("  + .gitattributes (merge rules)".to_owned()),
             Say::Info(format!("  + {settings_item}")),
             Say::Info(
-                "  + opencode.json (ask: charter handoff, ask: charter report --yes, ask: charter ws \
-                 todo promote, ask: purlis handoff, ask: purlis report --yes, ask: purlis ws todo promote)"
+                "  + opencode.json (ask: charter report --yes, ask: charter ws \
+                 todo promote, ask: purlis report --yes, ask: purlis ws todo promote)"
                     .to_owned(),
             ),
             Say::Info("  + personas/steward/ (front door, declared in charter.toml)".to_owned()),
@@ -2242,12 +2229,9 @@ mod tests {
                 Say::Info(
                     "  already present: charter.toml, personas/, inventory/, workspaces/, \
                      .gitignore, .gitattributes (merge rules), .claude/settings.json (env), \
-                     .claude/settings.json (ask: \
-                     charter handoff), opencode.json (ask: charter handoff), \
                      .claude/settings.json (ask: charter report --yes), opencode.json (ask: \
                      charter report --yes), .claude/settings.json (ask: charter ws todo \
                      promote), opencode.json (ask: charter ws todo promote), \
-                     .claude/settings.json (ask: purlis handoff), opencode.json (ask: purlis handoff), \
                      .claude/settings.json (ask: purlis report --yes), opencode.json (ask: purlis \
                      report --yes), .claude/settings.json (ask: purlis ws todo promote), \
                      opencode.json (ask: purlis ws todo promote), \
@@ -2521,12 +2505,10 @@ mod tests {
 
         let mut created = "charter.toml, personas/, workspaces/.gitkeep, .gitignore, \
                            .gitattributes (merge rules), .claude/settings.json (env), \
-                           .claude/settings.json (ask: charter handoff), opencode.json (ask: \
-                           charter handoff), .claude/settings.json (ask: charter report --yes), \
+                           .claude/settings.json (ask: charter report --yes), \
                            opencode.json (ask: charter report --yes), .claude/settings.json \
                            (ask: charter ws todo promote), opencode.json (ask: charter ws todo \
-                           promote), .claude/settings.json (ask: purlis handoff), opencode.json \
-                           (ask: purlis handoff), .claude/settings.json (ask: purlis report --yes), \
+                           promote), .claude/settings.json (ask: purlis report --yes), \
                            opencode.json (ask: purlis report --yes), .claude/settings.json (ask: \
                            purlis ws todo promote), opencode.json (ask: purlis ws todo promote), \
                            personas/steward/ (front door, declared in charter.toml)"
@@ -2743,7 +2725,7 @@ mod tests {
     }
 
     #[test]
-    fn an_opencode_file_that_cannot_take_the_handoff_rule_keeps_it_out_of_every_harness() {
+    fn an_opencode_file_that_cannot_take_an_ask_rule_keeps_it_out_of_every_harness() {
         // `commands._guard_apply`: every harness is asked first, and "only `malformed`
         // blocks" — Claude Code is first in the registry, so without the dry run its file
         // would already hold the rule when opencode refused. Nothing is written anywhere.
@@ -2754,7 +2736,7 @@ mod tests {
         let outcome = init(&at(&root, false), &plain());
 
         let warned = Say::Warn(format!(
-            "the ask rule for `charter handoff` was not written anywhere — {} (`permission` is \
+            "the ask rule for `charter report --yes` was not written anywhere — {} (`permission` is \
              not an object) is not valid, and purlis writes every harness or none. Fix it, \
              then run purlis init again",
             opencode.display()
@@ -2762,7 +2744,7 @@ mod tests {
         assert!(outcome.said.contains(&warned), "{:?}", outcome.said);
         let claude = std::fs::read_to_string(root.join(settings::SETTINGS)).unwrap_or_default();
         assert!(
-            !claude.contains(settings::HANDOFF_RULE),
+            !claude.contains(settings::REPORT_RULE),
             "Claude Code took the rule opencode could not: {claude}"
         );
         assert_eq!(
@@ -3884,18 +3866,15 @@ mod report_ask_tests {
         assert_eq!(
             read(&root.join(settings::SETTINGS))["permissions"]["ask"],
             json!([
-                "Bash(charter handoff *)",
                 "Bash(charter report *--yes*)",
                 "Bash(charter *todo*promote*)",
-                "Bash(purlis handoff *)",
                 "Bash(purlis report *--yes*)",
                 "Bash(purlis *todo*promote*)"
             ])
         );
         assert_eq!(
             read(&root.join(settings::OPENCODE))["permission"]["bash"],
-            json!({"charter handoff *": "ask", "charter report *--yes*": "ask",
-                   "charter *todo*promote*": "ask", "purlis handoff *": "ask",
+            json!({"charter report *--yes*": "ask", "charter *todo*promote*": "ask",
                    "purlis report *--yes*": "ask", "purlis *todo*promote*": "ask"})
         );
     }
@@ -3982,12 +3961,13 @@ mod report_ask_tests {
         let claude = read(&root.join(settings::SETTINGS));
         assert_eq!(
             claude["permissions"]["ask"],
+            // The handoff rule an older `init` wrote is kept, and given no `purlis` twin
+            // (#1444): the `handoff-rule` fix is what removes it.
             json!([
                 "Bash(charter handoff *)",
                 "Bash(terraform *)",
                 "Bash(charter report *--yes*)",
                 "Bash(charter *todo*promote*)",
-                "Bash(purlis handoff *)",
                 "Bash(purlis report *--yes*)",
                 "Bash(purlis *todo*promote*)"
             ])
@@ -3997,7 +3977,7 @@ mod report_ask_tests {
         assert_eq!(
             read(&root.join(settings::OPENCODE))["permission"]["bash"],
             json!({"charter handoff *": "ask", "ls *": "allow", "charter report *--yes*": "ask",
-                   "charter *todo*promote*": "ask", "purlis handoff *": "ask",
+                   "charter *todo*promote*": "ask",
                    "purlis report *--yes*": "ask", "purlis *todo*promote*": "ask"})
         );
 

@@ -1,14 +1,15 @@
-//! `charter handoff` — open a chat in a workspace you name, started on an approved brief.
+//! `charter handoff` — open a chat in a workspace you name, started on a brief.
 //!
 //! ```text
-//! charter handoff <workspace> [--create --vision "<vision>"] [--persona <name>] <<'BRIEF'
+//! charter handoff --name "<task>" <workspace> [--report] [--create --vision "<vision>"]
+//!     [--persona <name>] <<'BRIEF'
 //! <the brief>
 //! BRIEF
 //! ```
 //!
 //! A port of `charter/commands_handoff.py`: the ORDER of the refusals and the writes.
 //! [`purlis_core::handoff`] is every string they are made of, and its module header is where
-//! each refusal is argued — including the four that belong to the PreToolUse guard and are
+//! each refusal is argued — including the ones that belong to the PreToolUse guard and are
 //! therefore not here.
 //!
 //! **The order is the design.** Every question is asked before the first write, because
@@ -27,9 +28,15 @@
 //! has no tmux; its frame is the desktop app, and a chat the app started carries the app's
 //! hook socket in `$CHARTER_HOOK_SOCKET` (`purlis_core::hookwire`). So step 4 asks the app,
 //! over that socket, to open the chat: a tab in the target workspace, started on the stamped
-//! brief (charter-app#204). The consent is unchanged and is not asked for twice. It is the
-//! harness's permission prompt in front of this exact command, which the operator answered
-//! with the brief on screen.
+//! brief (charter-app#204).
+//!
+//! **The app decides it, as it decides any dispatch** (#1444): a handoff is a dispatch in
+//! handoff mode, and its consent is the dispatch grant, never the harness's permission
+//! prompt. To the asking chat's own persona it opens at once. To another, the app holds it
+//! and asks the person for the pair on this chat's tab, with the brief in front of them;
+//! this command says so and exits 0, because a held handoff was accepted, not refused
+//! ([`held_for_the_person`]). A second one across a pair the person is already being asked
+//! about is dropped, and that is a refusal ([`not_held`]). Nobody approves the brief.
 //!
 //! **Anything short of the app saying "opened" is today's answer, byte for byte**: no socket
 //! in the environment (a terminal, which is where every chat was before #204), an app that is
@@ -256,6 +263,30 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
             }
             return ExitCode::SUCCESS;
         }
+        // Held, not refused: the handoff is accepted and waits on the person, so this is
+        // not a failure and is not said as one. Nothing was opened, so nothing is recorded:
+        // the app opens the chat when the person allows the pair.
+        Host::Held {
+            from,
+            to,
+            waiting: None,
+        } => {
+            println!(
+                "{}",
+                held_for_the_person(from.as_deref(), &to, ws, create_vision.is_some())
+            );
+            return ExitCode::SUCCESS;
+        }
+        // Not held: the person is already being asked about this pair for another dispatch,
+        // and this one was dropped. Nothing of it will open, so it is a refusal.
+        Host::Held {
+            from,
+            to,
+            waiting: Some(first),
+        } => {
+            voice::err(&not_held(from.as_deref(), &to, &first));
+            return ExitCode::FAILURE;
+        }
         Host::Refused(why) => Some(why),
         Host::None => None,
     };
@@ -284,6 +315,49 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     }
     voice::err(&said);
     ExitCode::FAILURE
+}
+
+/// Who asks, as a held handoff's sentences say it.
+fn who_asks(from: Option<&str>) -> String {
+    match from {
+        Some(from) => format!("'{}' chats", purlis_core::personas::one_line(from)),
+        None => "this chat".to_owned(),
+    }
+}
+
+/// What a chat is told where its handoff waits on the person for a dispatch grant: nothing
+/// has opened, the person is being asked on this chat's tab, and what happens next. A
+/// dispatch's own sentence (`crate::dispatch`), in a handoff's words.
+fn held_for_the_person(from: Option<&str>, to: &str, ws: &str, creates: bool) -> String {
+    let created = if creates {
+        format!(" '{ws}' is created then too, and not before.")
+    } else {
+        String::new()
+    };
+    format!(
+        "{HANDOFF_SAYS} held for the person. {} may not dispatch to '{}' yet, so the person \
+         is being asked on this chat's tab, with this brief in front of them. Nothing has been \
+         opened. If they allow it, the chat opens in workspace '{ws}' then, started on the \
+         brief;{created} if they keep it blocked, this chat is told on its next turn. Carry on \
+         with other work, and do not hand it off again.",
+        who_asks(from),
+        purlis_core::personas::one_line(to)
+    )
+}
+
+/// What a chat is told where the person is already being asked about this pair for the
+/// dispatch `first`: this handoff was not held beside it, because the person was shown one
+/// brief.
+fn not_held(from: Option<&str>, to: &str, first: &str) -> String {
+    let one = purlis_core::personas::one_line;
+    format!(
+        "{HANDOFF_SAYS} not held. The person is already being asked whether {} may dispatch \
+         to '{}', for '{}', and they were shown that brief, so only it starts when they allow \
+         it. Nothing was opened. Hand this off again once they have answered.",
+        who_asks(from),
+        one(to),
+        one(first)
+    )
 }
 
 /// The instant this handoff happens at: the hidden `--now`, a LOCAL naive time as it is
@@ -405,6 +479,13 @@ enum Host {
     /// The chat is open, under this number on the app's board, and what became of its row in
     /// the dispatch log where the app wrote it ([`purlis_core::hookwire::Row`]).
     Opened(u32, Option<purlis_core::hookwire::Row>, Option<String>),
+    /// The app holds the handoff and is asking the person for a dispatch grant across this
+    /// pair of personas ([`purlis_core::hookwire::Answer::NeedsGrant`]): nothing has opened.
+    Held {
+        from: Option<String>,
+        to: String,
+        waiting: Option<String>,
+    },
     /// The app answered, and said no, in its own words.
     Refused(String),
     /// There is no app to ask, or it did not answer: the terminal path, unchanged.
@@ -458,6 +539,7 @@ fn in_the_app(
     };
     match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
         Ok(Answer::Opened { chat, row, note }) => Host::Opened(chat, row, note),
+        Ok(Answer::NeedsGrant { from, to, waiting }) => Host::Held { from, to, waiting },
         Ok(Answer::No { why }) => Host::Refused(why),
         Ok(
             Answer::Ticket { .. }
@@ -468,7 +550,6 @@ fn in_the_app(
             | Answer::Vaults { .. }
             | Answer::Working(_)
             | Answer::Dispatched { .. }
-            | Answer::NeedsGrant { .. }
             | Answer::Task(_),
         )
         | Err(_) => Host::None,

@@ -31,7 +31,7 @@ fn a_command_is_wrapped_as_bash_and_a_rule_is_kept_as_it_is() {
 }
 
 #[test]
-fn handoff_puts_the_rule_back_in_both_harnesses_and_touches_nothing_else() {
+fn an_ask_rule_is_written_in_both_harnesses_and_touches_nothing_else() {
     let (_d, root) = plane();
     std::fs::write(
         root.join(".claude/settings.json"),

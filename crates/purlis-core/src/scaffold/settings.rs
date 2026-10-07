@@ -1,8 +1,12 @@
 //! The things `init` puts in harness settings files the plane commits, each only when it is
 //! absent: `$CHARTER_HARNESS` in `.claude/settings.json`'s `env`, the ask rules for
-//! `charter handoff *`, `charter report *--yes*` and `charter *todo*promote*` in
-//! `.claude/settings.json` and
+//! `charter report *--yes*` and `charter *todo*promote*` in `.claude/settings.json` and
 //! `opencode.json`, and the plane-root guard hook in `.claude/settings.json`.
+//!
+//! **And one thing it takes back out** ([`handoff_rule_retired`], #1444): the ask rule for
+//! `charter handoff *` that `init` wrote until a handoff became a dispatch. Consent to a
+//! handoff is purlis's own dispatch grant now, so `init` writes no such rule, and the
+//! `handoff-rule` fix removes the one it wrote, that exact rule and nothing near it.
 //!
 //! A port of `charter/commands.py`'s `ensure_env_var`, `add_permission_rule`,
 //! `_ensure_guard_hook`, and `harness/opencode.py:_apply_rule`, with the restraint they
@@ -28,7 +32,12 @@ pub const SETTINGS: &str = ".claude/settings.json";
 /// `opencode.json`, under the plane.
 pub const OPENCODE: &str = "opencode.json";
 
-/// The pattern a handoff's consent rule names (`commands.HANDOFF_ASK_PATTERN`).
+/// The pattern the retired handoff rule names (`commands.HANDOFF_ASK_PATTERN`). **`init` no
+/// longer writes it** (#1444): a handoff is a dispatch, and what consents to one is purlis's
+/// own dispatch grant, asked of the person by the app, the same on every harness. Kept by
+/// name for what still reads it: the fix that removes the rule `init` wrote
+/// ([`handoff_rule_retired`]), `purlis guard handoff`, which names it and writes nothing, and
+/// the guards, which still read a handoff where it sits.
 pub const HANDOFF_PATTERN: &str = "charter handoff *";
 
 /// The same pattern as Claude Code's rule syntax (`commands._as_rule`).
@@ -54,12 +63,14 @@ pub const PROMOTE_RULE: &str = "Bash(charter *todo*promote*)";
 /// Every consent rule `init` writes, as its pattern: the commands the host asks the operator
 /// about before they run. The guard reads this list to refuse the same commands under a name
 /// the patterns do not spell ([`crate::consentspelling`]), so the two cannot drift apart.
-pub const CONSENT_PATTERNS: [&str; 3] = [HANDOFF_PATTERN, REPORT_PATTERN, PROMOTE_PATTERN];
+/// A handoff is not among them since #1444: its consent is the dispatch grant.
+pub const CONSENT_PATTERNS: [&str; 2] = [REPORT_PATTERN, PROMOTE_PATTERN];
 
-/// [`HANDOFF_PATTERN`] under the command line's new name (RN-7). `init`, `reinit` and the
-/// `rename-plane` fix write each `PURLIS_*` consent rule beside its `charter` one, so either
-/// spelling of the command waits for the operator; the guard lets the `purlis` spelling through
-/// only in a project that carries the rule ([`carries_consent_rule`]).
+/// [`HANDOFF_PATTERN`] under the command line's new name (RN-7), retired with it (#1444).
+/// `init`, `reinit` and the `rename-plane` fix write each `PURLIS_*` consent rule beside its
+/// `charter` one, so either spelling of the command waits for the operator; the guard lets the
+/// `purlis` spelling through only in a project that carries the rule
+/// ([`carries_consent_rule`]).
 pub const PURLIS_HANDOFF_PATTERN: &str = "purlis handoff *";
 
 /// [`PURLIS_HANDOFF_PATTERN`] as Claude Code's rule.
@@ -78,11 +89,200 @@ pub const PURLIS_PROMOTE_PATTERN: &str = "purlis *todo*promote*";
 pub const PURLIS_PROMOTE_RULE: &str = "Bash(purlis *todo*promote*)";
 
 /// [`CONSENT_PATTERNS`] under the new name, in the same order.
-pub const PURLIS_CONSENT_PATTERNS: [&str; 3] = [
-    PURLIS_HANDOFF_PATTERN,
-    PURLIS_REPORT_PATTERN,
-    PURLIS_PROMOTE_PATTERN,
-];
+pub const PURLIS_CONSENT_PATTERNS: [&str; 2] = [PURLIS_REPORT_PATTERN, PURLIS_PROMOTE_PATTERN];
+
+/// The retired handoff rule under both names the command line has: what `init` wrote, and
+/// what the `handoff-rule` fix removes ([`handoff_rule_retired`]).
+pub const RETIRED_HANDOFF_PATTERNS: [&str; 2] = [HANDOFF_PATTERN, PURLIS_HANDOFF_PATTERN];
+
+/// What became of the retired handoff rule in one settings file ([`handoff_rule_retired`],
+/// [`opencode_handoff_rule_retired`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Retired {
+    /// The file as it should now read, or `None` where nothing in it is purlis's to remove.
+    pub text: Option<String>,
+    /// Each rule removed, as the file spelt it.
+    pub removed: Vec<String>,
+    /// Each rule that names a handoff and is **not** the one `init` wrote, as the file spells
+    /// it with where it stands (`deny: Bash(purlis handoff *)`): the person's own, left alone.
+    pub left: Vec<String>,
+}
+
+/// Whether a rule or a glob names the handoff command without being the exact rule `init`
+/// wrote: a person's own rule about a handoff, which is named and never removed.
+fn names_a_handoff(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    crate::cliname::INSTALLED
+        .iter()
+        .any(|name| lower.contains(&format!("{name} handoff")))
+}
+
+/// Claude Code's `.claude/settings.json`, as `raw`, **without the handoff ask rule `init`
+/// wrote** (#1444): `Bash(charter handoff *)` and `Bash(purlis handoff *)` under
+/// `permissions.ask`, each exactly so and nowhere else.
+///
+/// **Only that exact rule.** A rule for a handoff in `deny` or `allow`, or one spelt any other
+/// way (`Bash(purlis handoff:*)`, a narrower glob), is one a person wrote or edited: it stays,
+/// and [`Retired::left`] names it. An `ask` list left empty stays as an empty list, and
+/// nothing else in the file moves: it is rendered in its own layout, as every writer here
+/// renders it.
+///
+/// `Err` for a file purlis cannot read the way the harness reads it, which is left as it is.
+pub fn handoff_rule_retired(raw: &str) -> Result<Retired, String> {
+    let Some(Value::Object(mut map)) = pyjson::loads_strict(raw) else {
+        return Err(format!(
+            "{SETTINGS} is not a JSON object purlis can read, so nothing in it was changed"
+        ));
+    };
+    let wrote: Vec<String> = RETIRED_HANDOFF_PATTERNS
+        .iter()
+        .map(|pattern| format!("Bash({pattern})"))
+        .collect();
+    let mut retired = Retired::default();
+    if let Some(Value::Object(perms)) = map.get_mut("permissions") {
+        for (bucket, rules) in perms.iter_mut() {
+            let Value::Array(rules) = rules else {
+                continue;
+            };
+            // The one `init` wrote: that exact text, under `ask`, and nowhere else.
+            let ours = |rule: &str| bucket == "ask" && wrote.iter().any(|w| w == rule);
+            for rule in rules.iter().filter_map(Value::as_str) {
+                if ours(rule) {
+                    retired.removed.push(rule.to_owned());
+                } else if names_a_handoff(rule) {
+                    retired.left.push(format!("{bucket}: {rule}"));
+                }
+            }
+            rules.retain(|rule| !rule.as_str().is_some_and(ours));
+        }
+    }
+    if !retired.removed.is_empty() {
+        retired.text = Some(render(map, raw, None, false));
+    }
+    Ok(retired)
+}
+
+/// What the `handoff-rule` fix found in the project's harness files, and did with it
+/// ([`retire_handoff_rule`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RetiredIn {
+    /// Each file a rule was removed from, relative to the project, with the rules removed.
+    pub removed: Vec<(&'static str, Vec<String>)>,
+    /// Each file that holds a person's own rule about a handoff, with those rules.
+    pub left: Vec<(&'static str, Vec<String>)>,
+}
+
+/// The project's machine-local Claude Code settings: a person's own, never rewritten here.
+const LOCAL_SETTINGS: &str = ".claude/settings.local.json";
+
+/// **The `handoff-rule` fix's whole write** (#1444): the handoff ask rule `init` wrote, taken
+/// out of the project's `.claude/settings.json` and `opencode.json`
+/// ([`handoff_rule_retired`], [`opencode_handoff_rule_retired`]). With `dry_run`, what it would
+/// do, writing nothing: what `purlis doctor`'s row reads.
+///
+/// **Both files or neither.** Each is read and judged before either is written, so a file
+/// purlis cannot read stops the whole fix: a rule in force under one harness and not the other
+/// is the split `purlis guard` exists to prevent. A missing file holds no rule.
+///
+/// **The machine-local file is read and never written.** `.claude/settings.local.json` is one
+/// person's own on one machine, and `init` never wrote there, so a handoff rule in it is
+/// theirs: it is named in [`RetiredIn::left`] with the rest.
+pub fn retire_handoff_rule(root: &Path, dry_run: bool) -> Result<RetiredIn, String> {
+    let text_of = |rel: &str| -> Result<Option<String>, String> {
+        let path = root.join(rel);
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => Ok(Some(raw)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!(
+                "{rel} could not be read ({e}), so nothing was changed"
+            )),
+        }
+    };
+    let claude = text_of(SETTINGS)?
+        .map(|raw| handoff_rule_retired(&raw))
+        .transpose()?
+        .unwrap_or_default();
+    let opencode = text_of(OPENCODE)?
+        .map(|raw| opencode_handoff_rule_retired(&raw))
+        .transpose()?
+        .unwrap_or_default();
+    // A local file purlis cannot read is not a reason to leave the shared ones as they are:
+    // nothing in it is purlis's, so it is only ever named.
+    let local = text_of(LOCAL_SETTINGS)
+        .ok()
+        .flatten()
+        .and_then(|raw| handoff_rule_retired(&raw).ok())
+        .map(|found| {
+            let asks = found.removed.iter().map(|rule| format!("ask: {rule}"));
+            asks.chain(found.left.iter().cloned()).collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut out = RetiredIn::default();
+    for (rel, found) in [(SETTINGS, &claude), (OPENCODE, &opencode)] {
+        if !found.left.is_empty() {
+            out.left.push((rel, found.left.clone()));
+        }
+    }
+    if !local.is_empty() {
+        out.left.push((LOCAL_SETTINGS, local));
+    }
+    for (rel, found) in [(SETTINGS, claude), (OPENCODE, opencode)] {
+        let Some(text) = found.text else {
+            continue;
+        };
+        if !dry_run {
+            std::fs::write(root.join(rel), text).map_err(|e| {
+                let before: Vec<&str> = out.removed.iter().map(|(rel, _)| *rel).collect();
+                if before.is_empty() {
+                    format!("{rel} could not be written ({e}), so nothing was changed")
+                } else {
+                    format!(
+                        "{rel} could not be written ({e}); {} was already rewritten",
+                        before.join(", ")
+                    )
+                }
+            })?;
+        }
+        out.removed.push((rel, found.removed));
+    }
+    Ok(out)
+}
+
+/// opencode's `opencode.json`, as `raw`, **without the handoff ask rule `init` wrote**
+/// (#1444): `"charter handoff *": "ask"` and `"purlis handoff *": "ask"` under
+/// `permission.bash`. The same glob with another decision (a `deny`, an `allow`) and any other
+/// glob that names a handoff are the person's, left and named, as
+/// [`handoff_rule_retired`] leaves them.
+pub fn opencode_handoff_rule_retired(raw: &str) -> Result<Retired, String> {
+    let Some(Value::Object(mut map)) = pyjson::loads_strict(raw) else {
+        return Err(format!(
+            "{OPENCODE} is not a JSON object purlis can read, so nothing in it was changed"
+        ));
+    };
+    let mut retired = Retired::default();
+    if let Some(Value::Object(bash)) = map
+        .get_mut("permission")
+        .and_then(|permission| permission.get_mut("bash"))
+    {
+        let ours = |glob: &str, decision: &Value| {
+            RETIRED_HANDOFF_PATTERNS.contains(&glob) && decision.as_str() == Some("ask")
+        };
+        for (glob, decision) in bash.iter() {
+            if ours(glob, decision) {
+                retired.removed.push(glob.clone());
+            } else if names_a_handoff(glob) {
+                let decision = decision.as_str().unwrap_or("not a decision");
+                retired.left.push(format!("{decision}: {glob}"));
+            }
+        }
+        bash.retain(|glob, decision| !ours(glob, decision));
+    }
+    if !retired.removed.is_empty() {
+        retired.text = Some(pyjson::dumps_indent2(&Value::Object(map)));
+    }
+    Ok(retired)
+}
 
 /// The consent pattern `pattern` (spelt `charter …`, one of [`CONSENT_PATTERNS`]) spelt with the
 /// program name `name` instead, or `None` for a pattern that does not start with `charter `.
@@ -371,7 +571,7 @@ pub fn renamed_to_purlis(root: &Path) -> Result<Option<String>, String> {
                     .collect();
                 let mut out: Vec<Value> = Vec::with_capacity(rules.len());
                 for rule in std::mem::take(rules) {
-                    let twin = rule.as_str().and_then(purlis_rule_twin);
+                    let twin = rule.as_str().and_then(|rule| rule_twin(bucket, rule));
                     out.push(rule);
                     if let Some(twin) = twin
                         && have.insert(twin.clone())
@@ -385,6 +585,17 @@ pub fn renamed_to_purlis(root: &Path) -> Result<Option<String>, String> {
     }
     let text = render(map, &doc.raw, None, false);
     Ok((text != doc.raw).then_some(text))
+}
+
+/// [`purlis_rule_twin`] of a rule in `bucket` (`ask` or `deny`), and none for the retired
+/// handoff ask (#1444): purlis writes that rule nowhere now, the rename included. A project
+/// that still carries `Bash(charter handoff *)` as an ask keeps it until the `handoff-rule`
+/// fix removes it, and is given no `purlis` copy of it. A deny on it is an operator's own.
+fn rule_twin(bucket: &str, rule: &str) -> Option<String> {
+    if bucket == "ask" && rule == HANDOFF_RULE {
+        return None;
+    }
+    purlis_rule_twin(rule)
 }
 
 /// `Bash(purlis …)` for a rule `Bash(charter …)`, else `None`.
@@ -486,6 +697,10 @@ pub fn opencode_rules_to_twin(root: &Path) -> Result<Vec<(String, String)>, Stri
         .iter()
         .filter_map(|(glob, decision)| {
             let decision = decision.as_str().filter(|d| matches!(*d, "ask" | "deny"))?;
+            // Not the retired handoff ask (#1444), as in Claude Code's file.
+            if decision == "ask" && glob.as_str() == HANDOFF_PATTERN {
+                return None;
+            }
             let twin = consent_pattern_for(glob, crate::cliname::PRIMARY)?;
             Some((twin, decision.to_owned()))
         })
@@ -1251,6 +1466,129 @@ mod tests {
         }
         assert_eq!(consent_pattern_for("charterx y", "purlis"), None);
         assert_eq!(consent_pattern_for("git push *", "purlis"), None);
+    }
+
+    /// The rule `init` wrote for a handoff, under both names, and nothing else (#1444).
+    #[test]
+    fn the_handoff_rule_init_wrote_is_removed_and_every_other_rule_stays_where_it_was() {
+        let raw = concat!(
+            r#"{"env":{"CHARTER_HARNESS":"claude-code"},"permissions":{"ask":["#,
+            r#""Bash(charter handoff *)","Bash(charter report *--yes*)","#,
+            r#""Bash(purlis handoff *)","Bash(terraform apply *)"],"allow":["Bash(ls *)"]}}"#,
+            "\n"
+        );
+        let retired = handoff_rule_retired(raw).expect("a settings file");
+        assert_eq!(
+            retired.removed,
+            ["Bash(charter handoff *)", "Bash(purlis handoff *)"]
+        );
+        assert_eq!(retired.left, Vec::<String>::new());
+        assert_eq!(
+            retired.text.as_deref(),
+            Some(concat!(
+                r#"{"env":{"CHARTER_HARNESS":"claude-code"},"permissions":{"ask":["#,
+                r#""Bash(charter report *--yes*)","Bash(terraform apply *)"],"#,
+                r#""allow":["Bash(ls *)"]}}"#,
+                "\n"
+            ))
+        );
+    }
+
+    /// A rule about a handoff that is not the one `init` wrote is a person's: a deny, an
+    /// allow, another spelling. It is named and the file is not rewritten for it.
+    #[test]
+    fn a_handoff_rule_a_person_wrote_or_edited_is_left_and_named() {
+        let raw = r#"{"permissions": {"ask": ["Bash(purlis handoff:*)", "Bash(purlis handoff beta *)"],
+            "deny": ["Bash(charter handoff *)"], "allow": ["Bash(purlis handoff *)"]}}"#;
+        let retired = handoff_rule_retired(raw).expect("a settings file");
+        assert_eq!(retired.text, None, "nothing here is purlis's to remove");
+        assert_eq!(retired.removed, Vec::<String>::new());
+        assert_eq!(
+            retired.left,
+            [
+                "ask: Bash(purlis handoff:*)",
+                "ask: Bash(purlis handoff beta *)",
+                "deny: Bash(charter handoff *)",
+                "allow: Bash(purlis handoff *)",
+            ]
+        );
+        // And beside the one it wrote: that one goes, the person's stays and is named.
+        let both = r#"{"permissions": {"ask": ["Bash(purlis handoff *)"], "deny": ["Bash(charter handoff *)"]}}"#;
+        let retired = handoff_rule_retired(both).expect("a settings file");
+        assert_eq!(retired.removed, ["Bash(purlis handoff *)"]);
+        assert_eq!(retired.left, ["deny: Bash(charter handoff *)"]);
+        assert_eq!(
+            retired.text.as_deref(),
+            Some(r#"{"permissions": {"ask": [], "deny": ["Bash(charter handoff *)"]}}"#)
+        );
+    }
+
+    #[test]
+    fn a_settings_file_with_no_handoff_rule_or_that_does_not_parse_is_not_rewritten() {
+        for raw in [
+            "{}",
+            r#"{"permissions": {"ask": ["Bash(terraform apply *)"]}}"#,
+            r#"{"permissions": "nope"}"#,
+            r#"{"permissions": {"ask": "Bash(purlis handoff *)"}}"#,
+        ] {
+            assert_eq!(handoff_rule_retired(raw), Ok(Retired::default()), "{raw}");
+        }
+        for raw in ["", "[]", "{not json", r#"{"a": NaN}"#] {
+            assert!(handoff_rule_retired(raw).is_err(), "{raw:?}");
+            assert!(opencode_handoff_rule_retired(raw).is_err(), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn opencode_s_handoff_ask_is_removed_and_another_decision_for_it_is_left_and_named() {
+        let raw = r#"{"permission": {"bash": {"charter handoff *": "ask", "ls *": "allow",
+            "charter report *--yes*": "ask", "purlis handoff *": "ask"}}}"#;
+        let retired = opencode_handoff_rule_retired(raw).expect("an opencode file");
+        assert_eq!(retired.removed, ["charter handoff *", "purlis handoff *"]);
+        assert_eq!(retired.left, Vec::<String>::new());
+        let now: Value = serde_json::from_str(retired.text.as_deref().expect("rewritten")).unwrap();
+        assert_eq!(
+            now,
+            json!({"permission": {"bash": {"ls *": "allow", "charter report *--yes*": "ask"}}})
+        );
+
+        let theirs = r#"{"permission": {"bash": {"purlis handoff *": "deny", "charter handoff *": "allow",
+            "purlis handoff beta *": "ask"}}}"#;
+        let retired = opencode_handoff_rule_retired(theirs).expect("an opencode file");
+        assert_eq!(retired.text, None);
+        assert_eq!(
+            retired.left,
+            [
+                "deny: purlis handoff *",
+                "allow: charter handoff *",
+                "ask: purlis handoff beta *",
+            ]
+        );
+        assert_eq!(
+            opencode_handoff_rule_retired(r#"{"permission": "ask"}"#),
+            Ok(Retired::default())
+        );
+    }
+
+    /// The rename gives every `charter …` ask or deny its `purlis …` twin, and not the retired
+    /// handoff ask: purlis writes that rule nowhere now (#1444). A deny on it is an operator's
+    /// own and is twinned like any other.
+    #[test]
+    fn the_rename_writes_no_twin_of_the_retired_handoff_ask() {
+        assert_eq!(rule_twin("ask", "Bash(charter handoff *)"), None);
+        assert_eq!(
+            rule_twin("deny", "Bash(charter handoff *)").as_deref(),
+            Some("Bash(purlis handoff *)")
+        );
+        assert_eq!(
+            rule_twin("ask", "Bash(charter report *--yes*)").as_deref(),
+            Some("Bash(purlis report *--yes*)")
+        );
+        assert_eq!(
+            rule_twin("ask", "Bash(charter handoff beta *)").as_deref(),
+            Some("Bash(purlis handoff beta *)"),
+            "a narrower rule is a person's own"
+        );
     }
 
     /// A migrated project's harness variable is never joined by the old one, nor the other way.

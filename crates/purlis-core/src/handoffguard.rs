@@ -1,55 +1,66 @@
-//! Arm A7: a handoff waits for a yes the operator can see (#1014, ADR 0014).
+//! Arm A7: a handoff purlis can read, from the chat itself (#1014, #1444).
 //!
-//! A port of `charter/hooks.py`'s `_handoff_refusal` and the five readers under it —
+//! A port of `charter/hooks.py`'s `_handoff_refusal` and the readers under it —
 //! `_disguised_as`, `_disguised_handoff`, `_shell_string`, `_as_the_shell_reads`,
 //! `_shell_string_handoff`, `_handoff_segment`, `_handoff_line` — plus `_runs_handoff` and
-//! `_is_handoff`, which the Python shares with the routing-mark clear.
+//! `_is_handoff`, which the Python shares with the routing-mark clear. The readers are the
+//! Python's still; the verdict is not, since a handoff became a dispatch.
 //!
-//! A handoff's brief becomes a new chat's first message, and a first message runs with the
-//! operator's authority. **The consent is the harness's own permission prompt** — the `ask`
-//! rule for `charter handoff *` that `charter init` writes, because a pattern belongs to the
-//! host (ADR 0014). Each refusal here covers something that prompt cannot see: who is asking,
-//! whether anybody is there to answer, a spelling the rule does not match, and a stdin the
-//! prompt would not show.
+//! # What consents to a handoff, and what this guard is for
+//!
+//! **Consent is the dispatch grant** (spec #1434, decisions 4 and 5; #1444). A handoff is a
+//! dispatch in handoff mode: the app decides it from its own record of the asking chat, asks
+//! the person once for a pair of personas with the brief in front of them, and starts nothing
+//! until they allow it. That is the same on every harness. The harness's own permission prompt
+//! is no part of it, so nothing here protects that prompt any more: the exact spelling its
+//! rule matched and the refusal of an unattended run, which stood in for a prompt nobody was
+//! there to answer, are gone. An unattended chat is answered by the app, under a grant that
+//! already stands or not at all (`dispatchunattended`).
+//!
+//! What is left is what only a tool hook can know or read:
+//!
+//! - **who is asking**: a helper sub-agent's handoff reaches the app looking exactly like its
+//!   chat's own, and only the hook's payload tells them apart ([`Caller::from_a_subagent`]);
+//! - **a shape purlis cannot read**: a handoff inside a string or a heredoc a shell runs, or
+//!   one whose words the shell rewrites, is one whose brief this cannot see and whose asker it
+//!   cannot vouch for;
+//! - **a brief the shell would change**: the new chat's first message and the dispatch record
+//!   are the text written in the call, so a brief fed by a pipe, a file, an unquoted heredoc
+//!   or beside a live substitution is refused, as it was.
 //!
 //! # Why the hook and not the command
 //!
-//! [`crate::handoff`]'s module header carries the table that divides them, and marks these
-//! four rows as A7's. Each needs a fact no command can observe — the **source spelling** of
-//! the command line, and the harness's own hook payload (`agent_id`, `permission_mode`) — so
-//! a second permission rule could not express them and the command cannot reach them. By the
-//! time `charter handoff` is running, the spelling that got it there is gone.
+//! [`crate::handoff`]'s module header carries the table that divides them. Each refusal here
+//! needs a fact no command can observe — the **source spelling** of the command line, and the
+//! harness's own hook payload (`agent_id`) — so the command cannot reach them. By the time
+//! `purlis handoff` is running, the spelling that got it there is gone.
 //!
 //! # What A7 is, and is not
 //!
-//! It keeps a good-faith chat's permission prompt in front of its handoff by refusing the
-//! spellings it can recognise. **It reads a command's words and is not a shell**: an
-//! interpreter (`python3 -c`), a variable, a script file, a heredoc fed to a shell and an
-//! expansion that does not leave a word whole (`{hand,}off`) all run a
-//! handoff it never sees. Claude Code says the same of its own rule — "isn't a security
-//! boundary around the program"
-//! (<https://code.claude.com/docs/en/permissions.md>, *What a Bash rule doesn't match*).
+//! **It reads a command's words and is not a shell**: an interpreter (`python3 -c`), a
+//! variable, a script file and an expansion that does not leave a word whole (`{hand,}off`)
+//! all run a handoff it never sees. That is advice a sub-agent meets, not a boundary it cannot
+//! cross, as [`crate::dispatchguard`] says of itself: a handoff that gets past it reaches the
+//! app's decision like any other, and starts only what the grants in force allow.
 //!
 //! # The shared heredoc plan, and the trap under it
 //!
 //! Which heredoc bodies a shell RUNS comes from [`crate::leakguard::lines_a_command_could_run`],
 //! and so from the one plan the leak guard uses ([`crate::heredoc::heredoc_strip_plan`]). A
-//! body fed to a reader — `charter handoff`'s own brief, `git commit -F -` — is data and is not
-//! searched; a body fed to a shell is searched and flagged, because the host's rule only ever
-//! saw the `bash` that opened it.
+//! body fed to a reader — `purlis handoff`'s own brief, `git commit -F -` — is data and is not
+//! searched; a body fed to a shell is searched and flagged.
 //!
 //! **An unknown plan has to fail the same way for both**, which is
 //! [`crate::heredoc::heredoc_could_run`]'s whole subject. The leak guard's unknown is "keep
 //! every body visible", which still denies. A7's *used to be* "drop every body", which is the
-//! opposite — and a canonical handoff inside `bash <<'EOF'` then ran with no prompt in every
-//! shape that loses the plan. The two now share one answer and this module adds no default of
-//! its own; `heredoc.rs` is `pub` at that boundary for exactly this caller.
+//! opposite. The two now share one answer and this module adds no default of its own;
+//! `heredoc.rs` is `pub` at that boundary for exactly this caller.
 //!
 //! # Nothing about this module is gated here
 //!
 //! A7 is PLANE-GATED in `pretooluse` — unlike A5 and A6 beside it, which refuse a fact about
 //! the shell. A handoff opens a chat in one of this plane's workspaces, so outside a plane
-//! there is no such chat to consent to. The gate is [`crate::toolgate`]'s, one level up, for
+//! there is no such chat to start. The gate is [`crate::toolgate`]'s, one level up, for
 //! the reason that module's header gives: reading it once is what keeps five decisions from
 //! drifting apart.
 
@@ -88,57 +99,55 @@ pub const REDIRECT_READS: [&str; 2] = ["<>", "<"];
 // what each refusal says
 // ----------------------------------------------------------------------------------------
 //
-// Spelled once, so a denial reads the same wherever it is quoted. Every one is
-// `charter/hooks.py`'s constant verbatim, and the differential compares them as data as well
-// as through the verdict, because a paraphrase here is a denial two charters word differently.
+// Spelled once, so a denial reads the same wherever it is quoted. They were
+// `charter/hooks.py`'s constants verbatim until a handoff became a dispatch (#1444); since then
+// they are this guard's own, and the recording in `fixtures/corpora` holds them as rewritten.
 
-/// `_HANDOFF_SUBAGENT`.
-pub const HANDOFF_SUBAGENT: &str = "`charter handoff` is refused from inside a sub-agent. A brief becomes a new chat's first \
-     message and runs with the operator's authority, so only the chat the operator is talking \
-     to may propose one — and whatever this sub-agent found goes back to that chat anyway. \
-     Return it to the parent chat, and let the parent propose the handoff.";
+/// What a helper sub-agent that hands off is told.
+pub const HANDOFF_SUBAGENT: &str = "`purlis handoff` is refused from inside a sub-agent. A handoff starts a chat the person \
+     can see, open and stop, for the chat that asks, and a sub-agent is not a chat. Return \
+     what you found to your chat, and let that chat hand it off.";
 
-/// `_HANDOFF_UNATTENDED`.
-pub const HANDOFF_UNATTENDED: &str = "`charter handoff` is refused in an unattended run (`permission_mode: bypassPermissions`). \
-     A handoff opens a chat that starts working on its brief with the operator's authority, \
-     and its consent is a permission prompt nobody is here to answer. Record the work \
-     instead — purlis ws todo --workspace <workspace> \"<what>\" — and hand it off from a \
-     chat someone is attending.";
+/// What a handoff purlis cannot read as a command of its own is told.
+pub const HANDOFF_SPELLING: &str = "`purlis handoff` is refused where purlis cannot read it as a command of its own: the \
+     shell rewrites one of its two words (a brace, a glob or a parameter in \
+     `purlis` or `handoff`), or it stands inside a command substitution. purlis reads a \
+     command's words and is not a shell, so it cannot see which brief this hands off. Write \
+     it at the start of its own command: \
+     purlis handoff --name \"<task>\" <workspace> <<'BRIEF'";
 
-/// `_HANDOFF_SPELLING`.
-pub const HANDOFF_SPELLING: &str = "`charter handoff` must be spelled exactly that, at the start of its command: the two \
-     words unquoted, unescaped and unexpanded, one space apart, and one space before what \
-     follows. The permission rule that asks the operator first is `Bash(charter handoff *)`, \
-     and a spelling it does not match gets no prompt — on Claude Code 2.1.268, \
-     `python3 -m charter handoff`, a path to charter, `charter 'handoff'` and \
-     `charter $'handoff'` all ran with none. This guard refuses the spellings of a handoff it \
-     can recognise; it reads a command's words and is not a shell. Spell it exactly \
-     `charter handoff <workspace> <<'BRIEF'`.";
+/// What a handoff inside a string or a heredoc a shell runs is told.
+pub const HANDOFF_SHELL_STRING: &str = "`purlis handoff` is refused inside a string or a heredoc a shell runs (`eval`, \
+     `bash -c '…'`, `bash <<'EOF'`). purlis looks one level in and no deeper, so it cannot \
+     read the brief there or tell a helper sub-agent's handoff from this chat's own. Run it \
+     directly instead: purlis handoff --name \"<task>\" <workspace> <<'BRIEF'";
 
-/// `_HANDOFF_SHELL_STRING`.
-pub const HANDOFF_SHELL_STRING: &str = "`charter handoff` is refused inside a string or a heredoc a shell runs (`eval`, \
-     `bash -c '…'`, `bash <<'EOF'`). The permission rule that asks the operator first is \
-     `Bash(charter handoff *)`, and it reads the outer command — on Claude Code 2.1.268 a \
-     handoff inside `eval` or `bash -c` ran with no prompt. This guard looks one level in and \
-     no deeper. Run it directly instead, spelled exactly \
-     `charter handoff <workspace> <<'BRIEF'`.";
+/// What a handoff inside a substitution, a `case` branch or a function body is told
+/// ([`crate::consentspelling`] finds those). `where_` is where it sits, as a refusal says it.
+pub fn handoff_placed(where_: &str) -> String {
+    format!(
+        "`purlis handoff` is refused {where_}. purlis cannot read the brief there or tell a helper \
+         sub-agent's handoff from this chat's own. Run it as a command of its own: \
+         purlis handoff --name \"<task>\" <workspace> <<'BRIEF'"
+    )
+}
 
-/// `_HANDOFF_SOURCE`, with `{what}` still to fill — [`handoff_source`] fills it.
-pub const HANDOFF_SOURCE: &str = "`charter handoff` takes its brief from a QUOTED heredoc in the same call — <<'BRIEF' — \
-     so the permission prompt shows exactly the text the new chat is sent. This call feeds it \
-     {what}, which the shell would change or hide before purlis reads it. Write: \
-     charter handoff <workspace> <<'BRIEF' … BRIEF";
+/// What a brief the shell would change is told, with `{what}` still to fill —
+/// [`handoff_source`] fills it.
+pub const HANDOFF_SOURCE: &str = "`purlis handoff` takes its brief from a QUOTED heredoc in the same call — <<'BRIEF' — \
+     so the new chat is sent exactly the text written here, and the dispatch record keeps the \
+     same. This call feeds it {what}, which the shell would change or hide before purlis \
+     reads it. Write: purlis handoff --name \"<task>\" <workspace> <<'BRIEF' … BRIEF";
 
-/// [`HANDOFF_SOURCE`] with `{what}` filled — Python's `_HANDOFF_SOURCE.format(what=…)`.
+/// [`HANDOFF_SOURCE`] with `{what}` filled.
 pub fn handoff_source(what: &str) -> String {
     HANDOFF_SOURCE.replace("{what}", what)
 }
 
 /// The trace reason each refusal is tallied under. The words are the Python's, and they are
-/// the stable key a tally reader already has.
+/// the stable key a tally reader already has. `handoff-spelling` is now the handoff purlis
+/// cannot read as a command of its own, and `handoff-unattended` is no longer made (#1444).
 pub const REASON_SUBAGENT: &str = "handoff-subagent";
-/// See [`REASON_SUBAGENT`].
-pub const REASON_UNATTENDED: &str = "handoff-unattended";
 /// See [`REASON_SUBAGENT`].
 pub const REASON_SHELL_STRING: &str = "handoff-shell-string";
 /// See [`REASON_SUBAGENT`].
@@ -186,16 +195,6 @@ fn py_slice(chars: &[char], start: isize, end: isize) -> String {
     chars[a..b].iter().collect()
 }
 
-/// `line.startswith(prefix, start)` as CPython reads it: a CHARACTER offset, negative from the
-/// end, clamped at zero, and `false` once the offset is past the end of a non-empty prefix.
-fn py_starts_with_at(chars: &[char], prefix: &str, start: isize) -> bool {
-    let n = chars.len() as isize;
-    let at = if start < 0 { start + n } else { start };
-    let at = at.clamp(0, n) as usize;
-    let want: Vec<char> = prefix.chars().collect();
-    chars.len() >= at + want.len() && chars[at..at + want.len()] == want[..]
-}
-
 // ----------------------------------------------------------------------------------------
 // is a handoff about to run
 // ----------------------------------------------------------------------------------------
@@ -204,10 +203,8 @@ fn py_starts_with_at(chars: &[char], prefix: &str, start: isize) -> bool {
 /// plain one, `python3 -m charter`, a path to charter, behind a prefix or a wrapper.
 /// `_runs_handoff`.
 ///
-/// **Every spelling, on purpose.** Which spellings the harness's permission prompt covers is a
-/// separate question with a measured answer, and [`handoff_refusal`] asks it; this answers only
-/// "is a handoff about to run", which is what a guard has to know before it can say anything
-/// about one.
+/// **Every spelling, on purpose.** This answers only "is a handoff about to run", which is
+/// what a guard has to know before it can say anything about one.
 pub fn runs_handoff(prog: &str, argv: &[String]) -> bool {
     charter_words(prog, argv).is_some_and(|w| w.first().is_some_and(|f| f == "handoff"))
 }
@@ -532,7 +529,7 @@ fn trailing_backslashes(line: &str) -> usize {
 // ----------------------------------------------------------------------------------------
 
 /// What the hook knows about a tool call that no command can observe. `_handoff_refusal`'s
-/// `data`, narrowed to the three fields it reads.
+/// `data`, narrowed to the three fields purlis's guards read.
 ///
 /// A struct rather than three arguments: the two that gate the sub-agent refusal only mean
 /// anything together, and a call site that passed them the other way round would compile.
@@ -545,7 +542,9 @@ pub struct Caller<'a> {
     /// `$CHARTER_HARNESS`. Read here rather than from the environment because the core holds
     /// no globals; the CLI passes what the process was given.
     pub harness: Option<&'a str>,
-    /// The payload's `permission_mode` — [`crate::floorguard::unattended`]'s input.
+    /// The payload's `permission_mode` — [`crate::floorguard::unattended`]'s input. **A7 no
+    /// longer reads it** (#1444): whether anybody answers a chat's prompts is the app's own
+    /// mark on that chat, read where a handoff is decided. The release floor still does.
     pub permission_mode: Option<&'a str>,
 }
 
@@ -560,72 +559,43 @@ impl Caller<'_> {
     }
 }
 
-/// `(trace reason, denial)` for a `charter handoff` the operator's permission prompt cannot
-/// stand in front of — or `None`. `_handoff_refusal`.
+/// `(trace reason, denial)` for a `purlis handoff` this guard refuses — or `None`.
 ///
 /// **The first handoff INVOCATION line is the one judged** ([`handoff_line`]).
 ///
-/// The refusals, in the order the Python asks them:
+/// The refusals, in the order they are asked:
 ///
 /// 1. `handoff-subagent` — the payload carries `agent_id` on a harness where that is measured
 ///    to mean a sub-agent ([`Caller::from_a_subagent`]).
-/// 2. `handoff-unattended` — `permission_mode: bypassPermissions`.
-/// 3. `handoff-shell-string` — a handoff inside a string a shell runs, one level deep
-///    ([`shell_string_handoff`]), or inside a heredoc body a shell runs; the host's rule reads
-///    only the outer command.
-/// 4. `handoff-spelling` — a spelling of a handoff this guard can recognise that is not
-///    `charter handoff` as the SOURCE spells it: two bare words (no quote or escape in either),
-///    one ASCII space apart and one before whatever follows — **a backslash-newline there is
-///    not that space** — and neither word one that reads `charter` or `handoff` behind quoting,
-///    expansion or glob characters.
-/// 5. `handoff-brief-source` — stdin that is not exactly one quoted heredoc on the handoff's
+/// 2. `handoff-shell-string` — a handoff inside a string a shell runs, one level deep
+///    ([`shell_string_handoff`]), or inside a heredoc body a shell runs.
+/// 3. `handoff-spelling` — a handoff this guard recognises and cannot read as a command of its
+///    own: a word of it that reads `purlis` or `handoff` only behind an expansion or a glob, or
+///    one inside a command substitution ([`handoff_segment`] finds no segment for it). A
+///    group and a subshell are read through: the handoff in one is a segment like any other.
+/// 4. `handoff-brief-source` — stdin that is not exactly one quoted heredoc on the handoff's
 ///    own segment, or a live substitution anywhere in the call
 ///    ([`livesub::live_substitution`], scoped to the WHOLE call like A5 and A6, for their
 ///    reason).
+///
+/// **What it no longer refuses** (#1444, where a handoff became a dispatch and its consent the
+/// dispatch grant). Both stood in for the harness's own permission prompt, which consents to
+/// nothing now:
+///
+/// - *an unattended run* (`permission_mode: bypassPermissions`). The app answers a chat nobody
+///   is at, from its own mark on that chat: under a grant that already stands, or refused
+///   (`dispatchunattended`). Codex reports that mode for every chat, so this arm refused every
+///   handoff from one.
+/// - *a spelling the harness's rule did not match*: a path to the binary, `python3 -m`, a
+///   `VAR=` prefix or a wrapper, a quoted or escaped word that still reads plainly, more than
+///   one space, a line continuation. Each is a handoff this guard reads, word for word, so the
+///   brief's source is judged as for any other.
 ///
 /// **Quoting is read off the delimiter token**, which is the answer
 /// [`heredoc::heredoc_header`] gives — any quoting anywhere in the word makes the body literal
 /// — taken from the tokenizer that already found this `<<`. A search of the raw line for it
 /// would be misled by a quoted `"<<"` earlier on the line.
 pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, String)> {
-    handoff_refusal_spelt(cmd, caller, &[crate::cliname::ALIAS])
-}
-
-/// [`handoff_refusal`] for a call in the project at `plane`, whose host settings may come from
-/// any of `anchors` (the session's start folder and the call's `cwd`): `purlis handoff`,
-/// spelt exactly, passes the spelling check where the `purlis handoff` twin holds it at least as
-/// strictly as the `charter handoff` rule in every settings file the host reads there — the
-/// project's and the layer's ([`crate::scaffold::settings::twin_in_force`], RN-7, closing
-/// D-RN3-4) — and is refused for its spelling where it does not. Every other refusal is the
-/// same.
-pub fn handoff_refusal_in(
-    cmd: &str,
-    caller: Caller<'_>,
-    plane: &std::path::Path,
-    anchors: &[&std::path::Path],
-) -> Option<(&'static str, String)> {
-    let purlis_ruled = crate::scaffold::settings::twin_in_force(
-        plane,
-        anchors,
-        crate::scaffold::settings::HANDOFF_PATTERN,
-        crate::cliname::PRIMARY,
-    );
-    if purlis_ruled {
-        handoff_refusal_spelt(
-            cmd,
-            caller,
-            &[crate::cliname::ALIAS, crate::cliname::PRIMARY],
-        )
-    } else {
-        handoff_refusal(cmd, caller)
-    }
-}
-
-fn handoff_refusal_spelt(
-    cmd: &str,
-    caller: Caller<'_>,
-    spelt: &[&str],
-) -> Option<(&'static str, String)> {
     let found = handoff_line(cmd);
     let in_a_string = shell_string_handoff(cmd);
     if found.is_none() && !in_a_string {
@@ -634,11 +604,8 @@ fn handoff_refusal_spelt(
     if caller.from_a_subagent() {
         return Some((REASON_SUBAGENT, HANDOFF_SUBAGENT.to_string()));
     }
-    if crate::floorguard::unattended(caller.permission_mode) {
-        return Some((REASON_UNATTENDED, HANDOFF_UNATTENDED.to_string()));
-    }
     // A handoff a shell runs — from a `-c` string or from a heredoc body it executes — is one
-    // the host's rule never sees, because the command it matches is `bash`.
+    // this guard looks one level into and no deeper.
     //
     // Python's `in_a_string or found[1]` short-circuits, which is what makes `found` safe to
     // unwrap below: the only way past this line with `found` unset is `in_a_string` being
@@ -661,14 +628,14 @@ fn handoff_refusal_spelt(
         ));
     };
     let toks = shellseg::split_punctuation(lexed);
-    let (seg, piped) = handoff_segment(&toks);
-    if !spelled_exactly(&line, seg.as_deref(), spelt) {
+    // Found by its line and by no segment of it: the words are rewritten by the shell, or the
+    // handoff is not at the start of a command of its own.
+    let (Some(seg), piped) = handoff_segment(&toks) else {
         return Some((REASON_SPELLING, HANDOFF_SPELLING.to_string()));
-    }
-    let seg = seg.expect("`spelled_exactly` answers false for no segment");
+    };
     // A report back carries no brief and opens no chat (charter-app#259): its text is the
-    // command's own argument, which the prompt shows as it is. Only a live substitution is
-    // still refused, because that text is not the one the prompt showed.
+    // command's own argument. Only a live substitution is still refused, because that text is
+    // not the one written here.
     if is_a_report(&seg) {
         return livesub::live_substitution(cmd).map(|hit| {
             let said = if livesub::is_process_substitution(hit) {
@@ -683,15 +650,32 @@ fn handoff_refusal_spelt(
     Some((REASON_BRIEF_SOURCE, handoff_source(what)))
 }
 
-/// Whether a handoff segment is `charter handoff report <summary>` — a report back, which
+/// Whether a handoff segment is `purlis handoff report <summary>` — a report back, which
 /// carries its text as an argument and reads no brief (charter-app#259).
 ///
-/// `report` bare and followed by at least one word, and nothing read from stdin: `charter handoff report
-/// <<'BRIEF'` is still a handoff INTO a workspace called `report`, judged as one.
+/// `report` bare, right after the `handoff` **the reader found**, and followed by at least one
+/// word, and nothing read from stdin: `purlis handoff report <<'BRIEF'` is still a handoff INTO
+/// a workspace called `report`, judged as one.
+///
+/// The word is found where [`charter_words`] says the command line's own words start, never by
+/// looking for a token spelt `handoff`: a segment this guard reads may start with a prefix or a
+/// wrapper, and a wrapper's own argument can be spelt anything (`sudo -u handoff …`). Where the
+/// reader's words are not the segment's own tail, this answers no, and the brief is judged.
 fn is_a_report(seg: &[Tok]) -> bool {
-    seg.get(2)
+    let texts: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
+    let (prog, _env, argv) = shellwrap::split_env(&texts);
+    let Some(words) = charter_words(&prog, &argv) else {
+        return false;
+    };
+    let Some(at) = texts.len().checked_sub(words.len()) else {
+        return false;
+    };
+    if texts[at..] != words[..] || words.first().is_none_or(|word| word != "handoff") {
+        return false;
+    }
+    seg.get(at + 1)
         .is_some_and(|word| word.bare && word.text == "report")
-        && seg.len() > 3
+        && seg.len() > at + 2
         && !seg.iter().enumerate().any(|(i, t)| {
             t.is_op(&["<<", "<<<", "<", "<>"]) && !opens_a_process_substitution(seg, i)
         })
@@ -715,71 +699,16 @@ fn opens_a_process_substitution(seg: &[Tok], i: usize) -> bool {
 }
 
 /// What a report back with a live substitution in it is told.
-pub const HANDOFF_REPORT_SOURCE: &str = "`charter handoff report` sends its summary as the \
-     text the permission prompt shows, and this call has a live command substitution in it, \
-     which the shell would replace before purlis reads it. Write the summary out in plain \
-     words: charter handoff report \"<summary>\"";
+pub const HANDOFF_REPORT_SOURCE: &str = "`purlis handoff report` sends its summary as it is written here, and this call has a \
+     live command substitution in it, which the shell would replace before purlis reads it. \
+     Write the summary out in plain words: purlis handoff report \"<summary>\"";
 
 /// What a report back with a live PROCESS substitution in it is told: the shell runs that
-/// command too, and hands charter a path to its output where the words stood.
-pub const HANDOFF_REPORT_PROCESS_SOURCE: &str = "`charter handoff report` sends its summary as \
-     the text the permission prompt shows, and this call has a live process substitution in it, \
-     which the shell would run and replace with a path before purlis reads it. Write the \
-     summary out in plain words: charter handoff report \"<summary>\"";
-
-/// Whether the handoff on `line` is spelled the way the host's rule matches: the SOURCE, not
-/// the words a shell makes of it.
-///
-/// `'charter' handoff`, `\charter handoff` and `charter  handoff` all lex to the same two texts
-/// as the exact form. `bare` says no quote or escape touched either word; the offsets say what
-/// stood between them.
-fn spelled_exactly(line: &str, seg: Option<&[Tok]>, spelt: &[&str]) -> bool {
-    let Some(seg) = seg else {
-        return false;
-    };
-    // `_runs_handoff` cannot be true of a segment with fewer than two tokens — `_charter_words`
-    // needs an argv of at least two, and `_split_env` only ever strips a PREFIX — so Python
-    // indexes `seg[0]`/`seg[1]` unguarded and would raise `IndexError` if one ever arrived.
-    //
-    // **Measured as well as argued**, because "the oracle would crash" is a claim worth more
-    // than a deduction: 200,529 cases through the differential's own generators produced 10,814
-    // handoff segments, none shorter than two tokens and none raising out of
-    // `_handoff_refusal`. Answering "not the exact spelling" for a shorter one is the same
-    // verdict as the Python's for every input either implementation has been shown, without a
-    // panic where the guard is the only thing standing in front of a tool call.
-    let (Some(first), Some(second)) = (seg.first(), seg.get(1)) else {
-        return false;
-    };
-    let chars: Vec<char> = line.chars().collect();
-    if !(first.bare && second.bare)
-        || !spelt.contains(&first.text.as_str())
-        || second.text != "handoff"
-    {
-        return false;
-    }
-    // The SOURCE of each word, too: a backslash-newline inside one (`char\<newline>ter`) is not
-    // quoting, so the word is bare and its text is `charter`, and it is still not the spelling
-    // the host's rule matches.
-    if py_slice(&chars, first.start, first.end) != first.text
-        || py_slice(&chars, second.start, second.end) != "handoff"
-    {
-        return false;
-    }
-    if py_slice(&chars, first.end, second.start) != " " {
-        return false;
-    }
-    if let Some(third) = seg.get(2) {
-        // A backslash-newline after `handoff` is not that one space, and the TOKENS do not say
-        // so: the lexer folds the pair into the word that follows, leaving a gap that reads as
-        // a single space. The source is where it shows.
-        if py_slice(&chars, second.end, third.start) != " "
-            || py_starts_with_at(&chars, "\\\n", third.start)
-        {
-            return false;
-        }
-    }
-    !disguised_handoff_spelling(line, spelt)
-}
+/// command too, and hands purlis a path to its output where the words stood.
+pub const HANDOFF_REPORT_PROCESS_SOURCE: &str = "`purlis handoff report` sends its summary as it is written here, and this call has a \
+     live process substitution in it, which the shell would run and replace with a path \
+     before purlis reads it. Write the summary out in plain words: \
+     purlis handoff report \"<summary>\"";
 
 /// What this call feeds the brief, for [`handoff_source`] — or `None`, which is the one way a
 /// handoff passes A7.
@@ -801,7 +730,7 @@ fn brief_source(cmd: &str, seg: &[Tok], piped: bool) -> Option<&'static str> {
         .enumerate()
         .any(|(i, t)| t.is_op(&REDIRECT_READS) && !opens_a_process_substitution(seg, i))
     {
-        return Some("a file (<), which the prompt shows as a path rather than as the brief");
+        return Some("a file (<), whose text this call does not show");
     }
     if piped {
         return Some("a pipe");
@@ -833,7 +762,7 @@ fn brief_source(cmd: &str, seg: &[Tok], piped: bool) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    /// The shape the host's rule matches, and the only one A7 lets through.
+    /// The shape the handoff skill writes: two plain words and a quoted heredoc.
     const CANONICAL: &str = "charter handoff beta <<'BRIEF'\nship it\nBRIEF";
 
     fn attended() -> Caller<'static> {
@@ -865,9 +794,13 @@ mod tests {
         assert_eq!(reason("grep -rn 'charter handoff' docs"), None);
     }
 
+    /// A handoff is a dispatch, and its consent is the dispatch grant (#1444): no rule of the
+    /// harness has to match its spelling, so every spelling this guard reads word for word
+    /// goes on to the app, which decides it.
     #[test]
-    fn a_spelling_the_hosts_rule_does_not_match_is_refused() {
+    fn a_handoff_purlis_reads_passes_however_its_two_words_are_written() {
         for cmd in [
+            "purlis handoff beta <<'BRIEF'\nx\nBRIEF",
             "python3 -m charter handoff beta <<'BRIEF'\nx\nBRIEF",
             "/usr/local/bin/charter handoff beta <<'BRIEF'\nx\nBRIEF",
             "charter 'handoff' beta <<'BRIEF'\nx\nBRIEF",
@@ -876,17 +809,41 @@ mod tests {
             "\\charter handoff beta <<'BRIEF'\nx\nBRIEF",
             "charter  handoff beta <<'BRIEF'\nx\nBRIEF",
             "CHARTER_ROOT=/x charter handoff beta <<'BRIEF'\nx\nBRIEF",
+            // A backslash-newline is gone before the shell reads the words.
+            "charter handoff \\\nbeta <<'BRIEF'\nx\nBRIEF",
         ] {
-            assert_eq!(reason(cmd), Some(REASON_SPELLING), "{cmd:?}");
+            assert_eq!(refusal(cmd), None, "{cmd:?}");
         }
     }
 
+    /// What this guard recognises as a handoff and cannot read as a command of its own is
+    /// still refused: it cannot see which brief that hands off.
     #[test]
-    fn a_backslash_newline_is_not_the_one_space_after_handoff() {
-        // The shell removes the pair, so the tokens read as a single space and only the source
-        // tells them apart.
-        let cmd = "charter handoff \\\nbeta <<'BRIEF'\nx\nBRIEF";
-        assert_eq!(reason(cmd), Some(REASON_SPELLING));
+    fn a_handoff_purlis_cannot_read_as_a_command_of_its_own_is_refused() {
+        for cmd in [
+            "charter hando?f beta <<'BRIEF'\nx\nBRIEF",
+            "charter {handoff,} beta <<'BRIEF'\nx\nBRIEF",
+            "purlis ${x:-handoff} beta <<'BRIEF'\nx\nBRIEF",
+        ] {
+            let (why, said) = refusal(cmd).unwrap_or_else(|| panic!("{cmd:?} is refused"));
+            assert_eq!(why, REASON_SPELLING, "{cmd:?}");
+            assert_eq!(said, HANDOFF_SPELLING, "{cmd:?}");
+        }
+    }
+
+    /// The brief's source is judged for every spelling this guard reads, not only the plain
+    /// one: a prefix or a path in front does not let a brief through that the shell changes.
+    #[test]
+    fn a_brief_the_shell_would_change_is_refused_under_every_spelling_that_is_read() {
+        for cmd in [
+            "FOO=1 purlis handoff beta < brief.txt",
+            "/usr/local/bin/purlis handoff beta",
+            "python3 -m purlis handoff beta <<BRIEF\nx\nBRIEF",
+            "cat brief.txt | 'purlis' handoff beta",
+            "charter  handoff \"$(cat name)\" <<'BRIEF'\nx\nBRIEF",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE), "{cmd:?}");
+        }
     }
 
     #[test]
@@ -895,7 +852,7 @@ mod tests {
             ("charter handoff beta <<<'x'", "a here-string (<<<)"),
             (
                 "charter handoff beta < brief.txt",
-                "a file (<), which the prompt shows as a path rather than as the brief",
+                "a file (<), whose text this call does not show",
             ),
             ("cat brief.txt | charter handoff beta", "a pipe"),
             ("charter handoff beta", "no heredoc at all"),
@@ -917,7 +874,7 @@ mod tests {
     #[test]
     fn a_live_substitution_beside_a_quoted_heredoc_is_refused() {
         let cmd = "charter handoff \"$(cat name)\" <<'BRIEF'\nx\nBRIEF";
-        // The spelling is exact and the heredoc is quoted; what is left is the substitution,
+        // The heredoc is quoted; what is left is the substitution,
         // and it is looked for in the WHOLE call, exactly as A5 and A6 look for one.
         let (r, said) = refusal(cmd).expect("refused");
         assert_eq!(r, REASON_BRIEF_SOURCE);
@@ -1098,7 +1055,7 @@ mod tests {
             ("echo \"a\nb\"; charter handoff beta", REASON_BRIEF_SOURCE),
             ("echo \"a\nb\"\ncharter handoff beta", REASON_BRIEF_SOURCE),
             (
-                "echo 'a\nb' && charter 'handoff' beta <<'BRIEF'\nx\nBRIEF",
+                "echo 'a\nb' && charter hando?f beta <<'BRIEF'\nx\nBRIEF",
                 REASON_SPELLING,
             ),
             // An apostrophe in a COMMENT opens no quote, so the next line is a command.
@@ -1107,7 +1064,7 @@ mod tests {
             // word, and `quote_map` is what says they are not a string.
             ("echo \"$(\ncharter handoff beta\n)\"", REASON_BRIEF_SOURCE),
             // A backslash-newline is a continuation, not a quote, though the lexer folds it.
-            ("true \\\n&& charter 'handoff' beta", REASON_SPELLING),
+            ("true \\\n&& charter 'handoff' beta", REASON_BRIEF_SOURCE),
             ("bash -c \"\ncharter handoff beta\n\"", REASON_SHELL_STRING),
             (
                 "echo \"a\nb\"\nbash <<'EOF'\ncharter handoff beta <<'BRIEF'\nx\nBRIEF\nEOF",
@@ -1153,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn a_disguised_first_or_second_word_is_a_spelling_refusal() {
+    fn a_word_that_reads_as_one_of_the_two_behind_an_expansion_is_a_disguise() {
         for cmd in [
             "$'charter' handoff beta <<'BRIEF'\nx\nBRIEF",
             "charter hando?f beta <<'BRIEF'\nx\nBRIEF",
@@ -1170,8 +1127,7 @@ mod tests {
             harness: Some("claude-code"),
             permission_mode: Some(crate::floorguard::UNATTENDED_MODE),
         };
-        // Both gates are open; the sub-agent one is asked first, and the Python's order is
-        // what decides which sentence the chat reads.
+        // Whatever its harness says of its prompts, a sub-agent is refused, and first.
         assert_eq!(
             handoff_refusal(CANONICAL, caller).map(|(r, _)| r),
             Some(REASON_SUBAGENT)
@@ -1211,30 +1167,40 @@ mod tests {
         assert_eq!(handoff_refusal(CANONICAL, caller), None);
     }
 
+    /// Whether anybody answers a chat's prompts is the app's to weigh, from its own mark on
+    /// the chat, where it decides the handoff (#1444, V98i). The harness's prompt consents to
+    /// nothing, so this guard no longer refuses a run for having it switched off; Codex says
+    /// so of every chat.
     #[test]
-    fn an_unattended_run_may_not_hand_off() {
-        let caller = Caller {
-            agent_id: None,
-            harness: Some("claude-code"),
-            permission_mode: Some(crate::floorguard::UNATTENDED_MODE),
-        };
-        assert_eq!(
-            handoff_refusal(CANONICAL, caller).map(|(r, _)| r),
-            Some(REASON_UNATTENDED)
-        );
-    }
-
-    #[test]
-    fn unattended_is_asked_before_the_shell_string() {
-        let caller = Caller {
-            agent_id: None,
-            harness: Some("claude-code"),
-            permission_mode: Some(crate::floorguard::UNATTENDED_MODE),
-        };
-        assert_eq!(
-            handoff_refusal("eval 'charter handoff beta'", caller).map(|(r, _)| r),
-            Some(REASON_UNATTENDED)
-        );
+    fn an_unattended_run_is_not_this_guards_to_refuse() {
+        for harness in ["claude-code", "codex"] {
+            let caller = Caller {
+                agent_id: None,
+                harness: Some(harness),
+                permission_mode: Some(crate::floorguard::UNATTENDED_MODE),
+            };
+            assert_eq!(handoff_refusal(CANONICAL, caller), None, "{harness}");
+            // And everything it still refuses, it refuses there too.
+            assert_eq!(
+                handoff_refusal("eval 'charter handoff beta'", caller).map(|(r, _)| r),
+                Some(REASON_SHELL_STRING),
+                "{harness}"
+            );
+            assert_eq!(
+                handoff_refusal("charter handoff beta < brief.txt", caller).map(|(r, _)| r),
+                Some(REASON_BRIEF_SOURCE),
+                "{harness}"
+            );
+            let helper = Caller {
+                agent_id: Some("sub-1"),
+                ..caller
+            };
+            assert_eq!(
+                handoff_refusal(CANONICAL, helper).map(|(r, _)| r),
+                Some(REASON_SUBAGENT),
+                "{harness}"
+            );
+        }
     }
 
     #[test]
@@ -1323,10 +1289,13 @@ mod tests {
     }
 
     #[test]
-    fn a_report_back_is_still_spelled_exactly_and_still_asked_only_of_the_main_chat() {
+    fn a_report_back_is_read_under_every_spelling_and_still_asked_only_of_the_chat_itself() {
+        assert_eq!(refusal("charter 'handoff' report \"done\""), None);
+        assert_eq!(refusal("FOO=1 purlis handoff report \"done\""), None);
+        // Still a report, so still no brief to ask for, and still no live substitution.
         assert_eq!(
-            reason("charter 'handoff' report \"done\""),
-            Some(REASON_SPELLING)
+            reason("FOO=1 purlis handoff report \"$(cat notes.md)\""),
+            Some(REASON_BRIEF_SOURCE)
         );
         let subagent = Caller {
             agent_id: Some("a1"),
@@ -1336,6 +1305,37 @@ mod tests {
             handoff_refusal("charter handoff report \"done\"", subagent).map(|(r, _)| r),
             Some(REASON_SUBAGENT)
         );
+    }
+
+    /// The report is the word after the `handoff` the reader found, not after the first
+    /// token that happens to be spelt so: a wrapper's own argument is not the command.
+    #[test]
+    fn a_report_back_is_found_after_the_handoff_the_reader_read_and_no_other_word() {
+        // `sudo -u handoff`: the user is called `handoff`, and the report is real.
+        assert_eq!(
+            refusal("sudo -u handoff purlis handoff report \"done\""),
+            None
+        );
+        // The same wrapper in front of a handoff that is no report: its brief is judged.
+        assert_eq!(
+            reason("cat f | sudo -u handoff purlis handoff report-it"),
+            Some(REASON_BRIEF_SOURCE)
+        );
+        assert_eq!(
+            reason("cat f | env X=1 purlis handoff beta handoff report now"),
+            Some(REASON_BRIEF_SOURCE)
+        );
+    }
+
+    /// What the sentence says is refused is refused, and what it does not name is read:
+    /// an ANSI-C word is the word the shell makes of it.
+    #[test]
+    fn the_spelling_sentence_names_only_shapes_that_are_refused() {
+        assert!(!HANDOFF_SPELLING.contains("$'"), "{HANDOFF_SPELLING}");
+        for refused in ["a brace", "a glob", "a parameter", "a command substitution"] {
+            assert!(HANDOFF_SPELLING.contains(refused), "{refused}");
+        }
+        assert_eq!(refusal("charter $'handoff' beta <<'BRIEF'\nx\nBRIEF"), None);
     }
 
     #[test]
@@ -1413,15 +1413,17 @@ mod tests {
     }
 
     /// A word written with ANSI-C escapes is the word the shell makes, so `$'\x68'andoff` is
-    /// `handoff` — and not the spelling the host's rule matches.
+    /// `handoff`: this guard reads it as the handoff it is, and judges its brief.
     #[test]
-    fn an_ansi_c_spelling_of_a_handoff_is_refused() {
+    fn an_ansi_c_spelling_of_a_handoff_is_read_as_the_handoff_it_is() {
         for cmd in [
-            "charter $'\\x68'andoff beta <<'BRIEF'\nx\nBRIEF",
-            "$'\\x63harter' handoff beta <<'BRIEF'\nx\nBRIEF",
-            "charter $'\\150andoff' beta <<'BRIEF'\nx\nBRIEF",
+            "charter $'\\x68'andoff beta",
+            "$'\\x63harter' handoff beta",
+            "charter $'\\150andoff' beta",
         ] {
-            assert_eq!(reason(cmd), Some(REASON_SPELLING), "{cmd:?}");
+            assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE), "{cmd:?}");
+            let fed = format!("{cmd} <<'BRIEF'\nx\nBRIEF");
+            assert_eq!(reason(&fed), None, "{fed:?}");
         }
         assert_eq!(
             reason("bash -c $'charter \\x68andoff beta'"),
@@ -1430,13 +1432,14 @@ mod tests {
     }
 
     /// A backslash-newline inside `charter` or `handoff` is gone before the shell reads the
-    /// word, so the word is the program — and the source is still not the exact spelling.
+    /// word, so the word is the program, and the handoff is read as one.
     #[test]
-    fn a_backslash_newline_inside_a_word_is_not_the_exact_spelling() {
-        let cmd = "char\\\nter handoff beta <<'BRIEF'\nx\nBRIEF";
-        assert_eq!(reason(cmd), Some(REASON_SPELLING));
-        let cmd = "charter hand\\\noff beta <<'BRIEF'\nx\nBRIEF";
-        assert_eq!(reason(cmd), Some(REASON_SPELLING));
+    fn a_backslash_newline_inside_a_word_is_still_the_word() {
+        for cmd in ["char\\\nter handoff beta", "charter hand\\\noff beta"] {
+            assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE), "{cmd:?}");
+            let fed = format!("{cmd} <<'BRIEF'\nx\nBRIEF");
+            assert_eq!(reason(&fed), None, "{fed:?}");
+        }
     }
 
     /// `<<B\<newline>RIEF` is the unquoted delimiter `BRIEF` to the shell, whose body expands.

@@ -879,6 +879,8 @@ impl StandIn {
                 grants: &purlis_core::dispatchgrant::InForce::default(),
                 profile: None,
                 by: dispatchdecision::By::Chat,
+                mode: dispatchdecision::Mode::Task,
+                counted: dispatchdecision::Counted::Tasks,
             },
         );
         match asked.decision {
