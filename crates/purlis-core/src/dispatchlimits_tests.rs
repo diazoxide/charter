@@ -39,6 +39,7 @@ fn quiet() -> Lineage {
         running: 0,
         lineage: 1,
         as_target: 0,
+        by_asking: 0,
     }
 }
 
@@ -338,20 +339,28 @@ fn policy_is_read_from_the_policy_file_beside_the_sandbox_locks() {
 }
 
 #[test]
-fn a_policy_file_that_says_something_else_about_dispatch_is_refused_and_dispatch_is_off() {
+fn a_refused_policy_file_switches_dispatch_off_and_says_the_file_is_refused() {
     for json in [
         r#"{"dispatch": {"depth": 9}}"#,
         r#"{"dispatch": {"depth": -1}}"#,
         r#"{"dispatch": {"depth": "3"}}"#,
         r#"{"dispatch": {"speed": 3}}"#,
         r#"{"dispatch": 3}"#,
+        // Nothing about dispatch at all: the file is refused for something else.
+        r#"{"sandbox": {"speed": 3}}"#,
+        "not json",
     ] {
         let locks =
             crate::sandbox::policy::Locks::parse(json, Path::new("/etc/purlis/policy.json"));
         assert!(locks.refused_because().is_some(), "{json}");
+        assert!(locks.dispatch_ceiling().is_refused(), "{json}");
+        // Whatever the project, a workspace, a persona or the person says.
         let limits = in_force(
-            &nothing(),
-            None,
+            &table(
+                "[dispatch]\nrunning-per-chat = 6\n\n[dispatch.personas.steward]\n\
+                 running-per-chat = 4\n",
+            ),
+            Some("alpha"),
             Some("steward"),
             Some("devops"),
             &nothing(),
@@ -359,12 +368,36 @@ fn a_policy_file_that_says_something_else_about_dispatch_is_refused_and_dispatch
         );
         let decision = decide(&limits, &quiet());
         assert_eq!(
+            refused_of(&decision),
+            &Refused::Off {
+                limit: Limit::RunningPerChat,
+                by: Source::PolicyRefused,
+                target: Some("devops".to_owned())
+            },
+            "{json}"
+        );
+        // No limit "is set to 0": nobody set one.
+        assert_eq!(
             sentence_of(&decision),
-            "dispatch is off on this machine, by policy: running per chat is set to 0. Only \
-             an administrator can change it, in this machine's policy file.",
+            "dispatch is off on this machine: its policy file is refused, so purlis cannot \
+             tell what an administrator allows. Only an administrator can fix it.",
+            "{json}"
+        );
+        assert_eq!(
+            sentence_of(&may_send(&limits, 0)),
+            "messages between chats are off on this machine: its policy file is refused, so \
+             purlis cannot tell what an administrator allows. Only an administrator can fix \
+             it.",
             "{json}"
         );
     }
+    // A policy that is read and names no limit caps none, and is not a refused one.
+    let read = crate::sandbox::policy::Locks::parse(
+        r#"{"owner": "IT"}"#,
+        Path::new("/etc/purlis/policy.json"),
+    );
+    assert!(!read.dispatch_ceiling().is_refused());
+    assert!(read.dispatch_ceiling().is_unset());
 }
 
 // ---- each limit refuses at its number ------------------------------------------------------------
@@ -380,12 +413,24 @@ fn running_per_chat_refuses_at_its_number_and_allows_one_below() {
     let at = |running| Lineage { running, ..quiet() };
     assert_eq!(decide(&limits, &at(5)), Decision::Allowed);
     let refused = decide(&limits, &at(6));
-    assert_eq!(refused_of(&refused), &Refused::TooManyRunning { limit: 6 });
+    assert_eq!(
+        refused_of(&refused),
+        &Refused::TooManyRunning {
+            limit: 6,
+            running: 6
+        }
+    );
     assert_eq!(limit_of(&refused), Some(Limit::RunningPerChat));
     assert_eq!(
         sentence_of(&refused),
-        "this chat already has 6 persona chats running, which is as many as it may have at \
-         once. Wait for one to report, then dispatch again."
+        "this chat already has 6 persona chats running, and it may have 6 at once. Wait for \
+         one to report, then dispatch again."
+    );
+    // The count said is the real one, where a limit was lowered under what is running.
+    assert_eq!(
+        sentence_of(&decide(&limits, &at(9))),
+        "this chat already has 9 persona chats running, and it may have 6 at once. Wait for \
+         one to report, then dispatch again."
     );
 }
 
@@ -395,12 +440,23 @@ fn live_per_lineage_refuses_at_its_number_and_allows_one_below() {
     let at = |lineage| Lineage { lineage, ..quiet() };
     assert_eq!(decide(&limits, &at(15)), Decision::Allowed);
     let refused = decide(&limits, &at(16));
-    assert_eq!(refused_of(&refused), &Refused::LineageFull { limit: 16 });
+    assert_eq!(
+        refused_of(&refused),
+        &Refused::LineageFull {
+            limit: 16,
+            lineage: 16
+        }
+    );
     assert_eq!(limit_of(&refused), Some(Limit::LivePerLineage));
     assert_eq!(
         sentence_of(&refused),
-        "this chat's lineage already holds 16 running chats, which is as many as it may hold. \
-         Wait for one to finish, then dispatch again."
+        "this chat's lineage already holds 16 running chats, and it may hold 16. Wait for one \
+         to finish, then dispatch again."
+    );
+    assert_eq!(
+        sentence_of(&decide(&limits, &at(20))),
+        "this chat's lineage already holds 20 running chats, and it may hold 16. Wait for one \
+         to finish, then dispatch again."
     );
 }
 
@@ -413,34 +469,82 @@ fn depth_refuses_at_its_number_and_allows_one_below() {
         Decision::Allowed
     );
     let refused = decide(&limits, &under(&["writer", "reviewer", "steward"]));
-    assert_eq!(refused_of(&refused), &Refused::TooDeep { limit: 3 });
+    assert_eq!(
+        refused_of(&refused),
+        &Refused::TooDeep { limit: 3, depth: 3 }
+    );
     assert_eq!(limit_of(&refused), Some(Limit::Depth));
     assert_eq!(
         sentence_of(&refused),
-        "this chat is 3 dispatches below the chat the person started, which is as deep as a \
-         chain may go here. Do the work in this chat, or say in your report what is left."
+        "this chat is 3 dispatches below the chat the person started, and a chain may go 3 \
+         deep here. Do the work in this chat, or say in your report what is left."
+    );
+    // A chain already deeper than a limit since lowered says how deep it really is.
+    let lowered = committed("[dispatch]\ndepth = 1\n");
+    assert_eq!(
+        sentence_of(&decide(&lowered, &under(&["reviewer", "steward"]))),
+        "this chat is 2 dispatches below the chat the person started, and a chain may go 1 \
+         deep here. Do the work in this chat, or say in your report what is left."
     );
 }
 
 #[test]
-fn may_dispatch_refuses_at_its_number_and_allows_one_below() {
+fn may_dispatch_counts_every_chat_running_as_the_asking_persona_in_the_project() {
     let limits = committed("[dispatch.personas.steward]\nmay-dispatch = 2\n");
-    let at = |running| Lineage { running, ..quiet() };
+    let at = |by_asking| Lineage {
+        by_asking,
+        ..quiet()
+    };
     assert_eq!(decide(&limits, &at(1)), Decision::Allowed);
     let refused = decide(&limits, &at(2));
     assert_eq!(
         refused_of(&refused),
         &Refused::PersonaDispatches {
             persona: "steward".to_owned(),
-            limit: 2
+            limit: 2,
+            running: 2
         }
     );
     assert_eq!(limit_of(&refused), Some(Limit::MayDispatch));
     assert_eq!(
         sentence_of(&refused),
-        "this chat already has 2 persona chats running, which is as many as a chat as steward \
-         may have at once. Wait for one to report, then dispatch again."
+        "chats as steward already have 2 persona chats running between them, and may have 2 \
+         at once in this project. Wait for one to finish, then dispatch again."
     );
+}
+
+#[test]
+fn may_dispatch_is_not_the_asking_chats_own_count() {
+    // This chat has none running; two other steward chats have one each. The persona's cap
+    // of 2 is reached all the same.
+    let limits = committed("[dispatch.personas.steward]\nmay-dispatch = 2\n");
+    let others = Lineage {
+        running: 0,
+        by_asking: 2,
+        ..quiet()
+    };
+    assert_eq!(
+        limit_of(&decide(&limits, &others)),
+        Some(Limit::MayDispatch)
+    );
+    // This chat's own two alone do not reach a cap of 2 while the project's count is 1: the
+    // count is the one the app hands over, never this chat's.
+    let own = Lineage {
+        running: 2,
+        by_asking: 1,
+        ..quiet()
+    };
+    assert_eq!(decide(&limits, &own), Decision::Allowed);
+    // A chat on no persona has no persona's cap.
+    let nobody = in_force(
+        &table("[dispatch.personas.steward]\nmay-dispatch = 0\n"),
+        None,
+        None,
+        Some("devops"),
+        &nothing(),
+        &no_policy(),
+    );
+    assert_eq!(decide(&nobody, &others), Decision::Allowed);
 }
 
 #[test]
@@ -467,15 +571,21 @@ fn at_most_n_chats_as_a_persona_refuses_the_next_one_wherever_they_run() {
             refused_of(&refused),
             &Refused::PersonaFull {
                 persona: "devops".to_owned(),
-                limit: 2
+                limit: 2,
+                running: 2
             }
         );
         assert_eq!(limit_of(&refused), Some(Limit::MayRunAtOnce));
-        // It names the persona and the limit.
+        // It names the persona, the count and the limit.
         assert_eq!(
             sentence_of(&refused),
-            "2 chats are already running as devops, which is as many as may run as it at once \
-             in this project. Wait for one to finish, then dispatch again."
+            "2 chats are already running as devops, and 2 may run as it at once in this \
+             project. Wait for one to finish, then dispatch again."
+        );
+        assert_eq!(
+            sentence_of(&decide(&limits, &at(5))),
+            "5 chats are already running as devops, and 2 may run as it at once in this \
+             project. Wait for one to finish, then dispatch again."
         );
     }
 }
@@ -492,8 +602,8 @@ fn one_chat_as_a_persona_is_said_in_the_singular() {
     );
     assert_eq!(
         sentence_of(&refused),
-        "1 chat is already running as devops, which is as many as may run as it at once in \
-         this project. Wait for one to finish, then dispatch again."
+        "1 chat is already running as devops, and 1 may run as it at once in this project. \
+         Wait for one to finish, then dispatch again."
     );
 }
 
@@ -504,13 +614,16 @@ fn messages_per_minute_refuses_at_its_number_and_allows_one_below() {
     let refused = may_send(&limits, 10);
     assert_eq!(
         refused_of(&refused),
-        &Refused::TooManyMessages { limit: 10 }
+        &Refused::TooManyMessages {
+            limit: 10,
+            sent: 10
+        }
     );
     assert_eq!(limit_of(&refused), Some(Limit::MessagesPerMinute));
     assert_eq!(
         sentence_of(&refused),
-        "this chat has sent that chat 10 messages in the last minute, which is as many as it \
-         may. Wait a minute, then send it."
+        "this chat has sent that chat 10 messages in the last minute, and it may send 10. \
+         Wait a minute, then send it."
     );
 }
 
@@ -534,6 +647,11 @@ fn the_sentences_end_on_the_constants_the_dispatch_decision_reuses() {
     );
     assert_eq!(WAIT_FOR_ONE, "Wait for one to finish, then dispatch again.");
     assert_eq!(WAIT_TO_SEND, "Wait a minute, then send it.");
+    assert_eq!(
+        POLICY_REFUSED,
+        "its policy file is refused, so purlis cannot tell what an administrator allows. Only \
+         an administrator can fix it."
+    );
     assert_eq!(DEEPEST, 8);
 }
 
@@ -599,7 +717,7 @@ fn a_chat_may_split_its_own_work_and_only_as_deep_as_the_depth_allows() {
     assert_eq!(own(&["devops", "steward"]), Decision::Allowed);
     assert_eq!(
         refused_of(&own(&["devops", "devops", "steward"])),
-        &Refused::TooDeep { limit: 3 }
+        &Refused::TooDeep { limit: 3, depth: 3 }
     );
 }
 
@@ -662,7 +780,6 @@ fn zero_at_the_project_refuses_every_dispatch_and_says_dispatch_is_off_here() {
         ("running-per-chat", Limit::RunningPerChat),
         ("live-per-lineage", Limit::LivePerLineage),
         ("depth", Limit::Depth),
-        ("messages-per-minute", Limit::MessagesPerMinute),
     ] {
         let limits = committed(&format!("[dispatch]\n{word} = 0\n"));
         let refused = decide(&limits, &quiet());
@@ -682,9 +799,29 @@ fn zero_at_the_project_refuses_every_dispatch_and_says_dispatch_is_off_here() {
                  change it, in Settings › Project › Dispatch."
             )
         );
-        // And no message passes either.
-        assert!(may_send(&limits, 0).refused().is_some(), "{word}");
+        // It stops new dispatches only: a chat already running still gets its messages.
+        assert_eq!(may_send(&limits, 0), Decision::Allowed, "{word}");
     }
+}
+
+#[test]
+fn zero_messages_a_minute_stops_messages_and_no_dispatch() {
+    let limits = committed("[dispatch]\nmessages-per-minute = 0\n");
+    assert_eq!(decide(&limits, &quiet()), Decision::Allowed);
+    let refused = may_send(&limits, 0);
+    assert_eq!(
+        refused_of(&refused),
+        &Refused::Off {
+            limit: Limit::MessagesPerMinute,
+            by: Source::Project,
+            target: Some("devops".to_owned())
+        }
+    );
+    assert_eq!(
+        sentence_of(&refused),
+        "messages between chats are off in this project: messages per minute is set to 0. \
+         Only the person can change it, in Settings › Project › Dispatch."
+    );
 }
 
 #[test]
@@ -732,10 +869,63 @@ fn zero_for_a_persona_stops_it_dispatching_and_zero_at_once_stops_dispatch_to_it
 }
 
 #[test]
-fn a_more_specific_level_turns_dispatch_back_on_over_a_zero_beneath_it() {
+fn a_more_specific_level_turns_dispatch_back_on_over_a_projects_zero() {
     let project = "[dispatch]\nrunning-per-chat = 0\n\n[dispatch.workspaces.alpha]\n\
-                   running-per-chat = 2\n";
+                   running-per-chat = 2\n\n[dispatch.personas.reviewer]\nrunning-per-chat = 1\n";
+    // The workspace's 2 over the project's 0.
     assert_eq!(decide(&committed(project), &quiet()), Decision::Allowed);
+    // The persona's 1 over it too, in a workspace that says nothing.
+    let reviewer = in_force(
+        &table(project),
+        Some("beta"),
+        Some("reviewer"),
+        Some("devops"),
+        &nothing(),
+        &no_policy(),
+    );
+    assert_eq!(decide(&reviewer, &quiet()), Decision::Allowed);
+    // Where no level says more, the project's 0 holds.
+    let elsewhere = in_force(
+        &table(project),
+        Some("beta"),
+        Some("steward"),
+        Some("devops"),
+        &nothing(),
+        &no_policy(),
+    );
+    assert_eq!(
+        limit_of(&decide(&elsewhere, &quiet())),
+        Some(Limit::RunningPerChat)
+    );
+}
+
+#[test]
+fn no_level_turns_dispatch_back_on_over_a_policys_zero() {
+    let policy = Level::unset().with(Limit::RunningPerChat, 0);
+    let project = "[dispatch]\nrunning-per-chat = 6\n\n[dispatch.workspaces.alpha]\n\
+                   running-per-chat = 2\n\n[dispatch.personas.steward]\nrunning-per-chat = 4\n";
+    let limits = in_force(
+        &table(project),
+        Some("alpha"),
+        Some("steward"),
+        Some("devops"),
+        &table("[dispatch]\nrunning-per-chat = 1\n"),
+        &policy,
+    );
+    let refused = decide(&limits, &quiet());
+    assert_eq!(
+        refused_of(&refused),
+        &Refused::Off {
+            limit: Limit::RunningPerChat,
+            by: Source::Policy,
+            target: Some("devops".to_owned())
+        }
+    );
+    assert_eq!(
+        sentence_of(&refused),
+        "dispatch is off on this machine, by policy: running per chat is set to 0. Only an \
+         administrator can change it, in this machine's policy file."
+    );
 }
 
 // ---- what a file may say -------------------------------------------------------------------------
@@ -776,6 +966,45 @@ fn a_file_with_no_dispatch_table_or_no_file_sets_nothing() {
     let wrong = read(Some("dispatch = 3\n"), FILE);
     assert_eq!(wrong.table, Table::default());
     assert_eq!(wrong.refused.len(), 1);
+}
+
+// ---- this machine's file, where git would carry it ---------------------------------------------
+
+#[test]
+fn your_own_lowering_holds_where_git_would_carry_this_machines_file() {
+    use crate::settings::LayerText;
+    let committed = "[dispatch]\nrunning-per-chat = 6\ndepth = 3\n";
+    let mine = "[dispatch]\nrunning-per-chat = 2\ndepth = 8\n";
+    let left_out = LayerText::LeftOut {
+        why: "charter.local.toml is tracked by git".to_owned(),
+        text: mine.to_owned(),
+    };
+    for local in [LayerText::Text(mine.to_owned()), left_out] {
+        let files = Files::of(Some(committed), &local);
+        let limits = files.in_force(Some("alpha"), Some("steward"), Some("devops"), &no_policy());
+        // The lowering is honoured either way: it can only lower.
+        assert_eq!(limits.running, 2, "{local:?}");
+        assert_eq!(limits.set_by(Limit::RunningPerChat), &Source::You);
+        // And it still raises nothing.
+        assert_eq!(limits.depth, 3, "{local:?}");
+        assert_eq!(limits.ignored.len(), 1);
+    }
+    // No file of this machine's lowers nothing.
+    let none = Files::of(Some(committed), &LayerText::Nothing);
+    assert_eq!(none.mine, Table::default());
+}
+
+#[test]
+fn your_own_lowering_is_read_from_the_project_whatever_git_says_of_the_file() {
+    // No repo here, or one that would carry the file: either way the file's limit holds.
+    let root = tempfile::tempdir().expect("a project");
+    std::fs::write(
+        root.path().join("charter.local.toml"),
+        "[dispatch]\nrunning-per-chat = 1\n",
+    )
+    .expect("this machine's file");
+    let limits = of(root.path(), None, Some("steward"), Some("devops"));
+    assert_eq!(limits.running, 1);
 }
 
 // ---- a persona's own file ------------------------------------------------------------------------
@@ -869,7 +1098,10 @@ fn a_limit_changed_in_the_project_file_applies_to_the_next_dispatch() {
     assert_eq!(after.running, 2);
     assert_eq!(
         refused_of(&decide(&after, &lineage)),
-        &Refused::TooManyRunning { limit: 2 }
+        &Refused::TooManyRunning {
+            limit: 2,
+            running: 2
+        }
     );
 }
 

@@ -2469,8 +2469,16 @@ export type DispatchLimits = {
 	locked_by: string | null,
 	/**  What either file holds in `[dispatch]` that is not read, each as one sentence. */
 	refused: string[],
-	/**  Why this machine's file is not read, where git would carry it. */
+	/**
+	 *  Why nothing else of this machine's file is read, where git would carry it. Its dispatch
+	 *  limits are read all the same: they only ever lower.
+	 */
 	local_left_out: string | null,
+	/**
+	 *  Whether this machine's policy file was refused: dispatch is off until it is fixed, and
+	 *  [`Self::locked_by`] says why.
+	 */
+	policy_refused: boolean,
 };
 
 /**  A pair policy locks, as Settings shows it locked. */
