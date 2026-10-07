@@ -136,6 +136,7 @@ fn a_plane() -> Plane {
         mode: crate::reopen::Mode::Handoff,
         depth: 0,
         root: None,
+        by_person: false,
     });
     crate::reopen::write(
         &root,

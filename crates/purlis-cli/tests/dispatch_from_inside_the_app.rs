@@ -924,6 +924,7 @@ impl StandIn {
                 mode: Mode::Task,
                 depth: asked.depth,
                 root: asked.root,
+                by_person: false,
             }),
             ..Default::default()
         };
@@ -959,6 +960,7 @@ impl StandIn {
                 changed: task.changed,
                 // The app's own record of the session record it wrote for the chat.
                 record: Some("workspaces/alpha/sessions/20261007-143900-queue.md".to_owned()),
+                by_person: false,
             }),
             answered: None,
         };
@@ -1044,7 +1046,7 @@ fn a_task_goes_end_to_end() {
     assert_eq!(
         started[0].1,
         format!(
-            "⟨task from steward 1 · workspace alpha · 2026-10-07 14:32⟩\n{}\n\n{BRIEF}",
+            "⟨task from `steward 1` · workspace alpha · 2026-10-07 14:32⟩\n{}\n\n{BRIEF}",
             purlis_core::handoff::TASK_NOTE
         )
     );
@@ -1060,6 +1062,7 @@ fn a_task_goes_end_to_end() {
             mode: Mode::Task,
             depth: 1,
             root: None,
+            by_person: false,
         })
     );
     // In the asking chat's folder, on its profile, as its persona.

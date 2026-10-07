@@ -676,6 +676,7 @@ mod tests {
                 mode,
                 depth,
                 root: None,
+                by_person: false,
             }),
             ..chat(persona)
         }

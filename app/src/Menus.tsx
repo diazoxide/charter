@@ -1,6 +1,7 @@
 import { useEffect, useId, type KeyboardEvent, type ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import {
+  askRows,
   curateRows,
   curateSubjectOf,
   menuRows,
@@ -72,6 +73,12 @@ export function Menued({
           {rows.above.map((offer) => (
             <Row key={offer.id} offer={offer} onPress={onPress} />
           ))}
+          {/* **Ask a persona**, on a chat's tab: one row per persona the project has finished.
+              Read here, inside the content, so the scan is paid by a menu that is open. */}
+          {on.on === "chat" &&
+            askRows(on.tab, offers).map((offer) => (
+              <Row key={offer.id} offer={offer} onPress={onPress} />
+            ))}
           {curating !== undefined && (
             <Curate subject={curating} offers={offers} onPress={onPress} />
           )}

@@ -6034,6 +6034,7 @@ pub(crate) mod tests {
                 mode,
                 depth: 1,
                 root: None,
+                by_person: false,
             }),
             ..chat(&a_claude(dir), name, None)
         }
@@ -6303,6 +6304,7 @@ pub(crate) mod tests {
             mode: purlis_core::reopen::Mode::Task,
             depth: 2,
             root: Some(root.to_owned()),
+            by_person: false,
         };
         let task = Chat {
             from: Some(lineage.clone()),
