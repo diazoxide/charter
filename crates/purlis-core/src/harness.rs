@@ -949,7 +949,8 @@ mod tests {
     fn a_claude_code_chat_may_run_charter_session_record_and_read_charter_without_asking() {
         // SI-8e, the operator's ruling: a Smart close never stops on a permission prompt for
         // the one command that ends it. Amended by V79 (#1050): the five read-only tools of
-        // charter's own MCP server are pre-allowed beside it. Only grants, for exactly these —
+        // charter's own MCP server are pre-allowed beside it, and `persona_where` with them
+        // (D-T58-1, #1450). Only grants, for exactly these —
         // no `ask`, no `deny`, no mode — so every rule of the operator's and the project's
         // still stands beside them (measured on 2.1.283: `--settings` permissions merge with
         // them, and a compound command holding the record command is still asked about).
@@ -967,6 +968,7 @@ mod tests {
                 "mcp__purlis__session_record_list",
                 "mcp__purlis__session_record_read",
                 "mcp__purlis__change_status",
+                "mcp__purlis__persona_where",
             ]})
         );
     }
@@ -974,7 +976,8 @@ mod tests {
     #[test]
     fn a_claude_code_chat_is_still_asked_before_every_other_charter_tool() {
         // V79: the writes and `ask_operator` keep Claude Code's prompt. Every tool the server
-        // offers that is not one of the five reads has no allow, whatever it is marked.
+        // offers that is not one of the five reads or `persona_where` (D-T58-1) has no allow,
+        // whatever it is marked.
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
         let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
@@ -989,6 +992,7 @@ mod tests {
             "session_record_list",
             "session_record_read",
             "change_status",
+            "persona_where",
             "session_record",
         ];
         let others: Vec<&str> = crate::chattools::TOOLS
@@ -1212,6 +1216,7 @@ mod tests {
                 "mcp__purlis__session_record_list",
                 "mcp__purlis__session_record_read",
                 "mcp__purlis__change_status",
+                "mcp__purlis__persona_where",
             ])
         );
         assert_eq!(

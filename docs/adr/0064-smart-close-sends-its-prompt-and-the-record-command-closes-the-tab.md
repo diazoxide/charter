@@ -284,6 +284,22 @@ measured as closed.
 
 Codex and opencode are not covered by this ruling, and nothing is added for them.
 
+### Amended 2026-10-07: `persona_where` is pre-allowed with the five (D-T58-1, #1450)
+
+Decided at the assembly of train 58 by its dispatcher, under the operator's delegation, and not
+a numbered ruling of the operator's: `mcp__purlis__persona_where` joins
+`chattools::PRE_ALLOWED`, on the rules above (an `allow` only, by its full name, for Claude Code
+only, and an operator's `ask` or `deny` still wins).
+
+- **It only reads, and what it reads is the app's.** The tool takes no arguments and asks the
+  app that started the chat over the chat's hook socket. The ask is bound to the sender, so a
+  chat can ask about itself alone.
+- **It answers nothing the chat is not told unasked.** Names, personas, workspaces, states and
+  start times of the chat that asked for it, that chat's other tasks and the other chats running
+  as its persona: what the chat's start briefing and its turn updates already say, and never
+  another chat's brief or transcript.
+- **The list is still written out.** A tool added later still asks until it is ruled in.
+
 ### Amended 2026-10-06: the record is a brokered write, and a person's act is the pass (#1332)
 
 The operator's ruling of 2026-10-06 on spec #1330 ("smart close must work without approval;

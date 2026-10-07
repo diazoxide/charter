@@ -267,8 +267,10 @@ fn settings(
     //
     // **And the five read-only tools of charter's own MCP server** (V79, #1050, amending
     // SI-8e): a chat reading its own todos, memory, records or change status does not stop on
-    // a prompt. Each by its full name, never the server as a whole, so the other writes and
-    // `ask_operator` still ask, and an operator's `ask` or `deny` for any of them still wins.
+    // a prompt. `persona_where` is allowed with them (D-T58-1, #1450): it reads the app's own
+    // record of the open chats and answers what the chat is told at its start. Each by its
+    // full name, never the server as a whole, so the other writes and `ask_operator` still
+    // ask, and an operator's `ask` or `deny` for any of them still wins.
     let mut allow = vec![
         SMART_CLOSE_ALLOW.to_owned(),
         format!(

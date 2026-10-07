@@ -391,7 +391,8 @@ how it is cited and nothing here is renumbered.
     `Bash(purlis session record *)` as an `allow`, so a Smart close never stops to ask for
     the command that ends it, and, since V79, an `allow` for each of purlis's five read-only
     MCP tools (`todo_list`, `memory_search`, `session_record_list`, `session_record_read`,
-    `change_status`), while its writes and `ask_operator` still ask. Codex's approval and
+    `change_status`) and for `persona_where` (#1450), while its writes and `ask_operator`
+    still ask. Codex's approval and
     sandbox are whole-session switches, so it carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
     in front. **Smart close puts the chat into the background** (SI-8f): its tab shrinks to a
     fixed chip — the chat's icon and the breathing mark, the name in its tooltip — at the chat

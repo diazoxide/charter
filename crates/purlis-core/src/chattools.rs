@@ -60,15 +60,18 @@ pub const PERSONA_REMEMBER: &str = "persona_remember";
 pub const PERSONA_WHERE: &str = "persona_where";
 
 /// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
-/// the five that only read. Named one by one, never derived from [`Tool::read_only`]:
-/// `ask_operator` is marked read-only too and still asks, and a tool added later is asked
-/// about until someone rules it in here. Writes are never in this list.
-pub const PRE_ALLOWED: [&str; 5] = [
+/// the five that only read, and [`PERSONA_WHERE`] (D-T58-1, #1450), which reads the app's own
+/// record and answers names and states a chat is told at its start anyway. Named one by one,
+/// never derived from [`Tool::read_only`]: `ask_operator` is marked read-only too and still
+/// asks, and a tool added later is asked about until someone rules it in here. Writes are
+/// never in this list.
+pub const PRE_ALLOWED: [&str; 6] = [
     "todo_list",
     "memory_search",
     "session_record_list",
     "session_record_read",
     "change_status",
+    PERSONA_WHERE,
 ];
 
 /// The variables the server reads to find the chat's place, as a `charter` command in the chat
