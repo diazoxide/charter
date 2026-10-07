@@ -4,6 +4,7 @@ import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Offer } from "./actions";
 import { type State } from "./chatState";
+import { PersonaMark, type PersonaMarkData } from "./PersonaMark";
 import { useArrived } from "./lib/arrived";
 import { moveAlong } from "./tabSequence";
 import { deletes } from "./tabKeys";
@@ -132,6 +133,10 @@ export type Asking = {
   name: string;
   /** The workspace it is filed in, already said as the strip says it. */
   workspace: string;
+  /** The persona it runs as, when it runs as one, and that persona's mark (#1449). Handed
+   *  over whole, because the list is the window's and reads no one project's marks. */
+  persona?: string | null;
+  mark?: PersonaMarkData | null;
   /**
    * The chats that have reported back to this one and not been read, by name (charter-app#259).
    * Its row then says `<child> reported back` — what the operator is being asked to look at —
@@ -361,6 +366,9 @@ export function NeedsYouMenu({
                       }}
                       onKeyDown={(event) => ignoreOnDelete(event, item.ignore, press)}
                     >
+                      {item.persona != null && (
+                        <PersonaMark persona={item.persona} mark={item.mark} />
+                      )}
                       <span className="needs-you-name">{back ?? item.name}</span>
                       <span className="needs-you-where">
                         {item.workspace} · {item.project}

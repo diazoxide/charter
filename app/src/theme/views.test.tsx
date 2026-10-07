@@ -63,7 +63,7 @@ import type {
 import type { ViewRef } from "../tabs";
 import { literalsIn } from "./literal";
 import { MOTION_TOKENS, motionProperty } from "./motion";
-import { BUILT_IN, DEFAULT_THEME, TOKENS, drawIn, property } from "./theme";
+import { BUILT_IN, DEFAULT_THEME, TOKENS, drawIn, inForce, property, tinted } from "./theme";
 import { forgetGroups } from "../settings/links";
 
 afterEach(() => {
@@ -127,6 +127,21 @@ function unread(value: string, said: (what: string) => void): void {
 }
 
 /**
+ * Whether `value`, set as the custom property `name` on `element`, is **the theme's own tint**:
+ * the token of that name in the theme in force, turned to the hue the element declares in
+ * `data-colour` (`theme.tinted`, which is what `tintVariables` writes for a workspace's colour
+ * and a persona's, #1449). A theme changes it by changing the token, so it is a token's value
+ * and no literal of the window's. Anything else written there is still a literal.
+ */
+function isTint(element: Element, name: string, value: string): boolean {
+  const colour = element.getAttribute("data-colour");
+  const token = TOKENS.find((one) => property(one) === name);
+  if (colour === null || token === undefined) return false;
+  const tint = tinted(inForce(), colour);
+  return tint !== inForce() && tint.values[token] === value;
+}
+
+/**
  * Everything about `root`'s drawing that a theme could not change, one sentence each;
  * empty when every colour in it is a token the theme in force sets.
  */
@@ -142,7 +157,7 @@ function complaints(root: Element): string[] {
         // A custom property's own name is not a colour, but its value can be one: the window
         // setting `--x: #fff` is the same defect as `color: #fff`. So is a colour inside an
         // inlined SVG's data URL.
-        if (literalsIn(value).length > 0)
+        if (literalsIn(value).length > 0 && !isTint(element, name, value))
           said.push(`${where} style ${name}: ${value} is a colour literal`);
         unread(value, (what) => said.push(`${where} style ${name} ${what}`));
       }

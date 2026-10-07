@@ -146,6 +146,7 @@ import { FreshMark, freshMarkShown, usePlaneUpdated } from "./PlaneUpdated";
 import { Notice, NoticeBand } from "./Notice";
 import { SandboxBlockNotice } from "./SandboxBlockNotice";
 import { PersonaGrantsNotice } from "./PersonaGrantsNotice";
+import { PersonaMarks, ReloadPersonaMarks, usePersonaMarks } from "./PersonaMark";
 import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
@@ -559,6 +560,9 @@ export const PlaneView = memo(function PlaneView({
   /** The same, counting only the changes the sidebar is made of (FD-10): a memory an agent
    *  saves does not make it list every workspace's todos again. */
   const sidebarChanges = usePlaneChanged([plane], SIDEBAR);
+  /** Every persona's icon and colour (#1449), read with the sidebar's changes: a persona's
+   *  definition or its folder moving is one of them. */
+  const personaMarks = usePersonaMarks(plane, sidebarChanges);
   /** The chats running on instructions the plane has changed since they started (charter#369),
    *  each marked on its tab. */
   const planeUpdates = usePlaneUpdated(plane, instructionsChanges);
@@ -1121,6 +1125,18 @@ export const PlaneView = memo(function PlaneView({
    * always shown those rather than dropping them, and a strip per workspace has to have
    * somewhere to put them or they become unreachable.
    */
+  /** The persona chat `session` runs as, as the plane's chats say it, or `null`. */
+  const personaOf = useCallback(
+    (session: number | undefined): string | null => {
+      if (session === undefined || sidebar === undefined) return null;
+      for (const chats of [...sidebar.workspaces.map((ws) => ws.chats), sidebar.unfiled]) {
+        const found = chats.find((chat) => chat.session === session);
+        if (found) return found.persona ?? null;
+      }
+      return null;
+    },
+    [sidebar],
+  );
   const filedIn = useCallback<FiledIn>(
     (session) => {
       const workspace = sidebar?.workspaces.find((ws) =>
@@ -4412,9 +4428,12 @@ export const PlaneView = memo(function PlaneView({
     ]);
     const item = (session: number, ignore: string): Asking => {
       const filed = filedIn(session);
+      const persona = personaOf(session);
       return {
         session,
         name: nameOf(session),
+        persona,
+        mark: persona === null ? null : (personaMarks.marks.get(persona) ?? null),
         reported: reportsTo(session),
         // A Smart close that stopped says so first; a refused commit (SQ-16) says its latest.
         why: stopped[session] ?? refusedIn(session)[refusedIn(session).length - 1],
@@ -4430,7 +4449,7 @@ export const PlaneView = memo(function PlaneView({
       ...needsYou.map((session) => item(session, ignoreId(session))),
       ...alsoStopped.map((session) => item(session, dismissId(session))),
     ];
-  }, [filedIn, nameOf, needsYou, refusals, reports, stopped, tabs]);
+  }, [filedIn, nameOf, needsYou, personaMarks.marks, personaOf, refusals, reports, stopped, tabs]);
 
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
@@ -4547,7 +4566,7 @@ export const PlaneView = memo(function PlaneView({
   if (!inFront) return null;
 
   return (
-    <Lent chats={chats} references={referenceChats}>
+    <Lent chats={chats} references={referenceChats} personas={personaMarks}>
       {/* The workspaces of this project, as the second of the three strips (ADR 0036). It is
           the axis the tmux frame had and the port lost: a top-level tab there was a
           WORKSPACE and the sessions lived under it, and transposing the app onto projects
@@ -4874,6 +4893,7 @@ export const PlaneView = memo(function PlaneView({
                                   <TabMarks
                                     tabs={tabs}
                                     id={id}
+                                    persona={personaOf(chatOf(tabs, id))}
                                     shells={shells}
                                     wrapping={wrapping}
                                     pin={
@@ -4923,6 +4943,7 @@ export const PlaneView = memo(function PlaneView({
                 <TabMarks
                   tabs={tabs}
                   id={id}
+                  persona={personaOf(chatOf(tabs, id))}
                   updates={planeUpdates}
                   shells={shells}
                   wrapping={wrapping}
@@ -5606,15 +5627,24 @@ export const PlaneView = memo(function PlaneView({
 function Lent({
   chats,
   references,
+  personas,
   children,
 }: {
   chats: ComponentProps<typeof ChatsHere.Provider>["value"];
   references: ChatsForReferences;
+  /** Every persona's mark here, and how to read them again (#1449). */
+  personas: ReturnType<typeof usePersonaMarks>;
   children: ReactNode;
 }) {
   return (
     <ChatsHere.Provider value={chats}>
-      <ReferenceChats.Provider value={references}>{children}</ReferenceChats.Provider>
+      <ReferenceChats.Provider value={references}>
+        <PersonaMarks.Provider value={personas.marks}>
+          <ReloadPersonaMarks.Provider value={personas.reload}>
+            {children}
+          </ReloadPersonaMarks.Provider>
+        </PersonaMarks.Provider>
+      </ReferenceChats.Provider>
     </ChatsHere.Provider>
   );
 }

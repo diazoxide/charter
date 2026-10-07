@@ -1280,6 +1280,16 @@ export const commands = {
 	 *  never a file, so no path it sends can be opened.
 	 */
 	personaEdit: (plane: PlaneId, name: string) => typedError<null, string>(__TAURI_INVOKE("persona_edit", { plane, name })),
+	/**
+	 *  Every persona's mark: its `icon:` and `color:`, and the `icon.png` in its folder. A persona with none of them is listed with nothing, and the window draws its
+	 *  initials.
+	 */
+	personaMarks: (plane: PlaneId) => typedError<PersonaMark[], string>(__TAURI_INVOKE("persona_marks", { plane })),
+	/**
+	 *  Write a persona's icon and colour into its definition. `null` takes the key out, so the
+	 *  persona goes back to what it inherits, or to its initials.
+	 */
+	personaMarkSet: (plane: PlaneId, name: string, icon: string | null, colour: string | null) => typedError<null, string>(__TAURI_INVOKE("persona_mark_set", { plane, name, icon, colour })),
 	/**  Record a todo in `workspace`, and answer with what was said. */
 	todoAdd: (plane: PlaneId, workspace: string, text: string) => typedError<string, string>(__TAURI_INVOKE("todo_add", { plane, workspace, text })),
 	/**  Close a todo as done: the journal records it, then the todo goes. */
@@ -3729,6 +3739,32 @@ export type Percent = {
 export type PersonaHosts = {
 	persona: string,
 	hosts: string[],
+};
+
+/**
+ *  A persona's custom image as it crosses to the window: bytes and what they are, never a
+ *  path or a URL. The window decodes them onto a canvas, as a file tab's image preview does.
+ */
+export type PersonaImage = {
+	/**  `image/png`. */
+	mime: string,
+	base64: string,
+};
+
+/**
+ *  What a persona is drawn with, wherever it appears (#1449): a built-in icon's name, a
+ *  colour, and a custom image when its folder holds one.
+ */
+export type PersonaMark = {
+	name: string,
+	/**  One of the icons the window ships for a persona, by name, or `null`. */
+	icon: string | null,
+	/**  A palette name or `#rrggbb`, as a workspace's colour is, or `null`. */
+	colour: string | null,
+	/**  The custom image, or `null`. */
+	image: PersonaImage | null,
+	/**  Why something the persona asked for is not drawn, each a sentence its view shows. */
+	trouble: string[],
 };
 
 /**  Where a smart close stands. */

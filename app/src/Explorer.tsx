@@ -44,6 +44,7 @@ import {
 } from "./branchStatus";
 import type { Place } from "./pieceViews";
 import { WRAPPING_UP, WrappingUp } from "./NeedsYou";
+import { PersonaMark } from "./PersonaMark";
 import { Menued } from "./Menus";
 import { NotClonedHere, type Cloning } from "./NotCloned";
 import { WorktreeMark } from "./Worktree";
@@ -878,7 +879,13 @@ function ChatList({
               {/* What tells a chat leaf from a worktree leaf at a glance. The tree has two
                 kinds of leaf under one kind of parent, and at fifty chats the indent alone
                 stopped being enough to tell them apart. */}
-              <SquareTerminal className="node-icon" />
+              {/* Its persona's mark where it runs as one (#1449): which persona, read before
+                the name is. A chat with none keeps the terminal. */}
+              {chat.persona ? (
+                <PersonaMark persona={chat.persona} className="node-icon" />
+              ) : (
+                <SquareTerminal className="node-icon" />
+              )}
               <span className="session">{chat.name}</span>
               {/* Its own chat's state, read by the mark itself (SC-3). */}
               <ChatStateMark session={chat.session} shell={isShell(chat)} />

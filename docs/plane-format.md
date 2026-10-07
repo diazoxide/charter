@@ -188,6 +188,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`personas/<name>/memory/.gitkeep`, `personas/<name>/refs/.gitkeep`](#personasnamememorygitkeep-personasnamerefsgitkeep)
   - [`personas/<name>/refs/README.md` and `personas/<name>/refs/**`](#personasnamerefsreadmemd-and-personasnamerefs)
   - [`personas/<name>/mcp.json`](#personasnamemcpjson)
+  - [`personas/<name>/icon.png`](#personasnameiconpng)
   - [`personas/<name>/bin/<script>`](#personasnamebinscript)
   - [`personas/<name>/curation/<id>.md` — a curation action](#personasnamecurationidmd--a-curation-action)
   - [`personas/_shared/` (`memory/`, `refs/`)](#personas_shared-memory-refs)
@@ -2518,6 +2519,10 @@ curation actions is offered.
 - **Status:** stable — hand-edited, committed, and read by the tool gate, the status line,
   hooks, `sync-agents` and (in M1-M3) the app.
 - **Tier:** Plane — committed.
+- **Written by (purlis, #1449):** the persona's view in the app, which sets or removes the
+  `icon` and `color` lines and leaves every other line as it was
+  (`crates/purlis-core/src/personamark.rs` `set`): one atomic replace, no link followed. A
+  key already there keeps its place; a new one goes last in the frontmatter.
 - **Written by:** `charter/commands_persona.py:123` (`cmd_persona_create`, template at
   `:36`/`:57`), `charter/commands.py:2677` (`_ensure_front_door`, template at
   `charter/commands.py:2597`), `charter/persona.py:2504` (`migrate` renames the legacy flat
@@ -2586,7 +2591,8 @@ is a string; "type" below is how purlis interprets it.
 | `activity` | `orchestrator` \| `standby` \| `advisory` | absent | Declares memory volume is not a usage signal; changes `persona stats` status | stable | `charter/persona.py:2408`, `:2444` |
 | `dispatch-isolation` | `worktree` | absent | Emits `isolation: worktree` into the agent and a sentence into its description | stable | `charter/commands_persona.py:802`, `:916` |
 | `model` | string | absent | Passed through verbatim into the agent frontmatter | stable | `charter/persona.py:305`, `charter/commands_persona.py:953` |
-| `color` | string | absent | Passed through verbatim | stable | same |
+| `color` | a palette name (`red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`) or `#rrggbb` | absent = a colour of the palette picked by the persona's name | **The persona's colour**, which its mark is drawn on wherever the persona appears in the app (#1449): a workspace's vocabulary (`settings.theme.colour`), and a hue of the theme drawn. Inherited along `extends`, child wins. A value that is neither is not drawn, and the persona's view says so. Still copied verbatim into the generated agent until that file is retired | stable | `crates/purlis-core/src/personamark.rs` (`mark`); `charter/persona.py:305` |
+| `icon` | one of purlis's persona icons, by name | absent = the persona's initials | **The persona's icon** (#1449): `anchor`, `book`, `bot`, `briefcase`, `bug`, `chart`, `clipboard`, `cloud`, `code`, `compass`, `cpu`, `database`, `eye`, `flask`, `git-branch`, `globe`, `graduation-cap`, `hammer`, `heart`, `key`, `leaf`, `lightbulb`, `lock`, `mail`, `map`, `megaphone`, `package`, `palette`, `pen`, `rocket`, `scale`, `search`, `server`, `shield`, `star`, `terminal`, `user`, `users`, `wrench`, `zap`. A name, never a path. Inherited along `extends`, child wins. Another value is not drawn, and the persona's view says so. A custom image in the folder is drawn instead (`icon.png` below) | stable | `crates/purlis-core/src/personamark.rs` (`ICONS`, `mark`) |
 | `memory` | string (truthy) | absent | Passed through verbatim **and** adds the "two memory stores" note to the body | stable | `charter/commands_persona.py:962` |
 
 Inheritance merge (`charter/persona.py:872`-`:909`): iterate the chain root→child; every
@@ -2797,6 +2803,31 @@ with `", "` (`:907`-`:908`).
 | `…command`, `…args`, `…env`, any other key | as `.mcp.json` | passed through | Emitted verbatim into the agent (all unknown keys are kept) | stable | `charter/persona.py:747` |
 | `…secrets` | `{ENV_VAR: vault-key}` | optional | Vault value injected as an env var | stable | `charter/persona.py:751`, `:782`-`:783` |
 | `…secret_files` | `{ENV_VAR: vault-key}` | optional | Vault value materialised to a 0600 file whose path is the env var | stable | `charter/persona.py:758`, `:784`-`:785` |
+
+---
+
+### `personas/<name>/icon.png`
+
+- **Format:** a PNG image.
+- **Status:** stable — optional, hand-placed, committed.
+- **Tier:** Plane — committed.
+- **Written by:** nothing in purlis — hand-placed only.
+- **Read by:** `crates/purlis-core/src/personamark.rs` (`mark`), for the app: the persona's
+  mark on its chats' tabs, the explorer, the Personas panel, its view, needs-you items,
+  Notices and the new-chat picker (#1449).
+- **Git:** committed.
+- **Encoding details:**
+  - The persona's own folder only: an image is not inherited along `extends`. It is drawn
+    instead of the `icon:` its definition names.
+  - At most 64 KB, a plain file, with no link on the way. A longer file is not read.
+  - **Untrusted**, since a chat can edit its own persona's folder. It must start with the PNG
+    signature. It reaches the window as bytes and is decoded onto a canvas: it is never put in
+    the page as markup and never loaded from a URL.
+  - An image that is refused, or that the window cannot decode, draws the persona's initials,
+    and the persona's view says why.
+  - **An `icon.svg` is not drawn and never read.** purlis notices the file by its name only.
+    With no `icon.png` beside it, the persona keeps its `icon:` or its initials, and its view
+    says: *purlis draws a custom persona icon from icon.png. Save this image as a PNG.*
 
 ---
 

@@ -439,6 +439,8 @@ export function Field(props: FieldProps) {
 export type Option = {
   value: string;
   label: string;
+  /** What is drawn before a radio's label and adds nothing to its name: a persona's mark. */
+  mark?: ReactNode;
   says?: ReactNode;
   disabled?: boolean;
   title?: string;
@@ -614,7 +616,10 @@ export function Choice(props: ChoiceProps) {
           >
             <RadioGroup.Indicator className="dot-mark" />
           </RadioGroup.Item>
-          <label htmlFor={`${ids.id}-${at}`}>{one.label}</label>
+          <label htmlFor={`${ids.id}-${at}`}>
+            {one.mark}
+            {one.label}
+          </label>
           {one.says && (
             <span className="ui-choice-says" id={`${ids.id}-${at}-says`}>
               {one.says}
