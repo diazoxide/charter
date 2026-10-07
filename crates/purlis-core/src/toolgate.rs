@@ -311,6 +311,15 @@ fn arms(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
         // than deciding which part of it is safe. Nothing here holds a command anyway.
         return Some(Verdict::new(reason, None, why));
     }
+    // A7d: a dispatch from inside a sub-agent (#1436). The one fact about a dispatch only the
+    // hook's payload holds; everything else about one is the app's decision. GATED, as A7 is:
+    // a dispatch starts a chat in this project.
+    if plane.is_some()
+        && let Some((reason, why)) = crate::dispatchguard::refusal(cmd, call.caller)
+    {
+        // No `cmd` on this trace row, for A7's reason: the line carries a brief.
+        return Some(Verdict::new(reason, None, why));
+    }
     // A7b: any consent-gated command spelt under a name the project's consent rules do not
     // spell, which the host would run with no prompt (RN-3, D-RN3-9; lifted per rule where the
     // project carries the purlis twin, RN-7). GATED, as A7 is: the rules it stands in for are a
@@ -537,6 +546,53 @@ mod tests {
             Some(rulespelling::REASON.to_string())
         );
         assert_eq!(verdict_of("terraform apply", &fix, true), None);
+    }
+
+    #[test]
+    fn a_dispatch_from_a_sub_agent_is_refused_in_a_project_and_the_chats_own_is_not() {
+        // #1436: only the hook's payload says a sub-agent made the call.
+        let fix = Fixture::new();
+        let root = fix.root();
+        let forges = forges();
+        let state = fix.state();
+        let ask = |agent_id: Option<&'static str>, in_a_plane: bool| {
+            let plane = Plane {
+                root: &root,
+                forges: &forges,
+                session_dir: "",
+                launched: Launched::default(),
+            };
+            let call = Call {
+                command: "purlis dispatch --name \"check the queue\" <<'BRIEF'\nlook\nBRIEF",
+                cwd: "",
+                state_dir: &state,
+                caller: Caller {
+                    agent_id,
+                    ..attended()
+                },
+            };
+            verdict(&call, in_a_plane.then_some(&plane))
+        };
+
+        let refused = ask(Some("sub-1"), true).expect("a sub-agent is refused");
+        assert_eq!(refused.reason, crate::dispatchguard::REASON_SUBAGENT);
+        assert!(
+            refused
+                .said()
+                .contains("Return what you found to your chat"),
+            "{}",
+            refused.said()
+        );
+        assert_eq!(
+            ask(None, true),
+            None,
+            "the chat's own dispatch is the app's to decide"
+        );
+        assert_eq!(
+            ask(Some("sub-1"), false),
+            None,
+            "gated, as the handoff guard is"
+        );
     }
 
     #[test]

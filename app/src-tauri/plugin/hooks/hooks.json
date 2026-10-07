@@ -55,7 +55,7 @@
         ]
       },
       {
-        "matcher": "Task|Agent",
+        "matcher": "Task|Agent|mcp__purlis__dispatch|mcp__purlis__dispatch_report",
         "hooks": [
           {
             "type": "command",

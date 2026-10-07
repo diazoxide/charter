@@ -375,12 +375,25 @@ pub fn pretooluse_edit(hook: &Hook) -> Answer {
 }
 
 /// `pretooluse_dispatch`: record the dispatch as in flight, and ask first when a persona that
-/// writes code is sent out while another agent is still running in the same working tree.
+/// writes code is sent out while another agent is still running in the same working tree. And
+/// refuse purlis's own `dispatch` tools to a sub-agent ([`crate::dispatchguard`]).
 pub fn pretooluse_dispatch(hook: &Hook) -> Answer {
     if !hook.in_plane {
         return Answer::Nothing;
     }
     let tool = hook.tool_name();
+    // purlis's own dispatch tools, called from inside a sub-agent (#1436): refused here, where
+    // the payload says who made the call. The chat's own call is the app's to decide.
+    let agent_id = hook.text("agent_id");
+    let harness = (hook.env)(crate::hookwire::HARNESS_ENV);
+    let caller = crate::handoffguard::Caller {
+        agent_id: (!agent_id.is_empty()).then_some(agent_id),
+        harness: harness.as_deref(),
+        permission_mode: None,
+    };
+    if let Some(why) = crate::dispatchguard::tool_refusal(tool, caller) {
+        return deny(why);
+    }
     if tool != "Task" && tool != "Agent" {
         return Answer::Nothing;
     }

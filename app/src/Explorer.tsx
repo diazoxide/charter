@@ -457,6 +457,12 @@ export function Explorer({
   // in a clone, and they are listed under the workspace row rather than dropped. `treeOf`
   // decided which they are, and the render reads it rather than deciding a second time.
   const atTheRoot = chats.filter((chat) => byId.get(chatRow(chat.session))?.parent === ROOT);
+  // A task is listed under the chat that asked for it (#1436), which `treeOf` decided too: a
+  // list draws the chats whose row is not under another chat's, and each row draws its own.
+  const askerRow = (chat: OpenChat) => byId.get(chatRow(chat.session))?.parent;
+  const isTop = (chat: OpenChat) => !askerRow(chat)?.startsWith(CHAT_ROW);
+  const dispatched = (session: number) =>
+    chats.filter((chat) => askerRow(chat) === chatRow(session));
 
   const filterBox = open.length > 0 && (
     // Only while some branch's files are open: it narrows the file rows and nothing else.
@@ -503,7 +509,9 @@ export function Explorer({
 
   if (cockpit !== undefined) {
     const { ref, name } = cockpit;
-    const here = chats.filter((chat) => byId.get(chatRow(chat.session)) !== undefined);
+    const here = chats.filter(
+      (chat) => byId.get(chatRow(chat.session)) !== undefined && isTop(chat),
+    );
     return (
       <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
         <nav
@@ -539,6 +547,7 @@ export function Explorer({
             <ChatList
               chats={here}
               started={started}
+              dispatched={dispatched}
               wrapping={wrapping}
               onShow={onShowChat}
               treeitem={treeitem}
@@ -594,6 +603,7 @@ export function Explorer({
           <ChatList
             chats={atTheRoot}
             started={started}
+            dispatched={dispatched}
             wrapping={wrapping}
             onShow={onShowChat}
             treeitem={treeitem}
@@ -738,8 +748,9 @@ export function Explorer({
                               </li>
                             </ul>
                             <ChatList
-                              chats={working}
+                              chats={working.filter(isTop)}
                               started={started}
+                              dispatched={dispatched}
                               wrapping={wrapping}
                               onShow={onShowChat}
                               treeitem={treeitem}
@@ -860,6 +871,7 @@ function PieceCount({ pieces, refused }: { pieces?: readonly unknown[]; refused?
 function ChatList({
   chats,
   started,
+  dispatched,
   wrapping,
   onShow,
   treeitem,
@@ -868,6 +880,8 @@ function ChatList({
   chats: readonly OpenChat[];
   /** The chats each chat started that work in another workspace, by its number. */
   started: ReadonlyMap<number, readonly ListedChat[]>;
+  /** The persona chats a chat dispatched as tasks, which are listed under it (#1436). */
+  dispatched: (session: number) => readonly OpenChat[];
   wrapping: ReadonlySet<number>;
   onShow: (session: number) => void;
   /** What a row says about its place in the tree. */
@@ -933,6 +947,16 @@ function ChatList({
           <ChildAgents session={chat.session} name={chat.name} />
           {/* The chats it started that went to another workspace (#1447), each naming it. */}
           <StartedElsewhere chats={started.get(chat.session)} name={chat.name} onShow={onShow} />
+          {/* The tasks it dispatched, under it: each a chat of its own, by name and state. */}
+          <ChatList
+            chats={dispatched(chat.session)}
+            started={started}
+            dispatched={dispatched}
+            wrapping={wrapping}
+            onShow={onShow}
+            treeitem={treeitem}
+            isDrawn={isDrawn}
+          />
         </li>
       ))}
     </ul>
@@ -1387,7 +1411,9 @@ function under(cwd: string | null, path: string): boolean {
 
 /** The workspace's own row, as a stop in the explorer's roving focus. */
 const ROOT = "root";
-const chatRow = (session: number) => `chat:${session}`;
+/** What starts every chat's row id. */
+const CHAT_ROW = "chat:";
+const chatRow = (session: number) => `${CHAT_ROW}${session}`;
 const cloneRow = (repo: string) => `clone:${repo}`;
 const pieceRow = (repo: string, piece: string) => `piece:${repo}/${piece}`;
 /** A folded clone, by workspace as well as name: two workspaces can each clone `svc`. */
@@ -1435,12 +1461,7 @@ function cockpitTreeOf(
   const { path } = cockpit;
   const working = path === undefined ? [] : chats.filter((chat) => under(chat.cwd, path));
   const kids: TreeNode[] = [
-    ...working.map((chat): TreeNode => ({
-      id: chatRow(chat.session),
-      name: chat.name,
-      kids: [],
-      shows: true,
-    })),
+    ...chatNodes(working),
     folderNode(workspace, { ...cockpit.ref, folder: "" }, "Files", files),
   ];
   const rows: Row[] = [];
@@ -1502,12 +1523,6 @@ function treeOf(
   if (workspace === undefined) return [];
   const { panels, pieces } = state;
   const inAPiece = new Set<number>();
-  const chatNode = (chat: OpenChat): TreeNode => ({
-    id: chatRow(chat.session),
-    name: chat.name,
-    kids: [],
-    shows: true,
-  });
   const clones = (panels?.repos ?? []).map((repo): TreeNode => {
     const branches = (pieces[repo] ?? []).map((piece): TreeNode => {
       const working = chats.filter((chat) => under(chat.cwd, piece.path));
@@ -1517,7 +1532,7 @@ function treeOf(
         name: piece.piece,
         kids: [
           folderNode(workspace, { repo, piece: piece.piece, folder: "" }, "Files", files),
-          ...working.map(chatNode),
+          ...chatNodes(working),
         ],
         shows: true,
       };
@@ -1539,13 +1554,38 @@ function treeOf(
   const root: TreeNode = {
     id: ROOT,
     name: workspace,
-    kids: [...chats.filter((chat) => !inAPiece.has(chat.session)).map(chatNode), ...clones],
+    kids: [...chatNodes(chats.filter((chat) => !inAPiece.has(chat.session))), ...clones],
     shows: true,
   };
 
   const rows: Row[] = [];
   walkRows(root, undefined, true, 0, 1, rows);
   return rows;
+}
+
+/**
+ * **The chats at one spot as nodes, each task under the chat that asked for it** (#1436): a
+ * persona chat a dispatch started is a child of its asking chat's row when both work at this
+ * spot. One whose asking chat is not listed here (it closed, or works elsewhere) is listed
+ * beside the others, as any chat is.
+ */
+function chatNodes(here: readonly OpenChat[]): TreeNode[] {
+  const listed = new Set(here.map((chat) => chat.session));
+  const asker = (chat: OpenChat) =>
+    chat.from?.task && chat.from.chat !== chat.session && listed.has(chat.from.chat)
+      ? chat.from.chat
+      : undefined;
+  // `above` is the chats already on the way down, so a record that names a loop draws each
+  // chat once and stops.
+  const node = (chat: OpenChat, above: ReadonlySet<number>): TreeNode => ({
+    id: chatRow(chat.session),
+    name: chat.name,
+    kids: here
+      .filter((kid) => asker(kid) === chat.session && !above.has(kid.session))
+      .map((kid) => node(kid, new Set([...above, chat.session]))),
+    shows: true,
+  });
+  return here.filter((chat) => asker(chat) === undefined).map((chat) => node(chat, new Set()));
 }
 
 /** `shows` is whether its children are drawn when it is: not in a folded clone or a closed

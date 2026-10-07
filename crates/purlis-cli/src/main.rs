@@ -37,6 +37,7 @@ use purlis_core::workspaces::Plane;
 mod brokered;
 mod change;
 mod curation;
+mod dispatch;
 mod extcmd;
 mod extensions;
 mod gitask;
@@ -451,6 +452,30 @@ enum Command {
         /// git's own arguments to the hook: `commit-msg`'s message file.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+
+    /// Dispatch a task to a persona: a chat of its own in the app, started on a brief you pass
+    /// as a quoted heredoc on stdin, which reports back to this chat.
+    ///
+    /// The new chat runs as the persona you name with --to, or as this chat's own persona,
+    /// which needs no grant. It works in this chat's folder, with the sandbox, hosts and vaults
+    /// the project gives that persona, and is listed under this chat in the explorer. Its
+    /// report reaches this chat as context on its next turn. A persona other than this chat's
+    /// own needs a dispatch grant, which only the person gives.
+    ///
+    /// `purlis dispatch report --outcome done "<text>"`, from a chat a dispatch started, sends
+    /// its one report back.
+    #[command(args_conflicts_with_subcommands = true)]
+    Dispatch {
+        /// The persona the new chat runs as (default: this chat's own).
+        #[arg(long)]
+        to: Option<String>,
+        /// A short name for the task, which the new chat is called and listed under
+        /// (`check the queue`). At most 64 characters.
+        #[arg(long)]
+        name: Option<String>,
+        #[command(subcommand)]
+        command: Option<dispatch::DispatchCommand>,
     },
 
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
@@ -2604,6 +2629,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Statusline { .. }
         | Command::Save { .. }
         | Command::Handoff { .. }
+        | Command::Dispatch { .. }
         | Command::Report(_)
         | Command::ShellGuard { .. }
         | Command::Mcp
@@ -3597,6 +3623,20 @@ fn main() -> ExitCode {
     // The workspace verbs that act on a workspace as a whole — `remove`'s guard exits 2.
     if let Some(code) = workspace_command(&cli.command) {
         return code;
+    }
+    // `dispatch` says what it started, or one refusal and exits 1.
+    if let Command::Dispatch { to, name, command } = &cli.command {
+        if let Some(command) = command {
+            return dispatch::run(command);
+        }
+        let here = match Here::read() {
+            Ok(here) => here,
+            Err(why) => {
+                eprintln!("purlis: {why}");
+                return ExitCode::FAILURE;
+            }
+        };
+        return dispatch::dispatch(&here, to.as_deref(), name.as_deref());
     }
     // `handoff` says one refusal and exits 1; it never returns 0 in this charter.
     if let Command::Handoff {

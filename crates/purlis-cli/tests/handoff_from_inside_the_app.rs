@@ -271,7 +271,8 @@ fn opens_as_nine(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
         | Ask::Write(_)
         | Ask::Git(_)
         | Ask::Vaults { .. }
-        | Ask::WhereWorking(_) => Answer::No {
+        | Ask::WhereWorking(_)
+        | Ask::Dispatch(_) => Answer::No {
             why: "not a handoff".to_owned(),
         },
     }

@@ -75,10 +75,13 @@ pub const HANDLERS: [Handler; 16] = [
         matcher: Some("Write|Edit|MultiEdit"),
         timeout: 5,
     },
+    // The harness's own sub-agent tools, and purlis's `dispatch` chat tools (#1436), which a
+    // sub-agent may not call (`dispatchguard`). The tools are named whole: a matcher is the
+    // harness's to read, and an exact name means the same to all of them.
     Handler {
         name: "pretooluse-dispatch",
         event: "PreToolUse",
-        matcher: Some("Task|Agent"),
+        matcher: Some("Task|Agent|mcp__purlis__dispatch|mcp__purlis__dispatch_report"),
         timeout: 5,
     },
     Handler {

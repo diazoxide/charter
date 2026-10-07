@@ -25,6 +25,7 @@ fn a_report(summary: &str) -> Handback {
         to: "steward 3".to_owned(),
         to_workspace: purlis_core::active::Place::Workspace("ops".to_owned()),
         summary: summary.to_owned(),
+        task: None,
     }
 }
 

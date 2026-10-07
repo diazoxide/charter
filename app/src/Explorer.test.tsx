@@ -351,6 +351,82 @@ describe("the explorer", () => {
     expect(screen.queryByRole("treeitem", { name: /sub-agent/ })).toBeNull();
   });
 
+  it("lists a task under the chat that asked for it, by name and state (#1436)", () => {
+    const states = moved(nothingKnown, {
+      plane: "/home/dev/plane",
+      session: 7,
+      state: "running",
+      needs_you: false,
+      queue: [],
+      moved_at: 1,
+      reports: [],
+      refusals: [],
+      sequence: 1,
+      children: [],
+    });
+    // Each has a tab: a task has none until the person opens it from the Chats section.
+    const asked = { name: "steward 1", workspace: "alpha", chat: 1, tab: true };
+    draw({
+      chats: [
+        chat(1, "steward 1", ALPHA),
+        chat(2, "steward 2", ALPHA),
+        chat(7, "check the queue", ALPHA, { from: { ...asked, task: true } }),
+        // A handoff is the person's to follow: it is listed beside the chat it came from.
+        chat(8, "moved on", ALPHA, { from: { ...asked, task: false } }),
+      ],
+      states,
+    });
+
+    const asking = screen.getByRole("treeitem", { name: /steward 1/ });
+    const task = screen.getByRole("treeitem", { name: /check the queue/ });
+    // Under its asking chat's row, one level down, and under no other chat's.
+    expect(asking.closest("li")).toContainElement(task);
+    expect(screen.getByRole("treeitem", { name: /steward 2/ }).closest("li")).not.toContainElement(
+      task,
+    );
+    expect(Number(task.getAttribute("aria-level"))).toBe(
+      Number(asking.getAttribute("aria-level")) + 1,
+    );
+    expect(task.querySelector("[data-state]")).toHaveAttribute("data-state", "running");
+    // The handoff is a sibling of the chat it came from.
+    const handoff = screen.getByRole("treeitem", { name: /moved on/ });
+    expect(handoff.getAttribute("aria-level")).toBe(asking.getAttribute("aria-level"));
+    expect(asking.closest("li")).not.toContainElement(handoff);
+  });
+
+  it("lists a task whose asking chat is not at this spot beside the other chats", () => {
+    draw({
+      chats: [
+        chat(2, "steward 2", ALPHA),
+        chat(7, "check the queue", ALPHA, {
+          from: { name: "steward 1", workspace: "alpha", chat: 1, task: true, tab: true },
+        }),
+      ],
+    });
+
+    const task = screen.getByRole("treeitem", { name: /check the queue/ });
+    expect(task.getAttribute("aria-level")).toBe(
+      screen.getByRole("treeitem", { name: /steward 2/ }).getAttribute("aria-level"),
+    );
+  });
+
+  it("brings a task forward when its row is pressed, as any chat", async () => {
+    const onShowChat = vi.fn();
+    draw({
+      chats: [
+        chat(1, "steward 1", ALPHA),
+        chat(7, "check the queue", ALPHA, {
+          from: { name: "steward 1", workspace: "alpha", chat: 1, task: true, tab: true },
+        }),
+      ],
+      onShowChat,
+    });
+
+    await userEvent.click(screen.getByRole("treeitem", { name: /check the queue/ }));
+
+    expect(onShowChat).toHaveBeenCalledWith(7);
+  });
+
   it("says on a chat what its harness cannot report, rather than leaving it unexplained", () => {
     draw({
       chats: [
