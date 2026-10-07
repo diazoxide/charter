@@ -91,6 +91,9 @@ impl ServerHandler for Server {
         if name == chattools::PERSONA_REMEMBER {
             return Ok(done(blocking(move || persona_remember(&args)).await));
         }
+        if name == chattools::PERSONA_WHERE {
+            return Ok(done(blocking(crate::whereworking::tool).await));
+        }
         let name = name.to_owned();
         Ok(done(
             blocking(move || {

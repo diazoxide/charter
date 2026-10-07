@@ -459,7 +459,8 @@ fn in_the_app(
             | Answer::Reported { .. }
             | Answer::Recorded { .. }
             | Answer::Written { .. }
-            | Answer::Said { .. },
+            | Answer::Said { .. }
+            | Answer::Working(_),
         )
         | Err(_) => Host::None,
     }
@@ -497,7 +498,8 @@ fn ticketed() -> Ticketed {
             | Answer::Reported { .. }
             | Answer::Recorded { .. }
             | Answer::Written { .. }
-            | Answer::Said { .. },
+            | Answer::Said { .. }
+            | Answer::Working(_),
         )
         | Err(_) => Ticketed::NoApp,
     }
@@ -568,7 +570,8 @@ fn report_back(summary: &str) -> ExitCode {
             | Answer::Opened { .. }
             | Answer::Recorded { .. }
             | Answer::Written { .. }
-            | Answer::Said { .. },
+            | Answer::Said { .. }
+            | Answer::Working(_),
         )
         | Err(_) => {
             voice::err(

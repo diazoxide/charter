@@ -55,6 +55,7 @@ mod session;
 mod shellguard;
 mod statusline;
 mod voice;
+mod whereworking;
 
 /// One line of a ported command, in the voice purlis says it in.
 ///
@@ -3353,6 +3354,10 @@ fn main() -> ExitCode {
     // Needs no plane either: it scans the repository it stands in.
     if let Command::Scan { explain } = &cli.command {
         return scan::run(*explain);
+    }
+    // Needs no project: the app that started the chat answers it, from its own record (#1450).
+    if let Command::Persona(memory::PersonaCommand::Where { now }) = &cli.command {
+        return whereworking::run(now.as_deref());
     }
     // The three internal words the Python charter's plugin wires beside its hooks. Answered —
     // exit 0, nothing printed, nothing read — so a plugin that still names them can never fail

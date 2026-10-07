@@ -680,6 +680,25 @@ pub enum Ask {
     /// #1335). The app answers [`Answer::Said`], or [`Answer::No`] with the refusal. Boxed for
     /// `Open`'s reason.
     Git(Box<GitAsk>),
+    /// Where this chat is working: who asked for it, its sibling tasks and the other chats
+    /// running as its persona (#1450). The app answers [`Answer::Working`] from its own record
+    /// of its open chats, or [`Answer::No`] with the refusal.
+    WhereWorking(WhereWorking),
+}
+
+/// A chat asking where it is working ([`crate::awareness`], #1450).
+///
+/// **It names no chat but itself, and that is the guard**, as [`RecordAsk`]'s: the picture is
+/// drawn from the app's record of the chat whose token the line carries, so a line can only
+/// ever learn what that chat may be told. No ticket, for a record's reason: nothing is made
+/// or moved by the answer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WhereWorking {
+    /// The chat asking, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// Why it asks: the command, the start briefing, or a turn beginning.
+    #[serde(default)]
+    pub tell: crate::awareness::Tell,
 }
 
 /// A write a chat asks the app to make for it ([`crate::brokered`]).
@@ -899,6 +918,9 @@ pub enum Answer {
         lines: Vec<crate::repocmd::Say>,
         code: u8,
     },
+    /// Where the chat is working (#1450): names, tasks and states from the app's own record,
+    /// and what changed since the chat was last told. Boxed: it is the largest answer.
+    Working(Box<crate::awareness::Working>),
 }
 
 /// How long a ticket lives unspent.
@@ -1052,6 +1074,7 @@ impl Line {
             Self::Ask(Ask::SessionRecord(record)) => record.chat,
             Self::Ask(Ask::Write(write)) => write.chat,
             Self::Ask(Ask::Git(git)) => git.chat,
+            Self::Ask(Ask::WhereWorking(asks)) => asks.chat,
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
@@ -2603,6 +2626,76 @@ mod tests {
         }
     }
 
+    #[test]
+    fn asking_where_a_chat_works_names_only_the_chat_its_token_must_be() {
+        // #1450: the whole ask is the chat's number and why it asks.
+        let ask = Ask::WhereWorking(WhereWorking {
+            chat: 7,
+            tell: crate::awareness::Tell::Turn,
+        });
+        let line = line_with(None, &ask).expect("a line");
+        let text = std::str::from_utf8(&line).expect("text");
+        assert_eq!(text, "{\"where_working\":{\"chat\":7,\"tell\":\"turn\"}}\n");
+        let (read, _) = read_line(text).expect("it reads");
+        assert_eq!(read.chat(), 7);
+        let Line::Ask(back) = read else {
+            panic!("the ask read as another kind of line");
+        };
+        assert_eq!(back, ask);
+        // And one that says no more than its chat is the command's.
+        let (bare, _) = read_line("{\"where_working\":{\"chat\":7}}").expect("it reads");
+        let Line::Ask(Ask::WhereWorking(bare)) = bare else {
+            panic!("the ask read as another kind of line");
+        };
+        assert_eq!(bare.tell, crate::awareness::Tell::Asked);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn asking_where_a_chat_works_under_a_forged_sender_is_refused_and_never_reaches_the_app() {
+        // #1450, D-1407-6/10: chat 3's picture is told only to a line carrying chat 3's token.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let three = listener.tokens().issue_to_this_process(3).expect("a token");
+        let four = listener.tokens().issue_to_this_process(4).expect("a token");
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        let _reading = listener.each_answering(
+            Box::new(|_| {}),
+            Box::new(move |_, _| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Answer::No {
+                    why: "the app was asked".to_owned(),
+                }
+            }),
+        );
+        let within = std::time::Duration::from_secs(5);
+        let ask = Ask::WhereWorking(WhereWorking {
+            chat: 3,
+            tell: crate::awareness::Tell::Asked,
+        });
+
+        for token in [None, Some(ChatToken::from("nope")), Some(four)] {
+            let answered = Asking::on(&path, token)
+                .expect("connected")
+                .ask(&ask, within);
+            assert!(
+                matches!(&answered, Ok(Answer::No { why }) if why.contains("token")),
+                "answered {answered:?}"
+            );
+        }
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let answered = Asking::on(&path, Some(three))
+            .expect("connected")
+            .ask(&ask, within);
+        assert!(
+            matches!(&answered, Ok(Answer::No { why }) if why == "the app was asked"),
+            "{answered:?}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_answer_that_takes_longer_than_a_report_may_still_reaches_the_asker() {
@@ -3761,11 +3854,13 @@ mod tests {
                             Err(why) => Answer::No { why },
                         }
                     }
-                    Ask::Report(_) | Ask::SessionRecord(_) | Ask::Write(_) | Ask::Git(_) => {
-                        Answer::No {
-                            why: "not here".to_owned(),
-                        }
-                    }
+                    Ask::Report(_)
+                    | Ask::SessionRecord(_)
+                    | Ask::Write(_)
+                    | Ask::Git(_)
+                    | Ask::WhereWorking(_) => Answer::No {
+                        why: "not here".to_owned(),
+                    },
                 }
             }),
         );

@@ -145,6 +145,18 @@ pub fn answer(
         // only the chat whose token it carries, and what it asks is checked against the app's
         // record of that chat.
         Ask::Git(git) => crate::gitbroker::answer(held, &git),
+        // Where the asking chat is working (#1450): no ticket, for the record's reason. The
+        // line names only the chat whose token it carries, and the picture is this app's own
+        // record of its open chats.
+        Ask::WhereWorking(asks) => held
+            .chats()
+            .working(asks.chat, asks.tell, &|chat| {
+                held.board().glance(chat).state
+            })
+            .map_or_else(
+                || no(format!("chat {} is not one this app has open", asks.chat)),
+                |working| Answer::Working(Box::new(working)),
+            ),
     }
 }
 
@@ -987,6 +999,131 @@ mod tests {
             })),
             &nothing_opens,
         )
+    }
+
+    // ----- where a chat is working (#1450) -----
+
+    /// What the app answers chat `chat` asking where it is working.
+    fn working(
+        held: &Held,
+        id: &PlaneId,
+        chat: u32,
+        tell: purlis_core::awareness::Tell,
+    ) -> purlis_core::awareness::Working {
+        match answer(
+            held,
+            id,
+            &Tickets::default(),
+            1,
+            Ask::WhereWorking(purlis_core::hookwire::WhereWorking { chat, tell }),
+            &nothing_opens,
+        ) {
+            Answer::Working(working) => *working,
+            other => panic!("where it is working, not {other:?}"),
+        }
+    }
+
+    fn names(rows: &[purlis_core::awareness::Row]) -> Vec<&str> {
+        rows.iter().map(|row| row.name.as_str()).collect()
+    }
+
+    #[test]
+    fn a_handed_off_chat_is_told_who_asked_and_its_sibling_and_never_a_word_of_a_brief() {
+        use purlis_core::awareness::{Parent, Tell};
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (first, _) =
+            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+        hand_off(&held, &id, &tickets, asking, Some("lint"), false).expect("opened");
+
+        let told = working(&held, &id, first, Tell::Asked);
+
+        assert_eq!(told.picture.me.name, "drop commons");
+        assert_eq!(
+            told.picture.parent,
+            Some(Parent {
+                name: "claude 1".to_owned(),
+                open: true
+            })
+        );
+        assert_eq!(names(&told.picture.siblings), ["lint"]);
+        assert_eq!(
+            told.picture.siblings[0].workspace,
+            purlis_core::active::Place::Workspace("alpha".to_owned())
+        );
+        // Both chats were opened on a brief, and none of either is in what one learns of the
+        // other: not its words, and not the stamp it opened with.
+        let wire = serde_json::to_string(&told).expect("json");
+        for of_a_brief in ["Ship it", "handoff from", "2026-05-04"] {
+            assert!(!wire.contains(of_a_brief), "{of_a_brief:?} in {wire}");
+        }
+        // The chat that asked was asked for by nobody.
+        assert!(working(&held, &id, asking, Tell::Asked).picture.is_alone());
+    }
+
+    #[test]
+    fn a_turn_is_told_a_sibling_started_and_reported_once_each_and_nothing_in_between() {
+        use purlis_core::awareness::{Tell, What};
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (first, _) =
+            hand_off(&held, &id, &tickets, asking, Some("drop commons"), false).expect("opened");
+        working(&held, &id, first, Tell::Start);
+        assert_eq!(working(&held, &id, first, Tell::Turn).changes, Vec::new());
+
+        let (second, _) =
+            hand_off(&held, &id, &tickets, asking, Some("lint"), true).expect("opened");
+        // Asked by the command in between: the turn is still told.
+        working(&held, &id, first, Tell::Asked);
+        let started = working(&held, &id, first, Tell::Turn).changes;
+        assert_eq!(started.len(), 1, "{started:?}");
+        assert_eq!(
+            (started[0].what, started[0].row.name.as_str()),
+            (What::Started, "lint")
+        );
+        assert_eq!(working(&held, &id, first, Tell::Turn).changes, Vec::new());
+
+        report(&held, &id, &tickets, second, "Linted.");
+        let reported = working(&held, &id, first, Tell::Turn).changes;
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert_eq!(reported[0].what, What::Reported);
+        assert!(!format!("{reported:?}").contains("Linted"), "{reported:?}");
+        assert_eq!(working(&held, &id, first, Tell::Turn).changes, Vec::new());
+    }
+
+    #[test]
+    fn where_a_chat_this_app_does_not_have_open_is_working_is_refused() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+
+        let said = answer(
+            &held,
+            &id,
+            &Tickets::default(),
+            1,
+            Ask::WhereWorking(purlis_core::hookwire::WhereWorking {
+                chat: 41,
+                tell: purlis_core::awareness::Tell::Start,
+            }),
+            &nothing_opens,
+        );
+
+        assert_eq!(
+            said,
+            Answer::No {
+                why: "chat 41 is not one this app has open".to_owned()
+            }
+        );
     }
 
     // ----- named for its task (charter-app#258) -----
