@@ -1160,6 +1160,13 @@ fn persona_ok(root: &Path, name: &str) -> bool {
     }
 }
 
+/// Whether this command runs inside a chat the app started, whose persona is fixed for its
+/// life (ADR 0090 as amended, #1435): the app sets the chat's number in every chat it starts.
+fn in_a_chat() -> bool {
+    purlis_core::envvar::var(purlis_core::hookwire::CHAT_ENV)
+        .is_some_and(|chat| !chat.trim().is_empty())
+}
+
 /// `purlis persona remember|recall`, with the persona resolved when it is not named.
 ///
 /// **A silent exit 1 when nothing resolves, which is purlis's own answer**:
@@ -1210,6 +1217,7 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
                 select: select.then_some(purlis_core::personaverbs::define::Selecting {
                     ids: &here.ids,
                     env_persona: here.persona_env.as_deref(),
+                    in_chat: in_a_chat(),
                 }),
                 force,
             };
@@ -1332,6 +1340,7 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
             let asking = purlis_core::personaverbs::select::Asking {
                 ids: &here.ids,
                 env_persona: here.persona_env.as_deref(),
+                in_chat: in_a_chat(),
                 bucket: &session(),
                 now: stamp(now.as_deref())?,
             };
