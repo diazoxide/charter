@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791357720558,
+  "lastUpdate": 1791374526550,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3150,6 +3150,48 @@ window.BENCHMARK_DATA = {
             "value": 104.834697,
             "unit": "ms",
             "extra": "median of 5 runs: 103.376, 104.702, 104.835, 105.334, 105.514 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "8abf6e50b31e25909239a8fef074fe95e7677545",
+          "message": "The dev channel build takes about half the time\n\nA dev publish took 37 to 45 minutes, 34 of them in the macOS job. The\nnine decisions of issue 1429 (ADR 0092):\n\n- A dev channel build is compiled with `dev-release`: `release` with\n  thin LTO over sixteen codegen units, and nothing else changed. The\n  command line, the built-in extension and the app all use it.\n- A dev publish makes no `.dmg`, and takes down the one an earlier\n  publish left on the `dev` release.\n- When the AppImage is required, one `tauri build` makes both Linux\n  bundles, on both channels. A build started by hand keeps two steps.\n- `purlis --version`, About purlis and the run summary name the\n  profile. The workflow reads the line off the binary it built and\n  stops if it is not the profile the run asked for.\n- A nightly profile guard builds `main` as a stable build is built,\n  outside the `release` environment, and publishes nothing. A red\n  night opens one issue or rewrites it; a clean night shuts it.\n- The stable build keeps `release`, its `.dmg` and its checks. No job\n  with a secret restores a cache, on either channel.\n\n`plan` now names the two events that get the `release` environment (a\ntag push and a green `ci`), so the schedule gets no key and neither\ndoes an event added later. A build started by hand can pick the\nprofile, which is how the two were timed.\n\nMeasured on the runners, same commit, unsigned path: macOS command\nline 490 s to 263 s and app 1003 s to 708 s; Linux 350 s to 228 s and\n755 s to 593 s. With the `.dmg` gone the macOS job comes to about 17\nminutes. The first real dev publish is the measurement of the whole.\n\nCloses #1429\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-07T15:58:29+04:00",
+          "tree_id": "95610a72e7a21f8e903c3f0a1fbc1768be4d70ec",
+          "url": "https://github.com/purlis/purlis/commit/8abf6e50b31e25909239a8fef074fe95e7677545"
+        },
+        "date": 1791374524835,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.517252,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.487, 0.496, 0.517, 0.529, 0.534 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.1458045,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.930, 17.079, 17.146, 17.202, 17.426 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.554148,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.514, 104.345, 104.554, 104.999, 105.139 ms"
           }
         ]
       }
