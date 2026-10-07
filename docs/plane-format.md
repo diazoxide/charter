@@ -4923,11 +4923,13 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Status:** **internal** — written by `charter hook` and `purlis git-hook` of the same build,
   read by the app.
 - **Tier:** Clone state, transient — each line is removed by the drain at the next open of the
-  project.
+  project, or when its chat is closed.
 - **Written by:** `purlis_core::hookwire::spool::append`, **under no lock**: hooks of one chat
   that spool at once never wait for each other. A hook takes the next number by making
   `<key>.<seq>.part` exclusively (the one after the highest number the folder's names hold for
-  its key, and the one after that if another hook took it first), writes its line into it,
+  its key or `keys.json` says was drained under it, whichever is higher, and the one after
+  that if another hook took it first; `keys.json` is read once the number is taken, and a
+  number a drain had already handed on is let go), writes its line into it,
   `fsync`s it, links it as `<key>.<seq>.json`, removes the `.part` name and `fsync`s the folder
   (and `spool/` too, for a new folder), all before the hook answers its harness. That survives
   a host crash. It is the ordinary `fsync`, so on macOS a power loss can still lose the line.
@@ -4939,25 +4941,45 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   **Only in a project's `.charter/app/spool/`** (V63): beside a fallback socket
   (`charter-<user>-<16 hex>/`) nothing is spooled, and the hook says the line is lost.
 - **Read by:** `purlis_core::hookwire::spool::drain`, from `Hooks::drain_spool` in the app,
-  when a project is opened and before any chat starts, holding an exclusive lock on the folder
-  that only another drain waits for. Each `.json` file is checked: its key must be one
-  `keys.json` holds for this chat, its MAC must be its own, and its line must name this chat. A
-  number missing below the highest one the folder holds for a key is a gap, whether or not a
-  `.part` file holds it. Lines removed from the end, or removed and then followed by new
-  ones, are not found. A name that is not a plain file of at most 1 MiB, not UTF-8, not one
-  spool line, or not the line its name says, and any name a hook does not give, is
-  `unreadable`, and the drain carries on past it. A `.part` file with no line of its name yet
-  is `unfinished`, said at each drain that sees it. A line the chat's `<n>.jsonl` gave in the
+  when a project is opened and before any chat starts, and `spool::end_chat`, from
+  `Hooks::chat_ended`, for one chat as it is closed. Either holds an exclusive lock on `spool/`
+  and on the folder, which only another drain and a token being issued wait for. Each `.json`
+  file is checked: its key must be one `keys.json` holds for this chat, its MAC must be its
+  own, and its line must name this chat.
+  **A key's numbers go on from the highest one drained** (`drained` in `keys.json`, V99i): a
+  line at or below it is `repeated`, unless its number is one no drain has handed on yet
+  (`missing`), and then it is handed on, once. So a line put back after it was drained is
+  rejected, whether that drain finished or stopped part-way. A number missing between
+  `drained` and the highest line there is a gap, said once, whether or not a `.part` file
+  holds it; a drain after one that stopped part-way says no gap for what the first one took.
+  Lines removed from the end are not found, and neither is every line above `drained`,
+  removed together: a hook that comes after takes their numbers. A name that is not a plain file of at most 1 MiB,
+  not UTF-8, not one spool line, or not the line its name says, and any name a hook does not
+  give, is `unreadable`, and the drain carries on past it. A `.part` file with no line of its
+  name yet is `unfinished`, said at each drain that sees it. A line the chat's `<n>.jsonl` gave in the
   same drain (the same key, number and MAC) is `repeated`. Lines under two keys are handed on
   in the order `keys.json` holds the keys. Every line the drain handed on is recorded before
   its file is removed. The drain removes the files it read and the names it could not read
   (a directory among them stays, and is said again), and no other; the chat's folder itself is
   never removed. A `.part` file last written an hour ago or more, or dated in a time to come,
   is a dead hook's, and is removed. **A line a hook is still writing while the drain runs is
-  not recorded by it**: it is a gap at that drain if a later line was there, it stays in the
-  folder, and the drain forgets its key as it ends, so the next drain rejects it as `no-key`.
-  Only a drain that stopped before its end leaves the key held, and the next one then hands
-  the line on.
+  recorded by the next one**: it is a gap at this drain if a later line was there, it stays in
+  the folder, and the next drain of the chat hands it on, since the key is kept while the chat
+  is open. A hook that outlives a drain numbers its next line after `drained`, and that line is
+  handed on too. A line spooled after its chat ended has no key any more, and is `no-key`. A
+  crash after the lines were recorded and before `keys.json` was written hands them on again
+  at the next drain; one after that write and before the files went has them `repeated`, and
+  removed.
+  **`repeated` is not only a line somebody put back.** It is also said, with nothing put back,
+  of: a line in `<n>.jsonl` under a key this build issued; a line a hook of a build before #983
+  appended to `<n>.jsonl` after a drain emptied it; a line of a hook that could not read
+  `keys.json` and found the folder empty after a drain, so numbered from 1; a line that landed
+  late under a number past the 64 runs kept as `missing`; and a line a drain had recorded when
+  the app stopped between writing `keys.json` and removing the file. In the first four the
+  line's content is not recorded; in the last it was recorded, once.
+  **A late line is filed under the chat's current run.** A chat the reopen record brings back
+  keeps the key of its start before, and a line that lands under that key is recorded at the
+  next drain under the run the chat is in then, not the start that wrote it.
 - **Git:** gitignored (under `/.charter/`). A sandboxed chat is denied reading and writing the
   whole `spool/` directory (ADR 0067 §5's integrity class, V63).
 
@@ -4969,27 +4991,78 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Tier:** Clone state, transient — emptied by the drain at the next open of the project.
 - **Written by:** nothing in this build.
 - **Read by:** `purlis_core::hookwire::spool::drain`, before the chat's folder and with the
-  same checks, under an exclusive lock on the file. A number missing below the file's own
-  highest one is a gap. Every line the drain handed on is recorded before the file is emptied.
+  same checks, under an exclusive lock on the file. **A line is taken from it only under a key
+  a build before V99i issued**, which is one `keys.json` holds with `file`: under a key this
+  build issued every line in it is `repeated`, because this build's hooks never write it, and
+  a line already drained from the folder could otherwise be put back here and taken again.
+  Under a key with `file`, its numbers go on from `file`: a line at or below it is `repeated`,
+  and a number missing between it and the file's own highest one is a gap. A hook of that
+  build numbers from 1 again once the file is emptied, so a line it appends after a drain is
+  `repeated` and not recorded, where it was `no-key` before. For a chat that was open across
+  the change of builds, the folder and the file still count apart: a line taken from one and
+  copied into the other after that drain is taken once more, until the chat ends. Every line
+  the drain handed on is recorded before the file is emptied.
   It is emptied and left, never removed, so a hook holding it open appends to the file the
   next drain reads.
 - **Git:** gitignored (under `/.charter/`), and denied to a sandboxed chat with the rest of
   `spool/`.
 
 ### `app/spool/keys.json`
-- **Format:** JSON, `{"v": 1, "keys": [{"id": "<16 hex>", "chat": <n>, "key": "<64 hex>"}]}`:
-  one entry per chat token the app issued since the last drain. `key` is HMAC-SHA256 of the
-  token under the label `charter hook spool v1`, and `id` the first 16 hex characters of its
-  SHA-256. The token itself is never written.
-- **Status:** **internal** — written and read by the app alone.
-- **Tier:** Clone state, transient — what lets a later app check a spooled line. Deleting it,
-  or a file that does not read as keys, makes every line spooled since the last drain `no-key`.
-  The drain still finishes.
-- **Written by:** `purlis_core::hookwire::ChatTokens::issue`, through `spool::remember`, before
-  the token reaches the chat (`rewrite::replace`, mode 0600, under an exclusive lock on the
-  `spool/` directory). The drain removes the keys it drained. Only in a project's
-  `.charter/app/spool/`, and a sandboxed chat neither reads nor writes it (V63): it is a verifier
-  at rest.
+- **Format:** JSON, `{"v": 2, "keys": [{"id": "<16 hex>", "chat": <n>, "key": "<64 hex>",
+  "drained": <n>, "missing": [[<from>, <to>]], "file": <n>}]}`: one entry per chat token the
+  app issued, in the order it issued them, **kept until the chat ends** (V99i, #983).
+  - `key` is HMAC-SHA256 of the token under the label `charter hook spool v1`, and `id` the
+    first 16 hex characters of its SHA-256. The token itself is never written.
+  - `drained` is the highest number of this key's lines in `<n>/` that a drain has handed on,
+    0 before the first. Only a line that passed every check moves it.
+  - `missing` is the numbers below `drained` that no drain has handed on, as ranges with both
+    ends included, lowest first: each was said as a gap when it was found. At most 64 ranges
+    are kept per key, and the lowest go first past that.
+  - `file` is there only for a key a build before V99i issued, which is one read from a
+    version 1 file: it is `drained` for the key's lines in `<n>.jsonl`, the file of a build
+    before #983, which has a sequence of its own. A key this build issues has no `file`, and
+    no line in `<n>.jsonl` is taken under it.
+  - **Version 1** (`{"v": 1, "keys": [{"id", "chat", "key"}]}`, written before V99i) is read
+    as it is, each key with nothing drained and `file` 0, and is written as version 2 at the
+    next write. **A version that is neither 1 nor 2 is refused**, however it is written (`3`,
+    `3.0`, `"3"`): nothing is drained, no key is added, and the file is left as it is for the
+    build that wrote it.
+  - **A build before V99i does not refuse version 2.** It reads the file by its shape, takes
+    every line under a key it finds with no look at `drained`, forgets the keys it drained,
+    and writes the rest back without `drained`, `missing` and `file`, the version still 2.
+    This build reads those keys as ones with nothing drained. Going back a build loses what
+    was kept, and no line that build would not have lost anyway.
+- **Status:** **internal** — written by the app alone; read by the app, and by `charter hook`
+  and `purlis git-hook` for the one number `drained` under their own key.
+- **Tier:** Clone state, transient — what lets a later app check a spooled line, and what
+  keeps it from taking one twice. Deleting it, or a file that does not read as keys, makes
+  every line still in a spool `no-key`, and the drain still finishes.
+- **Written by:**
+  - `purlis_core::hookwire::ChatTokens::issue`, through `spool::remember`, before the token
+    reaches the chat: the key is added.
+  - `spool::drain`, as a project is opened, after it has handed on each chat's lines and
+    before it removes their files: `drained`, `missing` and `file` move. A drain that stops
+    part-way keeps what it wrote for the chats it finished.
+  - **A key is dropped when its chat ends**, and at no other time but one:
+    - when the chat is closed (`spool::end_chat`, from the app's close of a chat, which a
+      restart of a chat under a new number is too): the chat's spool is drained first, so a
+      line spooled under the key is recorded, and then every key of that chat is dropped;
+    - when a project is opened and the chat is not one the reopen record brings back
+      (`spool::forget_all_but`, after a drain that finished);
+    - and a key the same chat number was issued a newer one after is dropped by the next
+      drain that finishes, which has drained its lines.
+    So the file holds one entry per token issued to a chat that is still open since that
+    chat's spool was last drained, and one per open chat after a drain. A chat that comes back
+    at an open therefore holds two through its next run: the key of its start before, and the
+    one it is issued now.
+  - Every write is `rewrite::replace`, mode 0600, under an exclusive lock on the `spool/`
+    directory that a drain holds from start to end. A hook reads the file under no lock.
+  - Only in a project's `.charter/app/spool/`, and a sandboxed chat neither reads nor writes
+    it (V63): it is a verifier at rest. Where no sandbox runs, the file's mode and its
+    folder's (0600 in 0700) are what keep it from another user; a process of the same user
+    can read it, as it can read the chat's token itself from the chat's environment. What the
+    key gives its holder is spool lines that check as that chat's, under a number no drain
+    has handed on; it does not let anything report on the live channel.
 - **Git:** gitignored (under `/.charter/`).
 
 ### Top-level markers, gates and ledgers

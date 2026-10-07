@@ -654,6 +654,8 @@ impl Held {
         // a chat started again in its place is marked afresh.
         self.held_dispatches.forget(session);
         self.unattended.forget(session);
+        // Its spool key does not outlive it (V99i): what its hooks spooled is recorded first.
+        self.hooks.chat_ended(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
         purlis_core::handback::orphan(&self.root, session);
