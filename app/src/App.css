@@ -2211,27 +2211,6 @@ h2.sidebar-title .node-icon {
   margin: 0.25rem 0 0;
 }
 
-/* A persona's initials, until its icon lands (#1449): a small tile in the row's own colours.
-   Drawn here, from the attribute, so they are no part of the row's text. */
-.persona-initials {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.4em;
-  height: 1.4em;
-  padding: 0 0.15em;
-  border: 1px solid var(--border-subtle);
-  border-radius: 3px;
-  color: var(--text-secondary);
-  font-size: 0.7em;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.persona-initials::before {
-  content: attr(data-initials);
-}
-
 /* The hand a chat wears on its row while it is asking for you: the title bar's, at the row's
    size. The mark may be `needs-you.base`; words beside it are not. */
 .needs-you-mark {

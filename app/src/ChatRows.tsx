@@ -15,7 +15,6 @@ import { chatOf, contentsOf, panesOf, type Tabs } from "./tabs";
 import { PersonaMark } from "./PersonaMark";
 import { ViewMark } from "./Views";
 import type { ListedChat } from "./chatsTree";
-import { PersonaMark } from "./PersonaMarkStandIn";
 
 /*
  * **The rows that draw a chat** (SC-3): split out of `PlaneView`, whose rendering they no longer
