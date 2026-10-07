@@ -71,6 +71,49 @@ fn done(text: &str) -> Report {
 }
 
 #[test]
+fn a_cancelled_task_is_recorded_as_cancelled_and_not_as_failed() {
+    // D-1441-15, D-T59-j5: the record has a word of its own for a task its asking chat
+    // cancelled, written as `cancelled` and read back so.
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let cancelled = Report {
+        outcome: Outcome::Cancelled,
+        text: "Stopped half way: two of five hosts checked.".to_owned(),
+        changed: Changed::default(),
+    };
+    close(
+        &root,
+        &opened.id,
+        Ending {
+            report: Some(cancelled.clone()),
+            usage: None,
+        },
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+
+    let record = read(&root, &opened.id).expect("it reads");
+    assert_eq!(record.report, Some(cancelled));
+    assert_eq!(Outcome::Cancelled.word(), "cancelled");
+    // And one for a chat the person stopped (D-T59-j10), which did not fail by itself.
+    assert_eq!(Outcome::Stopped.word(), "stopped");
+    assert_eq!(
+        serde_json::to_string(&Outcome::Stopped).unwrap(),
+        r#""stopped""#
+    );
+    let text = std::fs::read_to_string(
+        std::fs::read_dir(dir(&root))
+            .unwrap()
+            .flatten()
+            .next()
+            .expect("one record")
+            .path(),
+    )
+    .unwrap();
+    assert!(text.contains(r#""outcome": "cancelled""#), "{text}");
+}
+
+#[test]
 fn a_finished_dispatch_s_record_holds_every_field() {
     let (_d, root) = project();
     let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();

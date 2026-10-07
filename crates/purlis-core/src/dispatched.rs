@@ -159,6 +159,10 @@ pub struct Row {
     /// How long ago it was started, where the app saw it start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub age_secs: Option<u64>,
+    /// The person started it from this chat's tab (#1438): its report comes to this chat, and
+    /// this chat can wait on, tell, answer and cancel nothing of it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_person: bool,
 }
 
 // ---- how long a wait may be -------------------------------------------------------------------
@@ -197,10 +201,23 @@ pub fn owned(asker: u32, of: u32, record: Option<&HandedFrom>) -> Result<&Handed
 
 /// **The one rule of who owns a task**: the chat its record names as its asking chat, where a
 /// dispatch started it as a task. Every power over a task (wait, read, cancel, tell, answer)
-/// is this, so a rule added here holds for all of them: a task the person started themselves
-/// gives the tab's chat none, and that is one more line here.
+/// is this, so a rule added here holds for all of them.
+///
+/// **A task the person started from a chat's tab gives that chat none** (#1438, D-T59-j1). Its
+/// record names the tab's chat, because that is where its report goes; but that chat asked for
+/// nothing and holds no grant for the pair, and the person consented to one question, not to
+/// that chat steering the persona. It reads the report, sees the task listed, and that is all.
 fn is_owner(asker: u32, of: u32, from: &HandedFrom) -> bool {
-    from.chat == asker && from.mode == Mode::Task && asker != of
+    from.chat == asker && from.mode == Mode::Task && asker != of && !from.by_person
+}
+
+/// What a chat is told when it cancels a task the person is already stopping (D-T59-j3): the
+/// stop is the person's and the later word, and it ends in the chat being told all the same.
+pub fn being_stopped(name: &str, of: u32) -> String {
+    format!(
+        "'{name}' (chat {of}) is being stopped by the operator, so there is nothing to cancel. \
+         This chat is told when it has ended."
+    )
 }
 
 // ---- where a task stands ----------------------------------------------------------------------
@@ -273,7 +290,10 @@ impl State {
         match self {
             Self::Running => "running".to_owned(),
             Self::Idle => "idle, with no report yet".to_owned(),
-            Self::NeedsThePerson => "waiting on the person".to_owned(),
+            // One word for it, whoever lists the task (#1443).
+            Self::NeedsThePerson => crate::dispatchdecision::Standing::WaitingOnOperator
+                .word()
+                .to_owned(),
             Self::AsksYou => "asking this chat a question".to_owned(),
             Self::Cancelling => "cancelling".to_owned(),
             Self::Reported(Some(outcome)) => format!("reported: {}", outcome.word()),
@@ -819,6 +839,16 @@ impl Ledger {
     }
 
     /// Whether a cancel of `task` is under way.
+    /// **The person is stopping `task`** (D-T59-j3): a cancel of it stands down, for good. The
+    /// stop is the later word and the person's, so nothing more is sent for the cancel, and
+    /// what the chat reports in its last turn is its own outcome, not `cancelled`.
+    pub fn stood_down(&mut self, task: u32) {
+        if let Some(entry) = self.tasks.get_mut(&task) {
+            entry.cancel = None;
+            entry.cancelled = false;
+        }
+    }
+
     pub fn cancelling(&self, task: u32) -> bool {
         self.tasks
             .get(&task)
@@ -905,6 +935,10 @@ pub fn age_word(age: Duration) -> String {
     }
 }
 
+/// What a listed task the person started from this chat's tab says after its row.
+pub const STARTED_BY_THE_PERSON: &str = " · started by the person from this chat's tab: its \
+    report comes here, and it is not this chat's to wait on, tell or cancel";
+
 /// A chat's list of the tasks it dispatched, as `purlis dispatch list` prints it: persona,
 /// task, where, state and age, one task a line.
 pub fn list_text(rows: &[Row]) -> String {
@@ -913,12 +947,19 @@ pub fn list_text(rows: &[Row]) -> String {
                 its chat is closed."
             .to_owned();
     }
+    // A task the person started from this chat's tab is listed, and said to be theirs.
+    let theirs = rows.iter().filter(|row| row.by_person).count();
     let mut said = format!(
-        "{} dispatched by this chat:",
+        "{} {}:",
         if rows.len() == 1 {
             "1 task".to_owned()
         } else {
             format!("{} tasks", rows.len())
+        },
+        if theirs == 0 {
+            "dispatched by this chat"
+        } else {
+            "under this chat"
         }
     );
     for row in rows {
@@ -931,7 +972,7 @@ pub fn list_text(rows: &[Row]) -> String {
             None => "started before this app did".to_owned(),
         };
         said.push_str(&format!(
-            "\n- chat {} · '{}' · {} · {place} · {} · {age}",
+            "\n- chat {} · '{}' · {} · {place} · {} · {age}{}",
             row.chat,
             crate::personas::one_line(&row.name),
             match &row.persona {
@@ -939,6 +980,11 @@ pub fn list_text(rows: &[Row]) -> String {
                 None => "no persona".to_owned(),
             },
             crate::personas::one_line(&row.state),
+            if row.by_person {
+                STARTED_BY_THE_PERSON
+            } else {
+                ""
+            },
         ));
     }
     said
@@ -980,7 +1026,6 @@ mod tests {
                 stepped_in: false,
                 by_person: false,
                 unreported: false,
-                stopped: false,
             }),
             answered: None,
             stopped: None,
@@ -1030,6 +1075,78 @@ mod tests {
     fn a_chat_owns_only_the_tasks_its_own_record_says_it_dispatched() {
         let mine = dispatched_by(ASKER);
         assert_eq!(owned(ASKER, TASK, Some(&mine)), Ok(&mine));
+    }
+
+    #[test]
+    fn a_task_the_person_started_gives_the_chat_whose_tab_it_was_no_power_over_it() {
+        // D-T59-j1. The record names the tab's chat, because the report goes there. That chat
+        // dispatched nothing and holds no grant for the pair: every power is `owned`, so it has
+        // none of them, in the sentence any stranger is told.
+        let theirs = HandedFrom {
+            by_person: true,
+            ..dispatched_by(ASKER)
+        };
+        assert_eq!(owned(ASKER, TASK, Some(&theirs)), Err(not_yours(TASK)));
+        assert_eq!(
+            crate::dispatchtalk::down(ASKER, TASK, Some(&theirs)),
+            Err(not_yours(TASK))
+        );
+        // And it cannot begin a cancel by another road: a cancel is recorded only for a record
+        // `owned` answered, which this one is not.
+        assert!(!Ledger::default().cancelling(TASK));
+    }
+
+    #[test]
+    fn a_cancel_stands_down_for_good_when_the_person_stops_the_task() {
+        // D-T59-j3: a cancelling chat can be stopped, and the stop is the later word.
+        let mut ledger = cancelling();
+        assert!(ledger.cancelling(TASK));
+
+        ledger.stood_down(TASK);
+
+        assert!(!ledger.cancelling(TASK));
+        assert_eq!(
+            ledger.cancel_step(TASK, Owed::Due, RUNNING, true),
+            Step::Nothing,
+            "nothing more is sent for the cancel"
+        );
+        // Its last report is its own, not the cancel's.
+        assert_eq!(
+            ledger.outcome_for(TASK, Outcome::Blocked),
+            Ok(Outcome::Blocked)
+        );
+        assert_eq!(
+            being_stopped("check the queue", TASK),
+            format!(
+                "'check the queue' (chat {TASK}) is being stopped by the operator, so there is \
+                 nothing to cancel. This chat is told when it has ended."
+            )
+        );
+    }
+
+    #[test]
+    fn a_task_the_person_started_is_listed_and_said_to_be_theirs() {
+        let row = |chat, by_person| Row {
+            chat,
+            name: "check prod".to_owned(),
+            persona: Some("devops".to_owned()),
+            place: "alpha".to_owned(),
+            state: State::NeedsThePerson.say(),
+            age_secs: Some(65),
+            by_person,
+        };
+        let listed = list_text(&[row(8, false), row(9, true)]);
+        assert_eq!(
+            listed,
+            format!(
+                "2 tasks under this chat:\n\
+                 - chat 8 · 'check prod' · devops · workspace 'alpha' · waiting on the operator · \
+                 started 1m ago\n\
+                 - chat 9 · 'check prod' · devops · workspace 'alpha' · waiting on the operator · \
+                 started 1m ago{STARTED_BY_THE_PERSON}"
+            )
+        );
+        assert!(list_text(&[row(8, false)]).starts_with("1 task dispatched by this chat:"));
     }
 
     #[test]
@@ -1370,7 +1487,7 @@ mod tests {
             State::Reported(Some(Outcome::Blocked)).say(),
             "reported: blocked"
         );
-        assert_eq!(State::NeedsThePerson.say(), "waiting on the person");
+        assert_eq!(State::NeedsThePerson.say(), "waiting on the operator");
     }
 
     #[test]
@@ -1383,6 +1500,7 @@ mod tests {
                 place: "alpha".to_owned(),
                 state: State::Running.say(),
                 age_secs: Some(185),
+                by_person: false,
             },
             Row {
                 chat: 12,
@@ -1391,6 +1509,7 @@ mod tests {
                 place: Place::PlaneRoot.word().to_owned(),
                 state: State::Reported(Some(Outcome::Done)).say(),
                 age_secs: None,
+                by_person: false,
             },
         ];
 

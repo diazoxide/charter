@@ -552,6 +552,43 @@ fn what_waits_for_a_chat_s_next_turn_is_denied_only_where_the_hooks_run_outside_
     );
 }
 
+/// The messages between an asking chat and its tasks (#1442) wait in that same store, in
+/// `said-<chat>/` beside the reports, so the one rule holds them too: denied with the reports
+/// where the hooks run outside the sandbox, and reachable by the hook that takes them where
+/// they run inside it (D-T59-19, D-T59-j14).
+#[test]
+fn the_messages_between_chats_wait_inside_the_store_that_denial_names() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let message = crate::dispatchtalk::Message {
+        kind: crate::dispatchtalk::Kind::FollowUp,
+        from: "steward 3".to_owned(),
+        chat: 3,
+        text: "Also check staging.".to_owned(),
+    };
+    let file = crate::dispatchtalk::leave(plane.path(), 9, &message).expect("left");
+    assert!(
+        file.starts_with(crate::handback::dir(plane.path()).join("said-9")),
+        "{}",
+        file.display()
+    );
+    let denied =
+        Denied::of(plane.path(), &machine(Os::MacOs)).and_what_waits_for_a_chat(plane.path());
+    let held = paths(&denied, Class::Integrity, Access::ReadWrite);
+    assert!(
+        held.iter().any(|store| file.starts_with(store)),
+        "{} is under none of {held:?}",
+        file.display()
+    );
+    // And without that rule, as on a harness whose hooks run inside its sandbox, nothing
+    // denies it: the hook that takes the message there can still read and remove it.
+    let classes = Denied::of(plane.path(), &machine(Os::MacOs));
+    assert!(
+        !classes.paths.iter().any(|it| file.starts_with(&it.path)),
+        "{}",
+        file.display()
+    );
+}
+
 /// The same, in the form a harness whose hooks run outside is handed: its own sandbox's read
 /// and write denials, and its file tools'.
 #[test]

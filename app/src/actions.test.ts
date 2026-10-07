@@ -2660,7 +2660,11 @@ describe("stopping a chat (#1448)", () => {
       stopBelowId(2),
     ]);
     // A tab that holds no chat has no chat to stop.
-    expect(menuOn({ on: "chat", tab: 7 }).below).toEqual(["tab.fresh:7", "tab.close:7"]);
+    expect(menuOn({ on: "chat", tab: 7 }).below).toEqual([
+      "tab.restart:7",
+      "tab.fresh:7",
+      "tab.close:7",
+    ]);
   });
 
   it("offers no stop for a chat that is not running", () => {
