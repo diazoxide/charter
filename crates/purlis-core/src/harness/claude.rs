@@ -267,7 +267,7 @@ fn settings(
     //
     // **And the five read-only tools of charter's own MCP server** (V79, #1050, amending
     // SI-8e): a chat reading its own todos, memory, records or change status does not stop on
-    // a prompt. `persona_where` is allowed with them (D-T58-1, #1450): it reads the app's own
+    // a prompt. `persona_where` is allowed with them (V98a, #1450): it reads the app's own
     // record of the open chats and answers what the chat is told at its start. Each by its
     // full name, never the server as a whole, so the other writes and `ask_operator` still
     // ask, and an operator's `ask` or `deny` for any of them still wins.
@@ -380,12 +380,22 @@ fn permission_hook(binary: &std::path::Path) -> serde_json::Value {
 pub const SMART_CLOSE_ALLOW: &str = "Bash(purlis session record *)";
 
 /// The permission rules a Claude Code chat the app starts carries for a dispatch (V98b,
-/// amending ADR 0064): `purlis dispatch`, with any arguments, runs without asking, which is
-/// the task and its report (`purlis dispatch report …`). **Consent is the dispatch grant**,
-/// which purlis asks the person for itself; this only stops the harness asking beside it.
-/// A compound command that holds one beside another is still asked about, and an operator's
-/// own `ask` or `deny` still wins, as for [`SMART_CLOSE_ALLOW`].
-pub const DISPATCH_ALLOW: [&str; 1] = ["Bash(purlis dispatch *)"];
+/// amending ADR 0064): the task, by each flag its line can start with, and its report.
+/// **Consent is the dispatch grant**, which purlis asks the person for itself; this only stops
+/// the harness asking beside it.
+///
+/// **Each spelling by name, and no bare trailing wildcard.** `purlis dispatch *` would also
+/// allow every subcommand `dispatch` grows later, which nobody has ruled on: a new one is added
+/// here by name when it lands. A flag-first line cannot reach a subcommand (the command's
+/// arguments and its subcommands exclude each other), so these four are the task and the
+/// report and nothing else. An operator's own `ask` or `deny` still wins, as for
+/// [`SMART_CLOSE_ALLOW`].
+pub const DISPATCH_ALLOW: [&str; 4] = [
+    "Bash(purlis dispatch --name *)",
+    "Bash(purlis dispatch --to *)",
+    "Bash(purlis dispatch --profile *)",
+    "Bash(purlis dispatch report *)",
+];
 
 /// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.
 ///

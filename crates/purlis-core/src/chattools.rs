@@ -68,7 +68,7 @@ pub const DISPATCH: &str = "dispatch";
 pub const DISPATCH_REPORT: &str = "dispatch_report";
 
 /// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
-/// the five that only read, and [`PERSONA_WHERE`] (D-T58-1, #1450), which reads the app's own
+/// the five that only read, and [`PERSONA_WHERE`] (V98a, #1450), which reads the app's own
 /// record and answers names and states a chat is told at its start anyway. Named one by one,
 /// never derived from [`Tool::read_only`]: `ask_operator` is marked read-only too and still
 /// asks, and a tool added later is asked about until someone rules it in here. Writes are

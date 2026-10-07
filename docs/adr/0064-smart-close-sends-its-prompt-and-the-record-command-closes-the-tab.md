@@ -287,10 +287,16 @@ Codex and opencode are not covered by this ruling, and nothing is added for them
 ### Amended 2026-10-07: a dispatch runs without the harness asking (V98b, #1436, #1437)
 
 The operator's ruling V98b, on train 59 (D-T59-prealllow): a Claude Code chat the app starts
-carries `Bash(purlis dispatch *)` as an `allow`, and an `allow` for `mcp__purlis__dispatch` and
+carries an `allow` for the dispatch command by each spelling it has, `Bash(purlis dispatch
+--name *)`, `Bash(purlis dispatch --to *)`, `Bash(purlis dispatch --profile *)` and
+`Bash(purlis dispatch report *)`, and for `mcp__purlis__dispatch` and
 `mcp__purlis__dispatch_report`, on the rules above (an `allow` only, each by its full name, for
 Claude Code only, and an operator's `ask` or `deny` still wins).
 
+- **No bare trailing wildcard.** `Bash(purlis dispatch *)` would also allow every subcommand
+  `dispatch` grows later. The four rules are the task, started by any of its three flags, and
+  its report; a flag-first line cannot reach a subcommand. A later subcommand is added by name
+  when it lands.
 - **These are not reads, and the reason is not that they are harmless.** A dispatch starts a
   chat. What consents to it is purlis's own **dispatch grant** (spec #1434, decision 4, ADR
   0090 as amended): the app decides every dispatch from its own record of the asking chat, asks
@@ -299,9 +305,10 @@ Claude Code only, and an operator's `ask` or `deny` still wins).
   harness's prompt beside it asked twice for one thing, and asked for a chat's own persona,
   where no grant is needed.
 - **What it does not allow.** The handoff command keeps its harness prompt until it is
-  converted (#1444). A compound command that holds `purlis dispatch` beside another command is
-  still asked about. Nothing is allowed for Codex or opencode, whose approval is not per
-  command.
+  converted (#1444). A compound command that holds `purlis dispatch` beside another command
+  is expected to be asked about still, as one holding `purlis session record` was measured to
+  be above; that was measured for the record command and is carried over here, not measured
+  again. Nothing is added for Codex or opencode by this ruling.
 - **Where the grant is not the control.** An unattended chat is never asked for a grant and
   dispatches only under one that stands (#1446). A helper sub-agent's dispatch is refused by
   purlis's hook where the hook can tell one made the call, and that refusal is advice: a grant
@@ -309,10 +316,10 @@ Claude Code only, and an operator's `ask` or `deny` still wins).
 - **The two tools are named apart** (`chattools::DISPATCH_TOOLS`), never added to
   `PRE_ALLOWED`, which stays the tools that only read. A tool added later still asks.
 
-### Amended 2026-10-07: `persona_where` is pre-allowed with the five (D-T58-1, #1450)
+### Amended 2026-10-07: `persona_where` is pre-allowed with the five (V98a, #1450)
 
-Decided at the assembly of train 58 by its dispatcher, under the operator's delegation, and not
-a numbered ruling of the operator's: `mcp__purlis__persona_where` joins
+The operator's ruling V98a, first decided at the assembly of train 58 by its dispatcher as
+D-T58-1 and confirmed by the operator: `mcp__purlis__persona_where` joins
 `chattools::PRE_ALLOWED`, on the rules above (an `allow` only, by its full name, for Claude Code
 only, and an operator's `ask` or `deny` still wins).
 
@@ -334,7 +341,8 @@ starting it is the approval"), with ADR 0067 §2's brokered writes:
   `session_record`, the same operation as `purlis session record` through the other entrance
   (ADR 0067 §2). The same session `--settings` allow it by its full name,
   `mcp__purlis__session_record`, on the rules above: an `allow` only, and an operator's `ask` or
-  `deny` still wins. It is the one write tool allowed; the others still ask.
+  `deny` still wins. It was the one write tool allowed when this was written; the two
+  dispatch tools joined it by ruling V98b (above), and the others still ask.
 - **The app writes the record.** In a chat the app started, the command and the tool hand the
   title and body to the app over the chat's hook socket, and the app writes it from its own
   record of the chat. Where no app takes it, the command writes it itself, as above.
