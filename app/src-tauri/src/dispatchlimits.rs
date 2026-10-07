@@ -72,8 +72,12 @@ pub struct DispatchLimits {
     pub locked_by: Option<String>,
     /// What either file holds in `[dispatch]` that is not read, each as one sentence.
     pub refused: Vec<String>,
-    /// Why this machine's file is not read, where git would carry it.
+    /// Why nothing else of this machine's file is read, where git would carry it. Its dispatch
+    /// limits are read all the same: they only ever lower.
     pub local_left_out: Option<String>,
+    /// Whether this machine's policy file was refused: dispatch is off until it is fixed, and
+    /// [`Self::locked_by`] says why.
+    pub policy_refused: bool,
 }
 
 fn most(limit: Limit) -> u32 {
@@ -162,7 +166,15 @@ fn page(
     locks: &Locks,
 ) -> DispatchLimits {
     let shared = limits::read(base.as_deref(), file);
-    let own = limits::read(local.text(), local_file);
+    // Yours is read whether or not git would carry the file (`limits::Files::of`): a lowering
+    // can only lower.
+    let own = limits::read(
+        match local {
+            LayerText::Text(text) | LayerText::LeftOut { text, .. } => Some(text.as_str()),
+            LayerText::Nothing => None,
+        },
+        local_file,
+    );
     let nothing = Table::default();
     let no_cap = Level::unset();
     let ceiling = locks.dispatch_ceiling();
@@ -225,6 +237,7 @@ fn page(
             },
         ),
         locked_by: (!ceiling.is_unset()).then(|| locks.locked_by()),
+        policy_refused: ceiling.is_refused(),
         refused: shared.refused.into_iter().chain(own.refused).collect(),
         local_left_out: local.left_out().map(str::to_owned),
         base,
@@ -398,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn a_local_file_git_would_carry_sets_nothing_and_says_why() {
+    fn a_local_file_git_would_carry_still_lowers_and_says_what_is_left_out() {
         let page = page(
             FILE,
             LOCAL,
@@ -410,10 +423,31 @@ mod tests {
             Some("[dispatch]\ndepth = 1\n".to_owned()),
             &Locks::none(),
         );
-        assert_eq!(page.mine[0].values, vec![None; 6]);
+        assert_eq!(page.mine[0].values[at(&page, "depth")], Some(1));
         assert_eq!(
             page.local_left_out.as_deref(),
             Some("purlis.local.toml is tracked by git")
         );
+    }
+
+    #[test]
+    fn a_refused_policy_file_is_said_as_refused_and_not_as_limits_set_to_nothing() {
+        let locks = Locks::parse("not json", std::path::Path::new("/etc/purlis/policy.json"));
+        let page = drawn("schema = 1\n", "", &locks);
+        assert!(page.policy_refused);
+        assert!(
+            page.locked_by
+                .as_deref()
+                .is_some_and(|said| said.contains("is refused")),
+            "{:?}",
+            page.locked_by
+        );
+        // A policy that is read is not a refused one.
+        let read = Locks::parse(
+            r#"{"dispatch": {"depth": 2}}"#,
+            std::path::Path::new("/etc/purlis/policy.json"),
+        );
+        assert!(!drawn("schema = 1\n", "", &read).policy_refused);
+        assert!(!drawn("schema = 1\n", "", &Locks::none()).policy_refused);
     }
 }

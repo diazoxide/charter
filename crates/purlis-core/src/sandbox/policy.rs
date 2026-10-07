@@ -63,7 +63,8 @@
 //! - `dispatch`: a **ceiling** on each dispatch limit it names (#1440,
 //!   [`crate::dispatchlimits`]): no project, workspace, persona or person's own setting gives
 //!   more. `may-dispatch` and `may-run-at-once` cap every persona. 0 switches dispatch off on
-//!   this machine. A file that is refused is read as 0 for every one.
+//!   this machine, and nothing lifts it. A file that is refused switches dispatch off, and is
+//!   said as refused ([`crate::dispatchlimits::Source::PolicyRefused`]).
 //!
 //! Absent keys lock nothing. `true` is the same as absent.
 

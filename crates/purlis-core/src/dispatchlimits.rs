@@ -38,9 +38,9 @@
 //!
 //! **The most specific level wins**: the persona's over the workspace's over the project's, and
 //! a level that does not set a limit inherits it. The four general limits follow the *asking*
-//! chat: its workspace, then its persona. `may-dispatch` is the asking persona's and
-//! `may-run-at-once` the target persona's; only a persona's table holds them, and neither has
-//! a cap until one is written.
+//! chat: its workspace, then its persona. `may-dispatch` is the asking persona's, counted
+//! across every chat running as it in the project, and `may-run-at-once` the target persona's;
+//! only a persona's table holds them, and neither has a cap until one is written.
 //!
 //! **A persona's limits are here, never in its own `persona.md`** (as its sandbox hosts are,
 //! D-1362-1): a chat may edit its persona's charter, so a limit written there would be one a
@@ -51,7 +51,8 @@
 //! **This machine's own table** is `[dispatch]` in `charter.local.toml`, in the same shape,
 //! and **it only ever lowers** a limit: a value above what the project's files give is
 //! ignored, and [`Limits::ignored`] says so. A chat that can write that file can therefore
-//! make dispatch stricter and never looser.
+//! make dispatch stricter and never looser. For the same reason it is read even where git would
+//! carry the file, which leaves every other table of it out ([`Files::read`]).
 //!
 //! **An administrator's policy is a ceiling** on every limit (`dispatch` in
 //! [`crate::sandbox::policy::MACHINE_FILE`], [`ceiling`]).
@@ -62,7 +63,13 @@
 //!   its chain is refused, whatever the limits say. A chat's own persona is not above it, so a
 //!   chat may split its own work.
 //! - `depth` is never above [`DEEPEST`]: a higher one is refused as a setting.
-//! - A limit of 0 switches dispatch off at the level that sets it.
+//! - A limit of 0 switches dispatch off at the level that sets it, and a more specific level
+//!   may set it back above 0: a project's 0 with a workspace's 2 is 2 in that workspace. A
+//!   policy's 0 is a ceiling, and nothing lifts it. `messages-per-minute = 0` stops messages
+//!   only, never a dispatch.
+//! - A policy file that is refused switches dispatch off, and says the file is refused.
+//! - Every count is of chats that still owe work: not yet reported, and their program not
+//!   ended.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -150,7 +157,8 @@ impl Limit {
             Self::Depth => "How many dispatches deep a chain may go. Never above 8.",
             Self::MessagesPerMinute => "The messages one chat may send another in a minute.",
             Self::MayDispatch => {
-                "The persona chats a chat running as this persona may have running at once."
+                "The persona chats the chats running as this persona may have running at once, \
+                 in the project."
             }
             Self::MayRunAtOnce => "The chats that may run as this persona at once, in the project.",
         }
@@ -189,6 +197,8 @@ impl Limit {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Level {
     values: [Option<u32>; 6],
+    /// A policy file that was refused: no limit of it was read, and dispatch is off.
+    refused: bool,
 }
 
 impl Level {
@@ -211,7 +221,13 @@ impl Level {
 
     /// Whether it sets nothing.
     pub fn is_unset(&self) -> bool {
-        self.values.iter().all(Option::is_none)
+        !self.refused && self.values.iter().all(Option::is_none)
+    }
+
+    /// Whether this is the ceiling of a policy file that was refused
+    /// ([`ceiling_when_refused`]): nothing was read from it, and dispatch is off.
+    pub fn is_refused(&self) -> bool {
+        self.refused
     }
 }
 
@@ -238,6 +254,8 @@ pub enum Source {
     You,
     /// An administrator's ceiling, which lowered it.
     Policy,
+    /// This machine's policy file was refused, so nothing is allowed until it is fixed.
+    PolicyRefused,
 }
 
 impl Source {
@@ -248,7 +266,7 @@ impl Source {
             Self::Workspace(name) => format!("in the workspace {name}"),
             Self::Persona(name) => format!("for the persona {name}"),
             Self::You => "on this machine, by your own limit".to_owned(),
-            Self::Policy => "on this machine, by policy".to_owned(),
+            Self::Policy | Self::PolicyRefused => "on this machine, by policy".to_owned(),
         }
     }
 }
@@ -319,10 +337,12 @@ impl Limits {
         &self.set_by[limit.at()]
     }
 
-    /// The first limit that is 0, which switches dispatch off, and the level that set it.
+    /// The first limit that is 0 and so switches dispatch off, and the level that set it.
+    /// Messages a minute is not one: its 0 stops messages only ([`may_send`]).
     fn off(&self) -> Option<(Limit, &Source)> {
         Limit::ALL
             .into_iter()
+            .filter(|limit| *limit != Limit::MessagesPerMinute)
             .find(|limit| self.value(*limit) == Some(0))
             .map(|limit| (limit, self.set_by(limit)))
     }
@@ -394,7 +414,10 @@ pub fn in_force(
                 _ => (value, from) = (Some(yours), Source::You),
             }
         }
-        if let Some(ceiling) = policy.get(limit)
+        if policy.is_refused() {
+            // Nothing was read from the file, so nothing is allowed: no level lifts this.
+            (value, from) = (Some(0), Source::PolicyRefused);
+        } else if let Some(ceiling) = policy.get(limit)
             && value.is_none_or(|value| value > ceiling)
         {
             (value, from) = (Some(ceiling), Source::Policy);
@@ -422,6 +445,10 @@ pub fn in_force(
 /// **Where the asking chat stands among the chats the app has open**, from the app's own
 /// record and never from the request: what [`decide`] counts against the limits. The first
 /// four fields are the dispatch decision's own lineage, by the same names.
+///
+/// **A chat counts while it still owes work**: it has not reported and its program has not
+/// ended (the dispatch decision's D-1436-18). One that reported and stays open for the person
+/// to read counts nowhere here.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Lineage {
     /// How many dispatches stand between the asking chat and the chat the person started: 0
@@ -436,6 +463,10 @@ pub struct Lineage {
     pub lineage: u32,
     /// How many chats are running as the target persona, in every workspace of the project.
     pub as_target: u32,
+    /// How many persona chats the chats running as the asking persona have dispatched that are
+    /// still running, in every workspace of the project, the asking chat's own among them:
+    /// what `may-dispatch` counts.
+    pub by_asking: u32,
 }
 
 /// **Why a dispatch is refused**: which limit or rule, with its number. [`Refused::say`] is the
@@ -452,18 +483,27 @@ pub enum Refused {
     },
     /// The persona is already above the asking chat in its chain.
     Loop(String),
-    /// The chain is as deep as it may go.
-    TooDeep { limit: u32 },
-    /// The asking chat has as many persona chats running as it may.
-    TooManyRunning { limit: u32 },
-    /// The lineage holds as many running chats as it may.
-    LineageFull { limit: u32 },
-    /// A chat as this persona has as many persona chats running as its persona may dispatch.
-    PersonaDispatches { persona: String, limit: u32 },
-    /// As many chats run as this persona as may at once.
-    PersonaFull { persona: String, limit: u32 },
-    /// The asking chat has sent as many messages this minute as it may.
-    TooManyMessages { limit: u32 },
+    /// The chain is as deep as it may go: `depth` dispatches below the chat the person started.
+    TooDeep { limit: u32, depth: u32 },
+    /// The asking chat has as many persona chats running as it may: `running` of them.
+    TooManyRunning { limit: u32, running: u32 },
+    /// The lineage holds as many running chats as it may: `lineage` of them.
+    LineageFull { limit: u32, lineage: u32 },
+    /// The chats running as this persona have dispatched as many persona chats as the persona
+    /// may have running in the project: `running` of them.
+    PersonaDispatches {
+        persona: String,
+        limit: u32,
+        running: u32,
+    },
+    /// As many chats run as this persona as may at once: `running` of them.
+    PersonaFull {
+        persona: String,
+        limit: u32,
+        running: u32,
+    },
+    /// The asking chat has sent as many messages this minute as it may: `sent` of them.
+    TooManyMessages { limit: u32, sent: u32 },
 }
 
 /// What a chat is told to do about a limit of 0: only the person changes a limit.
@@ -472,6 +512,11 @@ pub const ASK_THE_PERSON: &str = "Only the person can change it, in Settings ›
 /// What a chat is told to do about a 0 an administrator's policy set.
 pub const ASK_AN_ADMINISTRATOR: &str =
     "Only an administrator can change it, in this machine's policy file.";
+
+/// What a chat is told where this machine's policy file was refused: nothing in it was read,
+/// so nothing is said to be "set".
+pub const POLICY_REFUSED: &str = "its policy file is refused, so purlis cannot tell what an \
+     administrator allows. Only an administrator can fix it.";
 
 /// What a chat is told to do about the loop rule.
 pub const REPORT_INSTEAD: &str = "Send it what you found in your report instead.";
@@ -515,63 +560,75 @@ impl Refused {
         match self {
             Self::Off { limit, by, target } => {
                 let what = match (limit, target) {
-                    (Limit::MayRunAtOnce, Some(target)) => {
+                    (Limit::MessagesPerMinute, _) => "messages between chats are off".to_owned(),
+                    (Limit::MayRunAtOnce, Some(target)) if *by != Source::PolicyRefused => {
                         format!("dispatch to {} is off", crate::shown::short(target))
                     }
                     _ => "dispatch is off".to_owned(),
                 };
-                // A policy's 0 is not the person's to change.
-                let who = if *by == Source::Policy {
-                    ASK_AN_ADMINISTRATOR
-                } else {
-                    ASK_THE_PERSON
-                };
-                format!(
-                    "{what} {}: {} is set to 0. {who}",
-                    by.off_here(),
-                    limit.label().to_lowercase()
-                )
+                match by {
+                    // Nobody set a limit to 0: the file was not read at all.
+                    Source::PolicyRefused => format!("{what} on this machine: {POLICY_REFUSED}"),
+                    // A policy's 0 is not the person's to change.
+                    Source::Policy => format!(
+                        "{what} {}: {} is set to 0. {ASK_AN_ADMINISTRATOR}",
+                        by.off_here(),
+                        limit.label().to_lowercase()
+                    ),
+                    _ => format!(
+                        "{what} {}: {} is set to 0. {ASK_THE_PERSON}",
+                        by.off_here(),
+                        limit.label().to_lowercase()
+                    ),
+                }
             }
             Self::Loop(name) => format!(
                 "persona '{}' is already in this chat's own chain of dispatches, and a persona \
                  is never dispatched to from below itself. {REPORT_INSTEAD}",
                 crate::shown::short(name)
             ),
-            Self::TooDeep { limit } => format!(
-                "this chat is {} below the chat the person started, which is as deep as a \
-                 chain may go here. {DO_IT_HERE}",
-                counted(*limit, "dispatch", "dispatches")
+            Self::TooDeep { limit, depth } => format!(
+                "this chat is {} below the chat the person started, and a chain may go {limit} \
+                 deep here. {DO_IT_HERE}",
+                counted(*depth, "dispatch", "dispatches")
             ),
-            Self::TooManyRunning { limit } => format!(
-                "this chat already has {} running, which is as many as it may have at once. \
+            Self::TooManyRunning { limit, running } => format!(
+                "this chat already has {} running, and it may have {limit} at once. \
                  {WAIT_TO_DISPATCH}",
-                counted(*limit, "persona chat", "persona chats")
+                counted(*running, "persona chat", "persona chats")
             ),
-            Self::LineageFull { limit } => format!(
-                "this chat's lineage already holds {}, which is as many as it may hold. \
-                 {WAIT_FOR_ONE}",
-                counted(*limit, "running chat", "running chats")
+            Self::LineageFull { limit, lineage } => format!(
+                "this chat's lineage already holds {}, and it may hold {limit}. {WAIT_FOR_ONE}",
+                counted(*lineage, "running chat", "running chats")
             ),
-            Self::PersonaDispatches { persona, limit } => format!(
-                "this chat already has {} running, which is as many as a chat as {} may have \
-                 at once. {WAIT_TO_DISPATCH}",
-                counted(*limit, "persona chat", "persona chats"),
-                crate::shown::short(persona)
+            Self::PersonaDispatches {
+                persona,
+                limit,
+                running,
+            } => format!(
+                "chats as {persona} already have {} running between them, and may have {limit} \
+                 at once in this project. {WAIT_FOR_ONE}",
+                counted(*running, "persona chat", "persona chats"),
+                persona = crate::shown::short(persona)
             ),
-            Self::PersonaFull { persona, limit } => format!(
-                "{} already running as {}, which is as many as may run as it at once in this \
+            Self::PersonaFull {
+                persona,
+                limit,
+                running,
+            } => format!(
+                "{} already running as {persona}, and {limit} may run as it at once in this \
                  project. {WAIT_FOR_ONE}",
-                if *limit == 1 {
+                if *running == 1 {
                     "1 chat is".to_owned()
                 } else {
-                    format!("{limit} chats are")
+                    format!("{running} chats are")
                 },
-                crate::shown::short(persona)
+                persona = crate::shown::short(persona)
             ),
-            Self::TooManyMessages { limit } => format!(
-                "this chat has sent that chat {} in the last minute, which is as many as it \
-                 may. {WAIT_TO_SEND}",
-                counted(*limit, "message", "messages")
+            Self::TooManyMessages { limit, sent } => format!(
+                "this chat has sent that chat {} in the last minute, and it may send {limit}. \
+                 {WAIT_TO_SEND}",
+                counted(*sent, "message", "messages")
             ),
         }
     }
@@ -634,24 +691,28 @@ pub fn decide(limits: &Limits, lineage: &Lineage) -> Decision {
     if lineage.depth >= limits.depth {
         return Decision::Refused(Refused::TooDeep {
             limit: limits.depth,
+            depth: lineage.depth,
         });
     }
     if lineage.running >= limits.running {
         return Decision::Refused(Refused::TooManyRunning {
             limit: limits.running,
+            running: lineage.running,
         });
     }
     if lineage.lineage >= limits.lineage {
         return Decision::Refused(Refused::LineageFull {
             limit: limits.lineage,
+            lineage: lineage.lineage,
         });
     }
     if let (Some(limit), Some(persona)) = (limits.may_dispatch, &limits.asking)
-        && lineage.running >= limit
+        && lineage.by_asking >= limit
     {
         return Decision::Refused(Refused::PersonaDispatches {
             persona: persona.clone(),
             limit,
+            running: lineage.by_asking,
         });
     }
     if let (Some(limit), Some(persona)) = (limits.may_run_at_once, &limits.target)
@@ -660,20 +721,28 @@ pub fn decide(limits: &Limits, lineage: &Lineage) -> Decision {
         return Decision::Refused(Refused::PersonaFull {
             persona: persona.clone(),
             limit,
+            running: lineage.as_target,
         });
     }
     Decision::Allowed
 }
 
 /// **Whether the asking chat may send another message** to a chat of its lineage, having sent
-/// `in_the_last_minute` already.
+/// `in_the_last_minute` already. Only messages a minute decides it: a 0 there stops messages
+/// and nothing else, and a 0 elsewhere stops new dispatches and no message of a chat already
+/// running.
 pub fn may_send(limits: &Limits, in_the_last_minute: u32) -> Decision {
-    if let Some(off) = limits.switched_off() {
-        return Decision::Refused(off);
+    if limits.messages_per_minute == 0 {
+        return Decision::Refused(Refused::Off {
+            limit: Limit::MessagesPerMinute,
+            by: limits.set_by(Limit::MessagesPerMinute).clone(),
+            target: limits.target.clone(),
+        });
     }
     if in_the_last_minute >= limits.messages_per_minute {
         return Decision::Refused(Refused::TooManyMessages {
             limit: limits.messages_per_minute,
+            sent: in_the_last_minute,
         });
     }
     Decision::Allowed
@@ -894,12 +963,17 @@ pub fn ceiling(dispatch: &serde_json::Map<String, serde_json::Value>) -> Result<
     Ok(level)
 }
 
-/// **The ceiling of a policy file that was refused**: every limit 0, so nothing is dispatched
-/// until an administrator fixes the file. purlis cannot tell what the file meant to allow.
+/// **The ceiling of a policy file that was refused**: dispatch is off, and no message passes,
+/// until an administrator fixes the file. purlis cannot tell what the file meant to allow, so
+/// it says the file is refused ([`Source::PolicyRefused`]) and never that a limit "is set to 0",
+/// which no one set.
 pub fn ceiling_when_refused() -> Level {
-    Limit::ALL
-        .into_iter()
-        .fold(Level::unset(), |level, limit| level.with(limit, 0))
+    Level {
+        refused: true,
+        ..Limit::ALL
+            .into_iter()
+            .fold(Level::unset(), |level, limit| level.with(limit, 0))
+    }
 }
 
 // ---- the project's files -----------------------------------------------------------------------
@@ -909,7 +983,7 @@ pub fn ceiling_when_refused() -> Level {
 pub struct Files {
     /// The committed file's.
     pub project: Table,
-    /// This machine's own, which only ever lowers. Nothing where git would carry the file.
+    /// This machine's own, which only ever lowers: read even where git would carry its file.
     pub mine: Table,
     /// What either file holds in `[dispatch]` that is not read, each as one sentence.
     pub refused: Vec<String>,
@@ -923,18 +997,34 @@ impl Files {
         let committed = crate::sandbox::read_plane_file(&crate::names::manifest(root))
             .ok()
             .flatten();
-        let shared = read(committed.as_deref(), crate::profiles::COMMITTED_FILE);
         let local = crate::settings::layer_text(root, crate::settings::Which::Local);
-        let mine = read(local.text(), crate::profiles::LOCAL_FILE);
+        let mut files = Self::of(committed.as_deref(), &local);
+        for said in &mut files.refused {
+            *said = crate::settings::named_at(root, said);
+        }
+        files
+    }
+
+    /// The tables of `committed`, the committed file's text (`None`: no file), and of `local`,
+    /// this machine's file as its layer was read.
+    ///
+    /// **This machine's table is read whether or not git would carry its file.** Every other
+    /// table of that file is left out when it would ([`crate::settings::layer_text`]), because
+    /// it could loosen what the project says with no trace in git. This one only ever lowers a
+    /// limit, so honouring it is the strict reading: dropping it would lift a limit the person
+    /// set for themselves the moment the file's ignore rule went missing.
+    pub fn of(committed: Option<&str>, local: &crate::settings::LayerText) -> Self {
+        use crate::settings::LayerText;
+        let shared = read(committed, crate::profiles::COMMITTED_FILE);
+        let local = match local {
+            LayerText::Text(text) | LayerText::LeftOut { text, .. } => Some(text.as_str()),
+            LayerText::Nothing => None,
+        };
+        let mine = read(local, crate::profiles::LOCAL_FILE);
         Self {
             project: shared.table,
             mine: mine.table,
-            refused: shared
-                .refused
-                .into_iter()
-                .chain(mine.refused)
-                .map(|said| crate::settings::named_at(root, &said))
-                .collect(),
+            refused: shared.refused.into_iter().chain(mine.refused).collect(),
         }
     }
 

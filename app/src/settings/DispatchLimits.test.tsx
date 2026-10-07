@@ -57,6 +57,7 @@ function page(over: Partial<DispatchLimits> = {}): DispatchLimits {
     locked_by: null,
     refused: [],
     local_left_out: null,
+    policy_refused: false,
     ...over,
   };
 }
@@ -100,8 +101,18 @@ afterEach(() => {
 /** One setting of the Dispatch page, drawn as its row draws it. */
 function Setting({ id }: { id: string }) {
   const setting = dispatchGroup(PLANE).settings.find((one) => one.id === id) as LiveSetting;
-  const { control } = setting.useControl();
-  return <>{control({ id: "d", labelledBy: "d-label" })}</>;
+  const { control, undo } = setting.useControl();
+  return (
+    <>
+      {control({ id: "d", labelledBy: "d-label" })}
+      {/* The settings row draws the last change's Undo; here it is drawn bare. */}
+      {undo && (
+        <button type="button" onClick={undo}>
+          Undo
+        </button>
+      )}
+    </>
+  );
 }
 
 const Page = () => <Setting id={`${DISPATCH}.limits`} />;
@@ -323,15 +334,103 @@ describe("Settings › Project › Dispatch", () => {
     });
   });
 
-  it("offers no row of yours while git would carry this machine's file, and says why", async () => {
-    core(page({ local_left_out: "purlis.local.toml is tracked by git, so it is not read." }));
+  it("still draws and applies your row while git would carry this machine's file, and says so", async () => {
+    core(
+      page({
+        mine: [row("project", "", [null, null, 1, null, null, null])],
+        local_left_out: "purlis.local.toml is tracked by git, so it is not read.",
+      }),
+    );
     render(<Page />);
 
     await screen.findByRole("table", { name: "Dispatch limits" });
-    expect(screen.queryByRole("rowheader", { name: "Me on this machine" })).not.toBeInTheDocument();
+    // A limit of yours can only lower one, so it holds whatever git says of the file.
+    expect(screen.getByLabelText("Depth for me on this machine")).toHaveValue("1");
     expect(
-      screen.getByText("purlis.local.toml is tracked by git, so it is not read."),
+      screen.getByText(
+        "purlis.local.toml is tracked by git, so it is not read. Your dispatch limits in it still apply, because they can only lower one.",
+      ),
     ).toBeInTheDocument();
+  });
+
+  it("offers Undo for the last limit changed, which puts back what the box held", async () => {
+    const before = page({ rows: [row("project", "", [null, null, 4, null, null, null])] });
+    const after = page({ rows: [row("project", "", [null, null, 2, null, null, null])] });
+    let now = after;
+    const { saves } = core(before, () => ({ now }));
+    render(<Page />);
+
+    // Nothing to undo until something is changed here.
+    await screen.findByRole("table", { name: "Dispatch limits" });
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    typeInto(screen.getByLabelText("Depth for the project"), "2");
+    await waitFor(() => expect(saves).toHaveLength(1));
+
+    now = before;
+    await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1]).toMatchObject({
+      which: "shared",
+      change: edit(["dispatch", "depth"], { kind: "integer", value: 4 }),
+    });
+    // One level: the Undo is gone once it is used.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Depth for the project")).toHaveValue("4");
+  });
+
+  it("undoes a first value by taking the key out again", async () => {
+    const { saves } = core(page(), () => ({
+      now: page({ rows: [row("project", "", [null, null, 2, null, null, null])] }),
+    }));
+    render(<Page />);
+
+    typeInto(await screen.findByLabelText("Depth for the project"), "2");
+    await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].change).toEqual(edit(["dispatch", "depth"], null));
+  });
+
+  it("undoes a removed override by writing back each limit it set", async () => {
+    const { saves } = core(
+      page({
+        rows: [row("project", ""), row("persona", "devops", [null, null, 1, null, null, 2])],
+      }),
+      () => ({ now: page() }),
+    );
+    render(<Page />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Remove the override for the persona devops" }),
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].change).toEqual({
+      kind: "edits",
+      edits: [
+        {
+          path: ["dispatch", "personas", "devops", "depth"].map((key) => ({ key })),
+          value: { kind: "integer", value: 1 },
+        },
+        {
+          path: ["dispatch", "personas", "devops", "may-run-at-once"].map((key) => ({ key })),
+          value: { kind: "integer", value: 2 },
+        },
+      ],
+    });
+  });
+
+  it("offers no Undo for a change the core refused", async () => {
+    core(page(), () => ({ refused: ["dispatch.depth is 9, and depth is never above 8"] }));
+    render(<Page />);
+
+    typeInto(await screen.findByLabelText("Depth for the project"), "9");
+
+    await screen.findByText("dispatch.depth is 9, and depth is never above 8");
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
   });
 
   it("draws a policy's ceiling as locked, with who set it, and no control", async () => {
@@ -353,6 +452,50 @@ describe("Settings › Project › Dispatch", () => {
     ]);
     expect(within(locks).queryByRole("textbox")).not.toBeInTheDocument();
     expect(within(locks).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("says a refused policy file is refused, once, and not that each limit is 0", async () => {
+    const refused =
+      "Locked by policy: this machine's policy file, /etc/purlis/policy.json, is refused (it is not JSON), so everything it could lock is locked until this machine's administrator fixes it.";
+    core(
+      page({
+        limits: LIMITS.map((one) => ({ ...one, ceiling: 0 })),
+        locked_by: refused,
+        policy_refused: true,
+      }),
+    );
+    render(<Setting id={`${DISPATCH}.locks`} />);
+
+    const locks = await screen.findByRole("list", { name: "Policy locks" });
+    expect(
+      within(locks)
+        .getAllByRole("listitem")
+        .map((one) => one.textContent),
+    ).toEqual([`Dispatch is off on this machine. ${refused}`]);
+    expect(within(locks).queryByText(/is 0/)).not.toBeInTheDocument();
+  });
+
+  it("says a policy's 0 messages a minute stops messages, not dispatch", async () => {
+    const by = "Locked by policy, set by IT in /etc/purlis/policy.json.";
+    core(
+      page({
+        limits: LIMITS.map((one) =>
+          one.word === "messages-per-minute" || one.word === "depth" ? { ...one, ceiling: 0 } : one,
+        ),
+        locked_by: by,
+      }),
+    );
+    render(<Setting id={`${DISPATCH}.locks`} />);
+
+    const locks = await screen.findByRole("list", { name: "Policy locks" });
+    expect(
+      within(locks)
+        .getAllByRole("listitem")
+        .map((one) => one.textContent),
+    ).toEqual([
+      `Depth is 0, so dispatch is off on this machine. ${by}`,
+      `Messages per minute is 0, so no chat sends another a message on this machine. ${by}`,
+    ]);
   });
 
   it("says no policy limits dispatch where none does", async () => {
@@ -560,6 +703,26 @@ describe("the persona view", () => {
         value: 3,
       }),
     });
+  });
+
+  it("offers Undo under the table for the last limit changed there", async () => {
+    const before = page({
+      rows: [row("project", ""), row("persona", "devops", [null, null, 1, null, null, 2])],
+    });
+    const { saves } = core(before, () => ({
+      now: page({
+        rows: [row("project", ""), row("persona", "devops", [null, null, 1, null, null, 5])],
+      }),
+    }));
+    render(<DispatchLimitsTable plane={PLANE} scope={{ kind: "persona", name: "devops" }} />);
+
+    typeInto(await screen.findByLabelText("May run at once for this persona"), "5");
+    await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].change).toEqual(
+      edit(["dispatch", "personas", "devops", "may-run-at-once"], { kind: "integer", value: 2 }),
+    );
   });
 
   it("draws nothing where the core says nothing of the limits", async () => {
