@@ -13,11 +13,16 @@
 //! stays. A file a running session still writes has a fresh modification time, which is the
 //! age this reads, so it stays too.
 //!
+//! **A dispatch record is session data too** (#1452). `.charter/app/dispatches/<id>.json` holds
+//! a brief and a report, and is collected by the same rule: a month after it was last written,
+//! unless the chat that asked or the chat that worked is one the reopen record brings back,
+//! by its id and not its number, which another launch deals again.
+//!
 //! **A trace that records a secret handed out is kept** (V71). Those events
 //! ([`crate::secrets::cmd::HANDED_OUT`]) are the only record of which credential went where
 //! until AU-5 writes them into the audit chain; once it does, they follow the 30-day rule too.
 //!
-//! **Only what this names, and only this plane's.** Plain files directly in those three
+//! **Only what this names, and only this plane's.** Plain files directly in those
 //! directories, whose names are ones charter writes there. The directories are
 //! `<plane>/.charter/…` — never `$CHARTER_HOME`, which can be one directory several planes
 //! share, and which the pointer writers (`wscmd::select`, `active`) do not read either. Each
@@ -42,11 +47,26 @@ pub struct Swept {
     pub sessions: usize,
     pub traces: usize,
     pub reports: usize,
+    /// Dispatch records ([`crate::dispatchrecord`], #1452).
+    pub dispatches: usize,
 }
 
 /// Remove the per-session files of `plane` older than [`KEEP_FOR`] at `now`, except those of
 /// a session in `live` and a trace that records a secret handed out.
 pub fn sweep(plane: &Path, now: SystemTime, live: &[String]) -> Swept {
+    sweep_keeping(plane, now, live, &[])
+}
+
+/// [`sweep`], also keeping the dispatch records of the chats in `chats`: the ones a live chat
+/// asked for or worked on, matched by the chat's ULID ([`crate::dispatchrecord::same_chat`]).
+/// A chat's number is dealt again in another launch, so a number alone keeps only a record
+/// that names its chat by nothing else.
+pub fn sweep_keeping(
+    plane: &Path,
+    now: SystemTime,
+    live: &[String],
+    chats: &[crate::dispatchrecord::Live],
+) -> Swept {
     Swept {
         sessions: collect(
             plane,
@@ -67,6 +87,17 @@ pub fn sweep(plane: &Path, now: SystemTime, live: &[String]) -> Swept {
             hands_out_a_secret,
         ),
         reports: sweep_reports(plane, now),
+        dispatches: collect(
+            plane,
+            &[
+                crate::names::state_name(plane),
+                "app",
+                crate::dispatchrecord::DIR_NAME,
+            ],
+            now,
+            crate::dispatchrecord::a_record,
+            |file| crate::dispatchrecord::of_a_live_chat(file, chats),
+        ),
     }
 }
 
@@ -108,7 +139,7 @@ pub fn on_open(plane: &Path, now: SystemTime) -> Swept {
             number.into_iter().chain(resume)
         })
         .collect();
-    sweep(plane, now, &live)
+    sweep_keeping(plane, now, &live, &crate::dispatchrecord::Live::of(&record))
 }
 
 /// The Python charter's report drafts, which are no session's. This plane's only, as every

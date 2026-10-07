@@ -171,6 +171,7 @@ function core(
         persona_hosts: on.personaHosts?.hosts ?? [],
         resume_holds: on.personaHosts?.holds ?? false,
         persona_hosts_locked: on.personaHosts?.locked ?? null,
+        dispatches: [],
       };
     if (cmd === "resume_session") {
       const answer = on.resumes?.[resumed];
