@@ -352,7 +352,13 @@ pub fn task_message_noting(
         // Last, so a name that happened to spell `{when}` is not filled in again.
         .replace("{from}", from);
     let note = note
-        .map(|note| format!("\n⟨{}⟩", crate::personas::one_line(note)))
+        // One line and whole: a note says which profile and why, and is never cut.
+        .map(|note| {
+            format!(
+                "\n⟨{}⟩",
+                crate::shown::one_line(note, crate::shown::NO_CLIP)
+            )
+        })
         .unwrap_or_default();
     format!("{line}\n{TASK_NOTE}{note}\n\n{brief}")
 }

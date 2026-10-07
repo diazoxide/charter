@@ -2491,12 +2491,15 @@ mod tests {
             &nothing_opens,
         );
         assert!(matches!(said, Answer::No { .. }), "{said:?}");
-        // An open whose stamp claims another chat asked.
-        let stolen = ticket(&held, &id, &tickets, asking);
+        // An open whose stamp claims another chat asked. On tickets of its own: the asking
+        // chat's ticket above was never spent (the line named another chat), and a chat has
+        // one live ticket at a time.
+        let others = Tickets::default();
+        let stolen = ticket(&held, &id, &others, asking);
         let said = answer(
             &held,
             &id,
-            &tickets,
+            &others,
             1,
             an_open(asking, &stolen, stamped(child)),
             &nothing_opens,
@@ -3107,7 +3110,11 @@ mod tests {
                 report: Owed::Due,
                 mode: Mode::Task,
                 depth: 1,
-                root: None,
+                // The lineage it is in: the asking chat's own id, which the person started.
+                root: held
+                    .chats()
+                    .recorded_chat(asking)
+                    .and_then(|chat| chat.identity.id),
             })
         );
         // In the asking chat's folder, on its profile, as its persona.
