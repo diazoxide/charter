@@ -590,7 +590,8 @@ struct OpenChat {
     from: Option<HandedFromNote>,
 }
 
-/// Where a handed-off chat came from, as the window draws it.
+/// Where a chat another chat started came from, as the window draws it: its note, and its
+/// place in the project's tree of chats (#1447).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct HandedFromNote {
     /// The chat it came from, by the name the operator saw it under.
@@ -598,13 +599,26 @@ pub struct HandedFromNote {
     /// The workspace it came from, or `plane root` for a chat that handed off from there
     /// (SI-1b) — `purlis_core::active::Place::word`, drawn as it is.
     pub workspace: String,
+    /// That chat's number: what the Chats section nests this one under while it is open.
+    /// Never drawn; the note says the name.
+    pub chat: u32,
+    /// Whether a dispatch started it as a task, which owes that chat a report; a handoff, where
+    /// the work moved, is not one.
+    pub task: bool,
+    /// Whether it has a tab. A handoff always has one; a task chat has none until the person
+    /// opens it from the Chats section (`open_chat_tab`).
+    pub tab: bool,
 }
 
-impl From<&purlis_core::reopen::HandedFrom> for HandedFromNote {
-    fn from(from: &purlis_core::reopen::HandedFrom) -> Self {
+impl HandedFromNote {
+    /// The note for a chat started `from` another, which the window draws as a tab or not.
+    pub fn of(from: &purlis_core::reopen::HandedFrom, tab: bool) -> Self {
         Self {
             name: from.name.clone(),
             workspace: from.workspace.word().to_owned(),
+            chat: from.chat,
+            task: from.mode == purlis_core::reopen::Mode::Task,
+            tab,
         }
     }
 }
@@ -1806,6 +1820,18 @@ fn pin_chat(
     planes.held(&plane)?.chats().pin(session, pinned)
 }
 
+/// The person opened a task chat's tab from the Chats section (#1447): the record keeps it,
+/// so a reloaded window and the next launch draw the tab again.
+#[tauri::command]
+#[specta::specta]
+fn open_chat_tab(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<(), String> {
+    planes.held(&plane)?.chats().open_tab(session)
+}
+
 /// The order the chat strip draws this project's chats in, by session, so the record lists
 /// them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
 ///
@@ -1899,7 +1925,10 @@ impl From<chats::Open> for OpenChat {
             in_front: open.in_front,
             pinned: open.pinned,
             label: open.label,
-            from: open.from.as_ref().map(HandedFromNote::from),
+            from: open
+                .from
+                .as_ref()
+                .map(|from| HandedFromNote::of(from, open.tab)),
             guessed: None,
             resumed: match &open.how {
                 Reopened::Resumed(id) => Some(id.to_string()),

@@ -144,6 +144,14 @@ pub struct Chat {
     /// see [`HeldGrants`]. Its own home, apart from [`Self::from`], so a handoff note that does
     /// not read never drops it, and a Resume, which has no note, can hold too.
     pub held: Option<HeldGrants>,
+    /// Whether the person opened this chat's tab from the Chats section (#1447).
+    ///
+    /// **Only a task chat's answer is read**: a chat a dispatch started in [`Mode::Task`] is
+    /// listed with no tab until the person clicks its row, and this is that click, kept so a
+    /// reload and a relaunch bring the tab back. Every other chat has a tab from its start;
+    /// [`Self::has_tab`] is the one answer. `false` is every record written before this field
+    /// — not a format change, for [`Self::pinned`]'s reason.
+    pub tab_opened: bool,
     /// The workspace this chat's directory was renamed away from, where a rename left it with
     /// no conversation its harness can find (charter#367, D10).
     ///
@@ -183,6 +191,18 @@ pub struct Chat {
     /// chat whose program is not running, and every record written before this field — not a
     /// format change, for [`Self::pinned`]'s reason. A chat with none stamps nothing.
     pub pid: Option<u32>,
+}
+
+impl Chat {
+    /// Whether the window draws this chat as a tab (#1447): every chat but a task chat the
+    /// person has not opened, which is listed in the Chats section and nowhere on the strip.
+    pub fn has_tab(&self) -> bool {
+        self.tab_opened
+            || self
+                .from
+                .as_ref()
+                .is_none_or(|from| from.mode != Mode::Task)
+    }
 }
 
 /// A chat's ids, as the record keeps them across a relaunch (ADR 0066, "What changes where").
@@ -225,6 +245,39 @@ pub struct HandedFrom {
     pub workspace: crate::active::Place,
     /// Whether it asked for a report, and whether one has been sent.
     pub report: Owed,
+    /// Whether the work moved or a report is expected back: what decides whether the chat
+    /// opens as a tab (#1447).
+    pub mode: Mode,
+}
+
+/// How one chat started another (the spec's two modes of a dispatch, #1434).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// The work moved: the chat opens as a tab. Every record written before modes existed.
+    #[default]
+    Handoff,
+    /// The asking chat expects a report: the chat is listed in the Chats section, and has no
+    /// tab until the person opens it ([`Chat::has_tab`]).
+    Task,
+}
+
+impl Mode {
+    /// The word the record and the window's lineage carry.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Handoff => "handoff",
+            Self::Task => "task",
+        }
+    }
+
+    /// Anything but `task` reads as a handoff, which is what a record without the key says.
+    fn of(word: &str) -> Self {
+        if word == "task" {
+            Self::Task
+        } else {
+            Self::Handoff
+        }
+    }
 }
 
 /// **The persona grants a chat holds instead of its own persona's** (#1362, D-1362-5 and
@@ -1214,6 +1267,10 @@ struct ChatOnDisk {
     /// holds no persona's grants, never its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     held: Option<serde_json::Value>,
+    /// Whether the person opened this task chat's tab — see [`Chat::tab_opened`]. Absent until
+    /// they do, so a project with no task chat writes the record it always wrote.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    tab_opened: bool,
     /// The workspace a rename moved this chat away from, or absent — see
     /// [`Chat::renamed_from`]. A value that is not a workspace name reads as absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1268,6 +1325,9 @@ struct FromOnDisk {
     /// `"owed"`, `"sent"`, or absent for a handoff that asked for nothing.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     report: String,
+    /// `"task"`, or absent for a handoff: see [`Mode`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    mode: String,
 }
 
 impl From<&HandedFrom> for FromOnDisk {
@@ -1277,6 +1337,10 @@ impl From<&HandedFrom> for FromOnDisk {
             name: from.name.clone(),
             workspace: from.workspace.word().to_owned(),
             report: from.report.word().to_owned(),
+            mode: match from.mode {
+                Mode::Handoff => String::new(),
+                Mode::Task => from.mode.word().to_owned(),
+            },
         }
     }
 }
@@ -1291,6 +1355,7 @@ impl FromOnDisk {
             name: label(&self.name).ok().flatten()?,
             workspace: crate::active::Place::read(&self.workspace)?,
             report: Owed::of(&self.report),
+            mode: Mode::of(&self.mode),
         })
     }
 }
@@ -1335,6 +1400,7 @@ impl From<&Record> for OnDisk {
                     held: chat.held.as_ref().map(|held| {
                         serde_json::Value::String(held.persona.clone().unwrap_or_default())
                     }),
+                    tab_opened: chat.tab_opened,
                     renamed_from: chat.renamed_from.clone().unwrap_or_default(),
                     sandbox: if chat.unsandboxed {
                         SANDBOX_OFF.to_owned()
@@ -1404,6 +1470,7 @@ impl From<ChatOnDisk> for Chat {
                     .filter(|persona| crate::personas::valid_name(persona))
                     .map(str::to_owned),
             }),
+            tab_opened: chat.tab_opened,
             renamed_from: Some(chat.renamed_from)
                 .filter(|name| crate::contain::workspace_name_ok(name)),
             unsandboxed: chat.sandbox == SANDBOX_OFF,
@@ -3225,7 +3292,91 @@ pub(crate) mod tests {
             name: "steward 3".into(),
             workspace: crate::active::Place::Workspace("platform-next".into()),
             report: Owed::Due,
+            mode: Mode::Handoff,
         }
+    }
+
+    // ----- a task chat is listed without a tab until the person opens it (#1447) ----------
+
+    #[test]
+    fn a_task_chat_comes_back_a_task_with_no_tab_until_the_person_opened_it() {
+        let plane = tempfile::tempdir().unwrap();
+        let task = HandedFrom {
+            mode: Mode::Task,
+            ..handed()
+        };
+        let listed = Chat {
+            from: Some(task.clone()),
+            ..claude("3", None)
+        };
+        let opened = Chat {
+            tab_opened: true,
+            ..listed.clone()
+        };
+        let record = Record {
+            chats: vec![listed, opened],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let back = read(plane.path()).chats;
+        assert_eq!(back[0].from, Some(task));
+        assert!(!back[0].has_tab(), "listed, and on no strip");
+        assert!(back[1].has_tab(), "the tab the person opened comes back");
+    }
+
+    #[test]
+    fn a_handoff_and_a_chat_the_person_opened_have_a_tab_and_write_the_record_they_always_wrote() {
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![
+                Chat {
+                    from: Some(handed()),
+                    ..claude("3", None)
+                },
+                claude("4", None),
+            ],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert!(
+            !text.contains(r#""mode""#) && !text.contains("tab_opened"),
+            "{text}"
+        );
+        let back = read(plane.path()).chats;
+        assert_eq!(
+            back[0].from.as_ref().map(|from| from.mode),
+            Some(Mode::Handoff)
+        );
+        assert!(back[0].has_tab() && back[1].has_tab());
+    }
+
+    #[test]
+    fn a_mode_nobody_wrote_reads_as_a_handoff() {
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![Chat {
+                from: Some(HandedFrom {
+                    mode: Mode::Task,
+                    ..handed()
+                }),
+                ..claude("3", None)
+            }],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert!(text.contains(r#""mode": "task""#), "{text}");
+        std::fs::write(
+            path(plane.path()),
+            text.replace(r#""mode": "task""#, r#""mode": "hidden""#),
+        )
+        .unwrap();
+
+        // Fails open to a tab: a chat is never hidden by a word purlis did not write.
+        assert!(read(plane.path()).chats[0].has_tab());
     }
 
     #[test]
