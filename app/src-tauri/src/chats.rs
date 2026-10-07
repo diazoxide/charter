@@ -5171,6 +5171,7 @@ pub(crate) mod tests {
                 workspace: purlis_core::active::Place::Workspace("ide".to_owned()),
                 report: purlis_core::reopen::Owed::Due,
                 mode,
+                depth: 1,
             }),
             ..chat(&a_claude(dir), name, None)
         }

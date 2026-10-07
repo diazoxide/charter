@@ -220,7 +220,9 @@ pub fn send(
             | Answer::Reported { .. }
             | Answer::Recorded { .. }
             | Answer::Written { .. }
-            | Answer::Said { .. },
+            | Answer::Said { .. }
+            | Answer::Vaults { .. }
+            | Answer::Working(_),
         )
         | Err(_) => Err(format!(
             "{SAYS} the purlis app did not answer, so purlis cannot say whether the chat \
@@ -329,6 +331,8 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
             | Answer::Recorded { .. }
             | Answer::Written { .. }
             | Answer::Said { .. }
+            | Answer::Vaults { .. }
+            | Answer::Working(_)
             | Answer::Dispatched { .. }
             | Answer::NeedsGrant { .. },
         )

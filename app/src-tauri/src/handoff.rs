@@ -2416,6 +2416,8 @@ mod tests {
                 workspace: "alpha".to_owned(),
                 chat: asking,
                 task: true,
+                // Listed in the Chats section, with no tab until the person opens it (#1447).
+                tab: false,
             })
         );
         // Its lineage is on its own record: who asked, that it is a task, and what it owes.

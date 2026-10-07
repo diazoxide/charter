@@ -364,7 +364,8 @@ describe("the explorer", () => {
       sequence: 1,
       children: [],
     });
-    const asked = { name: "steward 1", workspace: "alpha", chat: 1 };
+    // Each has a tab: a task has none until the person opens it from the Chats section.
+    const asked = { name: "steward 1", workspace: "alpha", chat: 1, tab: true };
     draw({
       chats: [
         chat(1, "steward 1", ALPHA),
@@ -398,7 +399,7 @@ describe("the explorer", () => {
       chats: [
         chat(2, "steward 2", ALPHA),
         chat(7, "check the queue", ALPHA, {
-          from: { name: "steward 1", workspace: "alpha", chat: 1, task: true },
+          from: { name: "steward 1", workspace: "alpha", chat: 1, task: true, tab: true },
         }),
       ],
     });
@@ -415,7 +416,7 @@ describe("the explorer", () => {
       chats: [
         chat(1, "steward 1", ALPHA),
         chat(7, "check the queue", ALPHA, {
-          from: { name: "steward 1", workspace: "alpha", chat: 1, task: true },
+          from: { name: "steward 1", workspace: "alpha", chat: 1, task: true, tab: true },
         }),
       ],
       onShowChat,
