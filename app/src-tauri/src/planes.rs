@@ -655,6 +655,7 @@ impl Held {
     /// `started` takes chat `session`'s place: the old one ends, and the new one is in front
     /// where the old one was.
     fn in_its_place(&self, session: u32, started: u32) {
+        self.followed(session, started);
         let in_front = self.chats.front() == Some(session);
         if let Err(why) = self.close_chat(session) {
             tracing::warn!(
@@ -664,6 +665,17 @@ impl Held {
         if in_front {
             self.chats.bring_to_front(Some(started));
         }
+    }
+
+    /// **Chat `session` is now `started`**: the same chat, started again under a new number.
+    /// What knew it by the old number follows it (#1436): the tasks it dispatched
+    /// ([`crate::chats::Chats::followed`]) and the reports already waiting for its next turn,
+    /// which would otherwise go to its workspace when the old one closes, a moment from now.
+    /// Under the lock a report is taken under, so one arriving meanwhile lands on one side.
+    pub fn followed(&self, session: u32, started: u32) {
+        let _deciding = self.chats.deciding();
+        self.chats.followed(session, started);
+        purlis_core::handback::moved(&self.root, session, started);
     }
 
     /// A chat `session` handed work to, shown as `from`, has reported back to it — a needs-you

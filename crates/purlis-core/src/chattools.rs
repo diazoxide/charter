@@ -58,6 +58,14 @@ pub const PERSONA_REMEMBER: &str = "persona_remember";
 /// started the chat knows, so the server asks it over the chat's hook socket, as
 /// `purlis persona where` run in the chat does.
 pub const PERSONA_WHERE: &str = "persona_where";
+/// The tool that dispatches a task to a persona (#1436), which [`call`] does not answer either:
+/// the server hands it to the app that started the chat, the one operation `purlis dispatch`
+/// run in the chat performs. Only the app starts a chat, so with no app it starts nothing.
+pub const DISPATCH: &str = "dispatch";
+
+/// The tool that sends a task's one report back to the chat that dispatched it (#1436): the
+/// one operation `purlis dispatch report` performs, handed to the app as [`DISPATCH`] is.
+pub const DISPATCH_REPORT: &str = "dispatch_report";
 
 /// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
 /// the five that only read, and [`PERSONA_WHERE`] (D-T58-1, #1450), which reads the app's own
@@ -207,7 +215,7 @@ fn one_string(key: &str, description: &str) -> Value {
 }
 
 /// Every tool, in the order a harness lists them.
-pub static TOOLS: [Tool; 12] = [
+pub static TOOLS: [Tool; 14] = [
     Tool {
         name: "todo_list",
         description: "List the open todos of the workspace this chat works in, oldest first, \
@@ -357,6 +365,70 @@ pub static TOOLS: [Tool; 12] = [
         read_only: true,
     },
     Tool {
+        name: DISPATCH,
+        description: "Dispatch a task to a persona. A chat of its own is started for it, \
+                      which the person can see, open and stop, and which reports back to this \
+                      chat on its next turn. With no persona named it runs as this chat's own \
+                      persona, which needs no grant; another persona needs a dispatch grant \
+                      that only the person gives. The brief is a request to that chat, never a \
+                      secret.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "A short name for the task, which the new chat is \
+                                        called and listed under. At most 64 characters.",
+                    },
+                    "brief": {
+                        "type": "string",
+                        "description": "What to do and what to report back, as the new chat's \
+                                        first message.",
+                    },
+                    "to": {
+                        "type": "string",
+                        "description": "The persona the new chat runs as. Leave it out for \
+                                        this chat's own persona.",
+                    },
+                },
+                "required": ["name", "brief"],
+                "additionalProperties": false,
+            })
+        },
+        read_only: false,
+    },
+    Tool {
+        name: DISPATCH_REPORT,
+        description: "Send this task's one report back to the chat that dispatched it: how it \
+                      ended, what you did and found, and what changed. Write your session \
+                      record first; purlis adds its path. Only a chat a dispatch started has \
+                      a report to send.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "outcome": {
+                        "type": "string",
+                        "enum": ["done", "blocked", "failed"],
+                        "description": "How the task ended.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "What you did and what you found, in a few lines.",
+                    },
+                    "changed": {
+                        "type": "string",
+                        "description": "What changed: files, commits, a branch.",
+                    },
+                },
+                "required": ["outcome", "text"],
+                "additionalProperties": false,
+            })
+        },
+        read_only: false,
+    },
+    Tool {
         name: ASK_OPERATOR,
         description: "Ask the operator a question and wait for the answer, through this \
                       harness's own prompt. Never ask for a password, token or other secret: \
@@ -387,7 +459,7 @@ pub fn call(
             "{ASK_OPERATOR} is asked through the harness by purlis's MCP server, not here"
         ));
     }
-    if tool == SESSION_RECORD || tool == PERSONA_REMEMBER {
+    if [SESSION_RECORD, PERSONA_REMEMBER, DISPATCH, DISPATCH_REPORT].contains(&tool) {
         return Err(format!(
             "{tool} is handed to the app by purlis's MCP server, not written here"
         ));
@@ -591,6 +663,39 @@ pub fn persona_remember_args(
         string(args, "text")?.to_owned(),
         optional_string(args, "title")?.map(str::to_owned),
         shared,
+    ))
+}
+/// The `dispatch` tool's arguments: the persona where one is named, the task's name and the
+/// brief.
+pub fn dispatch_args(
+    args: &Map<String, Value>,
+) -> Result<(Option<String>, String, String), String> {
+    let to = match args.get("to") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(to)) if !to.trim().is_empty() => Some(to.trim().to_owned()),
+        Some(Value::String(_)) => None,
+        Some(_) => return Err("`to` is a persona's name".to_owned()),
+    };
+    Ok((
+        to,
+        string(args, "name")?.to_owned(),
+        string(args, "brief")?.to_owned(),
+    ))
+}
+
+/// The `dispatch_report` tool's arguments: the outcome, the text, and what changed.
+pub fn dispatch_report_args(
+    args: &Map<String, Value>,
+) -> Result<(String, String, Option<String>), String> {
+    let changed = match args.get("changed") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(changed)) => Some(changed.clone()),
+        Some(_) => return Err("`changed` is text".to_owned()),
+    };
+    Ok((
+        string(args, "outcome")?.to_owned(),
+        string(args, "text")?.to_owned(),
+        changed,
     ))
 }
 
