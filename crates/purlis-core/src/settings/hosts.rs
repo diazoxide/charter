@@ -150,8 +150,9 @@ fn without(which: Which, text: &str, at: usize) -> Result<String, Refusal> {
 
 /// **Adds the host `typed`** to `which`'s `[sandbox] hosts` at `root`, read by the caller as
 /// `base` — answering the new entry's identity, or why nothing was written: the host's own
-/// refusal under the field, one already listed here, or (for yours) one the project already
-/// lets every chat reach.
+/// refusal under the field, one an administrator's policy does not allow at this level
+/// ([`crate::sandbox::policy::Locks::refuses`], #1423), one already listed here, or (for yours)
+/// one the project already lets every chat reach.
 pub fn add(root: &Path, which: Which, base: Option<&str>, typed: &str) -> Result<String, Refusal> {
     added(root, which, base, typed).map_err(|refusal| refusal.named_at(root))
 }
@@ -164,6 +165,19 @@ fn added(root: &Path, which: Which, base: Option<&str>, typed: &str) -> Result<S
         ..Refusal::default()
     };
     let host = Host::parse(typed).map_err(field)?;
+    // An administrator's policy (#1423): a host it locks out at this level would be written and
+    // then reach nothing, so it is refused here, with the policy's own sentence.
+    if let Some(why) =
+        crate::sandbox::policy::Locks::of(root).refuses(&crate::sandbox::hosts::Granted {
+            host: host.clone(),
+            level: match which {
+                Which::Shared => crate::sandbox::hosts::Level::Project,
+                Which::Local => crate::sandbox::hosts::Level::You,
+            },
+        })
+    {
+        return Err(field(why));
+    }
     let here = |text: &str| crate::sandbox::hosts::of_table(text.parse().ok().as_ref());
     if here(text).contains(&host) {
         let confirmed = crate::sandbox::local::confirmed_hosts(root);

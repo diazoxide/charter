@@ -62,8 +62,9 @@ fn operator_env_pass(root: &Path) -> Vec<String> {
 /// the folder `cwd`, on `machine` (#1410).
 ///
 /// In order: the project's own manifest is read first, and a project that leaves the sandbox
-/// off decides nothing more. Where it turns the sandbox on, or its manifest is missing or cannot
-/// be read, the chat's folder is checked next ([`purlis_core::sandbox::folder_refusal`]): a
+/// off decides nothing more, unless an administrator's policy requires it here (D-1423-1).
+/// Where the sandbox is in force, or the manifest is missing or cannot be read, the chat's
+/// folder is checked next ([`purlis_core::sandbox::folder_refusal`]): a
 /// chat with no folder, one outside the project, or one reached through a link is refused and
 /// never started any other way. Only then is the sandbox decided. A system with no backend
 /// (Windows) never sandboxes a chat, so its folder is not checked there.
@@ -77,21 +78,24 @@ fn project_sandbox(
     grants: &purlis_core::sandbox::grant::Grants,
 ) -> Result<Option<purlis_core::sandbox::Decided>, String> {
     let plane = purlis_core::sandbox::Plane::read(root);
-    let leaves_it_off = !plane.missing() && !plane.unreadable() && plane.said().policy.is_none();
+    // An administrator's policy may require the sandbox where the project has not turned it on
+    // (D-1423-1), and may forbid the opt-out no refusal then names (#1423).
+    let locks = purlis_core::sandbox::policy::Locks::of(root);
+    let leaves_it_off = !plane.missing() && !plane.unreadable() && plane.in_force(&locks).is_none();
     // A person's opt-out (#1342) starts the chat without the sandbox, so its folder confines
     // nothing and is not checked: the opt-out sits inside every refusal, as in `decide`.
     if !leaves_it_off && opt_out.is_none() && machine.os.has_backend() {
         let Some(cwd) = cwd else {
-            return Err(purlis_core::sandbox::FOLDER_MISSING.to_owned());
+            return Err(purlis_core::sandbox::FolderRefusal::Missing.said(&locks));
         };
         if let Some(why) = purlis_core::sandbox::folder_refusal(root, cwd) {
-            return Err(why.to_owned());
+            return Err(why.said(&locks));
         }
     }
     // A chat on no profile adopts no persona, so no persona's grants (#1362); a person's grants
     // for this one chat (#1342) are its own.
     purlis_core::sandbox::decide_granted(harness, root, machine, has, opt_out, None, grants)
-        .map_err(|not| not.to_string())
+        .map_err(|not| not.said(&locks))
 }
 
 /// The workspace of the project at `root` a chat started in `cwd` works in, read once as it
@@ -596,7 +600,7 @@ impl Chats {
         plugins: &purlis_core::harness_plugin::Chosen,
         sandbox: Option<&purlis_core::sandbox::Applied>,
     ) -> Result<Armed, String> {
-        let not_carried = "this plane runs every chat sandboxed, and this app cannot hand the \
+        let not_carried = "this project runs every chat sandboxed, and this app cannot hand the \
                            sandbox to this chat's harness, so nothing was started";
         if let Some(applied) = sandbox
             && harness != Some(applied.harness())
@@ -1299,7 +1303,7 @@ impl Chats {
         let confinement = match sandbox {
             Some(applied) => applied.confine().map_err(|err| {
                 format!(
-                    "this plane runs every chat sandboxed, and purlis could not start what the \
+                    "this project runs every chat sandboxed, and purlis could not start what the \
                      sandbox needs beside this chat ({err}), so nothing was started."
                 )
             })?,
@@ -1323,6 +1327,7 @@ impl Chats {
                         cwd: chat.cwd.as_deref(),
                         hook_socket: socket.as_deref(),
                         confinement: confinement.as_ref(),
+                        no_opt_out: false,
                     },
                 )?;
                 (line.program, line.args, line.env)
@@ -3178,7 +3183,7 @@ pub(crate) mod tests {
         // Refused for one reason or another on every system — no compiler here, no wrap there,
         // no shipped binary to arm it with — and never started unconfined.
         assert!(
-            refused.starts_with("this plane runs every chat sandboxed"),
+            refused.starts_with("this project runs every chat sandboxed"),
             "{refused}"
         );
         assert!(chats.in_order().is_empty(), "a chat was opened");
@@ -3398,7 +3403,11 @@ pub(crate) mod tests {
             )
             .expect_err("not started");
 
-        assert_eq!(refused, purlis_core::sandbox::FOLDER_LINKED);
+        assert_eq!(
+            refused,
+            purlis_core::sandbox::FolderRefusal::Linked
+                .said(&purlis_core::sandbox::policy::Locks::none())
+        );
         assert!(chats.in_order().is_empty(), "a chat was opened");
     }
 
@@ -3413,12 +3422,20 @@ pub(crate) mod tests {
         let refused = chats
             .start(&a_chat_in(elsewhere.path(), "/nowhere/opencode"), SIZE)
             .expect_err("not started");
-        assert_eq!(refused, purlis_core::sandbox::FOLDER_OUTSIDE);
+        assert_eq!(
+            refused,
+            purlis_core::sandbox::FolderRefusal::Outside
+                .said(&purlis_core::sandbox::policy::Locks::none())
+        );
 
         let refused = chats
             .start(&chat("/nowhere/opencode", "no folder", None), SIZE)
             .expect_err("not started");
-        assert_eq!(refused, purlis_core::sandbox::FOLDER_MISSING);
+        assert_eq!(
+            refused,
+            purlis_core::sandbox::FolderRefusal::Missing
+                .said(&purlis_core::sandbox::policy::Locks::none())
+        );
         assert!(chats.in_order().is_empty(), "a chat was opened");
     }
 
@@ -3437,7 +3454,7 @@ pub(crate) mod tests {
             .expect_err("not started");
 
         assert!(
-            refused.starts_with("this plane runs every chat sandboxed"),
+            refused.starts_with("this project runs every chat sandboxed"),
             "{refused}"
         );
         assert!(chats.in_order().is_empty(), "a chat was opened");
@@ -3540,7 +3557,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             mac.map(|_| ()),
-            Err(purlis_core::sandbox::FOLDER_LINKED.to_owned())
+            Err(purlis_core::sandbox::FolderRefusal::Linked
+                .said(&purlis_core::sandbox::policy::Locks::none()))
         );
     }
 

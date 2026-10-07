@@ -44,7 +44,8 @@ const PROJECT: SandboxGrant = {
   by: "Dana",
   at: 1_790_000_000,
   chat: null,
-  locked: "your organisation allows no project hosts",
+  locked:
+    "10.0.0.5:6443 is not a host policy allows. Locked by policy, set by IT in /etc/purlis/policy.json.",
 };
 
 afterEach(() => {
@@ -88,7 +89,7 @@ describe("the Granted list", () => {
     );
     // Locked by policy: said, and no Revoke.
     expect(rows[2]).toHaveTextContent(
-      "Locked by policy: your organisation allows no project hosts",
+      "Not in force. 10.0.0.5:6443 is not a host policy allows. Locked by policy, set by IT in /etc/purlis/policy.json.",
     );
     expect(within(rows[2]).queryByRole("button")).toBeNull();
 

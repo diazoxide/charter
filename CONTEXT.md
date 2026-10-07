@@ -797,7 +797,9 @@ policy
 **Policy**:
 An admin's locks on settings, kept on this machine or for the organisation. A locked value
 cannot be changed at any **level**, the strictest value wins, and Settings shows it as "locked
-by policy". It never loosens what a project or a person sets (ADR 0067 §1, §4).
+by policy". It never loosens what a project or a person sets. One that forbids the opt-out
+requires the sandbox in every project on that machine, which Settings shows as "On, required by
+policy" (ADR 0067 §1, §4 as amended).
 _Avoid_: supervisor, managed tier (in UI text; that is a harness vendor's), org settings
 
 ### Core and extensions

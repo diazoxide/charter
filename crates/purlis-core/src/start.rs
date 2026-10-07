@@ -329,7 +329,8 @@ pub fn ready_on(
             .as_deref(),
             &start.grants,
         )
-        .map_err(|refused| refused.to_string())?
+        // Under a policy that forbids the opt-out, no refusal sends the person to it (#1423).
+        .map_err(|refused| refused.said(&crate::sandbox::policy::Locks::of(root)))?
         {
             Some(crate::sandbox::Decided::Sandboxed(applied)) => (Some(applied), None),
             Some(crate::sandbox::Decided::Unsandboxed(lifted)) => {
@@ -350,12 +351,24 @@ pub fn ready_on(
             if plane.unreadable() {
                 return Err(crate::sandbox::NotStarted::PlaneUnreadable.to_string());
             }
-            if plane.said().policy.is_some() {
+            // Its own sandbox, or the one an administrator's policy requires (D-1423-1).
+            let locks = crate::sandbox::policy::Locks::of(root);
+            if plane.in_force(&locks).is_some() {
+                let its_own = plane.said().policy.is_some();
                 return Err(format!(
-                    "this project turns the sandbox on, and purlis cannot sandbox a {} chat \
-                     yet — it is a declared harness with no adapter, and a chat that cannot be \
-                     confined is not started. Nothing was started.",
-                    crate::shown::short(&profile.kind)
+                    "{}, and purlis cannot sandbox a {} chat yet — it is a declared harness \
+                     with no adapter, and a chat that cannot be confined is not started. \
+                     Nothing was started.{}",
+                    if its_own {
+                        "this project turns the sandbox on"
+                    } else {
+                        "policy requires the sandbox in this project"
+                    },
+                    crate::shown::short(&profile.kind),
+                    locks
+                        .opt_out_refused()
+                        .filter(|_| !its_own)
+                        .map_or_else(String::new, |policy| format!(" {policy}"))
                 ));
             }
             (None, None)

@@ -122,6 +122,19 @@ pub struct Policy {
     pub personas: std::collections::BTreeMap<String, persona::Grants>,
 }
 
+impl Policy {
+    /// The sandbox turned on and nothing else said: the default presets ([`Preset::DEFAULT`]),
+    /// no host of the project's own, no certificate checks, no persona's grants.
+    pub fn defaults() -> Self {
+        Self {
+            egress: Preset::DEFAULT.to_vec(),
+            hosts: Vec::new(),
+            certificate_checks: false,
+            personas: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
 /// The key that lets a chat ask the system's certificate check.
 pub const CERTIFICATE_CHECKS: &str = "certificate-checks";
 
@@ -215,18 +228,51 @@ impl Plane {
             .collect()
     }
 
-    /// The hosts that reach chats here because this file says so: its own `[sandbox]
-    /// hosts`, then, while the `forge` preset is on, its `[[forge]]` hosts, then each persona's
-    /// own as `<host> for <persona> chats` (#1362), so the Notice says which chats a host
-    /// reaches — what the one-time Notice of a change names (#1341).
-    pub fn granted_hosts(&self) -> Vec<String> {
-        let Some(policy) = self.said().policy else {
+    /// **The sandbox policy in force for chats here under `locks`**: the project's own where it
+    /// turned the sandbox on, and none where it has not — unless an administrator's policy
+    /// requires the sandbox ([`policy::Locks::forbids_opt_out`], D-1423-1). Then a project
+    /// with no `[sandbox]`, or one that has not turned it on, runs every chat sandboxed as if
+    /// it had: what its `[sandbox]` says with the mode on, so the default presets where it
+    /// names none ([`Policy::defaults`]). `locks` hold that policy as they hold any other when
+    /// it is compiled ([`Compiled::granted`]): the presets it fixes, the hosts it allows.
+    ///
+    /// The one place "do chats here run sandboxed" is answered, for a start, Settings and every
+    /// Notice.
+    pub fn in_force(&self, locks: &policy::Locks) -> Option<Policy> {
+        self.said().in_force(locks)
+    }
+
+    /// The hosts that reach chats here because this file says so, under `locks`: its own
+    /// `[sandbox] hosts`, then, while the `forge` preset is on, its `[[forge]]` hosts, then each
+    /// persona's own as `<host> for <persona> chats` (#1362), so the Notice says which chats a
+    /// host reaches — what the one-time Notice of a change names (#1341).
+    ///
+    /// **Only what a chat reaches** (#1423): a host an administrator's policy locks out, a
+    /// forge's while policy turns the `forge` preset off, and a persona's where policy forbids
+    /// a persona's own, is not named, as [`Compiled::granted`] grants none of them.
+    pub fn granted_hosts(&self, locks: &policy::Locks) -> Vec<String> {
+        let Some(policy) = self.in_force(locks) else {
             return Vec::new();
         };
-        let mut out: Vec<String> = policy.hosts.iter().map(ToString::to_string).collect();
-        if policy.egress.contains(&Preset::Forge) {
+        let reaches = |host: &hosts::Host, level: hosts::Level| {
+            locks
+                .refuses(&hosts::Granted {
+                    host: host.clone(),
+                    level,
+                })
+                .is_none()
+        };
+        let mut out: Vec<String> = policy
+            .hosts
+            .iter()
+            .filter(|host| reaches(host, hosts::Level::Project))
+            .map(ToString::to_string)
+            .collect();
+        if locks.presets(&policy.egress).contains(&Preset::Forge) {
             for host in self.forge_hosts() {
-                if !out.contains(&host) {
+                let reached = hosts::Host::parse(&host)
+                    .is_ok_and(|host| reaches(&host, hosts::Level::Project));
+                if reached && !out.contains(&host) {
                     out.push(host);
                 }
             }
@@ -236,6 +282,7 @@ impl Plane {
                 grants
                     .hosts
                     .iter()
+                    .filter(|host| reaches(host, hosts::Level::Persona))
                     .map(|host| format!("{host} for {persona} chats")),
             );
         }
@@ -371,9 +418,24 @@ impl fmt::Display for Refusal {
 pub struct Said {
     pub policy: Option<Policy>,
     pub refused: Vec<Refusal>,
+    /// What its `[sandbox]` says where it has **not** turned the sandbox on (a table with no
+    /// `mode`): what its chats run under where an administrator's policy requires the sandbox
+    /// ([`Plane::in_force`], D-1423-1). `None` where the sandbox is on, and where there is no
+    /// `[sandbox]` at all.
+    pub unset: Option<Policy>,
 }
 
 impl Said {
+    /// The sandbox policy in force under `locks` ([`Plane::in_force`]): its own where it turned
+    /// the sandbox on, or what it says with the mode on where policy requires the sandbox.
+    pub fn in_force(self, locks: &policy::Locks) -> Option<Policy> {
+        self.policy.or_else(|| {
+            locks
+                .forbids_opt_out()
+                .then(|| self.unset.unwrap_or_else(Policy::defaults))
+        })
+    }
+
     /// What `top`, a parsed `charter.toml`, says.
     pub fn of(top: Option<&toml::Table>) -> Self {
         let Some(table) = top.and_then(|top| top.get(TABLE)) else {
@@ -381,13 +443,9 @@ impl Said {
         };
         let Some(table) = table.as_table() else {
             return Self {
-                policy: Some(Policy {
-                    egress: Preset::DEFAULT.to_vec(),
-                    hosts: Vec::new(),
-                    certificate_checks: false,
-                    personas: std::collections::BTreeMap::new(),
-                }),
+                policy: Some(Policy::defaults()),
                 refused: vec![Refusal::NotATable],
+                unset: None,
             };
         };
         let mut refused = Vec::new();
@@ -457,14 +515,21 @@ impl Said {
         };
         let (personas, not) = persona::read(table.get(persona::KEY), FILE);
         refused.extend(not.into_iter().map(Refusal::Persona));
+        let written = Policy {
+            egress,
+            hosts,
+            certificate_checks,
+            personas,
+        };
+        let (policy, unset) = if on {
+            (Some(written), None)
+        } else {
+            (None, Some(written))
+        };
         Self {
-            policy: on.then_some(Policy {
-                egress,
-                hosts,
-                certificate_checks,
-                personas,
-            }),
+            policy,
             refused,
+            unset,
         }
     }
 }
@@ -1136,13 +1201,13 @@ pub struct Besides {
     pub folders: usize,
 }
 
-/// [`Besides`] for the project at `root`, read as `plane`, on `machine`: nothing where the
-/// project has not turned the sandbox on.
+/// [`Besides`] for the project at `root`, read as `plane`, on `machine`: nothing where no
+/// sandbox is in force ([`Plane::in_force`]).
 pub fn besides(root: &Path, plane: &Plane, machine: &Machine) -> Besides {
-    let Some(policy) = plane.said().policy else {
+    let locks = policy::Locks::of(root);
+    let Some(policy) = plane.in_force(&locks) else {
         return Besides::default();
     };
-    let locks = policy::Locks::of(root);
     Besides {
         folders: granted_folders(root, machine, &[], &locks).len(),
         ..counted_hosts(&granted_hosts(&policy, root, &[], &[], &locks))
@@ -1523,11 +1588,15 @@ impl Applied {
     pub fn line(&self, words: Words, at: &At<'_>) -> Result<Line, String> {
         // Ruling of 2026-10-03, every harness: a folder reached through a link is not the
         // folder the rules name, so no sandboxed chat starts in one.
+        // Every refusal here is said under the policy in force (#1423): where it forbids the
+        // opt-out, none names it, and each ends with the policy and who set it.
+        let locks = policy::Locks::of(&self.root);
+        let locked = locks.opt_out_refused();
         let Some(cwd) = at.cwd else {
-            return Err(FOLDER_MISSING.to_owned());
+            return Err(FolderRefusal::Missing.said(&locks));
         };
         if let Some(why) = folder_refusal(&self.root, cwd) {
-            return Err(why.to_owned());
+            return Err(why.said(&locks));
         }
         // #1327: never a chat whose own folder, or one above it, it may not write — by what
         // was compiled, or by a manifest of its folders that is a link to one of them (#1336).
@@ -1535,16 +1604,26 @@ impl Applied {
         let chain = self.chain(Some(cwd));
         if let Some(refused) = covering(&self.denied, &ground).or_else(|| covering(&chain, &ground))
         {
-            return Err(refused.placed_in(&self.root).to_string());
+            return Err(refused.placed_in(&self.root).said(&locks));
         }
+        // An adapter's own refusal, and the caches' below, ends with the policy too.
+        let under = |why: String| match &locked {
+            Some(policy) => format!("{why} {policy}"),
+            None => why,
+        };
+        let at = &At {
+            no_opt_out: locked.is_some(),
+            ..*at
+        };
         let mut line = self
             .harness
             .adapter()
-            .sandboxed_line(&self.with(chain), words, at)?;
+            .sandboxed_line(&self.with(chain), words, at)
+            .map_err(under)?;
         // The project's package caches (D-1337-6): made here, outside the sandbox, with any link
         // a chat planted in them taken out; refused, naming the path, only where one stays.
         if let Some(caches) = &self.caches {
-            caches.prepare()?;
+            caches.prepare().map_err(under)?;
             line.env
                 .retain(|(key, _)| !caches.env.iter().any(|(set, _)| set == key));
             line.env.extend(caches.env.iter().cloned());
@@ -1612,6 +1691,11 @@ pub struct At<'a> {
     pub hook_socket: Option<&'a Path>,
     /// What [`Applied::confine`] started for it.
     pub confinement: Option<&'a Confinement>,
+    /// Whether an administrator's policy forbids starting a chat without the sandbox
+    /// ([`policy::Locks::forbids_opt_out`]): a refusal an adapter writes then names no opt-out
+    /// (#1423). [`Applied::line`] sets it from the policy in force, and ends every refusal with
+    /// the policy and who set it; a caller leaves it `false`.
+    pub no_opt_out: bool,
 }
 
 /// A chat's line under its sandbox: the program that runs, its arguments, and what its
@@ -1747,40 +1831,69 @@ pub fn never_on(harness: Harness, os: Os) -> Option<String> {
 /// purlis could not take out, as found `when` it made the folders.
 pub fn caches_linked(path: &Path, when: &str) -> String {
     format!(
-        "this plane runs every chat sandboxed, and {} of the project's package caches is a \
+        "this project runs every chat sandboxed, and {} of the project's package caches is a \
          link purlis could not take out ({when} making them), so nothing was started. Remove \
          that link and start the chat again.",
         path.display()
     )
 }
 
-/// Why a sandboxed chat with no folder of its own is not started.
-pub const FOLDER_MISSING: &str = "this plane runs every chat sandboxed, and the chat has no folder \
-                                  of its own to be confined to, so nothing was started. Forget \
-                                  this chat and start a new one in a folder of the project; Start \
-                                  without the sandbox is yours to pick when you start it.";
+/// Why a sandboxed chat is not started in the folder it was given (ruling of 2026-10-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderRefusal {
+    /// The chat has no folder of its own.
+    Missing,
+    /// Its folder, or one between it and the project, is a link or not a real folder.
+    Linked,
+    /// Its folder is not inside the project.
+    Outside,
+}
 
-/// Why a sandboxed chat in a linked folder is not started.
-pub const FOLDER_LINKED: &str = "this plane runs every chat sandboxed, and the chat's folder, or a \
-                                 folder between it and the plane, is a link or not a real folder, \
-                                 so nothing was started. Move the chat's folder into the project \
-                                 as a real folder, or forget this chat and start a new one; Start \
-                                 without the sandbox is yours to pick when you start it.";
+impl FolderRefusal {
+    /// What happened and what to change, with no full stop: [`Self::said`] ends it.
+    fn happened(self) -> &'static str {
+        match self {
+            Self::Missing => {
+                "this project runs every chat sandboxed, and the chat has no folder of its own \
+                 to be confined to, so nothing was started. Forget this chat and start a new one \
+                 in a folder of the project"
+            }
+            Self::Linked => {
+                "this project runs every chat sandboxed, and the chat's folder, or a folder \
+                 between it and the project, is a link or not a real folder, so nothing was \
+                 started. Move the chat's folder into the project as a real folder, or forget \
+                 this chat and start a new one"
+            }
+            Self::Outside => {
+                "this project runs every chat sandboxed, and the chat's folder is not inside \
+                 the project, so nothing was started. Move the chat's folder into the project, \
+                 or forget this chat and start a new one"
+            }
+        }
+    }
 
-/// Why a sandboxed chat outside its plane is not started.
-pub const FOLDER_OUTSIDE: &str = "this plane runs every chat sandboxed, and the chat's folder is \
-                                  not inside the plane, so nothing was started. Move the chat's \
-                                  folder into the project, or forget this chat and start a new \
-                                  one; Start without the sandbox is yours to pick when you start \
-                                  it.";
+    /// **The refusal as the person reads it under `locks`** (#1423): it ends with the person's
+    /// own way out, "Start without the sandbox", or, where an administrator's policy forbids
+    /// that, with the policy and who set it instead. Both are built from the same first part,
+    /// so no rewording can leave the opt-out named under a lock.
+    pub fn said(self, locks: &policy::Locks) -> String {
+        let happened = self.happened();
+        match locks.opt_out_refused() {
+            None => {
+                format!("{happened}; Start without the sandbox is yours to pick when you start it.")
+            }
+            Some(policy) => format!("{happened}. {policy}"),
+        }
+    }
+}
 
 /// Why a chat in the folder `cwd` of the plane at `root` may not start sandboxed, or `None`
 /// (ruling of 2026-10-03): every folder from the plane's own, as the kernel names it, down to
 /// the chat's must be a real directory and not a link, so a folder another chat swapped for a
 /// link never takes the rules of the folder it replaced to somewhere else.
-pub fn folder_refusal(root: &Path, cwd: &Path) -> Option<&'static str> {
+pub fn folder_refusal(root: &Path, cwd: &Path) -> Option<FolderRefusal> {
     let Ok(real_root) = root.canonicalize() else {
-        return Some(FOLDER_LINKED);
+        return Some(FolderRefusal::Linked);
     };
     // Where the folder meets the plane: the outermost of its ancestors that is the plane as the
     // kernel names it, so a link above the plane (`/tmp`, a linked parent) is allowed on either
@@ -1792,10 +1905,10 @@ pub fn folder_refusal(root: &Path, cwd: &Path) -> Option<&'static str> {
         .rev()
         .find(|dir| dir.canonicalize().is_ok_and(|real| real == real_root))
     else {
-        return Some(FOLDER_OUTSIDE);
+        return Some(FolderRefusal::Outside);
     };
     let Ok(below) = cwd.strip_prefix(meets) else {
-        return Some(FOLDER_OUTSIDE);
+        return Some(FolderRefusal::Outside);
     };
     let below = below.to_path_buf();
     let mut at = real_root.clone();
@@ -1804,22 +1917,22 @@ pub fn folder_refusal(root: &Path, cwd: &Path) -> Option<&'static str> {
         Err(_) => false,
     };
     if !check(&at) {
-        return Some(FOLDER_LINKED);
+        return Some(FolderRefusal::Linked);
     }
     for part in below.components() {
         match part {
             std::path::Component::Normal(name) => at.push(name),
             std::path::Component::CurDir => continue,
-            _ => return Some(FOLDER_LINKED),
+            _ => return Some(FolderRefusal::Linked),
         }
         if !check(&at) {
-            return Some(FOLDER_LINKED);
+            return Some(FolderRefusal::Linked);
         }
     }
     // The walk and the kernel agree on where the folder is.
     match cwd.canonicalize() {
         Ok(real) if real == at => None,
-        _ => Some(FOLDER_LINKED),
+        _ => Some(FolderRefusal::Linked),
     }
 }
 
@@ -2155,6 +2268,10 @@ pub enum NotStarted {
     /// A person asked to start the chat without the sandbox, and an administrator's policy
     /// forbids it (#1343): why, naming the policy and who set it.
     OptOutLocked(String),
+    /// An administrator's policy requires the sandbox, and purlis has no sandbox backend on
+    /// this system (D-1423-1): the chat is not started, and never started unconfined.
+    /// [`Self::said`] names the policy and who set it.
+    RequiredWithoutBackend(Os),
 }
 
 impl NotStarted {
@@ -2184,71 +2301,95 @@ impl NotStarted {
 }
 
 impl fmt::Display for NotStarted {
+    /// The refusal where a person may still start the chat without the sandbox. Where an
+    /// administrator's policy forbids that, say it with [`NotStarted::said`] instead.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let lead = "this plane runs every chat sandboxed";
+        f.write_str(&self.sentence(true))
+    }
+}
+
+impl NotStarted {
+    /// **The refusal as the person reads it under `locks`** (#1423): where an administrator's
+    /// policy forbids starting a chat without the sandbox, no sentence sends the person to
+    /// that opt-out, and each ends with the policy and who set it instead
+    /// ([`policy::Locks::opt_out_refused`]). Where it does not, the refusal as it always read.
+    pub fn said(&self, locks: &policy::Locks) -> String {
+        match (self, locks.opt_out_refused()) {
+            // It names the policy itself.
+            (Self::OptOutLocked(_), _) | (_, None) => self.to_string(),
+            (_, Some(policy)) => format!("{} {policy}", self.sentence(false)),
+        }
+    }
+
+    /// **The refusal beside a line that already names the policy** ([`Ahead::Refused`], which
+    /// the new-chat picker draws over what locks the opt-out): [`Self::said`] without the
+    /// policy's own sentence.
+    fn said_beside(&self, locks: &policy::Locks) -> String {
+        self.sentence(!locks.forbids_opt_out())
+    }
+
+    /// The refusal in one or more sentences. `opt_out` is whether a person may start this chat
+    /// without the sandbox: where they may not, no way out names it.
+    fn sentence(&self, opt_out: bool) -> String {
+        let lead = "this project runs every chat sandboxed";
         match self {
-            Self::NoCompiler(harness) => write!(
-                f,
+            Self::NoCompiler(harness) => format!(
                 "{lead}, and purlis cannot sandbox {} {} chat yet, so it was not started. \
                  Start this chat on a {} profile.",
                 article(harness.title()),
                 harness.title(),
                 sandboxed_harnesses_but(Some(*harness))
             ),
-            Self::ProgramWritable(path) => write!(
-                f,
+            Self::ProgramWritable(path) => format!(
                 "{lead}, and the program lives where this chat can write: {}, so it was not \
                  started sandboxed. Keep the program outside the plane and outside what a chat \
                  may write.",
                 path.display()
             ),
-            Self::ProgramRelative => write!(
-                f,
+            Self::ProgramRelative => format!(
                 "{lead}, and this profile's program is a relative path, which would be found in \
                  a folder the chat can write, so it was not started sandboxed. Name the program \
                  by its full path."
             ),
-            Self::WordTooLong => write!(
-                f,
+            Self::WordTooLong => format!(
                 "{lead}, and a word of this profile's command is longer than 4 KiB, which purlis \
                  does not check, so it was not started sandboxed. Keep what it says in a file \
                  outside the plane and name that file instead."
             ),
-            Self::WordWritable(word) => write!(
-                f,
+            Self::WordWritable(word) => format!(
                 "{lead}, and this profile's command names {word}, which lies where this chat \
                  can write, so it was not started sandboxed. Keep every file the command names \
                  outside the plane and outside what a chat may write."
             ),
-            Self::ProbeTimedOut(harness) => write!(
-                f,
+            Self::ProbeTimedOut(harness) => format!(
                 "{lead}, and this profile's program did not answer whether it is {} within {} \
                  seconds, so it was not started. A first run of a program can be slow: start \
                  the chat again.",
                 harness.title(),
                 program::PATIENCE.as_secs()
             ),
-            Self::NotTheHarness(harness) => write!(
-                f,
+            Self::NotTheHarness(harness) => format!(
                 "{lead}, and this profile's program does not answer as {}, whose sandbox it was \
                  given, so it was not started sandboxed.",
                 harness.title()
             ),
-            Self::HeldBack(harness, issue) => write!(
-                f,
+            Self::HeldBack(harness, issue) => format!(
                 "purlis cannot keep {} {} chat inside its sandbox yet (#{issue}), so in this \
-                 project a new one starts only without the sandbox, from the new-chat picker.",
+                 project {}",
                 article(harness.title()),
-                harness.title()
+                harness.title(),
+                if opt_out {
+                    "a new one starts only without the sandbox, from the new-chat picker."
+                } else {
+                    "none starts."
+                }
             ),
-            Self::PlaneUnreadable => write!(
-                f,
+            Self::PlaneUnreadable => format!(
                 "{FILE} in this plane cannot be read as TOML, so purlis cannot tell whether it \
                  runs chats sandboxed, and nothing was started. Fix {FILE} and start the chat \
                  again."
             ),
-            Self::PlaneMissing => write!(
-                f,
+            Self::PlaneMissing => format!(
                 "This project's {FILE} is missing, so purlis cannot tell whether it runs chats \
                  sandboxed, and nothing was started. Restore {FILE}, or reopen the project."
             ),
@@ -2257,51 +2398,68 @@ impl fmt::Display for NotStarted {
                 named: Some(named),
                 within,
                 ..
-            } => write!(
-                f,
+            } => format!(
                 "{lead}, and `{}` in {}{} reads as a script purlis keeps this chat from \
                  changing, which would leave it unable to write {}, so nothing was started. \
-                 Change that word in {}, or start this chat without the sandbox from the \
-                 new-chat picker.",
+                 Change that word in {}{}",
                 named.word,
                 named.file.display(),
                 within
                     .as_ref()
                     .map_or_else(String::new, |within| format!(" ({within})")),
                 path.display(),
-                named.file.display()
+                named.file.display(),
+                if opt_out {
+                    ", or start this chat without the sandbox from the new-chat picker."
+                } else {
+                    "."
+                }
             ),
             Self::CoversItsGround {
                 path,
                 class,
                 named: None,
                 ..
-            } => write!(
-                f,
+            } => format!(
                 "{lead}, and its {} rules would keep the chat from writing {}, so nothing was \
-                 started. Start this chat without the sandbox from the new-chat picker.",
+                 started.{}",
                 class.word(),
-                path.display()
+                path.display(),
+                if opt_out {
+                    " Start this chat without the sandbox from the new-chat picker."
+                } else {
+                    ""
+                }
             ),
-            Self::Unread(named) => write!(
-                f,
+            Self::Unread(named) => format!(
                 "{lead}, and a command in {} changes folder or names scripts more often than \
                  purlis follows, from `{}` on, so purlis cannot tell what it runs, and nothing \
-                 was started. Move that command into a script of its own, or start this chat \
-                 without the sandbox from the new-chat picker.",
+                 was started. Move that command into a script of its own{}",
                 named.file.display(),
-                named.word
+                named.word,
+                if opt_out {
+                    ", or start this chat without the sandbox from the new-chat picker."
+                } else {
+                    "."
+                }
             ),
-            Self::OptOutLocked(why) => write!(f, "{why} Nothing was started."),
-            Self::NoBackend(missing) => write!(
-                f,
+            Self::OptOutLocked(why) => format!("{why} Nothing was started."),
+            // The Windows backend is M46, #565.
+            Self::RequiredWithoutBackend(os) => format!(
+                "purlis has no sandbox backend on {} yet, and policy requires the sandbox for \
+                 every chat on this machine, so nothing was started.",
+                match os {
+                    Os::Windows => "Windows",
+                    Os::MacOs | Os::Linux | Os::Other => "this system",
+                }
+            ),
+            Self::NoBackend(missing) => format!(
                 "{lead}, and this machine cannot apply the sandbox: {missing}. Nothing was \
                  started."
             ),
             Self::Uncompilable(it) => match it.unheld {
                 // The Linux wrap is #1040.
-                Unheld::Wrap(os) => write!(
-                    f,
+                Unheld::Wrap(os) => format!(
                     "{lead}, and purlis runs {} inside a sandbox of its own, which it can apply \
                      on macOS but not yet on {}, so it was not started. Start this chat on a {} \
                      profile.",
@@ -2316,20 +2474,28 @@ impl fmt::Display for NotStarted {
                 // Ruling V90c: never a dead end. The new-chat picker offers the opt-out beside
                 // it; a resumed or relaunched chat has no opt-out, so moving the secrets is its
                 // way on.
-                Unheld::Service(Service::CredentialStore, os) => write!(
-                    f,
+                Unheld::Service(Service::CredentialStore, os) => format!(
                     "this project runs every chat sandboxed, and {} purlis cannot keep {} {} \
                      chat away from the system keyring, where this project's keyring vaults \
-                     keep their secrets, so nothing was started. Start this chat without the \
-                     sandbox from the new-chat picker, or move those secrets to a plain-file or \
-                     1Password vault, which the sandbox can keep from a chat. For a resumed or \
-                     relaunched chat, moving them is the way on.",
+                     keep their secrets, so nothing was started. {} a plain-file or 1Password \
+                     vault, which the sandbox can keep from a chat.{}",
                     match os {
                         Os::Linux => "on Linux",
                         Os::MacOs | Os::Windows | Os::Other => "on this system",
                     },
                     article(it.harness.title()),
-                    it.harness.title()
+                    it.harness.title(),
+                    if opt_out {
+                        "Start this chat without the sandbox from the new-chat picker, or move \
+                         those secrets to"
+                    } else {
+                        "Move those secrets to"
+                    },
+                    if opt_out {
+                        " For a resumed or relaunched chat, moving them is the way on."
+                    } else {
+                        ""
+                    }
                 ),
             },
         }
@@ -2400,10 +2566,10 @@ fn local_refusals(text: &str) -> Vec<String> {
     out
 }
 
-/// What a chat of `harness` in the plane at `root` starts under on `machine`: `None` where the
-/// plane has not turned the sandbox on, the compiled sandbox where it has — or why the chat
-/// does not start. `has` answers whether a program the backend needs is installed
-/// ([`backend::installed`]).
+/// What a chat of `harness` in the plane at `root` starts under on `machine`: `None` where no
+/// sandbox is in force (the plane has not turned it on, and no policy requires it:
+/// [`Plane::in_force`]), the compiled sandbox where one is — or why the chat does not start.
+/// `has` answers whether a program the backend needs is installed ([`backend::installed`]).
 ///
 /// **Fail closed** (ADR 0067 §1). A harness charter has no compiler for, a machine the policy
 /// cannot be applied on, and a class the harness cannot hold here each refuse the chat; none
@@ -2453,7 +2619,8 @@ pub fn for_start_granted(
     if plane.unreadable() {
         return Err(NotStarted::PlaneUnreadable);
     }
-    let Some(policy) = plane.said().policy else {
+    // The project's own, or the one an administrator's policy requires (D-1423-1).
+    let Some(policy) = plane.in_force(&policy::Locks::of(root)) else {
         return Ok(None);
     };
     let Some(compile) = compiler(harness) else {
@@ -2694,15 +2861,20 @@ pub enum Decided {
 }
 
 /// What a chat of `harness` in the project at `root` starts under on `machine`, where `opt_out`
-/// is a person's choice to start it without the sandbox: `None` where the project has not
-/// turned the sandbox on (there is nothing to lift, so nothing to audit), else sandboxed or
-/// unsandboxed — or why the chat does not start.
+/// is a person's choice to start it without the sandbox: `None` where no sandbox is in force
+/// (the project has not turned it on and no policy requires it, [`Plane::in_force`]: there is
+/// nothing to lift, so nothing to audit), else sandboxed or unsandboxed — or why the chat does
+/// not start.
 ///
 /// **Fail closed, with two exits that are each audited** (ADR 0067 §1 and §7):
 /// - a person's opt-out, which starts the chat without the sandbox even where it could not be
 ///   applied — the opt-out inside the refusal;
 /// - Windows, where no backend exists yet and every chat starts at the opt-out with charter as
 ///   the actor (ruling V21 3). Any other system with no backend still refuses.
+///
+/// **An administrator's policy that forbids the opt-out closes both** (ADR 0067 §4 as amended,
+/// D-1423-1): the opt-out is refused ([`NotStarted::OptOutLocked`]), and so is a start on a
+/// system with no backend ([`NotStarted::RequiredWithoutBackend`]). Neither starts unconfined.
 pub fn decide(
     harness: Harness,
     root: &Path,
@@ -2736,12 +2908,13 @@ pub fn decide_granted(
     // does one that has gone (D-1410e): each falls through to a refusal below, which the
     // opt-out sits inside.
     let plane = Plane::read(root);
-    if !plane.unreadable() && !plane.missing() && plane.said().policy.is_none() {
+    let locks = policy::Locks::of(root);
+    if !plane.unreadable() && !plane.missing() && plane.in_force(&locks).is_none() {
         return Ok(None);
     }
     if let Some(opt_out) = opt_out {
         // An administrator's policy may forbid it (#1343, ADR 0067 §7): refused, saying who.
-        if let Some(why) = policy::Locks::of(root).opt_out_refused() {
+        if let Some(why) = locks.opt_out_refused() {
             return Err(NotStarted::OptOutLocked(why));
         }
         return Ok(Some(Decided::Unsandboxed(Lifted {
@@ -2750,6 +2923,11 @@ pub fn decide_granted(
         })));
     }
     if !machine.os.has_backend() {
+        // A policy that requires the sandbox is never met by starting without one (D-1423-1,
+        // which replaces D-1343-9): refused, and never started unconfined.
+        if locks.forbids_opt_out() {
+            return Err(NotStarted::RequiredWithoutBackend(machine.os));
+        }
         return Ok(Some(Decided::Unsandboxed(Lifted {
             by: By::NoBackend(Os::Windows),
             reason: None,
@@ -2797,8 +2975,11 @@ pub fn ahead(
     os_release: &str,
     check: &dyn Fn(&Applied) -> Result<(), NotStarted>,
 ) -> Ahead {
+    // Under a policy that forbids the opt-out no sentence sends the person to it (#1423); the
+    // picker says what locks it on a line of its own.
+    let locks = policy::Locks::of(root);
     let refused = |refused: NotStarted| Ahead::Refused {
-        why: refused.to_string(),
+        why: refused.said_beside(&locks),
         install: match &refused {
             NotStarted::NoBackend(missing) => backend::install_command(missing, os_release),
             NotStarted::NoCompiler(_)
@@ -2814,7 +2995,8 @@ pub fn ahead(
             | NotStarted::Unread(_)
             | NotStarted::PlaneUnreadable
             | NotStarted::PlaneMissing
-            | NotStarted::OptOutLocked(_) => None,
+            | NotStarted::OptOutLocked(_)
+            | NotStarted::RequiredWithoutBackend(_) => None,
         },
     };
     match decide(harness, root, machine, has, None, None) {

@@ -1255,6 +1255,7 @@ mod tests {
                 cwd: Some(&cwd),
                 hook_socket: socket,
                 confinement: None,
+                no_opt_out: false,
             },
         );
         (plane, line)
@@ -1351,6 +1352,7 @@ mod tests {
                     cwd: Some(cwd),
                     hook_socket: Some(&socket),
                     confinement: None,
+                    no_opt_out: false,
                 },
             )
         };

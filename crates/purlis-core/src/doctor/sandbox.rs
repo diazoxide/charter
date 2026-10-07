@@ -4,18 +4,27 @@
 
 use super::{Config, Doctor, Row};
 
-/// The row, only where the project turned the sandbox on: a project that has not prints the
-/// rows it always printed.
+/// The row, only where the project turned the sandbox on, or an administrator's policy
+/// requires it on this machine: any other project prints the rows it always printed.
 pub(super) fn sandbox(d: &Doctor) -> Option<Row> {
     const NAME: &str = "sandbox";
     let cfg = match &d.config {
         Config::Read(cfg) => cfg,
         Config::Malformed(_) | Config::Refused(_) => return None,
     };
-    crate::sandbox::Said::of(Some(cfg)).policy?;
+    // The project's own, or the one an administrator's policy requires here (D-1423-1): one
+    // row either way, which says when it is policy's.
+    let locks = crate::sandbox::policy::Locks::of(&d.root);
+    let said = crate::sandbox::Said::of(Some(cfg));
+    let its_own = said.policy.is_some();
+    said.in_force(&locks)?;
     Some(Row::ok(
         NAME,
-        format!("on — {}", crate::sandbox::local::tally(&d.root).said()),
+        format!(
+            "on{} — {}",
+            if its_own { "" } else { ", required by policy" },
+            crate::sandbox::local::tally(&d.root).said()
+        ),
     ))
 }
 

@@ -422,8 +422,7 @@ fn open_it(
     };
     let held_grants = holds_after_handoff(
         purlis_core::sandbox::Plane::read(root)
-            .said()
-            .policy
+            .in_force(&purlis_core::sandbox::policy::Locks::of(root))
             .as_ref(),
         &asking_chat,
         root,

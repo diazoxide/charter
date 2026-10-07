@@ -58,6 +58,7 @@ fn line_in(
             cwd: Some(cwd),
             hook_socket: socket,
             confinement: Some(confinement),
+            no_opt_out: false,
         },
     )
 }
@@ -101,7 +102,7 @@ fn on_linux_an_opencode_chat_is_refused_until_charter_can_wrap_it_there() {
     // Which harness it names instead is this machine's to say: on Linux, Claude Code.
     assert!(
         refused.to_string().starts_with(
-            "this plane runs every chat sandboxed, and purlis runs opencode inside a sandbox of \
+            "this project runs every chat sandboxed, and purlis runs opencode inside a sandbox of \
              its own, which it can apply on macOS but not yet on Linux (#1040), so it was not \
              started. Start this chat on a Claude Code"
         ),
@@ -148,6 +149,7 @@ fn the_wrapped_line_runs_the_whole_harness_under_sandbox_exec() {
                 cwd: Some(plane.path()),
                 hook_socket: None,
                 confinement: Some(&confinement),
+                no_opt_out: false,
             },
         )
         .expect("starts");
@@ -409,7 +411,7 @@ fn a_chat_whose_directory_holds_opencodes_own_files_is_not_wrapped() {
         assert_eq!(
             line_in(&applied, &cwd, None, &confinement),
             Err(
-                "this plane runs every chat sandboxed, and purlis cannot wrap an opencode chat \
+                "this project runs every chat sandboxed, and purlis cannot wrap an opencode chat \
                  whose directory holds opencode's own files, or is inside them, so nothing was \
                  started."
                     .to_owned()
@@ -479,7 +481,7 @@ fn a_path_is_quoted_so_it_cannot_end_its_string_and_one_with_a_control_character
     assert_eq!(
         line_in(&applied, &newline, None, &confinement),
         Err(
-            "this plane runs every chat sandboxed, and purlis cannot write a sandbox profile \
+            "this project runs every chat sandboxed, and purlis cannot write a sandbox profile \
              for a path holding a control character, so nothing was started."
                 .to_owned()
         )
@@ -504,9 +506,10 @@ fn a_wrapped_chat_with_no_directory_or_no_confinement_is_refused() {
                 cwd: None,
                 hook_socket: None,
                 confinement: Some(&confinement),
+                no_opt_out: false,
             }
         ),
-        Err(FOLDER_MISSING.to_owned())
+        Err(FolderRefusal::Missing.said(&policy::Locks::none()))
     );
     assert_eq!(
         applied.line(
@@ -515,10 +518,11 @@ fn a_wrapped_chat_with_no_directory_or_no_confinement_is_refused() {
                 cwd: Some(plane.path()),
                 hook_socket: None,
                 confinement: None,
+                no_opt_out: false,
             }
         ),
         Err(
-            "this plane runs every chat sandboxed, and purlis's egress proxy was not started \
+            "this project runs every chat sandboxed, and purlis's egress proxy was not started \
              for this opencode chat, so nothing was started."
                 .to_owned()
         )
@@ -928,6 +932,7 @@ fn stated(harness: Harness, plane: &Path, cwd: &Path, machine: &Machine) -> Stat
                 cwd: Some(cwd),
                 hook_socket: None,
                 confinement: confinement.as_ref(),
+                no_opt_out: false,
             },
         )
         .expect("starts");
