@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791374526550,
+  "lastUpdate": 1791387629295,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3192,6 +3192,48 @@ window.BENCHMARK_DATA = {
             "value": 104.554148,
             "unit": "ms",
             "extra": "median of 5 runs: 102.514, 104.345, 104.554, 104.999, 105.139 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "37c74d0e6945400dad80cb021b383f4e0692f2a4",
+          "message": "chats: Restart chat, and a Notice when a sandbox change leaves chats behind\n\nA chat keeps the sandbox it started with. After a sandbox setting changed,\nrunning chats kept the old one and nothing said so; the only ways to apply it\nwere to close the tab and resume, or to press Allow on a block Notice.\n\n- Restart chat on a chat tab's menu and in the palette: the chat's program\n  ends and starts again on the same conversation, with the project's sandbox\n  as it compiles now. Mid-turn the row reads \"Restart chat … when this turn\n  ends\" and the restart waits for the turn; the row's note says the wait too,\n  so the palette says it. While a restart runs the chat's pane says\n  \"Restarting this chat…\", and a chat waiting on a permission prompt says, in\n  the core's sentence, that it restarts once that is answered.\n- A Notice after a sandbox setting changes while chats run under an older\n  sandbox: how many, Restart them (Restart it for one) and Dismiss. One\n  Notice for each change. \"Older\" is decided by compiling, never by a file\n  having been written, and by what settings decide alone: the hosts, what the\n  presets widen, and the folders every chat may write. The window asks again\n  after its own sandbox commands return, so revoking a folder in Settings'\n  Granted list raises it.\n- Settings › Sandbox says a change applies to a chat from its next start.\n\nOne restart path. The grant restart (issue 1342), Restart now for persona\ngrants (issue 1362) and Restart chat all go through Chats::restart and the\nrestart_chat command, driven by the window's one \"once the turn ends\" driver.\nThe person asks with ask_chat_restart, a command of the window with no\nhook-line route. restart_chat_for_grant and the old restart_chat are gone;\nChats::start_again is Start fresh alone again. The window's names say restart\nand no longer grant (restartOwed, chatRestarted, answerRestart, restartsSaid,\nand the cause restart:<session>).\n\nA hang that is on main too is mended here. Chats::restarted took what was\nqueued for a chat out of `owed` inside an `if let` and put it back under the\nsame lock, so anything queued while a restart ran (Allow on a block's Notice\nwhile that chat restarted) left the restart waiting on its own lock for good,\nand every close, grant and owed list of the project behind it. The queue is\nnow taken out in a statement of its own, and what was allowed meanwhile is\ncarried to the new run, as D-1342-13 meant.\n\nA person's opt-out is never inherited (ADR 0067 §7): a chat that ran without\nthe sandbox restarts in it, and its tab says so. Nothing here offers an\nopt-out, so a policy that forbids one has nothing to hide.\n\nDecided in implementation:\n- D-1428-1: one core restart, Chats::restart, refused for a chat owed\n  nothing; the person's ask owes it one with nothing to tell.\n- D-1428-2: a chat that reports no state restarts at once when the person\n  asks; its row and the Notice say purlis cannot tell whether it is mid-turn\n  and promise no wait, and only a known mid-turn chat waits.\n- D-1428-3: a chat with no conversation to resume is refused on its pane,\n  with what to do: send it a message first, or Start fresh.\n- D-1428-4: a restart the person asked for that is refused is not owed again,\n  and Restart now asks anew (the persona Notice no longer remembers a press).\n- D-1428-5: the Notice does not count a chat started without the sandbox, a\n  shell, a chat whose sandbox cannot be compiled now, or a chat already owed\n  a restart or restarting.\n- D-1428-6: a dismissal is kept for each chat by a SHA-256 of what settings\n  decide for it now, until no chat is behind that change; any change nobody\n  dismissed shows the Notice, which then counts every chat behind.\n- D-1428-7: the row's mid-turn and no-state words are read as the menu is\n  drawn (Offer.midTurn, Offer.noState), so a chat's turn does not rebuild the\n  catalogue; the palette shows the plain title and the note with the wait.\n- D-1428-8: no opt-out is offered on a restart; the picker and a block's\n  Notice remain the two places to choose it.\n- D-1428-9: a test-only seam decides an off-profile chat's sandbox, because a\n  stand-in harness lives where a chat can write and could never start\n  sandboxed through the real program check.\n- D-1428-10 (dispatcher): the Notice compares only what settings decide, not\n  what a start finds by walking the project's tree; Confines records the\n  writable folders for it, and a run for the chat is not widened by them.\n- D-1428-11: each chat is compiled for the comparison with the persona\n  grants and the chat's own grants it started with, so a grant for one chat\n  or a persona's hosts allowed on its tab never reads as the project's change.\n- D-1428-12: an ask while a chat restarts asks for nothing more, and only\n  what has something to tell is carried to the new run.\n- D-1428-13: a pane says one line of its restart: why it failed, else why\n  not yet, else that it is under way, else that it waits for the person.\n\nCloses #1428\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-07T19:31:38+04:00",
+          "tree_id": "c94ecd8cc920f7e978fbd19d6e441e1280ee2678",
+          "url": "https://github.com/purlis/purlis/commit/37c74d0e6945400dad80cb021b383f4e0692f2a4"
+        },
+        "date": 1791387628651,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.486674,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.468, 0.484, 0.487, 0.493, 0.506 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.761324,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.653, 16.654, 16.761, 16.795, 16.818 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.45965050000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.966, 102.379, 102.460, 102.817, 103.161 ms"
           }
         ]
       }
