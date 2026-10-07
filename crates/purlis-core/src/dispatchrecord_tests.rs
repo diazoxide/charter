@@ -739,6 +739,7 @@ fn a_line_forged_with_a_record_s_fields_carries_none_of_them_past_the_wire() {
             chat: 7,
             summary: "done".to_owned(),
             ticket: "t".to_owned(),
+            task: None,
         })),
         Ask::Open(Box::new(OpenChat {
             chat: 3,

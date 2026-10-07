@@ -3,7 +3,7 @@ import {
   commands,
   type DispatchLimit,
   type DispatchLimits,
-  type DispatchRow,
+  type DispatchLimitRow,
   type PlaneId,
   type SettingsEdit,
   type SettingsStep,
@@ -47,7 +47,7 @@ type Drawn = {
   which: SettingsWhich;
   scope: "project" | "workspace" | "persona";
   name: string;
-  row: DispatchRow | undefined;
+  row: DispatchLimitRow | undefined;
   /** Whether the file holds this row: one that it does not is there to fill in. */
   written: boolean;
 };

@@ -906,68 +906,6 @@ fn told_first(
     Ok(ready)
 }
 
-/// Opens the dispatch record of the handoff that started `session` (#1452).
-///
-/// **Every fact but the brief is the app's.** The asking chat, its persona and its workspace
-/// are the app's record of chat `from`; the persona, the profile and the folder are what the
-/// app started the new chat with. The brief is the message the handoff carried, as the new
-/// chat was given it; the task name is the one the app held to a tab name's rule.
-fn record_it(
-    held: &Held,
-    from: u32,
-    session: u32,
-    open: &OpenChat,
-    chat: &Chat,
-    ready: &purlis_core::start::Ready,
-    ws: &str,
-) {
-    use purlis_core::dispatchrecord::{Asker, Mode, Opening, Place as Worked, Worker};
-
-    let root = held.root();
-    let (Some(asker), Some(worker)) = (
-        crate::dispatches::chat_ref(held, from),
-        crate::dispatches::chat_ref(held, session),
-    ) else {
-        return;
-    };
-    let asked_from = held
-        .chats()
-        .recorded_chat(from)
-        .and_then(|asking| asking.cwd)
-        .and_then(|cwd| workspace_of(root, &cwd));
-    crate::dispatches::opened(
-        held,
-        Opening {
-            mode: Mode::Handoff,
-            asker: Asker {
-                chat: asker,
-                workspace: asked_from,
-                by_person: false,
-                session_record: None,
-            },
-            persona: chat.persona.clone(),
-            worker: Worker {
-                chat: worker,
-                harness: ready.harness.map(|harness| harness.name().to_owned()),
-                profile: chat.profile.clone(),
-                session_record: None,
-            },
-            task: chat.label.clone(),
-            place: Worked {
-                workspace: Some(ws.to_owned()),
-                folder: ready
-                    .cwd
-                    .as_deref()
-                    .map(|cwd| crate::dispatches::folder(root, cwd)),
-                worktree: None,
-            },
-            brief: purlis_core::handoff::stamped(&open.message)
-                .map_or_else(|| open.message.clone(), |read| read.brief.to_owned()),
-            report_owed: open.report,
-        },
-    );
-}
-
 /// Opens the dispatch record of the dispatch that started `session`, a handoff or a task
 /// (#1452).
 ///

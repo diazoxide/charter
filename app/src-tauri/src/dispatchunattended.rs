@@ -17,6 +17,10 @@
 //! is raised, and there is nothing for an Allow to be pressed on: a grant for this chat cannot
 //! be made from it, and one made while a person answered it is not read.
 //!
+//! **One seam refuses plainly.** An unattended chat's ask goes through
+//! [`crate::dispatchgrants::request_dispatch_grant_or_refuse`], which answers it with
+//! [`unattended`] and nothing else, so a chat nobody is at is refused in one place.
+//!
 //! **Outside a sandbox it dispatches to no other persona.** Whether the chat is sandboxed is
 //! this app's record of how it started it ([`crate::chats::Chats::confines_of`]): what its
 //! sandbox was compiled to, or nothing. No line a chat sends says so.
@@ -27,7 +31,9 @@ use purlis_core::dispatchgrant::{self, InForce};
 use purlis_core::dispatchunattended::{self, Answer, Attendance};
 use purlis_core::sandbox::policy::Locks;
 
-use crate::dispatchgrants::{Asking, Requested, asking_of, request_dispatch_grant};
+use crate::dispatchgrants::{
+    Asking, Requested, request_dispatch_grant, request_dispatch_grant_or_refuse,
+};
 
 /// **THE DISPATCH CORE'S ENTRY POINT (#1446).** Chat `session` of `held`'s project, which runs
 /// as `attendance` says, asks to dispatch to persona `target` with `brief`.
@@ -47,30 +53,11 @@ pub fn request_dispatch(
     target: &str,
     brief: &str,
 ) -> Requested {
-    if attendance == Attendance::Attended {
-        return request_dispatch_grant(held, session, target, brief);
+    match attendance {
+        Attendance::Attended => request_dispatch_grant(held, session, target, brief),
+        // One seam refuses plainly, for whoever calls it: it ends in [`unattended`].
+        Attendance::Unattended => request_dispatch_grant_or_refuse(held, session, target, brief),
     }
-    let root = held.root();
-    let Some(asking) = asking_of(held.chats(), root, session) else {
-        return Requested::Refused(format!("chat {session} is not one this app has open"));
-    };
-    let known = purlis_core::workspaces::Plane::open(root.to_path_buf())
-        .personas()
-        .is_ok_and(|personas| personas.iter().any(|one| one == target));
-    if !known {
-        return Requested::Refused(format!(
-            "this project has no persona named {}, so there is nothing to dispatch to.",
-            purlis_core::shown::short(target)
-        ));
-    }
-    let runs = Runs {
-        holds_anothers: held
-            .chats()
-            .recorded_chat(session)
-            .is_some_and(|chat| chat.held.is_some()),
-        sandboxed: held.chats().confines_of(session).is_some(),
-    };
-    unattended(root, &Locks::of(root), &asking, runs, target)
 }
 
 /// How an asking chat runs, as this app started and records it.
@@ -110,11 +97,20 @@ pub fn unattended(
     }
     // No grant of one chat is read, so none can count.
     let standing = InForce::read(root, Vec::new());
-    let answer = dispatchunattended::covers(
-        asking.persona.as_deref(),
+    let persona = asking.persona.as_deref();
+    // A pair the project's file names counts on this machine only once someone here allowed
+    // it (D-1437-R1), so what is in force no longer says whether the file names it. The file
+    // is asked: a pair it names that still needs a grant is one nobody here has reviewed.
+    let named_by_the_project = persona.is_some_and(|persona| {
+        dispatchgrant::committed_at(root)
+            .iter()
+            .any(|pair| pair.asking == persona && pair.target == target)
+    });
+    let answer = dispatchunattended::answer_of(
+        dispatchgrant::covers(persona, target, &standing, locks),
+        persona,
         target,
-        &standing,
-        locks,
+        named_by_the_project,
         runs.sandboxed,
     );
     match answer {

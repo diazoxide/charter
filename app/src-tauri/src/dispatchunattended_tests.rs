@@ -2,7 +2,7 @@
 //! a missing one is refused in a sentence, and nothing of it is ever held for the person.
 
 use super::*;
-use crate::dispatchgrants::{Ground, Store};
+use crate::dispatchgrants::{Ground, Store, Uncovered};
 use purlis_core::dispatchgrant::Audited;
 use purlis_core::sandbox::grant::Level;
 
@@ -13,6 +13,7 @@ fn chat(session: u32, persona: Option<&str>) -> Asking {
         id: Some(format!("chat-{session}")),
         name: format!("{} {session}", persona.unwrap_or("claude")),
         persona: persona.map(str::to_owned),
+        held: false,
     }
 }
 
@@ -24,6 +25,7 @@ fn on<T>(root: &Path, with: impl FnOnce(&Ground<'_>) -> T) -> T {
         root,
         locks: &Locks::none(),
         is_open: &|_| true,
+        sandboxed: &|_| true,
         audit: &audit,
         at: 100,
     })
@@ -97,15 +99,33 @@ fn a_grant_in_the_project_s_file_starts_an_unattended_dispatch() {
         "schema = 1\n[dispatch.grants]\nsteward = [\"devops\"]\n",
     )
     .expect("the project grants it");
-
-    assert_eq!(
+    let ask = || {
         unattended(
             project.path(),
             &Locks::none(),
             &chat(3, Some("steward")),
             SANDBOXED,
             "devops",
-        ),
+        )
+    };
+
+    // A pair the file names counts on a machine only once someone there allowed it
+    // (D-1437-R1). Until then the refusal says so, and where a person reviews it.
+    assert_eq!(
+        ask(),
+        Requested::Refused(
+            dispatchunattended::Missing {
+                asking: Some("steward".to_owned()),
+                target: "devops".to_owned(),
+                unreviewed: true,
+            }
+            .say()
+        )
+    );
+    dispatchgrant::acknowledge(project.path(), &["steward -> devops".to_owned()])
+        .expect("a person read the project's grants on this machine");
+    assert_eq!(
+        ask(),
         Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat("devops"))
     );
 }
@@ -122,6 +142,7 @@ fn a_grant_made_for_this_chat_while_a_person_answered_it_does_not_count_once_nob
             chat(3, Some("steward")),
             "devops",
             "Check the queue.",
+            Uncovered::AskThePerson,
         )
     });
     let Requested::NeedsGrant { pending } = asked else {
@@ -129,7 +150,13 @@ fn a_grant_made_for_this_chat_while_a_person_answered_it_does_not_count_once_nob
     };
     on(root, |ground| store.allow(ground, pending, Level::Chat)).expect("allowed");
     let (again, _) = on(root, |ground| {
-        store.request(ground, chat(3, Some("steward")), "devops", "And again.")
+        store.request(
+            ground,
+            chat(3, Some("steward")),
+            "devops",
+            "And again.",
+            Uncovered::AskThePerson,
+        )
     });
     assert!(matches!(again, Requested::Covered(_)), "{again:?}");
 

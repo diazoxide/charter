@@ -803,7 +803,19 @@ export const commands = {
 	 *  policy and who set it. No chat as this persona reaches them, Resume or not.
 	 */
 	persona_hosts_locked: string | null,
+	/**
+	 *  The dispatches the record's chat made before it wrote it (#1452), in the order it made
+	 *  them: persona, task and outcome, from this machine's dispatch records. Empty for none,
+	 *  and for a record another machine wrote.
+	 */
+	dispatches: DispatchMade[],
 } | null, string>(__TAURI_INVOKE("session_record", { plane, path })),
+	/**
+	 *  Every dispatch of the project purlis draws, newest first, for its Dispatches tab (#1452):
+	 *  the running ones and the past ones this machine still keeps. On a blocking thread, as it reads every
+	 *  record.
+	 */
+	dispatches: (plane: PlaneId) => typedError<Dispatches, string>(__TAURI_INVOKE("dispatches", { plane })),
 	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 	 *  given its conversation where it can be, and told the record in its briefing
@@ -2426,6 +2438,29 @@ export type DispatchLimit = {
 	ceiling: number | null,
 };
 
+/**  One row: what one level of one file sets. */
+export type DispatchLimitRow = {
+	/**  `project`, `workspace` or `persona`. */
+	scope: string,
+	/**  The workspace's or the persona's name; empty for the project's row. */
+	name: string,
+	/**
+	 *  What it sets each limit to, in [`DispatchLimits::limits`]' order; `null` where it does
+	 *  not, and the level beneath it is in force.
+	 */
+	values: (number | null)[],
+	/**
+	 *  What is in force beneath this row for each limit, which an unset one shows; `null` is
+	 *  no cap.
+	 */
+	beneath: (number | null)[],
+	/**
+	 *  For a row of yours: each limit of it that is above the project's and so is ignored, as
+	 *  one sentence.
+	 */
+	ignored: string[],
+};
+
 /**  What Settings › Project › Dispatch draws. */
 export type DispatchLimits = {
 	/**  The committed file's name, as this project has it. */
@@ -2442,9 +2477,9 @@ export type DispatchLimits = {
 	 *  The committed file's rows: the project's first, then each workspace's, then each
 	 *  persona's.
 	 */
-	rows: DispatchRow[],
+	rows: DispatchLimitRow[],
 	/**  This machine's rows, in the same order: they only ever lower. */
-	mine: DispatchRow[],
+	mine: DispatchLimitRow[],
 	/**  "Locked by policy, set by <who> in <file>.", where a policy caps any limit. */
 	locked_by: string | null,
 	/**  What either file holds in `[dispatch]` that is not read, each as one sentence. */
@@ -2465,6 +2500,14 @@ export type DispatchLimits = {
 export type DispatchLock = {
 	asking: string,
 	target: string,
+};
+
+/**  One dispatch a chat made, as its session record's tab lists it. */
+export type DispatchMade = {
+	persona: string | null,
+	task: string,
+	/**  As a row's ([`DispatchRow::outcome`]). */
+	outcome: string,
 };
 
 /**  A dispatch that needs the person, as the Notice on the asking chat's tab shows it. */
@@ -2498,27 +2541,67 @@ export type DispatchPending = {
 	locked: string | null,
 };
 
-/**  One row: what one level of one file sets. */
+/**  One dispatch, as the Dispatches tab draws its row. */
 export type DispatchRow = {
-	/**  `project`, `workspace` or `persona`. */
-	scope: string,
-	/**  The workspace's or the persona's name; empty for the project's row. */
-	name: string,
+	id: string,
+	/**  `task` or `handoff`. */
+	mode: string,
+	/**  The persona it went to; `null` for a chat started as none. */
+	persona: string | null,
+	/**  The task's name where the dispatch gave one, else the persona chat's name. */
+	task: string,
+	/**  The asking chat, by the name the person saw. */
+	asker: string,
 	/**
-	 *  What it sets each limit to, in [`DispatchLimits::limits`]' order; `null` where it does
-	 *  not, and the level beneath it is in force.
+	 *  Which chat that is, for a filter: its id, or `#<number>` for one given none. Two chats
+	 *  that were called the same are still two.
 	 */
-	values: (number | null)[],
+	asker_key: string,
+	asker_persona: string | null,
+	/**  Whether the person dispatched from that chat's tab themselves. */
+	by_person: boolean,
+	/**  Where it worked: the workspace's name, or `project root`, and its worktree's branch. */
+	place: string,
+	/**  The folder it started in. */
+	folder: string | null,
 	/**
-	 *  What is in force beneath this row for each limit, which an unset one shows; `null` is
-	 *  no cap.
+	 *  `running`, `done`, `blocked`, `failed`, or `handed off` for one that ended owing no
+	 *  report.
 	 */
-	beneath: (number | null)[],
+	outcome: string,
+	/**  When it started, as the record keeps it (UTC, RFC 3339). */
+	started: string,
+	/**  When it ended, the same way; `null` while it runs. */
+	ended: string | null,
+	/**  How long it ran, or has run so far, spelled (`4m 30s`). */
+	duration: string,
+	needed_you: number,
+	messages: number,
+	/**  What its harness said it cost (`$0.42`); `null` where the harness reports none. */
+	cost: string | null,
 	/**
-	 *  For a row of yours: each limit of it that is above the project's and so is ignored, as
-	 *  one sentence.
+	 *  The tokens its harness counted, in and out (`15k in, 4k out`); `null` where it
+	 *  reports none.
 	 */
-	ignored: string[],
+	tokens: string | null,
+	brief: string,
+	/**  The report's text, where it ended with one. */
+	report: string | null,
+	/**  The persona chat's session, while it is still open: what the row opens. */
+	open_session: number | null,
+	/**  Else its session record, by its project-relative path, once it wrote one. */
+	session_record: string | null,
+};
+
+/**  What the Dispatches tab is handed. */
+export type Dispatches = {
+	/**  Newest first. */
+	rows: DispatchRow[],
+	/**
+	 *  How many records in the store purlis will not draw (`dispatchrecord::sound`): text it
+	 *  refuses to put on the screen, or more of it than the store ever writes.
+	 */
+	undrawn: number,
 };
 
 /**  What applying a fix came to, as the Doctor dialog draws it. */
@@ -5126,6 +5209,12 @@ export type SessionRecordView = {
 	 *  policy and who set it. No chat as this persona reaches them, Resume or not.
 	 */
 	persona_hosts_locked: string | null,
+	/**
+	 *  The dispatches the record's chat made before it wrote it (#1452), in the order it made
+	 *  them: persona, task and outcome, from this machine's dispatch records. Empty for none,
+	 *  and for a record another machine wrote.
+	 */
+	dispatches: DispatchMade[],
 };
 
 /**  What a save is: Edit as TOML's whole text, or a form's changes to the text it was read as. */
