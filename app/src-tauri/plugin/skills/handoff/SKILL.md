@@ -27,8 +27,9 @@ turn*, it is a sub-agent. If the operator will read it and talk to it, it is a c
   new chat directly: a bug to fix, a chore, a question for another workspace to own.
 - **Needs an answer** (`--report`) — this chat has to act on the outcome later: it is waiting
   on a fix to build on, a decision, a finding. The new chat reports back when it is done, and
-  the report reaches this chat on its next turn. Do not ask for one out of habit: every report
-  is an item on the operator's needs-you list.
+  the report reaches this chat on its next turn. It is this chat's to read, and no item on the
+  operator's needs-you list. Do not ask for one out of habit: a report nobody acts on is work
+  the other chat did for nothing.
 
 **This workspace or another — does the ask serve this workspace's vision?** Yes → a new
 chat here. No → another workspace.

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { chatsTree, startedBy, startedElsewhere, type ListedChat } from "./chatsTree";
+import {
+  belowCount,
+  chatsTree,
+  needing,
+  parentsIn,
+  startedBy,
+  startedElsewhere,
+  unfolded,
+  type ListedChat,
+} from "./chatsTree";
 
 /** A chat started by `parent`, where one started it. */
 function listed(session: number, parent: number | null = null): ListedChat {
@@ -75,5 +84,71 @@ describe("the project's chats as a tree", () => {
     ]);
     expect([...by.keys()]).toEqual([1]);
     expect(by.get(1)).toEqual([away]);
+  });
+});
+
+/** 1 started 2 and 5; 2 started 3; 3 started 4. 6 is on its own. */
+const deep = () => [listed(1), listed(2, 1), listed(3, 2), listed(4, 3), listed(5, 1), listed(6)];
+
+describe("the needs-you mark rolling up the tree (#1448)", () => {
+  /** Each marked row as `row>chat it leads to`. */
+  const leads = (needsYou: number[]) =>
+    [...needing(chatsTree(deep()), needsYou)].map(([row, to]) => `${row}>${to}`);
+
+  it("marks the chat that needs you and every chat above it, each leading to that chat", () => {
+    expect(leads([4])).toEqual(["1>4", "2>4", "3>4", "4>4"]);
+  });
+
+  it("marks nothing beside or below the chat that needs you", () => {
+    expect(leads([2])).toEqual(["1>2", "2>2"]);
+    expect(leads([6])).toEqual(["6>6"]);
+    expect(leads([])).toEqual([]);
+  });
+
+  it("leads a chat that needs you itself to itself, whatever is below it", () => {
+    expect(leads([4, 2])).toEqual(["1>4", "2>2", "3>4", "4>4"]);
+  });
+
+  it("leads a row over several to the one that has needed you longest", () => {
+    // 5 asked before 4 did: the queue is oldest first.
+    expect(leads([5, 4])).toEqual(["1>5", "2>4", "3>4", "4>4", "5>5"]);
+  });
+});
+
+describe("folding a row of the tree (#1448)", () => {
+  const shown = (folded: number[]) =>
+    unfolded(chatsTree(deep()), new Set(folded)).map((row) => row.session);
+
+  it("says which rows have rows under them", () => {
+    expect([...parentsIn(chatsTree(deep()))]).toEqual([1, 2, 3]);
+  });
+
+  it("draws every row while nothing is folded", () => {
+    expect(shown([])).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("leaves out everything under a folded row, at any depth, and nothing else", () => {
+    expect(shown([2])).toEqual([1, 2, 5, 6]);
+    expect(shown([1])).toEqual([1, 6]);
+    expect(shown([3, 1])).toEqual([1, 6]);
+  });
+
+  it("still marks a folded row for a chat it hides", () => {
+    const rows = chatsTree(deep());
+    const drawnRows = unfolded(rows, new Set([2]));
+    const marks = needing(rows, [4]);
+    expect(drawnRows.filter((row) => marks.has(row.session)).map((row) => row.session)).toEqual([
+      1, 2,
+    ]);
+    expect(marks.get(2)).toBe(4);
+  });
+});
+
+describe("what is below a chat (#1448)", () => {
+  it("counts every running chat nested under it", () => {
+    expect(belowCount(deep(), 1)).toBe(4);
+    expect(belowCount(deep(), 2)).toBe(2);
+    expect(belowCount(deep(), 4)).toBe(0);
+    expect(belowCount(deep(), 9)).toBe(0);
   });
 });

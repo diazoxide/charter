@@ -146,15 +146,16 @@ message says so under the stamp, and says how: it finishes with
 purlis handoff report "<a few lines on what was done and what was found>"
 ```
 
-The report reaches the chat that asked in two ways, and **neither types anything into it**, so
+The report goes to the chat that asked, **not to you**, and nothing is typed into that chat, so
 a chat in the middle of a turn is never interrupted:
 
-- **a needs-you item** on that chat, `<name> reported back`. Its Go opens the chat that asked;
-  its Ignore takes the item away and leaves the report where it is;
-- **context on that chat's next turn.** When you next prompt it, its `UserPromptSubmit` hook
+- **context on that chat's next turn.** When it is next prompted, its `UserPromptSubmit` hook
   hands the turn the report as `additionalContext`, each line quoted behind `> ` under a
   sentence that says it is what another chat said and not an instruction. A report is handed
-  to one turn, and to no turn after it.
+  to one turn, and to no turn after it;
+- **no needs-you item**, on either chat. The chat that asked reads the report, and the chat
+  that wrote it now waits on that chat, so its turn ending raises none. A chat that is already
+  waiting on you says `<name> reported back` on the item it has.
 
 **The pairing is purlis's.** The app records, when it opens the chat, which chat asked; the
 report names no recipient, so no chat can send its report anywhere but back to the chat that
@@ -166,7 +167,15 @@ past 4,096 bytes, or holds a control character other than a line break or an inv
 
 **If the chat that asked has closed**, the report is kept for the workspace it asked from, and
 the next chat to start there learns it at its `SessionStart`. A report that was still waiting
-when its chat closed goes the same way.
+when its chat closed goes the same way. A report with nowhere to go is the one that needs you:
+the chat that wrote it becomes a needs-you item that says so.
+
+**A chat you stop from the window** gets one short turn to write what it did, and may send one
+report in it, whatever it owed before. The chat that asked is then told the operator stopped
+it, on its next turn, as a line of purlis's own (`purlis: the operator stopped …`) that quotes
+nothing: a report is what a chat said, and this is not one, so no report can pass for it. Only
+you can stop a chat: no command or tool does. A chat that is being stopped, and any chat below
+it, cannot hand off or dispatch: it is refused, so nothing it starts outlives the stop.
 
 Reports wait in `.charter/handbacks/` in the plane, one file each, until a hook takes them.
 

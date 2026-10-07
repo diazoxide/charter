@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  backSaid,
   childrenOf,
   moved,
   movedAt,
+  needSays,
+  needsOf,
   nothingKnown,
   quietOnes,
   refusalsOf,
@@ -349,5 +352,56 @@ describe("a move keeps what it did not change", () => {
     const after = moved(before, doing(3, "running", [], 2, []));
 
     expect(reportsTo(after, 3)).toEqual([]);
+  });
+});
+
+describe("what the app found a chat needs you for (#1448)", () => {
+  const undelivered = { kind: "report_undelivered" as const, asker: "steward 3" };
+
+  it("says a report has nowhere to go, and whose it was", () => {
+    expect(needSays(undelivered)).toBe(
+      "its report has nowhere to go because steward 3 has closed or its program has ended",
+    );
+  });
+
+  it("keeps it by chat, as the sentence its item says, until the chat's next snapshot", () => {
+    const needed = moved(nothingKnown, { ...doing(3, "running", [3]), needs: [undelivered] });
+    expect(needsOf(needed, 3)).toEqual([
+      "its report has nowhere to go because steward 3 has closed or its program has ended",
+    ]);
+    expect(needsOf(needed, 4)).toEqual([]);
+
+    // Its next prompt: the core sends none, as it does for nearly every chat.
+    expect(needsOf(moved(needed, { ...doing(3, "running", []), needs: null }), 3)).toEqual([]);
+    expect(needsOf(moved(needed, doing(3, "running", [])), 3)).toEqual([]);
+  });
+
+  it("keeps the same list when a move says the same thing", () => {
+    const needed = moved(nothingKnown, { ...doing(3, "running", [3]), needs: [undelivered] });
+    const again = moved(needed, { ...doing(3, "waiting", [3]), needs: [undelivered] });
+
+    expect(again.needs).toBe(needed.needs);
+  });
+});
+
+describe("what the chats a chat started have done (#1448)", () => {
+  it("says who reported back, who was stopped, and both, each in its own words", () => {
+    expect(backSaid([], [])).toBeUndefined();
+    expect(backSaid(["drop commons"])).toBe("drop commons reported back");
+    expect(backSaid([], ["retry hooks"])).toBe("retry hooks was stopped");
+    expect(backSaid([], ["retry hooks", "lint"])).toBe("retry hooks, lint were stopped");
+    expect(backSaid(["drop commons"], ["retry hooks"])).toBe(
+      "drop commons reported back; retry hooks was stopped",
+    );
+  });
+
+  it("keeps a stopped chat apart from a report, by the chat that started it", () => {
+    const told = moved(nothingKnown, { ...doing(3, "running"), stopped: ["retry hooks"] });
+
+    expect(told.stoppedBelow[3]).toEqual(["retry hooks"]);
+    expect(reportsTo(told, 3)).toEqual([]);
+    // Its next prompt reads it: the core sends none.
+    expect(moved(told, doing(3, "running")).stoppedBelow[3]).toEqual([]);
+    expect(moved(told, { ...doing(3, "running"), stopped: null }).stoppedBelow[3]).toEqual([]);
   });
 });

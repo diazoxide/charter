@@ -770,6 +770,7 @@ mod live {
             summary: "the queue is clear".to_owned(),
             task: None,
             answered: None,
+            stopped: None,
         };
         handback::leave(plane.path(), For::Chat(3), &report).expect("the app leaves a report");
         let waiting = handback::dir(plane.path()).join("chat-3");

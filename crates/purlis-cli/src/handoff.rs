@@ -556,7 +556,7 @@ fn report_back(summary: &str) -> ExitCode {
         Ok(Answer::Reported { to, kept_for: None }) => {
             println!(
                 "charter handoff report: sent to '{}'. It reaches that chat as context on its \
-                 next turn, and it is on its needs-you list now.",
+                 next turn, and is that chat's to read.",
                 purlis_core::personas::one_line(&to)
             );
             ExitCode::SUCCESS

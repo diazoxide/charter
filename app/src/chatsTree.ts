@@ -130,3 +130,75 @@ export function chatsTree(chats: readonly ListedChat[]): ChatRow[] {
   );
   return rows;
 }
+
+/** The chats that have a row nested under theirs: the rows that fold. */
+export function parentsIn(rows: readonly ChatRow[]): ReadonlySet<number> {
+  const parents = new Set<number>();
+  rows.forEach((row, at) => {
+    if ((rows[at + 1]?.level ?? 0) > row.level) parents.add(row.session);
+  });
+  return parents;
+}
+
+/** The rows drawn when the chats in `folded` are folded: every row but the ones nested, at any
+ *  depth, under a folded one. */
+export function unfolded(rows: readonly ChatRow[], folded: ReadonlySet<number>): ChatRow[] {
+  const drawn: ChatRow[] = [];
+  /** The level of the folded row being skipped under, while one is. */
+  let under: number | undefined;
+  for (const row of rows) {
+    if (under !== undefined && row.level > under) continue;
+    under = folded.has(row.session) ? row.level : undefined;
+    drawn.push(row);
+  }
+  return drawn;
+}
+
+/**
+ * **Where each row's needs-you mark leads** (#1448), by the row's chat: the chat itself while
+ * it needs you, and otherwise the chat below it, at any depth, that has needed you longest.
+ * A row that is in neither case is not here, and draws no mark.
+ *
+ * **Read off every row, drawn or not**, so a folded row answers for what it hides: a chat two
+ * levels down that needs you marks every row above it, and a fold cannot hide it.
+ */
+export function needing(
+  rows: readonly ChatRow[],
+  /** The chats asking for you, oldest first. */
+  needsYou: readonly number[],
+): ReadonlyMap<number, number> {
+  const leads = new Map<number, number>();
+  if (needsYou.length === 0) return leads;
+  const waited = new Map(needsYou.map((session, at) => [session, at]));
+  rows.forEach((row, at) => {
+    if (waited.has(row.session)) {
+      leads.set(row.session, row.session);
+      return;
+    }
+    let longest: { session: number; turn: number } | undefined;
+    for (let next = at + 1; next < rows.length && rows[next].level > row.level; next += 1) {
+      const turn = waited.get(rows[next].session);
+      if (turn !== undefined && (longest === undefined || turn < longest.turn))
+        longest = { session: rows[next].session, turn };
+    }
+    if (longest !== undefined) leads.set(row.session, longest.session);
+  });
+  return leads;
+}
+
+/** The running chats nested under `session`, at any depth, top to bottom. */
+export function below(chats: readonly ListedChat[], session: number): number[] {
+  const rows = chatsTree(chats);
+  const at = rows.findIndex((row) => row.session === session);
+  if (at < 0) return [];
+  const under: number[] = [];
+  for (let next = at + 1; next < rows.length && rows[next].level > rows[at].level; next += 1)
+    under.push(rows[next].session);
+  return under;
+}
+
+/** How many running chats are nested under `session`, at any depth: what stopping it and
+ *  everything below it would end beside the chat itself. */
+export function belowCount(chats: readonly ListedChat[], session: number): number {
+  return below(chats, session).length;
+}

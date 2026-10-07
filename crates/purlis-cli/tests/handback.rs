@@ -27,6 +27,7 @@ fn a_report(summary: &str) -> Handback {
         summary: summary.to_owned(),
         task: None,
         answered: None,
+        stopped: None,
     }
 }
 

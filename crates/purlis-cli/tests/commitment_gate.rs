@@ -155,6 +155,7 @@ fn the_gate_and_a_report_back_arrive_as_one_context() {
         summary: "Dropped it.".to_owned(),
         task: None,
         answered: None,
+        stopped: None,
     };
     handback::leave(plane.path(), For::Chat(3), &report).unwrap();
 

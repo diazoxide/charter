@@ -2232,6 +2232,60 @@ h2.sidebar-title .node-icon {
   display: inline-flex;
 }
 
+/* A row of the Chats section is one line: the fold, the row, and the hand of a chat below it
+   (#1448). */
+.chats-section li {
+  display: flex;
+  gap: 0.15rem;
+  align-items: center;
+  min-width: max-content;
+}
+
+/* The fold of a row with chats under it, and the same width left empty on a row with none, so
+   names line up. */
+.chats-section .twist {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  color: var(--text-muted);
+  background: none;
+}
+
+.chats-section button.twist:hover {
+  background: var(--surface-hover);
+}
+
+.chats-section .twist svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+/* The hand rolled up from a chat below: a button of its own beside the row, since a press goes
+   to that chat and not to the row's. */
+.chats-section .needs-you-mark.rolled-up {
+  flex: none;
+  padding: 0.1rem;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  cursor: default;
+}
+
+.chats-section .needs-you-mark.rolled-up:hover {
+  background: var(--surface-hover);
+}
+
+.chats-section .stopping {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
 .needs-you-mark svg {
   width: 1em;
   height: 1em;
