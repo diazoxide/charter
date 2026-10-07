@@ -85,8 +85,14 @@ fn count(ctx: &Ctx, v: &Vault) -> Option<u32> {
 /// folder are this app's record of the chat whose token the line carried, never the line's, and
 /// the sandbox the command runs under is the one the chat's own was compiled to as it started.
 /// A chat this app does not have open is refused.
+///
+/// A vault the chat's persona is not tagged for is refused by the core, and noted here first
+/// for the Notice on the chat's tab (#1430, `crate::vaultroute`): from the same record of the
+/// chat, never from the line.
 pub(crate) fn run_brokered(
     held: &crate::planes::Held,
+    plane: &PlaneId,
+    refused: &(dyn Fn(crate::vaultroute::VaultRefused) + Send + Sync),
     ask: purlis_core::secrets::brokered::Ask,
     reader: Box<dyn std::io::BufRead + Send>,
     writer: Box<dyn std::io::Write + Send>,
@@ -117,7 +123,44 @@ pub(crate) fn run_brokered(
         // and a policy changed since does not change it.
         confines: held.chats().confines_of(ask.chat),
     };
+    crate::vaultroute::refused(
+        plane,
+        held.vault_refusals(),
+        &asker,
+        &ask.secret_exec.vault,
+        refused,
+    );
     brokered::serve(&asker, ask.secret_exec, reader, writer);
+}
+
+/// Answers `purlis vault list` for chat `chat` of `held` (#1430): every vault the project
+/// registers, with its tag and whether the persona this app started the chat as may use it.
+/// Read from the registry alone: no provider is asked, and no value or key name is answered.
+pub(crate) fn list_for_chat(
+    held: &crate::planes::Held,
+    chat: u32,
+) -> purlis_core::hookwire::Answer {
+    use purlis_core::hookwire::Answer;
+    let Some(open) = held
+        .chats()
+        .open_now()
+        .into_iter()
+        .find(|open| open.session == chat)
+    else {
+        return Answer::No {
+            why: format!("chat {chat} is not one this app has open"),
+        };
+    };
+    let ctx = Ctx::new(held.root(), Env::from_process());
+    match purlis_core::secrets::brokered::listed(&ctx, open.persona.as_deref()) {
+        Ok(vaults) => Answer::Vaults {
+            persona: open.persona,
+            vaults,
+            allow_locked: purlis_core::sandbox::policy::Locks::of(held.root())
+                .forbids_vault_grants(),
+        },
+        Err(why) => Answer::No { why },
+    }
 }
 
 /// Every vault the plane registers, by name.

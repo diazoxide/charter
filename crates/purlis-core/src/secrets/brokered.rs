@@ -6,8 +6,8 @@
 //! and prints what comes back ([`forwarded`]). The app then ([`serve`]):
 //!
 //! 1. **authorises** the vault against the persona the app recorded for the chat, never one the
-//!    request names: a vault the registry tags with that persona ([`authorise`]). A chat on no
-//!    persona gets no vault;
+//!    request names: a vault the registry tags with that persona, or one the person allowed for
+//!    it on this machine ([`authorise`], D-1430-1). A chat on no persona gets no vault;
 //! 2. **resolves** each value with the providers' own code, in the app's process and
 //!    environment, never the chat's, so nothing the chat sets moves where a value is read from;
 //! 3. **runs** the command outside the chat's read rules but inside a sandbox built from what
@@ -36,7 +36,7 @@
 //! base64'`, or a copy written into its folder, hands it over, and masking catches only a value's
 //! own literal bytes. Brokering keeps out of the chat what a chat could otherwise reach: the
 //! vault's storage and its provider's session (the op config, the keychain, the plain file),
-//! every vault not tagged for the chat's persona, and the credential file itself, which only the
+//! every vault the chat's persona may not use (D-1430-1), and the credential file itself, which only the
 //! child may read. It is not a boundary between a chat and its own persona's secrets.
 
 use std::ffi::OsString;
@@ -309,14 +309,103 @@ pub const NO_WRAP: &str = "purlis cannot yet run a command in a sandbox on this 
                            so it runs none for a sandboxed chat here: run `purlis secret exec` \
                            in a terminal outside the chat";
 
+/// A vault a chat asked for that is registered and is not one its persona may use (#1430):
+/// what the Notice on the chat's tab names. Every field is the app's own record or the
+/// registry's, never the line's but the vault's name, which is one the registry holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotTagged {
+    pub vault: String,
+    /// The persona the app started the chat as.
+    pub persona: String,
+    /// The persona the registry tags the vault for, where it tags one.
+    pub tagged_for: Option<String>,
+}
+
+/// Whether you let `persona`'s chats use `vault` on this machine (#1430): a grant in
+/// [`crate::sandbox::local`], which no chat writes, and which an administrator's policy can
+/// take away ([`crate::sandbox::policy::Locks::forbids_vault_grants`]). Read on every call, so
+/// an Allow or a Revoke reaches the next run with no restart.
+fn allowed_here(ctx: &Ctx, persona: &str, vault: &str) -> bool {
+    !crate::sandbox::policy::Locks::of(&ctx.root).forbids_vault_grants()
+        && crate::sandbox::local::granted_vaults(&ctx.root)
+            .iter()
+            .any(|one| one.vault == vault && one.persona == persona)
+}
+
+/// `vault` as [`NotTagged`] for a chat started as `persona`, or `None` where there is nothing
+/// to allow: the chat runs as no persona, the vault is not registered, or the persona may use
+/// it already.
+pub fn not_tagged(ctx: &Ctx, persona: Option<&str>, vault: &str) -> Option<NotTagged> {
+    let persona = persona.filter(|p| !p.is_empty())?;
+    let doc = registry::load_registry(ctx).ok()?;
+    let tagged_for = registry::vault_in(&doc, vault).ok()?.persona;
+    if tagged_for.as_deref() == Some(persona) || allowed_here(ctx, persona, vault) {
+        return None;
+    }
+    Some(NotTagged {
+        vault: vault.to_owned(),
+        persona: persona.to_owned(),
+        tagged_for: tagged_for.filter(|p| !p.is_empty()),
+    })
+}
+
+/// What every refusal of a vault says of the chat's own persona (ADR 0090 as amended, #1435).
+pub const FIXED: &str = "A chat's persona is fixed for its life, so nothing run in this chat \
+                         changes which vaults it may use.";
+
+/// The persona `not`'s vault is tagged for, where a chat can be dispatched to it: one the
+/// project defines. The registry's tag is any text its shared, committed half holds, so a tag
+/// that names no persona offers no chat, and the name is one line wherever it is shown.
+pub fn dispatchable(ctx: &Ctx, not: &NotTagged) -> Option<String> {
+    let theirs = not.tagged_for.as_deref()?;
+    crate::personas::name_refusal(&ctx.root, theirs)
+        .is_none()
+        .then(|| crate::personas::one_line(theirs))
+}
+
+/// **The ways forward a refused vault names** (#1430), for the chat that reads the refusal: the
+/// operator's Allow on the chat's tab, where policy leaves it open, and a dispatch to the
+/// persona the vault is tagged for, where the project defines that persona
+/// ([`dispatchable`]). Never a change of the chat's own persona, which is fixed for its life.
+pub fn routes(ctx: &Ctx, not: &NotTagged) -> String {
+    let dispatch = dispatchable(ctx, not).map(|theirs| {
+        format!(
+            "to have '{theirs}', the persona the vault is tagged for, do the work, dispatch to \
+             it: `purlis handoff <workspace> --persona {theirs}`"
+        )
+    });
+    let said = match (
+        crate::sandbox::policy::Locks::of(&ctx.root).vault_grants_refused(),
+        dispatch,
+    ) {
+        (None, Some(dispatch)) => format!("Two ways forward: {ALLOW}; or, {dispatch}."),
+        (None, None) => format!("The way forward: {ALLOW}."),
+        (Some(locked), Some(dispatch)) => format!("{locked} The way forward: {dispatch}."),
+        (Some(locked), None) => locked,
+    };
+    format!("{said} {FIXED}")
+}
+
+/// The first way forward: the operator's Allow, which the next run reads.
+const ALLOW: &str = "ask the operator to press Allow in the notice on this chat's tab, then run \
+                     the command again (no restart is needed)";
+
 /// Whether `persona` may use `vault`: the vault registry tags it with that persona
-/// (`purlis vault add <vault> --persona <persona>`). A chat on no persona uses no vault.
+/// (`purlis vault add <vault> --persona <persona>`), or you allowed it for that persona on this
+/// machine ([`allowed_here`], D-1430-1). A chat on no persona uses no vault.
 ///
-/// **The registry, and only the registry** (D-1407-1). A persona's own `vault:` line is what
-/// `purlis persona secret` reads first, but it lives in the persona's file, which a chat can
-/// write (a chat at the project root writes `personas/`, and a chat edits its own persona's
-/// charter), so it cannot be what lets a chat at a vault: a chat would grant itself any vault
-/// by naming it there. The registry is denied to every chat's writes (ADR 0067 §5 class 1).
+/// **The registry and your own grant, and nothing a chat writes.** D-1407-1 made the registry
+/// the only thing that opens a vault to a chat; D-1430-1 widens it by one thing, the person's
+/// own grant on this machine. A persona's own `vault:` line is what `purlis persona secret`
+/// reads first, but it lives in the persona's file, which a chat can write (a chat at the
+/// project root writes `personas/`, and a chat edits its own persona's charter), so it cannot
+/// be what lets a chat at a vault: a chat would grant itself any vault by naming it there. The
+/// registry is denied to every chat's writes (ADR 0067 §5 class 1), and so is the file your
+/// grant is kept in (the integrity class).
+///
+/// **A vault the registry does not hold is refused in the registry's own words**, with no way
+/// forward named: there is nothing to allow and nobody to dispatch to, and no Notice is raised
+/// for it ([`not_tagged`]).
 pub fn authorise(ctx: &Ctx, persona: Option<&str>, vault: &str) -> Result<(), String> {
     let Some(persona) = persona.filter(|p| !p.is_empty()) else {
         return Err(format!(
@@ -324,20 +413,22 @@ pub fn authorise(ctx: &Ctx, persona: Option<&str>, vault: &str) -> Result<(), St
              persona that vault '{vault}' is tagged with."
         ));
     };
-    let tagged = registry::load_registry(ctx)
-        .map(|doc| registry::vaults_for_persona(&doc, persona))
-        .map_err(|e| e.message)?;
-    if tagged.iter().any(|t| t == vault) {
+    let doc = registry::load_registry(ctx).map_err(|e| e.message)?;
+    let registered = registry::vault_in(&doc, vault).map_err(|e| e.message)?;
+    let tagged = registry::vaults_for_persona(&doc, persona);
+    if tagged.iter().any(|t| t == vault) || allowed_here(ctx, persona, vault) {
         return Ok(());
     }
-    let tag = format!(
-        "Tag the vault with the persona in the vault registry (its `persona` field, which no chat \
-         can write): `purlis vault add {vault} --persona {persona}` registers a new one that way."
-    );
+    let not = NotTagged {
+        vault: vault.to_owned(),
+        persona: persona.to_owned(),
+        tagged_for: registered.persona.filter(|p| !p.is_empty()),
+    };
+    let routes = routes(ctx, &not);
     if cmd::persona_vault(ctx, persona).is_ok_and(|declared| declared == vault) {
         return Err(format!(
             "persona '{persona}' names vault '{vault}' in its own file, and a chat can edit that \
-             file, so purlis does not open the vault for a chat on that alone. {tag}"
+             file, so purlis does not open the vault for a chat on that alone. {routes}"
         ));
     }
     let theirs = if tagged.is_empty() {
@@ -354,8 +445,106 @@ pub fn authorise(ctx: &Ctx, persona: Option<&str>, vault: &str) -> Result<(), St
     };
     Err(format!(
         "vault '{vault}' is not one persona '{persona}' may use, so purlis did not open it \
-         ({theirs}). {tag}"
+         ({theirs}). {routes}"
     ))
+}
+
+/// One vault as `purlis vault list` shows it to a sandboxed chat (#1430): its name, the
+/// provider's id, the persona the registry tags it for, and whether the chat's persona may use
+/// it. **No value, no key name, and nothing of a provider's session.**
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Listed {
+    pub name: String,
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
+    /// Whether the chat that asked may use it, as [`authorise`] would answer.
+    pub usable: bool,
+}
+
+/// Every vault the project registers, for a chat started as `persona`: read from the registry
+/// alone, in the app, so no provider is asked and no session is opened. The registry, the
+/// policy and this machine's grants are each read once.
+pub fn listed(ctx: &Ctx, persona: Option<&str>) -> Result<Vec<Listed>, String> {
+    let doc = registry::load_registry(ctx).map_err(|e| e.message)?;
+    let persona = persona.filter(|p| !p.is_empty());
+    let granted = if crate::sandbox::policy::Locks::of(&ctx.root).forbids_vault_grants() {
+        Vec::new()
+    } else {
+        crate::sandbox::local::granted_vaults(&ctx.root)
+    };
+    let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
+    names.sort();
+    Ok(names
+        .into_iter()
+        .filter_map(|name| {
+            let vault = registry::vault_in(&doc, &name).ok()?;
+            let tag = vault.persona.filter(|p| !p.is_empty());
+            let usable = persona.is_some_and(|persona| {
+                tag.as_deref() == Some(persona)
+                    || granted
+                        .iter()
+                        .any(|one| one.vault == name && one.persona == persona)
+            });
+            Some(Listed {
+                usable,
+                provider: vault.provider,
+                persona: tag,
+                name,
+            })
+        })
+        .collect())
+}
+
+/// What the app answers `purlis vault list` from a chat: the persona it started the chat as,
+/// every vault, and whether an administrator's policy forbids the person's Allow here, so the
+/// listing names only a way forward that is open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub persona: Option<String>,
+    pub vaults: Vec<Listed>,
+    pub allow_locked: bool,
+}
+
+/// How long `purlis vault list` waits for the app's answer.
+#[cfg(unix)]
+const A_LISTING_TAKES_AT_MOST: Duration = Duration::from_secs(5);
+
+/// The app's answer to `purlis vault list` from a sandboxed chat it started (#1430), or `None`
+/// where no app answers it (no socket, an app older than the ask) and the listing is made here
+/// as it always was.
+#[cfg(unix)]
+pub fn listing_from_the_app(ctx: &Ctx) -> Option<Result<Listing, String>> {
+    use crate::hookwire::{Answer, Ask, Asking, ChatToken};
+    let env = |name: &str| ctx.env.get(name);
+    if !crate::sandbox::chat_is_sandboxed_in(&env) {
+        return None;
+    }
+    let socket = env(crate::hookwire::SOCKET_ENV).filter(|s| !s.is_empty())?;
+    let chat = chat_number(&env)?;
+    let mut asking = Asking::on(Path::new(&socket), ChatToken::read(&env)).ok()?;
+    match asking
+        .ask(&Ask::Vaults { chat }, A_LISTING_TAKES_AT_MOST)
+        .ok()?
+    {
+        Answer::Vaults {
+            persona,
+            vaults,
+            allow_locked,
+        } => Some(Ok(Listing {
+            persona,
+            vaults,
+            allow_locked,
+        })),
+        Answer::No { why } => Some(Err(why)),
+        _ => None,
+    }
+}
+
+/// Where there is no unix socket there is no app to ask.
+#[cfg(not(unix))]
+pub fn listing_from_the_app(_ctx: &Ctx) -> Option<Result<Listing, String>> {
+    None
 }
 
 /// How a run is wrapped: in a Seatbelt profile built from the chat's policy, or, for a test of

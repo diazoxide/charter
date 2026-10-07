@@ -306,7 +306,12 @@ pub fn render(root: &Path, state: &Path, name: &str, def: &Resolved) -> String {
                    Delegate to the owner via the Agent tool (`subagent_type: <persona>`; it runs \
                    with *its own* vault — you never see its secrets); `{program} persona list` \
                    shows who owns what. Never `{program} persona use` to switch the active \
-                   persona — that's user-request-only."
+                   persona — that's user-request-only.\n- **In a sandboxed chat you run with \
+                   that chat's persona's vaults, not this persona's.** {program} hands a chat only \
+                   the vaults tagged for the persona the chat was opened as, and a sub-agent is \
+                   part of its chat. If `{program} secret exec` is refused, report that to the \
+                   chat that dispatched you: the operator can allow the vault in the notice on \
+                   the chat's tab, or the work can go to a chat opened as this persona."
     );
 
     let creds = if super::vault_of(root, state, name).is_some() {

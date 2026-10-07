@@ -29,7 +29,8 @@
 //!     "personal-hosts": false,
 //!     "persona-hosts": false,
 //!     "opt-out": false,
-//!     "write-grants": false
+//!     "write-grants": false,
+//!     "vault-grants": false
 //!   }
 //! }
 //! ```
@@ -47,6 +48,9 @@
 //!   turn the sandbox on in a project that has not (#1423).
 //! - `write-grants`: `false` forbids every folder a block's Allow or Settings would let a chat
 //!   write.
+//! - `vault-grants`: `false` forbids letting a persona's chats use a vault the vault registry
+//!   does not tag for it (a refused vault's Allow, #1430), and takes away any such grant
+//!   already made: only the registry's tags open a vault to a chat.
 //!
 //! Absent keys lock nothing. `true` is the same as absent.
 
@@ -92,6 +96,7 @@ pub struct Locks {
     no_persona_hosts: bool,
     no_opt_out: bool,
     no_write_grants: bool,
+    no_vault_grants: bool,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -163,6 +168,7 @@ impl Locks {
             no_persona_hosts: true,
             no_opt_out: true,
             no_write_grants: true,
+            no_vault_grants: true,
         }
     }
 
@@ -297,6 +303,22 @@ impl Locks {
         })
     }
 
+    /// Whether policy forbids letting a persona's chats use a vault it is not tagged for.
+    pub fn forbids_vault_grants(&self) -> bool {
+        self.no_vault_grants
+    }
+
+    /// Why no persona may be allowed a vault the registry does not tag for it, where policy
+    /// forbids it (#1430).
+    pub fn vault_grants_refused(&self) -> Option<String> {
+        self.no_vault_grants.then(|| {
+            format!(
+                "Policy forbids allowing a persona a vault it is not tagged for. {}",
+                self.locked_by()
+            )
+        })
+    }
+
     /// Why no chat may start without the sandbox, where policy forbids it.
     pub fn opt_out_refused(&self) -> Option<String> {
         self.no_opt_out.then(|| {
@@ -309,13 +331,14 @@ impl Locks {
 }
 
 /// The keys `sandbox` may hold, each a lock.
-const KEYS: [&str; 6] = [
+const KEYS: [&str; 7] = [
     "presets",
     "hosts",
     "personal-hosts",
     "persona-hosts",
     "opt-out",
     "write-grants",
+    "vault-grants",
 ];
 
 /// `text` as a policy read from `file`, or why it is refused.
@@ -414,6 +437,7 @@ fn parsed(text: &str, file: &Path) -> Result<Locks, String> {
         no_persona_hosts: forbids("persona-hosts")?,
         no_opt_out: forbids("opt-out")?,
         no_write_grants: forbids("write-grants")?,
+        no_vault_grants: forbids("vault-grants")?,
     })
 }
 

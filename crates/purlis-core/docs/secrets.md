@@ -46,10 +46,21 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   under `--stream` and `--exec`, then the exit status. stdin is passed through when it is not a
   terminal.
 
+  **Which vaults a chat may use.** One the vault registry tags for the persona the chat was
+  opened as, or one you allowed for that persona on this machine. A vault that is neither is
+  refused with a sentence naming the ways forward, and the chat's tab shows a notice with
+  **Allow {persona} to use this vault** and **Keep blocked**. Allow is kept on this machine
+  beside the project, never in the committed registry; it is recorded, listed in Settings ›
+  Sandbox › Granted and revoked there, and the next run reads it, so the chat does not restart.
+  A policy's `"vault-grants": false` forbids it. The other way forward is a dispatch to the
+  persona the vault is tagged for. A chat's persona is fixed for its life, so nothing run in
+  the chat changes which vaults it may use. A vault name the project does not register is
+  refused as that.
+
   **What it keeps from the chat, and what it does not.** It keeps out the vault's storage and its
-  provider's session, every vault not tagged for the chat's persona, and the credential file. It
+  provider's session, every vault the chat's persona may not use, and the credential file. It
   does not keep the values out: the command is the chat's own choice, so a chat can obtain any
-  key of a vault tagged for its persona, for example by encoding it before printing. Masking
+  key of a vault its persona may use, for example by encoding it before printing. Masking
   matches a value's literal text only. Prefer `--file` to `--env` for a command that can read
   its credential from a file: an environment variable is readable by the same user through `ps
   eww` while the command runs. Linux has no such sandbox yet (#1040), so there the app refuses.
@@ -69,7 +80,10 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   persona: its `vault:` field, else the vault tagged with it. `vault: none` says the persona
   holds no credentials.
 - **`vault add | list | verify | remove`** manage the registry. `vault list` shows each vault's
-  provider, persona, scope and health, never a value; `vault verify` resolves every reference
+  provider, persona, scope and health, never a value. In a sandboxed chat the app answers it,
+  because the chat's sandbox denies it every provider's own files: each vault's provider and
+  persona, and whether this chat may use it, with no scope or health column and no provider
+  asked; `vault verify` resolves every reference
   for real and exits non-zero when one does not resolve.
 
 `exec`, `cp` and `get --reveal` each record one event in the session trace naming the vault,

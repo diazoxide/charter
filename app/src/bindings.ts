@@ -405,6 +405,19 @@ export const commands = {
 	listGrantableFolder: (plane: PlaneId, folder: string) => typedError<GrantableListed, string>(__TAURI_INVOKE("list_grantable_folder", { plane, folder })),
 	/**  Takes `folder` off the folders chats here may be granted. Answers the list as it is now. */
 	unlistGrantableFolder: (plane: PlaneId, folder: string) => typedError<string[], string>(__TAURI_INVOKE("unlist_grantable_folder", { plane, folder })),
+	/**  The vaults chat `session` was refused and the person has not answered, oldest first. */
+	vaultRefusals: (plane: PlaneId, session: number) => typedError<VaultRefused[], string>(__TAURI_INVOKE("vault_refusals", { plane, session })),
+	/**
+	 *  **Allow** on a refused vault's Notice: lets the chat's persona use `vault` in this project
+	 *  on this machine, audited, and tells the chat to run its command again, now or when its turn
+	 *  ends, or leaves that to the person ([`tell`]). No restart.
+	 */
+	allowRefusedVault: (plane: PlaneId, session: number, vault: string) => typedError<VaultAnswered, string>(__TAURI_INVOKE("allow_refused_vault", { plane, session, vault })),
+	/**
+	 *  **Keep blocked** on a refused vault's Notice: puts it away, and changes nothing. The chat's
+	 *  next try at the vault raises it again.
+	 */
+	keepVaultBlocked: (plane: PlaneId, session: number, vault: string) => typedError<null, string>(__TAURI_INVOKE("keep_vault_blocked", { plane, session, vault })),
 	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
@@ -2834,7 +2847,13 @@ export type GrantWhat =
 /**  A host to reach. */
 "host" | 
 /**  A folder to write, and everything in it. */
-"write";
+"write" | 
+/**
+ *  A vault a persona's chats may use although the registry does not tag it for the
+ *  persona (#1430). Granted from a refused vault's Notice (`crate::vaultroute`), never from
+ *  a block's Allow.
+ */
+"vault";
 
 /**  The folders chats may be granted, and those just dropped from the list. */
 export type GrantableFolders = {
@@ -4557,8 +4576,10 @@ export type SandboxGrant = {
 	/**  What Revoke is sent by. */
 	id: string,
 	what: GrantWhat,
-	/**  The host or the folder. */
+	/**  The host, the folder, or the vault's name. */
 	target: string,
+	/**  For a vault, the persona whose chats may use it. */
+	persona: string | null,
 	level: GrantLevel,
 	/**
 	 *  Who committed it, for one the project carries; null for one you granted, or one the
@@ -5134,6 +5155,11 @@ export type UsageTurn = {
 	written: string | null,
 };
 
+/**  What a press on the Notice answered: the sentence it then says. */
+export type VaultAnswered = {
+	said: string,
+};
+
 /**  One vault, opened. */
 export type VaultContents = {
 	name: string,
@@ -5168,6 +5194,30 @@ export type VaultHealth = {
 export type VaultIdentity = {
 	variable: string,
 	held: IdentityHeld,
+};
+
+/**
+ *  A vault a chat was refused, as the Notice on its tab shows it: names only. No key, no
+ *  value, and nothing of the command the chat ran.
+ */
+export type VaultRefused = {
+	plane: PlaneId,
+	session: number,
+	vault: string,
+	/**  The persona the app started the chat as. */
+	persona: string,
+	/**
+	 *  The persona the vault registry tags the vault for, where it tags one: the registry's
+	 *  own text, on one line.
+	 */
+	tagged_for: string | null,
+	/**
+	 *  That persona, where the project defines it: one the chat's refusal told it how to
+	 *  dispatch to.
+	 */
+	dispatch_to: string | null,
+	/**  Why a policy forbids Allow, where one does: the Notice then offers none. */
+	locked: string | null,
 };
 
 /**

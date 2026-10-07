@@ -145,6 +145,9 @@ pub fn answer(
         // only the chat whose token it carries, and what it asks is checked against the app's
         // record of that chat.
         Ask::Git(git) => crate::gitbroker::answer(held, &git),
+        // `purlis vault list` from a sandboxed chat (#1430): no ticket, because it changes
+        // nothing, and whose vaults it lists is the app's record of the chat the token is for.
+        Ask::Vaults { chat } => crate::vaults::list_for_chat(held, chat),
     }
 }
 
