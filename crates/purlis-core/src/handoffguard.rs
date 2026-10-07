@@ -54,14 +54,13 @@
 //! drifting apart.
 
 use crate::consentspelling;
-use crate::heredoc;
+use crate::heredoc::{self, Heredocs};
 use crate::leakguard;
 use crate::livesub;
 use crate::memstore::is_python_space;
 use crate::proseguard::charter_words;
 use crate::pypath;
 use crate::shellseg::{self, Tok};
-use crate::shellsubst;
 use crate::shellwrap;
 
 /// The `agent_id` on a payload means "a sub-agent" only on a harness where that was MEASURED.
@@ -386,9 +385,10 @@ const FURTHER_IN: &str =
 ///   ends a command and once a function's header is off the front of its segment
 ///   ([`consentspelling::in_a_branch_or_body_by`]), over the lines a shell runs: a heredoc body
 ///   a reader takes as data, a script written to a file included, is never read as commands;
-/// - **a string or a heredoc a shell runs, at every level**: one level in, a handoff anywhere
-///   in it, in a branch, a body, a substitution or a string handed on to another shell
-///   ([`runs_a_handoff_anywhere`]).
+/// - **a string or a heredoc a shell runs, at every level**
+///   ([`consentspelling::in_shell_strings_at_every_level_by`], the walk all three backstops
+///   share, #1426): a handoff anywhere in one, in a branch, a body or a substitution
+///   ([`runs_a_handoff_at_its_level`]).
 ///
 /// A handoff in a substitution of the command as written is the consent backstop's
 /// ([`crate::consentspelling`], D-1417-5) and is not looked for here.
@@ -405,63 +405,10 @@ fn placed_in(read: &Heredocs) -> Option<&'static str> {
     {
         return Some(place.said());
     }
-    let mut seen = std::collections::HashSet::new();
-    let further_in = shell_strings(&read.stripped)
-        .iter()
-        .chain(&read.shells_bodies())
-        .any(|inner| runs_a_handoff_anywhere(inner, 1, &mut seen));
-    further_in.then_some(FURTHER_IN)
-}
-
-/// A text's heredocs, read once ([`heredoc::heredoc_layout`]) for the two readings A7 takes of
-/// them: the text with every body a reader takes as data left out
-/// ([`heredoc::strip_reader_heredocs`]), and the lines a shell could run, each with whether a
-/// heredoc feeds it to a shell ([`leakguard::lines_a_command_could_run`]).
-struct Heredocs {
-    stripped: String,
-    rows: Vec<(String, bool)>,
-}
-
-impl Heredocs {
-    fn of(text: &str) -> Self {
-        if !text.contains("<<") {
-            return Self {
-                stripped: text.to_owned(),
-                rows: text.split('\n').map(|l| (l.to_owned(), false)).collect(),
-            };
-        }
-        let layout = heredoc::heredoc_layout(text);
-        let stripped = layout
-            .iter()
-            .filter(|l| !l.drop)
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let rows = layout
-            .into_iter()
-            .filter(|l| !l.body || l.executed)
-            .map(|l| (l.text, l.executed))
-            .collect();
-        Self { stripped, rows }
-    }
-
-    /// Each run of lines a heredoc feeds a shell, as one text with its line continuations taken
-    /// out, so a command split over a continuation is read as the one command the shell runs.
-    fn shells_bodies(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut run: Vec<&str> = Vec::new();
-        for (row, in_a_shells_body) in &self.rows {
-            if *in_a_shells_body {
-                run.push(row);
-            } else if !run.is_empty() {
-                out.push(std::mem::take(&mut run).join("\n").replace("\\\n", ""));
-            }
-        }
-        if !run.is_empty() {
-            out.push(run.join("\n").replace("\\\n", ""));
-        }
-        out
-    }
+    consentspelling::in_shell_strings_at_every_level_by(read, &|inner: &Heredocs| {
+        runs_a_handoff_at_its_level(inner).then_some(())
+    })
+    .map(|_| FURTHER_IN)
 }
 
 /// Whether a segment of `text` runs a handoff, in any spelling A7 recognises: the two readers
@@ -470,47 +417,14 @@ fn runs_a_handoff(text: &str) -> bool {
     is_handoff(&as_the_shell_reads(text)) || disguised_handoff(text)
 }
 
-/// Every string a segment of `text` hands a shell to run (`sh -c '…'`, `eval '…'`), exactly as
-/// the shell receives it — the strings [`shell_string_handoff`] reads.
-fn shell_strings(text: &str) -> Vec<String> {
-    let Ok(toks) = shellseg::lex(text) else {
-        return Vec::new();
-    };
-    let toks = shellseg::split_punctuation(toks);
-    heredoc::segments_of(&toks)
-        .iter()
-        .flat_map(|(seg, _before)| {
-            let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
-            shellwrap::shell_scripts(&words)
-        })
-        .collect()
-}
-
-/// Whether `text`, a string or a heredoc body a shell runs `depth` levels into the command,
-/// runs a handoff anywhere: one of its own segments, a `case` branch or a function body, a
-/// substitution at any depth ([`crate::shellsubst`]), a heredoc in it that feeds a shell, or a
-/// string it hands another shell, read the same way one level further in.
+/// Whether a text a shell runs, its heredocs read once, runs a handoff at its own level: one of
+/// its own segments, a `case` branch or a function body, or a substitution at any depth
+/// ([`crate::shellsubst`]). The strings it hands on are the shared walk's to open
+/// ([`consentspelling::in_shell_strings_at_every_level_by`]).
 ///
-/// **Each distinct text is read once per command** (`seen`), as the backstops read each
-/// substitution once (D-1417-11): its heredocs once ([`Heredocs`]), its substitutions once
-/// ([`shellsubst::every_substitution`]). A text met again found nothing the first time, or the
-/// walk would have stopped there.
-///
-/// **Fails closed past a bound**: a string nested more than [`crate::guardcaps::MAX_NESTING`]
-/// levels deep, or substitutions past the scanner's bounds, are answered as running one.
-fn runs_a_handoff_anywhere(
-    text: &str,
-    depth: usize,
-    seen: &mut std::collections::HashSet<String>,
-) -> bool {
-    if depth > crate::guardcaps::MAX_NESTING {
-        shellseg::met_a_string_too_deep();
-        return true;
-    }
-    if !seen.insert(text.to_owned()) {
-        return false;
-    }
-    let read = Heredocs::of(text);
+/// **Fails closed past a bound**: substitutions past the scanner's bounds are answered as
+/// running one.
+fn runs_a_handoff_at_its_level(read: &Heredocs) -> bool {
     if runs_a_handoff(&read.stripped)
         || consentspelling::in_a_branch_or_body_by(&read.stripped, &|text: &str| {
             runs_a_handoff(text).then_some(())
@@ -519,9 +433,9 @@ fn runs_a_handoff_anywhere(
     {
         return true;
     }
-    let inward = shellsubst::every_substitution(text);
-    let in_a_substitution =
-        consentspelling::in_a_substitution_by(&inward, &|segments: &[Vec<String>]| {
+    let inward = read.inward();
+    inward.too_big
+        || consentspelling::in_a_substitution_by(inward, &|segments: &[Vec<String>]| {
             segments
                 .iter()
                 .any(|toks| {
@@ -530,14 +444,7 @@ fn runs_a_handoff_anywhere(
                 })
                 .then_some(())
         })
-        .is_some();
-    if inward.too_big || in_a_substitution {
-        return true;
-    }
-    shell_strings(&read.stripped)
-        .iter()
-        .chain(&read.shells_bodies())
-        .any(|inner| runs_a_handoff_anywhere(inner, depth + 1, seen))
+        .is_some()
 }
 
 /// What a handoff the host's rule never sees, where it sits, is told (#1419).
@@ -789,7 +696,7 @@ impl Caller<'_> {
 /// — taken from the tokenizer that already found this `<<`. A search of the raw line for it
 /// would be misled by a quoted `"<<"` earlier on the line.
 pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, String)> {
-    handoff_refusal_spelt(cmd, caller, &[crate::cliname::ALIAS])
+    handoff_refusal_spelt(&Heredocs::of(cmd), caller, &[crate::cliname::ALIAS])
 }
 
 /// [`handoff_refusal`] for a call in the project at `plane`, whose host settings may come from
@@ -805,6 +712,17 @@ pub fn handoff_refusal_in(
     plane: &std::path::Path,
     anchors: &[&std::path::Path],
 ) -> Option<(&'static str, String)> {
+    handoff_refusal_of(&Heredocs::of(cmd), caller, plane, anchors)
+}
+
+/// [`handoff_refusal_in`] of a command already read, for a caller that reads it once for every
+/// backstop ([`crate::toolgate::verdict`], #1426).
+pub(crate) fn handoff_refusal_of(
+    read: &Heredocs,
+    caller: Caller<'_>,
+    plane: &std::path::Path,
+    anchors: &[&std::path::Path],
+) -> Option<(&'static str, String)> {
     let purlis_ruled = crate::scaffold::settings::twin_in_force(
         plane,
         anchors,
@@ -813,27 +731,26 @@ pub fn handoff_refusal_in(
     );
     if purlis_ruled {
         handoff_refusal_spelt(
-            cmd,
+            read,
             caller,
             &[crate::cliname::ALIAS, crate::cliname::PRIMARY],
         )
     } else {
-        handoff_refusal(cmd, caller)
+        handoff_refusal_spelt(read, caller, &[crate::cliname::ALIAS])
     }
 }
 
 fn handoff_refusal_spelt(
-    cmd: &str,
+    read: &Heredocs,
     caller: Caller<'_>,
     spelt: &[&str],
 ) -> Option<(&'static str, String)> {
-    // The command's heredocs, read once for every reading below.
-    let read = Heredocs::of(cmd);
+    let cmd = read.text.as_str();
     let found = handoff_line_in(&read.rows);
     let in_a_string = shell_string_handoff_in(&read.stripped);
     // Read only once the readers above have nothing to refuse, so every answer they give is
     // the one it was; this adds refusals and changes none (#1419).
-    let placed = || placed_in(&read).map(|where_| (REASON_PLACED, handoff_placed(where_)));
+    let placed = || placed_in(read).map(|where_| (REASON_PLACED, handoff_placed(where_)));
     if found.is_none() && !in_a_string {
         let placed = placed()?;
         if caller.from_a_subagent() {

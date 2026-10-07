@@ -96,6 +96,21 @@ fn shapes(deep: usize) -> Vec<Shape> {
             }),
         ),
         ("many heredocs", Box::new(|b| fill("cat <<A\nx\nA\n", b))),
+        (
+            // Every level of a string a shell runs is read (#1419, #1426): heredocs fed to a
+            // shell, each holding a string handed to another, as deep as a shape nests.
+            "strings and heredocs handed on to shells, nested",
+            Box::new(move |b| {
+                let unit = (0..deep).fold("ls".to_string(), |inner, k| {
+                    if k % 2 == 0 {
+                        format!("bash <<'E{k}'\n{inner}\nE{k}")
+                    } else {
+                        format!("eval bash -c {inner:?}")
+                    }
+                });
+                fill(&format!("{unit}\n"), b)
+            }),
+        ),
     ]
 }
 

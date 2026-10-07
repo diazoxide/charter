@@ -298,9 +298,12 @@ fn arms(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
     }
     // A7: a `charter handoff` the operator's permission prompt cannot stand in front of.
     // GATED, unlike A5 and A6 beside it.
-    if let Some(plane) = plane
-        && let Some((reason, why)) = handoffguard::handoff_refusal_in(
-            cmd,
+    // The command read once for the three backstops below (#1426): its heredocs, its
+    // substitutions and the strings it hands a shell are theirs to share.
+    let read = plane.map(|_| crate::heredoc::Heredocs::of(cmd));
+    if let (Some(plane), Some(read)) = (plane, &read)
+        && let Some((reason, why)) = handoffguard::handoff_refusal_of(
+            read,
             call.caller,
             Path::new(plane.root),
             &[Path::new(plane.session_dir), Path::new(call.cwd)],
@@ -315,9 +318,9 @@ fn arms(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
     // spell, which the host would run with no prompt (RN-3, D-RN3-9; lifted per rule where the
     // project carries the purlis twin, RN-7). GATED, as A7 is: the rules it stands in for are a
     // plane's.
-    if let Some(plane) = plane
-        && let Some(why) = consentspelling::refusal(
-            cmd,
+    if let (Some(plane), Some(read)) = (plane, &read)
+        && let Some(why) = consentspelling::refusal_of(
+            read,
             Path::new(plane.root),
             &[Path::new(plane.session_dir), Path::new(call.cwd)],
         )
@@ -327,9 +330,9 @@ fn arms(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
     // A7c: the same backstop for the operator's own ask and deny rules (#1286): a program a rule
     // names, spelt so the host's glob would not see it. GATED, as A7b is: the rules are a
     // plane's settings.
-    if let Some(plane) = plane
-        && let Some(why) = rulespelling::refusal(
-            cmd,
+    if let (Some(plane), Some(read)) = (plane, &read)
+        && let Some(why) = rulespelling::refusal_of(
+            read,
             Path::new(plane.root),
             &[Path::new(plane.session_dir), Path::new(call.cwd)],
         )

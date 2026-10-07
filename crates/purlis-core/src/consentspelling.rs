@@ -19,9 +19,10 @@
 //!
 //! **Read as A7 reads a handoff**: over the call with every heredoc a reader takes as data
 //! stripped ([`heredoc::strip_reader_heredocs`]), so a commit message or a note that mentions
-//! one of these commands is not refused, while a body a shell runs still is; and one level into
-//! the string a `sh -c`, `bash -c` or `eval` runs ([`shellwrap::shell_scripts`]), as
-//! [`crate::handoffguard::shell_string_handoff`] reads it.
+//! one of these commands is not refused, while a body a shell runs still is; and in the string
+//! a `sh -c`, `bash -c` or `eval` runs ([`shellwrap::shell_scripts`]) or a heredoc feeds a
+//! shell, at every level up to the nesting cap, as the handoff guard reads them (#1426,
+//! [`in_a_string_a_shell_runs_by`]).
 //!
 //! **Read off the table the rules are written from**, so a rule added there is refused under
 //! the new name with nothing else to remember.
@@ -44,9 +45,10 @@
 use std::path::Path;
 
 use crate::cliname;
+use crate::floorguard;
 use crate::guardcaps;
 use crate::handoffguard::as_the_shell_reads;
-use crate::heredoc;
+use crate::heredoc::{self, Heredocs};
 use crate::leakguard;
 use crate::proseguard::charter_words;
 use crate::pypath;
@@ -106,21 +108,26 @@ impl Gated {
 /// or an expanding heredoc body, however deep it nests. Past the walk's bounds the call is
 /// refused as too big to check, never read in part.
 pub fn refusal(cmd: &str, plane: &Path, anchors: &[&Path]) -> Option<String> {
+    refusal_of(&Heredocs::of(cmd), plane, anchors)
+}
+
+/// [`refusal`] of a command already read, for a caller that reads it once for every backstop
+/// ([`crate::toolgate::verdict`], #1426).
+pub(crate) fn refusal_of(read: &Heredocs, plane: &Path, anchors: &[&Path]) -> Option<String> {
     // Read once for the whole command, every depth, and handed to the arm that reads it.
-    let inward = every_substitution(cmd);
+    let inward = read.inward();
     if inward.too_big {
         return Some(guardcaps::too_deep_refusal());
     }
-    let stripped = heredoc::strip_reader_heredocs(cmd);
+    let stripped = &read.stripped;
     let at = At { plane, anchors };
     // Where the command sits first (a substitution, a `case` branch, a function body), so the
     // refusal says so; then how it is spelt.
-    in_a_substitution(&inward)
-        .or_else(|| in_a_branch_or_body(&stripped))
-        .or_else(|| refusal_in(&stripped, at))
-        .or_else(|| in_a_shell_string(&stripped))
-        .or_else(|| in_a_shells_heredoc(cmd))
-        .or_else(|| not_as_the_rule_spells_it(&stripped))
+    in_a_substitution(inward)
+        .or_else(|| in_a_branch_or_body(stripped))
+        .or_else(|| refusal_in(stripped, at))
+        .or_else(|| in_a_shell_string(read))
+        .or_else(|| not_as_the_rule_spells_it(stripped))
 }
 
 /// Where the call is made: the project, and the directory the host runs it in.
@@ -208,7 +215,7 @@ pub(crate) fn every_reading_in(
     if !inward {
         return readings_in(&shellseg::segment_argv(text), wanted);
     }
-    read(commands_of(text));
+    read(commands_of(&heredoc::strip_reader_heredocs(text)));
     let inner = every_substitution(text);
     for cased in &inner.texts {
         read(with_function_bodies(shellseg::segment_argv(
@@ -237,11 +244,12 @@ pub(crate) fn readings_in(
 /// What `find` makes of the first command `text` runs that it answers for — its segments, a
 /// `case` branch, a function body, or a substitution a shell runs at any depth
 /// ([`every_substitution`]). For a string a shell is handed whole (`sh -c`, a body `bash`
-/// reads), which no other reading here looks inside.
+/// reads), which no other reading here looks inside. A heredoc body a reader takes as data in
+/// it, a script it writes to a file, is no command; only its substitutions run (#1426).
 fn found<T>(text: &str, find: &impl Fn(&Reading) -> Option<T>) -> Option<T> {
     let first =
         |segments: Vec<Vec<String>>| segments.iter().find_map(|toks| find(&reading_of(toks)?));
-    first(commands_of(text)).or_else(|| {
+    first(commands_of(&heredoc::strip_reader_heredocs(text))).or_else(|| {
         every_substitution(text).texts.iter().find_map(|cased| {
             first(with_function_bodies(shellseg::segment_argv(
                 &lines_it_runs(cased),
@@ -398,17 +406,443 @@ fn shell_string_refusal(it: &Gated) -> String {
     )
 }
 
-/// One level into each string a segment of `text` hands a shell: a consent-gated command there
-/// under either name.
-fn in_a_shell_string(text: &str) -> Option<String> {
+/// A consent-gated command under either name in a string or a heredoc body a shell runs, at
+/// any level up to the cap ([`in_a_string_a_shell_runs_by`]), or the refusal of one nested
+/// past it.
+fn in_a_shell_string(read: &Heredocs) -> Option<String> {
     let find = |it: &Reading| consent_gated(it, &Gated::not_a7s);
-    in_a_shell_string_by(text, &|text: &str| found(text, &find)).map(|it| shell_string_refusal(&it))
+    Some(
+        match in_a_string_a_shell_runs_by(read, &|text: &str| found(text, &find))? {
+            Nested::Found(it) => shell_string_refusal(&it),
+            Nested::TooDeep => guardcaps::too_deep_refusal(),
+        },
+    )
+}
+
+/// What [`in_shell_strings_at_every_level_by`] found.
+pub(crate) enum Nested<T> {
+    /// What its `look` found, at some level.
+    Found(T),
+    /// A string handed on more than [`guardcaps::MAX_NESTING`] levels in: not read, so the call
+    /// is too big to check, whatever the string holds.
+    TooDeep,
+}
+
+/// What the consent and operator-rule backstops' `look` finds in a string or a heredoc body a
+/// shell runs, at every level (#1426): the first level read as before, a heredoc's lines one by
+/// one ([`in_a_shell_string_by`], [`in_a_shells_heredoc_by`]), so every answer it gave stands;
+/// then every level through the walk the handoff guard reads with too
+/// ([`in_shell_strings_at_every_level_by`]). `look` is handed each string as the shell reads it
+/// ([`as_the_shell_reads`]). `read` is the command, its heredocs read once.
+pub(crate) fn in_a_string_a_shell_runs_by<T>(
+    read: &Heredocs,
+    look: &impl Fn(&str) -> Option<T>,
+) -> Option<Nested<T>> {
+    if let Some(it) = in_a_shell_string_by(&read.stripped, look)
+        .or_else(|| in_a_shells_heredoc_by(&read.rows, look))
+    {
+        return Some(Nested::Found(it));
+    }
+    in_shell_strings_at_every_level_by(read, &|inner: &Heredocs| {
+        look(&as_the_shell_reads(&inner.text))
+    })
+}
+
+/// The walk every backstop reads nested shell strings with — the consent, operator-rule and
+/// handoff backstops alike (#1419, #1426): what `look` finds in a text a shell is handed to
+/// run, at every level ([`strings_handed_on`]). The host's rule reads only the outer command,
+/// so it sees none of them.
+///
+/// `look` is handed each text raw, exactly as the shell receives it (D-1419-3), with its
+/// heredocs read once (D-1419-13), and reads that text's own level only; the strings it hands
+/// on are this walk's. Each distinct text is read once per command, and the texts each one
+/// hands on are found once for every backstop that walks the same command
+/// ([`Heredocs::handed_on`]).
+///
+/// **A level is a text handed to a shell**, in command position: the script of a `-c` or an
+/// `eval`, the body of a heredoc that feeds a shell, a script fed to a shell on its stdin, or
+/// the command a `find -exec` runs. Text in a body no shell is handed (a commit message, a body
+/// the shells read differently) is no level, however often it names one.
+///
+/// **Fails closed past the cap**: a text handed on more than [`guardcaps::MAX_NESTING`] levels
+/// in is not read; it is [`Nested::TooDeep`], whatever it holds, and reported to
+/// [`shellseg::too_deep_within`].
+pub(crate) fn in_shell_strings_at_every_level_by<T>(
+    read: &Heredocs,
+    look: &impl Fn(&Heredocs) -> Option<T>,
+) -> Option<Nested<T>> {
+    in_strings_from(read, 1, look, &mut HashSet::new())
+}
+
+/// What `look` finds in the texts `read` hands a shell ([`strings_handed_on`]), they being
+/// `depth` levels into the command, and in theirs, further in.
+fn in_strings_from<'a, T>(
+    read: &'a Heredocs,
+    depth: usize,
+    look: &impl Fn(&Heredocs) -> Option<T>,
+    seen: &mut HashSet<&'a str>,
+) -> Option<Nested<T>> {
+    let strings = read.handed_on(strings_handed_on);
+    if strings.is_empty() {
+        return None;
+    }
+    if depth > guardcaps::MAX_NESTING {
+        shellseg::met_a_string_too_deep();
+        return Some(Nested::TooDeep);
+    }
+    for inner in strings {
+        // A text met again found nothing the first time, or the walk would have stopped there.
+        if !seen.insert(inner.text.as_str()) {
+            continue;
+        }
+        if let Some(it) = look(inner) {
+            return Some(Nested::Found(it));
+        }
+        if let Some(nested) = in_strings_from(inner, depth + 1, look, seen) {
+            return Some(nested);
+        }
+    }
+    None
+}
+
+/// Every text `read` hands a shell to run, raw, one level further in:
+///
+/// - what each of its commands hands on ([`handed_by_the_commands_of`]): the script of a `-c`
+///   or an `eval`, a script fed on stdin, the command of a `find -exec`; in its own commands
+///   and in the commands of each substitution it runs, at any depth
+///   ([`handed_in_substitutions`], off the substitutions `read` holds, read once);
+/// - the body of each heredoc that feeds a shell ([`bodies_handed_on`]);
+/// - the same in each line of a body the shells read differently, read one line at a time
+///   ([`Heredocs::lines_a_shell_may_run_in_place`]). The body itself is handed to no shell, so
+///   it is no level.
+///
+/// A heredoc body a reader takes as data hands nothing on.
+fn strings_handed_on(read: &Heredocs) -> Vec<String> {
+    let mut out = handed_by_the_commands_of(&read.stripped);
+    out.extend(bodies_handed_on(read));
+    out.extend(handed_in_substitutions(read.inward()));
+    for line in read.lines_a_shell_may_run_in_place() {
+        out.extend(handed_by_the_commands_of(&line));
+        if line.contains("$(") || line.contains('`') {
+            out.extend(handed_in_substitutions(&every_substitution(&line)));
+        }
+    }
+    let mut met = HashSet::new();
+    out.retain(|inner| met.insert(inner.clone()));
+    out
+}
+
+/// The heredoc bodies of `read` a shell is handed as a script: each one that feeds a shell
+/// ([`Heredocs::bodies_fed_to_a_shell`]), and, where a command sources its stdin by name
+/// (`source /dev/stdin <<'EOF'`, which the layout names no shell for), every body
+/// ([`Heredocs::every_body`]).
+fn bodies_handed_on(read: &Heredocs) -> Vec<String> {
+    let mut out = read.bodies_fed_to_a_shell();
+    let text = &read.stripped;
+    let names_stdin =
+        text.contains("/dev/stdin") || text.contains("/dev/fd/0") || text.contains("/proc/self/");
+    if names_stdin
+        && text.contains("<<")
+        && commands_of(text).iter().any(|words| {
+            let (prog, _env, argv) = shellwrap::split_env(words);
+            shellwrap::takes_its_script_from_stdin(&prog, &argv)
+        })
+    {
+        out.extend(read.every_body());
+    }
+    out
+}
+
+/// What the commands of each substitution hand a shell, at any depth, off `inward`, the
+/// substitutions read once ([`every_substitution`]), each read as the substitution backstop
+/// reads it ([`in_a_substitution_by`]): a heredoc body a reader takes as data is no command.
+fn handed_in_substitutions(inward: &Inward) -> Vec<String> {
+    let mut out = Vec::new();
+    for cased in &inward.texts {
+        out.extend(handed_by_the_commands_of(&lines_it_runs(cased)));
+        if cased.contains("<<") {
+            out.extend(bodies_handed_on(&Heredocs::of(cased)));
+        }
+    }
+    out
+}
+
+/// Every text the commands of `text` hand a shell to run ([`handed_as_written`]), each command
+/// read where it stands: in a `case` branch or a function body too. For a text that holds no
+/// heredoc body a reader takes as data.
+///
+/// **Each script as the shell that is handed it receives it.** The shared lexer keeps a
+/// backslash in front of a `$` or a backtick inside double quotes, where a shell drops it: to
+/// the shell, `bash -c "echo \$(x)"` hands on `echo $(x)`, which runs `x`. The corpus pins the
+/// lexer, so the text is read a second time with those backslashes dropped as a shell drops
+/// them ([`as_a_shell_unquotes`]), through the same reading, and both readings are kept
+/// (#1426). The second reading is the first one's in every other way: the same commands, a
+/// `case` branch and a function body among them, and a word that joins an ANSI-C part to a
+/// double-quoted one read part by part.
+///
+/// **A text the lexer cannot read whole is still read** (it fails closed): with every heredoc
+/// body emptied ([`crate::shellsubst::Scan::as_commands`]), so a body's apostrophe does not run
+/// on over the commands around it, and, where that does not read either, line by line.
+fn handed_by_the_commands_of(text: &str) -> Vec<String> {
+    let both_ways = |text: &str, out: &mut Vec<String>| {
+        let (handed, parsed) = handed_as_written(text);
+        out.extend(handed);
+        if text.contains("\\$") || text.contains("\\`") {
+            out.extend(handed_as_written(&as_a_shell_unquotes(text)).0);
+        }
+        parsed
+    };
+    let mut out = Vec::new();
+    if !may_hand_a_script_on(text) || both_ways(text, &mut out) {
+        return out;
+    }
+    if let Some(scan) = scan(text, true).filter(crate::shellsubst::Scan::has_heredoc_bodies)
+        && both_ways(&scan.as_commands(true), &mut out)
+    {
+        return out;
+    }
+    if text.contains('\n') {
+        for line in text.split('\n') {
+            both_ways(line, &mut out);
+        }
+    }
+    out
+}
+
+/// Whether a command of `text` may hand a script on at all: it may name a shell (every one of
+/// [`shellwrap::STRING_SHELLS`] ends in `sh`), `eval`, `find` or `source`, or it holds what `.`
+/// would source (stdin by name, a process substitution). Asked as a hot-path prefilter must ask
+/// ([`shellwrap::may_name`]), so it never says no to a spelling the reading behind it accepts;
+/// most texts name none, and are not read again for the scripts they hand on.
+fn may_hand_a_script_on(text: &str) -> bool {
+    if text.contains("$'") || text.contains("$\\\n") {
+        return true;
+    }
+    let text = shellwrap::prefilter_text(text);
+    ["sh", "eval", "find", "source", "/dev/", "/proc/", "<("]
+        .iter()
+        .any(|name| text.contains(name))
+}
+
+/// `text` as [`commands_of`] reads it for its commands: each `case` pattern's `)` read as the
+/// end of a command, and its line continuations taken out.
+fn as_commands_read(text: &str) -> std::borrow::Cow<'_, str> {
+    match scan(text, false) {
+        Some(scan) => scan.as_commands(false).into(),
+        None => text.into(),
+    }
+}
+
+/// Every text the commands of `text`, as the lexer reads them, hand a shell to run, and whether
+/// the lexer read the text whole:
+///
+/// - the script of a `-c` or an `eval` ([`shellwrap::shell_scripts_of`]);
+/// - the script a here-string hands a shell, or a `source` of stdin
+///   ([`shellwrap::here_string_script_of`]);
+/// - what a pipe feeds a shell that reads its script from stdin ([`piped_into_a_shell`]);
+/// - what a process substitution prints, where a shell or a `source` reads it as its script
+///   ([`printed_by_process_substitutions`]);
+/// - the command a `find -exec` runs ([`shellwrap::commands_a_find_runs`]), as a command line.
+///
+/// The last four are scripts a shell is handed without a `-c` string or a heredoc (D-1426-9).
+fn handed_as_written(text: &str) -> (Vec<String>, bool) {
+    let source = as_commands_read(text);
+    let (segments, parsed) = shellseg::segment_argv_parsed(&source);
+    let mut out = Vec::new();
+    let (mut reads_stdin, mut reads_a_file) = (false, false);
+    for words in with_function_bodies(segments) {
+        let (prog, _env, argv) = shellwrap::split_env(&words);
+        out.extend(shellwrap::shell_scripts_of(&prog, &argv));
+        out.extend(
+            shellwrap::commands_a_find_runs(&prog, &argv)
+                .iter()
+                .map(|run| quoted(run)),
+        );
+        if !shellwrap::runs_a_script_file(&prog) {
+            continue;
+        }
+        out.extend(shellwrap::here_string_script_of(&prog, &argv));
+        reads_stdin |= shellwrap::takes_its_script_from_stdin(&prog, &argv);
+        reads_a_file |= argv.iter().any(|w| w == "<");
+    }
+    if reads_stdin && source.contains('|') {
+        out.extend(piped_into_a_shell(&source));
+    }
+    if reads_a_file && source.contains("<(") {
+        out.extend(printed_by_process_substitutions(&source));
+    }
+    (out, parsed)
+}
+
+/// How many commands in front of a pipe into a shell are read as feeding it, once a group or
+/// a subshell stands there (`{ a; b; } | sh`): the walk does not say where the group began, so
+/// it reads back this far. Keeps the reading linear in the text.
+const FEEDERS_READ: usize = 32;
+
+/// What a pipe feeds each command of `source` that reads its script from stdin
+/// ([`shellwrap::takes_its_script_from_stdin`]: `echo '…' | bash`, `printf … | sh -s`,
+/// `… | source /dev/stdin`): what each command in front of it on the pipeline could print
+/// ([`floorguard::fed_lines`], the release floor's reading of the same). A text the lexer
+/// cannot read has no pipeline to follow, so every command of it is read as a feeder.
+fn piped_into_a_shell(source: &str) -> Vec<String> {
+    let fed_by = |argv: &[String]| {
+        let at = shellwrap::past_function_headers(argv).unwrap_or(0);
+        floorguard::fed_lines(&argv[at..])
+    };
+    let Some(segments) = shellseg::joined_argv(source) else {
+        return shellseg::segment_argv(source)
+            .iter()
+            .flat_map(|argv| fed_by(argv))
+            .collect();
+    };
+    let piped = |op: &Option<String>| matches!(op.as_deref(), Some("|" | "|&"));
+    let mut out = Vec::new();
+    for (k, reader) in segments.iter().enumerate() {
+        if !piped(&reader.before) {
+            continue;
+        }
+        let at = shellwrap::past_function_headers(&reader.argv).unwrap_or(0);
+        let (prog, _env, argv) = shellwrap::split_env(&reader.argv[at..]);
+        if !shellwrap::takes_its_script_from_stdin(&prog, &argv) {
+            continue;
+        }
+        // Back along the pipeline; and where a group's end stands in front of the pipe, back
+        // over the commands that may be the group's.
+        let mut grouped = false;
+        for feeder in segments[..k].iter().rev().take(FEEDERS_READ) {
+            out.extend(fed_by(&feeder.argv));
+            grouped |= !piped(&feeder.after);
+            if !grouped && !piped(&feeder.before) {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// What the commands inside each process substitution of `source` (`<( … )`) could print
+/// ([`floorguard::fed_lines`]): a shell or a `source` handed one reads that as its script
+/// (`bash <(echo '…')`, `source <( … )`, `bash < <( … )`). Quoting is not read, so one inside
+/// quotes is read too, which only ever reads more.
+fn printed_by_process_substitutions(source: &str) -> Vec<String> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < chars.len() {
+        if chars[i] != '<' || chars[i + 1] != '(' {
+            i += 1;
+            continue;
+        }
+        let from = i + 2;
+        let mut depth = 1usize;
+        let mut j = from;
+        while j < chars.len() && depth > 0 {
+            match chars[j] {
+                '\\' => j += 1,
+                '\'' => {
+                    j += 1;
+                    while j < chars.len() && chars[j] != '\'' {
+                        j += 1;
+                    }
+                }
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            j += 1;
+        }
+        let to = j
+            .saturating_sub(usize::from(depth == 0))
+            .clamp(from, chars.len());
+        let body: String = chars[from..to].iter().collect();
+        for argv in commands_of(&body) {
+            out.extend(floorguard::fed_lines(&argv));
+        }
+        i = j.max(from);
+    }
+    out
+}
+
+/// `text` with the backslash dropped in front of a `$` or a backtick inside double quotes, as
+/// a shell drops it when it unquotes the word, and nothing else changed: what the lexer then
+/// reads of a double-quoted word is what a shell hands on. Single quotes and ANSI-C quoting
+/// (`$'…'`) are stepped over, and a `$( … )` inside double quotes is read as unquoted text up
+/// to its `)`, so the quotes inside it pair as the shell pairs them.
+fn as_a_shell_unquotes(text: &str) -> String {
+    /// What stands open: double quotes, or a `$( … )` with the parentheses open inside it.
+    enum Open {
+        Quotes,
+        Substitution(usize),
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut open: Vec<Open> = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let quoted = matches!(open.last(), Some(Open::Quotes));
+        match c {
+            '\\' => match chars.next() {
+                Some(d @ ('$' | '`')) if quoted => out.push(d),
+                Some(d) => {
+                    out.push('\\');
+                    out.push(d);
+                }
+                None => out.push('\\'),
+            },
+            '"' => {
+                out.push(c);
+                if quoted {
+                    open.pop();
+                } else {
+                    open.push(Open::Quotes);
+                }
+            }
+            '$' if chars.peek() == Some(&'(') => {
+                out.push_str("$(");
+                chars.next();
+                open.push(Open::Substitution(0));
+            }
+            '$' if !quoted && chars.peek() == Some(&'\'') => {
+                out.push_str("$'");
+                chars.next();
+                while let Some(d) = chars.next() {
+                    out.push(d);
+                    if d == '\\' {
+                        out.extend(chars.next());
+                    } else if d == '\'' {
+                        break;
+                    }
+                }
+            }
+            '\'' if !quoted => {
+                out.push(c);
+                for d in chars.by_ref() {
+                    out.push(d);
+                    if d == '\'' {
+                        break;
+                    }
+                }
+            }
+            '(' | ')' if !quoted => {
+                out.push(c);
+                match (c, open.last_mut()) {
+                    ('(', Some(Open::Substitution(n))) => *n += 1,
+                    (')', Some(Open::Substitution(0))) => {
+                        open.pop();
+                    }
+                    (')', Some(Open::Substitution(n))) => *n -= 1,
+                    _ => {}
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// What `look` finds one level into a string a segment of `text` hands a shell to run
 /// (`sh -c '…'`, `eval '…'`, [`shellwrap::shell_scripts`]): the host's rule reads only the
 /// outer command.
-pub(crate) fn in_a_shell_string_by<T>(text: &str, look: &impl Fn(&str) -> Option<T>) -> Option<T> {
+fn in_a_shell_string_by<T>(text: &str, look: &impl Fn(&str) -> Option<T>) -> Option<T> {
     let toks = shellseg::split_punctuation(shellseg::lex(text).ok()?);
     heredoc::segments_of(&toks)
         .iter()
@@ -420,19 +854,14 @@ pub(crate) fn in_a_shell_string_by<T>(text: &str, look: &impl Fn(&str) -> Option
         })
 }
 
-/// A consent-gated command under either name on a line a heredoc feeds a shell
-/// ([`leakguard::lines_a_command_could_run`], the plan the leak guard and A7 share): the rule
-/// saw only the `bash` that opened it.
-fn in_a_shells_heredoc(cmd: &str) -> Option<String> {
-    let find = |it: &Reading| consent_gated(it, &Gated::not_a7s);
-    in_a_shells_heredoc_by(cmd, &|text: &str| found(text, &find))
-        .map(|it| shell_string_refusal(&it))
-}
-
-/// What `look` finds on a line a heredoc feeds a shell (`bash <<'EOF'`, `cat <<EOF | sh`).
-pub(crate) fn in_a_shells_heredoc_by<T>(cmd: &str, look: &impl Fn(&str) -> Option<T>) -> Option<T> {
-    leakguard::lines_a_command_could_run(cmd)
-        .iter()
+/// What `look` finds on a line a heredoc feeds a shell (`bash <<'EOF'`, `cat <<EOF | sh`), in
+/// `rows`, the lines the command could run ([`leakguard::lines_a_command_could_run`], the plan
+/// the leak guard and A7 share): the rule saw only the `bash` that opened it.
+fn in_a_shells_heredoc_by<T>(
+    rows: &[(String, bool)],
+    look: &impl Fn(&str) -> Option<T>,
+) -> Option<T> {
+    rows.iter()
         .filter(|(_, in_a_shells_body)| *in_a_shells_body)
         .find_map(|(row, _)| look(&as_the_shell_reads(row)))
 }

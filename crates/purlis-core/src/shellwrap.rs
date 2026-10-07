@@ -1058,6 +1058,100 @@ pub fn here_string_script(toks: &[String]) -> Option<String> {
     }
 }
 
+/// The names a program reads its own stdin by, as a file.
+const STDIN_FILES: [&str; 3] = ["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
+
+/// The builtins that run a file in the current shell.
+const SOURCING: [&str; 2] = ["source", "."];
+
+/// `argv` with its redirections taken out: each operator, the word it takes, and a file
+/// descriptor's number in front of it (`2>/dev/null` lexes to `2`, `>`, `/dev/null`).
+fn without_redirections(argv: &[String]) -> Vec<&String> {
+    let mut words: Vec<&String> = Vec::new();
+    let mut skip = false;
+    for w in argv {
+        if skip {
+            skip = false;
+        } else if is_redirect_token(w) {
+            if words.len() > 1
+                && words
+                    .last()
+                    .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
+            {
+                words.pop();
+            }
+            skip = true;
+        } else {
+            words.push(w);
+        }
+    }
+    words
+}
+
+/// True when the command `prog` with `argv` runs a script it reads from its stdin (#1426): a
+/// shell with no `-c` and no script file ([`reads_script_from_stdin`]), its redirections read
+/// past; a shell whose script file is its stdin by name (`bash /dev/stdin`); and `source` or
+/// `.` of the same. What feeds that stdin (a pipe, a here-string) is a script the shell runs.
+pub fn takes_its_script_from_stdin(prog: &str, argv: &[String]) -> bool {
+    let words: Vec<String> = without_redirections(argv).into_iter().cloned().collect();
+    let names_stdin = |w: Option<&String>| w.is_some_and(|w| STDIN_FILES.contains(&w.as_str()));
+    if SOURCING.contains(&prog) {
+        return names_stdin(words.get(1));
+    }
+    if !is_string_shell(prog) {
+        return false;
+    }
+    let (dash_c, operand) = shell_options(&words, false);
+    !dash_c && (operand.is_none() || names_stdin(operand) || words.iter().any(|a| a == "-s"))
+}
+
+/// True when `prog` is a program that runs a file handed to it as a script: a shell, or
+/// `source` and `.`. A process substitution among its words (`bash <( … )`) is such a file.
+pub fn runs_a_script_file(prog: &str) -> bool {
+    SOURCING.contains(&prog) || is_string_shell(prog)
+}
+
+/// The script a here-string hands the command `prog` with `argv` (`bash <<< '…'`,
+/// `. /dev/stdin <<< '…'`), or `None`: [`here_string_script`] of a segment already split, and
+/// of `source` and `.` reading stdin too (#1426).
+pub fn here_string_script_of(prog: &str, argv: &[String]) -> Option<String> {
+    let at = argv.iter().position(|t| t == "<<<")?;
+    let sourced = SOURCING.contains(&prog) && takes_its_script_from_stdin(prog, &argv[..at]);
+    (is_string_shell(prog) || sourced)
+        .then(|| argv.get(at + 1).cloned())
+        .flatten()
+}
+
+/// The primaries of `find` that run the words after them as a command, up to a `;` or a `+`.
+const FIND_RUNS: [&str; 4] = ["-exec", "-execdir", "-ok", "-okdir"];
+
+/// Each command a `find` runs for what it finds (`find … -exec sh -c '…' \;`), as its words,
+/// or nothing for another program (#1426). `xargs` is a wrapper [`split_env`] reads through;
+/// `find` names its command in the middle of its own words, so it is read here.
+pub fn commands_a_find_runs(prog: &str, argv: &[String]) -> Vec<Vec<String>> {
+    if base_lower(prog) != "find" {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut i = 1;
+    while i < argv.len() {
+        if !FIND_RUNS.contains(&argv[i].as_str()) {
+            i += 1;
+            continue;
+        }
+        let run: Vec<String> = argv[i + 1..]
+            .iter()
+            .take_while(|w| *w != ";" && *w != "+")
+            .cloned()
+            .collect();
+        i += run.len() + 1;
+        if !run.is_empty() {
+            out.push(run);
+        }
+    }
+    out
+}
+
 /// `re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg)` — a `-c` alone or inside a letter cluster.
 ///
 /// Hand-written rather than compiled: the class is ASCII by construction on both sides, so
@@ -1074,6 +1168,39 @@ fn is_dash_c_cluster(arg: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn words(line: &str) -> Vec<String> {
+        line.split(' ').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn a_command_that_runs_its_stdin_is_one_whatever_it_redirects() {
+        for (line, runs) in [
+            ("bash", true),
+            ("sh -s -- a", true),
+            ("bash 2 > /dev/null", true),
+            ("bash /dev/stdin", true),
+            ("source /dev/stdin", true),
+            (". /dev/fd/0", true),
+            ("bash -c cat", false),
+            ("bash script.sh", false),
+            ("source env.sh", false),
+            ("cat", false),
+        ] {
+            let argv = words(line);
+            assert_eq!(takes_its_script_from_stdin(&argv[0], &argv), runs, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_find_names_each_command_it_runs() {
+        let argv = words("find . -name x -exec sh -c ls ; -o -execdir rm {} + -print");
+        assert_eq!(
+            commands_a_find_runs("find", &argv),
+            [words("sh -c ls"), words("rm {}")]
+        );
+        assert!(commands_a_find_runs("grep", &argv).is_empty());
+    }
 
     #[test]
     fn a_dash_c_cluster_is_a_shells_string_flag() {

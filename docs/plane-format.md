@@ -4710,7 +4710,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   line is `unreadable`, and the drain carries on past it. A file another process holds for more
   than a second is reported `held`, and one past 16 MiB `too-big`; neither is read, and both are
   left, with their keys, for the next open. Every line the drain handed on is recorded before the
-  file is emptied.
+  file is emptied. The emptied file's `fsync` is waited for at most a second; past that the drain
+  goes on, and a file a crash puts back whole is drained again, its lines handed on twice.
 - **Git:** gitignored (under `/.charter/`). A sandboxed chat is denied reading and writing the
   whole `spool/` directory (ADR 0067 §5's integrity class, V63).
 
@@ -4726,7 +4727,10 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Written by:** `purlis_core::hookwire::ChatTokens::issue`, through `spool::remember`, before
   the token reaches the chat (`rewrite::replace`, mode 0600, under an exclusive lock on the
   `spool/` directory). The drain removes the keys it drained, and keeps those of a spool it left
-  `held` or `too-big`. Only in a project's
+  `held` or `too-big`. Issuing a token and the drain each wait at most a second for that lock:
+  past it, issuing says in the log that the key was not recorded (a line the chat spools is then
+  `no-key`), and the drain leaves every spool for the next open, or, once it has drained them,
+  keeps the keys until then. Only in a project's
   `.charter/app/spool/`, and a sandboxed chat neither reads nor writes it (V63): it is a verifier
   at rest.
 - **Git:** gitignored (under `/.charter/`).

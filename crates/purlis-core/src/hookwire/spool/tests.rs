@@ -574,3 +574,120 @@ fn a_line_not_yet_durable_is_told_apart_from_a_line_lost() {
     assert!(late.to_string().contains("next start"), "{late}");
     assert!(!is_not_yet_durable(&io::Error::other("lost")));
 }
+
+/// What `remember` answers for chat `chat` in `spool`, or `None` if it has not answered in five
+/// seconds: issuing a token must not wait on a process holding the spool directory.
+fn remembered_within_five_seconds(spool: &Path, chat: u32) -> Option<io::Result<()>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spool = spool.to_path_buf();
+    std::thread::spawn(move || {
+        let token = ChatTokens::default()
+            .issue_to_this_process(chat)
+            .expect("a token");
+        let _ = tx.send(remember(&spool, chat, &token));
+    });
+    rx.recv_timeout(Duration::from_secs(5)).ok()
+}
+
+/// A second open of the spool directory, holding its lock: another process reading or writing
+/// `keys.json`, as flock sees one (#1426).
+fn hold_the_keys(spool: &Path) -> File {
+    let holder = File::open(spool).expect("the directory opens");
+    holder.lock().expect("the holder takes the lock");
+    holder
+}
+
+#[test]
+fn a_token_whose_keys_another_process_holds_is_given_up_on_in_bounded_time() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    issued(&spool, 3);
+    let holder = hold_the_keys(&spool);
+
+    let started = Instant::now();
+    let refused = remembered_within_five_seconds(&spool, 4)
+        .expect("remember answered")
+        .expect_err("the key is not recorded");
+    let waited = started.elapsed();
+
+    assert_eq!(refused.kind(), io::ErrorKind::TimedOut, "{refused}");
+    assert!(
+        waited >= THE_KEYS_ARE_WAITED_FOR_AT_MOST && waited < Duration::from_secs(3),
+        "waited {waited:?}"
+    );
+    assert!(refused.to_string().contains("keys"), "{refused}");
+    drop(holder);
+    remembered_within_five_seconds(&spool, 4)
+        .expect("remember answered")
+        .expect("free keys take the key");
+}
+
+#[test]
+fn a_drain_whose_keys_another_process_holds_stops_in_bounded_time_and_keeps_every_line() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let holder = hold_the_keys(&spool);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let at = spool.clone();
+    let started = Instant::now();
+    std::thread::spawn(move || {
+        let _ = tx.send(drain(&at, &mut |_| Ok(())));
+    });
+    let refused = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the drain answered")
+        .expect_err("the drain stops");
+    let waited = started.elapsed();
+
+    assert_eq!(refused.kind(), io::ErrorKind::TimedOut, "{refused}");
+    assert!(
+        waited >= THE_KEYS_ARE_WAITED_FOR_AT_MOST && waited < Duration::from_secs(3),
+        "waited {waited:?}"
+    );
+    drop(holder);
+    assert_eq!(
+        tools(&drained(&spool)),
+        [(4, 1, "a".to_owned())],
+        "nothing was read, so the line and its key are there for the next start"
+    );
+}
+
+#[test]
+fn a_drains_last_sync_still_running_past_its_wait_is_given_up_on_and_the_drain_finishes() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let other = issued(&spool, 5);
+    append(&spool, 5, &other, &call(5, "b")).expect("spooled");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let at = spool.clone();
+    let started = Instant::now();
+    std::thread::spawn(move || {
+        THE_DRAINS_SYNC_STALLS_FOR.with(|stall| stall.set(Duration::from_secs(5)));
+        let _ = tx.send(drained(&at));
+    });
+    let all = rx
+        .recv_timeout(Duration::from_secs(8))
+        .expect("the drain answered");
+    let took = started.elapsed();
+
+    assert_eq!(
+        tools(&all),
+        [(4, 1, "a".to_owned()), (5, 1, "b".to_owned())]
+    );
+    assert!(
+        // Two waits and room for a loaded machine, still short of the stall.
+        took < 2 * THE_DRAINS_SYNC_IS_WAITED_FOR_AT_MOST + Duration::from_secs(2),
+        "took {took:?}"
+    );
+    assert_eq!(
+        tools(&drained(&spool)),
+        [],
+        "each spool was emptied all the same"
+    );
+}

@@ -74,6 +74,27 @@ const A_LINE_SYNC_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_millis(250);
 /// holder never holds up the drain of every other chat, or the app's start.
 const THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST: Duration = Duration::from_secs(1);
 
+/// How long issuing a token ([`remember`]) and the drain wait for `keys.json`, under the lock
+/// on the spool directory itself, while another process holds it (#1426). Past it, issuing says
+/// in the log that the key was not recorded and issues the token all the same, and the drain
+/// stops and is run again at the next start: a holder never holds up a chat's start or the
+/// app's.
+const THE_KEYS_ARE_WAITED_FOR_AT_MOST: Duration = Duration::from_secs(1);
+
+/// How long the drain waits for an emptied spool to be made durable (#1426). Past it the drain
+/// goes on: every line in it was recorded before it was emptied, so a spool that comes back
+/// whole after a crash is drained again and its lines handed on twice, the side a drain errs
+/// on (see [`drain`]).
+const THE_DRAINS_SYNC_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_secs(1);
+
+#[cfg(test)]
+thread_local! {
+    /// How long the drain's sync of an emptied spool sleeps first, on this thread: a disk that
+    /// does not answer, as a test makes one.
+    static THE_DRAINS_SYNC_STALLS_FOR: std::cell::Cell<Duration> =
+        const { std::cell::Cell::new(Duration::ZERO) };
+}
+
 /// The most a chat's spool holds, and the most the drain reads of one. A spool the host has not
 /// drained grows by one hook line at a time, so this is many thousands of lines. [`append`]
 /// refuses a line that would take a spool past it, and the line is said to be lost, so every
@@ -121,11 +142,25 @@ fn refused_unless_covered(dir: &Path) -> io::Result<()> {
 
 /// Holds an exclusive lock on the spool directory itself while `keys.json` is read and
 /// rewritten, so two tokens issued at once never drop each other's key.
+///
+/// **The wait for it is bounded** ([`THE_KEYS_ARE_WAITED_FOR_AT_MOST`], #1426), and the
+/// directory is opened without blocking and only as a directory, so nothing planted at its path
+/// holds the caller either.
 fn keys_locked<T>(dir: &Path, act: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
-    let held = File::open(dir)?;
-    held.lock()?;
+    let held = open_dir(dir)?;
+    lock_within(&held, THE_KEYS_ARE_WAITED_FOR_AT_MOST, "the spool's keys")?;
     let _held = crate::filelock::Held::locked(held);
     act()
+}
+
+/// The directory `dir`, opened without blocking and only as a directory.
+fn open_dir(dir: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let flags = rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NONBLOCK;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags.bits() as i32)
+        .open(dir)
 }
 
 /// Chat `chat`'s spool in `dir`.
@@ -247,14 +282,9 @@ thread_local! {
 /// `fsync`s the directory `dir`, opened without blocking and only as a directory, within `wait`
 /// ([`done_within`]).
 fn sync_dir_within(dir: &Path, wait: Duration) -> io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     #[cfg(test)]
     DIRECTORY_SYNCS.with(|n| n.set(n.get() + 1));
-    let flags = rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NONBLOCK;
-    let held = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(flags.bits() as i32)
-        .open(dir)?;
+    let held = open_dir(dir)?;
     done_within(wait, "the spool's directory", move || {
         rustix::fs::fsync(&held).map_err(io::Error::from)
     })
@@ -419,7 +449,7 @@ pub fn append(
     if file.metadata()?.len() == 0 {
         sync_dir_within(dir, A_DIRECTORY_SYNC_IS_WAITED_FOR_AT_MOST)?;
     }
-    lock_within(&file, A_LOCK_IS_WAITED_FOR_AT_MOST)?;
+    lock_within(&file, A_LOCK_IS_WAITED_FOR_AT_MOST, "this chat's spool")?;
     let mut file = crate::filelock::Held::locked(file);
     let len = file.metadata()?.len();
     if len >= A_SPOOL_HOLDS_AT_MOST {
@@ -456,8 +486,8 @@ pub fn append(
 }
 
 /// Takes `file`'s exclusive lock, or answers [`io::ErrorKind::TimedOut`] once `wait` has passed
-/// with another holder still on it.
-fn lock_within(file: &File, wait: Duration) -> io::Result<()> {
+/// with another holder still on it. `what` is what the file is, as the error says it.
+fn lock_within(file: &File, wait: Duration, what: &str) -> io::Result<()> {
     let started = Instant::now();
     loop {
         match file.try_lock() {
@@ -466,10 +496,7 @@ fn lock_within(file: &File, wait: Duration) -> io::Result<()> {
             Err(std::fs::TryLockError::WouldBlock) if started.elapsed() >= wait => {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    format!(
-                        "another process held this chat's spool for {} ms",
-                        wait.as_millis()
-                    ),
+                    format!("another process held {what} for {} ms", wait.as_millis()),
                 ));
             }
             Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(A_TRY_EVERY),
@@ -624,6 +651,12 @@ pub mod why {
 ///
 /// **Run before this host issues any token**, as a host does at its start: a line under a key
 /// `keys.json` does not hold when the drain begins is rejected (`no-key`).
+///
+/// **Every wait is bounded**, so the app's start is never held: for `keys.json`
+/// ([`THE_KEYS_ARE_WAITED_FOR_AT_MOST`]; before any spool is read, the drain stops with
+/// [`io::ErrorKind::TimedOut`] and every line waits for the next start), for each chat's spool
+/// ([`THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST`], reported `held`), and for each emptied spool's sync
+/// ([`THE_DRAINS_SYNC_IS_WAITED_FOR_AT_MOST`]).
 pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
@@ -657,13 +690,23 @@ pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io:
         }
     }
     // Every key taken is drained: forget them, keeping any issued since and those of a spool
-    // left for the next start.
-    keys_locked(dir, || {
+    // left for the next start. Keys another process holds past the wait are kept, and
+    // forgotten by the next drain: the spools they check are empty, so nothing is lost.
+    match keys_locked(dir, || {
         let mut now = read_keys(dir)?;
         now.keys
             .retain(|held| !taken.contains_key(&held.id) || left.contains(&held.chat));
         write_keys(dir, &now)
-    })
+    }) {
+        Err(why) if why.kind() == io::ErrorKind::TimedOut => {
+            tracing::warn!(
+                "purlis: the hook spool was drained, and its keys were kept ({why}); they are \
+                 forgotten at the next start"
+            );
+            Ok(())
+        }
+        forgot => forgot,
+    }
 }
 
 /// Drains chat `chat`'s spool, and answers whether it did: `false` for one left, unread, for the
@@ -689,7 +732,11 @@ fn drain_one(
         }
         opened => opened?,
     };
-    match lock_within(&file, THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST) {
+    match lock_within(
+        &file,
+        THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST,
+        "this chat's spool",
+    ) {
         Err(why) if why.kind() == io::ErrorKind::TimedOut => {
             return each(left(why::HELD)).map(|()| false);
         }
@@ -780,7 +827,24 @@ fn drain_one(
     // Everything handed on is recorded, and every line was this drain's: emptied, not removed,
     // so a hook holding it open appends to the file the next drain reads.
     file.set_len(0)?;
-    rustix::fs::fsync(&file)?;
+    let emptied = file.try_clone()?;
+    #[cfg(test)]
+    let stall = THE_DRAINS_SYNC_STALLS_FOR.with(std::cell::Cell::get);
+    match done_within(
+        THE_DRAINS_SYNC_IS_WAITED_FOR_AT_MOST,
+        "the emptied spool",
+        move || {
+            #[cfg(test)]
+            std::thread::sleep(stall);
+            rustix::fs::fsync(&emptied).map_err(io::Error::from)
+        },
+    ) {
+        Err(why) if why.kind() == io::ErrorKind::TimedOut => tracing::warn!(
+            "purlis: chat {chat}'s spool was drained, and {why}; if the machine stops before \
+             the disk has it, its lines are handed on again at the next start"
+        ),
+        synced => synced?,
+    }
     Ok(true)
 }
 

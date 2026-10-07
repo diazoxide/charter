@@ -62,6 +62,7 @@
 //! the generated cases, `shellseg-generated.jsonl.gz` (ADR 0046) — and
 //! `tests/the_shell_is_read_the_way_python_reads_it.rs` replays them with no Python present.
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -69,6 +70,7 @@ use regex::Regex;
 
 use crate::memstore::is_python_space;
 use crate::shellseg::{self, Quoting, Tok};
+use crate::shellsubst::{Inward, every_substitution};
 use crate::shellwrap::{self, base_lower};
 
 /// Programs that RUN a heredoc reaching their pipeline as CODE, so its body is never data —
@@ -1831,6 +1833,14 @@ pub struct LayoutLine {
     pub drop: bool,
     /// An executor runs this body — what A7 reads.
     pub executed: bool,
+    /// The body is fed to an executor (`bash <<'EOF'`, a reader piped into one): a text handed
+    /// on to another shell. An `executed` body that is not is one the shells read differently,
+    /// which a shell may run as lines of the command it stands in (#1426).
+    pub fed: bool,
+    /// The body's delimiter is unquoted, so the shell that opens the heredoc expands the body
+    /// before any program reads it: a backslash in front of `$`, a backtick or `\` is dropped
+    /// (#1426).
+    pub expands: bool,
 }
 
 /// Every line of `cmd` as `(text, is a heredoc body, drop it, an executor runs it)` —
@@ -1893,6 +1903,7 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
         // carries `None`, which is never a key of `drop`.
         let mut chunks: Vec<(Option<usize>, String)> = Vec::new();
         let mut ended: HashMap<usize, bool> = HashMap::new();
+        let mut expanding: HashSet<usize> = HashSet::new();
         let mut fallback: HashMap<usize, bool> = HashMap::new();
         let mut body_count = 0usize;
         // Bodies the shells read differently, which are read both ways.
@@ -1999,6 +2010,9 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
                 }
                 i += len;
                 ended.insert(idx, found);
+                if h.expands {
+                    expanding.insert(idx);
+                }
                 if i < n {
                     // the terminator line itself
                     chunks.push((Some(idx), lines[i].to_string()));
@@ -2041,6 +2055,8 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
                     && !unterminated,
                 executed: idx
                     .is_some_and(|k| executed.get(&k).copied().unwrap_or(false) || both_ways(k)),
+                fed: idx.is_some_and(|k| executed.get(&k).copied().unwrap_or(false)),
+                expands: idx.is_some_and(|k| expanding.contains(&k)),
             });
         }
     }
@@ -2063,6 +2079,203 @@ pub fn strip_reader_heredocs(cmd: &str) -> String {
         .map(|l| l.text)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A text a shell runs, read once for every reading a backstop takes of it (D-1419-13), and
+/// shared by the three backstops that read the same command (#1426): its heredocs
+/// ([`heredoc_layout`]) as the text itself, the text with every body a reader takes as data left
+/// out ([`strip_reader_heredocs`]), and the lines a shell could run, each with whether a heredoc
+/// holds it ([`crate::leakguard::lines_a_command_could_run`]) and whether that heredoc feeds a
+/// shell; its substitutions at every depth ([`Heredocs::inward`]); and the texts it hands on to
+/// another shell, each read the same way ([`Heredocs::handed_on`]). The last two are read when
+/// first asked for and kept.
+pub(crate) struct Heredocs {
+    /// The text as it stood.
+    pub(crate) text: String,
+    pub(crate) stripped: String,
+    pub(crate) rows: Vec<(String, bool)>,
+    /// For each of `rows`, whether its heredoc feeds it to a shell ([`LayoutLine::fed`]).
+    fed: Vec<bool>,
+    /// For each of `rows`, whether the shell that opens its heredoc expands it
+    /// ([`LayoutLine::expands`]).
+    expands: Vec<bool>,
+    inward: OnceCell<Inward>,
+    handed_on: OnceCell<Vec<Heredocs>>,
+}
+
+impl Heredocs {
+    pub(crate) fn of(text: &str) -> Self {
+        if !text.contains("<<") {
+            let rows: Vec<(String, bool)> =
+                text.split('\n').map(|l| (l.to_owned(), false)).collect();
+            return Self {
+                text: text.to_owned(),
+                stripped: text.to_owned(),
+                fed: vec![false; rows.len()],
+                expands: vec![false; rows.len()],
+                rows,
+                inward: OnceCell::new(),
+                handed_on: OnceCell::new(),
+            };
+        }
+        let layout = heredoc_layout(text);
+        let stripped = layout
+            .iter()
+            .filter(|l| !l.drop)
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut rows = Vec::new();
+        let mut fed = Vec::new();
+        let mut expands = Vec::new();
+        for l in layout.into_iter().filter(|l| !l.body || l.executed) {
+            fed.push(l.fed);
+            expands.push(l.expands);
+            rows.push((l.text, l.executed));
+        }
+        Self {
+            text: text.to_owned(),
+            stripped,
+            rows,
+            fed,
+            expands,
+            inward: OnceCell::new(),
+            handed_on: OnceCell::new(),
+        }
+    }
+
+    /// Every substitution a shell runs in the text, at every depth
+    /// ([`every_substitution`]), read once. A walk that stopped at a bound is reported to
+    /// [`shellseg::too_deep_within`] each time it is asked for, as a fresh reading would.
+    pub(crate) fn inward(&self) -> &Inward {
+        let inward = self.inward.get_or_init(|| every_substitution(&self.text));
+        if inward.too_big {
+            shellseg::met_a_string_too_deep();
+        }
+        inward
+    }
+
+    /// The texts this one hands a shell to run, one level further in, each read in turn: what
+    /// `find` answers the first time, and kept for every backstop that asks after it.
+    pub(crate) fn handed_on(&self, find: impl FnOnce(&Self) -> Vec<String>) -> &[Self] {
+        self.handed_on
+            .get_or_init(|| find(self).iter().map(|inner| Self::of(inner)).collect())
+    }
+
+    /// Each run of lines a heredoc feeds a shell (`bash <<'EOF'`, `cat <<EOF | sh`), as one text
+    /// with its line continuations taken out, so a command split over a continuation is read as
+    /// the one command the shell runs. A text handed on to another shell: one level further in.
+    ///
+    /// **A body whose delimiter is unquoted is expanded first**, by the shell that opens the
+    /// heredoc: it drops the backslash in front of a `$`, a backtick or a backslash, so what
+    /// the shell fed the body receives may run a substitution the body spells escaped. Such a
+    /// run is given both ways, as written and as expanded ([`as_a_heredoc_expands`]).
+    pub(crate) fn bodies_fed_to_a_shell(&self) -> Vec<String> {
+        self.runs_of(true)
+    }
+
+    /// Each line of a heredoc body the shells read differently, which one of them may run as a
+    /// line of the command it stands in (D-1419-12), its continuations taken out. No shell is
+    /// handed these: they are lines at the level of the text itself, read one by one, so prose
+    /// in a commit message is never joined into one text and read as a script.
+    pub(crate) fn lines_a_shell_may_run_in_place(&self) -> Vec<String> {
+        self.runs_of(false)
+            .iter()
+            .flat_map(|run| run.split('\n'))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Each run of rows a heredoc holds that is, or is not, `fed` to a shell, joined.
+    fn runs_of(&self, fed: bool) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut run: Vec<&str> = Vec::new();
+        let mut expanded = false;
+        let mut end = |run: &mut Vec<&str>, expanded: &mut bool| {
+            if run.is_empty() {
+                return;
+            }
+            let text = std::mem::take(run).join("\n");
+            if fed && std::mem::take(expanded) && text.contains('\\') {
+                let as_expanded = as_a_heredoc_expands(&text);
+                out.push(text.replace("\\\n", ""));
+                if out.last() != Some(&as_expanded) {
+                    out.push(as_expanded);
+                }
+            } else {
+                out.push(text.replace("\\\n", ""));
+            }
+        };
+        for (((row, in_a_body), row_fed), row_expands) in
+            self.rows.iter().zip(&self.fed).zip(&self.expands)
+        {
+            if *in_a_body && *row_fed == fed {
+                run.push(row);
+                expanded |= *row_expands;
+            } else {
+                end(&mut run, &mut expanded);
+            }
+        }
+        end(&mut run, &mut expanded);
+        out
+    }
+
+    /// Every heredoc body in the text, whoever reads it, each as one text: for a command that
+    /// reads its script from a stdin the layout names no shell for (`source /dev/stdin`).
+    pub(crate) fn every_body(&self) -> Vec<String> {
+        if !self.text.contains("<<") {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut run: Vec<String> = Vec::new();
+        let mut expanded = false;
+        for l in heredoc_layout(&self.text) {
+            if l.body {
+                expanded |= l.expands;
+                run.push(l.text);
+                continue;
+            }
+            if !run.is_empty() {
+                let text = std::mem::take(&mut run).join("\n");
+                if std::mem::take(&mut expanded) {
+                    out.push(as_a_heredoc_expands(&text));
+                }
+                out.push(text);
+            }
+        }
+        if !run.is_empty() {
+            let text = run.join("\n");
+            if expanded {
+                out.push(as_a_heredoc_expands(&text));
+            }
+            out.push(text);
+        }
+        out
+    }
+}
+
+/// A heredoc body as the shell that opens the heredoc hands it on when the delimiter is
+/// unquoted: a backslash in front of `$`, a backtick or a backslash dropped, and a
+/// backslash-newline taken out. Every other backslash stays.
+fn as_a_heredoc_expands(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some(d @ ('$' | '`' | '\\')) => out.push(d),
+            Some('\n') => {}
+            Some(d) => {
+                out.push('\\');
+                out.push(d);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

@@ -312,7 +312,7 @@ pub(crate) fn floor(cmd: &str, unattended: bool, depth: usize) -> Option<String>
 /// What a segment could print into a shell reading stdin: its words as one line, with and
 /// without the producer's own leading options (`echo -n`, `printf --`) and, for `printf`, its
 /// format; and each word that is a line of its own.
-fn fed_lines(toks: &[String]) -> Vec<String> {
+pub(crate) fn fed_lines(toks: &[String]) -> Vec<String> {
     let (prog, _env, argv) = shellwrap::split_env(toks);
     let words = argv.get(1..).unwrap_or(&[]);
     let past_options = words

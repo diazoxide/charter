@@ -34,11 +34,12 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::consentspelling::{self, Place};
+use crate::consentspelling::{self, Nested, Place};
+use crate::heredoc::Heredocs;
 use crate::scaffold::settings::{self, CONSENT_PATTERNS, PURLIS_CONSENT_PATTERNS};
 use serde_json::Value;
 
-use crate::{cliname, heredoc, pyjson, shellwrap};
+use crate::{cliname, pyjson, shellwrap};
 
 /// The trace reason this refusal is tallied under.
 pub const REASON: &str = "rule-spelling";
@@ -103,6 +104,11 @@ pub fn refusal(cmd: &str, plane: &Path, anchors: &[&Path]) -> Option<String> {
     Rules::in_force(plane, anchors).refusal(cmd)
 }
 
+/// [`refusal`] of a command already read ([`Rules::refusal_of`]).
+pub(crate) fn refusal_of(read: &Heredocs, plane: &Path, anchors: &[&Path]) -> Option<String> {
+    Rules::in_force(plane, anchors).refusal_of(read)
+}
+
 /// The host's `Bash` ask and deny rules, file by file, as the guard reads them.
 #[derive(Default)]
 pub struct Rules {
@@ -149,17 +155,30 @@ impl Rules {
 
     /// Why `cmd` is refused under these rules, or `None` ([`refusal`]).
     pub fn refusal(&self, cmd: &str) -> Option<String> {
-        let files = &self.files;
-        if !files
+        if !self.names_a_program() {
+            return None;
+        }
+        self.refusal_of(&Heredocs::of(cmd))
+    }
+
+    /// Whether any rule names a program to read every spelling of.
+    fn names_a_program(&self) -> bool {
+        self.files
             .iter()
             .any(|f| f.rules.iter().any(|r| r.program.is_some()))
-        {
+    }
+
+    /// [`Rules::refusal`] of a command already read, for a caller that reads it once for every
+    /// backstop ([`crate::toolgate::verdict`], #1426).
+    pub(crate) fn refusal_of(&self, read: &Heredocs) -> Option<String> {
+        let files = &self.files;
+        if !self.names_a_program() {
             return None;
         }
         // Every substitution a shell runs, at every depth, is read once through the leak
         // guard's scanner (#1417) and handed to the arm that reads it; past its bounds the
         // call is too big to check, not read in part.
-        let inward = crate::shellsubst::every_substitution(cmd);
+        let inward = read.inward();
         if inward.too_big {
             return Some(crate::guardcaps::too_deep_refusal());
         }
@@ -167,7 +186,7 @@ impl Rules {
         let look = |text: &str| hits(files, text, false);
         let look_inward = |text: &str| hits(files, text, true);
         let named = |name: &str| named(files, name);
-        let stripped = heredoc::strip_reader_heredocs(cmd);
+        let stripped = read.stripped.as_str();
         let first = |found: &Found, source: &str| match found {
             Found::TooDeep => None,
             Found::Hits(hits) => Some(
@@ -179,29 +198,33 @@ impl Rules {
         };
         // Where the command sits first (a substitution, a `case` branch, a function body), so
         // the refusal says so; then a string a shell runs; then how it is spelt.
-        consentspelling::in_a_substitution_by(&inward, &|segments: &[Vec<String>]| {
+        consentspelling::in_a_substitution_by(inward, &|segments: &[Vec<String>]| {
             hits_in(files, consentspelling::readings_in(segments, &named))
         })
         .map(|found| (found, Place::Substitution))
-        .or_else(|| consentspelling::in_a_branch_or_body_by(&stripped, &look))
+        .or_else(|| consentspelling::in_a_branch_or_body_by(stripped, &look))
         .map(|(found, place)| match first(&found, "") {
             Some(hit) => placed_refusal(files, hit, place),
             None => too_deep_refusal(),
         })
         .or_else(|| {
-            consentspelling::in_a_shell_string_by(&stripped, &look_inward)
-                .or_else(|| consentspelling::in_a_shells_heredoc_by(cmd, &look_inward))
-                .map(|found| match first(&found, "") {
-                    Some(hit) => shell_string_refusal(files, hit),
-                    None => too_deep_refusal(),
-                })
+            // At every level up to the nesting cap, and refused past it (#1426).
+            consentspelling::in_a_string_a_shell_runs_by(read, &look_inward).map(|nested| {
+                match nested {
+                    Nested::Found(found) => match first(&found, "") {
+                        Some(hit) => shell_string_refusal(files, hit),
+                        None => too_deep_refusal(),
+                    },
+                    Nested::TooDeep => crate::guardcaps::too_deep_refusal(),
+                }
+            })
         })
         .or_else(|| {
             let asked = |source: &str, found: &Found| match found {
                 Found::TooDeep => false,
                 Found::Hits(hits) => hits.iter().all(|h| asks(files, *h, source)),
             };
-            consentspelling::not_as_written_by(&stripped, &look, asked).map(|(found, source)| {
+            consentspelling::not_as_written_by(stripped, &look, asked).map(|(found, source)| {
                 match first(&found, &source) {
                     Some(hit) => spelling_refusal(files, hit),
                     None => too_deep_refusal(),
