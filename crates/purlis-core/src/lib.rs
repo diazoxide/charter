@@ -29,6 +29,7 @@ pub mod diffscan;
 pub mod dispatch;
 pub mod dispatchgrant;
 pub mod dispatchlimits;
+pub mod dispatchunattended;
 pub mod docsrc;
 pub mod doctor;
 pub mod engine;

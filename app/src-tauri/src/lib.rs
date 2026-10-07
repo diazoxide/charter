@@ -28,6 +28,7 @@ mod clipath;
 mod curation;
 mod dispatchgrants;
 mod dispatchlimits;
+mod dispatchunattended;
 mod doctor;
 mod extensions;
 mod filewatch;
