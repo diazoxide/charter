@@ -427,10 +427,67 @@ fn a_profile_that_asks_is_passed_on_whatever_else_its_command_says() {
         words(&["claude", "--permission-mode=acceptEdits"]),
         words(&["claude", "--model", "bypassPermissions"]),
         words(&["claude", "--permission-mode"]),
-        words(&["codex", "-a", "never"]),
+        words(&["codex", "-a", "on-request"]),
     ] {
         assert_eq!(bypass_in(&command), None, "{command:?}");
     }
-    // A profile that is not the asking chat's is the project's own to judge.
+    // With no profile handed in there is nothing to refuse here: a caller that knows who
+    // named the profile asks `bypass_refusal` of it first.
     assert!(start_of_a_persona_chat(the_asking_chats_own(), "devops", None).is_ok());
+}
+
+#[test]
+fn codex_s_own_ways_of_asking_nobody_are_recognised_and_its_asking_ones_are_not() {
+    for (command, flag) in [
+        (words(&["codex", "--full-auto"]), Some("--full-auto")),
+        (words(&["codex", "-a", "never"]), Some("-a")),
+        (
+            words(&["codex", "--ask-for-approval", "never"]),
+            Some("--ask-for-approval"),
+        ),
+        (
+            words(&["codex", "--ask-for-approval=never"]),
+            Some("--ask-for-approval=never"),
+        ),
+        (words(&["codex", "-a", "on-request"]), None),
+        (words(&["codex", "--ask-for-approval", "untrusted"]), None),
+        // A value is the word after its flag, and nothing further along.
+        (words(&["codex", "-a", "on-failure", "never"]), None),
+    ] {
+        assert_eq!(bypass_in(&command), flag, "{command:?}");
+    }
+}
+
+#[test]
+fn no_chat_is_started_for_another_on_a_profile_that_asks_nobody_whoever_named_it() {
+    let yolo = words(&["claude", "--dangerously-skip-permissions"]);
+    let asks = words(&["claude"]);
+    for by in [
+        NamedBy::TheDispatch,
+        NamedBy::ThePersona("devops"),
+        NamedBy::TheAskingChat,
+    ] {
+        assert_eq!(bypass_refusal("work", &asks, by), None, "{by:?}");
+        let said = bypass_refusal("yolo", &yolo, by).expect("refused");
+        assert!(said.contains("'yolo'"), "{said}");
+        assert!(said.contains("(--dangerously-skip-permissions)"), "{said}");
+        assert!(!said.contains('\n'), "{said}");
+    }
+    assert_eq!(
+        bypass_refusal("yolo", &yolo, NamedBy::TheDispatch).as_deref(),
+        Some(
+            "the dispatch names profile 'yolo', which starts its harness with the permission \
+             prompts off (--dangerously-skip-permissions), and purlis starts no chat for \
+             another chat on such a profile. Name a profile that asks, or none."
+        )
+    );
+    assert_eq!(
+        bypass_refusal("yolo", &yolo, NamedBy::ThePersona("devops")).as_deref(),
+        Some(
+            "persona 'devops' names profile 'yolo', which starts its harness with the \
+             permission prompts off (--dangerously-skip-permissions), and purlis starts no \
+             chat for another chat on such a profile. Give the persona a profile that asks, \
+             from its view, or name one with --profile."
+        )
+    );
 }

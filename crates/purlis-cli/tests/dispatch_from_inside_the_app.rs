@@ -321,10 +321,12 @@ fn a_second_dispatch_across_a_pair_the_person_is_being_asked_about_is_not_held()
         &["--to", "qa", "--name", "and the logs"],
     );
 
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    // Dropped, so a refusal: nothing of this ask will ever start.
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stdout), "");
     assert_eq!(
-        text(&out.stdout),
-        "purlis dispatch: not held. The person is already being asked whether this chat may \
+        text(&out.stderr),
+        "✗ purlis dispatch: not held. The person is already being asked whether this chat may \
          dispatch to 'qa', for the task 'check the queue', and they were shown that task's \
          brief, so only it starts when they allow it. Nothing was started. Dispatch 'and the \
          logs' again once they have answered.\n"
@@ -532,20 +534,16 @@ fn the_refusals() -> Vec<(&'static str, String)> {
     ]
 }
 
-/// What `purlis dispatch` prints for the app's refusal `why`.
-fn printed(why: &str) -> String {
-    if why.to_lowercase().contains("nothing was started") {
-        format!("✗ purlis dispatch: {why}\n")
-    } else {
-        format!("✗ purlis dispatch: {why} Nothing was started.\n")
-    }
-}
-
 #[test]
-fn every_recorded_refusal_answers_with_the_core_s_own_sentence() {
+fn every_recorded_refusal_is_the_core_s_own_sentence_and_what_the_command_prints_for_it() {
     // A recorded scenario's stand-in app answers one line, written in the fixture. Each is the
     // sentence the core says, and this holds the fixture to it: a change to a sentence is a
     // change to its scenario, made on purpose. And every refusal has its scenario.
+    //
+    // **What the row expects on stderr is what the command prints**, asked of the command
+    // itself: the binary is run against an app that answers the core's sentence, and its
+    // stderr is compared with the row. A copy of the command's formatting kept here would
+    // pass while the command printed something else, which it once did.
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/recorded/behaviour.jsonl");
     let rows: Vec<serde_json::Value> = std::fs::read_to_string(fixture)
@@ -560,12 +558,40 @@ fn every_recorded_refusal_answers_with_the_core_s_own_sentence() {
             .unwrap_or_else(|| panic!("no recorded scenario named {name}"));
         assert!(!said.contains('\n'), "{name}: {said}");
         assert_eq!(row["serve"]["answer"]["no"]["why"], said.as_str(), "{name}");
+        assert_eq!(row["expect"]["exit"], 1, "{name}");
+
+        let tmp = daily();
+        let (app, _reading, _asked) = an_app(&tmp, {
+            let why = said.clone();
+            move |tickets, connection, ask| {
+                on_a_ticket(tickets, connection, ask, |_| Answer::No {
+                    why: why.clone(),
+                })
+            }
+        });
+        // The row's own arguments after the command's name, on a persona this project has.
+        let args: Vec<&str> = row["args"]
+            .as_array()
+            .expect("its arguments")
+            .iter()
+            .skip(1)
+            .map(|arg| arg.as_str().expect("a word"))
+            .collect();
+        let out = dispatch(&root(&tmp), Some(&app), &args);
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        assert_eq!(text(&out.stdout), "", "{name}");
         assert_eq!(
             row["expect"]["stderr"]["text"],
-            printed(&said).as_str(),
+            text(&out.stderr).as_str(),
             "{name}"
         );
-        assert_eq!(row["expect"]["exit"], 1, "{name}");
+        // Whole: the sentence's last words, which say what to do, are there.
+        let last = said.rsplit(". ").next().expect("a last sentence");
+        assert!(
+            text(&out.stderr).contains(last),
+            "{name}: {}",
+            text(&out.stderr)
+        );
     }
 }
 

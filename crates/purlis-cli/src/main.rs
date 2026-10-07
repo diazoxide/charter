@@ -461,7 +461,7 @@ enum Command {
     /// which needs no grant. It works in this chat's folder, with the sandbox, hosts and vaults
     /// the project gives that persona, and is listed under this chat in the explorer. Its
     /// report reaches this chat as context on its next turn. A persona other than this chat's
-    /// own needs a dispatch grant, which only the person gives: where there is none the
+    /// own needs a dispatch grant, which the person gives: where there is none the
     /// person is asked on this chat's tab, and the task starts when they allow it.
     ///
     /// It starts on the persona's own harness profile where its definition names one, else on
@@ -3632,7 +3632,8 @@ fn main() -> ExitCode {
     if let Some(code) = workspace_command(&cli.command) {
         return code;
     }
-    // `dispatch` says what it started, or one refusal and exits 1.
+    // `dispatch` says what it started, or that it is held for the person, and exits 0; or says
+    // one refusal and exits 1.
     if let Command::Dispatch {
         to,
         name,

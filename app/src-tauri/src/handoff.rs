@@ -172,9 +172,9 @@ pub fn answer(
                     arrived(*it);
                     answer
                 }
-                Ok(Dispatched::Held { from, to, waiting }) => {
-                    Answer::NeedsGrant { from, to, waiting }
-                }
+                Ok(Dispatched::Held {
+                    from, to, waiting, ..
+                }) => Answer::NeedsGrant { from, to, waiting },
                 Err(why) => no(why),
             }
         }
@@ -473,6 +473,10 @@ fn open_it(
     // of the asking chat, never from the request. The request names none today.
     let on = profile_for(root, asking.profile.as_deref(), persona.as_deref(), None);
     let chosen = on.chosen.as_ref().map_err(|refused| refused.say())?;
+    // A handoff starts no chat on a profile that asks nobody either, as a task does not.
+    if let Some(refused) = asks_nobody(&on, chosen, persona.as_deref()) {
+        return Err(refused);
+    }
     let profile = chosen.profile.clone();
     // Where the persona's own profile is not offered on this machine, the chat runs on the
     // asking chat's and is told so under its stamp; the asking chat is told in the answer
@@ -572,19 +576,21 @@ fn open_it(
     let arrived = start_on(
         held,
         plane,
-        |name| start::Start {
-            profile: Some(profile.clone()),
-            persona: persona.clone(),
-            name,
-            cwd: Some(dir),
-            resume: None,
-            // The picker's footer box is one operator choice for one chat, and nobody made it
-            // for this one.
-            show_footer: false,
-            resuming: None,
-            without_sandbox: None,
-            held: held_grants.clone(),
-            grants: Default::default(),
+        |name| {
+            Ok(start::Start {
+                profile: Some(profile.clone()),
+                persona: persona.clone(),
+                name,
+                cwd: Some(dir),
+                resume: None,
+                // The picker's footer box is one operator choice for one chat, and nobody made it
+                // for this one.
+                show_footer: false,
+                resuming: None,
+                without_sandbox: None,
+                held: held_grants.clone(),
+                grants: Default::default(),
+            })
         },
         &Opening {
             message: &message,
@@ -644,7 +650,7 @@ type LaunchRead<'a> = (
 fn start_on(
     held: &Held,
     plane: &PlaneId,
-    start_of: impl FnOnce(String) -> purlis_core::start::Start,
+    start_of: impl FnOnce(String) -> Result<purlis_core::start::Start, String>,
     opening: &Opening<'_>,
     (declared, launch): LaunchRead<'_>,
     size: Size,
@@ -658,7 +664,7 @@ fn start_on(
         .number
         .unwrap_or_else(|| held.chats().sessions().deal());
     let name = number.to_string();
-    let start = start_of(name.clone());
+    let start = start_of(name.clone())?;
     let ready = start::ready_read(&start, held.root(), declared, launch).and_then(|ready| {
         told_first(
             ready,
@@ -715,6 +721,8 @@ enum Dispatched {
         from: Option<String>,
         to: String,
         waiting: Option<String>,
+        /// The grants store's number for the held dispatch.
+        pending: u32,
     },
 }
 
@@ -786,6 +794,23 @@ impl HeldDispatches {
     /// Chat `session` closed: what it asked for goes with it, as the store's own entry does.
     pub fn forget(&self, session: u32) {
         self.lock().retain(|_, wanted| wanted.chat != session);
+    }
+
+    /// Takes out everything chat `session` asked for that still waits on the person.
+    fn taken_from(&self, session: u32) -> Vec<Wanted> {
+        let mut held = self.lock();
+        let ids: Vec<u32> = held
+            .iter()
+            .filter(|(_, wanted)| wanted.chat == session)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut taken: Vec<(u32, Wanted)> = ids
+            .into_iter()
+            .filter_map(|id| held.remove(&id).map(|wanted| (id, wanted)))
+            .collect();
+        // In the order they were asked.
+        taken.sort_by_key(|(id, _)| *id);
+        taken.into_iter().map(|(_, wanted)| wanted).collect()
     }
 }
 
@@ -891,7 +916,6 @@ fn dispatch_it(
     use crate::dispatchgrants::Requested;
     use purlis_core::dispatchdecision::{By, Decision, Moment};
     use purlis_core::dispatchunattended::{self, Attendance, Inherited};
-    use purlis_core::personaprofile::Who;
     use purlis_core::{dispatchgrant, handoff, start};
 
     let root = held.root();
@@ -974,20 +998,12 @@ fn dispatch_it(
         }
         // The decision refused where no profile was chosen.
         let chosen = on.chosen.as_ref().map_err(|refused| refused.say())?;
-        // A profile taken from the asking chat is not one whose own command switches the
-        // prompts off: said now, before the person is asked for anything.
-        let inherited = (chosen.by == Who::AskingChat)
-            .then(|| on.launch.0.get(&chosen.profile))
-            .flatten();
-        if let Some(theirs) = inherited {
-            dispatchunattended::start_of_a_persona_chat(
-                start::Start::default(),
-                pair.to.as_deref().unwrap_or_default(),
-                Some(Inherited {
-                    profile: &theirs.name,
-                    command: &theirs.command,
-                }),
-            )?;
+        // **No chat is started for another chat on a profile whose own command switches the
+        // harness's prompts off**, whoever named it: the dispatch, the persona's definition
+        // (which a chat can write), or nobody, where it is the asking chat's own. Said now,
+        // before the person is asked for anything.
+        if let Some(refused) = asks_nobody(&on, chosen, asked.to.as_deref()) {
+            return Err(refused);
         }
         // **The grant**, where a chat asks for a persona. The person needs none, and a chat
         // on no persona dispatching to none has no pair to grant.
@@ -1006,6 +1022,7 @@ fn dispatch_it(
                             from: pair.asking.clone(),
                             to: to.to_owned(),
                             waiting: held.held_dispatches().keep(pending, wanted),
+                            pending,
                         });
                     }
                     Requested::Locked(why) => {
@@ -1049,10 +1066,28 @@ fn dispatch_it(
     };
     // The slot is let go when this returns: the chat is open by then and counts for itself,
     // or its start was refused and nothing does.
+    // What the chat starts on, for the one function every persona chat's start goes through.
+    let its_profile = on.launch.0.get(&profile).cloned();
     let arrived = start_on(
         held,
         plane,
-        |name| dispatchdecision::start_for(&asking, its, profile, name),
+        |name| {
+            let start = dispatchdecision::start_for(&asking, its, profile, name);
+            match to.as_deref() {
+                // **The joined start** (#1446): whatever the start held of the asking chat's
+                // is dropped here, and a profile that asks nobody is refused here too.
+                Some(target) => dispatchunattended::start_of_a_persona_chat(
+                    start,
+                    target,
+                    its_profile.as_ref().map(|profile| Inherited {
+                        profile: &profile.name,
+                        command: &profile.command,
+                    }),
+                ),
+                // A chat on no persona dispatching to none: nothing of a persona to hold.
+                None => Ok(start),
+            }
+        },
         &Opening {
             message: &message,
             brief: &wanted.brief,
@@ -1114,15 +1149,45 @@ pub fn answered(
                 arrived(*it);
                 (Answered::Started, detail)
             }
-            // Allowed a moment ago and not covered now: the grant was taken back in between.
-            Ok(Dispatched::Held { .. }) => (
-                Answered::NotStarted,
-                format!("the grant for {pair} was taken back before it started"),
-            ),
+            // Allowed a moment ago and not covered now: the pair changed in between (the grant
+            // was taken back, or the chat no longer asks as the persona it was allowed for).
+            // Deciding it again raised a new question for the person; that one is taken back
+            // out, so the chat is not told "not started" while a Notice that would start it
+            // waits on its tab.
+            Ok(Dispatched::Held { pending, .. }) => {
+                held.held_dispatches().take(pending);
+                held.dispatch_grants().keep_blocked(pending);
+                (
+                    Answered::NotStarted,
+                    format!(
+                        "the grant for {pair} no longer covers this dispatch. Dispatch it \
+                         again, and the person is asked"
+                    ),
+                )
+            }
             Err(why) => (Answered::NotStarted, why),
         }
     };
     tell_the_asker(held, &wanted, how, &detail);
+}
+
+/// **Chat `session` was started again as `started` while dispatches of its own waited on the
+/// person** (a restart for a grant, Restart chat, Start fresh). The Notice was the old
+/// session's and goes with it, so nothing would ever start them: the chat, which was told it
+/// would hear, is told on its next turn that each was not started, and to dispatch it again.
+pub fn started_again(held: &Held, session: u32, started: u32) {
+    for wanted in held.held_dispatches().taken_from(session) {
+        tell_the_asker(
+            held,
+            &Wanted {
+                chat: started,
+                ..wanted
+            },
+            purlis_core::handback::Answered::NotStarted,
+            "this chat was started again before the person answered, and the question went \
+             with the old run. Dispatch it again, and the person is asked",
+        );
+    }
 }
 
 /// Leaves the asking chat of `wanted` the app's word on its held dispatch, for its next turn.
@@ -1163,6 +1228,26 @@ fn tell_the_asker(
     if let Err(why) = handback::leave(root, For::Chat(wanted.chat), &word) {
         tracing::warn!("purlis: a chat was not told what became of its dispatch ({why})");
     }
+}
+
+/// **Why no chat is started on the profile `chosen`**, where its own command switches the
+/// harness's permission prompts off (`purlis_core::dispatchunattended::bypass_refusal`), in
+/// the words for whoever named it. `persona` is the persona the new chat runs as. A handoff
+/// and a task are held to it alike.
+fn asks_nobody(
+    on: &On,
+    chosen: &purlis_core::personaprofile::Chosen,
+    persona: Option<&str>,
+) -> Option<String> {
+    use purlis_core::dispatchunattended::{NamedBy, bypass_refusal};
+    use purlis_core::personaprofile::Who;
+    let profile = on.launch.0.get(&chosen.profile)?;
+    let by = match chosen.by {
+        Who::Asker => NamedBy::TheDispatch,
+        Who::Persona | Who::PersonaModel => NamedBy::ThePersona(persona.unwrap_or_default()),
+        Who::AskingChat => NamedBy::TheAskingChat,
+    };
+    bypass_refusal(&profile.name, &profile.command, by)
 }
 
 /// Whether chat `chat`'s program still runs, by the board: one that has ended, with or
@@ -1472,6 +1557,30 @@ mod tests {
             )
             .expect("approved");
             self.a_persona("ops", "profile: cx\n")
+        }
+
+        /// With a profile `name` the project offers and this machine approved, whose own
+        /// command switches the harness's permission prompts off.
+        fn with_a_profile_that_asks_nobody(self, name: &str) -> Self {
+            let local = self.root.join(purlis_core::profiles::LOCAL_FILE);
+            let work = purlis_core::profiles::current(&self.root)
+                .get("work")
+                .expect("work reads")
+                .command[0]
+                .clone();
+            let mut text = std::fs::read_to_string(&local).expect("the local file");
+            text.push_str(&format!(
+                "[harness.{name}]\nkind = \"claude\"\ncommand = [{work:?}, \"--dangerously-skip-permissions\"]\n"
+            ));
+            std::fs::write(&local, text).expect("the profile");
+            let set = purlis_core::profiles::current(&self.root);
+            purlis_core::profiletrust::record_launched(
+                &self.root,
+                name,
+                &purlis_core::profiletrust::fingerprint(set.get(name).expect("it reads")),
+            )
+            .expect("approved");
+            self
         }
 
         /// A persona `name`, whose definition holds `frontmatter` under its name.
@@ -4023,6 +4132,55 @@ mod tests {
     }
 
     #[test]
+    fn a_held_dispatch_whose_asking_chat_is_started_again_is_told_it_was_not_started() {
+        // A restart is the ordinary end of an Allow on a sandbox block. The Notice was the
+        // old run's and goes with it: the chat was told it would hear, so it hears.
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let (said, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("devops"),
+            "check the cluster",
+        );
+        assert!(matches!(said, Answer::NeedsGrant { .. }), "{said:?}");
+        // The same chat, started again under a new number, and the old one ended.
+        let again = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+
+        held.followed(asking, again);
+        let _ = held.close_chat(asking);
+
+        let told = told_on_its_next_turn(&held, again);
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!(told[0].from, "check the cluster");
+        assert_eq!(
+            told[0].answered,
+            Some(purlis_core::handback::Answered::NotStarted)
+        );
+        assert!(
+            told[0]
+                .summary
+                .starts_with("this chat was started again before the person answered"),
+            "{}",
+            told[0].summary
+        );
+        // Nothing is left to allow, and nothing starts.
+        assert!(held.dispatch_grants().waiting(asking).is_empty());
+        assert!(held.dispatch_grants().waiting(again).is_empty());
+        assert_eq!(
+            held.chats().open_now().len(),
+            before - 1,
+            "only the old run ended"
+        );
+    }
+
+    #[test]
     fn a_dispatch_the_person_keeps_blocked_starts_nothing_and_the_asking_chat_is_told() {
         let plane = a_plane_with_personas();
         let planes = planes();
@@ -4323,6 +4481,134 @@ mod tests {
                 "{flag}"
             );
         }
+    }
+
+    /// [`a_plane_with_personas`], with an approved profile `yolo` that asks nobody and a
+    /// persona `night` whose definition names it.
+    fn a_plane_with_a_profile_that_asks_nobody() -> Plane {
+        a_plane_with_personas()
+            .with_a_profile_that_asks_nobody("yolo")
+            .a_persona("night", "description: runs overnight\nprofile: yolo\n")
+    }
+
+    #[test]
+    fn a_dispatch_never_starts_a_chat_on_a_profile_that_asks_nobody_whoever_named_it() {
+        let plane = a_plane_with_a_profile_that_asks_nobody();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        for to in ["devops", "night"] {
+            purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", to)
+                .expect("the person allowed the pair");
+        }
+        let before = held.chats().open_now().len();
+        let brief = "# Check the queue\nSay how many are stuck.\n";
+        let refused = |to: Option<&str>, profile: Option<&str>| match dispatch_with(
+            &held, &id, asking, to, "task", brief, profile,
+        )
+        .0
+        {
+            Answer::No { why } => why,
+            other => panic!("refused, not {other:?}"),
+        };
+
+        // Named by the dispatch: for the chat's own persona, which needs no grant and no
+        // prompt, and for another persona under a grant that stands.
+        for to in [None, Some("devops")] {
+            let why = refused(to, Some("yolo"));
+            assert!(
+                why.starts_with("the dispatch names profile 'yolo', which starts its harness")
+                    && why.contains("(--dangerously-skip-permissions)"),
+                "{to:?}: {why}"
+            );
+        }
+        // Named by the persona's own definition, which a chat can write.
+        let why = refused(Some("night"), None);
+        assert!(
+            why.starts_with("persona 'night' names profile 'yolo', which starts its harness"),
+            "{why}"
+        );
+        // And a handoff to that persona opens nothing either.
+        let why = hand_off_to(&held, &id, &Tickets::default(), asking, "night")
+            .expect_err("nothing is opened");
+        assert!(
+            why.starts_with("persona 'night' names profile 'yolo'"),
+            "{why}"
+        );
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        assert!(held.dispatch_grants().waiting(asking).is_empty());
+        // The same persona on a profile that asks starts.
+        let (said, _) = dispatch_with(
+            &held,
+            &id,
+            asking,
+            Some("night"),
+            "task",
+            brief,
+            Some("work"),
+        );
+        assert!(matches!(said, Answer::Dispatched { .. }), "{said:?}");
+    }
+
+    #[test]
+    fn a_held_dispatch_whose_profile_asks_nobody_by_the_time_it_is_allowed_is_not_started() {
+        // Held on a profile that asks. Before the person answers, that profile's command is
+        // changed to switch the prompts off and approved. The Allow starts nothing.
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let (said, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("devops"),
+            "check the cluster",
+        );
+        assert!(matches!(said, Answer::NeedsGrant { .. }), "{said:?}");
+        let before = held.chats().open_now().len();
+        let local = plane.root.join(purlis_core::profiles::LOCAL_FILE);
+        let text = std::fs::read_to_string(&local).expect("the local file");
+        std::fs::write(
+            &local,
+            text.replacen("\"]\n", "\", \"--dangerously-skip-permissions\"]\n", 1),
+        )
+        .expect("changed");
+        let set = purlis_core::profiles::current(&plane.root);
+        let work = set.get("work").expect("work reads");
+        assert!(purlis_core::dispatchunattended::bypass_in(&work.command).is_some());
+        purlis_core::profiletrust::record_launched(
+            &plane.root,
+            "work",
+            &purlis_core::profiletrust::fingerprint(work),
+        )
+        .expect("approved");
+        let pending = held.dispatch_grants().waiting(asking)[0].id;
+
+        on_the_ground(&held, |ground| {
+            held.dispatch_grants()
+                .allow(ground, pending, purlis_core::sandbox::grant::Level::You)
+        })
+        .expect("allowed");
+
+        let told = eventually(|| {
+            let told = told_on_its_next_turn(&held, asking);
+            (!told.is_empty()).then_some(told)
+        })
+        .expect("the asking chat is told");
+        assert_eq!(
+            told[0].answered,
+            Some(purlis_core::handback::Answered::NotStarted)
+        );
+        assert!(
+            told[0].summary.contains("permission prompts off"),
+            "{}",
+            told[0].summary
+        );
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
     }
 
     #[test]

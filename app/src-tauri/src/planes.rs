@@ -726,6 +726,9 @@ impl Held {
         let _deciding = self.chats.deciding();
         self.chats.followed(session, started);
         purlis_core::handback::moved(&self.root, session, started);
+        // What it asked for and still waited on the person about is answered: the question
+        // was the old run's, so the chat is told to ask again (#1437).
+        crate::handoff::started_again(self, session, started);
     }
 
     /// A chat `session` handed work to, shown as `from`, has reported back to it — a needs-you

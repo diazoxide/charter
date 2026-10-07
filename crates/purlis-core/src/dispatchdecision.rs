@@ -27,7 +27,9 @@
 //!
 //! # The order of the checks
 //!
-//! 1. the asker is a chat, not a harness's helper sub-agent ([`Refused::Helper`]);
+//! 1. the asker is a chat, not a harness's helper sub-agent ([`Refused::Helper`]). Only the
+//!    tool hook asks this ([`crate::dispatchguard`]): it alone knows a sub-agent made the call,
+//!    and the app, which cannot tell a sub-agent's ask from its chat's, never builds one;
 //! 2. the asking chat holds its own grants ([`Refused::Held`]);
 //! 3. the persona exists and is not a draft ([`Refused::NoPersona`], [`Refused::Draft`]);
 //! 4. policy: a policy file that is refused switches dispatch off, and a policy may lock all

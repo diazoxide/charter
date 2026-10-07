@@ -221,12 +221,18 @@ pub fn send(
         }
         // Held, not refused: the dispatch is accepted and waits on the person, so this is not
         // a failure and is not said as one.
-        Ok(Answer::NeedsGrant { from, to, waiting }) => Ok(held_for_the_person(
-            from.as_deref(),
-            &to,
-            &ask_name(&ask),
-            waiting.as_deref(),
-        )),
+        Ok(Answer::NeedsGrant {
+            from,
+            to,
+            waiting: None,
+        }) => Ok(held_for_the_person(from.as_deref(), &to, &ask_name(&ask))),
+        // Not held: the person is already being asked about this pair for another task, and
+        // this one was dropped. Nothing of it will start, so it is a refusal.
+        Ok(Answer::NeedsGrant {
+            from,
+            to,
+            waiting: Some(first),
+        }) => Err(not_held(from.as_deref(), &to, &ask_name(&ask), &first)),
         Ok(Answer::No { why }) => Err(app_refused(&why)),
         Ok(
             Answer::Ticket { .. }
@@ -247,32 +253,41 @@ pub fn send(
     }
 }
 
-/// What a chat is told where its dispatch waits on the person for a dispatch grant: nothing
-/// has started, the person is being asked on this chat's tab, and what happens next. `waiting`
-/// is the task the person is already being asked about across this pair, where this ask was
-/// not held beside it.
-fn held_for_the_person(from: Option<&str>, to: &str, task: &str, waiting: Option<&str>) -> String {
-    let one = purlis_core::personas::one_line;
-    let to = one(to);
-    let who = match from {
-        Some(from) => format!("'{}' chats", one(from)),
+/// The asking side of a pair, as a sentence names it.
+fn who_asks(from: Option<&str>) -> String {
+    match from {
+        Some(from) => format!("'{}' chats", purlis_core::personas::one_line(from)),
         None => "this chat".to_owned(),
-    };
-    if let Some(first) = waiting {
-        return format!(
-            "{SAYS} not held. The person is already being asked whether {who} may dispatch to \
-             '{to}', for the task '{}', and they were shown that task's brief, so only it \
-             starts when they allow it. {NOTHING} Dispatch '{}' again once they have answered.",
-            one(first),
-            one(task)
-        );
     }
+}
+
+/// What a chat is told where its dispatch waits on the person for a dispatch grant: nothing
+/// has started, the person is being asked on this chat's tab, and what happens next.
+fn held_for_the_person(from: Option<&str>, to: &str, task: &str) -> String {
+    let one = purlis_core::personas::one_line;
     format!(
-        "{SAYS} held for the person. {who} may not dispatch to '{to}' yet, so the person is \
+        "{SAYS} held for the person. {} may not dispatch to '{}' yet, so the person is \
          being asked on this chat's tab, with this brief in front of them. Nothing has started. \
          If they allow it, '{}' starts then and its report reaches this chat as context on a \
          later turn; if they keep it blocked, this chat is told on its next turn. Carry on \
          with other work, and do not dispatch it again.",
+        who_asks(from),
+        one(to),
+        one(task)
+    )
+}
+
+/// What a chat is told where the person is already being asked about this pair for the task
+/// `first`: this ask was not held beside it, because the person was shown one brief.
+fn not_held(from: Option<&str>, to: &str, task: &str, first: &str) -> String {
+    let one = purlis_core::personas::one_line;
+    format!(
+        "{SAYS} not held. The person is already being asked whether {} may dispatch to \
+         '{}', for the task '{}', and they were shown that task's brief, so only it \
+         starts when they allow it. {NOTHING} Dispatch '{}' again once they have answered.",
+        who_asks(from),
+        one(to),
+        one(first),
         one(task)
     )
 }

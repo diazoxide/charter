@@ -7,7 +7,9 @@
 //! board puts that chat in the needs-you queue, [`reported`] where the app accepts its report,
 //! [`ended`] where the app closes it, and [`session_recorded`] where the app writes a chat's
 //! session record. Nothing on the hook channel names a record, so no line a chat sends makes
-//! one, points one at another asker, or sets its outcome or its counts.
+//! one, points one at another asker or sets its counts. **A report's own line does carry how
+//! the task ended**, which is the persona chat's to say, and that outcome is written to the
+//! record of the dispatch that chat was started by, and to no other.
 //!
 //! **The cost is the one figure that is not the app's own, and a chat can alter it.** It is
 //! what the persona chat's harness reported through its status line
