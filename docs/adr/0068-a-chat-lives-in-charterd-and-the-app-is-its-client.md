@@ -299,6 +299,16 @@ the keys, the drain's checks and the sandbox's denial are as above, and a gap is
 highest number a key's files hold. The file of a build before is still drained (N−1).
 `docs/plane-format.md` has the shape.
 
+*Note, 2026-10-08, by ruling V99i, for issue 983: the host keeps a chat's spool key, with the
+highest number drained under it, until the chat ends.* Where the notes above say the verifier is
+at rest until the drain, it is now at rest until the chat is closed, or until the project is
+opened without the chat. The drain goes on from the number it kept: a line at or below it is
+rejected as repeated, a line that was still being written while a drain ran is handed on by the
+next, and a hook that outlives a drain numbers on from it. The numbers a drain found missing are
+kept beside the highest one, so a line that lands late is taken once and a line put back is not
+taken twice. A chat's spool is drained as the chat is closed, before its key is dropped.
+`docs/plane-format.md` has `keys.json`'s shape, version 2.
+
 ### 7. An upgrade hands the terminals over, and drains only when it must (V7; FD-28: upgrade without losing agents)
 
 **The normal path hands every live PTY master to the new host over `SCM_RIGHTS`.** A PTY master is

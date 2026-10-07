@@ -26,11 +26,22 @@
 //! anything report on the live channel as the chat. A line is that chat's only if it is in that
 //! chat's spool and checks under a key the host issued to that chat.
 //!
+//! **A key is kept until its chat ends, with what was drained under it** (V99i, #983): the
+//! highest number a drain handed on, and the numbers below it that none has. A drain goes on
+//! from there, so a line it already handed on is `repeated` if it is put back, a line that was
+//! still being written while it ran is handed on by the next, and a hook that outlives it
+//! numbers its next line after the last one drained. `repeated` is therefore said of more than
+//! a line put back ([`why::REPEATED`] lists what else). A chat ends when it is closed
+//! ([`end_chat`]) or when a project is opened without it ([`forget_all_but`]); its keys are
+//! dropped then, after its spool is drained, and a key is at rest no longer than that.
+//!
 //! **What it holds, stated plainly** (ADR 0068 §6, as amended by V63). A process holding a
 //! chat's token can write lines as that chat, as it can on the live channel. It cannot write
-//! lines that read as another chat's. A number missing below the highest one a key's lines hold
-//! is a gap the drain finds, whether or not a `.part` file still holds it; lines removed from
-//! the end, or removed and then followed by new ones, are not found. A sandboxed chat is denied
+//! lines that read as another chat's. A number missing between the highest one drained under
+//! a key and the highest one its lines hold is a gap the drain finds, whether or not a `.part`
+//! file still holds it. Lines removed from the end are not found, and neither is every line
+//! above the highest one drained, removed together: a hook that comes after takes their
+//! numbers. A sandboxed chat is denied
 //! reading and writing the whole directory, keys included (ADR 0067 §5's integrity class).
 //! Claude Code runs its hooks outside the sandbox it gives its tools, so they still reach it.
 //! opencode's and Codex's hooks run inside purlis's wrap (ADR 0067 as amended by V73c and
@@ -42,8 +53,7 @@
 //! socket) nothing is spooled and no key is written, and the hook says the line is lost.
 //!
 //! **Numbers are per key.** A key is one token, and a token is one start of a chat, so its
-//! sequence starts at 1 and every one of its lines is drained at the same start of the host:
-//! the first one after that start of the chat ended.
+//! sequence starts at 1 and runs on across every drain until the chat ends.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{CStr, CString};
@@ -65,8 +75,16 @@ pub const KEYS: &str = "keys.json";
 /// The label a chat's spool key is derived from its token under.
 const LABEL: &[u8] = b"charter hook spool v1";
 
-/// The version of `keys.json` and of a spool line.
+/// The version of a spool line.
 const VERSION: u32 = 1;
+
+/// The version of `keys.json` this build writes: 2 since a key is kept with what was drained
+/// under it (V99i). Version 1 is read, each key with nothing drained, and written as this one at
+/// the next write; a version that is neither is refused ([`read_keys`]).
+const KEYS_VERSION: u64 = 2;
+
+/// The version of `keys.json` a build before V99i wrote.
+const KEYS_VERSION_BEFORE: u64 = 1;
 
 /// How long [`append`] gives a line to be written and made durable.
 ///
@@ -91,6 +109,11 @@ const A_PART_IS_A_DEAD_HOOKS_AFTER: Duration = Duration::from_secs(60 * 60);
 /// The most of one line's file the drain reads. A hook's line is a few kilobytes; a file past
 /// this is not one, and is `unreadable`.
 const A_LINE_IS_READ_UP_TO: u64 = 1024 * 1024;
+
+/// The most ranges of missing numbers `keys.json` keeps for one key ([`Held::missing`]). A range
+/// is what one gap left, and a gap is a hook that was writing while a drain ran, or one that
+/// died: a handful. Past this the lowest go, and a line under one of those is `repeated`.
+const A_KEY_KEEPS_AT_MOST: usize = 64;
 
 /// The spool directory for the hook socket at `socket`: `spool/` beside it.
 pub fn dir_for(socket: &Path) -> PathBuf {
@@ -126,7 +149,9 @@ fn refused_unless_covered(dir: &Path) -> io::Result<()> {
 }
 
 /// Holds an exclusive lock on the spool directory itself while `keys.json` is read and
-/// rewritten, so two tokens issued at once never drop each other's key.
+/// rewritten, so two tokens issued at once never drop each other's key. A drain holds it from
+/// its start to its end, so there is one drain of a spool at a time and a token issued
+/// meanwhile waits for it. No hook takes it.
 fn keys_locked<T>(dir: &Path, act: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     let held = File::open(dir)?;
     held.lock()?;
@@ -207,17 +232,116 @@ struct OnDisk {
     mac: String,
 }
 
-/// One key in `keys.json`.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// One key in `keys.json`, and what has been drained under it.
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Held {
     id: String,
     chat: u32,
     key: String,
+    /// The highest number of the key's lines in the chat's folder that a drain handed on.
+    #[serde(default)]
+    drained: u64,
+    /// The numbers below `drained` that no drain has handed on, as ranges with both ends
+    /// included, lowest first: at most [`A_KEY_KEEPS_AT_MOST`] of them.
+    #[serde(default)]
+    missing: Vec<(u64, u64)>,
+    /// `drained`, for the key's lines in the file a build before #983 wrote: there only for a
+    /// key a build before V99i issued, which is one read from a version 1 `keys.json`. A key
+    /// this build issued has none, because its hooks write no such file, and nothing in that
+    /// file is taken under it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file: Option<u64>,
 }
 
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+/// Which of a chat's two stores a line is in. Each has a sequence of its own under one key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Store {
+    /// `<n>.jsonl`, the file of a build before #983.
+    File,
+    /// `<n>/`, a file per line.
+    Folder,
+}
+
+impl Held {
+    /// The highest number a drain handed on from `store`.
+    fn drained_from(&self, store: Store) -> u64 {
+        match store {
+            Store::File => self.file.unwrap_or(0),
+            Store::Folder => self.drained,
+        }
+    }
+
+    /// Whether number `seq` of `store` is one no drain may take under this key: one a drain
+    /// already handed on, which is one at or below the highest it drained and not one it is
+    /// still missing; or any number at all of the old file, for a key this build issued. Its
+    /// hooks write the folder alone, so a line in that file under such a key is a copy of one
+    /// that was written to the folder, whatever a drain has made of the original since.
+    fn not_to_be_taken(&self, store: Store, seq: u64) -> bool {
+        match store {
+            Store::File => self.file.is_none_or(|file| seq <= file),
+            Store::Folder => {
+                seq <= self.drained
+                    && !self
+                        .missing
+                        .iter()
+                        .any(|(from, to)| (*from..=*to).contains(&seq))
+            }
+        }
+    }
+
+    /// Takes what a drain handed on under this key into what is kept.
+    fn advance(&mut self, by: &Advance) {
+        match by.store {
+            Store::File => self.file = self.file.map(|file| file.max(by.to)),
+            Store::Folder => {
+                self.drained = self.drained.max(by.to);
+                for late in &by.late {
+                    self.missing = std::mem::take(&mut self.missing)
+                        .into_iter()
+                        .flat_map(|(from, to)| {
+                            if !(from..=to).contains(late) {
+                                return [Some((from, to)), None];
+                            }
+                            [
+                                (from < *late).then(|| (from, late - 1)),
+                                (*late < to).then(|| (late + 1, to)),
+                            ]
+                        })
+                        .flatten()
+                        .collect();
+                }
+                self.missing.extend(&by.gaps);
+                self.missing.sort_unstable();
+                if self.missing.len() > A_KEY_KEEPS_AT_MOST {
+                    let over = self.missing.len() - A_KEY_KEEPS_AT_MOST;
+                    tracing::warn!(
+                        "purlis: chat {}'s spool is missing more runs of numbers than are kept \
+                         ({A_KEY_KEEPS_AT_MOST}); a line under one of the {over} lowest will \
+                         read as repeated",
+                        self.chat
+                    );
+                    self.missing.drain(..over);
+                }
+            }
+        }
+    }
+}
+
+/// What one drain handed on under one key from one store: what [`Held::advance`] keeps.
+struct Advance {
+    id: String,
+    store: Store,
+    /// The highest number it handed on, or what was kept before if it handed on none above.
+    to: u64,
+    /// The numbers it handed on that an earlier drain was missing.
+    late: Vec<u64>,
+    /// The runs of numbers it found missing, and said.
+    gaps: Vec<(u64, u64)>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Keys {
-    v: u32,
+    v: u64,
     keys: Vec<Held>,
 }
 
@@ -451,12 +575,28 @@ impl Folder {
     }
 
     /// Takes key `key`'s next number: makes its `.part` file, and answers the number and the
-    /// file. The number is the one after the highest the folder's names hold for the key, or
-    /// the one after that for each hook that took a number first, so a number is given only
+    /// file. The number is the one after the highest the folder's names hold for the key or a
+    /// drain has handed on under it (`drained`, which reads `keys.json`), whichever is higher,
+    /// or the one after that for each hook that took a number first, so a number is given only
     /// once the one before it is taken. Each number another hook took is a line the spool
     /// holds, so the tries are counted against `lines` across every call for one line
     /// (`tries`), and at `lines` of either the spool is too full ([`too_many`]).
-    fn take_a_number(&self, key: &str, lines: usize, tries: &mut usize) -> io::Result<(u64, File)> {
+    ///
+    /// **What was drained is asked once the number is taken, and never before.** A drain
+    /// writes what it drained before it removes a line's file. So a number this hook could
+    /// take because a drain had removed its line is one `keys.json` already counts by the time
+    /// the `.part` file is there: the answer says so, and the hook lets the number go and takes
+    /// the one after the last drained. Asked any earlier, a drain could run between the answer
+    /// and the `.part` being made, and the hook would hold a number already handed on, whose
+    /// line the next drain would call `repeated`. One read is enough: the cost of asking late
+    /// is one file made and removed by a hook that outlived a drain.
+    fn take_a_number(
+        &self,
+        key: &str,
+        lines: usize,
+        tries: &mut usize,
+        drained: &dyn Fn() -> u64,
+    ) -> io::Result<(u64, File)> {
         let names = self.names(lines)?;
         if names.len() >= lines {
             return Err(too_many(lines));
@@ -481,7 +621,14 @@ impl Folder {
                 // A hook that listed the folder before this number's line was finished, and
                 // made the `.part` after its writer had let it go: the number is taken.
                 Ok(_) if self.has(&name_of(key, seq, Kind::Line))? => self.remove(&*part)?,
-                Ok(made) => return Ok((seq, made)),
+                Ok(made) => {
+                    let since = drained();
+                    if seq > since {
+                        return Ok((seq, made));
+                    }
+                    self.let_go(&part, &made);
+                    seq = since;
+                }
                 Err(why) if why.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(why) => return Err(why),
             }
@@ -591,7 +738,9 @@ fn append_within(
 /// [`append`]'s write: a number taken, the line written and synced under it, and given its
 /// name.
 ///
-/// 1. The number is taken by making `<key>.<seq>.part` ([`Folder::take_a_number`]).
+/// 1. The number is taken by making `<key>.<seq>.part` ([`Folder::take_a_number`]): the one
+///    after the highest the folder holds or a drain handed on under the key, which is read
+///    from `keys.json` once the number is taken.
 /// 2. The line, with that number and its MAC, is written into that file and `fsync`ed.
 /// 3. The file is linked as `<key>.<seq>.json`, which fails rather than replace a line, and the
 ///    `.part` name is removed.
@@ -620,8 +769,11 @@ fn write_line(
         mac: String::new(),
     };
     let mut tries = 0;
+    let id = key.id();
+    let drained = || drained_under(dir, &id);
     loop {
-        let (seq, mut part) = folder.take_a_number(&on_disk.key, bounds.lines, &mut tries)?;
+        let (seq, mut part) =
+            folder.take_a_number(&on_disk.key, bounds.lines, &mut tries, &drained)?;
         on_disk.seq = seq;
         on_disk.mac = key.sign(chat, seq, &on_disk.key, &on_disk.line);
         let mut bytes = serde_json::to_vec(&on_disk).map_err(io::Error::other)?;
@@ -675,6 +827,10 @@ fn write_line(
 /// chat spools can always be checked by the next host. Refused where the sandbox's integrity
 /// denial does not reach ([`covered`]): the key is a verifier at rest, owner-only, and a
 /// sandboxed chat may neither read nor write it (V63).
+///
+/// **Kept until the chat ends** ([`end_chat`], [`forget_all_but`]), with what is drained under
+/// it. A key that is already held is left as it is, what was drained under it included, so one
+/// remembered twice is never one whose drained lines can be put back.
 pub fn remember(dir: &Path, chat: u32, token: &ChatToken) -> io::Result<()> {
     refused_unless_covered(dir)?;
     private(dir)?;
@@ -687,35 +843,119 @@ pub fn remember(dir: &Path, chat: u32, token: &ChatToken) -> io::Result<()> {
                 id,
                 chat,
                 key: crate::extension::hex(&key.0),
+                drained: 0,
+                missing: Vec::new(),
+                file: None,
             });
         }
         write_keys(dir, &keys)
     })
 }
 
-/// The keys in `dir`'s `keys.json`. A file that is not there, or that does not read as keys,
-/// holds none: a line under a key it lost is `no-key` at the drain, and nothing is stuck on it.
+/// The keys in `dir`'s `keys.json`, as this build holds them.
+///
+/// - A file that is not there, or that does not read as keys, holds none: a line under a key it
+///   lost is `no-key` at the drain, and nothing is stuck on it.
+/// - **Version 1**, which a build before V99i wrote, is read as it is: each key with nothing
+///   drained under it, and marked as one whose hooks may have written the chat's old file
+///   ([`Held::file`]). Whatever writes the file next writes it as [`KEYS_VERSION`].
+/// - **A version that is neither 1 nor 2 is refused** ([`io::ErrorKind::InvalidData`]),
+///   however it is written (`3`, `3.0`, `"3"`): a newer build may have written it, and what it
+///   keeps there this one would drop by writing it. So nothing is drained, no key is added, and
+///   the file is left for that build.
+///
+/// **A build before V99i does not refuse version 2.** It reads the file by its shape, takes
+/// every line under a key it finds with no look at what was drained, forgets the keys it
+/// drained, and writes the rest back without what was kept under them, the version still 2.
+/// This build then reads those keys as ones with nothing drained. Going back a build loses
+/// what was kept, and no line that build would not have lost anyway.
 fn read_keys(dir: &Path) -> io::Result<Keys> {
-    match crate::contain::read_no_link(dir, &dir.join(KEYS)) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|why| {
+    /// Only the version, whatever JSON it is, read before anything else is made of the file.
+    #[derive(serde::Deserialize)]
+    struct Versioned {
+        v: serde_json::Value,
+    }
+    let path = dir.join(KEYS);
+    let bytes = match crate::contain::read_no_link(dir, &path) {
+        Ok(bytes) => bytes,
+        Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(Keys::new()),
+        Err(why) => return Err(why),
+    };
+    let version = serde_json::from_slice(&bytes).ok().map(|Versioned { v }| v);
+    if let Some(v) = &version
+        && ![Some(KEYS_VERSION_BEFORE), Some(KEYS_VERSION)].contains(&v.as_u64())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} says it is version {v}, and this purlis reads versions \
+                 {KEYS_VERSION_BEFORE} and {KEYS_VERSION}; a newer purlis may have written it, \
+                 so it is left as it is and this spool is not drained",
+                path.display()
+            ),
+        ));
+    }
+    let before = version.and_then(|v| v.as_u64()) == Some(KEYS_VERSION_BEFORE);
+    Ok(serde_json::from_slice(&bytes)
+        .map(|keys: Keys| Keys {
+            v: KEYS_VERSION,
+            keys: keys
+                .keys
+                .into_iter()
+                .map(|held| Held {
+                    file: held.file.or(before.then_some(0)),
+                    ..held
+                })
+                .collect(),
+        })
+        .unwrap_or_else(|why| {
             tracing::warn!(
                 "purlis: {} does not read as spool keys ({why}); every line under them is \
                  rejected as no-key",
-                dir.join(KEYS).display()
+                path.display()
             );
             Keys::new()
-        })),
-        Err(why) if why.kind() == io::ErrorKind::NotFound => Ok(Keys::new()),
-        Err(why) => Err(why),
-    }
+        }))
+}
+
+/// The highest number a drain has handed on under the key `id`, for a hook choosing its next
+/// one ([`Folder::take_a_number`]): 0 where the key is not held, and where `keys.json` cannot
+/// be read, which leaves the hook numbering by the folder's names alone. Read under no lock:
+/// the file is replaced whole, never written in place.
+fn drained_under(dir: &Path, id: &str) -> u64 {
+    read_keys(dir)
+        .ok()
+        .and_then(|keys| keys.keys.into_iter().find(|held| held.id == id))
+        .map_or(0, |held| held.drained)
 }
 
 impl Keys {
     fn new() -> Self {
         Self {
-            v: VERSION,
+            v: KEYS_VERSION,
             keys: Vec::new(),
         }
+    }
+
+    /// Each key by its id.
+    fn by_id(&self) -> HashMap<String, Held> {
+        self.keys
+            .iter()
+            .map(|held| (held.id.clone(), held.clone()))
+            .collect()
+    }
+
+    /// Takes what a drain handed on into what is kept, and answers whether anything moved.
+    fn advance(&mut self, by: &[Advance]) -> bool {
+        let mut moved = false;
+        for by in by {
+            if let Some(held) = self.keys.iter_mut().find(|held| held.id == by.id) {
+                let before = held.clone();
+                held.advance(by);
+                moved |= *held != before;
+            }
+        }
+        moved
     }
 }
 
@@ -768,7 +1008,9 @@ pub enum Drained {
         seq: Option<u64>,
         why: &'static str,
     },
-    /// One of chat `chat`'s sequences, drained: it ran from `from` to `to`.
+    /// One of chat `chat`'s sequences, drained: what this drain went through of it ran from
+    /// `from` to `to`. `from` is the number after the highest a drain before had handed on, or
+    /// a lower one this drain handed on late.
     Spool { chat: u32, from: u64, to: u64 },
 }
 
@@ -796,7 +1038,21 @@ pub mod why {
     pub const MAC: &str = "mac";
     /// The line checks, and names another chat, or is not a line a spool holds.
     pub const NOT_THIS_CHATS: &str = "not-this-chats";
-    /// A number the sequence already had, or a line another of the chat's stores already gave.
+    /// A number a drain already handed on under the key, or has twice in one spool, or a line
+    /// another of the chat's stores already gave.
+    ///
+    /// **Not only a line somebody put back.** It is also said, with nothing put back, of:
+    ///
+    /// - a line in the old `<n>.jsonl` under a key this build issued, whose hooks never write
+    ///   that file;
+    /// - a line a hook of a build before #983 appended to that file after a drain emptied it:
+    ///   that hook numbers from 1 again, and its line's content is not recorded;
+    /// - a line of a hook that could not read `keys.json` and found the folder empty after a
+    ///   drain, so numbered from 1: its content is not recorded;
+    /// - a line that landed late under a number the host no longer keeps as missing, past the
+    ///   64 runs it keeps per key: its content is not recorded;
+    /// - a line a drain had recorded when the host stopped, after it wrote what it drained and
+    ///   before it removed the file: its content was recorded, once.
     pub const REPEATED: &str = "repeated";
     /// A number a hook took and has no line under: it is still writing it, or died before it
     /// had.
@@ -811,74 +1067,200 @@ pub mod why {
 /// is left as it was, to be drained again at the next start. A line already handed on may
 /// then be handed on twice, which is the side a drain errs on.
 ///
+/// **It goes on from what was drained before** (V99i). `keys.json` keeps each key, with the
+/// highest number handed on under it and the numbers below that which no drain has handed on,
+/// until its chat ends. So, for one key:
+///
+/// - a line at or below the highest number drained is `repeated`: one put back after its
+///   drain is never taken twice, whether that drain finished or stopped part-way;
+/// - unless its number is one no drain has handed on yet, and then it is handed on, once;
+/// - a line above it is handed on in its order, and a number missing between the highest
+///   drained and the highest there is a gap, said once. A drain after one that stopped
+///   part-way says no gap for the numbers the first one took.
+///
+/// **Only a line that passed every check moves what is kept.** A file under a high number with
+/// no MAC of its own is rejected and changes nothing.
+///
+/// **What is kept is written per chat, after its lines are handed on and before their files
+/// are removed.** A crash after the hand-on and before the write leaves both undone, and the
+/// lines are handed on again at the next drain: twice, never lost. A crash after the write and
+/// before the files are gone leaves lines the next drain calls `repeated` and removes: said,
+/// and not recorded twice.
+///
 /// **Hooks may spool while it runs**, and no line it read is handed on twice: it removes the
 /// files it read and the names it could not read, and a hook never writes a file that has a
-/// line's name. **A line still being written while it runs is not recorded by it.** Its number
-/// is a gap at this drain if a later line was already there, and its `.part` file is said
-/// (`unfinished`). The line stays in the spool, and this drain forgets its key as it ends, so
-/// the next drain rejects it as `no-key` and its content is never recorded. Only a drain that
-/// stopped before its end leaves the key held, and the next one then hands the line on. The
-/// same goes for a hook that outlives the drain, as it did when the spool was one file.
+/// line's name. **A line still being written while it runs is handed on by the next drain.**
+/// Its number is a gap at this drain if a later line was already there, and its `.part` file is
+/// said (`unfinished`). The line stays in the spool, its number is kept as missing, and the
+/// next drain of the chat takes it. A hook that outlives the drain takes the number after the
+/// last one drained ([`Folder::take_a_number`]), and its line is handed on too. A hook of a
+/// chat that has ended has no key any more, and its line is `no-key`.
 ///
 /// **A spool a build before #983 left is drained too**, first: a chat's `<n>.jsonl`
-/// ([`drain_file`]), then its folder ([`drain_folder`]), each a sequence of its own. A line the
-/// file gave is not taken from the folder again: the same key, number and MAC there is
-/// `repeated`. A hook that changed builds in the middle of a chat has a number 1 in both, with
-/// a MAC of its own each, and both are handed on.
+/// ([`drain_file`]), then its folder ([`drain_folder`]), each a sequence of its own, with its
+/// own highest number kept. **Only under a key a build before V99i issued**, which is one read
+/// from a version 1 `keys.json` ([`Held::file`]): a key this build issued is used by this
+/// build's hooks, which write the folder alone, so every line in the file under such a key is
+/// `repeated`. Otherwise a line a drain took from the folder could be put back as the file and
+/// taken again, since the two stores count apart. A line the file gave is not taken from the
+/// folder again in the same drain: the same key, number and MAC there is `repeated`. A hook
+/// that changed builds in the middle of a chat has a number 1 in both, with a MAC of its own
+/// each, and both are handed on. A hook of that build numbers from 1 again once its file is
+/// emptied, so a line it appends after a drain is `repeated`. For a chat that was open across
+/// the change of builds, a line taken from one store and copied into the other after that
+/// drain is still taken once more, until the chat ends.
 ///
 /// **Two keys of one chat** are handed on in the order `keys.json` holds them, which is the
 /// order the host issued them in, for the lines of a folder; for the lines of the old file, in
-/// the order they first appear in it.
+/// the order they first appear in it. **Once every chat is drained, a chat keeps only the key
+/// it was issued last**: one issued before it is a start of the chat that ended, and its lines
+/// have just been drained.
 ///
-/// **Run before this host issues any token**, as a host does at its start: a line under a key
-/// `keys.json` does not hold when the drain begins is rejected (`no-key`).
+/// **One drain at a time**: it holds the lock on `dir` from start to end ([`keys_locked`]),
+/// which a second drain and a token being issued wait for, and no hook does.
+///
+/// **Run before this host issues any token**, as a host does at its start: the key a chat was
+/// issued last is then the last start that ran, and the ones before it are over.
+///
+/// **Refused when a newer build wrote `keys.json`** ([`read_keys`]): nothing is drained.
 pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
     }
-    let keys = keys_locked(dir, || read_keys(dir))?;
-    let taken: HashMap<String, Held> = keys
-        .keys
-        .iter()
-        .map(|held| (held.id.clone(), held.clone()))
-        .collect();
-    // Per chat: whether it has a file of lines, and whether it has a folder of them.
-    let mut chats: BTreeMap<u32, (bool, bool)> = BTreeMap::new();
-    match std::fs::read_dir(dir) {
-        Ok(entries) => {
-            for entry in entries.filter_map(Result::ok) {
-                let name = entry.file_name();
-                let Some(name) = name.to_str() else { continue };
-                if let Some(chat) = name.strip_suffix(".jsonl").and_then(|n| n.parse().ok()) {
-                    chats.entry(chat).or_default().0 = true;
-                } else if let Some(chat) = name
-                    .parse::<u32>()
-                    .ok()
-                    .filter(|chat| chat.to_string() == name)
-                {
-                    chats.entry(chat).or_default().1 = true;
+    keys_locked(dir, || {
+        let mut keys = read_keys(dir)?;
+        // Per chat: whether it has a file of lines, and whether it has a folder of them.
+        let mut chats: BTreeMap<u32, (bool, bool)> = BTreeMap::new();
+        match std::fs::read_dir(dir) {
+            Ok(entries) => {
+                for entry in entries.filter_map(Result::ok) {
+                    let name = entry.file_name();
+                    let Some(name) = name.to_str() else { continue };
+                    if let Some(chat) = name.strip_suffix(".jsonl").and_then(|n| n.parse().ok()) {
+                        chats.entry(chat).or_default().0 = true;
+                    } else if let Some(chat) = name
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|chat| chat.to_string() == name)
+                    {
+                        chats.entry(chat).or_default().1 = true;
+                    }
                 }
             }
+            Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(why) => return Err(why),
         }
-        Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(why) => return Err(why),
-    }
-    let issued: Vec<&str> = keys.keys.iter().map(|held| held.id.as_str()).collect();
-    for (chat, (file, folder)) in chats {
-        let mut given = Given::new();
-        if file {
-            given = drain_file(dir, chat, &taken, each)?;
+        for (chat, (file, folder)) in chats {
+            drain_chat(dir, chat, (file, folder), &mut keys, each)?;
         }
-        if folder {
-            drain_folder(dir, chat, &taken, &issued, given, each)?;
+        // Every chat is drained: a chat keeps the key it was issued last, and no other.
+        let before = keys.keys.len();
+        let newest: HashMap<u32, String> = keys
+            .keys
+            .iter()
+            .map(|held| (held.chat, held.id.clone()))
+            .collect();
+        keys.keys
+            .retain(|held| newest.get(&held.chat) == Some(&held.id));
+        if keys.keys.len() == before {
+            return Ok(());
         }
-    }
-    // Every key taken is drained: forget them, keeping any issued since.
-    keys_locked(dir, || {
-        let mut now = read_keys(dir)?;
-        now.keys.retain(|held| !taken.contains_key(&held.id));
-        write_keys(dir, &now)
+        write_keys(dir, &keys)
     })
+}
+
+/// Chat `chat` has ended: drains its spool as [`drain`] does, and then drops every key it was
+/// issued, so no key outlives its chat (V99i).
+///
+/// **Drained first**, so a line the chat's hooks spooled while the host was busy is recorded
+/// under the key it was written with before that key goes: a chat started again under a new
+/// number ends the old one this way, and the old one's lines are not lost to it. A drain that
+/// `each` stops leaves the keys, and the lines, for the next open of the project. A line a hook
+/// of the chat spools after this has no key, and is `no-key` at the next drain.
+pub fn end_chat(
+    dir: &Path,
+    chat: u32,
+    each: &mut dyn FnMut(Drained) -> io::Result<()>,
+) -> io::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    keys_locked(dir, || {
+        let mut keys = read_keys(dir)?;
+        let stores = (
+            file_for(dir, chat).symlink_metadata().is_ok(),
+            folder_for(dir, chat).symlink_metadata().is_ok(),
+        );
+        drain_chat(dir, chat, stores, &mut keys, each)?;
+        forget(dir, keys, |held| held.chat != chat)
+    })
+}
+
+/// [`end_chat`] for a host that has nowhere to record a line: chat `chat`'s keys are dropped
+/// and nothing is drained, so what its spool holds is `no-key` to a host that can.
+pub fn forget_chat(dir: &Path, chat: u32) -> io::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    keys_locked(dir, || {
+        forget(dir, read_keys(dir)?, |held| held.chat != chat)
+    })
+}
+
+/// Drops the keys of every chat but those numbered in `back`: the chats a project's reopen
+/// record brings back as it is opened. Any other chat a key was issued to has ended (V99i).
+///
+/// **After a [`drain`] that finished**, which has handed on what those chats spooled: a host
+/// whose drain stopped keeps every key, for the drain that finishes.
+pub fn forget_all_but(dir: &Path, back: &[u32]) -> io::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    keys_locked(dir, || {
+        forget(dir, read_keys(dir)?, |held| back.contains(&held.chat))
+    })
+}
+
+/// [`drain`], as a host runs it when a project is opened, and then [`forget_all_but`] the
+/// chats in `back`: the two in the one order that drops no key before its lines are drained.
+/// A drain that stops drops nothing.
+pub fn drain_at_open(
+    dir: &Path,
+    back: &[u32],
+    each: &mut dyn FnMut(Drained) -> io::Result<()>,
+) -> io::Result<()> {
+    drain(dir, each)?;
+    forget_all_but(dir, back)
+}
+
+/// Writes `keys` with only the keys `kept` answers for, where that drops any.
+fn forget(dir: &Path, mut keys: Keys, kept: impl Fn(&Held) -> bool) -> io::Result<()> {
+    let before = keys.keys.len();
+    keys.keys.retain(kept);
+    if keys.keys.len() == before {
+        return Ok(());
+    }
+    write_keys(dir, &keys)
+}
+
+/// Drains chat `chat`'s spool in `dir`, its file and then its folder where `stores` says it has
+/// them, and takes what was handed on into `keys`, written before a line's file is removed.
+/// Under the lock on `dir`, which its caller holds.
+fn drain_chat(
+    dir: &Path,
+    chat: u32,
+    (file, folder): (bool, bool),
+    keys: &mut Keys,
+    each: &mut dyn FnMut(Drained) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut given = Given::new();
+    if file {
+        given = drain_file(dir, chat, keys, each)?;
+    }
+    if folder {
+        drain_folder(dir, chat, keys, given, each)?;
+    }
+    Ok(())
 }
 
 /// The lines a drain has handed on from one of a chat's stores, each by its key's id, its number
@@ -889,6 +1271,8 @@ type Given = HashSet<(String, u64, String)>;
 /// ones it rejects.
 struct Checked<'a> {
     chat: u32,
+    /// Which of the chat's stores it reads.
+    store: Store,
     taken: &'a HashMap<String, Held>,
     /// What the chat's other store, drained before this one, already gave.
     already: Given,
@@ -901,9 +1285,10 @@ struct Checked<'a> {
 }
 
 impl<'a> Checked<'a> {
-    fn of(chat: u32, taken: &'a HashMap<String, Held>, already: Given) -> Self {
+    fn of(chat: u32, store: Store, taken: &'a HashMap<String, Held>, already: Given) -> Self {
         Self {
             chat,
+            store,
             taken,
             already,
             given: Given::new(),
@@ -958,8 +1343,13 @@ impl<'a> Checked<'a> {
             Some((Line::Refused(refused), _)) if refused.chat == chat => Spooled::Refused(refused),
             _ => return self.reject(Some(disk.seq), why::NOT_THIS_CHATS),
         };
+        // A number the sequence has, here or at a drain before this one (V99i), or a line in
+        // a store its key's hooks never write.
         let sequence = self.sequences.entry(disk.key.clone()).or_default();
-        if sequence.contains_key(&disk.seq) || disk.seq == 0 {
+        if sequence.contains_key(&disk.seq)
+            || disk.seq == 0
+            || held.not_to_be_taken(self.store, disk.seq)
+        {
             return self.reject(Some(disk.seq), why::REPEATED);
         }
         if !self.order.contains(&disk.key) {
@@ -987,37 +1377,58 @@ impl<'a> Checked<'a> {
     }
 
     /// Hands everything on: the rejected lines, then each key's lines by number with its gaps,
-    /// and the sequence drained. Answers what it gave.
-    fn hand_on(mut self, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io::Result<Given> {
+    /// and the sequence drained. A key's numbers go on from the highest a drain before this one
+    /// handed on: a gap is a number missing above that, and a line below it is one that drain
+    /// was missing. Answers what it gave, and what that moves under each key.
+    fn hand_on(
+        mut self,
+        each: &mut dyn FnMut(Drained) -> io::Result<()>,
+    ) -> io::Result<(Given, Vec<Advance>)> {
         let chat = self.chat;
         for item in std::mem::take(&mut self.rejected) {
             each(item)?;
         }
+        let mut advances = Vec::new();
         for id in std::mem::take(&mut self.order) {
-            let Some(sequence) = self.sequences.remove(&id) else {
+            let (Some(sequence), Some(held)) = (self.sequences.remove(&id), self.taken.get(&id))
+            else {
                 continue;
             };
-            let mut expected = 1;
-            let mut last = 0;
+            let (Some(first), Some(last)) = (
+                sequence.keys().next().copied(),
+                sequence.keys().next_back().copied(),
+            ) else {
+                continue;
+            };
+            let before = held.drained_from(self.store);
+            let mut advance = Advance {
+                id,
+                store: self.store,
+                to: before,
+                late: Vec::new(),
+                gaps: Vec::new(),
+            };
             for (seq, line) in sequence {
-                if seq > expected {
-                    each(Drained::Gap {
-                        chat,
-                        from: expected,
-                        to: seq - 1,
-                    })?;
+                if seq <= before {
+                    advance.late.push(seq);
+                } else {
+                    if seq - advance.to > 1 {
+                        let (from, to) = (advance.to + 1, seq - 1);
+                        each(Drained::Gap { chat, from, to })?;
+                        advance.gaps.push((from, to));
+                    }
+                    advance.to = seq;
                 }
                 each(Drained::Line { chat, seq, line })?;
-                expected = seq + 1;
-                last = seq;
             }
             each(Drained::Spool {
                 chat,
-                from: 1,
+                from: first.min(before.saturating_add(1)),
                 to: last,
             })?;
+            advances.push(advance);
         }
-        Ok(self.given)
+        Ok((self.given, advances))
     }
 }
 
@@ -1029,11 +1440,13 @@ impl<'a> Checked<'a> {
 /// hook holds and is not read. One with no line of its name yet is said (`unfinished`), left
 /// or not; one an hour old, or dated in a time to come, is a dead hook's and is removed
 /// ([`A_PART_IS_A_DEAD_HOOKS_AFTER`]). The folder itself is never removed.
+///
+/// What it handed on is taken into `keys` and written after the lines are handed on and before
+/// their files are removed ([`drain`] says why in that order).
 fn drain_folder(
     dir: &Path,
     chat: u32,
-    taken: &HashMap<String, Held>,
-    issued: &[&str],
+    keys: &mut Keys,
     already: Given,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -1056,7 +1469,9 @@ fn drain_folder(
     let _one_drain_at_a_time = crate::filelock::Held::locked(held);
 
     let names = folder.names(usize::MAX)?;
-    let mut checked = Checked::of(chat, taken, already);
+    let taken = keys.by_id();
+    let issued: Vec<&str> = keys.keys.iter().map(|held| held.id.as_str()).collect();
+    let mut checked = Checked::of(chat, Store::Folder, &taken, already);
     // The names this drain takes away once everything is handed on: the lines it read, which
     // must go, and what it could not read or a dead hook left, which goes if it will.
     let (mut read, mut unread) = (Vec::new(), Vec::new());
@@ -1100,9 +1515,12 @@ fn drain_folder(
             }
         }
     }
-    checked.in_the_order_of(issued);
-    checked.hand_on(each)?;
-    // Everything handed on is recorded.
+    checked.in_the_order_of(&issued);
+    let (_, advances) = checked.hand_on(each)?;
+    // Everything handed on is recorded: kept as drained, and only then removed.
+    if keys.advance(&advances) {
+        write_keys(dir, keys)?;
+    }
     for name in read {
         folder.remove(&**name)?;
     }
@@ -1115,10 +1533,12 @@ fn drain_folder(
 
 /// Drains chat `chat`'s file of lines, the spool of a build before #983: read under the file's
 /// lock, as that build's hooks append under it, handed on, and emptied. Answers what it gave.
+/// What it handed on is taken into `keys` and written before the file is emptied, as
+/// [`drain_folder`] does before it removes a line.
 fn drain_file(
     dir: &Path,
     chat: u32,
-    taken: &HashMap<String, Held>,
+    keys: &mut Keys,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
 ) -> io::Result<Given> {
     // A spool path that does not open as a plain file (a directory, a link, live or dangling,
@@ -1143,11 +1563,15 @@ fn drain_file(
     let mut file = crate::filelock::Held::locked(file);
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    let mut checked = Checked::of(chat, taken, Given::new());
+    let taken = keys.by_id();
+    let mut checked = Checked::of(chat, Store::File, &taken, Given::new());
     for raw in lines_of(&bytes) {
         checked.line(raw, None);
     }
-    let given = checked.hand_on(each)?;
+    let (given, advances) = checked.hand_on(each)?;
+    if keys.advance(&advances) {
+        write_keys(dir, keys)?;
+    }
     // Everything handed on is recorded, and every line was this drain's: emptied, not removed,
     // so a hook of that build holding it open appends to the file the next drain reads.
     file.set_len(0)?;

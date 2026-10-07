@@ -1031,6 +1031,10 @@ impl Hooks {
     /// told to the log first, so a line it spooled is recorded under the run it ran in. With
     /// no event log, or no channel, nothing is drained and the spool waits for a host that has
     /// both.
+    ///
+    /// **A chat the reopen record does not bring back has ended** (V99i): once the drain has
+    /// finished, its spool key is dropped. The chats it does bring back keep theirs, with what
+    /// was drained under each, so a hook of theirs that is still about loses no line.
     pub fn drain_spool(&self) {
         let Some(socket) = &self.socket else { return };
         let Some(events) = self
@@ -1043,10 +1047,13 @@ impl Hooks {
         };
         let root = self.plane.root();
         let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+        // The numbers of the chats this open brings back.
+        let mut back = Vec::new();
         if purlis_core::reopen::path(root).is_file()
             && let Ok(record) = purlis_core::reopen::read_or_refusal(root)
         {
             for chat in record.chats {
+                back.extend(chat.number);
                 if let (Some(number), Some(id), Some(run)) =
                     (chat.number, chat.identity.id, chat.identity.run)
                 {
@@ -1062,8 +1069,9 @@ impl Hooks {
             }
         }
         let durable = log.durable();
-        let drained = purlis_core::hookwire::spool::drain(
+        let drained = purlis_core::hookwire::spool::drain_at_open(
             &purlis_core::hookwire::spool::dir_for(socket),
+            &back,
             &mut |item| {
                 let event = log.spooled(root, item)?;
                 durable.through(event.seq)
@@ -1072,6 +1080,48 @@ impl Hooks {
         if let Err(why) = drained {
             tracing::warn!(
                 "purlis: the hook spool was not drained ({why}); it is drained at the next start"
+            );
+        }
+    }
+
+    /// Chat `chat` has ended, by its close or by another start taking its place: what its hooks
+    /// spooled while this host was busy is drained into the event log, and then its spool keys
+    /// are dropped, so no key outlives its chat (V99i, ADR 0068 §6).
+    ///
+    /// With no event log there is nowhere to record a line, and the keys are dropped all the
+    /// same. A drain the log refuses leaves the keys and the lines for the next open of the
+    /// project.
+    ///
+    /// **The event log is held for one item at a time**, as a live line holds it, and not at
+    /// all for a chat that spooled nothing: every other chat's hooks go on being recorded
+    /// while this one's spool is drained, where a hold across the drain would have each of
+    /// them wait and, past 250 ms, spool.
+    pub fn chat_ended(&self, chat: u32) {
+        use purlis_core::hookwire::spool;
+        let Some(socket) = &self.socket else { return };
+        let dir = spool::dir_for(socket);
+        let events = self
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let ended = match events {
+            Some(events) => {
+                let root = self.plane.root();
+                spool::end_chat(&dir, chat, &mut |item| {
+                    let (event, durable) = {
+                        let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+                        (log.spooled(root, item), log.durable())
+                    };
+                    durable.through(event?.seq)
+                })
+            }
+            None => spool::forget_chat(&dir, chat),
+        };
+        if let Err(why) = ended {
+            tracing::warn!(
+                "purlis: chat {chat}'s hook spool was not drained as it ended ({why}); its \
+                 key is kept until the next open of the project"
             );
         }
     }
@@ -2382,6 +2432,77 @@ mod tests {
             .map(|event| event.kind)
             .collect();
         assert_eq!(kinds, ["hook.posttooluse", "hook.spool.drained"]);
+    }
+
+    /// A chat's spool key lasts as long as the chat (V99i): what it spooled while the host was
+    /// busy is recorded as it closes, and a line under its key after that is rejected.
+    #[test]
+    fn a_closed_chats_spool_is_drained_into_the_log_and_its_key_does_not_outlive_it() {
+        use purlis_core::eventlog::{self, ArgsKey, Log, Recorder};
+        use purlis_core::hookwire::spool;
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join(".charter/app/hooks.sock"),
+        };
+        let plane: PlaneId =
+            serde_json::from_value(serde_json::json!(dir.path())).expect("a plane id");
+        let call = |chat: u32| purlis_core::hookwire::ToolCall {
+            chat,
+            tool_hook: "posttooluse".to_owned(),
+            tool: Some("Read".to_owned()),
+            call: Some("toolu_1".to_owned()),
+            args: None,
+            decision: purlis_core::hookwire::Decision::None,
+            rule: None,
+            hook_ms: 1,
+            agent: None,
+            at_ms: 0,
+        };
+        let hooks =
+            Hooks::listening_on(plane, &at, Arc::new(|_| {}), Arc::new(|_| {})).expect("listening");
+        let logs = dir.path().join("events");
+        hooks.record_into(Arc::new(Mutex::new(Recorder::new(
+            Log::open(&logs, "DEVICE").expect("a log"),
+            ArgsKey::open(&logs).expect("a key"),
+        ))));
+        let spooling = spool::dir_for(&at.socket);
+        let keys = || std::fs::read_to_string(spooling.join(spool::KEYS)).expect("the keys");
+        let (closing, staying) = (hooks.token_for(7), hooks.token_for(8));
+        // Each chat's hook spooled a call the host did not take in time.
+        spool::append(&spooling, 7, &closing, &call(7)).expect("spooled");
+        spool::append(&spooling, 8, &staying, &call(8)).expect("spooled");
+        let both = keys();
+
+        hooks.chat_ended(7);
+
+        let kinds = || -> Vec<String> {
+            eventlog::read(&logs)
+                .expect("the log reads")
+                .into_iter()
+                .map(|event| event.kind)
+                .collect()
+        };
+        assert_eq!(kinds(), ["hook.posttooluse", "hook.spool.drained"]);
+        let id = |token: &purlis_core::hookwire::ChatToken| spool::SpoolKey::of(token).id();
+        assert!(both.contains(&id(&closing)) && both.contains(&id(&staying)));
+        assert!(!keys().contains(&id(&closing)), "{}", keys());
+        assert!(keys().contains(&id(&staying)), "{}", keys());
+
+        // A hook of the closed chat that is still about spools once more. Then the project is
+        // opened again, with no reopen record: chat 8 is not brought back, so it has ended too.
+        spool::append(&spooling, 7, &closing, &call(7)).expect("spooled");
+        hooks.drain_spool();
+
+        assert_eq!(
+            kinds()[2..],
+            [
+                "hook.spool.rejected",
+                "hook.posttooluse",
+                "hook.spool.drained"
+            ]
+        );
+        assert!(!keys().contains(&id(&staying)), "{}", keys());
     }
 
     #[test]
