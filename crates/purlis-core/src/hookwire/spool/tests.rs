@@ -473,11 +473,11 @@ fn a_part_file_under_the_last_number_there_is_stops_its_keys_hooks_and_the_drain
     );
 }
 
-/// What the drain does with a line that was still being written while it ran (issue 983's
-/// first follow-up): its number is a gap at that drain, and the host forgets the key when the
-/// drain ends, so the line is rejected at the next one and its content is never recorded.
+/// What the drain does with a line that was still being written while it ran: its number is a
+/// gap at that drain, and the host keeps the key and what it drained under it, so the next
+/// drain hands the line on, once (V99i).
 #[test]
-fn a_line_in_flight_while_a_drain_runs_is_a_gap_then_and_no_key_at_the_next() {
+fn a_line_in_flight_while_a_drain_runs_is_a_gap_then_and_handed_on_at_the_next() {
     let dir = tempfile::tempdir().expect("a directory");
     let spool = dir.path().join(".charter/app").join(DIR);
     let token = issued(&spool, 4);
@@ -492,6 +492,13 @@ fn a_line_in_flight_while_a_drain_runs_is_a_gap_then_and_no_key_at_the_next() {
     std::fs::write(&part, a_spool_line(4, &token, 2, "b")).expect("written");
     std::fs::rename(&part, line_file(&spool, 4, &token, 2)).expect("named");
     let second = drained(&spool);
+    // And somebody puts its file back once it is drained.
+    std::fs::write(
+        line_file(&spool, 4, &token, 2),
+        a_spool_line(4, &token, 2, "b"),
+    )
+    .expect("put back");
+    let third = drained(&spool);
 
     assert_eq!(
         tools(&first),
@@ -511,21 +518,22 @@ fn a_line_in_flight_while_a_drain_runs_is_a_gap_then_and_no_key_at_the_next() {
     ] {
         assert!(first.contains(&said), "{said:?} is not in {first:?}");
     }
+    assert_eq!(tools(&second), [(4, 2, "b".to_owned())], "{second:?}");
+    assert_eq!(second.len(), 2, "the line and its sequence: {second:?}");
     assert_eq!(
-        second,
+        third,
         [Drained::Rejected {
             chat: 4,
             seq: Some(2),
-            why: why::NO_KEY,
+            why: why::REPEATED,
         }]
     );
 }
 
-/// The same line when the host still holds its key at the next drain, which it does only when
-/// the drain it was in flight for stopped before its end: handed on then, after a gap for the
-/// numbers the stopped drain had already taken.
+/// The same line when the drain it was in flight for stopped before its end: handed on at the
+/// next, with no gap said for the numbers the stopped drain had already taken.
 #[test]
-fn a_line_in_flight_while_a_drain_that_stops_runs_is_handed_on_at_the_next() {
+fn a_line_in_flight_while_a_drain_that_stops_runs_is_handed_on_at_the_next_with_no_gap() {
     let dir = tempfile::tempdir().expect("a directory");
     let spool = dir.path().join(".charter/app").join(DIR);
     let token = issued(&spool, 4);
@@ -550,13 +558,103 @@ fn a_line_in_flight_while_a_drain_that_stops_runs_is_handed_on_at_the_next() {
         [(4, 2, "b".to_owned()), (8, 1, "x".to_owned())]
     );
     assert!(
-        next.contains(&Drained::Gap {
-            chat: 4,
-            from: 1,
-            to: 1
+        !next.iter().any(|item| matches!(item, Drained::Gap { .. })),
+        "line 1 was taken by the drain that stopped, and is no gap: {next:?}"
+    );
+}
+
+/// A line put back after a drain that stopped part-way had taken it is not taken again: what a
+/// drain handed on for one chat is kept even when it could not finish the others.
+#[test]
+fn a_line_put_back_after_a_drain_that_stopped_part_way_is_rejected_as_repeated() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 7);
+    let other = issued(&spool, 8);
+    append(&spool, 7, &token, &call(7, "a")).expect("spooled");
+    append(&spool, 8, &other, &call(8, "x")).expect("spooled");
+    let saved = std::fs::read(line_file(&spool, 7, &token, 1)).expect("the line");
+
+    let stopped = drain(&spool, &mut |item| match item.chat() {
+        8 => Err(io::Error::other("a full disk")),
+        _ => Ok(()),
+    });
+    std::fs::write(line_file(&spool, 7, &token, 1), saved).expect("put back");
+    let next = drained(&spool);
+
+    assert!(stopped.is_err());
+    assert_eq!(tools(&next), [(8, 1, "x".to_owned())], "{next:?}");
+    assert!(
+        next.contains(&Drained::Rejected {
+            chat: 7,
+            seq: Some(1),
+            why: why::REPEATED,
         }),
         "{next:?}"
     );
+}
+
+/// A hook that outlives a drain, as one of a chat that is still open does: its next line takes
+/// the number after the last one drained, and the next drain hands it on with no gap.
+#[test]
+fn a_hook_that_outlives_a_drain_numbers_on_from_it_and_its_line_is_handed_on() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    for id in ["a", "b"] {
+        append(&spool, 4, &token, &call(4, id)).expect("spooled");
+    }
+    assert_eq!(tools(&drained(&spool)).len(), 2);
+
+    let third = append(&spool, 4, &token, &call(4, "c")).expect("spooled");
+    let next = drained(&spool);
+
+    assert_eq!(third, 3, "the folder is empty, and the number goes on");
+    assert_eq!(
+        next,
+        [
+            Drained::Line {
+                chat: 4,
+                seq: 3,
+                line: Spooled::Tool(call(4, "c")),
+            },
+            Drained::Spool {
+                chat: 4,
+                from: 3,
+                to: 3,
+            },
+        ]
+    );
+}
+
+/// Only a line that checks moves what is kept. A file planted under a high number, which has
+/// no MAC of its own, is rejected and leaves the key's real lines as they were: the next one
+/// is handed on, not `repeated`.
+#[test]
+fn a_planted_file_under_a_high_number_does_not_make_real_lines_read_as_repeated() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let forged = a_spool_line(4, &token, 900, "planted").replace("\"mac\":\"", "\"mac\":\"00");
+    std::fs::write(line_file(&spool, 4, &token, 900), forged).expect("planted");
+
+    let first = drained(&spool);
+    let second = append(&spool, 4, &token, &call(4, "b")).expect("spooled");
+    let next = drained(&spool);
+
+    assert_eq!(tools(&first), [(4, 1, "a".to_owned())], "{first:?}");
+    assert!(
+        first.contains(&Drained::Rejected {
+            chat: 4,
+            seq: Some(900),
+            why: why::MAC,
+        }),
+        "{first:?}"
+    );
+    assert_eq!(second, 2, "the planted number was never drained");
+    assert_eq!(tools(&next), [(4, 2, "b".to_owned())], "{next:?}");
+    assert_eq!(next.len(), 2, "no gap and nothing rejected: {next:?}");
 }
 
 #[test]
@@ -594,7 +692,7 @@ fn a_line_copied_from_the_folder_into_an_older_builds_file_is_handed_on_once() {
 }
 
 #[test]
-fn a_line_put_back_after_its_drain_is_rejected_as_no_key() {
+fn a_line_put_back_after_its_drain_is_rejected_as_repeated() {
     let dir = tempfile::tempdir().expect("a directory");
     let spool = dir.path().join(".charter/app").join(DIR);
     let token = issued(&spool, 4);
@@ -609,7 +707,7 @@ fn a_line_put_back_after_its_drain_is_rejected_as_no_key() {
         [Drained::Rejected {
             chat: 4,
             seq: Some(1),
-            why: why::NO_KEY,
+            why: why::REPEATED,
         }]
     );
 }
@@ -759,12 +857,26 @@ fn a_spool_line(chat: u32, token: &crate::hookwire::ChatToken, seq: u64, id: &st
     text
 }
 
+/// Rewrites `spool`'s `keys.json` as a build before V99i wrote it: version 1, and each key
+/// with its id, its chat and the key alone. What this build makes of that is a key a build
+/// before issued, whose hooks may have written the chat's one file.
+fn as_a_build_before_wrote_its_keys(spool: &Path) {
+    let mut keys = keys_of(spool);
+    keys["v"] = 1.into();
+    for held in keys["keys"].as_array_mut().expect("keys") {
+        let held = held.as_object_mut().expect("a key");
+        held.retain(|field, _| matches!(field.as_str(), "id" | "chat" | "key"));
+    }
+    std::fs::write(spool.join(KEYS), keys.to_string()).expect("the old shape");
+}
+
 #[test]
 fn a_spool_file_an_older_build_left_is_drained_before_the_chats_folder_and_emptied() {
     let dir = tempfile::tempdir().expect("a directory");
     let spool = dir.path().join(".charter/app").join(DIR);
     let token = issued(&spool, 4);
     let other = issued(&spool, 6);
+    as_a_build_before_wrote_its_keys(&spool);
     // Chat 4 has both: an older hook's file, with a line a crash tore, and this build's lines.
     let old = file_for(&spool, 4);
     let mut text = a_spool_line(4, &token, 1, "old-a");
@@ -1013,11 +1125,11 @@ fn sixteen_hooks_spooling_two_thousand_lines_for_one_chat_on_a_slow_disk_lose_no
 
 /// A drain that runs while hooks spool, as a host's one drain at a project's open would if
 /// hooks of the last run were still about. It hands on each line it read, once, and removes
-/// those files and no other. Every line a hook finishes after that is still in the spool, and
-/// the next drain rejects it as `no-key`, because the first drain forgot the key (issue 983's
-/// first follow-up). A number the first drain called a gap is one of those lines.
+/// those files and no other. Every line a hook finishes after that is handed on by the next
+/// drain, once, and a number the first drain called a gap is one of those lines: none is lost
+/// and none is handed on twice (V99i).
 #[test]
-fn a_drain_racing_hooks_hands_on_what_it_read_once_and_the_rest_is_no_key_at_the_next() {
+fn a_drain_racing_hooks_and_the_one_after_hand_on_every_line_once() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     const WRITERS: usize = 8;
     const EACH: usize = 100;
@@ -1037,45 +1149,495 @@ fn a_drain_racing_hooks_hands_on_what_it_read_once_and_the_rest_is_no_key_at_the
                 }
             });
         }
-        // The drain starts once the hooks are well under way.
+        // The drains start once the hooks are well under way, and go on while they spool.
         while spooled.load(Ordering::SeqCst) < WRITERS * EACH / 4 {
             std::thread::yield_now();
         }
-        drained(&spool)
+        let mut racing = Vec::new();
+        while spooled.load(Ordering::SeqCst) < WRITERS * EACH * 3 / 4 {
+            racing.extend(drained(&spool));
+        }
+        racing
     });
     let after = drained(&spool);
 
-    let handed_on = tools(&racing);
-    let mut once: Vec<&String> = handed_on.iter().map(|(_, _, id)| id).collect();
-    once.sort();
-    once.dedup();
-    assert_eq!(once.len(), handed_on.len(), "a line was handed on twice");
-    assert!(!handed_on.is_empty(), "the drain read nothing");
-    let mut no_key = Vec::new();
-    for item in &after {
-        match item {
-            Drained::Rejected {
-                seq: Some(seq),
-                why: why::NO_KEY,
-                ..
-            } => no_key.push(*seq),
-            other => panic!("the next drain found {other:?}"),
-        }
-    }
+    let handed_on: Vec<(u64, String)> = tools(&racing)
+        .into_iter()
+        .chain(tools(&after))
+        .map(|(_, seq, id)| (seq, id))
+        .collect();
+    let mut ids: Vec<&String> = handed_on.iter().map(|(_, id)| id).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), handed_on.len(), "a line was handed on twice");
+    assert_eq!(ids.len(), WRITERS * EACH, "a line was never handed on");
+    let mut numbers: Vec<u64> = handed_on.iter().map(|(seq, _)| *seq).collect();
+    numbers.sort_unstable();
     assert_eq!(
-        handed_on.len() + no_key.len(),
-        WRITERS * EACH,
-        "each line was handed on by the first drain or rejected by the next, and none is gone"
+        numbers,
+        (1..=(WRITERS * EACH) as u64).collect::<Vec<_>>(),
+        "every number once, so every gap a drain said was a line in flight"
     );
-    for item in &racing {
-        if let Drained::Gap { from, to, .. } = item {
-            for missing in *from..=*to {
-                assert!(
-                    no_key.contains(&missing),
-                    "the gap at {missing} is not a line that was in flight: {item:?}"
-                );
-            }
+    for item in racing.iter().chain(&after) {
+        match item {
+            Drained::Line { .. } | Drained::Gap { .. } | Drained::Spool { .. } => {}
+            // A number a hook held while a drain looked.
+            Drained::Rejected {
+                why: why::UNFINISHED,
+                ..
+            } => {}
+            other => panic!("a drain found {other:?}"),
         }
     }
+    assert!(
+        !after.iter().any(|item| matches!(item, Drained::Gap { .. })),
+        "nothing is in flight any more: {after:?}"
+    );
     assert_eq!(names(&spool, 9), Vec::<String>::new(), "nothing is left");
+    assert_eq!(drained(&spool), [], "and nothing is handed on again");
+}
+
+/// The `keys.json` of `spool`, as JSON.
+fn keys_of(spool: &Path) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(spool.join(KEYS)).expect("the keys")).expect("JSON")
+}
+
+/// The chat and the id of each key `keys.json` holds, in its order.
+fn kept(spool: &Path) -> Vec<(u64, String)> {
+    keys_of(spool)["keys"]
+        .as_array()
+        .expect("keys")
+        .iter()
+        .map(|held| {
+            (
+                held["chat"].as_u64().expect("a chat"),
+                held["id"].as_str().expect("an id").to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_keys_file_in_the_shape_before_is_read_and_written_in_this_one_with_no_key_dropped() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    let key = SpoolKey::of(&token);
+    // What a build before wrote: version 1, and a key with nothing said of what was drained.
+    let before = serde_json::json!({
+        "v": 1,
+        "keys": [{ "id": key.id(), "chat": 4, "key": crate::extension::hex(&key.0) }],
+    });
+    std::fs::write(spool.join(KEYS), before.to_string()).expect("the old shape");
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+
+    let items = drained(&spool);
+
+    assert_eq!(tools(&items), [(4, 1, "a".to_owned())], "{items:?}");
+    let now = keys_of(&spool);
+    assert_eq!(now["v"], 2, "{now}");
+    assert_eq!(now["keys"][0]["id"], key.id().as_str(), "{now}");
+    assert_eq!(now["keys"][0]["drained"], 1, "{now}");
+    assert_eq!(
+        now["keys"][0]["file"], 0,
+        "marked as a key a build before issued, with nothing drained from its file: {now}"
+    );
+    issued(&spool, 5);
+    assert!(
+        keys_of(&spool)["keys"][1].get("file").is_none(),
+        "a key this build issues has no file of lines"
+    );
+}
+
+#[test]
+fn a_keys_file_a_newer_build_wrote_is_refused_and_left_as_it_is() {
+    // Version 3, and versions written in ways no build of this one writes: none is 1 or 2.
+    for version in ["3", "3.0", "\"3\"", "4294967298", "0", "null"] {
+        let dir = tempfile::tempdir().expect("a directory");
+        let spool = dir.path().join(".charter/app").join(DIR);
+        let token = issued(&spool, 4);
+        append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+        let newer =
+            format!(r#"{{"v":{version},"keys":[],"something":"this build does not know"}}"#);
+        std::fs::write(spool.join(KEYS), &newer).expect("a newer shape");
+
+        let refused = drain(&spool, &mut |_| Ok(())).expect_err("nothing is drained");
+        let not_added = remember(&spool, 5, &token).expect_err("no key is added");
+
+        for refused in [refused, not_added] {
+            assert!(refused.to_string().contains("a newer purlis"), "{refused}");
+            assert!(
+                refused.to_string().contains(&format!("version {version}")),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(spool.join(KEYS)).expect("the keys"),
+            newer,
+            "version {version}"
+        );
+        assert_eq!(names(&spool, 4).len(), 1, "the line waits for that build");
+        append(&spool, 4, &token, &call(4, "b")).expect("a hook still spools beside it");
+    }
+}
+
+/// The bound on `keys.json`: after a drain, one key per chat, the last one it was issued.
+#[test]
+fn a_drain_keeps_each_chats_newest_key_and_drops_the_ones_issued_before_it() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    // Chat 4 started three times, and spooled under its first key and its last.
+    let first = issued(&spool, 4);
+    issued(&spool, 4);
+    let last = issued(&spool, 4);
+    let other = issued(&spool, 5);
+    append(&spool, 4, &first, &call(4, "a")).expect("spooled");
+    append(&spool, 4, &last, &call(4, "b")).expect("spooled");
+    assert_eq!(kept(&spool).len(), 4, "one per token issued, until a drain");
+
+    let items = drained(&spool);
+
+    assert_eq!(
+        tools(&items),
+        [(4, 1, "a".to_owned()), (4, 1, "b".to_owned())],
+        "a key issued before is drained before it is dropped"
+    );
+    assert_eq!(
+        kept(&spool),
+        [
+            (4, SpoolKey::of(&last).id()),
+            (5, SpoolKey::of(&other).id())
+        ]
+    );
+}
+
+#[test]
+fn a_key_remembered_twice_is_held_once_and_keeps_what_was_drained_under_it() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let saved = std::fs::read(line_file(&spool, 4, &token, 1)).expect("the line");
+    assert_eq!(tools(&drained(&spool)).len(), 1);
+
+    remember(&spool, 4, &token).expect("remembered again");
+    std::fs::write(line_file(&spool, 4, &token, 1), saved).expect("put back");
+
+    assert_eq!(kept(&spool).len(), 1);
+    assert_eq!(
+        drained(&spool),
+        [Drained::Rejected {
+            chat: 4,
+            seq: Some(1),
+            why: why::REPEATED,
+        }]
+    );
+}
+
+/// A drain that recorded a chat's lines and could not write what it drained leaves the lines:
+/// they are handed on again at the next drain, the side a drain errs on, and never removed
+/// with nothing kept of them.
+#[test]
+fn a_drain_that_cannot_write_its_keys_leaves_the_lines_and_hands_them_on_again() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let mode = |mode| {
+        std::fs::set_permissions(&spool, std::fs::Permissions::from_mode(mode)).expect("its mode")
+    };
+
+    mode(0o500);
+    let mut recorded = Vec::new();
+    let stopped = drain(&spool, &mut |item| {
+        recorded.push(item);
+        Ok(())
+    });
+    mode(0o700);
+
+    assert!(stopped.is_err(), "the keys could not be written");
+    assert_eq!(tools(&recorded), [(4, 1, "a".to_owned())]);
+    assert_eq!(names(&spool, 4).len(), 1, "the line is still there");
+    assert_eq!(tools(&drained(&spool)), [(4, 1, "a".to_owned())]);
+}
+
+/// Two drains of one spool at once, as two hosts on one project would be: every line is handed
+/// on by one of them and by no other.
+#[test]
+fn two_drains_at_once_hand_on_each_line_once_between_them() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    for n in 0..60 {
+        append(&spool, 4, &token, &call(4, &format!("{n:02}"))).expect("spooled");
+    }
+
+    let (one, other) = std::thread::scope(|scope| {
+        let one = scope.spawn(|| drained(&spool));
+        let other = scope.spawn(|| drained(&spool));
+        (one.join().expect("a drain"), other.join().expect("a drain"))
+    });
+
+    let mut numbers: Vec<u64> = tools(&one)
+        .into_iter()
+        .chain(tools(&other))
+        .map(|(_, seq, _)| seq)
+        .collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, (1..=60).collect::<Vec<_>>());
+    assert!(
+        one.is_empty() || other.is_empty(),
+        "one of them found nothing left, not even a line to reject"
+    );
+}
+
+/// What is kept of the numbers a key is missing is bounded: past 64 ranges the lowest go, and a
+/// line under one of those is `repeated`, where one under a range still kept is handed on.
+#[test]
+fn the_numbers_a_key_is_missing_are_kept_up_to_a_bound_and_the_lowest_go_first() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    std::fs::create_dir(folder_for(&spool, 4)).expect("the chat's folder");
+    let put = |seq: u64| {
+        std::fs::write(
+            line_file(&spool, 4, &token, seq),
+            a_spool_line(4, &token, seq, &seq.to_string()),
+        )
+        .expect("written");
+    };
+    // Every even number up to 140: seventy gaps of one number each.
+    (1..=70).for_each(|n| put(2 * n));
+
+    let first = drained(&spool);
+    put(1);
+    put(139);
+    let next = drained(&spool);
+
+    let gaps = |items: &[Drained]| {
+        items
+            .iter()
+            .filter(|item| matches!(item, Drained::Gap { .. }))
+            .count()
+    };
+    assert_eq!(gaps(&first), 70, "every gap is said");
+    assert_eq!(
+        keys_of(&spool)["keys"][0]["missing"]
+            .as_array()
+            .expect("missing")
+            .len(),
+        A_KEY_KEEPS_AT_MOST - 1,
+        "64 kept, and 139 has since been handed on"
+    );
+    assert_eq!(tools(&next), [(4, 139, "139".to_owned())], "{next:?}");
+    assert!(
+        next.contains(&Drained::Rejected {
+            chat: 4,
+            seq: Some(1),
+            why: why::REPEATED,
+        }),
+        "{next:?}"
+    );
+}
+
+/// A chat that is closed: what it spooled is handed on under its key, and then the key is gone.
+/// No key outlives its chat, and no other chat's key goes with it.
+#[test]
+fn a_chat_that_ends_has_its_spool_drained_and_then_its_keys_dropped() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    let other = issued(&spool, 5);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    append(&spool, 5, &other, &call(5, "x")).expect("spooled");
+
+    let mut ended = Vec::new();
+    end_chat(&spool, 4, &mut |item| {
+        ended.push(item);
+        Ok(())
+    })
+    .expect("the chat ends");
+    // A hook of the chat that is still about spools once more.
+    append(&spool, 4, &token, &call(4, "late")).expect("spooled");
+    let next = drained(&spool);
+
+    assert_eq!(
+        tools(&ended),
+        [(4, 1, "a".to_owned())],
+        "only its own spool"
+    );
+    assert_eq!(kept(&spool), [(5, SpoolKey::of(&other).id())]);
+    assert_eq!(tools(&next), [(5, 1, "x".to_owned())], "{next:?}");
+    assert!(
+        next.contains(&Drained::Rejected {
+            chat: 4,
+            seq: Some(1),
+            why: why::NO_KEY,
+        }),
+        "a line spooled after its chat ended has no key: {next:?}"
+    );
+}
+
+#[test]
+fn a_chat_whose_lines_could_not_be_recorded_as_it_ended_keeps_its_key_for_the_next_open() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+
+    let stopped = end_chat(&spool, 4, &mut |_| Err(io::Error::other("a full disk")));
+
+    assert!(stopped.is_err());
+    assert_eq!(kept(&spool).len(), 1, "its line still needs it");
+    assert_eq!(tools(&drained(&spool)), [(4, 1, "a".to_owned())]);
+}
+
+/// A chat started again takes a new number and a key of its own, and the old number is closed
+/// once the new one runs. What the old one spooled is recorded under the old key before that
+/// key is dropped, and the new one's key and lines are untouched.
+#[test]
+fn a_chat_started_again_has_the_old_ones_lines_drained_before_its_key_is_dropped() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let tokens = ChatTokens::spooling_into(spool.clone());
+    let old = tokens.issue_to_this_process(4).expect("a token");
+    append(&spool, 4, &old, &call(4, "before-the-restart")).expect("spooled");
+    // The new one starts, and its hooks may spool, before the old one is ended.
+    let new = tokens.issue_to_this_process(9).expect("a token");
+    append(&spool, 9, &new, &call(9, "after-the-restart")).expect("spooled");
+
+    let mut ended = Vec::new();
+    end_chat(&spool, 4, &mut |item| {
+        ended.push(item);
+        Ok(())
+    })
+    .expect("the old one ends");
+
+    assert_eq!(tools(&ended), [(4, 1, "before-the-restart".to_owned())]);
+    assert_eq!(kept(&spool), [(9, SpoolKey::of(&new).id())]);
+    assert_eq!(
+        tools(&drained(&spool)),
+        [(9, 1, "after-the-restart".to_owned())]
+    );
+    assert_eq!(kept(&spool).len(), 1, "the new one is still open");
+}
+
+/// A project opened without a chat it had: the chat has ended, and its key goes once the open's
+/// drain has handed on what it spooled. A chat the reopen record brings back keeps its key.
+#[test]
+fn a_chat_a_project_is_opened_without_has_its_key_dropped_after_the_drain() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let gone = issued(&spool, 4);
+    let back = issued(&spool, 5);
+    append(&spool, 4, &gone, &call(4, "a")).expect("spooled");
+
+    let mut items = Vec::new();
+    drain_at_open(&spool, &[5], &mut |item| {
+        items.push(item);
+        Ok(())
+    })
+    .expect("the spool drains");
+
+    assert_eq!(tools(&items), [(4, 1, "a".to_owned())]);
+    assert_eq!(kept(&spool), [(5, SpoolKey::of(&back).id())]);
+    forget_all_but(&spool, &[]).expect("the keys are written");
+    assert_eq!(kept(&spool), []);
+}
+
+#[test]
+fn an_open_whose_drain_stops_drops_no_key() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let gone = issued(&spool, 4);
+    append(&spool, 4, &gone, &call(4, "a")).expect("spooled");
+
+    let stopped = drain_at_open(&spool, &[], &mut |_| Err(io::Error::other("a full disk")));
+
+    assert!(stopped.is_err());
+    assert_eq!(kept(&spool).len(), 1, "its line still needs it");
+    assert_eq!(tools(&drained(&spool)), [(4, 1, "a".to_owned())]);
+}
+
+#[test]
+fn a_host_with_nowhere_to_record_drops_an_ended_chats_keys_and_drains_nothing() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    issued(&spool, 5);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+
+    forget_chat(&spool, 4).expect("the keys are written");
+
+    assert_eq!(kept(&spool).len(), 1);
+    assert_eq!(kept(&spool)[0].0, 5);
+    assert_eq!(names(&spool, 4).len(), 1, "nothing was drained");
+}
+
+/// A line a drain took from the chat's folder is not taken again from the file a build before
+/// wrote. This build's hooks never write that file, so under a key this build issued nothing
+/// in it is a line: a copy put there after the drain is `repeated`, at the next drain and as
+/// the chat ends.
+#[test]
+fn a_drained_line_put_back_as_an_older_builds_file_is_rejected_at_a_drain_and_at_the_chats_end() {
+    type Ends = fn(&Path, &mut dyn FnMut(Drained) -> io::Result<()>) -> io::Result<()>;
+    let at_a_drain: Ends = |spool, each| drain(spool, each);
+    let as_the_chat_ends: Ends = |spool, each| end_chat(spool, 4, each);
+    for again in [at_a_drain, as_the_chat_ends] {
+        let dir = tempfile::tempdir().expect("a directory");
+        let spool = dir.path().join(".charter/app").join(DIR);
+        let token = issued(&spool, 4);
+        append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+        let saved = std::fs::read(line_file(&spool, 4, &token, 1)).expect("the line");
+        assert_eq!(tools(&drained(&spool)), [(4, 1, "a".to_owned())]);
+
+        // Something that can write the spool puts the line's bytes back as the old file.
+        std::fs::write(file_for(&spool, 4), saved).expect("put back");
+        let mut items = Vec::new();
+        again(&spool, &mut |item| {
+            items.push(item);
+            Ok(())
+        })
+        .expect("it drains");
+
+        assert_eq!(
+            items,
+            [Drained::Rejected {
+                chat: 4,
+                seq: Some(1),
+                why: why::REPEATED,
+            }]
+        );
+    }
+}
+
+/// The hook asks what was drained once its number is taken. A drain that ran after the hook
+/// listed the folder has left the folder empty and the low numbers free: the hook lets the one
+/// it took go, and takes the one after the last drained.
+#[test]
+fn a_hook_that_took_a_number_a_drain_had_already_handed_on_lets_it_go_and_takes_one_above() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    private(&spool).expect("the spool");
+    let (folder, _) = Folder::of_a_hook(&spool, 4).expect("the chat's folder");
+    let key = "0123456789abcdef";
+    let asked = std::cell::Cell::new(0);
+    // Seven lines were drained under the key, and their files are gone.
+    let drained = || {
+        asked.set(asked.get() + 1);
+        7
+    };
+
+    let (seq, _part) = folder
+        .take_a_number(key, 100, &mut 0, &drained)
+        .expect("a number");
+
+    assert_eq!(seq, 8);
+    assert_eq!(
+        names(&spool, 4),
+        [name_of(key, 8, Kind::Part)],
+        "the number it let go holds nothing"
+    );
+    assert_eq!(asked.get(), 2, "once per number it took, and never before");
 }

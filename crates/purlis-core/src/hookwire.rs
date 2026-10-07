@@ -490,7 +490,8 @@ impl ChatTokens {
     /// A fresh token for `chat`, replacing any it had: 32 bytes from the operating system's
     /// generator, written as hex.
     ///
-    /// Its spool key is on disk before it returns, where these tokens spool. A key that cannot
+    /// Its spool key is on disk before it returns, where these tokens spool, and stays there
+    /// until the chat ends ([`spool::end_chat`], [`spool::forget_all_but`]). A key that cannot
     /// be recorded is said in the log and the token is issued all the same: the chat runs, and
     /// a line it spools reads as `no-key` at the drain rather than as the chat's.
     pub fn issue(&self, chat: u32) -> std::io::Result<ChatToken> {
