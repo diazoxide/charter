@@ -135,6 +135,8 @@ pub struct Open {
     /// The chat a handoff opened it from, where one did (charter-app#258). It rides the
     /// record; see [`purlis_core::reopen::Chat::from`].
     pub from: Option<purlis_core::reopen::HandedFrom>,
+    /// Whether the window draws it as a tab: [`purlis_core::reopen::Chat::has_tab`].
+    pub tab: bool,
 }
 
 /// Who an open chat is beyond this launch, and the directory it works in.
@@ -1492,6 +1494,23 @@ impl Chats {
         Ok(())
     }
 
+    /// The person opened chat `session`'s tab (#1447): a task chat, listed until now, has a
+    /// tab from here on, across a reload and a relaunch. Written only when it changes, for
+    /// [`Self::pin`]'s reason, and only for a chat that had none.
+    pub fn open_tab(&self, session: u32) -> Result<(), String> {
+        let mut open = lock(&self.open);
+        let Some(one) = open.get_mut(&session) else {
+            return Err(format!("purlis has no chat {session} open to show."));
+        };
+        if one.chat.has_tab() {
+            return Ok(());
+        }
+        one.chat.tab_opened = true;
+        drop(open);
+        self.write_it_down();
+        Ok(())
+    }
+
     /// Gives a chat the name `raw`, or takes the one it was given off when `raw` is blank —
     /// and answers the name it now has (charter-app#254).
     ///
@@ -1776,6 +1795,7 @@ impl Chats {
                     pinned: chat.pinned,
                     label: chat.label.clone(),
                     from: chat.from.clone(),
+                    tab: chat.has_tab(),
                 })
             })
             .collect()
@@ -4924,6 +4944,90 @@ pub(crate) mod tests {
         chats.pin(session, true).unwrap();
 
         assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), after_one);
+        let _ = chats.close(session);
+    }
+
+    // ----- a task chat is listed with no tab until the person opens it (#1447) -----
+
+    /// A chat another chat started in `mode`, as a dispatch records it.
+    fn started_by(dir: &std::path::Path, name: &str, mode: purlis_core::reopen::Mode) -> Chat {
+        Chat {
+            from: Some(purlis_core::reopen::HandedFrom {
+                chat: 1,
+                name: "steward 1".to_owned(),
+                workspace: purlis_core::active::Place::Workspace("ide".to_owned()),
+                report: purlis_core::reopen::Owed::Due,
+                mode,
+            }),
+            ..chat(&a_claude(dir), name, None)
+        }
+    }
+
+    #[test]
+    fn a_task_chat_is_open_with_no_tab_and_a_handoff_with_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let task = chats
+            .start(
+                &started_by(dir.path(), "ide.7", purlis_core::reopen::Mode::Task),
+                SIZE,
+            )
+            .unwrap();
+        let handoff = chats
+            .start(
+                &started_by(dir.path(), "ide.8", purlis_core::reopen::Mode::Handoff),
+                SIZE,
+            )
+            .unwrap();
+
+        let tab = |session: u32| {
+            chats
+                .open_now()
+                .into_iter()
+                .find(|open| open.session == session)
+                .map(|open| open.tab)
+        };
+        assert_eq!(tab(task), Some(false), "listed, and on no strip");
+        assert_eq!(tab(handoff), Some(true));
+        let _ = chats.close(task);
+        let _ = chats.close(handoff);
+    }
+
+    #[test]
+    fn the_tab_the_person_opened_on_a_task_chat_is_written_into_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(
+                &started_by(dir.path(), "ide.7", purlis_core::reopen::Mode::Task),
+                SIZE,
+            )
+            .unwrap();
+
+        chats.open_tab(session).expect("the chat is open");
+
+        assert!(chats.record().chats[0].has_tab());
+        assert!(chats.open_now()[0].tab);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn opening_the_tab_of_a_chat_that_has_one_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counting = std::sync::Arc::clone(&written);
+        let chats = Chats::recorded_by(Box::new(move |_| {
+            counting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        let before = written.load(std::sync::atomic::Ordering::SeqCst);
+
+        chats.open_tab(session).unwrap();
+
+        assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), before);
+        assert!(chats.open_tab(session + 40).is_err(), "no chat, no tab");
         let _ = chats.close(session);
     }
 

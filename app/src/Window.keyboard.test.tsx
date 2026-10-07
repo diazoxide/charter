@@ -314,7 +314,10 @@ describe("the window's tab order", () => {
       // The chat strip: the selected chat's tab, and the `+`. A tab's `×` is not a stop.
       "tab steward two",
       "button New tab",
-      // The explorer, on the left by default: ONE stop, its current row.
+      // The left region, top to bottom. The project's chats (#1447): ONE stop, the row of the
+      // chat in front, which reads as its name and its workspace.
+      "treeitem steward twoalpha",
+      // The explorer: ONE stop, its current row.
       "treeitem alphathe workspace itself",
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.
       "separator",

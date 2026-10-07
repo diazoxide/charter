@@ -150,7 +150,13 @@ describe("a chat a handoff opened, named for its task (charter-app#258)", () => 
       {
         ...chat(1),
         label: "drop commons",
-        from: { name: "steward 3", workspace: "platform-next" },
+        from: {
+          name: "steward 3",
+          workspace: "platform-next",
+          chat: 3,
+          task: false,
+          tab: true,
+        },
       },
     ]);
     render(<App />);

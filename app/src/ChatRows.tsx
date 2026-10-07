@@ -1,8 +1,9 @@
 import { memo, type ReactNode } from "react";
-import { SquareTerminal } from "lucide-react";
+import { Hand, SquareTerminal } from "lucide-react";
 import { ChatMark, WrappingUp } from "./NeedsYou";
 import {
   childrenOf,
+  isAsking,
   markOf,
   sameChildren,
   useChatsHere,
@@ -13,6 +14,8 @@ import { PlaneUpdatedMark, type PlaneUpdates } from "./PlaneUpdated";
 import { chatOf, contentsOf, panesOf, type Tabs } from "./tabs";
 import { PersonaMark } from "./PersonaMark";
 import { ViewMark } from "./Views";
+import type { ListedChat } from "./chatsTree";
+import { PersonaMark } from "./PersonaMarkStandIn";
 
 /*
  * **The rows that draw a chat** (SC-3): split out of `PlaneView`, whose rendering they no longer
@@ -39,6 +42,21 @@ export const ChatStateMark = memo(function ChatStateMark({
 }) {
   const state = useChatsSelect(useChatsHere(), (states) => markOf(states, session ?? -1, shell));
   return <ChatMark state={state} />;
+});
+
+/**
+ * **A chat asking for you, on its row** (#1447): the hand the title bar's queue wears, drawn
+ * while the chat is in that queue and not otherwise. It reads its own chat off the project's
+ * store, as the state mark does, so the queue changing redraws the hands that changed.
+ */
+export const NeedsYouMark = memo(function NeedsYouMark({ session }: { session: number }) {
+  const asking = useChatsSelect(useChatsHere(), (states) => isAsking(states, session));
+  if (!asking) return null;
+  return (
+    <span className="needs-you-mark" data-mark="needs-you" role="img" aria-label="needs you">
+      <Hand aria-hidden="true" />
+    </span>
+  );
 });
 
 /** How many characters of a harness's id for a child agent its row shows: enough to tell
@@ -95,6 +113,54 @@ export const ChildAgents = memo(function ChildAgents({
           <ChatMark
             state={CHILD_STATES.includes(child.state) ? (child.state as State) : "unknown"}
           />
+        </li>
+      ))}
+    </ul>
+  );
+});
+
+/**
+ * **The chats a chat started that work in another workspace, under its row in the explorer**
+ * (#1447): each by its name, with what it is doing and **a badge naming the workspace it went
+ * to**, since nothing else in this workspace's explorer would say where it is.
+ *
+ * A started chat that works in this workspace is not drawn here: it has a row of its own, at
+ * the place it works. Beside the sub-agents and not instead of them: a sub-agent is a helper
+ * inside the chat's own program, and these are chats of their own. Like them, not rows of the
+ * tree, so the arrows stop on the chat; a press brings the started chat forward, and the Chats
+ * section is where the keyboard reaches it.
+ */
+export const StartedElsewhere = memo(function StartedElsewhere({
+  chats,
+  name,
+  onShow,
+}: {
+  chats: readonly ListedChat[] | undefined;
+  /** The chat that started them, which the list is labelled by. */
+  name: string;
+  onShow: (session: number) => void;
+}) {
+  if (chats === undefined || chats.length === 0) return null;
+  return (
+    <ul
+      className="started-chats"
+      role="list"
+      aria-label={`Chats ${name} started in other workspaces`}
+    >
+      {chats.map((chat) => (
+        <li key={chat.session} className="started-chat">
+          <button type="button" className="chat" tabIndex={-1} onClick={() => onShow(chat.session)}>
+            {chat.persona === null ? (
+              <SquareTerminal className="node-icon" aria-hidden="true" />
+            ) : (
+              <PersonaMark persona={chat.persona} />
+            )}
+            <span className="session">{chat.name}</span>
+            <ChatStateMark session={chat.session} shell={chat.shell} />
+            <span className="elsewhere" title={`Works in ${chat.workspace}`}>
+              {chat.workspace}
+            </span>
+          </button>
         </li>
       ))}
     </ul>
