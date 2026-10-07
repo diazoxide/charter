@@ -341,6 +341,13 @@ The new chat works in the asking chat's folder unless the dispatch says one word
   default, when the dispatch names no place. Where the asking chat works in no repo, that
   default gives way to the asking chat's folder and the command says so. `--in` wins over it.
 
+**A handoff says where its work goes itself**, by the workspace its command names, and takes
+no `--in`: its chat stands in that workspace from the start, and a persona's
+`dispatch-isolation: worktree` cuts nothing for it. It is decided as a dispatch is, against
+the asking chat's limits and grant. The two rules above for another workspace, the
+destination's own limits and the standing grant a chat nobody is at needs to cross, are a
+task's: a handoff is not held to them.
+
 **Nothing is merged for a worktree task, ever.** Its report names the branch, in a line
 purlis writes from its own record of what it cut, whatever the chat says; merging is the
 asking chat's decision or yours. The chat's sandbox is the one the project gives its persona
