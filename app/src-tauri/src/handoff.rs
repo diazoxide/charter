@@ -205,7 +205,7 @@ pub fn answer(
             ),
         // An ask after a task this chat dispatched (#1441): no ticket, for the record's reason,
         // and whose task it names is the app's record of that chat.
-        Ask::Task(asked) => crate::dispatched::answer(held, &asked),
+        Ask::Task(asked) => crate::dispatched::answer(held, &asked, connection),
     }
 }
 
@@ -252,7 +252,7 @@ fn report_it(
 
     // From "is one owed" to "one was sent" under one lock, so two reports in flight are one
     // report and one refusal, and a restart of the chat that asked lands on one side of it.
-    let _deciding = held.chats().deciding();
+    let deciding = held.chats().deciding();
     let from = held.chats().handed_from(chat).ok_or_else(|| {
         if task.is_some() {
             format!(
@@ -334,6 +334,9 @@ fn report_it(
             by_person: from.by_person,
             unreported: false,
             stopped: false,
+            // The app's own record of the person's keys in that pane, and only the fact
+            // (#1442).
+            stepped_in: crate::dispatched::stepped_in(held, chat),
         }),
     };
     // The dispatch's record ends with the report (#1452). A task's says how it ended; a
@@ -354,6 +357,12 @@ fn report_it(
     // asked. A task's is that chat's own to read, on its next turn (#1434).
     if delivered.reached_the_chat && from.mode == Mode::Handoff {
         held.reported_back(from.chat, &delivered.from);
+    }
+    // The lock is let go before anything is typed: a program that has stopped reading its
+    // terminal must not hold up every dispatch and report in the project (#1441).
+    drop(deciding);
+    if delivered.reached_the_chat && from.mode == Mode::Task {
+        crate::dispatched::told(held, from.chat);
     }
     Ok(Answer::Reported {
         to: delivered.to,
@@ -444,8 +453,9 @@ fn deliver(
     };
     let kept = handback::leave_at(held.root(), whose, &report)
         .map_err(|why| format!("the report could not be kept ({why})"))?;
-    // A command waiting on this task has its report now, and an asking chat that is waiting
-    // for the person is told it landed (#1441). Only a file left for the chat itself is one a
+    // A command waiting on this task has its report now (#1441); the asking chat is told it
+    // landed once the lock is let go, by whoever holds it ([`report_it`], and the end of a
+    // program). Only a file left for the chat itself is one a
     // wait may take back: one kept for a workspace is the next chat's there.
     if from.mode == Mode::Task {
         crate::dispatched::reported(
@@ -553,7 +563,13 @@ pub fn its_program_ended(held: &Held, chat: u32) {
             return;
         }
         if let Some(deciding) = held.chats().try_deciding() {
+            let asker = held.chats().owed_task_report(chat).map(|from| from.chat);
             unreported(held, chat, Unreported::Ended, &deciding);
+            // Typed only once the lock is let go, as a chat's own report is (#1441).
+            drop(deciding);
+            if let Some(asker) = asker {
+                crate::dispatched::told(held, asker);
+            }
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -4691,6 +4707,7 @@ mod tests {
                 by_person: false,
                 unreported: false,
                 stopped: false,
+                stepped_in: false,
             })
         );
         // For the chat that asked, not for the person (#1434).
@@ -6133,6 +6150,7 @@ mod tests {
                 by_person: false,
                 unreported: true,
                 stopped: false,
+                stepped_in: false,
             })
         );
         let told = purlis_core::handback::context(&left, false).expect("a turn's context");
@@ -7269,6 +7287,562 @@ mod tests {
             waiting[0].task.as_ref().map(|task| task.outcome),
             Some(purlis_core::handback::Outcome::Cancelled)
         );
+    }
+
+    #[test]
+    fn a_chat_may_park_sixteen_waits_and_the_seventeenth_is_refused() {
+        // D-1441-14: a process inside a chat cannot spend the app's threads on waits.
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let parked: Vec<_> = (0..crate::dispatched::MOST_WAITS_A_CHAT)
+            .map(|_| {
+                let (held, id) = (Arc::clone(&held), id.clone());
+                std::thread::spawn(move || {
+                    asks(
+                        &held,
+                        &id,
+                        asking,
+                        What::Wait {
+                            of: task,
+                            within_secs: 60,
+                        },
+                    )
+                })
+            })
+            .collect();
+        // Until every one of them is parked, by the app's own count: the seventeenth is then
+        // asked once. Asked in a loop it took a place itself whenever fewer were parked, so a
+        // thread was refused in its stead and the loop never was. And it has to be soon: the
+        // stand-in's program ends after ten seconds, and a wait on a task whose program has
+        // ended is answered at once (#1443).
+        let deadline = Instant::now() + std::time::Duration::from_secs(8);
+        while held.tasks().parked_now(asking) < crate::dispatched::MOST_WAITS_A_CHAT {
+            assert!(
+                Instant::now() < deadline,
+                "only {} of the waits parked",
+                held.tasks().parked_now(asking)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let refused = asks(
+            &held,
+            &id,
+            asking,
+            What::Wait {
+                of: task,
+                within_secs: 1,
+            },
+        );
+
+        assert!(
+            matches!(&refused, Answer::No { why } if why.contains("16 waits under way")),
+            "{refused:?}"
+        );
+        // The report ends them all, and their places are let go.
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+        for one in parked {
+            let said = one.join().expect("the wait ended");
+            assert!(matches!(said, Answer::Task(_)), "{said:?}");
+        }
+        let again = asks(
+            &held,
+            &id,
+            asking,
+            What::Wait {
+                of: task,
+                within_secs: 1,
+            },
+        );
+        assert!(matches!(again, Answer::Task(_)), "{again:?}");
+    }
+
+    #[test]
+    fn a_wait_on_a_task_whose_tab_was_closed_says_it_ended_and_is_still_nobody_else_s() {
+        // M6: the owner is told how it ended, not that the task was never its own.
+        let (plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let alpha = held.root().join("workspaces").join("alpha");
+        let other = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+
+        held.close_chat(task).expect("closed");
+
+        let closed = asks(
+            &held,
+            &id,
+            asking,
+            What::Wait {
+                of: task,
+                within_secs: 30,
+            },
+        );
+        // The person closed a task that had not reported, so the asking chat was told it was
+        // stopped (D-1443-11), and the wait is answered with that: how it ended.
+        assert!(
+            matches!(&closed, Answer::Task(answered)
+                if matches!(&**answered, Answered::Waited { of, name, what: Waited::Reported { .. } }
+                    if *of == task && name == "check the queue")),
+            "{closed:?}"
+        );
+        assert_eq!(
+            asks(
+                &held,
+                &id,
+                other,
+                What::Wait {
+                    of: task,
+                    within_secs: 30
+                }
+            ),
+            not_yours(task)
+        );
+        assert_eq!(
+            asks(&held, &id, asking, What::Cancel { of: task }),
+            not_yours(task)
+        );
+    }
+
+    #[test]
+    fn a_cancelled_task_started_again_under_a_new_number_is_still_cancelled() {
+        // Fold 6: a restart (to take a sandbox grant, say) must not shed the cancel.
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, asking, What::Cancel { of: task });
+        let record = held.chats().recorded_chat(task).expect("its record");
+        let again = held
+            .chats()
+            .start(&record, STARTING)
+            .expect("it starts again");
+
+        // As a restart ends the old one: in its own place, which is not the person's Close.
+        // A Close of a task that has not reported tells the asking chat it was stopped
+        // (D-1443-11), and a chat started again was not.
+        held.in_its_place_in_a_test(task, again);
+
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            again,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+        let waiting =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
+        assert_eq!(
+            waiting.len(),
+            1,
+            "one report, and none written for the old number"
+        );
+        assert_eq!(
+            waiting[0].task.as_ref().map(|task| task.outcome),
+            Some(purlis_core::handback::Outcome::Cancelled)
+        );
+    }
+
+    // ----- follow-ups, progress notes and questions (#1442) -----
+
+    use purlis_core::dispatched::Reply;
+    use purlis_core::dispatchtalk::{self, Kind, Message};
+
+    fn sent(kind: Kind, to: &str) -> Answer {
+        Answer::Task(Box::new(Answered::Sent {
+            kind,
+            to: to.to_owned(),
+        }))
+    }
+
+    fn tell(to: u32, text: &str) -> What {
+        What::Tell {
+            to,
+            text: text.to_owned(),
+        }
+    }
+
+    fn question(text: &str) -> What {
+        What::Question {
+            text: text.to_owned(),
+        }
+    }
+
+    fn the_answer(to: u32, text: &str) -> What {
+        What::Answer {
+            to,
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_follow_up_reaches_the_running_tasks_next_turn_as_data_from_the_asking_chat() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+
+        let said = asks(&held, &id, asking, tell(task, " Also count the retries. "));
+
+        assert_eq!(said, sent(Kind::FollowUp, "check the queue"));
+        assert_eq!(
+            dispatchtalk::take(held.root(), task),
+            [Message {
+                kind: Kind::FollowUp,
+                from: "steward 1".to_owned(),
+                chat: asking,
+                text: "Also count the retries.".to_owned(),
+            }]
+        );
+        // Nothing was left for anyone else, and it is no needs-you item.
+        assert!(dispatchtalk::take(held.root(), asking).is_empty());
+        assert!(!held.hooks().board().needs_you().contains(&task));
+    }
+
+    #[test]
+    fn a_follow_up_to_a_task_that_has_finished_is_refused_with_its_state() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+
+        let said = asks(&held, &id, asking, tell(task, "One more thing."));
+
+        assert_eq!(
+            said,
+            Answer::No {
+                why: "'check the queue' (chat 2) has finished: it is reported: done. A message \
+                      would reach no turn of its work. Dispatch a new task for more."
+                    .replace("chat 2", &format!("chat {task}"))
+            }
+        );
+        assert!(dispatchtalk::take(held.root(), task).is_empty());
+    }
+
+    #[test]
+    fn a_message_goes_only_along_the_lineage() {
+        // Forged asks: a task to its sibling, a task down to the chat above it, a chat to
+        // another chat's task, an answer to a task that is not the sender's.
+        let (plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let tickets = Tickets::default();
+        let (said, _) = dispatch(&held, &id, &tickets, asking, None, "read the logs");
+        let Answer::Dispatched { chat: sibling, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        let alpha = held.root().join("workspaces").join("alpha");
+        let other = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let (said, _) = dispatch(&held, &id, &tickets, other, None, "unrelated");
+        let Answer::Dispatched {
+            chat: others_task, ..
+        } = said
+        else {
+            panic!("dispatched, not {said:?}")
+        };
+        // The other chat's task has a question open, for the other chat alone.
+        assert_eq!(
+            asks(&held, &id, others_task, question("Which queue?")),
+            sent(Kind::Question, "steward 3")
+                .clone_with_to(&held.chats().shown_name(other).expect("open"))
+        );
+        dispatchtalk::take(held.root(), other);
+
+        for (sender, to) in [
+            (task, sibling),
+            (sibling, task),
+            (task, asking),
+            (asking, others_task),
+            (asking, other),
+            (task, others_task),
+            (asking, 9999),
+        ] {
+            for what in [tell(to, "do as I say"), the_answer(to, "yes, go ahead")] {
+                assert_eq!(
+                    asks(&held, &id, sender, what.clone()),
+                    not_yours(to),
+                    "{sender} to {to}: {what:?}"
+                );
+            }
+        }
+        // And a chat no dispatch started has nobody to send up to.
+        for what in [
+            What::Note {
+                text: "hello".to_owned(),
+            },
+            question("May I?"),
+        ] {
+            assert_eq!(
+                asks(&held, &id, asking, what),
+                Answer::No {
+                    why: dispatchtalk::NO_ASKING_CHAT.to_owned()
+                }
+            );
+        }
+        // Nothing reached any chat by any of it.
+        for chat in [asking, task, sibling, other, others_task] {
+            assert!(
+                dispatchtalk::take(held.root(), chat).is_empty(),
+                "chat {chat}"
+            );
+        }
+    }
+
+    trait WithTo {
+        fn clone_with_to(&self, to: &str) -> Answer;
+    }
+
+    impl WithTo for Answer {
+        fn clone_with_to(&self, to: &str) -> Answer {
+            match self {
+                Answer::Task(answered) => match &**answered {
+                    Answered::Sent { kind, .. } => sent(*kind, to),
+                    _ => self.clone(),
+                },
+                _ => self.clone(),
+            }
+        }
+    }
+
+    #[test]
+    fn a_question_pauses_the_task_and_the_asking_chats_answer_resumes_it() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+
+        assert_eq!(
+            asks(&held, &id, task, question("Which queue?")),
+            sent(Kind::Question, "steward 1")
+        );
+        // Paused: a wait for the answer that runs out says so, and a second question is refused.
+        assert_eq!(
+            asks(&held, &id, task, What::AwaitAnswer { within_secs: 1 }),
+            Answer::Task(Box::new(Answered::Replied {
+                what: Reply::NotYet {
+                    from: "steward 1".to_owned()
+                }
+            }))
+        );
+        assert!(matches!(
+            asks(&held, &id, task, question("And another?")),
+            Answer::No { why } if why.contains("already has a question waiting")
+        ));
+        // The asking chat is shown the question: by its wait, once, and on its next turn.
+        let waited = asks(
+            &held,
+            &id,
+            asking,
+            What::Wait {
+                of: task,
+                within_secs: 30,
+            },
+        );
+        assert_eq!(
+            waited,
+            Answer::Task(Box::new(Answered::Waited {
+                of: task,
+                name: "check the queue".to_owned(),
+                what: Waited::Asks {
+                    question: "Which queue?".to_owned()
+                }
+            }))
+        );
+        let listed = asks(&held, &id, asking, What::List);
+        assert!(
+            matches!(&listed, Answer::Task(answered)
+                if matches!(&**answered, Answered::Listed { rows }
+                    if rows[0].state == "asking this chat a question")),
+            "{listed:?}"
+        );
+        assert_eq!(
+            dispatchtalk::take(held.root(), asking)
+                .into_iter()
+                .map(|message| (message.kind, message.chat, message.text))
+                .collect::<Vec<_>>(),
+            [(Kind::Question, task, "Which queue?".to_owned())]
+        );
+
+        assert_eq!(
+            asks(&held, &id, asking, the_answer(task, "The second one.")),
+            sent(Kind::Answer, "check the queue")
+        );
+
+        assert_eq!(
+            asks(&held, &id, task, What::AwaitAnswer { within_secs: 30 }),
+            Answer::Task(Box::new(Answered::Replied {
+                what: Reply::Answered {
+                    from: "steward 1".to_owned(),
+                    text: "The second one.".to_owned()
+                }
+            }))
+        );
+        // The waiting command has it, so the task's next turn is not handed it again.
+        assert_eq!(
+            asks(&held, &id, task, What::GotAnswer),
+            Answer::Task(Box::new(Answered::Noted))
+        );
+        assert!(dispatchtalk::take(held.root(), task).is_empty());
+        // And a question answered is closed: a second answer finds none.
+        assert_eq!(
+            asks(&held, &id, asking, the_answer(task, "No, the first.")),
+            Answer::No {
+                why: dispatchtalk::no_question("check the queue", task)
+            }
+        );
+    }
+
+    #[test]
+    fn an_answer_after_the_task_has_reported_is_refused_and_a_follow_up_to_a_cancelled_one_too() {
+        // Folds 4 and 5.
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let tickets = Tickets::default();
+        asks(&held, &id, task, question("Which queue?"));
+        dispatchtalk::take(held.root(), asking);
+        tasks_report(
+            &held,
+            &id,
+            &tickets,
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+
+        assert_eq!(
+            asks(&held, &id, asking, the_answer(task, "The second one.")),
+            Answer::No {
+                why: dispatchtalk::no_question("check the queue", task)
+            }
+        );
+        assert!(dispatchtalk::take(held.root(), task).is_empty());
+
+        let (said, _) = dispatch(&held, &id, &tickets, asking, None, "count the retries");
+        let Answer::Dispatched { chat: second, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        asks(&held, &id, asking, What::Cancel { of: second });
+        let said = asks(&held, &id, asking, tell(second, "One more thing."));
+        assert!(
+            matches!(&said, Answer::No { why } if why.contains("it is cancelling")),
+            "{said:?}"
+        );
+        assert!(dispatchtalk::take(held.root(), second).is_empty());
+    }
+
+    #[test]
+    fn two_questions_sent_at_once_are_one_question_and_one_refusal_with_nothing_left_behind() {
+        // Fold 7.
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let both: Vec<_> = ["Which queue?", "Which cluster?"]
+            .into_iter()
+            .map(|text| {
+                let (held, id) = (Arc::clone(&held), id.clone());
+                std::thread::spawn(move || asks(&held, &id, task, question(text)))
+            })
+            .collect();
+        let said: Vec<Answer> = both.into_iter().map(|one| one.join().unwrap()).collect();
+
+        assert_eq!(
+            said.iter()
+                .filter(|one| matches!(one, Answer::Task(_)))
+                .count(),
+            1,
+            "{said:?}"
+        );
+        assert_eq!(dispatchtalk::take(held.root(), asking).len(), 1, "one file");
+    }
+
+    #[test]
+    fn messages_waiting_for_a_chat_follow_it_to_its_new_number() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, asking, tell(task, "Also count the retries."));
+        let record = held.chats().recorded_chat(task).expect("its record");
+        let again = held
+            .chats()
+            .start(&record, STARTING)
+            .expect("it starts again");
+
+        held.followed(task, again);
+        held.close_chat(task).expect("the old one closes");
+
+        assert_eq!(dispatchtalk::take(held.root(), again).len(), 1);
+    }
+
+    #[test]
+    fn the_eleventh_message_in_a_minute_between_one_pair_is_refused_with_the_limit() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        // Both ways count together: five down and five up.
+        for n in 0..5 {
+            assert_eq!(
+                asks(&held, &id, asking, tell(task, &format!("follow-up {n}"))),
+                sent(Kind::FollowUp, "check the queue")
+            );
+            assert_eq!(
+                asks(
+                    &held,
+                    &id,
+                    task,
+                    What::Note {
+                        text: format!("note {n}")
+                    }
+                ),
+                sent(Kind::Note, "steward 1")
+            );
+        }
+
+        let said = asks(&held, &id, asking, tell(task, "one too many"));
+
+        assert!(
+            matches!(&said, Answer::No { why }
+                if why.contains("exchanged 10 messages in the last minute")
+                    && why.contains("the limit is 10 a minute")),
+            "{said:?}"
+        );
+        assert_eq!(
+            dispatchtalk::take(held.root(), task).len(),
+            5,
+            "the eleventh was not left"
+        );
+        // A progress note is read on the asking chat's next turn, and is no needs-you item.
+        let notes = dispatchtalk::take(held.root(), asking);
+        assert_eq!(notes.len(), 5);
+        assert!(notes.iter().all(|note| note.kind == Kind::Note));
+        assert!(!held.hooks().board().needs_you().contains(&asking));
+    }
+
+    #[test]
+    fn a_report_from_a_task_the_person_typed_in_says_the_operator_stepped_in_and_no_more() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        // The terminal's own answer and the mouse are not the person; their keys are.
+        held.operator_input(task, b"\x1b[<64;10;10M").expect("sent");
+        assert!(!crate::dispatched::stepped_in(&held, task));
+        held.operator_input(task, b"use the staging cluster instead\r")
+            .expect("sent");
+
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+
+        let dir = purlis_core::handback::dir(held.root()).join(format!("chat-{asking}"));
+        let kept: String = std::fs::read_dir(&dir)
+            .expect("kept")
+            .map(|entry| std::fs::read_to_string(entry.expect("an entry").path()).expect("read"))
+            .collect();
+        assert!(
+            !kept.contains("staging"),
+            "nothing of what was typed: {kept}"
+        );
+        let waiting =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
+        assert_eq!(
+            waiting[0].task.as_ref().map(|task| task.stepped_in),
+            Some(true)
+        );
+        let told = purlis_core::handback::context(&waiting, false).expect("a report");
+        assert!(told.contains("The operator stepped in"), "{told}");
+        assert!(!told.contains("staging"), "{told}");
     }
 
     #[test]
