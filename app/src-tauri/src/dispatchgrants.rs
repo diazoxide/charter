@@ -229,10 +229,6 @@ pub struct Ground<'a> {
 
 impl Store {
     /// Hands every answer to `answers` from now on: the dispatch core's to register.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the dispatch core registers it (#1436)")
-    )]
     pub fn answers_with(&self, answers: Answers) {
         *lock(&self.answers) = Some(answers);
     }
@@ -246,8 +242,10 @@ impl Store {
             .collect()
     }
 
-    /// The grants in force for `asking` in the project at `root`.
-    fn in_force(&self, root: &Path, asking: &Asking) -> InForce {
+    /// The grants in force for `asking` in the project at `root`: what the dispatch decision
+    /// reads to put a limit before a question to the person. Reading it grants nothing; the
+    /// entry points below are still what a dispatch starts by.
+    pub fn in_force(&self, root: &Path, asking: &Asking) -> InForce {
         InForce::read(root, self.chat_pairs(asking.id.as_deref()))
     }
 
@@ -694,10 +692,6 @@ fn now_secs() -> u64 {
 /// request names it. Answers whether the dispatch is covered, held for the person (the Notice
 /// is raised on the asking chat's tab), locked by policy, or refused. The module's own doc is
 /// the contract.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the dispatch core calls it (#1436)")
-)]
 pub fn request_dispatch_grant(
     held: &crate::planes::Held,
     session: u32,
@@ -713,13 +707,6 @@ pub fn request_dispatch_grant(
 /// held, no Notice is raised, and a locked one raises none either. So an unattended chat
 /// dispatches only under a grant that already exists and that this machine has acknowledged,
 /// and a missing grant is a sentence for the chat, never a prompt nobody is there to answer.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the dispatch core calls it for an unattended chat (#1446)"
-    )
-)]
 pub fn request_dispatch_grant_or_refuse(
     held: &crate::planes::Held,
     session: u32,

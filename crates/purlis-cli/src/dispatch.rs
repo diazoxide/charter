@@ -1,7 +1,7 @@
 //! `purlis dispatch` — start a persona chat on a task, and send a task's report back (#1436).
 //!
 //! ```text
-//! purlis dispatch --name "<task>" [--to <persona>] <<'BRIEF'
+//! purlis dispatch --name "<task>" [--to <persona>] [--profile <profile>] <<'BRIEF'
 //! <the brief>
 //! BRIEF
 //!
@@ -67,8 +67,14 @@ pub enum DispatchCommand {
     },
 }
 
-/// `purlis dispatch --name <task> [--to <persona>]`, with the brief on stdin.
-pub fn dispatch(here: &crate::Here, to: Option<&str>, name: Option<&str>) -> ExitCode {
+/// `purlis dispatch --name <task> [--to <persona>] [--profile <profile>]`, with the brief on
+/// stdin.
+pub fn dispatch(
+    here: &crate::Here,
+    to: Option<&str>,
+    name: Option<&str>,
+    profile: Option<&str>,
+) -> ExitCode {
     let Some(name) = name else {
         voice::err(&format!(
             "{SAYS} a task needs a name, which the new chat is called and listed under: add \
@@ -89,7 +95,7 @@ pub fn dispatch(here: &crate::Here, to: Option<&str>, name: Option<&str>) -> Exi
             return ExitCode::FAILURE;
         }
     };
-    said(send(here, to, name, &brief))
+    said(send(here, to, name, &brief, profile))
 }
 
 /// Prints what a dispatch or a report answered: `Ok` on stdout, `Err` on stderr as a refusal.
@@ -138,6 +144,7 @@ pub fn send(
     to: Option<&str>,
     name: &str,
     brief: &str,
+    profile: Option<&str>,
 ) -> Result<String, String> {
     let name = checked(here, to, name)?;
     if !brief
@@ -183,6 +190,10 @@ pub fn send(
         to: to.map(str::to_owned),
         name,
         brief: brief.to_owned(),
+        profile: profile
+            .map(str::trim)
+            .filter(|profile| !profile.is_empty())
+            .map(str::to_owned),
         ticket,
     }));
     match asking.ask(&ask, crate::handoff::AN_OPEN_TAKES_AT_MOST) {
@@ -190,29 +201,32 @@ pub fn send(
             chat,
             name,
             persona,
+            note,
         }) => {
             let who = match persona {
                 Some(persona) => format!(" as {}", purlis_core::personas::one_line(&persona)),
                 None => String::new(),
             };
+            // What the app has to say about how it was started: today, that it runs on this
+            // chat's profile because its persona's own is not offered here (D-1445-8).
+            let note = match note {
+                Some(note) => format!(" Note: {}.", purlis_core::personas::one_line(&note)),
+                None => String::new(),
+            };
             Ok(format!(
                 "{SAYS} started '{}'{who} (chat {chat}). It works in this chat's folder, and \
-                 its report reaches this chat as context on its next turn.",
+                 its report reaches this chat as context on its next turn.{note}",
                 purlis_core::personas::one_line(&name)
             ))
         }
-        Ok(Answer::NeedsGrant { from, to }) => {
-            let from = match from {
-                Some(from) => format!("'{}'", purlis_core::personas::one_line(&from)),
-                None => "a chat on no persona".to_owned(),
-            };
-            Err(format!(
-                "{SAYS} needs a grant. {from} has no dispatch grant for '{}', and only the \
-                 person gives one. {NOTHING} Ask the person to allow it, or do the work in \
-                 this chat.",
-                purlis_core::personas::one_line(&to)
-            ))
-        }
+        // Held, not refused: the dispatch is accepted and waits on the person, so this is not
+        // a failure and is not said as one.
+        Ok(Answer::NeedsGrant { from, to, waiting }) => Ok(held_for_the_person(
+            from.as_deref(),
+            &to,
+            &ask_name(&ask),
+            waiting.as_deref(),
+        )),
         Ok(Answer::No { why }) => Err(app_refused(&why)),
         Ok(
             Answer::Ticket { .. }
@@ -231,6 +245,36 @@ pub fn send(
             purlis_core::personas::one_line(&ask_name(&ask))
         )),
     }
+}
+
+/// What a chat is told where its dispatch waits on the person for a dispatch grant: nothing
+/// has started, the person is being asked on this chat's tab, and what happens next. `waiting`
+/// is the task the person is already being asked about across this pair, where this ask was
+/// not held beside it.
+fn held_for_the_person(from: Option<&str>, to: &str, task: &str, waiting: Option<&str>) -> String {
+    let one = purlis_core::personas::one_line;
+    let to = one(to);
+    let who = match from {
+        Some(from) => format!("'{}' chats", one(from)),
+        None => "this chat".to_owned(),
+    };
+    if let Some(first) = waiting {
+        return format!(
+            "{SAYS} not held. The person is already being asked whether {who} may dispatch to \
+             '{to}', for the task '{}', and they were shown that task's brief, so only it \
+             starts when they allow it. {NOTHING} Dispatch '{}' again once they have answered.",
+            one(first),
+            one(task)
+        );
+    }
+    format!(
+        "{SAYS} held for the person. {who} may not dispatch to '{to}' yet, so the person is \
+         being asked on this chat's tab, with this brief in front of them. Nothing has started. \
+         If they allow it, '{}' starts then and its report reaches this chat as context on a \
+         later turn; if they keep it blocked, this chat is told on its next turn. Carry on \
+         with other work, and do not dispatch it again.",
+        one(task)
+    )
 }
 
 /// The name a dispatch ask carries.
@@ -252,7 +296,13 @@ fn ticket_words(why: &str) -> String {
 }
 
 fn app_refused(why: &str) -> String {
-    format!("{SAYS} {} {NOTHING}", purlis_core::personas::one_line(why))
+    let why = purlis_core::personas::one_line(why);
+    // A refusal that already says nothing was started is not told so twice.
+    if why.to_lowercase().contains("nothing was started") {
+        format!("{SAYS} {why}")
+    } else {
+        format!("{SAYS} {why} {NOTHING}")
+    }
 }
 
 fn no_app() -> String {

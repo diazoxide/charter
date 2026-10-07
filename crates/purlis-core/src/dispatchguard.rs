@@ -21,7 +21,7 @@
 //! chat its own chat could have started, listed under that chat where the person sees it. So
 //! nothing that grants a chat a dispatch should be described as never reaching its helpers.
 
-use crate::dispatchdecision::{self, Asker, Decision, Grant, Limits, Mode, Persona, Request};
+use crate::dispatchdecision::{self, Asker, Decision, Mode, Persona, Request};
 use crate::handoffguard::Caller;
 use crate::proseguard::charter_words;
 use crate::{shellseg, shellwrap};
@@ -118,12 +118,24 @@ pub fn tool_refusal(tool: &str, caller: Caller<'_>) -> Option<String> {
 
 /// What the decision answers a helper sub-agent, in its own sentence.
 fn helper_is_told() -> String {
+    // Who asks is the first thing the decision reads, so the rest is whatever a project that
+    // set nothing would have.
+    let limits = crate::dispatchlimits::in_force(
+        &crate::dispatchlimits::Table::default(),
+        None,
+        None,
+        None,
+        &crate::dispatchlimits::Table::default(),
+        &crate::dispatchlimits::Level::unset(),
+    );
     let asked = Request {
         asker: Asker::Helper,
         to: Persona::None,
         mode: Mode::Task,
-        grant: Grant::Missing,
-        limits: Limits::default(),
+        grant: &crate::dispatchgrant::Covers::NeedsGrant,
+        profile: None,
+        limits: &limits,
+        lineage: &dispatchdecision::Lineage::default(),
     };
     match dispatchdecision::decide(&asked) {
         Decision::Refused(why) => why.say(),

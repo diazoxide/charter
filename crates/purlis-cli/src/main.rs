@@ -461,7 +461,11 @@ enum Command {
     /// which needs no grant. It works in this chat's folder, with the sandbox, hosts and vaults
     /// the project gives that persona, and is listed under this chat in the explorer. Its
     /// report reaches this chat as context on its next turn. A persona other than this chat's
-    /// own needs a dispatch grant, which only the person gives.
+    /// own needs a dispatch grant, which only the person gives: where there is none the
+    /// person is asked on this chat's tab, and the task starts when they allow it.
+    ///
+    /// It starts on the persona's own harness profile where its definition names one, else on
+    /// this chat's; --profile names another of the project's profiles.
     ///
     /// `purlis dispatch report --outcome done "<text>"`, from a chat a dispatch started, sends
     /// its one report back.
@@ -474,6 +478,10 @@ enum Command {
         /// (`check the queue`). At most 64 characters.
         #[arg(long)]
         name: Option<String>,
+        /// One of the project's harness profiles to start the new chat on (default: the
+        /// persona's own, else this chat's).
+        #[arg(long)]
+        profile: Option<String>,
         #[command(subcommand)]
         command: Option<dispatch::DispatchCommand>,
     },
@@ -3625,7 +3633,13 @@ fn main() -> ExitCode {
         return code;
     }
     // `dispatch` says what it started, or one refusal and exits 1.
-    if let Command::Dispatch { to, name, command } = &cli.command {
+    if let Command::Dispatch {
+        to,
+        name,
+        profile,
+        command,
+    } = &cli.command
+    {
         if let Some(command) = command {
             return dispatch::run(command);
         }
@@ -3636,7 +3650,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        return dispatch::dispatch(&here, to.as_deref(), name.as_deref());
+        return dispatch::dispatch(&here, to.as_deref(), name.as_deref(), profile.as_deref());
     }
     // `handoff` says one refusal and exits 1; it never returns 0 in this charter.
     if let Command::Handoff {

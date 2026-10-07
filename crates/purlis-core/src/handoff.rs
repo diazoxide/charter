@@ -333,12 +333,28 @@ report once with `purlis dispatch report --outcome done \"<what you did and foun
 ///
 /// `from` is the asking chat by the name the person sees it under, `place` where it works.
 pub fn task_message(from: &str, place: &Place, when: chrono::NaiveDateTime, brief: &str) -> String {
+    task_message_noting(from, place, when, brief, None)
+}
+
+/// [`task_message`], with `note` as one more line under the stamp, as [`delivered_noting`]
+/// gives a handoff: something the app has to tell the new chat about how it was started.
+/// Purlis's own words, never the asking chat's.
+pub fn task_message_noting(
+    from: &str,
+    place: &Place,
+    when: chrono::NaiveDateTime,
+    brief: &str,
+    note: Option<&str>,
+) -> String {
     let line = TASK_STAMP
         .replace("{place}", &place_words(place))
         .replace("{when}", &when.format("%Y-%m-%d %H:%M").to_string())
         // Last, so a name that happened to spell `{when}` is not filled in again.
         .replace("{from}", from);
-    format!("{line}\n{TASK_NOTE}\n\n{brief}")
+    let note = note
+        .map(|note| format!("\n⟨{}⟩", crate::personas::one_line(note)))
+        .unwrap_or_default();
+    format!("{line}\n{TASK_NOTE}{note}\n\n{brief}")
 }
 
 // ----------------------------------------------------------------------------------------
@@ -932,6 +948,49 @@ mod tests {
     fn a_task_is_never_read_as_a_handoff_s_wire_message() {
         // The app opens a handoff only on a message stamped by the chat that asks
         // (`is_stamped_from`); a task's message is the app's own and is not that shape.
+        // A note the app adds is one more line of its own under the stamp, above the brief.
+        let noted = task_message_noting(
+            "steward 3",
+            &ws("ops"),
+            at("2026-10-07T14:32:05"),
+            "the brief",
+            Some("persona 'devops' names profile 'codex-ops', which this machine does not offer"),
+        );
+        let (above, brief) = noted.split_once("\n\n").expect("a blank line");
+        assert_eq!(brief, "the brief");
+        assert!(
+            above.ends_with(
+                "⟨persona 'devops' names profile 'codex-ops', which this machine does not offer⟩"
+            ),
+            "{above}"
+        );
+        assert_eq!(
+            above.lines().count(),
+            3,
+            "the stamp, the note of a task, the note: {above}"
+        );
+        // A note is one line whatever it holds: it cannot end purlis's lines and start a brief.
+        let broken = task_message_noting(
+            "steward 3",
+            &ws("ops"),
+            at("2026-10-07T14:32:05"),
+            "the brief",
+            Some("one\n\ntwo"),
+        );
+        assert_eq!(
+            broken.split_once("\n\n").expect("a blank line").1,
+            "the brief"
+        );
+        assert_eq!(
+            task_message_noting(
+                "steward 3",
+                &ws("ops"),
+                at("2026-10-07T14:32:05"),
+                "x",
+                None
+            ),
+            task_message("steward 3", &ws("ops"), at("2026-10-07T14:32:05"), "x")
+        );
         let told = task_message("7", &ws("ops"), at("2026-10-07T14:32:05"), "x y");
         assert_eq!(stamped(&told), None);
     }
