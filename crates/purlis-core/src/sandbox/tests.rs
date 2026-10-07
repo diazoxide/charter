@@ -494,6 +494,101 @@ fn an_opencode_chat_is_handed_the_dispatch_records_denied_for_reading() {
     }
 }
 
+/// D-T59-19: what waits to be told to a chat on its next turn (a task's report, purlis's word
+/// on a held dispatch) is left by the app and taken by purlis's hooks. **Denied for reading
+/// and writing where the harness's hooks run outside its sandbox, and left as it was where
+/// they run inside it**: there the hook that delivers is held to the same sandbox, and a
+/// denial would cut every report off.
+#[test]
+fn what_waits_for_a_chat_s_next_turn_is_denied_only_where_the_hooks_run_outside_the_sandbox() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let stores: Vec<std::path::PathBuf> = [".charter", ".purlis"]
+        .iter()
+        .map(|state| plane.path().join(state).join("handbacks"))
+        .collect();
+    // No harness is given the denial by the classes alone: it is added per harness.
+    let classes = Denied::of(plane.path(), &machine(Os::MacOs));
+    for store in &stores {
+        assert!(!classes.paths.iter().any(|it| it.path == *store));
+    }
+    let mut kinds = (0, 0);
+    for harness in Harness::ALL {
+        if compiler(harness).is_none() {
+            continue;
+        }
+        let applied = applied_for(
+            harness,
+            &policy_of(&[], false),
+            &Plane::of(None),
+            plane.path(),
+            &machine(Os::MacOs),
+        )
+        .expect("compiles");
+        let denies = |store: &std::path::Path| {
+            applied
+                .denied
+                .iter()
+                .any(|it| it.path == *store && it.access == Access::ReadWrite)
+        };
+        if harness.adapter().sandbox_holds_what_it_starts() {
+            kinds.1 += 1;
+            for store in &stores {
+                assert!(
+                    !denies(store),
+                    "{harness:?} runs its hooks inside its sandbox, and they take from {}",
+                    store.display()
+                );
+            }
+        } else {
+            kinds.0 += 1;
+            for store in &stores {
+                assert!(denies(store), "{harness:?}: {} not denied", store.display());
+            }
+        }
+    }
+    assert!(
+        kinds.0 > 0 && kinds.1 > 0,
+        "both kinds are compiled: {kinds:?}"
+    );
+}
+
+/// The same, in the form a harness whose hooks run outside is handed: its own sandbox's read
+/// and write denials, and its file tools'.
+#[test]
+fn a_chat_whose_hooks_run_outside_is_handed_what_waits_denied_for_reading_and_writing() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let denied =
+        Denied::of(plane.path(), &machine(Os::MacOs)).and_what_waits_for_a_chat(plane.path());
+    let stores: Vec<std::path::PathBuf> = [".charter", ".purlis"]
+        .iter()
+        .map(|state| plane.path().join(state).join("handbacks"))
+        .collect();
+    let held = paths(&denied, Class::Integrity, Access::ReadWrite);
+    for store in &stores {
+        assert!(held.contains(store), "{} not in {held:?}", store.display());
+    }
+    let settings = claude::settings(&compiled(denied.clone(), Os::MacOs)).expect("compiles");
+    let listed = |key: &str| -> Vec<String> {
+        settings.sandbox["filesystem"][key]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(|path| path.as_str().map(str::to_owned))
+            .collect()
+    };
+    for store in &stores {
+        // As the kernel names it, which is what the compiler hands the harness.
+        let named = super::real(store).display().to_string();
+        assert!(listed("denyRead").contains(&named), "{named}");
+        assert!(listed("denyWrite").contains(&named), "{named}");
+        assert!(
+            settings.deny.contains(&format!("Read(/{named}/**)")),
+            "{named}: {:?}",
+            settings.deny
+        );
+    }
+}
+
 #[test]
 fn a_chat_never_writes_the_approvals_a_person_gave() {
     let (_plane, denied) = denied_with(None, Os::Linux);

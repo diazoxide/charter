@@ -130,9 +130,12 @@ pub enum For<'a> {
 /// root is not a workspace, and its word has a space in it.
 const PLANE_ROOT_DIR: &str = "plane-root";
 
+/// The folder of the state folder every report waits in.
+pub const DIR_NAME: &str = "handbacks";
+
 /// Where every report waits.
 pub fn dir(root: &Path) -> PathBuf {
-    crate::names::state(root).join("handbacks")
+    crate::names::state(root).join(DIR_NAME)
 }
 
 /// The directory `whose` reports wait in, or `None` for a workspace name that cannot be one.

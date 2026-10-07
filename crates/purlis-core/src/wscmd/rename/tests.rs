@@ -871,3 +871,78 @@ fn a_rename_with_no_chat_to_lose_warns_about_none() {
         "{said:?}"
     );
 }
+
+// ----- the reports kept for a workspace follow a rename a sandboxed chat left (D-T59-19) -----
+
+/// A project where a rename of `old` to `new` moved the workspace and left its journal, with
+/// one report kept for `old`.
+fn a_rename_left_by_a_sandboxed_chat(old: &str, new: &str, moved: bool) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("workspaces").join(new)).unwrap();
+    let kept = crate::handback::dir(root).join(format!("workspace-{old}"));
+    std::fs::create_dir_all(&kept).unwrap();
+    std::fs::write(kept.join("000000000000000000000001-a.json"), "{}").unwrap();
+    std::fs::write(
+        journal_path(root),
+        format!(r#"{{"from":"{old}","to":"{new}","moved":{moved}}}"#),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn the_app_moves_the_reports_kept_for_a_workspace_a_sandboxed_chat_renamed() {
+    let plane = a_rename_left_by_a_sandboxed_chat("alpha", "beta", true);
+    let root = plane.path();
+    let kept = |ws: &str| crate::handback::dir(root).join(format!("workspace-{ws}"));
+
+    assert_eq!(kept_reports_follow(root).ok(), Some(true));
+
+    assert!(
+        !kept("alpha").exists(),
+        "nothing is left under the old name"
+    );
+    assert!(
+        kept("beta")
+            .join("000000000000000000000001-a.json")
+            .is_file(),
+        "the report waits for the next chat to start in the renamed workspace"
+    );
+    // The rest of the rename is the command's to finish: its journal is still there.
+    assert!(journal_path(root).is_file());
+    // And asked again there is nothing to move.
+    assert_eq!(kept_reports_follow(root).ok(), Some(false));
+}
+
+#[test]
+fn kept_reports_are_moved_only_for_a_rename_whose_workspace_really_moved() {
+    // The journal is a file a chat can write. It moves nothing unless the old workspace is
+    // gone and the new one is there, and it names two workspaces.
+    let not_moved = a_rename_left_by_a_sandboxed_chat("alpha", "beta", false);
+    assert_eq!(kept_reports_follow(not_moved.path()).ok(), Some(false));
+
+    let old_still_there = a_rename_left_by_a_sandboxed_chat("alpha", "beta", true);
+    std::fs::create_dir_all(old_still_there.path().join("workspaces/alpha")).unwrap();
+    assert_eq!(
+        kept_reports_follow(old_still_there.path()).ok(),
+        Some(false)
+    );
+
+    let no_new = a_rename_left_by_a_sandboxed_chat("alpha", "beta", true);
+    std::fs::remove_dir_all(no_new.path().join("workspaces/beta")).unwrap();
+    assert_eq!(kept_reports_follow(no_new.path()).ok(), Some(false));
+
+    let no_journal = a_rename_left_by_a_sandboxed_chat("alpha", "beta", true);
+    std::fs::remove_file(journal_path(no_journal.path())).unwrap();
+    assert_eq!(kept_reports_follow(no_journal.path()).ok(), Some(false));
+
+    for plane in [&not_moved, &old_still_there, &no_new, &no_journal] {
+        assert!(
+            crate::handback::dir(plane.path())
+                .join("workspace-alpha")
+                .is_dir(),
+            "left where it was"
+        );
+    }
+}

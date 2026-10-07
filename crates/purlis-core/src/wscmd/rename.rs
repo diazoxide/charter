@@ -971,6 +971,19 @@ fn rename_state(root: &Path, old: &str, new: &str) -> Vec<String> {
         ),
     ] {
         if let Err(why) = move_over(root, &from, &to) {
+            // Where the chat's sandbox denies it what waits for a chat's next turn (a harness
+            // whose hooks run outside its sandbox, D-T59-19), a rename run inside that chat
+            // leaves the reports kept for the workspace, and says who moves them instead.
+            if from.starts_with(crate::handback::dir(root))
+                && why.kind() == std::io::ErrorKind::PermissionDenied
+            {
+                left.push(format!(
+                    "{} was not moved: this chat's sandbox does not let it move kept reports; \
+                     the app moves them when the project is next opened",
+                    from.display()
+                ));
+                continue;
+            }
             left.push(format!(
                 "{} was not moved to {} ({why})",
                 from.display(),
@@ -979,6 +992,42 @@ fn rename_state(root: &Path, old: &str, new: &str) -> Vec<String> {
         }
     }
     left
+}
+
+/// **The reports kept for a workspace follow a rename a sandboxed chat could not finish**
+/// (D-T59-19): called by the app as it opens the project, which is not sandboxed.
+///
+/// A rename run inside a chat whose sandbox denies it the kept reports moves the workspace and
+/// cannot move `handbacks/workspace-<old>`, so it leaves its journal behind ([`journal_path`]) with the
+/// move made. Where that journal says so, the old workspace is gone and the new one is there,
+/// the kept reports are moved under the new name, where the next chat to start in it reads
+/// them. Nothing else of the rename is finished here: the same command, run again, does that.
+///
+/// The journal is a file a chat can write. All it can do here is move reports kept for a
+/// workspace that no longer exists to one that does, both names held to a workspace's rule.
+pub fn kept_reports_follow(root: &Path) -> std::io::Result<bool> {
+    let Some(journal) = read_journal(root) else {
+        return Ok(false);
+    };
+    let (old, new) = (journal.from.as_str(), journal.to.as_str());
+    if !journal.moved
+        || !crate::contain::workspace_name_ok(old)
+        || !crate::contain::workspace_name_ok(new)
+        || wscmd::workspace_dir_exists(root, old)
+        || !wscmd::workspace_dir_exists(root, new)
+    {
+        return Ok(false);
+    }
+    let from = crate::handback::dir(root).join(format!("workspace-{old}"));
+    if std::fs::symlink_metadata(&from).is_err() {
+        return Ok(false);
+    }
+    move_over(
+        root,
+        &from,
+        &crate::handback::dir(root).join(format!("workspace-{new}")),
+    )?;
+    Ok(true)
 }
 
 /// Moves `from` to `to`. A directory that is already at `to` takes `from`'s entries one by one,

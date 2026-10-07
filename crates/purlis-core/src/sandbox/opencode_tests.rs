@@ -750,6 +750,60 @@ mod live {
         assert!(!store.join("forged.json").exists());
     }
 
+    /// What waits to be told to a chat on its next turn (D-T59-19) is NOT denied under the
+    /// wrap: the wrap is around the whole harness, so the hook that delivers a report runs
+    /// inside it, and it reads the report's file and then removes it. A report left for this
+    /// chat by the app is taken under the wrap, as the hook takes it.
+    #[test]
+    fn a_report_left_for_a_wrapped_chat_can_still_be_taken_by_its_hook_under_the_wrap() {
+        use crate::active::Place;
+        use crate::handback::{self, For, Handback};
+
+        let plane = plane_saying(ON);
+        let cwd = plane.path().join("work");
+        std::fs::create_dir(&cwd).expect("a workspace");
+        let report = Handback {
+            from: "check the queue".to_owned(),
+            from_workspace: Place::Workspace("alpha".to_owned()),
+            to: "steward 3".to_owned(),
+            to_workspace: Place::Workspace("alpha".to_owned()),
+            summary: "the queue is clear".to_owned(),
+            task: None,
+            answered: None,
+        };
+        handback::leave(plane.path(), For::Chat(3), &report).expect("the app leaves a report");
+        let waiting = handback::dir(plane.path()).join("chat-3");
+        let file = std::fs::read_dir(&waiting)
+            .expect("the chat's reports")
+            .flatten()
+            .map(|entry| entry.path())
+            .next()
+            .expect("the report's file");
+
+        let home = tempfile::tempdir().expect("a home");
+        let machine = Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: Some(home.path().to_path_buf()),
+            os: Os::MacOs,
+        };
+        let applied = for_start(Harness::Opencode, plane.path(), &machine, &|_| true)
+            .expect("starts")
+            .expect("sandboxed");
+        let confinement = applied.confine().expect("confined").expect("a wrap");
+        let line = line_in(&applied, &cwd, None, &confinement).expect("starts");
+
+        // What `handback::take` does, under the wrap: read the file, then remove it.
+        let read = run(&line, &format!("cat '{}'", file.display()));
+        assert!(read.status.success(), "{read:?}");
+        assert!(
+            String::from_utf8_lossy(&read.stdout).contains("the queue is clear"),
+            "{read:?}"
+        );
+        let removed = run(&line, &format!("rm '{}'", file.display()));
+        assert!(removed.status.success(), "{removed:?}");
+        assert!(!file.exists());
+    }
+
     /// A file denial does not stop a connect to a unix socket, which Seatbelt judges as
     /// network: the wrap refuses it because it allows no unix socket but the hook socket. So a
     /// socket in the credentials' directory, and one anywhere else, is refused, and the hook
