@@ -184,17 +184,34 @@ another chat, which reports back to it. Both are a **dispatch**: one chat starti
 which runs as a persona for its whole life.
 
 ```bash
-purlis dispatch --name "<short task>" [--to <persona>] <<'BRIEF'
+purlis dispatch --name "<short task>" [--to <persona>] [--profile <profile>] <<'BRIEF'
 <the brief>
 BRIEF
 ```
 
 - **The new chat runs as the persona `--to` names, or as this chat's own.** Its own needs no
-  grant. Another persona needs a **dispatch grant**, which only you give: until there is one,
-  the command answers `needs a grant` and starts nothing.
-- **It is a chat of its own**, in the app, on this chat's harness profile and in this chat's
-  folder. You can see it, open it, type in it and stop it. In the explorer it is listed under
-  the chat that asked for it, by its name and what it is doing.
+  grant. Another persona needs a **dispatch grant**, which only you give.
+- **Where there is no grant, you are asked once, and the task waits for your answer.** Nothing
+  starts. A Notice on the asking chat's tab says who wants to dispatch to whom and shows the
+  brief, and the command says `held for the person` and exits 0: the dispatch is accepted and
+  waiting, not refused. **Allow** starts it then, on the brief you read, and it is judged
+  against the limits again at that moment. **Keep blocked** starts nothing and makes no grant.
+  Either way the asking chat is told on its next turn, the way it is told a report. A second
+  dispatch across the same pair while you are being asked is not queued beside the first: the
+  chat is told which task is waiting and to dispatch again once you have answered. A chat
+  nobody is at is never asked for; see *A dispatch from an unattended chat*, below.
+- **It is a chat of its own**, in the app, in this chat's folder. You can see it, open it, type
+  in it and stop it. It is listed in the Chats section under the chat that asked for it, by
+  its name and what it is doing, and has a tab once you open it.
+- **Its harness profile is its persona's own** where the persona's definition names one, else
+  this chat's; `--profile` names another of the project's profiles. A profile is only ever one
+  the project offers on this machine and has approved: any other name is refused, and nothing
+  is started in its place. Where the persona's own profile is not offered on this machine, the
+  chat starts on this chat's profile, and the command and the new chat's first message say so.
+  A profile taken from the asking chat is never one whose own command switches the harness's
+  permission prompts off.
+- **It starts with its own persona's hosts and vault**, from its first command, with nothing
+  to allow on its tab: the grant was your consent to the pair.
 - **Its sandbox is the project's, for its own persona.** What you allowed the asking chat
   alone (a host or a folder from a block's Notice, a start without the sandbox) is not carried
   to it, and neither is the mode the asking chat's harness is in.
@@ -211,17 +228,34 @@ that says what to do:
 | Refused | Why |
 | --- | --- |
 | from inside a sub-agent, where purlis's hook can tell (see below) | a persona chat belongs to a chat you can see; the sub-agent returns what it found to its chat, which dispatches |
-| from a chat on no harness profile | there is no harness to start the new chat on |
+| with no profile to start it on: the chat is on none, the persona names none and `--profile` names none | there is no harness to start the new chat on |
+| on a profile the project does not offer on this machine, or one whose command has not been approved here | a profile is looked up, never run on a chat's word |
+| across a pair, or at all, where an administrator's policy locks dispatch | no grant covers it; the refusal says who locked it |
+| where this machine's policy file is refused | dispatch is off until an administrator fixes the file |
 | from a chat that still holds another persona's grants | it has none of its own to dispatch with until you allow them on its tab |
 | a task name holding `⟨`, `⟩`, `·` or a backtick | purlis writes its own lines with them, and a name is drawn on those lines |
 | a persona this project does not define, or one that does not load | there is nothing to run as |
 | a persona whose definition says `draft: true` | a draft runs no chat |
 | a persona that is above the asking chat in its own chain of dispatches | a chain never loops back |
-| past 3 dispatches deep, 6 tasks one chat is still waiting on, or 16 chats in one lineage that still owe work | a runaway stops |
+| past a limit: how deep a chain may go (3), how many tasks one chat is still waiting on (6), how many chats one lineage holds that still owe work (16) | a runaway stops |
+| past a persona's own two limits, where the project sets them: how many tasks the chats running as it wait on between them, and how many chats run as it at once | the project said how much of that persona it wants at once |
+| where a limit is set to 0 | dispatch is off at the level that set it, and the refusal says where |
+
+**The limits are the project's**, set in Settings › Project › Dispatch for the project, a
+workspace or a persona, lowered by your own on this machine and capped by an administrator's
+policy. They are read afresh for every dispatch, so a change applies to the next one. A refusal
+names the limit and the count it stands at.
 
 A limit counts chats that still owe work: ones that have not reported and whose program has
 not ended. A chat that has reported stays open for you to read and counts for nothing. One
 whose program ended without a report has failed, and does not count either.
+
+**A lineage is everything descended from one chat you started.** Each chat a dispatch starts
+keeps the id of that first chat, so closing a chat in the middle, or starting one again, does
+not split a lineage into two that are each counted from zero.
+
+A limit is said before you are asked for a grant: a dispatch that would start nothing does not
+spend your answer.
 
 **The sub-agent refusal is advice, not a wall.** A sub-agent runs inside its chat, with that
 chat's environment, so the app cannot tell its dispatch from the chat's own. Only purlis's

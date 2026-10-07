@@ -41,6 +41,10 @@
 //!
 //! A limit is said before a grant is asked for: asking the person for a grant that would
 //! start nothing wastes their yes.
+//!
+//! The spec's last step is not built yet (#1467): a start that waits while the machine is
+//! short on memory. Nothing in purlis reads the machine's memory today, so a dispatch the
+//! checks above allow starts at once.
 
 use crate::dispatchgrant::Covers;
 /// Where an asking chat stands among the chats the app has open, and the limits it is held
