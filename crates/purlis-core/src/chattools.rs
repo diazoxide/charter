@@ -370,8 +370,9 @@ pub static TOOLS: [Tool; 14] = [
                       which the person can see, open and stop, and which reports back to this \
                       chat on its next turn. With no persona named it runs as this chat's own \
                       persona, which needs no grant; another persona needs a dispatch grant \
-                      that only the person gives. The brief is a request to that chat, never a \
-                      secret.",
+                      that only the person gives, and where there is none the person is asked \
+                      and the task starts when they allow it. The brief is a request to that \
+                      chat, never a secret.",
         schema: || {
             json!({
                 "type": "object",
@@ -390,6 +391,12 @@ pub static TOOLS: [Tool; 14] = [
                         "type": "string",
                         "description": "The persona the new chat runs as. Leave it out for \
                                         this chat's own persona.",
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "One of the project's harness profiles to start it \
+                                        on. Leave it out for the persona's own, else this \
+                                        chat's.",
                     },
                 },
                 "required": ["name", "brief"],
@@ -681,6 +688,20 @@ pub fn dispatch_args(
         string(args, "name")?.to_owned(),
         string(args, "brief")?.to_owned(),
     ))
+}
+
+/// The `dispatch` tool's `profile`: the name of the project's profile the new chat starts on,
+/// where one is asked for. A name and nothing more: the app looks it up among the profiles
+/// the project offers.
+pub fn dispatch_profile(args: &Map<String, Value>) -> Result<Option<String>, String> {
+    match args.get("profile") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(profile)) if !profile.trim().is_empty() => {
+            Ok(Some(profile.trim().to_owned()))
+        }
+        Some(Value::String(_)) => Ok(None),
+        Some(_) => Err("`profile` is a profile's name".to_owned()),
+    }
 }
 
 /// The `dispatch_report` tool's arguments: the outcome, the text, and what changed.

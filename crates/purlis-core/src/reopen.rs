@@ -251,6 +251,16 @@ pub struct HandedFrom {
     /// How many dispatches stand between this chat and the chat the person started: 1 for a
     /// chat that one dispatched. 0 is a record written before this field.
     pub depth: u32,
+    /// **The lineage this chat is in, by the stable id of the chat the person started**
+    /// ([`Identity::id`]): copied down each dispatch, so every chat of one lineage names the
+    /// same root whichever chats between them have closed, and a chat started again under a
+    /// new number is still in it. `None` is a record written before this field, or a lineage
+    /// whose first chat had no id yet.
+    ///
+    /// **It says which lineage, and nothing else.** [`Self::chat`] is where this chat's report
+    /// goes; neither field says who may steer the chat (tell it, cancel it, wait on it), which
+    /// is its own question and not answered by this record.
+    pub root: Option<String>,
 }
 
 /// How one chat started another (the spec's two modes of a dispatch, #1434).
@@ -1334,6 +1344,9 @@ struct FromOnDisk {
     /// How deep in its chain of dispatches, or absent for 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     depth: u32,
+    /// The id of the chat the person started, which the lineage descends from, or absent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    root: String,
 }
 
 impl From<&HandedFrom> for FromOnDisk {
@@ -1348,6 +1361,7 @@ impl From<&HandedFrom> for FromOnDisk {
                 Mode::Task => from.mode.word().to_owned(),
             },
             depth: from.depth,
+            root: from.root.clone().unwrap_or_default(),
         }
     }
 }
@@ -1365,6 +1379,8 @@ impl FromOnDisk {
             mode: Mode::of(&self.mode),
             // Held to the ceiling: a depth no chain can have never reads as a shallower one.
             depth: self.depth.min(crate::dispatchdecision::DEEPEST),
+            // Held to the one shape an id is minted in: anything else names no lineage.
+            root: a_ulid(&self.root),
         })
     }
 }
@@ -3303,6 +3319,7 @@ pub(crate) mod tests {
             report: Owed::Due,
             mode: Mode::Handoff,
             depth: 0,
+            root: None,
         }
     }
 
@@ -3420,6 +3437,70 @@ pub(crate) mod tests {
         let text = std::fs::read_to_string(path(plane.path())).unwrap();
         assert_eq!(text.matches("\"mode\"").count(), 1, "{text}");
         assert_eq!(text.matches("\"depth\"").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_lineage_s_root_comes_back_with_the_chat_and_a_record_without_one_writes_no_key() {
+        // The root is what keeps a lineage one lineage when a chat in the middle closes: it
+        // has to outlive a relaunch, as the depth does.
+        let plane = tempfile::tempdir().unwrap();
+        let root = "01J9ZQ3V5N8X4T2K7M6P0R1S2A";
+        let below = HandedFrom {
+            mode: Mode::Task,
+            depth: 1,
+            root: Some(root.to_owned()),
+            ..handed()
+        };
+        let record = Record {
+            chats: vec![
+                Chat {
+                    from: Some(below.clone()),
+                    ..claude("3", None)
+                },
+                Chat {
+                    from: Some(handed()),
+                    ..claude("4", None)
+                },
+            ],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let back = read(plane.path());
+        assert_eq!(back.chats[0].from, Some(below));
+        assert_eq!(back.chats[1].from, Some(handed()));
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("\"root\"").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_root_that_is_not_an_id_purlis_mints_names_no_lineage() {
+        // The file is writable by anything running as the person. A root is compared, never
+        // drawn or run, and one in no shape an id has is dropped: the chat is then counted by
+        // who dispatched whom, as a record written before roots were kept is.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(path(plane.path()).parent().unwrap()).unwrap();
+        for (written, read_as) in [
+            ("../../etc", None),
+            ("", None),
+            (
+                "01j9zq3v5n8x4t2k7m6p0r1s2a",
+                Some("01J9ZQ3V5N8X4T2K7M6P0R1S2A"),
+            ),
+        ] {
+            let from = format!(
+                r#"{{"chat":16,"name":"steward 3","workspace":"ops","mode":"task","root":"{written}"}}"#
+            );
+            std::fs::write(
+                path(plane.path()),
+                format!(
+                    r#"{{"version":1,"at":0,"chats":[{{"program":"claude","name":"3","from":{from}}}]}}"#
+                ),
+            )
+            .unwrap();
+            let back = read(plane.path()).chats[0].from.clone().expect("it reads");
+            assert_eq!(back.root.as_deref(), read_as, "{written}");
+        }
     }
 
     #[test]

@@ -42,10 +42,6 @@ use crate::dispatchgrants::{
 /// answered here and now: [`Requested::Covered`], [`Requested::Locked`] or
 /// [`Requested::Refused`], and never [`Requested::NeedsGrant`]. Its brief is not kept: nothing
 /// is shown to anyone.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the dispatch core calls it (#1436)")
-)]
 pub fn request_dispatch(
     held: &crate::planes::Held,
     session: u32,

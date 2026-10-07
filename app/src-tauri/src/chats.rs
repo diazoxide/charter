@@ -1995,19 +1995,16 @@ impl Chats {
         lock(&self.open).get(&session).map(|one| one.chat.clone())
     }
 
-    /// Where chat `session` stands among the chats open here (#1436): its depth, the personas
-    /// above it, how many tasks it has running and how many chats its lineage holds, read from
-    /// the app's own records of them ([`purlis_core::dispatchdecision::lineage_of`]). `default`
-    /// is the persona a chat that names none runs as.
+    /// **What a dispatch is decided over**: every chat this app has open and every one it is
+    /// about to start, by its number for each, handed to `decide` with whether a number is a
+    /// chat still starting (which counts as working: it is about to be).
     ///
-    /// `working` says whether an open chat's program still runs, which only the board knows. A
-    /// chat that is starting ([`Self::reserve`]) is counted as one that is.
-    pub fn lineage(
+    /// Read under this store's own locks, and asked under [`Self::deciding`], so the records a
+    /// decision reads are the ones the slot it then reserves is added to.
+    pub fn deciding_over<R>(
         &self,
-        session: u32,
-        default: Option<&str>,
-        working: &dyn Fn(u32) -> bool,
-    ) -> purlis_core::dispatchdecision::Lineage {
+        decide: impl FnOnce(&[(u32, &Chat)], &dyn Fn(u32) -> bool) -> R,
+    ) -> R {
         let open = lock(&self.open);
         let reserved = lock(&self.reserved);
         let records: Vec<(u32, &Chat)> = open
@@ -2021,9 +2018,34 @@ impl Chats {
                     .map(|(number, chat)| (*number, chat)),
             )
             .collect();
-        let starting = |number: u32| !open.contains_key(&number) && reserved.contains_key(&number);
-        purlis_core::dispatchdecision::lineage_of(session, &records, default, &|number| {
-            starting(number) || working(number)
+        decide(&records, &|number: u32| {
+            !open.contains_key(&number) && reserved.contains_key(&number)
+        })
+    }
+
+    /// Where chat `session` stands among the chats this app has open, for a dispatch to its
+    /// own persona: what a test reads the counts by.
+    #[cfg(test)]
+    pub fn lineage(
+        &self,
+        session: u32,
+        default: Option<&str>,
+        working: &dyn Fn(u32) -> bool,
+    ) -> purlis_core::dispatchdecision::Lineage {
+        use purlis_core::dispatchdecision::{lineage_of, pair_of};
+        self.deciding_over(|open, starting| {
+            let pair = open
+                .iter()
+                .find(|(number, _)| *number == session)
+                .map(|(_, chat)| pair_of(chat, None, default))
+                .unwrap_or_default();
+            lineage_of(
+                session,
+                open,
+                default,
+                &|n| starting(n) || working(n),
+                &pair,
+            )
         })
     }
 
@@ -5979,6 +6001,7 @@ pub(crate) mod tests {
                 report: purlis_core::reopen::Owed::Due,
                 mode,
                 depth: 1,
+                root: None,
             }),
             ..chat(&a_claude(dir), name, None)
         }

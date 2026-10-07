@@ -7,24 +7,45 @@
 //!
 //! **Pure, and fed only what the app holds.** Every field of a [`Request`] is the app's own
 //! record of the asking chat, the project's definition of the persona, and the limits and
-//! grants in force. Nothing in it is a word the asking chat sent, except the persona it names.
-//! So what a chat can say changes which persona is asked for, and nothing else about the answer.
+//! grants in force. Nothing in it is a word the asking chat sent, except the persona it names
+//! and the profile it asks for, and a profile is only ever looked up among the ones the
+//! project offers. So what a chat can say changes which persona is asked for and on which of
+//! the project's profiles, and nothing else about the answer.
+//!
+//! # The parts, and where they are joined
+//!
+//! Three modules each answer one question, and [`asked_by_a_chat`] is the one place that asks
+//! all three for a dispatch:
+//!
+//! - [`crate::dispatchlimits`]: the limits in force ([`crate::dispatchlimits::of`]) and whether
+//!   the asking chat's lineage is within them ([`crate::dispatchlimits::decide`]);
+//! - [`crate::dispatchgrant`]: whether a grant or the same persona covers the pair, or a
+//!   policy locks it ([`crate::dispatchgrant::covers`]);
+//! - [`crate::personaprofile`]: the profile the new chat starts on
+//!   ([`crate::personaprofile::for_dispatch`]), which the caller asks, because the answer is
+//!   also what the chat is then started from.
 //!
 //! # The order of the checks
 //!
 //! 1. the asker is a chat, not a harness's helper sub-agent ([`Refused::Helper`]);
-//! 2. the asking chat is on a harness profile ([`Refused::NoProfile`]);
+//! 2. the asking chat holds its own grants ([`Refused::Held`]);
 //! 3. the persona exists and is not a draft ([`Refused::NoPersona`], [`Refused::Draft`]);
-//! 4. the loop rule ([`Refused::Loop`]) and the depth ([`Refused::TooDeep`]);
-//! 5. how many the asking chat has running, and how many its lineage holds
-//!    ([`Refused::TooManyRunning`], [`Refused::LineageFull`]);
-//! 6. the grant: none is needed for the asking chat's own persona, or when the person
+//! 4. policy: a policy file that is refused switches dispatch off, and a policy may lock all
+//!    dispatch or this pair ([`Refused::Limit`] with the off sentence, [`Refused::Locked`]);
+//! 5. a profile to start the persona chat on ([`Refused::Profile`]);
+//! 6. the limits ([`Refused::Limit`]): a limit of 0, the loop rule, the depth, then how many
+//!    the asking chat has running, how many its lineage holds, and the two counts a persona
+//!    has;
+//! 7. the grant: none is needed for the asking chat's own persona, or when the person
 //!    dispatches; any other pair answers [`Decision::NeedsGrant`] until one is in force.
 //!
-//! Policy locks stand between 3 and 4, the per-persona counts beside 5 and the machine's memory
-//! after 6 (#1434's order). Each arrives with its ticket (#1437, #1439, #1440) as a field of
-//! [`Request`], which is why the request is a struct and not a list of arguments.
+//! A limit is said before a grant is asked for: asking the person for a grant that would
+//! start nothing wastes their yes.
 
+use crate::dispatchgrant::Covers;
+/// Where an asking chat stands among the chats the app has open, and the limits it is held
+/// to: the limits module's own types, which this decision reads.
+pub use crate::dispatchlimits::{DEEPEST, Limits, Lineage};
 /// Why a dispatch is made: what the persona chat is for. One type with the record's
 /// ([`crate::reopen::Mode`]), which is where a chat keeps it.
 pub use crate::reopen::Mode;
@@ -38,16 +59,6 @@ pub struct AskingChat<'a> {
     /// Whether it holds another persona's grants instead of its own (#1362), which the person
     /// has not yet allowed away. Such a chat's own persona is not yet its own to pass on.
     pub held: bool,
-    /// The harness profile it started on.
-    pub profile: Option<&'a str>,
-    /// How many dispatches stand between it and the chat the person started: 0 for that chat.
-    pub depth: u32,
-    /// The personas of the chats above it in its lineage, nearest first.
-    pub chain: &'a [Option<&'a str>],
-    /// How many persona chats it dispatched are still running.
-    pub running: u32,
-    /// How many chats its lineage holds that are still running, itself included.
-    pub lineage: u32,
 }
 
 /// Who asks for a dispatch.
@@ -61,6 +72,17 @@ pub enum Asker<'a> {
     /// The person, from this chat's tab (#1438). No grant is needed: the person is the one a
     /// grant is asked of.
     Person(AskingChat<'a>),
+}
+
+/// Whether a chat asks or the person does, from that chat's tab: what a caller of
+/// [`asked_by_a_chat`] says of who is asking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum By {
+    /// The chat itself: its command or its tool.
+    #[default]
+    Chat,
+    /// The person, from the chat's tab (#1438).
+    Person,
 }
 
 /// The persona a dispatch names, as the project defines it.
@@ -85,44 +107,6 @@ impl<'a> Persona<'a> {
     }
 }
 
-/// The limits in force for one dispatch, already resolved to one number each: the most specific
-/// of the project's, the workspace's and the persona's, under policy's ceiling (#1439, #1440).
-/// 0 switches dispatch off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Limits {
-    /// How many running persona chats one asking chat may have.
-    pub running: u32,
-    /// How many running chats one lineage may hold.
-    pub lineage: u32,
-    /// How deep a chain of dispatches may go. Never read above [`DEEPEST`].
-    pub depth: u32,
-}
-
-/// The depth no setting raises (#1434).
-pub const DEEPEST: u32 = 8;
-
-impl Default for Limits {
-    /// The defaults a project that set none runs with (#1434).
-    fn default() -> Self {
-        Self {
-            running: 6,
-            lineage: 16,
-            depth: 3,
-        }
-    }
-}
-
-/// Whether a dispatch grant is in force for a pair of personas. How grants are stored and
-/// given is #1437's; the decision only reads the answer.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Grant {
-    /// No grant covers this pair.
-    #[default]
-    Missing,
-    /// The person granted it: for this chat, for themselves on this machine, or for the project.
-    InForce,
-}
-
 /// One dispatch, as the app asks about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Request<'a> {
@@ -130,9 +114,16 @@ pub struct Request<'a> {
     /// The persona the new chat would run as.
     pub to: Persona<'a>,
     pub mode: Mode,
-    /// Whether a grant covers the asking chat's persona dispatching to [`Self::to`].
-    pub grant: Grant,
-    pub limits: Limits,
+    /// What the grants in force and this machine's policy say of the asking chat's persona
+    /// dispatching to [`Self::to`] ([`crate::dispatchgrant::covers`]).
+    pub grant: &'a Covers,
+    /// Why no profile was chosen for the new chat, where none was
+    /// ([`crate::personaprofile::for_dispatch`]).
+    pub profile: Option<&'a crate::personaprofile::Refused>,
+    /// The limits in force for this dispatch ([`crate::dispatchlimits::of`]).
+    pub limits: &'a Limits,
+    /// Where the asking chat stands among the chats the app has open ([`lineage_of`]).
+    pub lineage: &'a Lineage,
 }
 
 /// What the app does with a dispatch.
@@ -140,7 +131,7 @@ pub struct Request<'a> {
 pub enum Decision {
     /// Start the persona chat.
     Start,
-    /// Start nothing, and ask the person for a dispatch grant for this pair.
+    /// Start nothing yet, and ask the person for a dispatch grant for this pair.
     NeedsGrant {
         /// The asking chat's persona, or `None` for a chat on none.
         from: Option<String>,
@@ -156,8 +147,6 @@ pub enum Decision {
 pub enum Refused {
     /// A helper sub-agent asked.
     Helper,
-    /// The asking chat is on no harness profile.
-    NoProfile,
     /// The asking chat holds another persona's grants instead of its own (#1362), which the
     /// person has not yet allowed away: it has no persona of its own to dispatch as or from.
     Held,
@@ -167,14 +156,14 @@ pub enum Refused {
     NoPersona(String),
     /// The persona is a draft.
     Draft(String),
-    /// The persona is already in the asking chat's own chain.
-    Loop(String),
-    /// The chain is as deep as it may go.
-    TooDeep { limit: u32 },
-    /// The asking chat has as many persona chats running as it may.
-    TooManyRunning { limit: u32 },
-    /// The lineage holds as many running chats as it may.
-    LineageFull { limit: u32 },
+    /// An administrator's policy locks this dispatch: the policy's own sentence, which names
+    /// who set it ([`crate::sandbox::policy::Locks::dispatch_refused`]). No grant covers it.
+    Locked(String),
+    /// No profile to start the persona chat on, and why ([`crate::personaprofile::Refused`]).
+    Profile(crate::personaprofile::Refused),
+    /// A limit or the loop rule stands in the way: which, with the count it stands at
+    /// ([`crate::dispatchlimits::Refused`]).
+    Limit(crate::dispatchlimits::Refused),
 }
 
 impl Refused {
@@ -182,10 +171,6 @@ impl Refused {
     pub fn say(&self) -> String {
         match self {
             Self::Helper => HELPER.to_owned(),
-            Self::NoProfile => "this chat is not on a harness profile, so there is no harness \
-                                to start a persona chat on. Dispatch from a chat that was \
-                                started on a profile."
-                .to_owned(),
             Self::Held => HELD.to_owned(),
             Self::NoPersonaNamed => "a dispatch names the persona its chat runs as. Name one \
                                      with --to, or leave it out for this chat's own."
@@ -203,34 +188,9 @@ impl Refused {
                      another persona."
                 )
             }
-            Self::Loop(name) => format!(
-                "persona '{}' is already in this chat's own chain of dispatches, and a persona \
-                 is never dispatched to from below itself. Send it what you found in your \
-                 report instead.",
-                crate::shown::short(name)
-            ),
-            // A limit of 0 is the off switch, and says so: nothing is "already" at it.
-            Self::TooDeep { limit: 0 }
-            | Self::TooManyRunning { limit: 0 }
-            | Self::LineageFull { limit: 0 } => "dispatch is switched off here: a limit it \
-                                                 runs under is set to 0. Do the work in this \
-                                                 chat, or ask the person to raise the limit."
-                .to_owned(),
-            Self::TooDeep { limit } => format!(
-                "this chat is {limit} dispatches below the chat the person started, which is \
-                 as deep as a chain may go here. Do the work in this chat, or say in your \
-                 report what is left."
-            ),
-            Self::TooManyRunning { limit } => format!(
-                "this chat already has {limit} persona chats that have not reported, which is \
-                 as many as it may have at once. Wait for one to report or stop one, then \
-                 dispatch again."
-            ),
-            Self::LineageFull { limit } => format!(
-                "this chat's lineage already holds {limit} chats that have not reported, \
-                 which is as many as it may hold. Wait for one to report or stop one, then \
-                 dispatch again."
-            ),
+            Self::Locked(why) => format!("{why} {LOCKED}"),
+            Self::Profile(why) => why.say(),
+            Self::Limit(why) => why.say(),
         }
     }
 }
@@ -245,6 +205,10 @@ pub const HELPER: &str = "a dispatch is refused from inside a sub-agent. A perso
 pub const HELD: &str = "this chat runs with another persona's grants until the person allows \
      its own, so it cannot dispatch yet. Ask the person to allow this chat its own grants on \
      its tab, then dispatch again.";
+
+/// What a chat is told to do about a dispatch a policy locks ([`Refused::Locked`]), after the
+/// policy's own sentence: no grant lifts it, so asking the person again does nothing.
+pub const LOCKED: &str = "No grant covers it, so do the work in this chat.";
 
 /// A task's name as purlis will draw it, or why not.
 ///
@@ -267,6 +231,60 @@ pub fn task_name(raw: &str) -> Result<String, String> {
     Ok(name)
 }
 
+/// Who a dispatch is from and to, by the app's record of the asking chat.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pair {
+    /// The persona the asking chat runs as ([`crate::start::grants_persona`]): the grants it
+    /// holds, else its own, else the one a new chat adopts by default. `None` is a chat on no
+    /// persona. **Never a word of the request.**
+    pub asking: Option<String>,
+    /// The persona the new chat runs as: the one named, else the asking chat's own.
+    pub to: Option<String>,
+}
+
+/// The pair a dispatch from the chat recorded as `asking` is across, naming `named` (or no
+/// persona, for its own). `default` is the persona a new chat adopts.
+///
+/// One answer for every caller, so the profile is chosen for the same persona the decision
+/// is made about.
+pub fn pair_of(asking: &crate::reopen::Chat, named: Option<&str>, default: Option<&str>) -> Pair {
+    let runs_as =
+        crate::start::grants_persona(asking.held.as_ref(), asking.persona.as_deref(), || {
+            default.map(str::to_owned)
+        });
+    // What a dispatch to "its own" names is the persona it is, held or not: a held chat is
+    // refused before that matters, and the person dispatching from its tab means that one.
+    let own = asking.persona.as_deref().or(default);
+    let to = named
+        .map(str::trim)
+        .filter(|named| !named.is_empty())
+        .or(own)
+        .map(str::to_owned);
+    Pair {
+        asking: runs_as,
+        to,
+    }
+}
+
+/// What the app holds at the moment it decides a dispatch: read under its own lock, so two
+/// asks in flight are decided one after the other.
+#[derive(Clone, Copy)]
+pub struct Moment<'a> {
+    /// Every chat it has open, and every one it is about to start, by its number for each.
+    pub open: &'a [(u32, &'a crate::reopen::Chat)],
+    /// Whether a chat's program is still running, or about to.
+    pub working: &'a dyn Fn(u32) -> bool,
+    /// The persona a new chat adopts by default, which a chat that names none runs as.
+    pub default: Option<&'a str>,
+    /// The dispatch grants in force for the asking chat: its own, the person's on this
+    /// machine, and the project's ([`crate::dispatchgrant::InForce::read`]).
+    pub grants: &'a crate::dispatchgrant::InForce,
+    /// Why no profile was chosen for the new chat, where none was.
+    pub profile: Option<&'a crate::personaprofile::Refused>,
+    /// Whether the chat asks, or the person does from its tab.
+    pub by: By,
+}
+
 /// What a chat's dispatch comes to: the decision, and the facts the app starts the persona
 /// chat with when the decision is to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,59 +294,81 @@ pub struct Asked {
     pub to: Option<String>,
     /// How deep the new chat is in its chain: one below the chat that asks.
     pub depth: u32,
+    /// The stable id of the chat the person started, which the whole lineage descends from
+    /// ([`crate::reopen::HandedFrom::root`]): what the new chat's record keeps.
+    pub root: Option<String>,
 }
 
-/// The decision for a task the chat recorded as `asking` asks for, naming `named` (or no
-/// persona, for its own), in the project at `root`.
+/// The decision for a dispatch the chat `number`, recorded as `asking`, asks for, naming
+/// `named` (or no persona, for its own), in the project at `root`.
 ///
-/// **Every fact about the asker is read here from the app's record of it**, in one place, so
-/// no caller builds a [`Request`] its own way: the persona it runs as (its own, else
-/// `default`, the one a new chat adopts), whether it holds another's grants, its profile, and
-/// where `lineage` says it stands.
+/// **The one place the parts are joined.** Every fact about the asker is read here from the
+/// app's record of it, so no caller builds a [`Request`] its own way: the persona it runs as,
+/// whether it holds another's grants, and where it stands among `moment.open`. The limits in
+/// force are read from the project's files and this machine's policy as they stand now
+/// ([`crate::dispatchlimits::of`]), and the grant from `moment.grants` under the same policy
+/// ([`crate::dispatchgrant::covers`]).
 pub fn asked_by_a_chat(
     root: &std::path::Path,
+    number: u32,
     asking: &crate::reopen::Chat,
     named: Option<&str>,
-    default: Option<&str>,
-    lineage: &Lineage,
-    grant: Grant,
-    limits: Limits,
+    moment: &Moment<'_>,
 ) -> Asked {
-    // The persona it runs as: its own, else the one a new chat adopts by default.
-    let runs_as = asking.persona.as_deref().or(default);
-    // The persona asked for: the one named, else its own.
-    let to_name = named
-        .map(str::trim)
-        .filter(|named| !named.is_empty())
-        .or(runs_as);
-    let chain: Vec<Option<&str>> = lineage.chain.iter().map(Option::as_deref).collect();
+    let pair = pair_of(asking, named, moment.default);
+    let workspace = asking
+        .cwd
+        .as_deref()
+        .and_then(|cwd| crate::active::workspace_of_tree(root, cwd));
+    let limits = crate::dispatchlimits::of(
+        root,
+        workspace.as_deref(),
+        pair.asking.as_deref(),
+        pair.to.as_deref(),
+    );
+    let lineage = lineage_of(number, moment.open, moment.default, moment.working, &pair);
+    let locks = crate::sandbox::policy::Locks::of(root);
+    let grant = match pair.to.as_deref() {
+        Some(to) => crate::dispatchgrant::covers(pair.asking.as_deref(), to, moment.grants, &locks),
+        // A chat on no persona dispatching to none: its own, which only a lock on all
+        // dispatch stands in the way of.
+        None if locks.forbids_dispatch() => Covers::Locked(
+            locks
+                .dispatch_refused(None, "")
+                .unwrap_or_else(|| locks.locked_by()),
+        ),
+        None => Covers::Covered,
+    };
+    let its = AskingChat {
+        persona: pair.asking.as_deref(),
+        held: asking.held.is_some(),
+    };
     let request = Request {
-        asker: Asker::Chat(AskingChat {
-            persona: runs_as,
-            held: asking.held.is_some(),
-            profile: asking.profile.as_deref(),
-            depth: lineage.depth,
-            chain: &chain,
-            running: lineage.running,
-            lineage: lineage.lineage,
-        }),
-        to: match to_name {
+        asker: match moment.by {
+            By::Chat => Asker::Chat(its),
+            By::Person => Asker::Person(its),
+        },
+        to: match pair.to.as_deref() {
             Some(name) => persona_in(root, name),
             None => Persona::None,
         },
         mode: Mode::Task,
-        grant,
-        limits,
+        grant: &grant,
+        profile: moment.profile,
+        limits: &limits,
+        lineage: &lineage,
     };
     Asked {
         decision: decide(&request),
-        to: to_name.map(str::to_owned),
         depth: lineage.depth.saturating_add(1).min(DEEPEST),
+        root: root_of(number, moment.open),
+        to: pair.to,
     }
 }
 
 /// Whether the dispatch `request` describes may start.
 pub fn decide(request: &Request<'_>) -> Decision {
+    use crate::dispatchlimits::{self, Source};
     let refused = |why| Decision::Refused(why);
     // 1. Who asks.
     let (asking, by_the_person) = match request.asker {
@@ -336,12 +376,9 @@ pub fn decide(request: &Request<'_>) -> Decision {
         Asker::Chat(asking) => (asking, false),
         Asker::Person(asking) => (asking, true),
     };
-    // 2. A harness to start the persona chat on, and grants of its own to dispatch with: a
-    // chat still holding another persona's has none (#1362), whatever it asks for. The person
-    // dispatching from its tab is not held to that: the hold is theirs to lift.
-    if asking.profile.is_none() {
-        return refused(Refused::NoProfile);
-    }
+    // 2. Grants of its own to dispatch with: a chat still holding another persona's has none
+    // (#1362), whatever it asks for. The person dispatching from its tab is not held to that:
+    // the hold is theirs to lift.
     if asking.held && !by_the_person {
         return refused(Refused::Held);
     }
@@ -352,43 +389,44 @@ pub fn decide(request: &Request<'_>) -> Decision {
         Persona::Defined(_) | Persona::None => {}
     }
     let to = request.to.name();
-    // 4. The loop rule: never to a persona above the asking chat. Its own persona is not above
-    // it, so a chat may split its own work, as deep as the depth allows.
-    if let Some(name) = to
-        && to != asking.persona
-        && asking.chain.contains(&to)
+    // 4. Policy, which holds the person too. A policy file that is refused says nothing
+    // purlis can read, so dispatch is off and the sentence says the file is refused; one that
+    // is read may lock all dispatch, or this pair.
+    let within = dispatchlimits::decide(request.limits, request.lineage);
+    if let Some(
+        off @ dispatchlimits::Refused::Off {
+            by: Source::PolicyRefused,
+            ..
+        },
+    ) = within.refused()
     {
-        return refused(Refused::Loop(name.to_owned()));
+        return refused(Refused::Limit(off.clone()));
     }
-    let deepest = request.limits.depth.min(DEEPEST);
-    if asking.depth >= deepest {
-        return refused(Refused::TooDeep { limit: deepest });
+    if let Covers::Locked(why) = request.grant {
+        return refused(Refused::Locked(why.clone()));
     }
-    // 5. The counts.
-    if asking.running >= request.limits.running {
-        return refused(Refused::TooManyRunning {
-            limit: request.limits.running,
-        });
+    // 5. A profile to start it on.
+    if let Some(why) = request.profile {
+        return refused(Refused::Profile(why.clone()));
     }
-    if asking.lineage >= request.limits.lineage {
-        return refused(Refused::LineageFull {
-            limit: request.limits.lineage,
-        });
+    // 6. The limits: a 0, the loop rule, the depth, then the counts.
+    if let Some(why) = within.refused() {
+        return refused(Refused::Limit(why.clone()));
     }
-    // 6. The grant. A chat's own persona needs none; the person needs none; a pair the person
-    // granted has one.
-    let its_own = to == asking.persona;
-    if by_the_person || its_own {
+    // 7. The grant. The person needs none; a chat's own persona needs none, which is what
+    // `covers` answers for it; a pair the person granted has one.
+    if by_the_person {
         return Decision::Start;
     }
-    match to {
-        Some(_) if request.grant == Grant::InForce => Decision::Start,
-        Some(to) => Decision::NeedsGrant {
+    match (to, request.grant) {
+        // No persona named, for a chat that runs as one: not a pair a grant could name.
+        (None, _) if asking.persona.is_some() => refused(Refused::NoPersonaNamed),
+        (_, Covers::Covered) => Decision::Start,
+        (Some(to), _) => Decision::NeedsGrant {
             from: asking.persona.map(str::to_owned),
             to: to.to_owned(),
         },
-        // No persona named, for a chat that runs as one: not a pair a grant could name.
-        None => refused(Refused::NoPersonaNamed),
+        (None, _) => refused(Refused::NoPersonaNamed),
     }
 }
 
@@ -409,27 +447,39 @@ pub fn persona_in<'a>(root: &std::path::Path, name: &'a str) -> Persona<'a> {
     }
 }
 
-/// Where an asking chat stands among the chats the app has open: what [`AskingChat`] says of
-/// its lineage, owned.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Lineage {
-    /// [`AskingChat::depth`].
-    pub depth: u32,
-    /// [`AskingChat::chain`].
-    pub chain: Vec<Option<String>>,
-    /// [`AskingChat::running`].
-    pub running: u32,
-    /// [`AskingChat::lineage`].
-    pub lineage: u32,
+/// The record of chat `number` among `open`.
+fn record<'a>(
+    number: u32,
+    open: &'a [(u32, &'a crate::reopen::Chat)],
+) -> Option<&'a crate::reopen::Chat> {
+    open.iter()
+        .find(|(n, _)| *n == number)
+        .map(|(_, chat)| *chat)
+}
+
+/// The stable id of the chat the person started, which chat `number`'s lineage descends from:
+/// the one its record was given when it was dispatched, or its own id for a chat nobody
+/// dispatched. `None` for a chat with no id yet, and for a record written before the key.
+pub fn root_of(number: u32, open: &[(u32, &crate::reopen::Chat)]) -> Option<String> {
+    let chat = record(number, open)?;
+    match &chat.from {
+        Some(from) => from.root.clone(),
+        None => chat.identity.id.clone(),
+    }
 }
 
 /// The lineage of chat `asking` among `open`, the chats the app has open by its number for
-/// each. `default` is the persona a chat that names none runs as, and `working` whether a
-/// chat's program is still running.
+/// each, for a dispatch across `pair`. `default` is the persona a chat that names none runs
+/// as, and `working` whether a chat's program is still running.
 ///
 /// **Read from the app's records and nothing else.** A chat's depth is the one its own record
 /// holds, written when it was dispatched, so closing the chat above it never makes a chain
 /// look shallower. The chain is of the chats still open.
+///
+/// **A lineage is counted by its root** ([`root_of`]): every open chat whose record names the
+/// same chat the person started is in it, so closing a chat in the middle, or starting one
+/// again under a new number, never splits it in two. A record written before a root was kept
+/// is found by walking who dispatched whom, as before.
 ///
 /// **The counts are of chats that still owe work** (D-1436-18): one that has not reported and
 /// whose program has not ended. A chat that reported stays open for the person to read and
@@ -439,15 +489,18 @@ pub fn lineage_of(
     open: &[(u32, &crate::reopen::Chat)],
     default: Option<&str>,
     working: &dyn Fn(u32) -> bool,
+    pair: &Pair,
 ) -> Lineage {
-    let record = |number: u32| {
-        open.iter()
-            .find(|(n, _)| *n == number)
-            .map(|(_, chat)| *chat)
-    };
+    let record = |number: u32| record(number, open);
     let asker_of = |number: u32| record(number)?.from.as_ref().map(|from| from.chat);
     let persona =
         |chat: &crate::reopen::Chat| chat.persona.clone().or_else(|| default.map(str::to_owned));
+    // Whose grants a chat runs with, which is who it dispatches as.
+    let runs_as = |chat: &crate::reopen::Chat| {
+        crate::start::grants_persona(chat.held.as_ref(), chat.persona.as_deref(), || {
+            default.map(str::to_owned)
+        })
+    };
     // Up: the chats above it that are still open, nearest first. `seen` ends a loop that only
     // a record somebody else wrote could hold.
     let mut seen = vec![asking];
@@ -459,8 +512,17 @@ pub fn lineage_of(
         seen.push(above);
         top = above;
     }
-    // Down from the top: every open chat that descends from it, itself included.
+    // Every open chat of the same root, then down from the top: every open chat that descends
+    // from it, itself included.
+    let root = root_of(asking, open);
     let mut lineage = vec![top];
+    if root.is_some() {
+        for (number, _) in open {
+            if root_of(*number, open) == root && !lineage.contains(number) {
+                lineage.push(*number);
+            }
+        }
+    }
     let mut at = 0;
     while at < lineage.len() {
         let above = lineage[at];
@@ -480,57 +542,87 @@ pub fn lineage_of(
                     .is_none_or(|from| from.report != crate::reopen::Owed::Sent)
             })
     };
-    // The tasks it dispatched that still owe it work. A handoff's work is not this chat's to
-    // wait on.
+    let counted = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    // A task some chat dispatched that still owes it work. A handoff's work is not the asking
+    // chat's to wait on.
+    let task_of = |number: u32, chat: &crate::reopen::Chat| {
+        chat.from
+            .as_ref()
+            .filter(|from| from.mode == Mode::Task && owes_work(number))
+            .map(|from| from.chat)
+    };
     let running = open
         .iter()
-        .filter(|(number, chat)| {
-            *number != asking
-                && owes_work(*number)
-                && chat
-                    .from
-                    .as_ref()
-                    .is_some_and(|from| from.chat == asking && from.mode == Mode::Task)
-        })
+        .filter(|(number, chat)| *number != asking && task_of(*number, chat) == Some(asking))
         .count();
-    let lineage: Vec<u32> = lineage
+    // Across the project: the chats running as the target persona, and the tasks the chats
+    // running as the asking persona still wait on, this chat's own among them.
+    let as_target = match pair.to.as_deref() {
+        Some(target) => open
+            .iter()
+            .filter(|(number, chat)| owes_work(*number) && persona(chat).as_deref() == Some(target))
+            .count(),
+        None => 0,
+    };
+    let by_asking = match pair.asking.as_deref() {
+        Some(asker) => open
+            .iter()
+            .filter(|(number, chat)| {
+                task_of(*number, chat)
+                    .and_then(record)
+                    .is_some_and(|by| runs_as(by).as_deref() == Some(asker))
+            })
+            .count(),
+        None => 0,
+    };
+    let lineage = lineage
         .into_iter()
         .filter(|number| owes_work(*number))
-        .collect();
+        .count();
     Lineage {
         depth: record(asking)
             .and_then(|chat| chat.from.as_ref())
             .map_or(0, |from| from.depth),
         chain,
-        running: u32::try_from(running).unwrap_or(u32::MAX),
-        lineage: u32::try_from(lineage.len()).unwrap_or(u32::MAX),
+        running: counted(running),
+        lineage: counted(lineage),
+        as_target: counted(as_target),
+        by_asking: counted(by_asking),
     }
 }
 
-/// The start of the persona chat a dispatch from `asking` opens, running as `persona` under
-/// the name `name`.
+/// The start of the persona chat a dispatch from `asking` opens on `profile`, under the name
+/// `name`, holding `its`: what a covered dispatch's chat holds
+/// ([`crate::dispatchgrant::grants_for_a_dispatched_chat`]), or `None` for a chat on no
+/// persona dispatching to none.
 ///
-/// **Everything it takes from the asking chat is here, and it is two things**: the profile and
-/// the folder. Its sandbox is what the project compiles for `persona` in that folder
-/// ([`crate::start::ready`]): the asking chat's per-chat grants, the grants it holds, its
-/// opt-out and whatever its harness was switched to while it ran are not the new chat's, and
-/// this never copies them (#1434).
+/// **What it takes from the asking chat is the folder, and nothing else.** The profile is the
+/// one chosen for it ([`crate::personaprofile::for_dispatch`]), which is the asking chat's
+/// only where neither the dispatch nor the persona names another. Its sandbox is what the
+/// project compiles for its own persona in that folder ([`crate::start::ready`]): the asking
+/// chat's per-chat grants, the grants it holds, its opt-out and whatever its harness was
+/// switched to while it ran are not the new chat's, and this never copies them (#1434, #1437).
 pub fn start_for(
     asking: &crate::reopen::Chat,
-    persona: Option<String>,
+    its: Option<crate::dispatchgrant::Dispatched>,
+    profile: String,
     name: String,
 ) -> crate::start::Start {
+    let (persona, held, grants, without_sandbox) = match its {
+        Some(its) => (Some(its.persona), its.held, its.grants, its.without_sandbox),
+        None => (None, None, crate::sandbox::grant::Grants::default(), None),
+    };
     crate::start::Start {
-        profile: asking.profile.clone(),
+        profile: Some(profile),
         persona,
         name,
         cwd: asking.cwd.clone(),
         resume: None,
         show_footer: false,
         resuming: None,
-        without_sandbox: None,
-        held: None,
-        grants: crate::sandbox::grant::Grants::default(),
+        without_sandbox,
+        held,
+        grants,
     }
 }
 
@@ -540,7 +632,12 @@ mod tests {
 
     // ----- the facts, from the app's records ------------------------------------------------
 
-    use crate::reopen::{Chat, HandedFrom, HeldGrants, Owed};
+    use crate::dispatchgrant::InForce;
+    use crate::dispatchlimits::{self, Level, Limit, Source, Table};
+    use crate::reopen::{Chat, HandedFrom, HeldGrants, Identity, Owed};
+
+    const ROOT_ID: &str = "01J9ZQ3V5N8X4T2K7M6P0R1S2A";
+    const OTHER_ID: &str = "01J9ZQ3V5N8X4T2K7M6P0R1S2B";
 
     fn chat(persona: Option<&str>) -> Chat {
         Chat {
@@ -549,6 +646,17 @@ mod tests {
             profile: Some("work".to_owned()),
             persona: persona.map(str::to_owned),
             ..Default::default()
+        }
+    }
+
+    /// A chat the person started, with the id its lineage is counted by.
+    fn started(persona: Option<&str>, id: &str) -> Chat {
+        Chat {
+            identity: Identity {
+                id: Some(id.to_owned()),
+                ..Default::default()
+            },
+            ..chat(persona)
         }
     }
 
@@ -561,21 +669,53 @@ mod tests {
                 report,
                 mode,
                 depth,
+                root: None,
             }),
             ..chat(persona)
         }
+    }
+
+    /// [`dispatched`], in the lineage of the chat whose id is `root`.
+    fn under(root: &str, by: u32, depth: u32, persona: Option<&str>) -> Chat {
+        let mut chat = dispatched(by, depth, Mode::Task, Owed::Due, persona);
+        if let Some(from) = chat.from.as_mut() {
+            from.root = Some(root.to_owned());
+        }
+        chat
+    }
+
+    fn pair(asking: Option<&str>, to: Option<&str>) -> Pair {
+        Pair {
+            asking: asking.map(str::to_owned),
+            to: to.map(str::to_owned),
+        }
+    }
+
+    /// The lineage of `asking` among `open`, every chat still working, for a chat running as
+    /// `steward` dispatching to its own persona.
+    fn seen(asking: u32, open: &[(u32, &Chat)]) -> Lineage {
+        lineage_of(
+            asking,
+            open,
+            None,
+            &|_| true,
+            &pair(Some("steward"), Some("steward")),
+        )
     }
 
     #[test]
     fn a_chat_the_person_started_stands_alone_at_depth_zero() {
         let one = chat(Some("steward"));
         assert_eq!(
-            lineage_of(1, &[(1, &one)], None, &|_| true),
+            seen(1, &[(1, &one)]),
             Lineage {
                 depth: 0,
                 chain: Vec::new(),
                 running: 0,
                 lineage: 1,
+                // Itself: one chat is running as the persona it would dispatch to.
+                as_target: 1,
+                by_asking: 0,
             }
         );
     }
@@ -601,28 +741,113 @@ mod tests {
             (6, &six),
         ];
 
+        let first = seen(1, &open);
+        assert_eq!((first.depth, first.chain.len()), (0, 0));
+        // 2 is still working. 3 has reported, and 5 was handed off: neither is a task this
+        // chat is waiting on.
+        assert_eq!(first.running, 1);
+        // And 3, having reported, is no longer one the lineage holds.
+        assert_eq!(first.lineage, 4);
+
+        let fourth = seen(4, &open);
+        assert_eq!(fourth.depth, 2);
         assert_eq!(
-            lineage_of(1, &open, None, &|_| true),
-            Lineage {
-                depth: 0,
-                chain: Vec::new(),
-                // 2 is still working. 3 has reported, and 5 was handed off: neither is a task
-                // this chat is waiting on.
-                running: 1,
-                // And 3, having reported, is no longer one the lineage holds.
-                lineage: 4,
-            }
+            fourth.chain,
+            vec![Some("devops".to_owned()), Some("steward".to_owned())]
         );
+        assert_eq!((fourth.running, fourth.lineage), (0, 4));
+        assert_eq!(seen(6, &open).lineage, 1);
+    }
+
+    #[test]
+    fn the_two_counts_a_persona_has_are_read_across_every_chat_of_the_project() {
+        // Two lineages. 1 and 6 both run as steward; 2 and 7 are the tasks they wait on, and 3
+        // is one that reported. 8 is a devops chat the person started, in another lineage.
+        let one = chat(Some("steward"));
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let three = dispatched(1, 1, Mode::Task, Owed::Sent, Some("devops"));
+        let six = chat(Some("steward"));
+        let seven = dispatched(6, 1, Mode::Task, Owed::Due, Some("qa"));
+        let eight = chat(Some("devops"));
+        let open = [
+            (1, &one),
+            (2, &two),
+            (3, &three),
+            (6, &six),
+            (7, &seven),
+            (8, &eight),
+        ];
+        let to_devops = pair(Some("steward"), Some("devops"));
+
+        let all = lineage_of(1, &open, None, &|_| true, &to_devops);
+        // `may-run-at-once` counts 2 and 8: 3 reported, and owes nothing more.
+        assert_eq!(all.as_target, 2);
+        // `may-dispatch` counts 2 and 7: what chats running as steward wait on, in the project.
+        assert_eq!(all.by_asking, 2);
+        // What this chat itself waits on is still its own.
+        assert_eq!(all.running, 1);
+
+        // A chat whose program ended is not running as anything, and nobody waits on it.
+        let ended = lineage_of(1, &open, None, &|number| number != 2, &to_devops);
+        assert_eq!((ended.as_target, ended.by_asking), (1, 1));
+
+        // A chat on no persona runs as the default one, and is counted as it.
+        let plain = chat(None);
+        let with_plain = [(1, &one), (9, &plain)];
         assert_eq!(
-            lineage_of(4, &open, None, &|_| true),
-            Lineage {
-                depth: 2,
-                chain: vec![Some("devops".to_owned()), Some("steward".to_owned())],
-                running: 0,
-                lineage: 4,
-            }
+            lineage_of(1, &with_plain, Some("devops"), &|_| true, &to_devops).as_target,
+            1
         );
-        assert_eq!(lineage_of(6, &open, None, &|_| true).lineage, 1);
+        // A dispatch that names no persona has neither count.
+        let none = lineage_of(1, &open, None, &|_| true, &pair(None, None));
+        assert_eq!((none.as_target, none.by_asking), (0, 0));
+    }
+
+    #[test]
+    fn a_lineage_is_counted_by_its_root_so_a_chat_closed_in_the_middle_does_not_split_it() {
+        // 1 ── 2 ── 4 and 1 ── 3, each record naming the chat the person started. Chat 2 has
+        // closed: 4's asker is no longer open, and 4 is still in 1's lineage.
+        let one = started(Some("steward"), ROOT_ID);
+        let three = under(ROOT_ID, 1, 1, Some("steward"));
+        let four = under(ROOT_ID, 2, 2, Some("steward"));
+        let other = started(Some("steward"), OTHER_ID);
+        let its_task = under(OTHER_ID, 5, 1, Some("steward"));
+        let open = [
+            (1, &one),
+            (3, &three),
+            (4, &four),
+            (5, &other),
+            (6, &its_task),
+        ];
+
+        assert_eq!(seen(1, &open).lineage, 3, "1, 3 and 4");
+        assert_eq!(seen(4, &open).lineage, 3, "asked from below the gap");
+        assert_eq!(seen(3, &open).lineage, 3);
+        // The other lineage is its own.
+        assert_eq!(seen(5, &open).lineage, 2);
+        assert_eq!(root_of(4, &open).as_deref(), Some(ROOT_ID));
+        assert_eq!(root_of(5, &open).as_deref(), Some(OTHER_ID));
+    }
+
+    #[test]
+    fn a_lineage_whose_root_was_started_again_under_a_new_number_is_still_one() {
+        // Chat 1 was started again as chat 9 (a restart keeps its id; the app rewrites the
+        // number its tasks name). Its tasks, and theirs, are still its lineage.
+        let nine = started(Some("steward"), ROOT_ID);
+        let two = under(ROOT_ID, 9, 1, Some("steward"));
+        let four = under(ROOT_ID, 2, 2, Some("steward"));
+        let open = [(9, &nine), (2, &two), (4, &four)];
+        assert_eq!(seen(9, &open).lineage, 3);
+        assert_eq!(seen(4, &open).lineage, 3);
+    }
+
+    #[test]
+    fn a_record_written_before_roots_were_kept_is_still_walked_to_its_lineage() {
+        let one = chat(Some("steward"));
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("steward"));
+        let open = [(1, &one), (2, &two)];
+        assert_eq!(root_of(2, &open), None);
+        assert_eq!(seen(2, &open).lineage, 2);
     }
 
     #[test]
@@ -635,15 +860,16 @@ mod tests {
         let three = dispatched(1, 1, Mode::Task, Owed::Due, Some("steward"));
         let four = dispatched(2, 2, Mode::Task, Owed::Due, Some("steward"));
         let open = [(1, &one), (2, &two), (3, &three), (4, &four)];
+        let own = pair(Some("steward"), Some("steward"));
 
-        let all_working = lineage_of(1, &open, None, &|_| true);
+        let all_working = lineage_of(1, &open, None, &|_| true, &own);
         assert_eq!((all_working.running, all_working.lineage), (2, 4));
 
-        let two_ended = lineage_of(1, &open, None, &|number| number != 2);
+        let two_ended = lineage_of(1, &open, None, &|number| number != 2, &own);
         assert_eq!((two_ended.running, two_ended.lineage), (1, 3));
         // The tree is still walked through it: 4 is under 1 by way of 2.
         assert_eq!(
-            lineage_of(4, &open, None, &|number| number != 2).chain,
+            lineage_of(4, &open, None, &|number| number != 2, &own).chain,
             vec![Some("steward".to_owned()), Some("steward".to_owned())]
         );
     }
@@ -670,43 +896,90 @@ mod tests {
         assert!(task_name(&"x".repeat(65)).is_err());
     }
 
-    fn asked(asking: &Chat, named: Option<&str>, default: Option<&str>) -> Asked {
+    // ----- the join: one chat's ask, from its record and the project's files ----------------
+
+    /// A project with personas `steward` and `devops` and a draft `intern`, whose committed
+    /// file is `manifest`.
+    fn a_project(manifest: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().expect("a project");
-        for name in ["steward", "devops"] {
+        for (name, more) in [("steward", ""), ("devops", ""), ("intern", "draft: true\n")] {
             let dir = root.path().join("personas").join(name);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join("persona.md"),
-                format!("---\nname: {name}\ndescription: d\n---\n# {name}\n"),
+                format!("---\nname: {name}\ndescription: d\n{more}---\n# {name}\n"),
             )
             .unwrap();
         }
-        let lineage = Lineage {
-            depth: 1,
-            chain: vec![Some("steward".to_owned())],
-            running: 0,
-            lineage: 2,
-        };
+        std::fs::write(crate::names::manifest(root.path()), manifest).unwrap();
+        std::fs::create_dir_all(root.path().join("workspaces/alpha")).unwrap();
+        root
+    }
+
+    /// What chat `number` of `open` is answered when it names `named`, in a project whose
+    /// committed file is `manifest`, under `grants`.
+    fn asked_in(
+        manifest: &str,
+        number: u32,
+        open: &[(u32, &Chat)],
+        named: Option<&str>,
+        grants: &InForce,
+        by: By,
+    ) -> Asked {
+        let root = a_project(manifest);
+        let asking = record(number, open).expect("the asking chat is open");
         asked_by_a_chat(
             root.path(),
+            number,
             asking,
             named,
-            default,
-            &lineage,
-            Grant::Missing,
-            Limits::default(),
+            &Moment {
+                open,
+                working: &|_| true,
+                default: None,
+                grants,
+                profile: None,
+                by,
+            },
         )
+    }
+
+    /// One chat, alone, asking in a project with no limits of its own and no grants.
+    fn asked(asking: &Chat, named: Option<&str>, default: Option<&str>) -> Asked {
+        let root = a_project("");
+        asked_by_a_chat(
+            root.path(),
+            2,
+            asking,
+            named,
+            &Moment {
+                open: &[(2, asking)],
+                working: &|_| true,
+                default,
+                grants: &InForce::default(),
+                profile: None,
+                by: By::Chat,
+            },
+        )
+    }
+
+    fn refusal(asked: &Asked) -> String {
+        match &asked.decision {
+            Decision::Refused(why) => why.say(),
+            other => panic!("refused, not {other:?}"),
+        }
     }
 
     #[test]
     fn a_chats_ask_is_built_from_its_record_and_names_its_own_persona_when_none_is_named() {
-        let steward = chat(Some("steward"));
+        let steward = dispatched(1, 1, Mode::Task, Owed::Due, Some("steward"));
         assert_eq!(
             asked(&steward, None, None),
             Asked {
                 decision: Decision::Start,
                 to: Some("steward".to_owned()),
                 depth: 2,
+                root: None,
             }
         );
         // A name with blanks around it is the name; a blank one is none.
@@ -729,38 +1002,74 @@ mod tests {
             asked(&steward, Some("ghost"), None).decision,
             Decision::Refused(Refused::NoPersona("ghost".to_owned()))
         );
+        assert_eq!(
+            asked(&steward, Some("intern"), None).decision,
+            Decision::Refused(Refused::Draft("intern".to_owned()))
+        );
     }
 
     #[test]
     fn a_chat_on_no_persona_asks_as_the_default_and_with_no_default_as_none() {
         let plain = chat(None);
+        let as_default = asked(&plain, None, Some("steward"));
+        assert_eq!(as_default.decision, Decision::Start);
+        assert_eq!(as_default.to.as_deref(), Some("steward"));
+        let as_none = asked(&plain, None, None);
+        assert_eq!(as_none.decision, Decision::Start);
+        assert_eq!(as_none.to, None);
+        // And a chat on none needs a grant for any persona, which only one for it covers.
         assert_eq!(
-            asked(&plain, None, Some("steward")),
-            Asked {
-                decision: Decision::Start,
-                to: Some("steward".to_owned()),
-                depth: 2,
-            }
-        );
-        assert_eq!(
-            asked(&plain, None, None),
-            Asked {
-                decision: Decision::Start,
-                to: None,
-                depth: 2,
+            asked(&plain, Some("devops"), None).decision,
+            Decision::NeedsGrant {
+                from: None,
+                to: "devops".to_owned(),
             }
         );
     }
 
     #[test]
-    fn a_chats_ask_reads_its_profile_its_hold_and_its_lineage_from_the_record() {
-        let shell = Chat {
-            profile: None,
-            ..chat(Some("steward"))
+    fn a_new_chat_s_record_is_given_the_root_its_asking_chat_descends_from() {
+        // The chat the person started: its own id is the root.
+        let first = started(Some("steward"), ROOT_ID);
+        assert_eq!(asked(&first, None, None).root.as_deref(), Some(ROOT_ID));
+        // One that was dispatched: the root its own record names, never its own id.
+        let below = Chat {
+            identity: Identity {
+                id: Some(OTHER_ID.to_owned()),
+                ..Default::default()
+            },
+            ..under(ROOT_ID, 1, 1, Some("steward"))
         };
+        assert_eq!(asked(&below, None, None).root.as_deref(), Some(ROOT_ID));
+    }
+
+    #[test]
+    fn a_chat_holding_another_personas_grants_is_refused_whatever_it_names() {
+        let holding = Chat {
+            held: Some(HeldGrants {
+                persona: Some("steward".to_owned()),
+            }),
+            ..chat(Some("devops"))
+        };
+        for named in [None, Some("devops"), Some("steward")] {
+            assert_eq!(
+                asked(&holding, named, None).decision,
+                Decision::Refused(Refused::Held),
+                "{named:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_asking_persona_is_whose_grants_the_chat_runs_with_and_never_a_word_it_sent() {
+        // A chat's own persona, else the default; a held chat's is the one it holds.
         assert_eq!(
-            asked(&shell, None, None).decision,
-            Decision::Refused(Refused::NoProfile)
+            pair_of(&chat(Some("steward")), Some("devops"), Some("qa")),
+            pair(Some("steward"), Some("devops"))
+        );
+        assert_eq!(
+            pair_of(&chat(None), None, Some("qa")),
+            pair(Some("qa"), Some("qa"))
         );
         let holding = Chat {
             held: Some(HeldGrants {
@@ -768,57 +1077,701 @@ mod tests {
             }),
             ..chat(Some("devops"))
         };
+        // "Its own" still names the persona it is, which is what the person means from its
+        // tab; the grants it asks with are the ones it holds.
         assert_eq!(
-            asked(&holding, None, None).decision,
-            Decision::Refused(Refused::Held)
-        );
-        // The lineage it was handed: devops is asked for from under steward, by a chat that is
-        // not steward, which the loop rule refuses whatever the grant.
-        let devops = chat(Some("devops"));
-        assert_eq!(
-            asked(&devops, Some("steward"), None).decision,
-            Decision::Refused(Refused::Loop("steward".to_owned()))
+            pair_of(&holding, None, None),
+            pair(Some("steward"), Some("devops"))
         );
     }
 
     #[test]
-    fn a_chat_on_no_persona_is_in_a_chain_as_the_default_persona() {
-        let one = chat(None);
+    fn the_loop_rule_is_read_from_the_chain_the_records_hold() {
+        // steward (1) dispatched devops (2). Devops asks for steward: from below itself.
+        let one = chat(Some("steward"));
         let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let open = [(1, &one), (2, &two)];
+        let grants = InForce {
+            you: vec![crate::dispatchgrant::Pair::new("devops", "steward").unwrap()],
+            ..Default::default()
+        };
+        let said = asked_in("", 2, &open, Some("steward"), &grants, By::Chat);
         assert_eq!(
-            lineage_of(2, &[(1, &one), (2, &two)], Some("steward"), &|_| true).chain,
-            vec![Some("steward".to_owned())]
+            said.decision,
+            Decision::Refused(Refused::Limit(dispatchlimits::Refused::Loop(
+                "steward".to_owned()
+            )))
+        );
+        // Its own persona is not above it.
+        assert_eq!(
+            asked_in("", 2, &open, None, &grants, By::Chat).decision,
+            Decision::Start
+        );
+    }
+
+    #[test]
+    fn the_limits_are_the_projects_own_read_for_the_asking_chats_workspace_and_persona() {
+        // The project allows one running task a chat; the asking chat has one.
+        let one = chat(Some("steward"));
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("steward"));
+        let open = [(1, &one), (2, &two)];
+        let none = InForce::default();
+        let said = asked_in(
+            "[dispatch]\nrunning-per-chat = 1\n",
+            1,
+            &open,
+            None,
+            &none,
+            By::Chat,
         );
         assert_eq!(
-            lineage_of(2, &[(1, &one), (2, &two)], None, &|_| true).chain,
-            vec![None]
+            refusal(&said),
+            "this chat already has 1 persona chat running, and it may have 1 at once. Wait \
+             for one to report, then dispatch again."
+        );
+        // A persona's own row is more specific than the project's.
+        let said = asked_in(
+            "[dispatch]\nrunning-per-chat = 1\n[dispatch.personas.steward]\nrunning-per-chat = 4\n",
+            1,
+            &open,
+            None,
+            &none,
+            By::Chat,
+        );
+        assert_eq!(said.decision, Decision::Start);
+        // And the defaults hold where the project says nothing.
+        assert_eq!(
+            asked_in("", 1, &open, None, &none, By::Chat).decision,
+            Decision::Start
         );
     }
 
     #[test]
-    fn a_chat_whose_asker_has_closed_keeps_the_depth_its_record_holds() {
-        // Chat 2 closed. Chat 4's own record says it is two dispatches down, and that is
-        // what counts: a chain never looks shallower because a chat above it went away.
-        let four = dispatched(2, 2, Mode::Task, Owed::Due, Some("devops"));
-        let seen = lineage_of(4, &[(4, &four)], None, &|_| true);
-        assert_eq!(seen.depth, 2);
-        assert_eq!(seen.chain, Vec::<Option<String>>::new());
-        assert_eq!(seen.lineage, 1);
+    fn every_count_a_refusal_names_is_the_one_the_records_hold() {
+        let none = InForce::default();
+        // Depth: the asking chat is one dispatch down, and a chain may go one deep.
+        let one = chat(Some("steward"));
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("steward"));
+        let open = [(1, &one), (2, &two)];
+        assert_eq!(
+            refusal(&asked_in(
+                "[dispatch]\ndepth = 1\n",
+                2,
+                &open,
+                None,
+                &none,
+                By::Chat
+            )),
+            "this chat is 1 dispatch below the chat the person started, and a chain may go 1 \
+             deep here. Do the work in this chat, or say in your report what is left."
+        );
+        // The lineage: two chats still owe work, and it may hold two.
+        assert_eq!(
+            refusal(&asked_in(
+                "[dispatch]\nlive-per-lineage = 2\n",
+                1,
+                &open,
+                None,
+                &none,
+                By::Chat
+            )),
+            "this chat's lineage already holds 2 running chats, and it may hold 2. Wait for \
+             one to finish, then dispatch again."
+        );
+        // What chats running as steward wait on between them, in the project.
+        assert_eq!(
+            refusal(&asked_in(
+                "[dispatch.personas.steward]\nmay-dispatch = 1\n",
+                1,
+                &open,
+                None,
+                &none,
+                By::Chat
+            )),
+            "chats as steward already have 1 persona chat running between them, and may have \
+             1 at once in this project. Wait for one to finish, then dispatch again."
+        );
+        // How many chats run as the target at once: both of these do.
+        assert_eq!(
+            refusal(&asked_in(
+                "[dispatch.personas.steward]\nmay-run-at-once = 2\n",
+                1,
+                &open,
+                None,
+                &none,
+                By::Chat
+            )),
+            "2 chats are already running as steward, and 2 may run as it at once in this \
+             project. Wait for one to finish, then dispatch again."
+        );
     }
 
     #[test]
-    fn records_that_name_each_other_are_walked_once() {
-        // The record is a file anything running as the person can write. Two chats that each
-        // say the other dispatched it are a loop no dispatch made, and reading it ends.
-        let one = dispatched(2, 1, Mode::Task, Owed::Due, Some("steward"));
-        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
-        let seen = lineage_of(1, &[(1, &one), (2, &two)], None, &|_| true);
-        assert_eq!(seen.chain, vec![Some("devops".to_owned())]);
-        assert_eq!(seen.lineage, 2);
+    fn a_limit_of_zero_switches_dispatch_off_and_says_where() {
+        let one = chat(Some("steward"));
+        let said = asked_in(
+            "[dispatch]\nrunning-per-chat = 0\n",
+            1,
+            &[(1, &one)],
+            None,
+            &InForce::default(),
+            By::Chat,
+        );
+        assert_eq!(
+            refusal(&said),
+            "dispatch is off in this project: running per chat is set to 0. Only the person \
+             can change it, in Settings › Project › Dispatch."
+        );
     }
 
     #[test]
-    fn a_persona_chat_takes_the_asking_chats_profile_and_folder_and_nothing_else_of_it() {
+    fn a_grant_at_any_level_covers_the_pair_and_starts_it() {
+        let one = chat(Some("steward"));
+        let open = [(1, &one)];
+        let to_devops = crate::dispatchgrant::Pair::new("steward", "devops").unwrap();
+        let ask = |grants: &InForce| asked_in("", 1, &open, Some("devops"), grants, By::Chat);
+
+        assert!(matches!(
+            ask(&InForce::default()).decision,
+            Decision::NeedsGrant { .. }
+        ));
+        for grants in [
+            InForce {
+                you: vec![to_devops.clone()],
+                ..Default::default()
+            },
+            InForce {
+                project: vec![to_devops.clone()],
+                ..Default::default()
+            },
+            InForce {
+                chat: vec![crate::dispatchgrant::ChatPair {
+                    asking: Some("steward".to_owned()),
+                    target: "devops".to_owned(),
+                }],
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(ask(&grants).decision, Decision::Start, "{grants:?}");
+        }
+        // A grant for another pair covers nothing here.
+        let other = InForce {
+            you: vec![crate::dispatchgrant::Pair::new("devops", "steward").unwrap()],
+            ..Default::default()
+        };
+        assert!(matches!(ask(&other).decision, Decision::NeedsGrant { .. }));
+    }
+
+    #[test]
+    fn the_person_dispatching_from_a_tab_needs_no_grant_and_is_held_to_the_limits() {
+        let one = chat(Some("steward"));
+        let open = [(1, &one)];
+        let none = InForce::default();
+        assert_eq!(
+            asked_in("", 1, &open, Some("devops"), &none, By::Person).decision,
+            Decision::Start
+        );
+        assert!(
+            refusal(&asked_in(
+                "[dispatch]\nrunning-per-chat = 0\n",
+                1,
+                &open,
+                Some("devops"),
+                &none,
+                By::Person
+            ))
+            .starts_with("dispatch is off in this project")
+        );
+        // A chat that holds another persona's grants: the hold is the person's to lift, so
+        // their own dispatch from its tab is not refused for it.
+        let holding = Chat {
+            held: Some(HeldGrants {
+                persona: Some("steward".to_owned()),
+            }),
+            ..chat(Some("devops"))
+        };
+        assert_eq!(
+            asked_in("", 1, &[(1, &holding)], Some("devops"), &none, By::Person).decision,
+            Decision::Start
+        );
+    }
+
+    #[test]
+    fn a_policy_that_locks_the_pair_or_all_dispatch_refuses_with_who_locked_it() {
+        use crate::sandbox::policy::{Locks, set_for_this_test};
+        let one = chat(Some("steward"));
+        let open = [(1, &one)];
+        let granted = InForce {
+            you: vec![crate::dispatchgrant::Pair::new("steward", "devops").unwrap()],
+            ..Default::default()
+        };
+        let file = std::path::Path::new("/etc/purlis/policy.json");
+
+        set_for_this_test(Locks::parse(
+            r#"{"dispatch": {"locked": [{"from": "steward", "to": "devops"}]}}"#,
+            file,
+        ));
+        // A grant already made covers nothing while the pair is locked, and the person's own
+        // dispatch from the tab is locked too.
+        for by in [By::Chat, By::Person] {
+            let said = refusal(&asked_in("", 1, &open, Some("devops"), &granted, by));
+            assert!(
+                said.starts_with("Policy forbids steward chats dispatching to devops."),
+                "{said}"
+            );
+            assert!(said.ends_with(LOCKED), "{said}");
+        }
+        // Its own persona is no pair, and starts.
+        assert_eq!(
+            asked_in("", 1, &open, None, &granted, By::Chat).decision,
+            Decision::Start
+        );
+
+        set_for_this_test(Locks::parse(r#"{"dispatch": {"allow": false}}"#, file));
+        for named in [None, Some("devops")] {
+            let said = refusal(&asked_in("", 1, &open, named, &granted, By::Chat));
+            assert!(
+                said.starts_with("Policy forbids one chat dispatching to another."),
+                "{said}"
+            );
+        }
+        // A chat on no persona, dispatching to none, is held by it as any chat is.
+        let plain = chat(None);
+        let said = refusal(&asked_in(
+            "",
+            1,
+            &[(1, &plain)],
+            None,
+            &InForce::default(),
+            By::Chat,
+        ));
+        assert!(said.starts_with("Policy forbids one chat"), "{said}");
+        set_for_this_test(Locks::none());
+    }
+
+    #[test]
+    fn a_policy_s_ceiling_is_over_what_the_project_sets() {
+        use crate::sandbox::policy::{Locks, set_for_this_test};
+        let one = chat(Some("steward"));
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("steward"));
+        let open = [(1, &one), (2, &two)];
+        set_for_this_test(Locks::parse(
+            r#"{"dispatch": {"running-per-chat": 1}}"#,
+            std::path::Path::new("/etc/purlis/policy.json"),
+        ));
+        let said = asked_in(
+            "[dispatch]\nrunning-per-chat = 9\n",
+            1,
+            &open,
+            None,
+            &InForce::default(),
+            By::Chat,
+        );
+        set_for_this_test(Locks::none());
+        assert!(
+            refusal(&said).contains("it may have 1 at once"),
+            "{}",
+            refusal(&said)
+        );
+    }
+
+    // ----- the decision ---------------------------------------------------------------------
+
+    fn steward() -> AskingChat<'static> {
+        AskingChat {
+            persona: Some("steward"),
+            held: false,
+        }
+    }
+
+    /// The limits in force where no file sets one, for `asking` dispatching to `target`.
+    fn defaults(asking: Option<&str>, target: Option<&str>) -> Limits {
+        dispatchlimits::in_force(
+            &Table::default(),
+            None,
+            asking,
+            target,
+            &Table::default(),
+            &Level::unset(),
+        )
+    }
+
+    /// A chat the person started, with nothing running.
+    fn alone() -> Lineage {
+        Lineage {
+            lineage: 1,
+            ..Default::default()
+        }
+    }
+
+    /// What `decide` says of a task from `asker` to `to`, under `grant`, the default limits
+    /// and `lineage`.
+    fn decided(asker: Asker<'_>, to: Persona<'_>, grant: &Covers, lineage: &Lineage) -> Decision {
+        let asking = match asker {
+            Asker::Chat(chat) | Asker::Person(chat) => chat.persona,
+            Asker::Helper => None,
+        };
+        decide(&Request {
+            asker,
+            to,
+            mode: Mode::Task,
+            grant,
+            profile: None,
+            limits: &defaults(asking, to.name()),
+            lineage,
+        })
+    }
+
+    fn refused(decision: Decision) -> Refused {
+        match decision {
+            Decision::Refused(why) => why,
+            other => panic!("refused, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_chat_dispatches_to_its_own_persona_with_no_grant() {
+        assert_eq!(
+            decided(
+                Asker::Chat(steward()),
+                Persona::Defined("steward"),
+                &Covers::Covered,
+                &alone()
+            ),
+            Decision::Start
+        );
+    }
+
+    #[test]
+    fn another_persona_needs_a_grant_and_starts_with_one() {
+        let to = Persona::Defined("devops");
+        assert_eq!(
+            decided(Asker::Chat(steward()), to, &Covers::NeedsGrant, &alone()),
+            Decision::NeedsGrant {
+                from: Some("steward".to_owned()),
+                to: "devops".to_owned(),
+            }
+        );
+        assert_eq!(
+            decided(Asker::Chat(steward()), to, &Covers::Covered, &alone()),
+            Decision::Start
+        );
+    }
+
+    #[test]
+    fn a_chat_on_no_persona_dispatches_to_none_and_needs_a_grant_for_any_persona() {
+        let plain = AskingChat {
+            persona: None,
+            held: false,
+        };
+        assert_eq!(
+            decided(
+                Asker::Chat(plain),
+                Persona::None,
+                &Covers::Covered,
+                &alone()
+            ),
+            Decision::Start
+        );
+        assert_eq!(
+            decided(
+                Asker::Chat(plain),
+                Persona::Defined("devops"),
+                &Covers::NeedsGrant,
+                &alone()
+            ),
+            Decision::NeedsGrant {
+                from: None,
+                to: "devops".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_chat_holding_another_personas_grants_is_refused_and_told_to_have_its_own_allowed() {
+        // #1362, D-1436-19: a chat handed off to `devops` from `qa` runs with qa's grants until
+        // the person allows its own. A dispatch to "its own" persona would start a chat with
+        // devops's hosts and vaults, which is the climb the hold exists to stop. It is refused
+        // outright, never answered "needs a grant": a grant named devops to devops would read
+        // as harmless and lift the hold for every chat like it.
+        let held = AskingChat {
+            persona: Some("devops"),
+            held: true,
+        };
+        for to in [
+            Persona::Defined("devops"),
+            Persona::Defined("qa"),
+            Persona::None,
+        ] {
+            // Whatever grant is in force for the pair its name suggests.
+            for grant in [Covers::Covered, Covers::NeedsGrant] {
+                let said = refused(decided(Asker::Chat(held), to, &grant, &alone()));
+                assert_eq!(said, Refused::Held, "{to:?}");
+                assert!(
+                    said.say().contains("allow this chat its own grants"),
+                    "{}",
+                    said.say()
+                );
+            }
+        }
+        // The person dispatching from its tab is not held to it.
+        assert_eq!(
+            decided(
+                Asker::Person(held),
+                Persona::Defined("devops"),
+                &Covers::NeedsGrant,
+                &alone()
+            ),
+            Decision::Start
+        );
+    }
+
+    #[test]
+    fn no_persona_named_is_only_ever_a_chats_own() {
+        // The app names the asking chat's own persona when none is named. A request that
+        // names none for a chat that runs as one is not one a grant could name.
+        assert_eq!(
+            refused(decided(
+                Asker::Chat(steward()),
+                Persona::None,
+                &Covers::Covered,
+                &alone()
+            )),
+            Refused::NoPersonaNamed
+        );
+    }
+
+    #[test]
+    fn the_person_dispatches_to_any_persona_with_no_grant() {
+        assert_eq!(
+            decided(
+                Asker::Person(steward()),
+                Persona::Defined("devops"),
+                &Covers::NeedsGrant,
+                &alone()
+            ),
+            Decision::Start
+        );
+    }
+
+    #[test]
+    fn a_helper_sub_agent_is_refused_before_anything_else_is_asked() {
+        // Even for a persona that is not there: the first question is who asks.
+        let said = refused(decided(
+            Asker::Helper,
+            Persona::Unknown("nobody"),
+            &Covers::Covered,
+            &alone(),
+        ));
+        assert_eq!(said, Refused::Helper);
+        assert!(said.say().contains("Return what you found to your chat"));
+    }
+
+    #[test]
+    fn an_unknown_persona_and_a_draft_are_refused_and_never_ask_for_a_grant() {
+        let ask = |asker, to| refused(decided(asker, to, &Covers::NeedsGrant, &alone()));
+        let unknown = ask(Asker::Chat(steward()), Persona::Unknown("nobody"));
+        assert_eq!(unknown, Refused::NoPersona("nobody".to_owned()));
+        assert!(unknown.say().contains("purlis persona list"));
+        let draft = ask(Asker::Chat(steward()), Persona::Draft("intern"));
+        assert_eq!(draft, Refused::Draft("intern".to_owned()));
+        assert!(draft.say().contains("draft: true"));
+        // The person is refused the same: a grant is not what is missing.
+        assert_eq!(
+            ask(Asker::Person(steward()), Persona::Draft("intern")),
+            Refused::Draft("intern".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_chain_goes_as_deep_as_the_limit_and_no_deeper() {
+        let at = |depth| Lineage { depth, ..alone() };
+        let ask = |depth| {
+            decided(
+                Asker::Chat(steward()),
+                Persona::Defined("steward"),
+                &Covers::Covered,
+                &at(depth),
+            )
+        };
+        assert_eq!(ask(2), Decision::Start);
+        assert_eq!(
+            refused(ask(3)),
+            Refused::Limit(dispatchlimits::Refused::TooDeep { limit: 3, depth: 3 })
+        );
+    }
+
+    #[test]
+    fn an_asking_chat_has_at_most_its_limit_running_and_a_lineage_holds_at_most_its_own() {
+        let ask = |lineage: Lineage| {
+            decided(
+                Asker::Chat(steward()),
+                Persona::Defined("steward"),
+                &Covers::Covered,
+                &lineage,
+            )
+        };
+        assert_eq!(
+            ask(Lineage {
+                running: 5,
+                lineage: 15,
+                ..alone()
+            }),
+            Decision::Start
+        );
+        assert_eq!(
+            refused(ask(Lineage {
+                running: 6,
+                ..alone()
+            })),
+            Refused::Limit(dispatchlimits::Refused::TooManyRunning {
+                limit: 6,
+                running: 6
+            })
+        );
+        assert_eq!(
+            refused(ask(Lineage {
+                lineage: 16,
+                ..alone()
+            })),
+            Refused::Limit(dispatchlimits::Refused::LineageFull {
+                limit: 16,
+                lineage: 16
+            })
+        );
+    }
+
+    #[test]
+    fn the_limits_hold_for_the_person_too_and_are_said_before_a_grant_is_asked_for() {
+        // Asking the person for a grant that would start nothing wastes their yes.
+        let full = Lineage {
+            running: 6,
+            ..alone()
+        };
+        for asker in [Asker::Person(steward()), Asker::Chat(steward())] {
+            assert!(matches!(
+                refused(decided(
+                    asker,
+                    Persona::Defined("devops"),
+                    &Covers::NeedsGrant,
+                    &full
+                )),
+                Refused::Limit(dispatchlimits::Refused::TooManyRunning { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn a_policy_lock_is_said_before_a_limit_and_a_refused_policy_file_before_either() {
+        let locked = Covers::Locked("Policy forbids one chat dispatching to another.".to_owned());
+        let full = Lineage {
+            running: 6,
+            ..alone()
+        };
+        let own = Persona::Defined("steward");
+        assert!(matches!(
+            refused(decided(Asker::Chat(steward()), own, &locked, &full)),
+            Refused::Locked(_)
+        ));
+        // The file was refused: nothing in it was read, so nothing is said to be locked or
+        // set. Dispatch is off, and the sentence says the file is why.
+        let off = dispatchlimits::in_force(
+            &Table::default(),
+            None,
+            Some("steward"),
+            Some("steward"),
+            &Table::default(),
+            &dispatchlimits::ceiling_when_refused(),
+        );
+        let said = refused(decide(&Request {
+            asker: Asker::Chat(steward()),
+            to: own,
+            mode: Mode::Task,
+            grant: &locked,
+            profile: None,
+            limits: &off,
+            lineage: &alone(),
+        }));
+        assert_eq!(
+            said,
+            Refused::Limit(dispatchlimits::Refused::Off {
+                limit: Limit::RunningPerChat,
+                by: Source::PolicyRefused,
+                target: Some("steward".to_owned()),
+            })
+        );
+        assert_eq!(
+            said.say(),
+            "dispatch is off on this machine: its policy file is refused, so purlis cannot \
+             tell what an administrator allows. Only an administrator can fix it."
+        );
+    }
+
+    #[test]
+    fn no_profile_to_start_on_is_refused_in_the_profile_s_own_sentence() {
+        use crate::personaprofile;
+        let limits = defaults(Some("steward"), Some("devops"));
+        let ask = |why: &personaprofile::Refused, lineage: &Lineage| {
+            refused(decide(&Request {
+                asker: Asker::Chat(steward()),
+                to: Persona::Defined("devops"),
+                mode: Mode::Task,
+                grant: &Covers::NeedsGrant,
+                profile: Some(why),
+                limits: &limits,
+                lineage,
+            }))
+        };
+        // A chat on no profile, dispatching to a persona that names none (D-1445-7: one that
+        // names a profile starts on it, and is not refused here).
+        let none = personaprofile::Refused::NoProfile;
+        assert_eq!(ask(&none, &alone()), Refused::Profile(none.clone()));
+        assert_eq!(ask(&none, &alone()).say(), none.say());
+        // A profile the dispatch named that the project does not offer: said before a limit,
+        // and before the person is asked for a grant.
+        let unoffered = personaprofile::Refused::NotOffered {
+            profile: "prod".to_owned(),
+            by: personaprofile::Who::Asker,
+            persona: None,
+        };
+        let full = Lineage {
+            running: 6,
+            ..alone()
+        };
+        assert_eq!(ask(&unoffered, &full), Refused::Profile(unoffered.clone()));
+    }
+
+    #[test]
+    fn every_refusal_is_one_line_that_says_what_to_do() {
+        for refusal in [
+            Refused::Helper,
+            Refused::Held,
+            Refused::NoPersonaNamed,
+            Refused::NoPersona("x".to_owned()),
+            Refused::Draft("x".to_owned()),
+            Refused::Locked("Policy forbids one chat dispatching to another.".to_owned()),
+            Refused::Profile(crate::personaprofile::Refused::NoProfile),
+            Refused::Limit(dispatchlimits::Refused::Loop("x".to_owned())),
+            Refused::Limit(dispatchlimits::Refused::TooDeep { limit: 3, depth: 3 }),
+            Refused::Limit(dispatchlimits::Refused::TooManyRunning {
+                limit: 6,
+                running: 6,
+            }),
+            Refused::Limit(dispatchlimits::Refused::LineageFull {
+                limit: 16,
+                lineage: 16,
+            }),
+        ] {
+            let said = refusal.say();
+            assert!(!said.contains('\n'), "{said}");
+            assert!(said.matches(". ").count() >= 1, "two sentences: {said}");
+        }
+    }
+
+    // ----- what the persona chat starts with ------------------------------------------------
+
+    #[test]
+    fn a_persona_chat_takes_the_asking_chats_folder_and_nothing_else_of_it() {
         // The asking chat holds another persona's grants, ran its last run without the
         // sandbox, draws its footer and is pinned. None of it is the new chat's.
         let asking = Chat {
@@ -834,12 +1787,18 @@ mod tests {
             ..chat(Some("steward"))
         };
 
-        let start = start_for(&asking, Some("devops".to_owned()), "7".to_owned());
+        let start = start_for(
+            &asking,
+            Some(crate::dispatchgrant::grants_for_a_dispatched_chat("devops")),
+            "codex-work".to_owned(),
+            "7".to_owned(),
+        );
 
         assert_eq!(
             start,
             crate::start::Start {
-                profile: Some("work".to_owned()),
+                // The profile chosen for it, which need not be the asking chat's.
+                profile: Some("codex-work".to_owned()),
                 persona: Some("devops".to_owned()),
                 name: "7".to_owned(),
                 cwd: Some("/plane/workspaces/alpha/svc".into()),
@@ -851,6 +1810,9 @@ mod tests {
                 grants: crate::sandbox::grant::Grants::default(),
             }
         );
+        // A chat on no persona dispatching to none starts one on none, holding nothing.
+        let plain = start_for(&asking, None, "work".to_owned(), "8".to_owned());
+        assert_eq!((plain.persona, plain.held), (None, None));
     }
 
     const DEVOPS_AND_QA: &str = "[sandbox]\nmode = \"on\"\negress = []\n\
@@ -882,6 +1844,15 @@ mod tests {
         .hosts
     }
 
+    fn start_as(asking: &Chat, persona: &str) -> crate::start::Start {
+        start_for(
+            asking,
+            Some(crate::dispatchgrant::grants_for_a_dispatched_chat(persona)),
+            "work".to_owned(),
+            "7".to_owned(),
+        )
+    }
+
     #[test]
     fn the_persona_chats_compiled_sandbox_is_the_projects_for_its_persona_and_not_the_askers() {
         // The asking chat runs as qa, and the person let it reach one more host from a block's
@@ -902,11 +1873,14 @@ mod tests {
             "what the asking chat itself reaches"
         );
 
-        let same = start_for(&asking, Some("qa".to_owned()), "7".to_owned());
-        assert_eq!(reached(DEVOPS_AND_QA, &same), ["qa.example"]);
-
-        let other = start_for(&asking, Some("devops".to_owned()), "8".to_owned());
-        assert_eq!(reached(DEVOPS_AND_QA, &other), ["10.100.39.145:6443"]);
+        assert_eq!(
+            reached(DEVOPS_AND_QA, &start_as(&asking, "qa")),
+            ["qa.example"]
+        );
+        assert_eq!(
+            reached(DEVOPS_AND_QA, &start_as(&asking, "devops")),
+            ["10.100.39.145:6443"]
+        );
     }
 
     #[test]
@@ -917,36 +1891,12 @@ mod tests {
             unsandboxed: true,
             ..chat(Some("qa"))
         };
-        let start = start_for(&asking, Some("qa".to_owned()), "7".to_owned());
-        assert_eq!(start.without_sandbox, None);
-        // And a chat holding another persona's grants passes no hold on either.
-        let held = Chat {
-            held: Some(HeldGrants { persona: None }),
-            ..chat(Some("devops"))
-        };
-        assert_eq!(
-            start_for(&held, Some("devops".to_owned()), "7".to_owned()).held,
-            None
-        );
+        assert_eq!(start_as(&asking, "qa").without_sandbox, None);
     }
 
     #[test]
     fn a_persona_is_read_from_the_projects_definition() {
-        let root = tempfile::tempdir().expect("a project");
-        let personas = root.path().join("personas");
-        std::fs::create_dir_all(personas.join("devops")).unwrap();
-        std::fs::write(
-            personas.join("devops/persona.md"),
-            "---\nname: devops\ndescription: runs the cluster\n---\n# devops\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(personas.join("intern")).unwrap();
-        std::fs::write(
-            personas.join("intern/persona.md"),
-            "---\nname: intern\ndescription: learning\ndraft: true\n---\n# intern\n",
-        )
-        .unwrap();
-
+        let root = a_project("");
         assert_eq!(
             persona_in(root.path(), "devops"),
             Persona::Defined("devops")
@@ -963,345 +1913,41 @@ mod tests {
         );
     }
 
-    // ----- the decision ---------------------------------------------------------------------
-
-    fn steward() -> AskingChat<'static> {
-        AskingChat {
-            persona: Some("steward"),
-            held: false,
-            profile: Some("work"),
-            depth: 0,
-            chain: &[],
-            running: 0,
-            lineage: 1,
-        }
-    }
-
-    fn task(asker: Asker<'static>, to: Persona<'static>) -> Request<'static> {
-        Request {
-            asker,
-            to,
-            mode: Mode::Task,
-            grant: Grant::Missing,
-            limits: Limits::default(),
-        }
-    }
-
-    fn refused(request: &Request<'_>) -> Refused {
-        match decide(request) {
-            Decision::Refused(why) => why,
-            other => panic!("refused, not {other:?}"),
-        }
-    }
-
     #[test]
-    fn a_chat_dispatches_to_its_own_persona_with_no_grant() {
-        let request = task(Asker::Chat(steward()), Persona::Defined("steward"));
-        assert_eq!(decide(&request), Decision::Start);
-    }
-
-    #[test]
-    fn a_chat_on_no_persona_dispatches_to_no_persona_with_no_grant() {
-        let plain = AskingChat {
-            persona: None,
-            ..steward()
-        };
+    fn a_chat_on_no_persona_is_in_a_chain_as_the_default_persona() {
+        let one = chat(None);
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let own = pair(Some("devops"), Some("devops"));
         assert_eq!(
-            decide(&task(Asker::Chat(plain), Persona::None)),
-            Decision::Start
+            lineage_of(2, &[(1, &one), (2, &two)], Some("steward"), &|_| true, &own).chain,
+            vec![Some("steward".to_owned())]
         );
-    }
-
-    #[test]
-    fn another_persona_needs_a_grant_and_starts_with_one() {
-        let request = task(Asker::Chat(steward()), Persona::Defined("devops"));
         assert_eq!(
-            decide(&request),
-            Decision::NeedsGrant {
-                from: Some("steward".to_owned()),
-                to: "devops".to_owned(),
-            }
-        );
-        let granted = Request {
-            grant: Grant::InForce,
-            ..request
-        };
-        assert_eq!(decide(&granted), Decision::Start);
-    }
-
-    #[test]
-    fn a_chat_on_no_persona_needs_a_grant_for_any_persona() {
-        let plain = AskingChat {
-            persona: None,
-            ..steward()
-        };
-        assert_eq!(
-            decide(&task(Asker::Chat(plain), Persona::Defined("devops"))),
-            Decision::NeedsGrant {
-                from: None,
-                to: "devops".to_owned(),
-            }
+            lineage_of(2, &[(1, &one), (2, &two)], None, &|_| true, &own).chain,
+            vec![None]
         );
     }
 
     #[test]
-    fn a_chat_holding_another_personas_grants_is_refused_and_told_to_have_its_own_allowed() {
-        // #1362, D-1436-19: a chat handed off to `devops` from `qa` runs with qa's grants until
-        // the person allows its own. A dispatch to "its own" persona would start a chat with
-        // devops's hosts and vaults, which is the climb the hold exists to stop. It is refused
-        // outright, never answered "needs a grant": a grant named devops to devops would read
-        // as harmless and lift the hold for every chat like it.
-        let held = AskingChat {
-            persona: Some("devops"),
-            held: true,
-            ..steward()
-        };
-        for to in [
-            Persona::Defined("devops"),
-            Persona::Defined("qa"),
-            Persona::None,
-        ] {
-            let said = refused(&task(Asker::Chat(held), to));
-            assert_eq!(said, Refused::Held, "{to:?}");
-            assert!(
-                said.say().contains("allow this chat its own grants"),
-                "{}",
-                said.say()
-            );
-        }
-        // Whatever grant is in force for the pair its name suggests.
-        let granted = Request {
-            grant: Grant::InForce,
-            ..task(Asker::Chat(held), Persona::Defined("devops"))
-        };
-        assert_eq!(refused(&granted), Refused::Held);
-        // A held chat on no persona is refused the same: nothing it holds is its own.
-        let plain = AskingChat {
-            persona: None,
-            held: true,
-            ..steward()
-        };
-        assert_eq!(
-            refused(&task(Asker::Chat(plain), Persona::None)),
-            Refused::Held
-        );
+    fn a_chat_whose_asker_has_closed_keeps_the_depth_its_record_holds() {
+        // Chat 2 closed. Chat 4's own record says it is two dispatches down, and that is
+        // what counts: a chain never looks shallower because a chat above it went away.
+        let four = dispatched(2, 2, Mode::Task, Owed::Due, Some("devops"));
+        let seen = seen(4, &[(4, &four)]);
+        assert_eq!(seen.depth, 2);
+        assert_eq!(seen.chain, Vec::<Option<String>>::new());
+        assert_eq!(seen.lineage, 1);
     }
 
     #[test]
-    fn no_persona_named_is_only_ever_a_chats_own() {
-        // The app names the asking chat's own persona when none is named. A request that
-        // names none for a chat that runs as one is not one a grant could name.
-        assert_eq!(
-            refused(&task(Asker::Chat(steward()), Persona::None)),
-            Refused::NoPersonaNamed
-        );
-    }
-
-    #[test]
-    fn the_person_dispatches_to_any_persona_with_no_grant() {
-        let request = task(Asker::Person(steward()), Persona::Defined("devops"));
-        assert_eq!(decide(&request), Decision::Start);
-    }
-
-    #[test]
-    fn a_helper_sub_agent_is_refused_before_anything_else_is_asked() {
-        // Even for a persona that is not there: the first question is who asks.
-        let said = refused(&task(Asker::Helper, Persona::Unknown("nobody")));
-        assert_eq!(said, Refused::Helper);
-        assert!(said.say().contains("Return what you found to your chat"));
-    }
-
-    #[test]
-    fn a_chat_on_no_profile_is_refused() {
-        let shell = AskingChat {
-            profile: None,
-            ..steward()
-        };
-        let said = refused(&task(Asker::Chat(shell), Persona::Defined("steward")));
-        assert_eq!(said, Refused::NoProfile);
-        assert!(
-            said.say().contains("started on a profile"),
-            "{}",
-            said.say()
-        );
-    }
-
-    #[test]
-    fn an_unknown_persona_and_a_draft_are_refused_and_never_ask_for_a_grant() {
-        let unknown = refused(&task(Asker::Chat(steward()), Persona::Unknown("nobody")));
-        assert_eq!(unknown, Refused::NoPersona("nobody".to_owned()));
-        assert!(unknown.say().contains("purlis persona list"));
-        let draft = refused(&task(Asker::Chat(steward()), Persona::Draft("intern")));
-        assert_eq!(draft, Refused::Draft("intern".to_owned()));
-        assert!(draft.say().contains("draft: true"));
-        // The person is refused the same: a grant is not what is missing.
-        assert_eq!(
-            refused(&task(Asker::Person(steward()), Persona::Draft("intern"))),
-            Refused::Draft("intern".to_owned())
-        );
-    }
-
-    #[test]
-    fn a_persona_above_the_asking_chat_is_never_dispatched_to_from_below() {
-        // steward → devops → steward: the grant is in force and the chain still refuses it.
-        let devops = AskingChat {
-            persona: Some("devops"),
-            depth: 1,
-            chain: &[Some("steward")],
-            ..steward()
-        };
-        let request = Request {
-            grant: Grant::InForce,
-            ..task(Asker::Chat(devops), Persona::Defined("steward"))
-        };
-        assert_eq!(refused(&request), Refused::Loop("steward".to_owned()));
-        // Its own persona is not above it: a chat splits its own work as far as depth allows.
-        assert_eq!(
-            decide(&task(Asker::Chat(devops), Persona::Defined("devops"))),
-            Decision::Start
-        );
-    }
-
-    #[test]
-    fn a_chain_goes_as_deep_as_the_limit_and_no_deeper() {
-        let at = |depth| AskingChat { depth, ..steward() };
-        let own = Persona::Defined("steward");
-        assert_eq!(decide(&task(Asker::Chat(at(2)), own)), Decision::Start);
-        assert_eq!(
-            refused(&task(Asker::Chat(at(3)), own)),
-            Refused::TooDeep { limit: 3 }
-        );
-    }
-
-    #[test]
-    fn no_setting_takes_a_chain_past_the_fixed_ceiling() {
-        let generous = Limits {
-            depth: 100,
-            ..Limits::default()
-        };
-        let request = Request {
-            limits: generous,
-            ..task(
-                Asker::Chat(AskingChat {
-                    depth: DEEPEST,
-                    ..steward()
-                }),
-                Persona::Defined("steward"),
-            )
-        };
-        assert_eq!(refused(&request), Refused::TooDeep { limit: DEEPEST });
-    }
-
-    #[test]
-    fn an_asking_chat_has_at_most_its_limit_running() {
-        let with = |running| AskingChat {
-            running,
-            ..steward()
-        };
-        let own = Persona::Defined("steward");
-        assert_eq!(decide(&task(Asker::Chat(with(5)), own)), Decision::Start);
-        assert_eq!(
-            refused(&task(Asker::Chat(with(6)), own)),
-            Refused::TooManyRunning { limit: 6 }
-        );
-        let said = Refused::TooManyRunning { limit: 6 }.say();
-        assert!(
-            said.contains("6 persona chats that have not reported"),
-            "{said}"
-        );
-        assert!(
-            said.contains("Wait for one to report or stop one"),
-            "{said}"
-        );
-    }
-
-    #[test]
-    fn a_lineage_holds_at_most_its_limit() {
-        let with = |lineage| AskingChat {
-            lineage,
-            ..steward()
-        };
-        let own = Persona::Defined("steward");
-        assert_eq!(decide(&task(Asker::Chat(with(15)), own)), Decision::Start);
-        assert_eq!(
-            refused(&task(Asker::Chat(with(16)), own)),
-            Refused::LineageFull { limit: 16 }
-        );
-        let said = Refused::LineageFull { limit: 16 }.say();
-        assert!(said.contains("16 chats that have not reported"), "{said}");
-        assert!(
-            said.contains("Wait for one to report or stop one"),
-            "{said}"
-        );
-    }
-
-    #[test]
-    fn a_limit_of_zero_switches_dispatch_off() {
-        let off = Limits {
-            running: 0,
-            ..Limits::default()
-        };
-        let request = Request {
-            limits: off,
-            ..task(Asker::Chat(steward()), Persona::Defined("steward"))
-        };
-        assert_eq!(refused(&request), Refused::TooManyRunning { limit: 0 });
-        // And the sentence says so, for each limit: never "already has 0".
-        for off in [
-            Refused::TooManyRunning { limit: 0 },
-            Refused::LineageFull { limit: 0 },
-            Refused::TooDeep { limit: 0 },
-        ] {
-            let said = off.say();
-            assert!(said.starts_with("dispatch is switched off here"), "{said}");
-            assert!(!said.contains("already"), "{said}");
-        }
-    }
-
-    #[test]
-    fn the_limits_hold_for_the_person_too() {
-        let full = AskingChat {
-            running: 6,
-            ..steward()
-        };
-        assert_eq!(
-            refused(&task(Asker::Person(full), Persona::Defined("devops"))),
-            Refused::TooManyRunning { limit: 6 }
-        );
-    }
-
-    #[test]
-    fn a_limit_is_said_before_a_grant_is_asked_for() {
-        // Asking the person for a grant that would start nothing wastes their yes.
-        let full = AskingChat {
-            running: 6,
-            ..steward()
-        };
-        assert_eq!(
-            refused(&task(Asker::Chat(full), Persona::Defined("devops"))),
-            Refused::TooManyRunning { limit: 6 }
-        );
-    }
-
-    #[test]
-    fn every_refusal_is_one_line_that_says_what_to_do() {
-        for refusal in [
-            Refused::Helper,
-            Refused::NoProfile,
-            Refused::Held,
-            Refused::NoPersonaNamed,
-            Refused::TooDeep { limit: 0 },
-            Refused::NoPersona("x".to_owned()),
-            Refused::Draft("x".to_owned()),
-            Refused::Loop("x".to_owned()),
-            Refused::TooDeep { limit: 3 },
-            Refused::TooManyRunning { limit: 6 },
-            Refused::LineageFull { limit: 16 },
-        ] {
-            let said = refusal.say();
-            assert!(!said.contains('\n'), "{said}");
-            assert!(said.matches(". ").count() >= 1, "two sentences: {said}");
-        }
+    fn records_that_name_each_other_are_walked_once() {
+        // The record is a file anything running as the person can write. Two chats that each
+        // say the other dispatched it are a loop no dispatch made, and reading it ends.
+        let one = dispatched(2, 1, Mode::Task, Owed::Due, Some("steward"));
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let seen = seen(1, &[(1, &one), (2, &two)]);
+        assert_eq!(seen.chain, vec![Some("devops".to_owned())]);
+        assert_eq!(seen.lineage, 2);
     }
 
     #[test]

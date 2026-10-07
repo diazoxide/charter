@@ -222,8 +222,10 @@ fn persona_remember(args: &serde_json::Map<String, serde_json::Value>) -> Result
 /// the command in the chat.
 fn dispatch(args: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
     let (to, name, brief) = chattools::dispatch_args(args)?;
+    let profile = chattools::dispatch_profile(args)?;
     let here = crate::Here::read()?;
-    crate::dispatch::send(&here, to.as_deref(), &name, &brief).map_err(|why| in_the_chat(&why))
+    crate::dispatch::send(&here, to.as_deref(), &name, &brief, profile.as_deref())
+        .map_err(|why| in_the_chat(&why))
 }
 
 /// `dispatch_report`: the one operation `purlis dispatch report` performs
