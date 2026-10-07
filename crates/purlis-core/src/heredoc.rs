@@ -1541,6 +1541,57 @@ fn opens_process_substitution(chars: &[char], i: usize) -> bool {
     }
 }
 
+/// Whether GNU bash 3.2.57 ends a `$( … )` at a `)` in `body`, the lines of a heredoc opened
+/// inside it (#1419's review, D-1419-12).
+///
+/// That bash finds the end of a `$( … )` before it reads the heredocs in it, by reading the text
+/// as commands and counting brackets, so a heredoc body is read as command text there. It skips
+/// what is inside quotes and backticks, and an escaped character, as it does in command text.
+/// Measured with marker commands after the `)` against /bin/bash 3.2.57: `1) Build`, `x)` and
+/// `f(a))` end it; `f()`, `$(x)`, `a "b)"` and `` `case x in x) y;; esac` `` do not. A quote
+/// still open at the end of the body ends nothing in it (that bash then reads past the body,
+/// and refuses the command when the quote never closes).
+///
+/// **Read towards ending it**: a `#` is not taken as a comment, and the body is read from a
+/// depth of zero whatever stood before it on the header's line, so a body is read as one that
+/// ends it wherever it might.
+fn a_paren_ends_it_in_bash_3(body: &[&str]) -> bool {
+    let text = body.join("\n");
+    let mut chars = text.chars();
+    let mut depth = 0usize;
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '\'' => {
+                if !chars.any(|c| c == '\'') {
+                    return false;
+                }
+            }
+            '"' | '`' => {
+                let mut closed = false;
+                while let Some(d) = chars.next() {
+                    if d == '\\' {
+                        chars.next();
+                    } else if d == c {
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    return false;
+                }
+            }
+            '(' => depth += 1,
+            ')' if depth == 0 => return true,
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Where a heredoc opener stands among the substitutions around it ([`SubstitutionContext`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Enclosed {
@@ -1806,7 +1857,9 @@ pub struct LayoutLine {
 ///   after it if the delimiter was misread;
 /// - a body the shells read differently is not dropped either, and is read as lines a shell
 ///   runs: one opened in a substitution closed on the header's line, or in one that spans lines
-///   when the body holds a `)` or a backtick ([`SubstitutionContext`]) — unless it is a
+///   when the body holds a backtick that ends a backtick substitution, or a `)` GNU bash 3.2.57
+///   ends a `$( … )` at ([`a_paren_ends_it_in_bash_3`]: one unmatched outside quotes and
+///   backticks, so a code span in a commit message ends nothing) — unless it is a
 ///   `"$( … )"` alone whose body stays inside its quotes ([`Enclosed::quoted_alone`]) — one whose
 ///   delimiter the
 ///   shells read differently ([`Header::shells_disagree`]), and one opened by a `<<` that may be
@@ -1921,10 +1974,13 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
                 let h = &m.header;
                 let (len, found) = body_extent(&lines[i..], &h.delim, h.expands, h.dash);
                 // The body with its terminator: where a shell may end the substitution around it.
+                // A backtick there ends a backtick substitution in every shell; a `)` ends a
+                // `$( … )` only where GNU bash 3.2.57's reading of the body as command text
+                // finds it unmatched ([`a_paren_ends_it_in_bash_3`]).
                 let body_ends_it = |closers: &[char]| {
-                    lines[i..(i + len + 1).min(n)]
-                        .iter()
-                        .any(|l| l.contains(closers))
+                    let body = &lines[i..(i + len + 1).min(n)];
+                    (closers.contains(&'`') && body.iter().any(|l| l.contains('`')))
+                        || (closers.contains(&')') && a_paren_ends_it_in_bash_3(body))
                 };
                 let differ = match within {
                     Enclosed::No => false,
@@ -2012,6 +2068,37 @@ pub fn strip_reader_heredocs(cmd: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A quoted heredoc in `"$( … )"` is text in every shell, code spans and brackets included,
+    /// unless GNU bash 3.2.57 ends the substitution at an unmatched `)` in it (D-1419-12).
+    #[test]
+    fn a_quoted_body_in_a_quoted_substitution_runs_only_past_an_unmatched_paren() {
+        let runs = |body: &str| {
+            let cmd = format!("git commit -m \"$(cat <<'EOF'\n{body}\nEOF\n)\"");
+            heredoc_layout(&cmd).iter().any(|l| l.body && l.executed)
+        };
+        for body in [
+            "refuses `f(){ x; }; f`",
+            "refuses `case x in x) y;; esac`",
+            "refuses `echo \"$(y)\"`",
+            "a \"b)\" `y`",
+            "don't `f(){ x; }`",
+            "f() `y`",
+        ] {
+            assert!(!runs(body), "{body:?} is text");
+        }
+        for body in [
+            "1) Build `y`",
+            "x) `y`",
+            "f(a)) `y`",
+            "fix a)\n`y`",
+            "it's (a), it's b) `y`",
+        ] {
+            assert!(runs(body), "{body:?} may run");
+        }
+        assert!(!a_paren_ends_it_in_bash_3(&["(a) b", "c (d)"]));
+        assert!(a_paren_ends_it_in_bash_3(&["\\(a) b)"]));
+    }
 
     fn argv(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_owned).collect()

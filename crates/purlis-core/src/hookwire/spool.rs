@@ -34,7 +34,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -64,10 +64,24 @@ const A_LOCK_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_millis(250);
 /// reason as the lock.
 const A_DIRECTORY_SYNC_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_millis(250);
 
-/// The most of a chat's spool [`append`] reads to choose the next number. A spool the host has
-/// not drained grows by one hook line at a time, so this is many thousands of lines; one past it
-/// is refused rather than read for as long as it takes, and the line is said to be lost.
-const A_SPOOL_IS_READ_UP_TO: u64 = 16 * 1024 * 1024;
+/// How long [`append`] waits for its line to be made durable, for the same reason as the lock.
+/// A line written and not yet durable when the wait runs out is still in the file, and reaches
+/// the drain unless the machine stops before the disk has it ([`NotYetDurable`]).
+const A_LINE_SYNC_IS_WAITED_FOR_AT_MOST: Duration = Duration::from_millis(250);
+
+/// How long the drain at the app's start waits for one chat's spool while another process holds
+/// it. Past it the spool is reported `held` and left, with its key, for the next start: one
+/// holder never holds up the drain of every other chat, or the app's start.
+const THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST: Duration = Duration::from_secs(1);
+
+/// The most a chat's spool holds, and the most the drain reads of one. A spool the host has not
+/// drained grows by one hook line at a time, so this is many thousands of lines. [`append`]
+/// refuses a line that would take a spool past it, and the line is said to be lost, so every
+/// line it wrote is one the drain reads; a spool past it is reported `too-big` and left.
+const A_SPOOL_HOLDS_AT_MOST: u64 = 16 * 1024 * 1024;
+
+/// How much of a spool's end [`append`] reads at a time, looking for the last number.
+const A_TAIL_IS_READ_BY: u64 = 64 * 1024;
 
 /// How long [`lock_within`] sleeps between tries.
 const A_TRY_EVERY: Duration = Duration::from_millis(5);
@@ -224,54 +238,150 @@ fn open_spool(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-/// `fsync`s the directory `dir`, opened without blocking and only as a directory, and answers
-/// [`io::ErrorKind::TimedOut`] once `wait` has passed with the sync still running. The sync then
-/// finishes, or not, on a thread of its own, which the hook's exit ends.
+#[cfg(test)]
+thread_local! {
+    /// How many directory syncs this thread has started: what a test of when one is made reads.
+    static DIRECTORY_SYNCS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `fsync`s the directory `dir`, opened without blocking and only as a directory, within `wait`
+/// ([`done_within`]).
 fn sync_dir_within(dir: &Path, wait: Duration) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
+    #[cfg(test)]
+    DIRECTORY_SYNCS.with(|n| n.set(n.get() + 1));
     let flags = rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NONBLOCK;
     let held = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(flags.bits() as i32)
         .open(dir)?;
+    done_within(wait, "the spool's directory", move || {
+        rustix::fs::fsync(&held).map_err(io::Error::from)
+    })
+}
+
+/// `sync`, run on a thread of its own, or [`io::ErrorKind::TimedOut`] once `wait` has passed with
+/// it still running. The sync then finishes, or not, on that thread, which the hook's exit ends.
+/// `what` is what it makes durable, as the error says it.
+fn done_within(
+    wait: Duration,
+    what: &str,
+    sync: impl FnOnce() -> io::Result<()> + Send + 'static,
+) -> io::Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(rustix::fs::fsync(&held).map_err(io::Error::from));
+        let _ = tx.send(sync());
     });
     rx.recv_timeout(wait).unwrap_or_else(|_| {
         Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            format!(
-                "the spool's directory was not made durable within {} ms",
-                wait.as_millis()
-            ),
+            format!("{what} was not made durable within {} ms", wait.as_millis()),
         ))
     })
 }
 
-/// All of `file`, read from where it stands, refused as [`io::ErrorKind::InvalidData`] past
-/// [`A_SPOOL_IS_READ_UP_TO`] bytes.
+/// A line [`append`] wrote whose `fsync` was still running when the wait ran out: it is in the
+/// spool, and reaches the app at its next start unless the machine stops before the disk has it.
+/// So it is neither durable, which is what [`append`] answers `Ok` for, nor lost.
+#[derive(Debug)]
+pub struct NotYetDurable(io::Error);
+
+impl std::fmt::Display for NotYetDurable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the line is in the spool, but {}; it reaches the app at its next start unless the \
+             machine stops before the disk has it",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for NotYetDurable {}
+
+/// `why`, a sync given up on, as [`NotYetDurable`].
+fn not_yet_durable(why: io::Error) -> io::Error {
+    io::Error::new(why.kind(), NotYetDurable(why))
+}
+
+/// Whether `why` is a line written and not yet durable ([`NotYetDurable`]) rather than lost.
+pub fn is_not_yet_durable(why: &io::Error) -> bool {
+    why.get_ref()
+        .is_some_and(|inner| inner.is::<NotYetDurable>())
+}
+
+/// Refused as [`io::ErrorKind::InvalidData`]: a spool past [`A_SPOOL_HOLDS_AT_MOST`].
+fn past_what_a_spool_holds() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "this chat's spool would be past {} MiB, more than the app reads of one",
+            A_SPOOL_HOLDS_AT_MOST / 1024 / 1024
+        ),
+    )
+}
+
+/// All of `file`, read from where it stands, refused past [`A_SPOOL_HOLDS_AT_MOST`] bytes
+/// ([`past_what_a_spool_holds`]).
 fn read_bounded(file: &mut impl Read) -> io::Result<Vec<u8>> {
     let mut text = Vec::new();
-    file.take(A_SPOOL_IS_READ_UP_TO + 1)
+    file.take(A_SPOOL_HOLDS_AT_MOST + 1)
         .read_to_end(&mut text)?;
-    if text.len() as u64 > A_SPOOL_IS_READ_UP_TO {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "this chat's spool is past {} MiB, more than a hook reads",
-                A_SPOOL_IS_READ_UP_TO / 1024 / 1024
-            ),
-        ));
+    if text.len() as u64 > A_SPOOL_HOLDS_AT_MOST {
+        return Err(past_what_a_spool_holds());
     }
     Ok(text)
+}
+
+/// The number of the last line under key `id` in a spool `len` bytes long, and whether the
+/// spool ends with a whole line. Read off its end, [`A_TAIL_IS_READ_BY`] at a time, back to the
+/// last of that key's lines: a key's numbers grow down the file, since each is chosen under the
+/// lock as one past the last, so that line holds the highest. Usually the last line in the file,
+/// so a long downtime costs a hook no more than one read. A line that does not read, or is
+/// another key's, is read past. 0 for a spool with none of that key's lines.
+fn last_number(file: &mut (impl Read + Seek), len: u64, id: &str) -> io::Result<(u64, bool)> {
+    let mut ends_whole = true;
+    if len > 0 {
+        let mut last = [0u8];
+        file.seek(SeekFrom::Start(len - 1))?;
+        file.read_exact(&mut last)?;
+        ends_whole = last[0] == b'\n';
+    }
+    // The bytes from `end` on that are not yet a whole line: the head of the chunk read last.
+    let mut rest: Vec<u8> = Vec::new();
+    let mut end = len;
+    while end > 0 {
+        let start = end.saturating_sub(A_TAIL_IS_READ_BY);
+        let mut chunk = vec![0u8; usize::try_from(end - start).map_err(io::Error::other)?];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut chunk)?;
+        chunk.extend_from_slice(&rest);
+        // Short of the file's start, what comes before the chunk's first newline may be part of
+        // a line that starts in the chunk before it.
+        let (head, whole) = match chunk.iter().position(|byte| *byte == b'\n') {
+            Some(at) if start > 0 => (chunk[..at].to_vec(), &chunk[at + 1..]),
+            None if start > 0 => (chunk.clone(), &chunk[chunk.len()..]),
+            _ => (Vec::new(), &chunk[..]),
+        };
+        let found = whole
+            .split(|byte| *byte == b'\n')
+            .rev()
+            .filter_map(|line| serde_json::from_slice::<OnDisk>(line).ok())
+            .find(|it| it.key == id);
+        if let Some(it) = found {
+            return Ok((it.seq, ends_whole));
+        }
+        rest = head;
+        end = start;
+    }
+    Ok((0, ends_whole))
 }
 
 /// Appends `what`, chat `chat`'s line, to its spool in `dir`, under `token`'s key and the next
 /// number in that key's sequence, and answers the number.
 ///
 /// **Survives a host crash when it returns** (FD-9's widened acceptance): the line is
-/// `fsync`ed, and a new file's directory with it, before this answers. It is the operating
+/// `fsync`ed, and an empty file's directory with it, before this answers. It is the operating
 /// system's ordinary `fsync`, which on macOS does not reach through the drive's own cache, so a
 /// power loss there can still lose it. The file is locked while the number is chosen and the
 /// line written, so two hooks of one chat running at once never take the same number.
@@ -282,11 +392,14 @@ fn read_bounded(file: &mut impl Read) -> io::Result<Vec<u8>> {
 /// [`io::ErrorKind::TimedOut`], nothing is written and no number is taken, and the hook says on
 /// stderr that the line is lost.
 ///
-/// **So is everything else before the line is written**: the open never blocks and takes only a
-/// plain file ([`open_spool`]), a new file's directory sync is waited for at most
-/// [`A_DIRECTORY_SYNC_IS_WAITED_FOR_AT_MOST`], and the read is of a plain file and at most
-/// [`A_SPOOL_IS_READ_UP_TO`]. Each one past its bound is an error the hook reports as the line
-/// lost.
+/// **So is everything else**: the open never blocks and takes only a plain file
+/// ([`open_spool`]); the directory sync of a spool with nothing in it yet — a new one, one the
+/// drain emptied, or one whose last directory sync was given up on — is waited for at most
+/// [`A_DIRECTORY_SYNC_IS_WAITED_FOR_AT_MOST`]; the next number is read off the spool's tail
+/// ([`last_number`]); and a line that would take the spool past [`A_SPOOL_HOLDS_AT_MOST`] is
+/// refused unread. Each one past its bound is an error the hook reports as the line lost. The
+/// line's own `fsync` is waited for at most [`A_LINE_SYNC_IS_WAITED_FOR_AT_MOST`]: past it the
+/// line is written and not yet durable, and the error says so ([`NotYetDurable`]).
 ///
 /// Refused where the sandbox's integrity denial does not reach ([`covered`]).
 pub fn append(
@@ -300,22 +413,19 @@ pub fn append(
     let key = SpoolKey::of(token);
     let id = key.id();
     let line = serde_json::to_string(what).map_err(io::Error::other)?;
-    let path = file_for(dir, chat);
-    let new = !path.exists();
-    let file = open_spool(&path)?;
-    if new {
+    let file = open_spool(&file_for(dir, chat))?;
+    // A line is written only after this, so a spool with a line in it has had its directory
+    // made durable; one with none may not have, whatever made it.
+    if file.metadata()?.len() == 0 {
         sync_dir_within(dir, A_DIRECTORY_SYNC_IS_WAITED_FOR_AT_MOST)?;
     }
     lock_within(&file, A_LOCK_IS_WAITED_FOR_AT_MOST)?;
     let mut file = crate::filelock::Held::locked(file);
-    let text = read_bounded(&mut &*file)?;
-    let last = lines_of(&text)
-        .filter_map(Result::ok)
-        .filter_map(|it| serde_json::from_str::<OnDisk>(it).ok())
-        .filter(|it| it.key == id)
-        .map(|it| it.seq)
-        .max()
-        .unwrap_or(0);
+    let len = file.metadata()?.len();
+    if len >= A_SPOOL_HOLDS_AT_MOST {
+        return Err(past_what_a_spool_holds());
+    }
+    let (last, ends_whole) = last_number(&mut &*file, len, &id)?;
     let seq = last
         .checked_add(1)
         .ok_or_else(|| io::Error::other("this chat's spool has used every number there is"))?;
@@ -330,11 +440,18 @@ pub fn append(
     .map_err(io::Error::other)?;
     bytes.push(b'\n');
     // A file a crash left ending in half a line: the new line starts on a line of its own.
-    if !text.is_empty() && !text.ends_with(b"\n") {
+    if !ends_whole {
         bytes.insert(0, b'\n');
     }
+    if len + bytes.len() as u64 > A_SPOOL_HOLDS_AT_MOST {
+        return Err(past_what_a_spool_holds());
+    }
     file.write_all(&bytes)?;
-    rustix::fs::fsync(&file)?;
+    let line = file.try_clone()?;
+    done_within(A_LINE_SYNC_IS_WAITED_FOR_AT_MOST, "the line", move || {
+        rustix::fs::fsync(&line).map_err(io::Error::from)
+    })
+    .map_err(not_yet_durable)?;
     Ok(seq)
 }
 
@@ -489,6 +606,12 @@ pub mod why {
     pub const NOT_THIS_CHATS: &str = "not-this-chats";
     /// A number the sequence already had.
     pub const REPEATED: &str = "repeated";
+    /// Not a line: another process held the chat's spool past the drain's wait, so it was not
+    /// read, and is left, with its key, for the next start.
+    pub const HELD: &str = "held";
+    /// Not a line: the chat's spool is past what the drain reads of one, so it was not read, and
+    /// is left, with its key, for its owner to look at.
+    pub const TOO_BIG: &str = "too-big";
 }
 
 /// Drains every spool in `dir`: each line checked and handed to `each` in its chat's order,
@@ -527,40 +650,58 @@ pub fn drain(dir: &Path, each: &mut dyn FnMut(Drained) -> io::Result<()>) -> io:
         Err(why) => return Err(why),
     };
     chats.sort_unstable();
+    let mut left = Vec::new();
     for chat in chats {
-        drain_one(dir, chat, &taken, each)?;
+        if !drain_one(dir, chat, &taken, each)? {
+            left.push(chat);
+        }
     }
-    // Every key taken is drained: forget them, keeping any issued since.
+    // Every key taken is drained: forget them, keeping any issued since and those of a spool
+    // left for the next start.
     keys_locked(dir, || {
         let mut now = read_keys(dir)?;
-        now.keys.retain(|held| !taken.contains_key(&held.id));
+        now.keys
+            .retain(|held| !taken.contains_key(&held.id) || left.contains(&held.chat));
         write_keys(dir, &now)
     })
 }
 
+/// Drains chat `chat`'s spool, and answers whether it did: `false` for one left, unread, for the
+/// next start — held by another process past [`THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST`], or past
+/// [`A_SPOOL_HOLDS_AT_MOST`] — each reported as a line rejected `held` or `too-big`.
 fn drain_one(
     dir: &Path,
     chat: u32,
     taken: &HashMap<String, Held>,
     each: &mut dyn FnMut(Drained) -> io::Result<()>,
-) -> io::Result<()> {
+) -> io::Result<bool> {
+    let left = |why| Drained::Rejected {
+        chat,
+        seq: None,
+        why,
+    };
     // A spool path that does not open as a plain file (a directory, a link, live or dangling,
     // a pipe) holds no line to read, and must not stop the drain of every chat after it: it is
     // reported as one unreadable line, and left for its owner to look at.
     let file = match open_spool(&file_for(dir, chat)) {
         Err(why) if why.kind() != io::ErrorKind::NotFound => {
-            return each(Drained::Rejected {
-                chat,
-                seq: None,
-                why: why::UNREADABLE,
-            });
+            return each(left(why::UNREADABLE)).map(|()| true);
         }
         opened => opened?,
     };
-    file.lock()?;
-    let mut file = crate::filelock::Held::locked(file);
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    match lock_within(&file, THE_DRAIN_WAITS_FOR_A_SPOOL_AT_MOST) {
+        Err(why) if why.kind() == io::ErrorKind::TimedOut => {
+            return each(left(why::HELD)).map(|()| false);
+        }
+        locked => locked?,
+    }
+    let file = crate::filelock::Held::locked(file);
+    let bytes = match read_bounded(&mut &*file) {
+        Err(why) if why.kind() == io::ErrorKind::InvalidData => {
+            return each(left(why::TOO_BIG)).map(|()| false);
+        }
+        read => read?,
+    };
     // Per key, in the order keys first appear: its lines by number.
     let mut order: Vec<String> = Vec::new();
     let mut sequences: HashMap<String, BTreeMap<u64, Spooled>> = HashMap::new();
@@ -640,7 +781,7 @@ fn drain_one(
     // so a hook holding it open appends to the file the next drain reads.
     file.set_len(0)?;
     rustix::fs::fsync(&file)?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

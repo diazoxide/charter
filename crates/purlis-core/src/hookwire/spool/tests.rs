@@ -357,3 +357,220 @@ fn a_spool_that_is_not_a_plain_file_is_reported_and_the_drain_reads_the_others()
         assert_eq!(tools(&all), [(7, 1, "a".to_owned())], "{what}");
     }
 }
+
+/// Drains `spool`, or `None` if the drain has not finished in five seconds: a process holding
+/// one chat's spool must not hold up the app's start.
+fn drained_within_five_seconds(spool: &Path) -> Option<Vec<Drained>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spool = spool.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(drained(&spool));
+    });
+    rx.recv_timeout(Duration::from_secs(5)).ok()
+}
+
+#[test]
+fn a_spool_another_process_holds_is_reported_held_and_drained_at_the_next_start() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let held = issued(&spool, 4);
+    let free = issued(&spool, 5);
+    append(&spool, 4, &held, &call(4, "a")).expect("spooled");
+    append(&spool, 5, &free, &call(5, "b")).expect("spooled");
+    let holder = File::open(file_for(&spool, 4)).expect("the spool opens");
+    holder.lock().expect("the holder takes the lock");
+
+    let all = drained_within_five_seconds(&spool).expect("the drain finished");
+
+    assert!(
+        all.contains(&Drained::Rejected {
+            chat: 4,
+            seq: None,
+            why: why::HELD
+        }),
+        "{all:?}"
+    );
+    assert_eq!(tools(&all), [(5, 1, "b".to_owned())]);
+    drop(holder);
+    assert_eq!(
+        tools(&drained(&spool)),
+        [(4, 1, "a".to_owned())],
+        "the held spool, and the key it checks under, are kept for the next start"
+    );
+}
+
+#[test]
+fn a_spool_past_what_the_drain_reads_is_reported_and_kept() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let big = issued(&spool, 4);
+    let other = issued(&spool, 5);
+    append(&spool, 4, &big, &call(4, "a")).expect("spooled");
+    append(&spool, 5, &other, &call(5, "b")).expect("spooled");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(file_for(&spool, 4))
+        .expect("the spool");
+    file.set_len(A_SPOOL_HOLDS_AT_MOST + 1).expect("grown");
+    drop(file);
+
+    let all = drained(&spool);
+
+    assert!(
+        all.contains(&Drained::Rejected {
+            chat: 4,
+            seq: None,
+            why: why::TOO_BIG
+        }),
+        "{all:?}"
+    );
+    assert_eq!(tools(&all), [(5, 1, "b".to_owned())]);
+    let len = std::fs::metadata(file_for(&spool, 4)).expect("kept").len();
+    assert_eq!(len, A_SPOOL_HOLDS_AT_MOST + 1, "left as it was");
+}
+
+#[test]
+fn a_line_that_would_take_a_spool_past_what_the_drain_reads_is_refused_unread() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(file_for(&spool, 4))
+        .expect("the spool");
+    file.set_len(A_SPOOL_HOLDS_AT_MOST - 8).expect("grown");
+    drop(file);
+
+    let refused = append(&spool, 4, &token, &call(4, "b")).expect_err("not spooled");
+
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidData, "{refused}");
+}
+
+/// A reader that counts what is read from it.
+struct Counted<'a> {
+    inner: std::io::Cursor<&'a [u8]>,
+    read: u64,
+}
+
+impl Read for Counted<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read += n as u64;
+        Ok(n)
+    }
+}
+
+impl std::io::Seek for Counted<'_> {
+    fn seek(&mut self, to: std::io::SeekFrom) -> io::Result<u64> {
+        self.inner.seek(to)
+    }
+}
+
+fn on_disk(seq: u64, key: &str) -> String {
+    format!(
+        "{}\n",
+        serde_json::to_string(&OnDisk {
+            v: VERSION,
+            seq,
+            key: key.to_owned(),
+            line: "{}".to_owned(),
+            mac: String::new(),
+        })
+        .expect("a line")
+    )
+}
+
+#[test]
+fn the_next_number_is_read_off_the_spools_tail() {
+    // A long downtime: thousands of this key's lines, the last one numbered 5000.
+    let mut text: String = (1..=5000).map(|seq| on_disk(seq, "k")).collect();
+    let mut file = Counted {
+        inner: std::io::Cursor::new(text.as_bytes()),
+        read: 0,
+    };
+    let len = text.len() as u64;
+    assert_eq!(
+        last_number(&mut file, len, "k").expect("read"),
+        (5000, true)
+    );
+    assert!(
+        file.read <= 2 * A_TAIL_IS_READ_BY,
+        "read {} of {len} bytes",
+        file.read
+    );
+
+    // Another key's lines after it, and a line torn at the end, are read past.
+    text.push_str(&on_disk(1, "other"));
+    text.push_str("{\"v\":1,\"seq\":9");
+    let len = text.len() as u64;
+    let mut file = Counted {
+        inner: std::io::Cursor::new(text.as_bytes()),
+        read: 0,
+    };
+    assert_eq!(
+        last_number(&mut file, len, "k").expect("read"),
+        (5000, false)
+    );
+
+    // A line longer than one read of the tail is read whole.
+    let long = format!("{}{}", on_disk(7, "k").trim_end(), " ".repeat(200_000));
+    let text = format!("{long}\n{}", on_disk(1, "other"));
+    let mut file = Counted {
+        inner: std::io::Cursor::new(text.as_bytes()),
+        read: 0,
+    };
+    assert_eq!(
+        last_number(&mut file, text.len() as u64, "k").expect("read"),
+        (7, true)
+    );
+    // And a spool with none of this key's lines starts it at 1.
+    let mut file = Counted {
+        inner: std::io::Cursor::new(b"" as &[u8]),
+        read: 0,
+    };
+    assert_eq!(last_number(&mut file, 0, "k").expect("read"), (0, true));
+}
+
+#[test]
+fn an_empty_spool_has_its_directory_synced_again_by_the_next_append() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let spool = dir.path().join(".charter/app").join(DIR);
+    let token = issued(&spool, 4);
+    // What a directory sync that timed out leaves: the file made, and nothing in it.
+    std::fs::write(file_for(&spool, 4), b"").expect("an empty spool");
+
+    let before = DIRECTORY_SYNCS.with(std::cell::Cell::get);
+    append(&spool, 4, &token, &call(4, "a")).expect("spooled");
+    let synced = DIRECTORY_SYNCS.with(std::cell::Cell::get) - before;
+
+    assert_eq!(synced, 1, "the directory was not synced");
+    append(&spool, 4, &token, &call(4, "b")).expect("spooled");
+    assert_eq!(
+        DIRECTORY_SYNCS.with(std::cell::Cell::get) - before,
+        1,
+        "a spool with lines in it is not synced again"
+    );
+}
+
+#[test]
+fn a_sync_still_running_past_its_wait_is_given_up_on() {
+    let started = Instant::now();
+    let given_up = done_within(Duration::from_millis(50), "the line", || {
+        std::thread::sleep(Duration::from_secs(2));
+        Ok(())
+    })
+    .expect_err("given up on");
+    assert_eq!(given_up.kind(), io::ErrorKind::TimedOut);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(done_within(Duration::from_secs(1), "the line", || Ok(())).is_ok());
+}
+
+#[test]
+fn a_line_not_yet_durable_is_told_apart_from_a_line_lost() {
+    let late = not_yet_durable(io::Error::new(io::ErrorKind::TimedOut, "slow"));
+    assert_eq!(late.kind(), io::ErrorKind::TimedOut);
+    assert!(is_not_yet_durable(&late), "{late}");
+    assert!(late.to_string().contains("next start"), "{late}");
+    assert!(!is_not_yet_durable(&io::Error::other("lost")));
+}

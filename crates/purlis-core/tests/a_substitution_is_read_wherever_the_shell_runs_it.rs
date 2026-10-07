@@ -500,6 +500,30 @@ fn gated_shapes() -> Vec<(String, Shells)> {
         ("f(){ {G}; }; f", Read),
         ("function f { {G}; }; f", Read),
         ("echo \"$(f(){ {G}; }; f)\"", Read),
+        // A commit or pull request body in `"$(cat <<'EOF' … EOF\n)"`: a quoted heredoc's body
+        // is text, code spans and all, unless a `)` in it ends the substitution early in
+        // GNU bash 3.2.57, after which a backtick in the double quotes runs (D-1419-12).
+        (
+            "git commit -m \"$(cat <<'EOF'\nrefuses `f(){ {G}; }; f`\nEOF\n)\"",
+            Mention,
+        ),
+        (
+            "git commit -m \"$(cat <<'EOF'\nrefuses `case x in x) {G};; esac`\nEOF\n)\"",
+            Mention,
+        ),
+        (
+            "git commit -m \"$(cat <<'EOF'\nrefuses `echo \"$({G})\"`\nEOF\n)\"",
+            Mention,
+        ),
+        (
+            "gh pr create --title t --body \"$(cat <<'EOF'\n- refuses `f(){ {G}; }; f`\nEOF\n)\"",
+            Mention,
+        ),
+        ("echo \"$(cat <<'EOF'\n`f(){ {G}; }; f`\nEOF\n)\"", Mention),
+        (
+            "echo \"$(cat <<'EOF'\nfix a)\n`{G}`\nEOF\n)\"",
+            SomeRead(&[Bash3]),
+        ),
         // Mentions.
         ("echo \"$(echo {G})\"", Mention),
         ("f(){ echo {G}; }; f", Mention),
@@ -528,10 +552,98 @@ fn gated_shapes() -> Vec<(String, Shells)> {
     out
 }
 
+/// The shapes only the handoff guard reads past (#1419): a `case` branch and a function body in
+/// every spelling a shell defines one, and a string or heredoc a shell runs handed on to another
+/// shell, at every level up to the cap.
+fn handoff_shapes() -> Vec<(String, Shells)> {
+    let mut out: Vec<(String, Shells)> = [
+        ("case x in x) {G};; esac", Read),
+        ("case x in y) :;; x) {G};; esac", Read),
+        ("case x in (x) {G};; esac", Read),
+        ("case x in (y) :;; (x) {G};; esac", Read),
+        ("case x in (y) :;& (x) {G};; esac", SomeRead(&[Bash5, Zsh])),
+        ("case x in\nx)\n  {G}\n  ;;\nesac", Read),
+        ("f(){ {G}; }; f", Read),
+        ("f() {\n  {G}\n}\nf", Read),
+        ("function f { {G}; }; f", Read),
+        ("function f() { {G}; }; f", Read),
+        ("f() ( {G} ); f", Read),
+        ("f(){ g(){ {G}; }; g; }; f", Read),
+        ("if true; then f(){ {G}; }; fi; f", Read),
+        ("f() {G}; f", SomeRead(&[Zsh])),
+        // A string a shell runs, handed on to another shell, and what that one reads.
+        ("bash -c \"bash -c '{G}'\"", Read),
+        ("sh -c \"eval '{G}'\"", Read),
+        ("bash -c 'case x in x) {G};; esac'", Read),
+        ("sh -c 'f(){ {G}; }; f'", Read),
+        ("eval 'echo \"$({G})\"'", Read),
+        ("bash <<'EOF'\nbash -c '{G}'\nEOF", Read),
+        ("bash <<'EOF'\nf(){ {G}; }; f\nEOF", Read),
+        // A commit or pull request body in `"$(cat <<'EOF' … EOF\n)"`: a quoted heredoc's body
+        // is text, code spans and all, unless a `)` in it ends the substitution early in
+        // GNU bash 3.2.57, after which a backtick in the double quotes runs (D-1419-12).
+        (
+            "git commit -m \"$(cat <<'EOF'\nrefuses `f(){ {G}; }; f`\nEOF\n)\"",
+            Mention,
+        ),
+        (
+            "git commit -m \"$(cat <<'EOF'\nrefuses `case x in x) {G};; esac`\nEOF\n)\"",
+            Mention,
+        ),
+        (
+            "git commit -m \"$(cat <<'EOF'\nrefuses `echo \"$({G})\"`\nEOF\n)\"",
+            Mention,
+        ),
+        (
+            "gh pr create --title t --body \"$(cat <<'EOF'\n- refuses `f(){ {G}; }; f`\nEOF\n)\"",
+            Mention,
+        ),
+        ("echo \"$(cat <<'EOF'\n`f(){ {G}; }; f`\nEOF\n)\"", Mention),
+        (
+            "echo \"$(cat <<'EOF'\nfix a)\n`{G}`\nEOF\n)\"",
+            SomeRead(&[Bash3]),
+        ),
+        // Mentions.
+        ("f(){ echo {G}; }; f", Mention),
+        ("case x in x) echo {G};; esac", Mention),
+        ("bash -c \"echo '{G}'\"", Mention),
+        ("bash -c \"bash -c 'echo {G}'\"", Mention),
+        ("cat > s.sh <<EOF\nf() { {G}; }\nf\nEOF", Mention),
+        ("cat > s.sh <<'EOF'\ncase x in x) {G};; esac\nEOF", Mention),
+    ]
+    .into_iter()
+    .map(|(s, shells)| (s.to_string(), shells))
+    .collect();
+    // `bash -c '…'` around `bash -c '…'`, as deep as the cap: the quotes alternate, and an
+    // inner single quote is spelt `'\''`.
+    for depth in 1..=guardcaps::MAX_NESTING {
+        out.push((shell_string_nested("{G}", depth), Read));
+        out.push((shell_string_nested("echo {G}", depth), Mention));
+    }
+    out
+}
+
+/// `inner` handed to `bash -c` `depth` times, each level single-quoted.
+fn shell_string_nested(inner: &str, depth: usize) -> String {
+    (0..depth).fold(inner.to_string(), |s, _| {
+        format!("bash -c '{}'", s.replace('\'', "'\\''"))
+    })
+}
+
 /// Runs every [`gated_shapes`] shape `shapes` keeps for each gated command in `gated` through
 /// the shells and through `judge`, and answers every disagreement: a shape a shell runs the command with must be
 /// refused, and a mention let through.
 fn disagreements(
+    gated: &[&str],
+    judge: &dyn Fn(&str) -> Option<String>,
+    shapes: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    disagreements_over(gated_shapes(), gated, judge, shapes)
+}
+
+/// [`disagreements`] over the shapes `corpus` lists.
+fn disagreements_over(
+    corpus: Vec<(String, Shells)>,
     gated: &[&str],
     judge: &dyn Fn(&str) -> Option<String>,
     shapes: impl Fn(&str) -> bool,
@@ -541,7 +653,8 @@ fn disagreements(
     let kinds: Vec<Option<Shell>> = installed.iter().map(|shell| kind(shell)).collect();
     let mut wrong = Vec::new();
     for g in gated {
-        for (shape, expected) in gated_shapes().into_iter().filter(|(s, _)| shapes(s)) {
+        for (shape, expected) in corpus.iter().filter(|(s, _)| shapes(s)) {
+            let expected = *expected;
             let cmd = spell(&shape.replace("{G}", g), &f);
             let ran: Vec<bool> = installed
                 .iter()
@@ -601,10 +714,46 @@ fn every_shape_a_shell_runs_a_consent_gated_command_with_is_refused_at_every_dep
         &judge,
         |_| true,
     );
-    // A handoff in a substitution, which the handoff guard does not read there.
+    // A handoff in a substitution, which the handoff guard does not read there. A body GNU bash
+    // 3.2.57 runs as lines past an unmatched `)` is the handoff guard's (`handoff-shell-string`).
     wrong.extend(disagreements(&["charter handoff beta"], &judge, |shape| {
-        shape.contains("$(") || shape.contains('`')
+        (shape.contains("$(") || shape.contains('`')) && !shape.contains("fix a)")
     }));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A handoff in a `case` branch, a function body, or a string a shell hands another shell is
+/// the handoff guard's to refuse, and every shape a shell runs one with is refused by it alone
+/// (#1419). Over the shapes every backstop reads, a handoff in a substitution is the consent
+/// backstop's (D-1417-5): between them, every shape is refused and no mention.
+#[test]
+fn every_shape_a_shell_runs_a_handoff_with_is_refused_and_no_other() {
+    purlis_core::unsteered!();
+    use purlis_core::handoffguard::{self, Caller};
+    let a7 = |cmd: &str| {
+        handoffguard::handoff_refusal(
+            cmd,
+            Caller {
+                agent_id: None,
+                harness: Some("claude-code"),
+                permission_mode: Some("default"),
+            },
+        )
+        .map(|(_, why)| why)
+    };
+    let project = tempfile::tempdir().expect("a project");
+    let both = |cmd: &str| {
+        a7(cmd).or_else(|| {
+            purlis_core::consentspelling::refusal(cmd, project.path(), &[project.path()])
+        })
+    };
+    let handoff = ["charter handoff beta"];
+    let mut wrong = disagreements_over(handoff_shapes(), &handoff, &a7, |_| true);
+    // A substitution in a comment inside a substitution runs nothing, and the handoff guard's
+    // line reading, which is the recorded Python's, still finds a handoff there: it refuses
+    // the mention, the side it errs on.
+    let over = "echo \"$(echo hi # $({G})\n)\"";
+    wrong.extend(disagreements(&handoff, &both, |shape| shape != over));
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 

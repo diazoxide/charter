@@ -53,6 +53,7 @@
 //! the reason that module's header gives: reading it once is what keeps five decisions from
 //! drifting apart.
 
+use crate::consentspelling;
 use crate::heredoc;
 use crate::leakguard;
 use crate::livesub;
@@ -60,6 +61,7 @@ use crate::memstore::is_python_space;
 use crate::proseguard::charter_words;
 use crate::pypath;
 use crate::shellseg::{self, Tok};
+use crate::shellsubst;
 use crate::shellwrap;
 
 /// The `agent_id` on a payload means "a sub-agent" only on a harness where that was MEASURED.
@@ -145,6 +147,9 @@ pub const REASON_SHELL_STRING: &str = "handoff-shell-string";
 pub const REASON_SPELLING: &str = "handoff-spelling";
 /// See [`REASON_SUBAGENT`].
 pub const REASON_BRIEF_SOURCE: &str = "handoff-brief-source";
+/// A handoff in a `case` branch, a function body, or a string or heredoc a shell runs further in
+/// than one level ([`placed_handoff`], #1419). Not the Python's: it never read these.
+pub const REASON_PLACED: &str = "handoff-placed";
 
 // ----------------------------------------------------------------------------------------
 // CPython's string arithmetic, where A7 does it on the SOURCE
@@ -340,12 +345,17 @@ pub fn as_the_shell_reads(text: &str) -> String {
 /// **Not recursive**: a string inside that string is not opened, and a heredoc fed to a shell
 /// (`bash <<'EOF'`) is not either — that one is [`handoff_line`]'s, through the shared plan.
 pub fn shell_string_handoff(cmd: &str) -> bool {
+    shell_string_handoff_in(&heredoc::strip_reader_heredocs(cmd))
+}
+
+/// [`shell_string_handoff`] of a command whose reader heredocs are already stripped.
+fn shell_string_handoff_in(stripped: &str) -> bool {
     // The STRIPPED text, not A7's line view: a quoted string that spans lines carries a `<<`
     // the header regex counts and the lexer cannot, so its lines are filed as a body nobody
     // executes and A7 skips them — which is right for a commit message and would hide the very
     // string this looks into (`eval "charter handoff b <<'BRIEF'` …). Nothing is dropped from
     // that text when the plan is unknown, so the whole call is here to lex.
-    let Ok(toks) = shellseg::lex(&heredoc::strip_reader_heredocs(cmd)) else {
+    let Ok(toks) = shellseg::lex(stripped) else {
         return false;
     };
     let toks = shellseg::split_punctuation(toks);
@@ -355,6 +365,189 @@ pub fn shell_string_handoff(cmd: &str) -> bool {
             .iter()
             .any(|inner| is_handoff(&as_the_shell_reads(inner)) || disguised_handoff(inner))
     })
+}
+
+// ----------------------------------------------------------------------------------------
+// a branch, a body, or a string further in (#1419)
+// ----------------------------------------------------------------------------------------
+
+/// Where [`placed_handoff`] found a handoff in a string or a heredoc a shell runs, past what
+/// [`shell_string_handoff`] and [`handoff_line`] read.
+const FURTHER_IN: &str =
+    "inside a string or a heredoc a shell runs, further in than its first level";
+
+/// Where a handoff runs that the host's rule never sees and the readers above do not find, as a
+/// refusal says it — or `None` (#1419).
+///
+/// Read with the shared reading the consent and operator-rule backstops use (#1417), so the
+/// shell's grammar is read in one place:
+///
+/// - **a `case` branch or a function body** the command defines, read once each pattern's `)`
+///   ends a command and once a function's header is off the front of its segment
+///   ([`consentspelling::in_a_branch_or_body_by`]), over the lines a shell runs: a heredoc body
+///   a reader takes as data, a script written to a file included, is never read as commands;
+/// - **a string or a heredoc a shell runs, at every level**: one level in, a handoff anywhere
+///   in it, in a branch, a body, a substitution or a string handed on to another shell
+///   ([`runs_a_handoff_anywhere`]).
+///
+/// A handoff in a substitution of the command as written is the consent backstop's
+/// ([`crate::consentspelling`], D-1417-5) and is not looked for here.
+pub fn placed_handoff(cmd: &str) -> Option<&'static str> {
+    placed_in(&Heredocs::of(cmd))
+}
+
+/// [`placed_handoff`] of a command whose heredocs are already read.
+fn placed_in(read: &Heredocs) -> Option<&'static str> {
+    if let Some(((), place)) =
+        consentspelling::in_a_branch_or_body_by(&read.stripped, &|text: &str| {
+            runs_a_handoff(text).then_some(())
+        })
+    {
+        return Some(place.said());
+    }
+    let mut seen = std::collections::HashSet::new();
+    let further_in = shell_strings(&read.stripped)
+        .iter()
+        .chain(&read.shells_bodies())
+        .any(|inner| runs_a_handoff_anywhere(inner, 1, &mut seen));
+    further_in.then_some(FURTHER_IN)
+}
+
+/// A text's heredocs, read once ([`heredoc::heredoc_layout`]) for the two readings A7 takes of
+/// them: the text with every body a reader takes as data left out
+/// ([`heredoc::strip_reader_heredocs`]), and the lines a shell could run, each with whether a
+/// heredoc feeds it to a shell ([`leakguard::lines_a_command_could_run`]).
+struct Heredocs {
+    stripped: String,
+    rows: Vec<(String, bool)>,
+}
+
+impl Heredocs {
+    fn of(text: &str) -> Self {
+        if !text.contains("<<") {
+            return Self {
+                stripped: text.to_owned(),
+                rows: text.split('\n').map(|l| (l.to_owned(), false)).collect(),
+            };
+        }
+        let layout = heredoc::heredoc_layout(text);
+        let stripped = layout
+            .iter()
+            .filter(|l| !l.drop)
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = layout
+            .into_iter()
+            .filter(|l| !l.body || l.executed)
+            .map(|l| (l.text, l.executed))
+            .collect();
+        Self { stripped, rows }
+    }
+
+    /// Each run of lines a heredoc feeds a shell, as one text with its line continuations taken
+    /// out, so a command split over a continuation is read as the one command the shell runs.
+    fn shells_bodies(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut run: Vec<&str> = Vec::new();
+        for (row, in_a_shells_body) in &self.rows {
+            if *in_a_shells_body {
+                run.push(row);
+            } else if !run.is_empty() {
+                out.push(std::mem::take(&mut run).join("\n").replace("\\\n", ""));
+            }
+        }
+        if !run.is_empty() {
+            out.push(run.join("\n").replace("\\\n", ""));
+        }
+        out
+    }
+}
+
+/// Whether a segment of `text` runs a handoff, in any spelling A7 recognises: the two readers
+/// [`shell_string_handoff`] asks of a string, over the same text.
+fn runs_a_handoff(text: &str) -> bool {
+    is_handoff(&as_the_shell_reads(text)) || disguised_handoff(text)
+}
+
+/// Every string a segment of `text` hands a shell to run (`sh -c '…'`, `eval '…'`), exactly as
+/// the shell receives it — the strings [`shell_string_handoff`] reads.
+fn shell_strings(text: &str) -> Vec<String> {
+    let Ok(toks) = shellseg::lex(text) else {
+        return Vec::new();
+    };
+    let toks = shellseg::split_punctuation(toks);
+    heredoc::segments_of(&toks)
+        .iter()
+        .flat_map(|(seg, _before)| {
+            let words: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
+            shellwrap::shell_scripts(&words)
+        })
+        .collect()
+}
+
+/// Whether `text`, a string or a heredoc body a shell runs `depth` levels into the command,
+/// runs a handoff anywhere: one of its own segments, a `case` branch or a function body, a
+/// substitution at any depth ([`crate::shellsubst`]), a heredoc in it that feeds a shell, or a
+/// string it hands another shell, read the same way one level further in.
+///
+/// **Each distinct text is read once per command** (`seen`), as the backstops read each
+/// substitution once (D-1417-11): its heredocs once ([`Heredocs`]), its substitutions once
+/// ([`shellsubst::every_substitution`]). A text met again found nothing the first time, or the
+/// walk would have stopped there.
+///
+/// **Fails closed past a bound**: a string nested more than [`crate::guardcaps::MAX_NESTING`]
+/// levels deep, or substitutions past the scanner's bounds, are answered as running one.
+fn runs_a_handoff_anywhere(
+    text: &str,
+    depth: usize,
+    seen: &mut std::collections::HashSet<String>,
+) -> bool {
+    if depth > crate::guardcaps::MAX_NESTING {
+        shellseg::met_a_string_too_deep();
+        return true;
+    }
+    if !seen.insert(text.to_owned()) {
+        return false;
+    }
+    let read = Heredocs::of(text);
+    if runs_a_handoff(&read.stripped)
+        || consentspelling::in_a_branch_or_body_by(&read.stripped, &|text: &str| {
+            runs_a_handoff(text).then_some(())
+        })
+        .is_some()
+    {
+        return true;
+    }
+    let inward = shellsubst::every_substitution(text);
+    let in_a_substitution =
+        consentspelling::in_a_substitution_by(&inward, &|segments: &[Vec<String>]| {
+            segments
+                .iter()
+                .any(|toks| {
+                    let (prog, _env, argv) = shellwrap::split_env(toks);
+                    runs_handoff(&prog, &argv)
+                })
+                .then_some(())
+        })
+        .is_some();
+    if inward.too_big || in_a_substitution {
+        return true;
+    }
+    shell_strings(&read.stripped)
+        .iter()
+        .chain(&read.shells_bodies())
+        .any(|inner| runs_a_handoff_anywhere(inner, depth + 1, seen))
+}
+
+/// What a handoff the host's rule never sees, where it sits, is told (#1419).
+pub fn handoff_placed(where_: &str) -> String {
+    format!(
+        "`charter handoff` is refused {where_}. The permission rule that asks the operator \
+         first is `Bash(charter handoff *)`, and it matches the command as written, which does \
+         not start with it, so no prompt would come. Run it as a command of its own, spelled \
+         exactly `charter handoff <workspace> <<'BRIEF'`."
+    )
 }
 
 // ----------------------------------------------------------------------------------------
@@ -406,9 +599,13 @@ pub fn handoff_segment(toks: &[Tok]) -> (Option<Vec<Tok>>, bool) {
 /// ends off the WHOLE text, and only what follows it is looked at. A row that the string
 /// covers entirely is skipped; a row where the string closes is judged from the close on.
 pub fn handoff_line(cmd: &str) -> Option<(String, bool)> {
-    let rows = leakguard::lines_a_command_could_run(cmd);
-    let heads = quoted_row_prefixes(&rows);
-    let live = live_text_in_heads(&rows, &heads);
+    handoff_line_in(&leakguard::lines_a_command_could_run(cmd))
+}
+
+/// [`handoff_line`] over the lines a command could run, already read.
+fn handoff_line_in(rows: &[(String, bool)]) -> Option<(String, bool)> {
+    let heads = quoted_row_prefixes(rows);
+    let live = live_text_in_heads(rows, &heads);
     let mut i = 0usize;
     while i < rows.len() {
         let (row, in_a_shells_body) = rows[i].clone();
@@ -582,6 +779,10 @@ impl Caller<'_> {
 ///    own segment, or a live substitution anywhere in the call
 ///    ([`livesub::live_substitution`], scoped to the WHOLE call like A5 and A6, for their
 ///    reason).
+/// 6. `handoff-placed` — once none of those has anything to refuse: a handoff in a `case`
+///    branch, a function body, or a string or heredoc a shell runs further in than one level
+///    ([`placed_handoff`], #1419). The host's rule matches the command as written, which does
+///    not start with it.
 ///
 /// **Quoting is read off the delimiter token**, which is the answer
 /// [`heredoc::heredoc_header`] gives — any quoting anywhere in the word makes the body literal
@@ -626,11 +827,35 @@ fn handoff_refusal_spelt(
     caller: Caller<'_>,
     spelt: &[&str],
 ) -> Option<(&'static str, String)> {
-    let found = handoff_line(cmd);
-    let in_a_string = shell_string_handoff(cmd);
+    // The command's heredocs, read once for every reading below.
+    let read = Heredocs::of(cmd);
+    let found = handoff_line_in(&read.rows);
+    let in_a_string = shell_string_handoff_in(&read.stripped);
+    // Read only once the readers above have nothing to refuse, so every answer they give is
+    // the one it was; this adds refusals and changes none (#1419).
+    let placed = || placed_in(&read).map(|where_| (REASON_PLACED, handoff_placed(where_)));
     if found.is_none() && !in_a_string {
-        return None;
+        let placed = placed()?;
+        if caller.from_a_subagent() {
+            return Some((REASON_SUBAGENT, HANDOFF_SUBAGENT.to_string()));
+        }
+        if crate::floorguard::unattended(caller.permission_mode) {
+            return Some((REASON_UNATTENDED, HANDOFF_UNATTENDED.to_string()));
+        }
+        return Some(placed);
     }
+    judged(cmd, caller, spelt, found, in_a_string).or_else(placed)
+}
+
+/// [`handoff_refusal_spelt`] for a call where [`handoff_line`] or [`shell_string_handoff`]
+/// found a handoff: the Python's chain, in its order.
+fn judged(
+    cmd: &str,
+    caller: Caller<'_>,
+    spelt: &[&str],
+    found: Option<(String, bool)>,
+    in_a_string: bool,
+) -> Option<(&'static str, String)> {
     if caller.from_a_subagent() {
         return Some((REASON_SUBAGENT, HANDOFF_SUBAGENT.to_string()));
     }
@@ -1150,6 +1375,75 @@ mod tests {
         // Closed on a later line, the body is inside the substitution, as every shell reads it.
         let cmd = "git commit -m \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"";
         assert_eq!(reason(cmd), None, "a commit message is not a handoff");
+    }
+
+    /// A handoff in a `case` branch, a function body, or a string a shell hands another shell
+    /// runs, and the host's rule reads none of them (#1419). The refusal says where it sits.
+    #[test]
+    fn a_handoff_in_a_branch_a_body_or_a_string_further_in_is_refused_and_placed() {
+        for (cmd, place) in [
+            (
+                "case x in x) charter handoff beta;; esac",
+                "a `case` branch",
+            ),
+            (
+                "case x in y) :;; x) charter handoff beta <<'B'\nx\nB\n;; esac",
+                "a `case` branch",
+            ),
+            (
+                "case x in (x) charter handoff beta;; esac",
+                "a `case` branch",
+            ),
+            ("f(){ charter handoff beta; }; f", "a function body"),
+            ("function f { charter handoff beta; }; f", "a function body"),
+            ("f() ( charter handoff beta ); f", "a function body"),
+            ("bash -c \"bash -c 'charter handoff beta'\"", "further in"),
+            (
+                "bash -c 'case x in x) charter handoff beta;; esac'",
+                "further in",
+            ),
+            ("sh -c 'f(){ charter handoff beta; }; f'", "further in"),
+            ("eval 'echo \"$(charter handoff beta)\"'", "further in"),
+            (
+                "bash <<'EOF'\nbash -c \"bash -c 'charter handoff beta'\"\nEOF",
+                "further in",
+            ),
+        ] {
+            let (r, said) = refusal(cmd).unwrap_or_else(|| panic!("{cmd:?} was let through"));
+            assert_eq!(r, REASON_PLACED, "{cmd:?}");
+            assert!(said.contains(place), "{cmd:?}: {said}");
+            assert!(said.contains("as a command of its own"), "{cmd:?}: {said}");
+        }
+        // A sub-agent and an unattended run are still told what they are first.
+        let sub = Caller {
+            agent_id: Some("a1"),
+            ..attended()
+        };
+        assert_eq!(
+            handoff_refusal("f(){ charter handoff beta; }; f", sub).map(|r| r.0),
+            Some(REASON_SUBAGENT)
+        );
+    }
+
+    /// The other side: a branch or a body that only mentions a handoff, and a script a reader
+    /// writes to a file, run none.
+    #[test]
+    fn a_branch_or_a_body_that_only_mentions_a_handoff_is_let_through() {
+        for cmd in [
+            "f(){ echo charter handoff beta; }; f",
+            "case x in x) echo charter handoff beta;; esac",
+            "cat > s.sh <<'EOF'\nf(){ charter handoff beta; }\nf\nEOF",
+            "cat > s.sh <<EOF\ncase $1 in a) charter handoff beta;; esac\nEOF",
+            "bash -c \"echo 'charter handoff beta'\"",
+            "f(){ :; }; f; charter handoff beta <<'BRIEF'\nship it\nBRIEF",
+            // A commit or pull request body whose code spans name one (D-1419-12).
+            "git commit -m \"$(cat <<'EOF'\nrefuses `f(){ charter handoff beta; }; f`\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nrefuses `case x in x) charter handoff beta;; esac`\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nrefuses `echo \"$(charter handoff beta)\"`\nEOF\n)\"",
+            "gh pr create --body \"$(cat <<'EOF'\n- refuses `f(){ charter handoff beta; }; f`\nEOF\n)\"",
+        ] {
+            assert_eq!(refusal(cmd), None, "{cmd:?}");
+        }
     }
 
     #[test]

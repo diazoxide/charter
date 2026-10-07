@@ -1465,10 +1465,12 @@ fn deliver(
     spool::append(&spool::dir_for(path), chat, token, line)
         .map(Delivered::Spooled)
         .map_err(|spooled| {
-            io::Error::new(
-                spooled.kind(),
-                format!("{why}, and it could not be spooled ({spooled}), so it is lost"),
-            )
+            let said = if spool::is_not_yet_durable(&spooled) {
+                format!("{why}, and it was spooled but not made durable in time: {spooled}")
+            } else {
+                format!("{why}, and it could not be spooled ({spooled}), so it is lost")
+            };
+            io::Error::new(spooled.kind(), said)
         })
 }
 
