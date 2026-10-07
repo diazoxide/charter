@@ -30,6 +30,7 @@ pub mod diffscan;
 pub mod dispatch;
 pub mod dispatchdecision;
 pub mod dispatchguard;
+pub mod dispatchlimits;
 pub mod docsrc;
 pub mod doctor;
 pub mod engine;

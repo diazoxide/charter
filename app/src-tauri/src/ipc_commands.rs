@@ -68,6 +68,7 @@ macro_rules! app_commands {
                 vaultroute::vault_refusals,
                 vaultroute::allow_refused_vault,
                 vaultroute::keep_vault_blocked,
+                dispatchlimits::dispatch_limits,
                 firstrun::open_repo,
                 firstrun::template_that_fits,
                 firstrun::open_local_project,

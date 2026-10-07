@@ -485,6 +485,10 @@ pub fn derive_declared(
         // person's level, read by `sandbox::hosts::personal` and refused key by key by
         // `sandbox::refusals`. Nothing in it reaches a teammate, so it is this file's.
         //
+        // `[dispatch]` holds this machine's own dispatch limits (#1440), read by
+        // `dispatchlimits`: they only ever lower what the project's files give, so nothing in
+        // it loosens plane policy, and nothing in it reaches a teammate.
+        //
         // `[chat_env]` is which more of this machine's own environment a chat is started with
         // (`chatenv`). It can only be this machine's: a committed list would let a teammate's
         // push decide which of this machine's variables every chat is handed.
@@ -507,13 +511,14 @@ pub fn derive_declared(
             && key != "plane"
             && key != "repos"
             && key != crate::sandbox::TABLE
+            && key != crate::dispatchlimits::TABLE
         {
             let name = shown::short(key);
             set.refused.push(Refused {
                 reason: format!(
                     "[{name}] in charter.local.toml is not read — that file carries \
                      [harness], [extensions], [theme], [harness_plugins], [plane], [repos], \
-                     [chat_env] and [sandbox] hosts, and nothing else, because an ignored file must not change plane policy \
+                     [chat_env], [sandbox] hosts and [dispatch] limits, and nothing else, because an ignored file must not change plane policy \
                      with no trace in git. Put [{name}] in charter.toml."
                 ),
                 name,
