@@ -192,6 +192,9 @@ export type Does =
    *  same chat, in a new run with no conversation resumed. */
   | { verb: "startFresh"; tab: number }
   | { verb: "restartChat"; tab: number }
+  /** Opens the dialog that asks a persona for something from a chat's tab. It starts nothing
+   *  by itself: the dialog's answer does, through `ask_persona_chat`. */
+  | { verb: "askPersona"; tab: number; persona: string }
   /** Pins or unpins a chat, a workspace or a project (ADR 0039).
    *
    *  Three verbs and not one, because they are three stores: a project's pin and a
@@ -605,6 +608,21 @@ export type Now = {
   restartable?: (session: number) => boolean;
   /** Why each chat's Smart close stopped without its record (SI-8f), for its needs-you rows. */
   stopped?: Readonly<Record<number, string>>;
+  /**
+   * What **Ask {persona}…** offers on this project's chats (`ask_persona_offer`): the personas
+   * that can be asked, or why none can, where an administrator's policy locks all dispatch.
+   * None until the core has answered, and then there are no rows.
+   */
+  ask?: {
+    personas: readonly string[];
+    locked: string | null;
+    /** The asks policy takes off one chat's tab: a locked pair, from the persona that chat
+     *  runs as to the one asked, and policy's sentence saying who locked it. */
+    locked_for?: readonly { session: number; persona: string; why: string }[];
+  };
+  /** Whether a persona can be asked from a chat's tab: not from a shell, which is on no
+   *  harness profile to start the persona's chat on. */
+  askable?: (session: number) => boolean;
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -625,6 +643,8 @@ export type Doing = {
   startFresh: (tab: number) => void;
   /** Restarts the tab's chat on its conversation, once its turn has ended. */
   restartChat: (tab: number) => void;
+  /** Opens the dialog that asks `persona` for something from the tab's chat. */
+  askPersona: (tab: number, persona: string) => void;
   /** Ends the chat's work link, through `chat_work_unlink`; a refusal is the core's sentence. */
   unlinkWorkItem: (tab: number) => Promise<Ran>;
   /** Each answers a `Ran`, because a pin can be refused: the stores are bounded, and
@@ -1224,6 +1244,38 @@ export function catalogue(now: Now): Offer[] {
     if (chatOf(now.tabs, tab) === undefined) continue;
     const name = now.tabs.byId[tab].name;
     offers.push(can(`tab.rename:${tab}`, `Rename chat ${name}…`, { verb: "renameTab", tab }, name));
+  }
+
+  // **Ask a persona from a chat's tab**: one row per chat per persona the project has
+  // finished, so the tab's menu and the palette are one surface. The words are the same on
+  // every tab, as a work link's are, so the note names the chat. It opens a dialog and starts
+  // nothing until that is answered, so it sits above the line.
+  //
+  // **Where policy locks all dispatch there is no such row on any tab**, and one row that
+  // cannot run says why, in the palette, where a person looks for an action that has gone.
+  if (now.ask !== undefined && now.ask.locked !== null) {
+    offers.push(cannot(ASK_LOCKED_ID, "Ask a persona…", now.ask.locked));
+  } else if (now.ask !== undefined) {
+    for (const tab of now.tabs.order) {
+      const chat = chatOf(now.tabs, tab);
+      if (chat === undefined || !(now.askable?.(chat) ?? false)) continue;
+      const name = now.tabs.byId[tab].name;
+      for (const persona of now.ask.personas) {
+        // A pair policy locks: off this chat's tab ({@link askRows} lists what can run), and
+        // a row here that cannot, with policy's own sentence, so the palette says why.
+        const locked = now.ask.locked_for?.find(
+          (one) => one.session === chat && one.persona === persona,
+        );
+        if (locked !== undefined) {
+          offers.push(cannot(askId(tab, persona), `Ask ${persona}…`, locked.why, name));
+          continue;
+        }
+        offers.push({
+          ...can(askId(tab, persona), `Ask ${persona}…`, { verb: "askPersona", tab, persona }),
+          note: `From chat ${name}. A chat starts as ${persona}, and its report comes back to this one.`,
+        });
+      }
+    }
   }
 
   // **Start fresh** (NO-3, charter#369): a chat the project's instructions changed under since it
@@ -2163,6 +2215,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "restartChat":
       doing.restartChat(does.tab);
       return DID;
+    case "askPersona":
+      doing.askPersona(does.tab, does.persona);
+      return DID;
     case "unlinkWorkItem":
       return doing.unlinkWorkItem(does.tab);
     case "pinTab":
@@ -2875,6 +2930,32 @@ export function curateRows(
     }
   }
   return { charter, personas, leftOut };
+}
+
+/** The row that says why no persona can be asked, where policy locks all dispatch. */
+export const ASK_LOCKED_ID = "chat.ask";
+
+/** What starts the id of every **Ask {persona}…** row of one tab. */
+const askPrefix = (tab: number) => `tab.ask:${tab}:`;
+
+/** The id of the row that asks `persona` from `tab`'s chat. */
+export const askId = (tab: number, persona: string) => `${askPrefix(tab)}${persona}`;
+
+/**
+ * The **Ask {persona}…** rows of one chat tab's menu, in the catalogue's order: one per
+ * persona the project has finished that this chat may ask, and none where dispatch is locked
+ * or the tab is a shell.
+ *
+ * A scan, as {@link curateRows} is and for its reason: which personas a project has is not
+ * something a list of ids can name ahead of time. It is made by a menu that is open, never by
+ * every tab on a strip per render.
+ */
+export function askRows(tab: number, offers: Catalogued): Offer[] {
+  const prefix = askPrefix(tab);
+  const rows: Offer[] = [];
+  // Only what can run: an ask policy locks is absent from the tab, and said in the palette.
+  for (const [id, offer] of offers) if (id.startsWith(prefix) && offer.available) rows.push(offer);
+  return rows;
 }
 
 /**

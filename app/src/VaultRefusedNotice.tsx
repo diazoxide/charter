@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { commands, type PlaneId, type VaultRefused } from "./bindings";
 import { listen } from "./here";
+import { useAskPersona } from "./AskPersona";
 import { Notice, type NoticeAction } from "./Notice";
 
 /** What a press answers: the sentence the Notice then says, or nothing for Keep blocked. */
@@ -19,8 +20,13 @@ type Answer = { status: "ok"; data: { said: string } | null } | { status: "error
  *   chat mid-turn when its turn ends), and otherwise the Notice says to ask the chat.
  * - **Keep blocked**: puts the Notice away. The chat's next try raises it again.
  *
- * The other way forward, a chat opened as the vault's persona, is not a button here yet: the
- * chat's own refusal tells it how to dispatch to that persona, and the Notice says so.
+ * - **Dispatch to {persona}…**, where the vault is tagged for a persona the project defines
+ *   (#1438): opens Ask {persona} for this chat, the dialog its tab's menu opens, and you type
+ *   what to ask. The chat's own refusal also told it how to dispatch to that persona.
+ *
+ * **The dialog opens empty.** What is typed there reaches the new chat as your own words, so
+ * this Notice hands it nothing a chat produced: not the command that was refused, and not the
+ * vault's name. It names the chat and the persona, which are purlis's own records.
  *
  * Only a press does any of it. Where an administrator's policy forbids Allow, it is not
  * offered, and the Notice says what policy forbids and who set it.
@@ -36,6 +42,7 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
   const [answered, setAnswered] = useState<string>();
   const [said, setSaid] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const askPersona = useAskPersona();
 
   const read = useCallback(() => {
     void commands
@@ -113,6 +120,20 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
     label: "Keep blocked",
     onPress: () => press(() => commands.keepVaultBlocked(plane, session, vault)),
   };
+  // Ask the vault's own persona, where the project defines it: the dialog, and nothing typed
+  // for you (see above). Policy that forbids Allow does not forbid this; what it does forbid
+  // of dispatch, the dialog's answer says.
+  const dispatchTo: NoticeAction[] =
+    newest.dispatch_to === null
+      ? []
+      : [
+          {
+            label: `Dispatch to ${newest.dispatch_to}…`,
+            onPress: () => {
+              if (newest.dispatch_to !== null) askPersona(session, newest.dispatch_to);
+            },
+          },
+        ];
   const fixes: readonly [NoticeAction, ...NoticeAction[]] =
     newest.locked === null
       ? [
@@ -120,9 +141,12 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
             label: `Allow ${persona} to use this vault`,
             onPress: () => press(() => commands.allowRefusedVault(plane, session, vault)),
           },
+          ...dispatchTo,
           keep,
         ]
-      : [keep];
+      : dispatchTo.length > 0
+        ? [dispatchTo[0], keep]
+        : [keep];
 
   // What a press would do, on screen before it, and the way forward that is the chat's own.
   const dispatch = newest.dispatch_to;
@@ -139,7 +163,8 @@ export function VaultRefusedNotice({ plane, session }: { plane: PlaneId; session
         {dispatch !== null && (
           <p>
             {newest.locked === null ? "The other way" : "The way forward"} is to have {dispatch} do
-            the work. purlis told this chat how to dispatch to it.
+            the work. Dispatch to {dispatch}… asks it from this chat, in your words. purlis also
+            told this chat how to dispatch to it.
           </p>
         )}
       </div>

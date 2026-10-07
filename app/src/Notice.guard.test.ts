@@ -76,6 +76,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "what the last action answered: replaced by the next action, not about something true now",
   },
+  "AskPersona.tsx": {
+    count: 1,
+    why: ACTION,
+  },
   "BottomBar.tsx": {
     count: 2,
     why:

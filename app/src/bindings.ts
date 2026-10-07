@@ -639,6 +639,17 @@ export const commands = {
 	 */
 	restartChatWithoutSandbox: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("restart_chat_without_sandbox", { plane, session, columns, rows })),
 	/**
+	 *  What "Ask <persona>…" offers on this project's chats: its finished personas, or why it
+	 *  offers none, and the asks policy takes off one chat's tab.
+	 */
+	askPersonaOffer: (plane: PlaneId) => typedError<AskOffer, string>(__TAURI_INVOKE("ask_persona_offer", { plane })),
+	/**
+	 *  Ask `persona` from chat `session`'s tab: starts a chat as that persona, under that chat, on
+	 *  what you typed. Its report goes to that chat, marked as started by you. Answers the new
+	 *  chat's number; the window is told of it as it is told of any chat another chat started.
+	 */
+	askPersonaChat: (plane: PlaneId, session: number, persona: string, name: string, ask: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("ask_persona_chat", { plane, session, persona, name, ask, columns, rows })),
+	/**
 	 *  Every chat this plane has open that is running on instructions the plane has changed since
 	 *  it started (charter#369): its tab is marked, and the mark names the files. The window asks
 	 *  again whenever the plane changes on disk.
@@ -2038,6 +2049,39 @@ export type Ask = {
 	changes: string[],
 	/**  Whether this is a first approval rather than a re-ask, so the dialog can say which. */
 	first: boolean,
+};
+
+/**  One ask policy takes off one chat's tab ([`AskOffer::locked_for`]). */
+export type AskLocked = {
+	/**  The chat whose tab it is. */
+	session: number,
+	/**  The persona that chat's tab does not ask. */
+	persona: string,
+	/**  What policy forbids, and who set it. */
+	why: string,
+};
+
+/**
+ *  What "Ask <persona>…" offers on the chats of one project (#1438): the personas it can ask,
+ *  or why it offers none, and the asks policy takes off one chat's tab.
+ */
+export type AskOffer = {
+	/**
+	 *  Every persona the project defines that is finished, by name, in order. A draft runs no
+	 *  chat (`purlis_core::dispatchdecision::Refused::Draft`), so it is not offered one.
+	 */
+	personas: string[],
+	/**
+	 *  Why nothing is offered, where an administrator's policy locks all dispatch: what is
+	 *  locked, and who set it. The action is then absent, and the palette says this.
+	 */
+	locked: string | null,
+	/**
+	 *  The asks policy locks for one chat: a pair of personas no chat dispatches across,
+	 *  where that chat runs as the first and the ask is to the second. That ask is not on
+	 *  that chat's tab, and the palette's row says why.
+	 */
+	locked_for: AskLocked[],
 };
 
 /**

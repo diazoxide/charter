@@ -261,6 +261,9 @@ pub struct HandedFrom {
     /// goes; neither field says who may steer the chat (tell it, cancel it, wait on it), which
     /// is its own question and not answered by this record.
     pub root: Option<String>,
+    /// Whether the person started it, from that chat's tab (#1438), and not that chat itself.
+    /// Its report still goes to that chat, and says so.
+    pub by_person: bool,
 }
 
 /// How one chat started another (the spec's two modes of a dispatch, #1434).
@@ -1347,7 +1350,13 @@ struct FromOnDisk {
     /// The id of the chat the person started, which the lineage descends from, or absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     root: String,
+    /// `"person"` for a chat the person started from that chat's tab (#1438), or absent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    by: String,
 }
+
+/// What a record's `by` holds for a chat the person started from another chat's tab.
+const BY_PERSON: &str = "person";
 
 impl From<&HandedFrom> for FromOnDisk {
     fn from(from: &HandedFrom) -> Self {
@@ -1362,6 +1371,11 @@ impl From<&HandedFrom> for FromOnDisk {
             },
             depth: from.depth,
             root: from.root.clone().unwrap_or_default(),
+            by: if from.by_person {
+                BY_PERSON.to_owned()
+            } else {
+                String::new()
+            },
         }
     }
 }
@@ -1381,6 +1395,7 @@ impl FromOnDisk {
             depth: self.depth.min(crate::dispatchdecision::DEEPEST),
             // Held to the one shape an id is minted in: anything else names no lineage.
             root: a_ulid(&self.root),
+            by_person: self.by == BY_PERSON,
         })
     }
 }
@@ -3320,6 +3335,7 @@ pub(crate) mod tests {
             mode: Mode::Handoff,
             depth: 0,
             root: None,
+            by_person: false,
         }
     }
 
@@ -3414,6 +3430,7 @@ pub(crate) mod tests {
         let task = HandedFrom {
             mode: crate::dispatchdecision::Mode::Task,
             depth: 2,
+            by_person: false,
             ..handed()
         };
         let record = Record {
@@ -3501,6 +3518,38 @@ pub(crate) mod tests {
             let back = read(plane.path()).chats[0].from.clone().expect("it reads");
             assert_eq!(back.root.as_deref(), read_as, "{written}");
         }
+    }
+
+    #[test]
+    fn a_chat_the_person_started_from_a_tab_comes_back_saying_so_and_no_other_writes_the_key() {
+        // #1438: who a report is marked as started by outlives a relaunch.
+        let plane = tempfile::tempdir().unwrap();
+        let asked = HandedFrom {
+            mode: crate::dispatchdecision::Mode::Task,
+            depth: 1,
+            by_person: true,
+            ..handed()
+        };
+        let record = Record {
+            chats: vec![
+                Chat {
+                    from: Some(asked.clone()),
+                    ..claude("3", None)
+                },
+                Chat {
+                    from: Some(handed()),
+                    ..claude("4", None)
+                },
+            ],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let back = read(plane.path());
+        assert_eq!(back.chats[0].from, Some(asked));
+        assert_eq!(back.chats[1].from, Some(handed()));
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("\"by\"").count(), 1, "{text}");
     }
 
     #[test]
