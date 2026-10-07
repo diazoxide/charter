@@ -338,6 +338,11 @@ pub struct ChatTokens {
     /// The spool directory each token's key is recorded in as it is issued (FD-30), where
     /// this host has one.
     spool: Option<std::path::PathBuf>,
+    /// The connections whose asks are being answered right now, by the number the listener
+    /// dealt each: what an answer that takes minutes asks whether its asker is still there
+    /// ([`Self::asker_gone`]).
+    #[cfg(unix)]
+    answering: std::sync::Mutex<std::collections::HashMap<u64, std::os::unix::net::UnixStream>>,
 }
 
 /// A chat's program: its pid, and when the process with that pid started, so a later process
@@ -415,7 +420,71 @@ impl ChatTokens {
             held: std::sync::Mutex::default(),
             roots: std::sync::Mutex::default(),
             spool: Some(dir),
+            #[cfg(unix)]
+            answering: std::sync::Mutex::default(),
         }
+    }
+
+    /// Whether the asker on `connection` has gone: it closed its end while its ask was being
+    /// answered. What an answer that waits for minutes looks at, so a command that was killed
+    /// does not keep a thread of the app's waiting for it (#1441). A connection that is not
+    /// being answered here has not gone: a caller that asks about one it made up waits on.
+    ///
+    /// **An asker says nothing while it is answered**, so anything readable on its connection
+    /// is its end of file. A byte it did send out of turn is read as the same: it is not a
+    /// purlis this app answers.
+    pub fn asker_gone(&self, connection: u64) -> bool {
+        #[cfg(unix)]
+        {
+            use std::io::Read;
+            let answering = self
+                .answering
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(mut stream) = answering.get(&connection) else {
+                return false;
+            };
+            // A look, not a wait: the shortest timeout a socket takes.
+            if stream
+                .set_read_timeout(Some(std::time::Duration::from_millis(1)))
+                .is_err()
+            {
+                return true;
+            }
+            let mut one = [0u8; 1];
+            let gone = match stream.read(&mut one) {
+                Ok(_) => true,
+                Err(why) => !matches!(
+                    why.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ),
+            };
+            let _ = stream.set_read_timeout(Some(A_REPORT_TAKES_AT_MOST));
+            gone
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = connection;
+            false
+        }
+    }
+
+    /// `stream` is the connection numbered `connection`, whose ask is about to be answered.
+    #[cfg(unix)]
+    fn answering(&self, connection: u64, stream: std::os::unix::net::UnixStream) {
+        self.answering
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(connection, stream);
+    }
+
+    /// The ask on `connection` has its answer.
+    #[cfg(unix)]
+    fn answered(&self, connection: u64) {
+        self.answering
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&connection);
     }
 
     /// A fresh token for `chat`, replacing any it had: 32 bytes from the operating system's
@@ -695,6 +764,10 @@ pub enum Ask {
     /// [`Answer::Dispatched`], [`Answer::NeedsGrant`], or [`Answer::No`] with the refusal.
     /// Boxed for `Open`'s reason.
     Dispatch(Box<DispatchAsk>),
+    /// Ask after a task this chat dispatched (#1441): wait for its report, list this chat's
+    /// tasks, or cancel one. The app answers [`Answer::Task`], or [`Answer::No`] with the
+    /// refusal. No ticket: see [`crate::dispatched::Asked`].
+    Task(Box<crate::dispatched::Asked>),
 }
 
 /// A chat asking where it is working ([`crate::awareness`], #1450).
@@ -1028,6 +1101,8 @@ pub enum Answer {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         waiting: Option<String>,
     },
+    /// What became of an ask after a dispatched task (#1441).
+    Task(Box<crate::dispatched::Answered>),
 }
 
 /// How long a ticket lives unspent.
@@ -1201,6 +1276,7 @@ impl Line {
             Self::Ask(Ask::Vaults { chat }) => *chat,
             Self::Ask(Ask::WhereWorking(asks)) => asks.chat,
             Self::Ask(Ask::Dispatch(dispatch)) => dispatch.chat,
+            Self::Ask(Ask::Task(asked)) => asked.chat,
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
@@ -2304,7 +2380,14 @@ fn serve(
                 // An ask is answered for as long as opening a chat takes, and nothing about
                 // the order of hook calls hangs on it: the turn is let go before it is.
                 turn.finish();
-                let Ok(mut said) = serde_json::to_vec(&(hearing.answer)(this, ask)) else {
+                // Known by its number while it is answered, so an answer that waits can ask
+                // whether its asker is still there.
+                if let Ok(asker) = writer.try_clone() {
+                    tokens.answering(this, asker);
+                }
+                let answer = (hearing.answer)(this, ask);
+                tokens.answered(this);
+                let Ok(mut said) = serde_json::to_vec(&answer) else {
                     return;
                 };
                 said.push(b'\n');
@@ -3972,6 +4055,26 @@ mod tests {
     }
 
     #[test]
+    fn an_asker_that_hung_up_while_it_was_answered_is_seen_to_have_gone() {
+        // #1441, M3: a waiting command that was killed must not hold a thread for minutes.
+        let tokens = ChatTokens::default();
+        let (ours, theirs) = std::os::unix::net::UnixStream::pair().expect("a pair");
+        assert!(!tokens.asker_gone(7), "nobody is being answered on 7");
+
+        tokens.answering(7, ours);
+        assert!(!tokens.asker_gone(7), "still there, and saying nothing");
+        assert!(!tokens.asker_gone(7), "and a look changes nothing");
+
+        drop(theirs);
+        assert!(tokens.asker_gone(7));
+        tokens.answered(7);
+        assert!(
+            !tokens.asker_gone(7),
+            "answered: no longer anyone's to ask about"
+        );
+    }
+
+    #[test]
     fn a_ticket_opens_once_and_never_again() {
         let tickets = Tickets::default();
         let now = std::time::Instant::now();
@@ -4327,7 +4430,8 @@ mod tests {
                     | Ask::Git(_)
                     | Ask::Vaults { .. }
                     | Ask::WhereWorking(_)
-                    | Ask::Dispatch(_) => Answer::No {
+                    | Ask::Dispatch(_)
+                    | Ask::Task(_) => Answer::No {
                         why: "not here".to_owned(),
                     },
                 }

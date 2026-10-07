@@ -233,6 +233,8 @@ pub struct Held {
     typed: Arc<crate::curation::Typed>,
     /// The chats being smart-closed (ADR 0064).
     closing: Arc<crate::smartclose::Closing>,
+    /// What the app remembers of the tasks its chats dispatched, and who waits on them (#1441).
+    tasks: Arc<crate::dispatched::Tasks>,
     /// The window, for each step of a smart close.
     smart: crate::smartclose::Teller,
     /// How many brokered writes each chat has made lately (#1333).
@@ -413,6 +415,22 @@ impl Held {
     /// The chats being smart-closed (ADR 0064).
     pub fn closing(&self) -> &crate::smartclose::Closing {
         &self.closing
+    }
+
+    /// The tasks this project's chats dispatched (#1441).
+    pub fn tasks(&self) -> &crate::dispatched::Tasks {
+        &self.tasks
+    }
+
+    /// [`Self::tasks`], for a wait that outlives its hold on the project.
+    pub fn tasks_shared(&self) -> &Arc<crate::dispatched::Tasks> {
+        &self.tasks
+    }
+
+    /// This project, held weakly: for work that must not keep a closed project open. Dangling
+    /// before the project is in its `Arc`, which is before anything can ask.
+    pub fn weak(&self) -> std::sync::Weak<Held> {
+        self.me.get().cloned().unwrap_or_default()
     }
 
     /// The cap on each chat's brokered writes (#1333).
@@ -721,6 +739,8 @@ impl Held {
         // a chat started again in its place is marked afresh.
         self.held_dispatches.forget(session);
         self.unattended.forget(session);
+        // Nothing is remembered of it as a task, and a command waiting on it is told (#1441).
+        crate::dispatched::closed(self, session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
         purlis_core::handback::orphan(&self.root, session);
@@ -1256,13 +1276,22 @@ impl Planes {
             let plane = id.clone();
             let tickets = purlis_core::hookwire::Tickets::default();
             let arrivals = Arc::clone(&self.arrivals);
-            Arc::new(move |connection, ask| match held.upgrade() {
-                Some(held) => {
-                    crate::handoff::answer(&held, &plane, &tickets, connection, ask, &*arrivals)
+            Arc::new(move |connection, ask| {
+                // A wait is the one ask that takes minutes: it holds the project weakly, so
+                // closing it is not held up by a chat waiting on a report (#1441).
+                if let purlis_core::hookwire::Ask::Task(asked) = &ask
+                    && matches!(asked.what, purlis_core::dispatched::What::Wait { .. })
+                {
+                    return crate::dispatched::wait(&held, asked);
                 }
-                None => purlis_core::hookwire::Answer::No {
-                    why: "this project has been closed".to_owned(),
-                },
+                match held.upgrade() {
+                    Some(held) => {
+                        crate::handoff::answer(&held, &plane, &tickets, connection, ask, &*arrivals)
+                    }
+                    None => purlis_core::hookwire::Answer::No {
+                        why: "this project has been closed".to_owned(),
+                    },
+                }
             })
         });
         // The person's answer to a dispatch that waited on them starts it, or tells the chat
@@ -1331,6 +1360,9 @@ impl Planes {
                     // A persona chat that has just come to wait on the person: its dispatch
                     // needed them once more (#1452).
                     crate::dispatches::needed_you(&held, report.chat);
+                    // And whatever waited for this chat to move: a cancel's next step, and
+                    // the line that says its tasks reported (#1441).
+                    crate::dispatched::heard(&held, report);
                 }
             })
         });
@@ -2112,6 +2144,9 @@ impl Planes {
                     // And the record no longer names the ended program's pid (V82, #1018).
                     if let Some(held) = me.get().and_then(std::sync::Weak::upgrade) {
                         held.chats.a_program_ended();
+                        // A cancelled task that ended has its report written, and a command
+                        // waiting on it is told (#1441).
+                        crate::dispatched::moved(&held, session);
                     }
                 }));
         }
@@ -2143,6 +2178,7 @@ impl Planes {
             started_on,
             typed,
             closing,
+            tasks: Arc::default(),
             smart: Arc::clone(&self.smart),
             brokered: purlis_core::brokered::Rate::default(),
             vault_refusals: crate::vaultroute::Refusals::default(),

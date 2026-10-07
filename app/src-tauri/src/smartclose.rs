@@ -396,6 +396,16 @@ impl Closing {
         }
     }
 
+    /// Whether the person has a line of their own in chat `session`'s prompt, or may have: bytes
+    /// typed since their last Enter, or keys since then that this could not follow
+    /// ([`line::Line::Unknown`]). A line purlis types into a chat ends in Enter, which would
+    /// send theirs with it, so none is typed while this holds (#1441).
+    pub fn person_has_a_line(&self, session: u32) -> bool {
+        self.lines()
+            .get(&session)
+            .is_some_and(|line| !line.is_empty())
+    }
+
     /// Takes the person's `/smart-close` in chat `session`, answering whether they submitted
     /// one within [`A_TYPED_SMART_CLOSE_IS_HEARD_WITHIN`] of `now`. Taken whatever the answer, so
     /// one Enter stands behind one prompt and no more.
