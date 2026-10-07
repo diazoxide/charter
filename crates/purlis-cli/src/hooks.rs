@@ -339,6 +339,10 @@ pub fn userpromptsubmit(payload: &str, now: Option<&str>) {
             let reports =
                 purlis_core::handback::take(hook.root, purlis_core::handback::For::Chat(chat));
             parts.extend(purlis_core::handback::context(&reports, false));
+            // And what the chat that dispatched this one, or a task it dispatched, sent it
+            // (#1442): quoted as data, as a report is.
+            let messages = purlis_core::dispatchtalk::take(hook.root, chat);
+            parts.extend(purlis_core::dispatchtalk::context(&messages));
         }
         // One line when where this chat is working has changed since it was last told (#1450),
         // by the app's own count of what it was told.

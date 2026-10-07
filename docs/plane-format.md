@@ -3266,17 +3266,28 @@ before it is stored.
 - **Written by:** `purlis_core::handback::leave` (purlis#259), from the app's answer to a
   report, from `handback::orphan` when a chat with reports waiting is closed, and from
   `handback::moved` when a chat with reports waiting is started again under a new number,
-  which moves `chat-<old>/` to `chat-<new>/`.
+  which moves `chat-<old>/` to `chat-<new>/`. A message between an asking chat and a task it
+  dispatched (#1442) is written by `purlis_core::dispatchtalk::leave`, from the app's answer to
+  `purlis dispatch tell`, `note`, `ask` and `answer`, and moved by `dispatchtalk::moved` on the
+  same restart (`said-<old>/` to `said-<new>/`). Only the app writes either.
 - **Read by:** `charter hook userpromptsubmit` (`chat-<n>/`, `<n>` from `$CHARTER_SESSION_ID`)
   and `charter hook sessionstart` (`workspace-<ws>/`, the session's workspace, or `plane-root/`
   for a session at the plane root), through
-  `handback::take`, which **removes each file it reads**: a report reaches one turn.
+  `handback::take`, which **removes each file it reads**: a report reaches one turn. The same
+  `userpromptsubmit` hook takes `said-<n>/` through `dispatchtalk::take`, which removes each
+  file it reads too. **Removed by:** the reader; `handback::took`, for a report the waiting
+  `purlis dispatch wait` printed itself (#1441); and `dispatchtalk::forget`, which empties
+  `said-<n>/` when chat `<n>` is closed, because a message is for that one chat's turn.
 - **Git:** gitignored (under `/.charter/`).
 - **Layout:** `chat-<n>/` for a report to a chat the app has open, `workspace-<ws>/` for one
   whose chat has closed, and `plane-root/` for one whose chat worked at the plane root and has
   closed (SI-1b). Each file is `<nanoseconds since the epoch, 24 digits>-<uuid>.json`,
   so a directory reads in arrival order; it is written as `.<name>` and renamed into place, and a
   reader skips a name starting with `.`. An empty directory is removed by the reader.
+  `said-<n>/` holds the messages waiting for chat `<n>` (#1442), in files named the same way.
+  **`said-<n>` is never reached through a link**: where it, or a directory above it down from
+  `.charter/`, is a symbolic link or is not a directory, nothing is read from it, written to
+  it or removed from it.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -3285,12 +3296,26 @@ before it is stored.
 | `to` | str | the chat that asked, by the name it is shown under |
 | `to_workspace` | str | the workspace that chat handed off from — where the report goes when it is gone — or `plane root` for a chat that handed off from the plane root (SI-1b). Two words with a space, which no workspace name can be, so a reader that holds the field to the name rule drops the report rather than joining the words onto `workspaces/` |
 | `summary` | str | the report: trimmed, at most 4,096 bytes, no control character but `\n` and no invisible one |
-| `task` | object, absent | what a task's report says besides (#1436): `{"outcome": "done" \| "blocked" \| "failed", "changed": "<str>", "record": "<str>", "by_person": true, "unreported": true, "stopped": true}`. Absent for a handoff's report, and in every file written before tasks. `outcome` is how the persona chat says the task ended. `changed` is what it says changed, in its own words, held to `summary`'s rule; absent when it said nothing. `record` is the project-relative path of the session record the app wrote for that chat, from the app's own note of what it wrote and never a path the chat named; absent when it wrote none. Held on the way in: an `outcome` that is none of the three, a `changed` that breaks the rule, or a `record` that is absolute, climbs with `..`, holds a backtick or an undrawable character, drops the whole report. `by_person` is `true` in the report of a task the person started from the asking chat's tab (#1438), copied from the app's record of the persona chat (`chats[].from.by`), and absent otherwise: the report then reads "a task the person started from this chat's tab". Wording only, as `by` is. `unreported` is `true` in a report the app wrote in the persona chat's place (#1443), and absent otherwise: no chat said any of it. `outcome` is then `"failed"`, `changed` is absent, and `summary` is exactly `ended without a report`, for a chat whose program ended on its own, or, with `stopped` `true` beside it, exactly `stopped by the operator`, for one the person closed. **Held on the way in**: a file with `unreported` in any other shape, or with `stopped` and no `unreported`, drops the whole report, so nothing that can write this directory has a sentence of its own read as purlis's |
+| `task` | object, absent | what a task's report says besides (#1436): `{"outcome": "done" \| "blocked" \| "failed" \| "cancelled", "changed": "<str>", "record": "<str>", "by_person": true, "unreported": true, "stopped": true, "stepped_in": true}`. `cancelled` (#1441) is written by the app for a task its asking chat cancelled, whatever that task's chat said, and for no other. `stepped_in` (#1442) is `true` when the person typed in the task's chat while it worked, from the app's own note of their keys and never anything the chat said; absent otherwise, and nothing they typed is written anywhere. Absent for a handoff's report, and in every file written before tasks. `outcome` is how the persona chat says the task ended, or `cancelled`. `changed` is what it says changed, in its own words, held to `summary`'s rule; absent when it said nothing. `record` is the project-relative path of the session record the app wrote for that chat, from the app's own note of what it wrote and never a path the chat named; absent when it wrote none. Held on the way in: an `outcome` that is none of the four, a `changed` that breaks the rule, or a `record` that is absolute, climbs with `..`, holds a backtick or an undrawable character, drops the whole report. `by_person` is `true` in the report of a task the person started from the asking chat's tab (#1438), copied from the app's record of the persona chat (`chats[].from.by`), and absent otherwise: the report then reads "a task the person started from this chat's tab". Wording only, as `by` is. `unreported` is `true` in a report the app wrote in the persona chat's place (#1443), and absent otherwise: no chat said any of it. `outcome` is then `"failed"`, `changed` is absent, and `summary` is exactly `ended without a report`, for a chat whose program ended on its own, or, with `stopped` `true` beside it, exactly `stopped by the operator`, for one the person closed. **Held on the way in**: a file with `unreported` in any other shape, or with `stopped` and no `unreported`, drops the whole report, so nothing that can write this directory has a sentence of its own read as purlis's |
 
 **Held again on the way in.** A file whose `summary` breaks the report rule, whose names break
 the chat-name rule, whose workspaces are neither a workspace's name nor `plane root`, or which
 is not JSON at all, is removed and
 handed to nobody. What is handed over is quoted as data: every line of the summary behind `> `.
+
+**A message in `said-<n>/`** (#1442) is one JSON object:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | str | `follow_up` (the asking chat, to a task still working), `note` or `question` (a task, to the chat that asked), or `answer` (the asking chat, to that question) |
+| `from` | str | the chat that sent it, by the name it is shown under, as the app wrote it |
+| `chat` | int | the app's number for that chat: what `purlis dispatch answer <chat>` names for a question |
+| `text` | str | the message: held to `summary`'s rule |
+
+It is held again on the way in: a `kind` that is none of the four, a `from` that breaks the
+chat-name rule or holds a backtick or an asterisk (either would break out of how the name is
+quoted above the message), or a `text` that breaks the report rule, drops the file. What is
+handed over is quoted as data, under a sentence that says which chat's words follow.
 
 ---
 

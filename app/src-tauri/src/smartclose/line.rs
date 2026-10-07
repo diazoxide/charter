@@ -84,9 +84,12 @@ impl Line {
         submitted
     }
 
-    /// Whether nothing is typed: a line this followed, with no bytes in it.
-    pub fn is_empty(&self) -> bool {
-        matches!(self, Self::Typed(typed) if typed.is_empty())
+    /// How many bytes are typed, where this could follow them.
+    pub fn len(&self) -> Option<usize> {
+        match self {
+            Self::Typed(typed) => Some(typed.len()),
+            Self::Unknown => None,
+        }
     }
 
     fn push(&mut self, byte: u8) {
