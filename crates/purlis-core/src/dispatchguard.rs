@@ -523,6 +523,70 @@ mod tests {
         }
     }
 
+    /// A dispatch may say where its chat works (`--in`, #1453). The word is one more argument
+    /// of a line a rule already allows, so the rule for a shared call sees it wherever it
+    /// stands (D-T61-3); and no rule allows a line that opens with it, so that spelling is the
+    /// harness's own to ask about, alone or not.
+    #[test]
+    fn a_dispatch_that_says_where_it_works_is_alone_or_asked_about_too() {
+        use crate::harness::claude::{DISPATCH_ALLOW, DISPATCH_TASK_ALLOW, HANDOFF_ALLOW};
+        let allowed = |cmd: &str| {
+            DISPATCH_ALLOW
+                .iter()
+                .chain(DISPATCH_TASK_ALLOW.iter())
+                .chain(HANDOFF_ALLOW.iter())
+                .any(|rule| {
+                    let glob = rule
+                        .strip_prefix("Bash(")
+                        .and_then(|rule| rule.strip_suffix(')'))
+                        .expect("a Bash rule");
+                    crate::pypath::fnmatch(cmd, glob)
+                })
+        };
+        for (cmd, pre_allowed) in [
+            (
+                "purlis dispatch --name x --in worktree <<'B'\nlook\nB",
+                true,
+            ),
+            (
+                "purlis dispatch --name x --in workspace:beta <<'B'\nlook\nB",
+                true,
+            ),
+            (
+                "purlis dispatch --to devops --in worktree --name x <<'B'\nlook\nB",
+                true,
+            ),
+            (
+                "purlis dispatch --wait --in workspace:beta --name x <<'B'\nlook\nB",
+                true,
+            ),
+            // No rule opens with `--in`: these the harness asks about itself.
+            (
+                "purlis dispatch --in worktree --name x <<'B'\nlook\nB",
+                false,
+            ),
+            (
+                "purlis dispatch --in workspace:beta --name x <<'B'\nlook\nB",
+                false,
+            ),
+            (
+                "purlis dispatch --in=worktree --name x <<'B'\nlook\nB",
+                false,
+            ),
+        ] {
+            assert_eq!(allowed(cmd), pre_allowed, "{cmd:?}");
+            assert_eq!(rider(cmd), None, "{cmd:?}");
+            for with in [
+                format!("{cmd}\ntouch /tmp/zz"),
+                format!("touch /tmp/zz && {cmd}"),
+                cmd.replacen("<<'B'", "<<'B' && touch /tmp/zz", 1),
+            ] {
+                assert_eq!(rider(&with).as_deref(), Some("touch /tmp/zz"), "{with:?}");
+                assert!(rider_ask(&with, the_chat()).is_some(), "{with:?}");
+            }
+        }
+    }
+
     #[test]
     fn a_second_dispatch_or_handoff_in_the_call_is_a_rider_too() {
         // Only the first handoff in a call is judged by the handoff guard, so a second one is
