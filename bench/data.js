@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791387629295,
+  "lastUpdate": 1791403447717,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3234,6 +3234,48 @@ window.BENCHMARK_DATA = {
             "value": 102.45965050000001,
             "unit": "ms",
             "extra": "median of 5 runs: 101.966, 102.379, 102.460, 102.817, 103.161 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "8f3d5172c4a3d1f19722a60b3551c0e90fe42246",
+          "message": "hooks: a chat's spool is a file per line, so hooks that spool at once lose none\n\nA hook whose line the host does not take keeps it in the chat's spool for the\nnext open of the project. The spool was one file per chat, appended under a\nlock that each holder kept while it read the whole file and synced. A hook\nwaited at most 250 ms for that lock, so with several hooks of one chat behind\none sync on a loaded machine, a waiter ran out of its wait and said its line\nwas lost. `a_host_restart_during_a_busy_turn_loses_no_event` showed it twice\nin CI (176 of 200, \"another process held this chat's spool for 250 ms\").\n\nThe spool is now a folder per chat, `spool/<n>/`, with a file per line. A hook\ntakes the next number by making `<key>.<seq>.part` exclusively, writes and\nsyncs its line there, links it as `<key>.<seq>.json`, removes the `.part` name\nand syncs the folder. No hook waits for another. The line, its number, its MAC,\n`keys.json`, every check the drain makes and the sandbox's denial of `spool/`\nare unchanged. The drain reads the files that have a line's name, hands them\non, and removes what it read, so hooks may go on spooling while it runs and no\nline it read is handed on twice. A `<n>.jsonl` a build before left, or that\none of its hooks still writes, is drained first and as it was, and a line it\ngave is not taken from the folder again.\n\nA hook is still bounded: the write runs on a thread of its own and is given\n1 s, and a spool that already holds 16,384 names takes no more. Past the cap,\nor on a disk that refuses the write, the hook says the line is lost, as\nbefore. Past the second it now says the line may be lost, since the write is\nleft to finish and the next open records the line if it did.\n\nWhat this does not change: the drain forgets a key once it has drained it. A\nline still being written while a drain runs, like a hook that outlives the\ndrain, is rejected as no-key at the next one and its content is not recorded.\nThat needs a ruling on keys.json and is the first follow-up on issue 983.\n\ndocs/plane-format.md has the new shape and the old file as read-only; ADR 0068\n§6 has a dated note that the shape as built is a folder.\n\nSeen red, then green: a pure test with 16 writers and 2,000 lines for one chat\non a disk that takes 20 ms per line lost 1,208 lines on main's code, each with\nCI's message, and loses none now. The delivery test keeps each hook's error\nand prints them when a line is short. After review, eight more tests were seen\nred on the first head and green now: the copy between the two stores, a line\nfile against its name, a `.part` said and one dated ahead, the last number,\nthe in-flight line, the keys' order, a write that stops, and \"may be lost\".\n\nDecided in implementation:\n- D-983-1: A file per line with the number taken by an exclusive create, over one file appended without a lock (numbers need a writer's turn, and a drain's truncate races a write) and over a shorter critical section with a longer wait (still a wait that can run out, and the drain holds the lock while it records).\n- D-983-2: The number stays contiguous per key and under the MAC: a hook tries the number after the highest it listed, then the one after for each hook that took it first, so gaps mean what they meant.\n- D-983-3: A line gets a `.json` name by a hard link, which fails rather than replace a line, and only after its bytes are synced; the name it linked is checked to be the file it wrote.\n- D-983-4: A number a dead hook took is a gap even while its `.part` file is there, so a `.part` file cannot hide a removed line; the drain removes one an hour old.\n- D-983-5: One bound for the whole write, 1 s on a thread, replaces the 250 ms lock wait and the 250 ms directory wait. A line said lost for the time may still be drained, the side the delivery path already errs on.\n- D-983-6: The size cap counts names, 16,384, where it counted 16 MiB read: a hook lists names and reads no line.\n- D-983-7: The drain holds a lock on the folder that only another drain waits for; hooks never take it.\n- D-983-8: Lines under two keys of one chat are handed on in the order keys.json holds the keys, the order the host issued them in; file times are not read (amended in review, from the files' times).\n- D-983-9: The old `<n>.jsonl` is drained at every open and emptied, never removed and never created, since a hook of the build before may still append to it (N-1).\n- D-983-10: A line in flight while a drain runs is a gap at that drain and is rejected as no-key at the next, unless the host still holds its key, which only a drain that stopped leaves; that is the loss a hook outliving the drain already had, pinned in tests, and keys.json is not changed here (corrected in review).\n- D-983-11: The seam is `Bounds`, a hook's limits and a call made as the line reaches the disk, private to the module; tests slow the disk, fill it, shrink the cap and shorten the wait through it.\n- D-983-12: The drain gives a chat's folder what its old file already gave, and the same key, number and MAC there is repeated; the MAC is compared because a hook that changed builds mid-chat has a number 1 in both.\n- D-983-13: A line's file must hold that one line under its name's key and number, or it is unreadable: hooks number by names, so names are held to the lines.\n- D-983-14: A `.part` with no line of its name is said at each drain as rejected, why `unfinished`, a new value of an existing event's field; one dated in a time to come is a dead hook's.\n- D-983-15: After a link, a line's name that is already gone was drained, so the line landed; a hook removes a `.part` name only while it is still its own file.\n- D-983-16: A line the spool was still writing when the hook stopped waiting \"may be lost\", every other \"is lost\"; a write that ends without answering says it stopped, not that the disk was slow.\n\nRefs #983\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-07T23:42:42+04:00",
+          "tree_id": "3f9ef8882add7d39b13bb593623873c61eb3fb25",
+          "url": "https://github.com/purlis/purlis/commit/8f3d5172c4a3d1f19722a60b3551c0e90fe42246"
+        },
+        "date": 1791403445232,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5339725,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.512, 0.519, 0.534, 0.538, 0.540 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.2264915,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.318, 17.213, 17.226, 17.240, 17.266 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.068119,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.472, 103.623, 104.068, 104.764, 106.107 ms"
           }
         ]
       }
