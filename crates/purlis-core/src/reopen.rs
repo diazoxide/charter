@@ -317,6 +317,10 @@ pub enum Owed {
     /// The report was sent, and that is the handoff's one report: nothing re-arms it. Another
     /// needs another `--report` handoff (the operator's ruling, charter-app#259).
     Sent,
+    /// The chat's program ended, or the chat was closed, before it reported, and the app told
+    /// the asking chat so in its place (#1443): `failed: ended without a report`. That is the
+    /// task's one report, as [`Self::Sent`] is.
+    Failed,
 }
 
 impl Owed {
@@ -325,6 +329,7 @@ impl Owed {
             Self::Nothing => "",
             Self::Due => "owed",
             Self::Sent => "sent",
+            Self::Failed => "failed",
         }
     }
 
@@ -332,6 +337,7 @@ impl Owed {
         match word {
             "owed" => Self::Due,
             "sent" => Self::Sent,
+            "failed" => Self::Failed,
             _ => Self::Nothing,
         }
     }
@@ -3586,6 +3592,28 @@ pub(crate) mod tests {
         write(plane.path(), &record).unwrap();
 
         assert_eq!(read(plane.path()).chats[0].from, Some(handed()));
+    }
+
+    #[test]
+    fn a_task_the_app_reported_failed_for_comes_back_so_and_is_never_owed_again() {
+        // #1443: a relaunch does not make a chat that ended without a report owe one again.
+        let plane = tempfile::tempdir().unwrap();
+        let failed = HandedFrom {
+            report: Owed::Failed,
+            mode: crate::dispatchdecision::Mode::Task,
+            depth: 1,
+            ..handed()
+        };
+        let record = Record {
+            chats: vec![Chat {
+                from: Some(failed.clone()),
+                ..claude("3", None)
+            }],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        assert_eq!(read(plane.path()).chats[0].from, Some(failed));
     }
 
     #[test]

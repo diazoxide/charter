@@ -59,7 +59,15 @@ const DEVOPS_CHAT: OpenChat = {
   guessed: null,
   pinned: false,
   label: "check prod",
-  from: { name: "steward 3", workspace: "alpha", chat: 3, task: false, tab: true },
+  from: {
+    name: "steward 3",
+    workspace: "alpha",
+    chat: 3,
+    task: false,
+    tab: true,
+    reported: false,
+    unreported: false,
+  },
 };
 
 const SIDEBAR = {

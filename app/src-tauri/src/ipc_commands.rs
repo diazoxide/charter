@@ -105,6 +105,8 @@ macro_rules! app_commands {
                 restart_chat_without_sandbox,
                 handoff::ask_persona_offer,
                 handoff::ask_persona_chat,
+                handoff::persona_chats_of,
+                handoff::close_chat_stopping,
                 chats_plane_updated,
                 chat_in_front,
                 plane_pins,

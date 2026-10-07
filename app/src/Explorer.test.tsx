@@ -365,7 +365,14 @@ describe("the explorer", () => {
       children: [],
     });
     // Each has a tab: a task has none until the person opens it from the Chats section.
-    const asked = { name: "steward 1", workspace: "alpha", chat: 1, tab: true };
+    const asked = {
+      name: "steward 1",
+      workspace: "alpha",
+      chat: 1,
+      tab: true,
+      reported: false,
+      unreported: false,
+    };
     draw({
       chats: [
         chat(1, "steward 1", ALPHA),
@@ -399,7 +406,15 @@ describe("the explorer", () => {
       chats: [
         chat(2, "steward 2", ALPHA),
         chat(7, "check the queue", ALPHA, {
-          from: { name: "steward 1", workspace: "alpha", chat: 1, task: true, tab: true },
+          from: {
+            name: "steward 1",
+            workspace: "alpha",
+            chat: 1,
+            task: true,
+            tab: true,
+            reported: false,
+            unreported: false,
+          },
         }),
       ],
     });
@@ -410,13 +425,45 @@ describe("the explorer", () => {
     );
   });
 
+  it("marks a task that has reported, and one that ended without reporting, and both still open", async () => {
+    const onShowChat = vi.fn();
+    const from = { name: "steward 1", workspace: "alpha", chat: 1, task: true, tab: true };
+    draw({
+      chats: [
+        chat(1, "steward 1", ALPHA),
+        chat(7, "check the queue", ALPHA, { from: { ...from, reported: true, unreported: false } }),
+        chat(8, "check prod", ALPHA, { from: { ...from, reported: false, unreported: false } }),
+        chat(9, "check staging", ALPHA, { from: { ...from, reported: false, unreported: true } }),
+      ],
+      onShowChat,
+    });
+
+    const reported = screen.getByRole("treeitem", { name: /check the queue/ });
+    expect(reported).toHaveTextContent("reported");
+    expect(screen.getByRole("treeitem", { name: /check prod/ })).not.toHaveTextContent("report");
+    // Never "reported" for a chat that did not: purlis reported in its place.
+    const ended = screen.getByRole("treeitem", { name: /check staging/ });
+    expect(ended).toHaveTextContent("ended without a report");
+    // Still a chat: its row opens it.
+    await userEvent.click(reported);
+    expect(onShowChat).toHaveBeenCalledWith(7);
+  });
+
   it("brings a task forward when its row is pressed, as any chat", async () => {
     const onShowChat = vi.fn();
     draw({
       chats: [
         chat(1, "steward 1", ALPHA),
         chat(7, "check the queue", ALPHA, {
-          from: { name: "steward 1", workspace: "alpha", chat: 1, task: true, tab: true },
+          from: {
+            name: "steward 1",
+            workspace: "alpha",
+            chat: 1,
+            task: true,
+            tab: true,
+            reported: false,
+            unreported: false,
+          },
         }),
       ],
       onShowChat,

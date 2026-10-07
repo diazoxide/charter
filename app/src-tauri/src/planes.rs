@@ -447,6 +447,14 @@ impl Held {
 
     /// Tells the window chat `session`'s smart close is at `phase`.
     pub fn tell_smart_close(&self, session: u32, phase: crate::smartclose::Phase) {
+        // A Smart close that ends without closing takes its "stop the chats below" with it:
+        // the answer was for that close, and the next one asks again.
+        if !matches!(
+            phase,
+            crate::smartclose::Phase::Queued | crate::smartclose::Phase::Sent
+        ) {
+            self.chats.stop_below_on_close(session, false);
+        }
         (self.smart)(crate::smartclose::SmartClosing {
             plane: self.id.clone(),
             session,
@@ -630,9 +638,68 @@ impl Held {
     /// the board took just before is told before this, never after it with the chat still
     /// asking. And off and told even when the session had already gone: either way the chat
     /// is gone from the app, and a window left believing otherwise is the defect.
+    ///
+    /// **A persona chat is never lost by a close** (#1443). One closed before it reported has
+    /// its asking chat told it was stopped by the operator, while its record is still here to
+    /// name its session record. The chats it asked that have reported and are at rest close
+    /// with it, each on its session record ([`crate::handoff::close_reported`]); the ones at
+    /// work are the person's choice, asked before the close ([`Self::close_chat_stopping`]),
+    /// and where they are kept their reports go to the workspace this chat asked from.
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
+        let deciding = self.chats.deciding();
+        self.close_chat_held(session, &deciding)
+    }
+
+    /// [`Self::close_chat`], under the caller's hold of the lock a dispatch is decided under
+    /// and a report is taken under: one hold for the whole close, so nothing is dispatched
+    /// from the closing chat, and no report is taken, between its steps.
+    pub(crate) fn close_chat_held(
+        &self,
+        session: u32,
+        deciding: &crate::handoff::Deciding<'_>,
+    ) -> Result<(), String> {
+        use crate::handoff::{self, Unreported};
+
+        // The person's answer when its Smart close began, where they gave one: what it
+        // started while it wrote its record goes with it.
+        if self.chats.takes_stop_below(session) {
+            handoff::stop_below(self, session, deciding);
+        }
+        handoff::unreported(self, session, Unreported::Stopped, deciding);
+        let reported = handoff::reported_by(self, session);
+        let closed = self.end_chat(session);
+        if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
+            handoff::close_reported(&me, reported, deciding);
+        }
+        closed
+    }
+
+    /// **Stop them, and close** (#1443): the person's answer to what closing chat `session`
+    /// asks. Every chat at work below it is ended, deepest first, and then, where `close`, the
+    /// chat itself, **under one hold**: the chat is still running until its own close, and
+    /// between two calls it could start another that outlives the answer. Where it is to be
+    /// smart-closed instead, the answer is remembered for the close its record brings.
+    /// Answers every chat this closed, `session` among them where it was.
+    pub fn close_chat_stopping(&self, session: u32, close: bool) -> Vec<u32> {
+        let deciding = self.chats.deciding();
+        let mut closed = crate::handoff::stop_below(self, session, &deciding);
+        if close {
+            if let Err(why) = self.close_chat_held(session, &deciding) {
+                tracing::warn!("purlis: chat {session} did not end cleanly ({why})");
+            }
+            closed.push(session);
+        } else {
+            self.chats.stop_below_on_close(session, true);
+        }
+        closed
+    }
+
+    /// Ends chat `session` and takes it off the board, and no more: [`Self::close_chat`]
+    /// without what a close owes a persona chat. For a chat that is being started again in its
+    /// own place, which is the same chat going on and not one that ended.
+    fn end_chat(&self, session: u32) -> Result<(), String> {
         // Before it is off the board, while its conversation is still known: a dispatch it
-        // was working on ends with it (#1452).
+        // was working on ends with it (#1452), unless a chat started in its place carries it.
         crate::dispatches::ended(self, session);
         let gone = self.board().closed(session);
         lock_started(&self.started_on).remove(&session);
@@ -707,7 +774,7 @@ impl Held {
     fn in_its_place(&self, session: u32, started: u32) {
         self.followed(session, started);
         let in_front = self.chats.front() == Some(session);
-        if let Err(why) = self.close_chat(session) {
+        if let Err(why) = self.end_chat(session) {
             tracing::warn!(
                 "purlis: chat {session}, started again in its place, did not end cleanly ({why})"
             );
@@ -1998,6 +2065,7 @@ impl Planes {
             let closing = Arc::clone(&closing);
             let smart = Arc::clone(&self.smart);
             let me = Arc::clone(&me);
+            let every_agent = Arc::clone(&self.kill_switch);
             chats
                 .sessions()
                 .when_one_ends(Arc::new(move |session, exit| {
@@ -2021,6 +2089,18 @@ impl Planes {
                         });
                     }
                     let changed = hooks::held_board(&board).exited(session, hooks::code_of(&exit));
+                    // A persona chat that still owed its asking chat a report has ended
+                    // without one: that chat is told it failed, now (#1443). Before the
+                    // window is told, so what it reads next already says so. **Only for a
+                    // program that ended on its own** (D-1443-10): not at a quit or as the
+                    // project is let go of, and not when every agent was stopped. Those chats
+                    // are kept, and report when they are started again.
+                    if let Some(held) = me.get().and_then(std::sync::Weak::upgrade)
+                        && !held.chats.ending()
+                        && !every_agent.is_stopped()
+                    {
+                        crate::handoff::its_program_ended(&held, session);
+                    }
                     if changed {
                         tell(hooks::now(&board, plane.clone(), session));
                     }

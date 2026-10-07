@@ -1026,6 +1026,30 @@ export const PlaneView = memo(function PlaneView({
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, [change, plane]);
 
+  /**
+   * The persona chats that still owe a report, as one word with what each is doing. A task's
+   * report is followed by the end of its turn, and a task that dies ends: either moves this
+   * word, and the sidebar is read again, which is where a task's reported mark comes from.
+   * Empty while no chat has a task in flight, so nothing is read again for it then.
+   */
+  const unreported = useMemo(
+    () =>
+      sidebar === undefined
+        ? []
+        : [...sidebar.unfiled, ...sidebar.workspaces.flatMap((ws) => ws.chats)]
+            .filter(
+              (chat) =>
+                chat.from?.task === true &&
+                chat.from.reported !== true &&
+                chat.from.unreported !== true,
+            )
+            .map((chat) => chat.session),
+    [sidebar],
+  );
+  const tasksMoved = useChatsSelect(chats, (states) =>
+    unreported.map((session) => `${session}:${stateOf(states, session)}`).join(","),
+  );
+
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
   // directory the operator also edits by hand and another charter process writes, so there is
   // nothing to invalidate a cache of it. `tabs` is the dependency because opening or ending a
@@ -1094,7 +1118,7 @@ export const PlaneView = memo(function PlaneView({
     return () => {
       gone = true;
     };
-  }, [change, sidebarChanges, plane, replan, startedIn, tabs]);
+  }, [change, sidebarChanges, plane, replan, startedIn, tabs, tasksMoved]);
 
   /**
    * What the machine store says this operator has pinned here, and what it says is gone.
@@ -4448,6 +4472,14 @@ export const PlaneView = memo(function PlaneView({
     session?: number;
     /** Whether that chat is offered Smart close (ADR 0064), or none where charter cannot say. */
     smart?: SmartAsk;
+    /** The persona chats that chat asked for that are still running, by name: what the dialog
+     *  asks about once, keep them running or stop them. */
+    running?: readonly string[];
+    /** Its persona chats that have reported and close with it, by name. */
+    closing?: readonly string[];
+    /** For a close of several chats: whether any has chats at work below it, which keep
+     *  running. */
+    keeps?: boolean;
   }>();
 
   /**
@@ -4471,13 +4503,31 @@ export const PlaneView = memo(function PlaneView({
     async (offer: Offer): Promise<Ran> => {
       if (offer.available && endsAChat(offer.does)) {
         const ending = chatsEndedBy(offer.does, now.current);
+        /** What closing chat `session` would do with the chats below it, as the core says. A
+         *  core that answers nothing (an older one) has none below it. */
+        const below = async (session: number) => {
+          const theirs = await commands
+            .personaChatsOf(plane, session)
+            .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+          const said = theirs.status === "ok" ? theirs.data : null;
+          return {
+            running: Array.isArray(said?.running) ? said.running : [],
+            closing: Array.isArray(said?.tasks)
+              ? said.tasks.filter((one) => one.closes_with_its_asker).map((one) => one.name)
+              : [],
+          };
+        };
         if (ending.length !== 1) {
+          // A close of several chats at once asks nothing about what each started: those
+          // keep running, and the dialog says so where any is.
+          const theirs = await Promise.all(ending.map(below));
           setEndingChat({
             offer,
             smart:
               ending.length > 1
                 ? { available: false, why: MORE_THAN_ONE_CHAT, close_first: false }
                 : undefined,
+            keeps: theirs.some((one) => one.running.length > 0),
           });
           return { ok: true };
         }
@@ -4491,7 +4541,10 @@ export const PlaneView = memo(function PlaneView({
           asked.status === "ok" && asked.data !== null && typeof asked.data === "object"
             ? asked.data
             : undefined;
-        setEndingChat({ offer, session, smart });
+        // And the chats at work below it, which the close asks about once, and its reported
+        // persona chats, which close with it.
+        const { running, closing } = await below(session);
+        setEndingChat({ offer, session, smart, running, closing });
         return { ok: true };
       }
       return carryOut(offer);
@@ -4531,6 +4584,36 @@ export const PlaneView = memo(function PlaneView({
       }
     },
     [change, filedIn, isBackground, isPinned, plane, settle, stoppedFor, wrapping],
+  );
+
+  /**
+   * **Stop them**, the person's answer about the chats at work below a closing chat: one
+   * command to the core (`close_chat_stopping`), which ends them, deepest first, and then the
+   * chat itself in the same step, so it cannot start another in between. For a Smart close
+   * it ends them now and remembers the answer for the close the chat's record brings. The
+   * window takes away the tabs of what the core closed — `closeChat`, never `close_session`,
+   * which would end them a second time.
+   */
+  const closeStopping = useCallback(
+    async (session: number, then: "close" | "smart_close") => {
+      const stopped = await commands
+        .closeChatStopping(plane, session, then)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (stopped.status === "error") {
+        setReport({ from: `close-stopping:${session}`, refused: true, words: stopped.error });
+        return false;
+      }
+      const gone = Array.isArray(stopped.data) ? stopped.data : [];
+      if (gone.length > 0)
+        change((tabs) =>
+          gone.reduce(
+            (now, one) => closeChat(now, one, filedIn, isPinned, inTheBackground.current),
+            tabs,
+          ),
+        );
+      return true;
+    },
+    [change, filedIn, isPinned, plane],
   );
 
   const press = useCallback(
@@ -5835,15 +5918,25 @@ export const PlaneView = memo(function PlaneView({
         <EndingChat
           offer={endingChat.offer}
           smart={endingChat.smart}
-          onEnd={() => {
-            const ending = endingChat.offer;
+          running={endingChat.running}
+          closing={endingChat.closing}
+          keeps={endingChat.keeps}
+          onEnd={(stop) => {
+            const { offer: ending, session } = endingChat;
             setEndingChat(undefined);
-            void carryOut(ending);
+            // Stop them: the core closes the chat too, in the one step. Keep them: the
+            // ordinary close.
+            if (stop && session !== undefined) void closeStopping(session, "close");
+            else void carryOut(ending);
           }}
-          onSmartClose={() => {
+          onSmartClose={(stop) => {
             const session = endingChat.session;
             setEndingChat(undefined);
-            if (session !== undefined) void beginSmartClose(session);
+            if (session === undefined) return;
+            void (async () => {
+              if (stop && !(await closeStopping(session, "smart_close"))) return;
+              await beginSmartClose(session);
+            })();
           }}
           onCancel={() => setEndingChat(undefined)}
         />

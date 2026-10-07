@@ -156,6 +156,8 @@ describe("a chat a handoff opened, named for its task (charter-app#258)", () => 
           chat: 3,
           task: false,
           tab: true,
+          reported: false,
+          unreported: false,
         },
       },
     ]);
