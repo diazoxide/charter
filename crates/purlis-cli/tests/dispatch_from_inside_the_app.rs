@@ -1085,7 +1085,7 @@ fn a_task_goes_end_to_end() {
 }
 
 #[test]
-fn a_dispatch_to_another_persona_starts_nothing_and_says_it_needs_a_grant() {
+fn a_dispatch_to_another_persona_starts_nothing_and_says_the_person_is_being_asked() {
     let tmp = daily();
     let root = root(&tmp);
     let (app, _reading, stand_in) = an_app_that_takes_the_apps_steps(&tmp);
@@ -1096,13 +1096,23 @@ fn a_dispatch_to_another_persona_starts_nothing_and_says_it_needs_a_grant() {
         &["--to", "qa", "--name", "check the suite"],
     );
 
-    assert_eq!(out.status.code(), Some(1));
+    // The decision this stand-in asks is the app's own, with no grant in force: needs a
+    // grant. The app holds such a dispatch for the person, so the command says that it is
+    // held and that nothing has started, and it is not a failure.
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "");
     assert!(
-        text(&out.stderr).starts_with(
-            "✗ purlis dispatch: needs a grant. 'steward' has no dispatch grant for 'qa'"
+        text(&out.stdout).starts_with(
+            "purlis dispatch: held for the person. 'steward' chats may not dispatch to 'qa' \
+             yet, so the person is being asked on this chat's tab"
         ),
         "{}",
-        text(&out.stderr)
+        text(&out.stdout)
+    );
+    assert!(
+        text(&out.stdout).contains("Nothing has started."),
+        "{}",
+        text(&out.stdout)
     );
     assert!(stand_in.first_messages.lock().unwrap().is_empty());
     assert_eq!(

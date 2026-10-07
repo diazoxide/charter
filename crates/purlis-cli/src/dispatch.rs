@@ -210,7 +210,7 @@ pub fn send(
             // What the app has to say about how it was started: today, that it runs on this
             // chat's profile because its persona's own is not offered here (D-1445-8).
             let note = match note {
-                Some(note) => format!(" Note: {}.", purlis_core::personas::one_line(&note)),
+                Some(note) => format!(" Note: {}.", whole(&note)),
                 None => String::new(),
             };
             Ok(format!(
@@ -277,6 +277,13 @@ fn held_for_the_person(from: Option<&str>, to: &str, task: &str, waiting: Option
     )
 }
 
+/// What the app said, as one line and **whole**: escaped as anything a chat may have had a
+/// hand in is, and never cut. A refusal says what to do in its last sentence, and the budget
+/// a name is drawn within (160 characters) would cut most of them off before it.
+fn whole(said: &str) -> String {
+    purlis_core::shown::one_line(said, purlis_core::shown::NO_CLIP)
+}
+
 /// The name a dispatch ask carries.
 fn ask_name(ask: &Ask) -> String {
     match ask {
@@ -296,7 +303,7 @@ fn ticket_words(why: &str) -> String {
 }
 
 fn app_refused(why: &str) -> String {
-    let why = purlis_core::personas::one_line(why);
+    let why = whole(why);
     // A refusal that already says nothing was started is not told so twice.
     if why.to_lowercase().contains("nothing was started") {
         format!("{SAYS} {why}")
@@ -446,6 +453,29 @@ fn read_brief() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refusal_longer_than_a_name_s_budget_is_said_whole_and_on_one_line() {
+        // The longest refusal a dispatch has: what an unattended chat with no standing grant
+        // is told. It ends with what to do, which is the part a cut would lose.
+        let why = purlis_core::dispatchunattended::Missing {
+            asking: Some("steward".to_owned()),
+            target: "devops".to_owned(),
+            unreviewed: false,
+        }
+        .say();
+        assert!(why.chars().count() > purlis_core::shown::DISPLAY_LIMIT);
+
+        let said = app_refused(&why);
+
+        assert_eq!(said, format!("{SAYS} {why} {NOTHING}"));
+        assert!(!said.contains('…'), "{said}");
+        // Still one line, whatever the app's sentence held.
+        assert!(!app_refused("one\ntwo").contains('\n'));
+        // And a refusal that already says nothing was started is not told so twice.
+        let none = purlis_core::personaprofile::Refused::NoProfile.say();
+        assert_eq!(app_refused(&none), format!("{SAYS} {none}"));
+    }
 
     #[test]
     fn a_ticket_still_live_is_said_in_a_dispatch_s_words() {
