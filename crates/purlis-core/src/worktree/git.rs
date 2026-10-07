@@ -454,9 +454,10 @@ fn verb<'a>(args: &[&'a str]) -> Option<&'a str> {
 pub struct Isolated {
     /// `key=value`, each passed as `-c`.
     config: Vec<String>,
-    /// A work tree and the git directory a check resolved for it: a call run in that tree is
-    /// given both, so git uses the repository that was checked and no other (D-1335-9).
-    pin: Option<(PathBuf, PathBuf)>,
+    /// Each work tree with the git directory a check resolved for it: a call run in that tree
+    /// is given both, so git uses the repository that was checked and no other (D-1335-9). A
+    /// clone, and beside it the folder of a branch cut from it (D-1453-27).
+    pins: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Isolated {
@@ -468,7 +469,10 @@ impl Isolated {
                 config.push(format!("{key}={value}"));
             }
         }
-        Self { config, pin: None }
+        Self {
+            config,
+            pins: Vec::new(),
+        }
     }
 
     /// The identity the operator's global git config gives, read through this module's
@@ -485,12 +489,26 @@ impl Isolated {
 
     /// The same, with every call run in `work_tree` given `--git-dir=<git_dir>` and
     /// `--work-tree=<work_tree>`, so it uses the repository a check resolved and discovers none.
+    /// A tree pinned before keeps its pin, and one pinned again takes the later git directory.
     #[must_use]
     pub fn pinned(&self, work_tree: &Path, git_dir: &Path) -> Self {
+        let tree = real(work_tree);
+        let mut pins = self.pins.clone();
+        pins.retain(|(held, _)| *held != tree);
+        pins.push((tree, git_dir.to_path_buf()));
         Self {
-            pin: Some((real(work_tree), git_dir.to_path_buf())),
+            pins,
             ..self.clone()
         }
+    }
+
+    /// The git directory a call run in `dir` is pinned to, if it is.
+    pub fn pin_of(&self, dir: &Path) -> Option<&Path> {
+        let dir = real(dir);
+        self.pins
+            .iter()
+            .find(|(tree, _)| *tree == dir)
+            .map(|(_, git_dir)| git_dir.as_path())
     }
 
     /// One more key. **For a test's stand-in forge only** (a `url.<base>.insteadOf` that points
@@ -559,11 +577,9 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
         for setting in &held.config {
             cmd.arg("-c").arg(setting);
         }
-        if let Some((tree, git_dir)) = &held.pin
-            && real(dir) == *tree
-        {
+        if let Some(git_dir) = held.pin_of(dir) {
             cmd.arg(format!("--git-dir={}", git_dir.display()))
-                .arg(format!("--work-tree={}", tree.display()));
+                .arg(format!("--work-tree={}", real(dir).display()));
         }
     }
     cmd.arg("-C").arg(dir).args(args);

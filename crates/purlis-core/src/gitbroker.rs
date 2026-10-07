@@ -128,6 +128,83 @@ fn isolated_answer(
     }
 }
 
+/// Runs `then` in the clone of `repo` in workspace `ws` **as a brokered git action is run**,
+/// for work the app does there on its own account and not on a chat's ask (#1453): the
+/// worktree it cuts for a persona chat a dispatch starts, and that worktree's removal.
+///
+/// The chat that will work there, or did, could have shaped the repository, so the two rules a
+/// chat's own ask is held to hold here: every git call reads `isolation`'s configuration and
+/// no global or system file, and a repository whose own config names a program is refused
+/// before any git runs in it ([`runs_a_program`]), with the calls pinned to the git directory
+/// that was checked. Nothing here reads an ask: which clone it is, is the app's to say.
+pub fn in_a_checked_clone<T>(
+    root: &Path,
+    ws: &str,
+    repo: &str,
+    isolation: &git::Isolated,
+    then: impl FnOnce() -> T,
+) -> Result<T, String> {
+    if !crate::contain::workspace_name_ok(ws) {
+        return Err(format!(
+            "'{}' cannot name a workspace",
+            crate::shown::short(ws)
+        ));
+    }
+    if !crate::contain::repo_name_ok(repo) {
+        return Err(format!(
+            "'{}' cannot name a repo",
+            crate::shown::short(repo)
+        ));
+    }
+    let clone = root.join("workspaces").join(ws).join(repo);
+    git::isolated(isolation, || {
+        let git_dir = runs_a_program(&clone)?;
+        Ok(git::isolated(&isolation.pinned(&clone, &git_dir), then))
+    })
+}
+
+/// Why [`in_a_checked_folder`] ran nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotRun {
+    /// The clone is not one the brokered route runs git in ([`in_a_checked_clone`]'s sentence).
+    Repo(String),
+    /// The branch's folder does not name the git directory the clone keeps for it.
+    Folder(crate::worktree::pointer::NotItsFolder),
+}
+
+/// [`in_a_checked_clone`] for work that also runs git **in the folder of `piece`**, a branch
+/// cut from that clone: what the folder holds, whether its branch is merged, its removal.
+///
+/// The folder is where a chat wrote, so which repository it belongs to is not read from it.
+/// Its git directory is derived from the clone that was just checked and the piece's name, the
+/// folder is checked to name exactly that directory
+/// ([`crate::worktree::pointer::verified`]), and every call run in the folder is pinned to it
+/// beside the clone's own pin (D-1453-27). A folder that names anything else is
+/// [`NotRun::Folder`], and no git runs in it or for it. A folder that is not there has nothing
+/// to check and gets no pin: no call can run in it.
+pub fn in_a_checked_folder<T>(
+    root: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+    isolation: &git::Isolated,
+    then: impl FnOnce() -> T,
+) -> Result<T, NotRun> {
+    let folder = crate::worktree::path_for(root, ws, repo, piece)
+        .map_err(|refusal| NotRun::Repo(refusal.to_string()))?;
+    let clone = root.join("workspaces").join(ws).join(repo);
+    git::isolated(isolation, || {
+        let git_dir = runs_a_program(&clone).map_err(NotRun::Repo)?;
+        let mut held = isolation.pinned(&clone, &git_dir);
+        if folder.symlink_metadata().is_ok() {
+            let own = crate::worktree::pointer::verified(&git_dir, &folder, piece)
+                .map_err(NotRun::Folder)?;
+            held = held.pinned(&folder, &own);
+        }
+        Ok(git::isolated(&held, then))
+    })
+}
+
 /// Whether `workspace` is one a chat standing at `cwd` already writes its ordinary files in:
 /// the chat stands at the project root, which writes every workspace, or inside `workspace`
 /// itself (D-3). Anything else is refused with a sentence.

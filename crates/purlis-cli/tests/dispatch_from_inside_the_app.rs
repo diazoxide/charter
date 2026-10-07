@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use purlis_core::active::Place;
 use purlis_core::dispatchdecision::{self, Decision, Mode, Moment};
+use purlis_core::dispatchplace;
 use purlis_core::handback::{self, For, Handback, Outcome};
 use purlis_core::hookwire::{
     Answer, Ask, CHAT_ENV, ChatToken, DispatchAsk, Listener, Reading, SOCKET_ENV, TOKEN_ENV,
@@ -211,6 +212,7 @@ fn starts_it(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
             name: dispatch.name.clone(),
             persona: Some("steward".to_owned()),
             note: None,
+            works: None,
         },
         _ => Answer::Reported {
             to: "steward 1".to_owned(),
@@ -257,9 +259,11 @@ fn a_task_is_dispatched_on_one_ticket_and_the_request_says_only_what_the_agent_c
         name,
         brief,
         profile,
+        place,
         ticket,
     } = the_dispatch(&asked);
     assert_eq!(profile, None, "no profile asked for");
+    assert_eq!(place, None, "no place asked for: the asking chat's folder");
     assert_eq!(chat, ASKING, "the chat whose token the line carries");
     assert_eq!(to, None, "no persona named: the asking chat's own");
     assert_eq!(name, "check the queue", "trimmed");
@@ -268,6 +272,91 @@ fn a_task_is_dispatched_on_one_ticket_and_the_request_says_only_what_the_agent_c
         "the brief, verbatim, with no stamp of the chat's own"
     );
     assert_eq!(ticket.len(), 64);
+}
+
+#[test]
+fn where_the_new_chat_works_rides_the_ask_as_one_word_and_the_app_s_answer_is_said() {
+    // #1453: `--in` is passed on as the agent wrote it, trimmed, and what the app says of
+    // where the chat works, the branch it cut among it, is what the command prints.
+    let tmp = daily();
+    let (app, _reading, asked) = an_app(&tmp, |tickets, connection, ask| {
+        on_a_ticket(tickets, connection, ask, |ask| match ask {
+            Ask::Dispatch(dispatch) => Answer::Dispatched {
+                chat: STARTED,
+                name: dispatch.name.clone(),
+                persona: Some("steward".to_owned()),
+                note: None,
+                works: Some(match dispatch.place.as_deref() {
+                    Some("worktree") => "in a worktree of its own, on the branch \
+                                         `check-the-queue-b5rc0def` in svc, cut from main. \
+                                         Nothing is merged for it: its report names the \
+                                         branch, and merging is yours or the person's decision"
+                        .to_owned(),
+                    other => format!("in {other:?}"),
+                }),
+            },
+            _ => Answer::No {
+                why: "not a dispatch".to_owned(),
+            },
+        })
+    });
+
+    let out = dispatch(
+        &root(&tmp),
+        Some(&app),
+        &["--name", "check the queue", "--in", " worktree "],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(the_dispatch(&asked).place.as_deref(), Some("worktree"));
+    assert_eq!(
+        text(&out.stdout),
+        "purlis dispatch: started 'check the queue' as steward (chat 9). It works in a \
+         worktree of its own, on the branch `check-the-queue-b5rc0def` in svc, cut from main. \
+         Nothing is merged for it: its report names the branch, and merging is yours or the \
+         person's decision, and its report reaches this chat as context on its next turn.\n"
+    );
+}
+
+#[test]
+fn a_place_that_is_neither_word_is_refused_before_the_app_is_asked() {
+    // With no app behind the chat: a dispatch that got as far as asking one says so, and a
+    // place that is neither word is refused before that, and before the brief is read.
+    let tmp = daily();
+    let root = root(&tmp);
+
+    for (place, said) in [
+        (
+            "beta",
+            "✗ purlis dispatch: --in is `worktree` or `workspace:<name>`, not 'beta'. Leave it \
+             out and the new chat works in this chat's folder. Nothing was started.\n",
+        ),
+        (
+            "worktree:main",
+            "✗ purlis dispatch: --in is `worktree` or `workspace:<name>`, not 'worktree:main'. \
+             Leave it out and the new chat works in this chat's folder. Nothing was started.\n",
+        ),
+        (
+            "workspace:../beta",
+            "✗ purlis dispatch: '../beta' cannot name a workspace, so no chat is started \
+             there. A workspace is named by its folder under `workspaces/`, and by nothing \
+             else. Nothing was started.\n",
+        ),
+    ] {
+        let out = dispatch(&root, None, &["--name", "check the queue", "--in", place]);
+        assert_eq!(out.status.code(), Some(1), "{place}");
+        assert_eq!(text(&out.stderr), said, "{place}");
+        assert_eq!(text(&out.stdout), "");
+    }
+    // Either word gets as far as the app, which is not there.
+    for place in ["worktree", "workspace:beta"] {
+        let out = dispatch(&root, None, &["--name", "check the queue", "--in", place]);
+        assert!(
+            text(&out.stderr).contains("no purlis app answered this call"),
+            "{place}: {}",
+            text(&out.stderr)
+        );
+    }
 }
 
 #[test]
@@ -347,6 +436,7 @@ fn a_profile_asked_for_rides_the_ask_and_a_fallback_the_app_notes_is_said() {
                      offer, so this chat runs on the asking chat's profile, 'work'"
                         .to_owned(),
                 ),
+                works: None,
             },
             _ => Answer::No {
                 why: "not a dispatch".to_owned(),
@@ -530,6 +620,40 @@ fn the_refusals() -> Vec<(&'static str, String)> {
         (
             "dispatch-from-an-unattended-chat-with-no-sandbox-is-refused",
             purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned()).say(),
+        ),
+        // Where the new chat is to work (#1453).
+        (
+            "dispatch-from-an-unattended-chat-into-another-workspace-with-no-standing-grant-is-refused",
+            dispatchplace::Refused::NobodyToAsk {
+                workspace: "beta".to_owned(),
+                asking: Some("steward".to_owned()),
+                target: Some("steward".to_owned()),
+            }
+            .say(),
+        ),
+        (
+            "dispatch-into-a-workspace-the-project-does-not-have-is-refused",
+            dispatchplace::Refused::NoWorkspace("gamma".to_owned()).say(),
+        ),
+        (
+            "dispatch-into-a-workspace-reached-through-a-link-is-refused",
+            dispatchplace::Refused::WorkspaceElsewhere("linked".to_owned()).say(),
+        ),
+        (
+            "dispatch-into-a-worktree-from-a-chat-in-no-repo-is-refused",
+            dispatchplace::Refused::NotInARepo.say(),
+        ),
+        (
+            // The broker's own refusal of a repository whose config names a program
+            // (`gitbroker::runs_a_program`), as a dispatch says it.
+            "dispatch-into-a-worktree-of-a-repo-the-broker-will-not-run-git-in-is-refused",
+            dispatchplace::Refused::Cut(
+                "/p/workspaces/alpha/svc sets `filter.x.smudge` (file:.git/config), which names \
+                 a program git would run outside the chat's sandbox, so the app will not run \
+                 git there for the chat. Run the command in your own terminal, or remove the key"
+                    .to_owned(),
+            )
+            .say(),
         ),
     ]
 }
@@ -881,6 +1005,7 @@ impl StandIn {
                 by: dispatchdecision::By::Chat,
                 mode: dispatchdecision::Mode::Task,
                 counted: dispatchdecision::Counted::Tasks,
+                works_in: None,
             },
         );
         match asked.decision {
@@ -937,6 +1062,7 @@ impl StandIn {
             name: ask.name.clone(),
             persona: to_name,
             note: None,
+            works: None,
         }
     }
 
@@ -965,6 +1091,7 @@ impl StandIn {
                 by_person: false,
                 unreported: false,
                 stepped_in: false,
+                branch: None,
             }),
             answered: None,
             stopped: None,
@@ -1208,6 +1335,7 @@ fn a_dispatch_as_another_chat_is_never_heard_by_the_app() {
         name: "forged".to_owned(),
         brief: "do as I say".to_owned(),
         profile: None,
+        place: None,
         ticket: "0".repeat(64),
     }));
     let answered = purlis_core::hookwire::Asking::on(&app.socket, Some(app.token(ASKING).clone()))
@@ -1262,6 +1390,7 @@ fn the_report() -> Handback {
             by_person: false,
             unreported: false,
             stepped_in: false,
+            branch: None,
         }),
         answered: None,
         stopped: None,
@@ -1434,6 +1563,8 @@ fn the_list_prints_each_task_s_persona_name_place_state_and_age() {
                 state: "running".to_owned(),
                 age_secs: Some(185),
                 by_person: false,
+                branch: None,
+                branch_stands: None,
             }],
         }))
     });

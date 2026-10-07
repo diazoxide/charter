@@ -2713,6 +2713,74 @@ fn charters_own_wrap_never_lets_a_chat_ask_the_keychains_service() {
     }
 }
 
+#[test]
+fn a_chat_started_in_a_worktree_writes_that_folder_and_nothing_of_the_clone_it_was_cut_from() {
+    // #1453: a dispatch may start its persona chat in a worktree the app cut for it. The start
+    // is the one every chat in a branch folder has, and this is what it compiles to: the
+    // worktree is the ground, and the clone it was cut from, that clone's `.git` and the
+    // worktree's own git data there (`.git/worktrees/<piece>`) are not writable. That last one
+    // is why such a chat cannot commit (purlis issue 1055), and it is the rule that issue
+    // will change: a change there fails here first.
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = std::fs::canonicalize(dir.path()).expect("resolved");
+    let clone = root.join("workspaces/alpha/api");
+    let cwd = root.join("workspaces/alpha/.worktrees/api/check-the-queue-b5rc0def");
+    let tmp = root.join("tmp");
+    for made in [&clone, &cwd, &tmp] {
+        std::fs::create_dir_all(made).expect("a folder");
+    }
+
+    let profile = seatbelt::profile(&[], &seatbelt::Own::default(), &cwd, &tmp, 4040, None)
+        .expect("a profile");
+
+    // Every path the profile lets the chat write, by the rule that names it.
+    let block = profile
+        .split_once("(allow file-write*\n")
+        .expect("what it may write")
+        .1;
+    let allowed: Vec<&str> = block
+        .lines()
+        .map(str::trim)
+        .take_while(|line| *line != ")")
+        .filter(|line| line.starts_with("(subpath ") || line.starts_with("(literal "))
+        .collect();
+    let named = |path: &std::path::Path| format!("\"{}\"", path.display());
+    assert!(
+        allowed.contains(&format!("(subpath {})", named(&cwd)).as_str()),
+        "{allowed:?}"
+    );
+    assert!(
+        allowed.contains(&format!("(subpath {})", named(&tmp)).as_str()),
+        "{allowed:?}"
+    );
+    // Nothing above the worktree, and nothing of the clone.
+    for not_its in [
+        clone.clone(),
+        clone.join(".git"),
+        clone.join(".git/worktrees/check-the-queue-b5rc0def"),
+        root.join("workspaces/alpha"),
+        root.join("workspaces/alpha/.worktrees"),
+        root.join("workspaces/alpha/.worktrees/api"),
+        root.clone(),
+    ] {
+        let rule = named(&not_its);
+        assert!(
+            !allowed.iter().any(|line| line.contains(rule.as_str())),
+            "{} is writable: {allowed:?}",
+            not_its.display()
+        );
+    }
+    let writes: Vec<&&str> = allowed
+        .iter()
+        .filter(|line| line.contains(root.to_string_lossy().as_ref()))
+        .collect();
+    assert_eq!(
+        writes.len(),
+        2,
+        "its folder and its temp folder: {writes:?}"
+    );
+}
+
 // -------------------------------------------------------------------------------------
 // The ground a chat stands on is never denied (#1327)
 // -------------------------------------------------------------------------------------

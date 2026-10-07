@@ -2589,6 +2589,7 @@ function listed(session: number, parent: number | null = null, tab = true): List
     mode: parent === null ? null : "task",
     from: parent === null ? null : `chat ${parent}`,
     tab,
+    branch: null,
   };
 }
 

@@ -2623,7 +2623,7 @@ is a string; "type" below is how purlis interprets it.
 | `routing` | `off` \| `advise` \| `require` | absent/unknown → `off` | Drove the Python's UserPromptSubmit roster block. **Retired** in purlis (charter#369): read without error, acted on by nothing, and `purlis doctor` names the personas that still declare it. Work for another persona goes to a chat of its own, by dispatch (#1434) | retired | `charter/persona.py:936`, `:939`, `charter/hooks.py:8518` |
 | `routes-to` | CSV of persona names | absent | Priority order for the roster (never restricts). **Retired** with `routing` — there is no roster | retired | `charter/persona.py:962`, `:1001` |
 | `activity` | `orchestrator` \| `standby` \| `advisory` | absent | Declares memory volume is not a usage signal; changes `persona stats` status | stable | `charter/persona.py:2408`, `:2444` |
-| `dispatch-isolation` | `worktree` | absent | **Retired in purlis (#1451): read by nothing.** It emitted `isolation: worktree` into the generated sub-agent, and made the dispatch hook ask before two writers shared a tree. A persona chat works in the asking chat's folder and nothing asks. `persona lint` and the `persona-agents` fix say so and leave the line. A persona chat in its own worktree: #1453 | retired |
+| `dispatch-isolation` | `worktree` | absent | It emitted `isolation: worktree` into the generated sub-agent, which purlis no longer generates (#1451). **In purlis** (#1453): the persona's default place to work when a dispatch to it names none — its chat gets a worktree of its own, cut by the app off the repo the asking chat works in, and works in the asking chat's folder where that chat works in no repo. Read with the persona's chain applied. A dispatch's own `--in` wins over it | stable | `charter/commands_persona.py:802`, `:916`; `crates/purlis-core/src/dispatchplace.rs` `isolates` |
 | `profile` | the name of a harness profile, or the reserved `none` | absent = a chat dispatched to this persona starts on the asking chat's profile | **purlis only** (#1445). The profile this persona's chats start on: what the new-chat picker starts on when the persona is picked, and what a chat handed to it starts on, on whatever harness that profile runs. A name, never a command: it is only looked up among the profiles the project offers on this machine. **Only a built-in's name (`claude`, `codex`, `opencode`) or a declared harness's travels with the project**; a local profile's name is one machine's. Where the name is not offered on a machine, a chat handed to the persona starts on the asking chat's profile there, and the dispatch's answer, the new chat's stamp and the persona view say so. A profile that is offered and whose command has not been approved on that machine starts nothing. `none` names no profile, for a persona that would otherwise inherit one, so no profile called `none` can be named. Inherited along `extends`. Claude Code and Codex profiles are the ones tested in this version; an `opencode` profile goes the same way and is untested | stable | `crates/purlis-core/src/personaprofile.rs` `named_by`, `for_dispatch` |
 | `model` | string | absent | **purlis:** where `profile` is absent and the project offers a profile of exactly this name, it names that profile; any other value is read by nothing (#1451: it was passed verbatim into the generated agent's frontmatter). The `persona-agents` fix rewrites the line to `profile:` where it is read as one and the profile travels with the project (a built-in or a declared harness the project offers on that machine, and no definition of the `extends` chain has a `profile:` line). Otherwise it and `persona lint` report it, with what follows: **a chat as that persona runs on the asking chat's profile and model** (D-1451-20) | retired, but for the profile it may name | `charter/persona.py:305`, `charter/commands_persona.py:953` |
 | `color` | a palette name (`red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`) or `#rrggbb` | absent = a colour of the palette picked by the persona's name | **The persona's colour**, which its mark is drawn on wherever the persona appears in the app (#1449): a workspace's vocabulary (`settings.theme.colour`), and a hue of the theme drawn. Inherited along `extends`, child wins. A value that is neither is not drawn, and the persona's view says so. No longer copied anywhere: the generated agent is retired (#1451). The `persona-agents` fix rewrites the two names Claude Code used that this palette spells otherwise (`cyan` to `teal`, `magenta` to `pink`) | stable | `crates/purlis-core/src/personamark.rs` (`mark`); `charter/persona.py:305` |
@@ -4917,7 +4917,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `session_record` (its own, once it wrote one); `task` — the task's name, absent where the
   dispatch gave none; `place` — where it worked: `workspace` (absent for the project's root),
   `folder` (relative to the project, `.` for its root, or absolute for one outside it),
-  `worktree` (`{"repo", "piece", "branch"?}`, absent unless the dispatch gave it its own);
+  `worktree` (`{"repo", "piece", "branch"?, "removed"?}`, absent unless the dispatch gave it
+  its own; see *Its own worktree* below);
   `brief` — the message the persona chat started on, without its stamp; `report_owed`;
   `started` and `ended` — UTC, `YYYY-MM-DDTHH:MM:SS+00:00`, `ended` absent while it runs;
   `report` — absent while it runs and for a dispatch that ended owing none:
@@ -4937,6 +4938,40 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   a brief to 16 KiB, a report's text to 8 KiB, a name to 512 bytes, a path to 1 KiB, and a
   report's files and commits to 100 each. A text over its cap is cut at a character and ends
   ` [cut at N bytes]`; a long brief or report never costs the dispatch its record.
+- **Its own worktree** (#1453): a dispatch asked for with `--in worktree`, or to a persona
+  whose definition says `dispatch-isolation: worktree`, gives its persona chat a worktree the
+  **app** cuts, by the brokered route (ADR 0067 §2), off the clone the asking chat works in.
+  `place.workspace` is that clone's workspace, `place.folder` the worktree's folder
+  (`workspaces/<ws>/.worktrees/<repo>/<piece>`), and `place.worktree` is:
+  - `repo` — the clone it was cut from, by its name in that workspace;
+  - `piece` — the worktree's folder name, which purlis chose: the task's name as a branch name
+    can carry it (letters, digits, `.`, `_`, `-`; `task` where nothing of it can), a `-`, and
+    the last eight characters of this record's `id`, lowercased. So the record's id is minted
+    before the worktree is cut, and two dispatches never share a folder or a branch. Nothing a
+    chat sends is read as a folder or a branch;
+  - `branch` — the branch purlis cut it on, as git printed it: the same name as `piece`. **It
+    is what a task's report names as its branch** (`report.changed.branch`, and the line the
+    asking chat's turn is told), whatever the persona chat says;
+  - `removed` — `"merged"` once purlis found that branch merged into the branch it was cut
+    from and took the worktree away, folder and branch; `"merged_branch_kept"` where it took
+    the folder and git would not delete the branch; `"discarded"` once the person
+    discarded its folder from the window, which deletes the branch only where git finds it
+    merged, so a branch that holds a commit found nowhere else is still in the repo. Absent
+    while the worktree is kept, and for one removed by other means, which the folder's absence
+    says. Written once, and never for a dispatch still running.
+
+  Nothing is ever merged for a dispatch. purlis looks at a kept worktree when its chat is
+  closed and when the project is opened, at no other time, and takes it away only where every
+  commit of `branch` is in the branch it was cut from (`branch.<branch>.charterBase`, below)
+  and the folder holds nothing else: no uncommitted path, and no ignored path that is not
+  purlis's own layer. **A record's worktree is the one purlis cut for that dispatch and no
+  other**: a record whose `piece` does not end with the end of its own `id`, or whose `branch`
+  is not its `piece`, names no worktree purlis looks at or offers to discard. **Which
+  repository that folder belongs to is purlis's record too**: for each of those looks, and for
+  a discard, git is given the git directory the clone keeps for the piece
+  (`<clone>/.git/worktrees/<piece>`) and the folder itself, after the folder's `.git` line is
+  checked to name exactly that directory. A folder that names another is left as it is, and
+  the window says so in one sentence (`purlis_core::worktree::pointer::verified`).
 - **Status:** **internal** — written by the app alone, and read by the app alone.
 - **Who writes it:** the app, from its own record of the two chats
   (`purlis_core::dispatchrecord`, called from `app/src-tauri/src/dispatches.rs`): opened where
@@ -5171,7 +5206,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Status:** **retired in purlis** (#1451) — it was written by the dispatch hook so that a
   persona declaring `dispatch-isolation: worktree` could be asked about before it shared a
   tree with a running agent. A persona is never a sub-agent now, so purlis neither writes
-  nor reads it. A file left from before is not removed.
+  nor reads it. (The key itself is read again, #1453: it gives a dispatched chat a worktree of
+  its own, and nothing is asked.) A file left from before is not removed.
 - **Tier:** Clone state, transient
 - **Written by:** `charter/inflight.py:246` (`start`, `tempfile.mkstemp` + `json.dump`);
   caller `charter/hooks.py:7954`. Also `kind="clone"` (`charter/commands.py:606`),

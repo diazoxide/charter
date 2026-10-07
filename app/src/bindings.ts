@@ -647,8 +647,11 @@ export const commands = {
 	 *  Ask `persona` from chat `session`'s tab: starts a chat as that persona, under that chat, on
 	 *  what you typed. Its report goes to that chat, marked as started by you. Answers the new
 	 *  chat's number; the window is told of it as it is told of any chat another chat started.
+	 * 
+	 *  `place` is where it works (#1453): `null` for that chat's folder, `worktree` for a branch of
+	 *  its own cut from the repo that chat works in, or `workspace:<name>` for another workspace.
 	 */
-	askPersonaChat: (plane: PlaneId, session: number, persona: string, name: string, ask: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("ask_persona_chat", { plane, session, persona, name, ask, columns, rows })),
+	askPersonaChat: (plane: PlaneId, session: number, persona: string, name: string, ask: string, place: string | null, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("ask_persona_chat", { plane, session, persona, name, ask, place, columns, rows })),
 	/**
 	 *  What closing chat `session` would do with the chats below it: its persona chats, each with
 	 *  where it stands and whether it closes too, and every chat below it that is at work.
@@ -860,6 +863,21 @@ export const commands = {
 	 *  record.
 	 */
 	dispatches: (plane: PlaneId) => typedError<Dispatches, string>(__TAURI_INVOKE("dispatches", { plane })),
+	/**
+	 *  What discarding the folder of dispatch `id`'s own branch would take with it (#1453): every
+	 *  uncommitted file, every ignored one, and how many commits its branch holds that exist
+	 *  nowhere else, for the question the window asks before it discards. Refused while a chat is
+	 *  still open in the folder, and where git will not say what is there.
+	 */
+	dispatchWorktreeLoss: (plane: PlaneId, id: string) => typedError<WorktreeLoss, string>(__TAURI_INVOKE("dispatch_worktree_loss", { plane, id })),
+	/**
+	 *  **Discard** on a dispatch's own branch (#1453): removes its folder, for good, with every
+	 *  uncommitted and ignored file in it. The branch is kept unless git finds it merged, so no
+	 *  commit is lost. `seen` is what the window showed the person would go, as
+	 *  `dispatch_worktree_loss` answered it: where the folder holds anything else by now, nothing
+	 *  is removed. Refused while a chat is still open in the folder. Nothing is merged.
+	 */
+	dispatchWorktreeDiscard: (plane: PlaneId, id: string, seen: WorktreeLoss) => typedError<null, string>(__TAURI_INVOKE("dispatch_worktree_discard", { plane, id, seen })),
 	/**
 	 *  Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
 	 *  given its conversation where it can be, and told the record in its briefing
@@ -2711,6 +2729,11 @@ export type DispatchRow = {
 	open_session: number | null,
 	/**  Else its session record, by its project-relative path, once it wrote one. */
 	session_record: string | null,
+	/**
+	 *  The worktree the app cut for it, where the dispatch gave it one (#1453), and how it
+	 *  stands. `null` for a dispatch that worked in a folder that was already there.
+	 */
+	worktree: RowWorktree | null,
 };
 
 /**  What the Dispatches tab is handed. */
@@ -5127,6 +5150,25 @@ export type RowAction = {
 	deletes: boolean,
 };
 
+/**  A dispatch's worktree, as its row lists it (#1453). */
+export type RowWorktree = {
+	/**  The repo it was cut from. */
+	repo: string,
+	/**  The branch purlis cut for it. */
+	branch: string | null,
+	/**
+	 *  `kept` while its folder is there; `merged` once purlis found its branch merged and took
+	 *  folder and branch away; `merged-branch-kept` where git kept the branch; `discarded` once the person discarded its folder;
+	 *  `gone` for one removed by other means.
+	 */
+	standing: string,
+	/**
+	 *  Whether Discard is offered: its folder is there. Discard itself is refused while a chat
+	 *  still stands in it.
+	 */
+	discard: boolean,
+};
+
 /**  What the picker says about the sandbox for one profile, before anything starts. */
 export type SandboxAhead = {
 	/**  `sandboxed`, `unsandboxed` (this system has no backend) or `refused`. */
@@ -6088,6 +6130,54 @@ export type WorkspaceSettings = {
 
 /**  What a workspace settings save answered. */
 export type WorkspaceSettingsSaved = { kind: "saved"; settings: WorkspaceSettings } | { kind: "refused"; reasons: string[] };
+
+/**
+ *  What discarding the folder of a dispatch's own branch would take with it, as the window
+ *  shows it before it asks (#1453), and as the window hands it back with the answer: **the
+ *  paths discarded are the ones the person was shown, or nothing is.**
+ * 
+ *  A comparison of paths, and it says so: every uncommitted file is listed by its own path,
+ *  so a new one is seen. A listed file changed again, or a file added inside a folder git
+ *  ignores whole, is the same list and passes. The moment between the last read and git's
+ *  removal is not covered either.
+ */
+export type WorktreeLoss = {
+	/**  The task, by the name its row has. */
+	task: string,
+	/**  The repo the branch is in. */
+	repo: string,
+	/**
+	 *  The branch purlis cut for the task, by the dispatch's record: the one a discard may
+	 *  delete, and only where git finds it merged.
+	 */
+	branch: string | null,
+	/**
+	 *  The branch the folder is on now; `null` for a folder on no branch (a detached HEAD).
+	 *  The record's, unless the chat switched its folder away from it.
+	 */
+	on: string | null,
+	/**
+	 *  Every uncommitted path, as git prints it (`?? new.txt`, ` M a.rs`): lost with the
+	 *  folder.
+	 */
+	changes: string[],
+	/**
+	 *  Every path git ignores there, a folder as one entry (`target/`): build output, local
+	 *  settings, and what purlis keeps hidden in a chat's folder. Deleted with the folder.
+	 */
+	ignored: string[],
+	/**
+	 *  How many commits the folder holds that exist on no other branch and no remote. **Where
+	 *  the folder is on a branch they are not lost**: that branch stays. Where it is on none,
+	 *  nothing keeps them and they go with the folder.
+	 */
+	unmerged: number,
+	/**
+	 *  Those commits, newest first, as `<short sha> <subject>` and at most eleven of them,
+	 *  **where they would be lost**: the folder is on no branch. Empty otherwise.
+	 */
+	lost: string[],
+};
 
 /**
  *  Which editor the operator chose in Settings (RC-20, ADR 0081 §3). The window

@@ -1,7 +1,8 @@
 //! `purlis dispatch` — start a persona chat on a task, and send a task's report back (#1436).
 //!
 //! ```text
-//! purlis dispatch --name "<task>" [--to <persona>] [--profile <profile>] <<'BRIEF'
+//! purlis dispatch --name "<task>" [--to <persona>] [--profile <profile>]
+//!                 [--in workspace:<name> | --in worktree] <<'BRIEF'
 //! <the brief>
 //! BRIEF
 //!
@@ -144,14 +145,23 @@ pub enum DispatchCommand {
     },
 }
 
-/// `purlis dispatch --name <task> [--to <persona>] [--profile <profile>] [--wait]`, with the
-/// brief on stdin. `waits` is how long to wait for the report, in seconds, where the command
-/// was told to wait.
+/// What a dispatch may say besides whom it is to, its name and its brief.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Options<'a> {
+    /// `--profile`: one of the project's harness profiles.
+    pub profile: Option<&'a str>,
+    /// `--in`: `worktree`, or `workspace:<name>` (#1453).
+    pub place: Option<&'a str>,
+}
+
+/// `purlis dispatch --name <task> [--to <persona>] [--profile <profile>] [--in <where>]
+/// [--wait]`, with the brief on stdin. `waits` is how long to wait for the report, in seconds,
+/// where the command was told to wait.
 pub fn dispatch(
     here: &crate::Here,
     to: Option<&str>,
     name: Option<&str>,
-    profile: Option<&str>,
+    options: &Options<'_>,
     waits: Option<u32>,
 ) -> ExitCode {
     let Some(name) = name else {
@@ -163,7 +173,7 @@ pub fn dispatch(
     };
     // The name and the persona are asked before the read: neither needs the brief, and a
     // refusal that waited for stdin would wait on a terminal.
-    if let Err(why) = checked(here, to, name) {
+    if let Err(why) = checked(here, to, name).and_then(|_| placed(options.place)) {
         voice::err(&why);
         return ExitCode::FAILURE;
     }
@@ -174,7 +184,16 @@ pub fn dispatch(
             return ExitCode::FAILURE;
         }
     };
-    said(send(here, to, name, &brief, profile, waits))
+    said(send(here, to, name, &brief, options, waits))
+}
+
+/// `--in` as the app will read it, or the refusal: one of its two words, said before a brief
+/// is read. Whether the workspace is there, and whether this chat works in a repo a worktree
+/// can be cut from, are the app's to say, from its own record of this chat.
+fn placed(place: Option<&str>) -> Result<Option<String>, String> {
+    let asked = purlis_core::dispatchplace::asked(place)
+        .map_err(|refused| format!("{SAYS} {} {NOTHING}", refused.say()))?;
+    Ok(asked.map(|_| place.unwrap_or_default().trim().to_owned()))
 }
 
 /// Prints what a dispatch or a report answered: `Ok` on stdout, `Err` on stderr as a refusal.
@@ -226,10 +245,11 @@ pub fn send(
     to: Option<&str>,
     name: &str,
     brief: &str,
-    profile: Option<&str>,
+    options: &Options<'_>,
     waits: Option<u32>,
 ) -> Result<String, String> {
     let name = checked(here, to, name)?;
+    let place = placed(options.place)?;
     if !brief
         .split(purlis_core::memstore::is_python_space)
         .any(|word| !word.is_empty())
@@ -273,18 +293,32 @@ pub fn send(
         to: to.map(str::to_owned),
         name,
         brief: brief.to_owned(),
-        profile: profile
+        profile: options
+            .profile
             .map(str::trim)
             .filter(|profile| !profile.is_empty())
             .map(str::to_owned),
+        place,
         ticket,
     }));
-    match asking.ask(&ask, crate::handoff::AN_OPEN_TAKES_AT_MOST) {
+    // A worktree is cut before the chat starts: a checkout, which on a large repo takes far
+    // longer than a start alone.
+    let cuts_a_worktree = matches!(
+        purlis_core::dispatchplace::asked(options.place),
+        Ok(Some(purlis_core::dispatchplace::Where::Worktree))
+    );
+    let within = if cuts_a_worktree {
+        A_WORKTREE_TAKES_AT_MOST
+    } else {
+        crate::handoff::AN_OPEN_TAKES_AT_MOST
+    };
+    match asking.ask(&ask, within) {
         Ok(Answer::Dispatched {
             chat,
             name,
             persona,
             note,
+            works,
         }) => {
             let who = match persona {
                 Some(persona) => format!(" as {}", purlis_core::personas::one_line(&persona)),
@@ -292,15 +326,24 @@ pub fn send(
             };
             // What the app has to say about how it was started: today, that it runs on this
             // chat's profile because its persona's own is not offered here (D-1445-8).
+            // Whole, never cut ([`whole`]): since #1453 it can say more than one thing (a
+            // default worktree that gave way, a clone whose uncommitted changes stayed behind).
             let note = match note {
                 Some(note) => format!(" Note: {}.", whole(&note)),
                 None => String::new(),
             };
+            // Where it works, in the app's words: another workspace, or a worktree of its own
+            // with the branch purlis cut (#1453). The app says nothing where it is this
+            // chat's folder.
+            let works = match works {
+                Some(works) => whole(&works),
+                None => "in this chat's folder".to_owned(),
+            };
             let name = purlis_core::personas::one_line(&name);
             let Some(within) = waits else {
                 return Ok(format!(
-                    "{SAYS} started '{name}'{who} (chat {chat}). It works in this chat's \
-                     folder, and its report reaches this chat as context on its next turn.{note}"
+                    "{SAYS} started '{name}'{who} (chat {chat}). It works {works}, and its \
+                     report reaches this chat as context on its next turn.{note}"
                 ));
             };
             // The chat is running either way: what the wait says is added to that, never
@@ -309,7 +352,7 @@ pub fn send(
                 Ok(said) | Err(said) => said,
             };
             Ok(format!(
-                "{SAYS} started '{name}'{who} (chat {chat}), in this chat's folder.{note}\n{waited}"
+                "{SAYS} started '{name}'{who} (chat {chat}), {works}.{note}\n{waited}"
             ))
         }
         // Held, not refused: the dispatch is accepted and waits on the person, so this is not
@@ -338,13 +381,31 @@ pub fn send(
             | Answer::Working(_)
             | Answer::Task(_),
         )
-        | Err(_) => Err(format!(
-            "{SAYS} the purlis app did not answer, so purlis cannot say whether the chat \
-             started. Look for '{}' under this chat in the explorer before you dispatch it \
-             again.",
-            purlis_core::personas::one_line(&ask_name(&ask))
-        )),
+        | Err(_) => Err(no_answer(&ask_name(&ask), cuts_a_worktree)),
     }
+}
+
+/// How long the app has to answer a dispatch that cuts a worktree: a checkout of the repo,
+/// then the chat's start. Still a bound, for the reason every wait here is one.
+const A_WORKTREE_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// What a chat is told where the app did not answer in time. **It is not told nothing
+/// started**: the app may still be cutting the worktree or starting the chat, and a second
+/// dispatch of the same task would make a second chat.
+fn no_answer(task: &str, cuts_a_worktree: bool) -> String {
+    let task = purlis_core::personas::one_line(task);
+    if cuts_a_worktree {
+        return format!(
+            "{SAYS} the purlis app did not answer in time, so purlis cannot say whether the \
+             chat started. Cutting a worktree of a large repo can take longer than this \
+             command waits, and the chat may still start. Look for '{task}' under this chat \
+             in the explorer before you dispatch it again."
+        );
+    }
+    format!(
+        "{SAYS} the purlis app did not answer, so purlis cannot say whether the chat started. \
+         Look for '{task}' under this chat in the explorer before you dispatch it again."
+    )
 }
 
 /// The asking side of a pair, as a sentence names it.
@@ -879,6 +940,26 @@ mod tests {
         // And a refusal that already says nothing was started is not told so twice.
         let none = purlis_core::personaprofile::Refused::NoProfile.say();
         assert_eq!(app_refused(&none), format!("{SAYS} {none}"));
+    }
+
+    #[test]
+    fn an_app_that_does_not_answer_in_time_is_never_said_to_have_started_nothing() {
+        // #1453 review, fold-in 2: the app may still be cutting the worktree.
+        assert_eq!(
+            no_answer("check the queue", true),
+            "purlis dispatch: the purlis app did not answer in time, so purlis cannot say \
+             whether the chat started. Cutting a worktree of a large repo can take longer than \
+             this command waits, and the chat may still start. Look for 'check the queue' under \
+             this chat in the explorer before you dispatch it again."
+        );
+        for cuts in [true, false] {
+            assert!(
+                !no_answer("x", cuts)
+                    .to_lowercase()
+                    .contains("nothing was started")
+            );
+        }
+        assert!(A_WORKTREE_TAKES_AT_MOST > crate::handoff::AN_OPEN_TAKES_AT_MOST);
     }
 
     #[test]

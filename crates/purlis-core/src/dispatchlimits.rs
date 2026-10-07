@@ -1040,6 +1040,35 @@ impl Files {
     }
 }
 
+/// **Off at the destination is off** (#1453, D-1453-17): the refusal where workspace
+/// `workspace`, the one a dispatch's chat is to work **in**, sets a limit that switches
+/// dispatch off to 0, in the project's file or on this machine. `target` is the persona
+/// dispatched to, for the sentence.
+///
+/// **Whatever a persona's own row says.** For the asking chat's own workspace the most
+/// specific level wins, so a persona's value outranks its workspace's 0 (ruling 9). A
+/// workspace a chat is sent *into* from elsewhere is different: its 0 is that workspace
+/// saying no chat is started in it by another, and a persona carrying a value of its own into
+/// every workspace would make that 0 mean nothing. An administrator's policy is not read
+/// here: it is a ceiling, and [`in_force`] has applied it.
+pub fn off_in(root: &Path, workspace: &str, target: Option<&str>) -> Option<Refused> {
+    let files = Files::read(root);
+    let off = |table: &Table| {
+        let level = table.workspaces.get(workspace)?;
+        Limit::ALL
+            .into_iter()
+            .filter(|limit| *limit != Limit::MessagesPerMinute && !limit.persona_only())
+            .find(|limit| level.get(*limit) == Some(0))
+    };
+    off(&files.project)
+        .or_else(|| off(&files.mine))
+        .map(|limit| Refused::Off {
+            limit,
+            by: Source::Workspace(workspace.to_owned()),
+            target: target.map(str::to_owned),
+        })
+}
+
 /// **The limits in force for a dispatch in the project at `root`**, on this machine: its files
 /// as they stand now, under this machine's policy. Read afresh each time, so a limit changed in
 /// Settings applies to the next dispatch.

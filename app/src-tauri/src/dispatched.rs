@@ -573,6 +573,9 @@ fn list(held: &Held, asker: u32) -> Vec<Row> {
         .filter_map(|listed| {
             let open = open.iter().find(|open| open.session == listed.session)?;
             let from = open.from.as_ref()?;
+            // Where it works on a branch of its own, by the dispatch's record (#1453). Read
+            // before the ledger is taken: it asks the chats, and reads a file.
+            let branch = crate::dispatches::branch_listed(held, listed.session);
             let ledger = held.tasks().ledger();
             let own = dispatched::owned(asker, listed.session, Some(from)).is_ok();
             let state = match (own, listed.state) {
@@ -604,6 +607,8 @@ fn list(held: &Held, asker: u32) -> Vec<Row> {
                 state,
                 age_secs: ledger.age(listed.session, now).map(|age| age.as_secs()),
                 by_person: !own,
+                branch: branch.as_ref().map(|(branch, _)| branch.clone()),
+                branch_stands: branch.map(|(_, stands)| stands),
             })
         })
         .collect()

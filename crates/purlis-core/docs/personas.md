@@ -86,7 +86,8 @@ The frontmatter is flat `key: value` lines. The keys this version acts on:
 | `icon`, `color` | What the persona is drawn with in the app: one of purlis's icons by name, and a palette colour or `#rrggbb`. |
 | `disallowed-tools` | Tools a chat as this persona is denied. **Honoured on Claude Code**, as deny rules of the chat's own settings. On Codex and opencode purlis cannot deny them, so a chat as this persona is **refused** there, and so is a dispatch to it. |
 | `skills` | The skills the persona declares, which `persona stats` compares with the skills it used. No chat preloads them (see below). |
-| `agent-tools`, `memory`, `dispatch-isolation`, and a `model` that names no profile | **Read by nothing.** Each only fed the sub-agent purlis used to generate — see *Personas are chats, not sub-agents* below. |
+| `dispatch-isolation` | `worktree`: a chat dispatched to this persona works in a worktree of its own, on a branch of its own, when the dispatch names no place (`purlis docs show handoff`, *Where it works*). |
+| `agent-tools`, `memory`, and a `model` that names no profile | **Read by nothing.** Each only fed the sub-agent purlis used to generate — see *Personas are chats, not sub-agents* below. |
 
 Other keys are kept in the file and not acted on in this version.
 
@@ -334,10 +335,11 @@ persona that declares `disallowed-tools:` is refused with a sentence, in the new
 and for a dispatch alike. A deny-list does not turn into a comment.
 
 **What a chat does not get.** `agent-tools:` was the sub-agent's allow-list, and nothing reads
-it: a persona that could not edit files as a sub-agent can as a chat. `dispatch-isolation:
-worktree` started the sub-agent in its own worktree and made purlis ask before a second one
-wrote in the same tree; a persona chat works in the asking chat's folder and nothing asks.
-`persona lint` says each of these by name. To keep a persona from a tool, name the tool in
+it: a persona that could not edit files as a sub-agent can as a chat. `persona lint` says each
+key nothing reads by name. `dispatch-isolation: worktree` is read again: it started the
+sub-agent in its own worktree, and now a chat dispatched to the persona works in a worktree of
+its own when the dispatch names no place (`purlis docs show handoff`, *Where it works*).
+Nothing asks before two chats write in one tree any more. To keep a persona from a tool, name the tool in
 `disallowed-tools:`.
 
 ### After updating: `purlis doctor --fix persona-agents`
@@ -387,7 +389,7 @@ changes nothing more.
   | `agent-tools` | its allow-list of tools | A persona chat has every tool of its harness. A persona that listed no editing tool could not edit files and now can. |
   | `skills` | preloaded those skills | A persona chat loads a skill when it uses it. `persona stats` still compares the declaration with what was used. |
   | `memory` | chose the harness's own memory store | A persona chat has the persona's memory in `personas/<name>/memory/`. |
-  | `dispatch-isolation` | started it in its own worktree, and asked before two wrote in one tree | A persona chat works in the asking chat's folder, and nothing asks. |
+  | `dispatch-isolation` | started it in its own worktree, and asked before two wrote in one tree | Read again (#1453): a chat dispatched to the persona works in a worktree of its own when the dispatch names no place. Nothing asks before two write in one tree. |
 
 - **`.claude/agent-memory/<persona>/` is named.** A sub-agent with `memory:` had the harness
   keep notes there. Nothing reads them again. The fix says which folders hold files and leaves

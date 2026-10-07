@@ -10,6 +10,23 @@ use purlis_core::hookwire::{Answer, GitAsk, GitWork};
 
 use crate::planes::Held;
 
+/// The configuration git reads where the app runs it for a chat, or in a repository a chat
+/// worked in: no global or system git config, only the operator's identity, read from their
+/// global config before the call runs (D-1335-7).
+///
+/// A test build reads no identity either: a test never reads the developer's own git config,
+/// and none of the calls made under it writes a commit.
+pub(crate) fn isolation() -> purlis_core::worktree::git::Isolated {
+    #[cfg(not(test))]
+    {
+        purlis_core::worktree::git::Isolated::operators()
+    }
+    #[cfg(test)]
+    {
+        purlis_core::worktree::git::Isolated::default()
+    }
+}
+
 /// Runs `ask` for its chat, or says why not.
 pub fn answer(held: &Held, ask: &GitAsk) -> Answer {
     let Some(open) = held
@@ -34,9 +51,7 @@ pub fn answer(held: &Held, ask: &GitAsk) -> Answer {
         GitWork::Clone { repos } => format!("clone {}", repos.join(" ")),
         GitWork::WorktreeAdd { repo, piece, .. } => format!("worktree add {repo} {piece}"),
     };
-    // No global or system git config reaches a brokered call, only the operator's identity,
-    // read from their global config before it runs (D-1335-7).
-    let isolation = purlis_core::worktree::git::Isolated::operators();
+    let isolation = isolation();
     let answer =
         purlis_core::gitbroker::answer(held.root(), &asker, ask, &isolation, chrono::Utc::now());
     match &answer {

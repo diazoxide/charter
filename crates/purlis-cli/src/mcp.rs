@@ -229,13 +229,17 @@ fn dispatch(args: &serde_json::Map<String, serde_json::Value>) -> Result<String,
     let (to, name, brief) = chattools::dispatch_args(args)?;
     let profile = chattools::dispatch_profile(args)?;
     let waits = chattools::dispatch_waits(args)?;
+    let place = chattools::dispatch_place(args)?;
     let here = crate::Here::read()?;
     crate::dispatch::send(
         &here,
         to.as_deref(),
         &name,
         &brief,
-        profile.as_deref(),
+        &crate::dispatch::Options {
+            profile: profile.as_deref(),
+            place: place.as_deref(),
+        },
         waits,
     )
     .map_err(|why| in_the_chat(&why))
