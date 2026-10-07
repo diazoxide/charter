@@ -450,8 +450,10 @@ export const commands = {
 	 */
 	revokeDispatchGrant: (plane: PlaneId, id: string) => typedError<DispatchGrants, string>(__TAURI_INVOKE("revoke_dispatch_grant", { plane, id })),
 	/**
-	 *  The person read the Notice of the project's dispatch grants as it showed them, `shown`: it
-	 *  is not shown again until they change from that. Answers what is still to tell, if anything.
+	 *  **Allow** on the Notice of the project's dispatch grants (D-1437-R1): `shown` is the pairs
+	 *  the person allowed, as the Notice showed them, all of them or one. Each the committed file
+	 *  holds is audited and is in force on this machine from now on; what the file no longer
+	 *  holds is read. Answers what is still to tell, if anything.
 	 */
 	acknowledgeDispatchGrants: (plane: PlaneId, shown: string[]) => typedError<{
 	/**  Each as `asking -> target`. */
@@ -2360,6 +2362,11 @@ export type DispatchGrant = {
 	chat: string | null,
 	/**  Why a policy locks it out, where one does: it covers nothing while it is locked. */
 	locked: string | null,
+	/**
+	 *  Whether it is the project's and nobody on this machine has allowed it yet: it covers
+	 *  nothing here until the project's Notice, or a chat's, is answered (D-1437-R1).
+	 */
+	waiting: boolean,
 };
 
 /**
@@ -2460,6 +2467,11 @@ export type DispatchPending = {
 	brief: string,
 	/**  Whether the brief was longer than the Notice shows and is cut. */
 	brief_cut: boolean,
+	/**
+	 *  How many lines the brief is, blank ones counted: the Notice says it, since its box
+	 *  shows only the first of a long one.
+	 */
+	brief_lines: number,
 	/**  The levels Allow is offered at. Empty where policy locks it. */
 	levels: GrantLevel[],
 	/**  Where policy locks it: the policy's sentence, naming who set it. No Allow is offered. */

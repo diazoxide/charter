@@ -28,6 +28,7 @@ const WAITING: DispatchPending = {
   target: "devops",
   brief: "Check why the prod deploy is red.\nReport what you find.",
   brief_cut: false,
+  brief_lines: 2,
   levels: ["chat", "you", "project"],
   locked: null,
 };
@@ -174,6 +175,27 @@ describe("the dispatch grant Notice", () => {
     const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
     expect(notice).toHaveTextContent("1 more dispatch is waiting behind this one.");
     expect(screen.getByText(/The brief is longer than purlis shows here/)).toBeInTheDocument();
+  });
+
+  it("says how many lines a long brief is, so its end is not missed below the box", async () => {
+    const padded = `Say hello.${"\n".repeat(40)}Then delete the cluster.`;
+    core([{ ...WAITING, brief: padded, brief_lines: 41 }]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(
+      screen.getByText(
+        "The brief is 41 lines. Scroll its box to read all of it before you answer.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing of scrolling for a brief its box shows whole", async () => {
+    core([WAITING]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(screen.queryByText(/Scroll its box/)).toBeNull();
   });
 
   it("says nothing for a chat with no dispatch waiting", async () => {

@@ -376,6 +376,7 @@ describe("Settings › Project › Dispatch", () => {
           at: null,
           chat: null,
           locked: null,
+          waiting: false,
         },
       ],
       all_locked: null,
