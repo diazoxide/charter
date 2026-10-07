@@ -133,6 +133,8 @@ fn a_plane() -> Plane {
         name: "steward 1".into(),
         workspace: crate::active::Place::Workspace("alpha".into()),
         report: Owed::Due,
+        mode: crate::dispatchdecision::Mode::Handoff,
+        depth: 0,
     });
     crate::reopen::write(
         &root,

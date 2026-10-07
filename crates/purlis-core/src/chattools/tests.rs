@@ -110,6 +110,8 @@ fn the_tools_are_the_ones_charter_names_and_each_says_what_it_does() {
             "session_record_read",
             "session_record",
             "change_status",
+            "dispatch",
+            "dispatch_report",
             "ask_operator",
         ]
     );
@@ -351,6 +353,80 @@ fn a_session_record_is_handed_to_the_app_by_the_server_and_not_written_by_call()
     .unwrap_err();
     assert!(refused.contains(SESSION_RECORD), "{refused}");
     assert_eq!(snapshot(p.path()), before, "call wrote something");
+}
+
+#[test]
+fn a_dispatch_and_its_report_are_handed_to_the_app_by_the_server_and_never_done_by_call() {
+    // #1436: only the app starts a chat, and only the app knows which chat a report goes to.
+    let p = tempfile::tempdir().unwrap();
+    let before = snapshot(p.path());
+    for (tool, given) in [
+        (
+            DISPATCH,
+            json!({"name": "check the queue", "brief": "look at it"}),
+        ),
+        (
+            DISPATCH_REPORT,
+            json!({"outcome": "done", "text": "looked"}),
+        ),
+    ] {
+        let refused = call(p.path(), &in_ws("alpha"), tool, &args(given), at(9, 0)).unwrap_err();
+        assert!(refused.contains(tool), "{refused}");
+    }
+    assert_eq!(snapshot(p.path()), before, "call wrote something");
+}
+
+#[test]
+fn a_dispatch_s_arguments_are_its_name_its_brief_and_a_persona_where_one_is_named() {
+    assert_eq!(
+        dispatch_args(&args(
+            json!({"name": "check", "brief": "look at it", "to": " devops "})
+        )),
+        Ok((
+            Some("devops".to_owned()),
+            "check".to_owned(),
+            "look at it".to_owned()
+        ))
+    );
+    // No persona named, or a blank one, is the chat's own.
+    for given in [
+        json!({"name": "check", "brief": "b"}),
+        json!({"name": "check", "brief": "b", "to": "  "}),
+        json!({"name": "check", "brief": "b", "to": null}),
+    ] {
+        assert_eq!(dispatch_args(&args(given)).map(|(to, ..)| to), Ok(None));
+    }
+    assert!(
+        dispatch_args(&args(json!({"brief": "b"}))).is_err(),
+        "no name"
+    );
+    assert!(
+        dispatch_args(&args(json!({"name": "n"}))).is_err(),
+        "no brief"
+    );
+    assert!(dispatch_args(&args(json!({"name": "n", "brief": "b", "to": 7}))).is_err());
+}
+
+#[test]
+fn a_dispatch_report_s_arguments_are_its_outcome_its_text_and_what_changed() {
+    assert_eq!(
+        dispatch_report_args(&args(
+            json!({"outcome": "blocked", "text": "stuck", "changed": "svc: 2 files"})
+        )),
+        Ok((
+            "blocked".to_owned(),
+            "stuck".to_owned(),
+            Some("svc: 2 files".to_owned())
+        ))
+    );
+    assert_eq!(
+        dispatch_report_args(&args(json!({"outcome": "done", "text": "t"}))).map(|r| r.2),
+        Ok(None)
+    );
+    assert!(
+        dispatch_report_args(&args(json!({"text": "t"}))).is_err(),
+        "no outcome"
+    );
 }
 
 #[test]

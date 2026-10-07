@@ -2886,6 +2886,10 @@ export type HandedFromNote = {
 	 *  (SI-1b) — `purlis_core::active::Place::word`, drawn as it is.
 	 */
 	workspace: string,
+	/**  The app's number for the chat it came from: what the explorer lists a task under. */
+	chat: number,
+	/**  Whether a dispatch started it as a task, which is listed under the chat that asked. */
+	task: boolean,
 };
 
 /**

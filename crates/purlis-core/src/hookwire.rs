@@ -680,6 +680,50 @@ pub enum Ask {
     /// #1335). The app answers [`Answer::Said`], or [`Answer::No`] with the refusal. Boxed for
     /// `Open`'s reason.
     Git(Box<GitAsk>),
+    /// Spend a ticket: dispatch a task to a persona (#1436). The app answers
+    /// [`Answer::Dispatched`], [`Answer::NeedsGrant`], or [`Answer::No`] with the refusal.
+    /// Boxed for `Open`'s reason.
+    Dispatch(Box<DispatchAsk>),
+}
+
+/// A task a chat asks the app to dispatch, as `purlis dispatch` and the `dispatch` chat tool
+/// hand it over (#1434, #1436).
+///
+/// **It says nothing about the chat that asks but its number, and that is the guard.** The
+/// asking chat's persona, profile, folder, name and lineage, the stamp the new chat opens with
+/// and the grants in force are all the app's own record of the chat whose token the line
+/// carries ([`crate::dispatchdecision`]). A request cannot say who asks, where from, or that a
+/// grant exists: there is no field to say it in. What it does say is what an agent chooses:
+/// which persona, what the task is called, and the brief.
+///
+/// The ticket is [`OpenChat`]'s, minted and spent the same way, so one run of the command
+/// starts at most one chat.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DispatchAsk {
+    /// The chat that asks, from [`CHAT_ENV`]: the chat whose token the line must carry.
+    pub chat: u32,
+    /// The persona the new chat runs as. `None` is the asking chat's own, whatever the app's
+    /// record says that is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// The task's name, which the persona chat is called and listed under. Held to
+    /// `reopen::label` by the command and again by the app.
+    pub name: String,
+    /// The brief, verbatim. The app puts its own stamp in front of it.
+    pub brief: String,
+    /// See [`OpenChat`]. Minted by the app, spent once, never written down.
+    pub ticket: String,
+}
+
+/// What a task's report says beside its text, as `purlis dispatch report` hands it over
+/// (#1436). Where the persona chat's session record is, the report's fourth part, is not here:
+/// the app says it, from its own record of what it wrote for that chat.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TaskReport {
+    pub outcome: crate::handback::Outcome,
+    /// What changed, in the persona chat's words: files, commits, a branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<String>,
 }
 
 /// A write a chat asks the app to make for it ([`crate::brokered`]).
@@ -771,6 +815,10 @@ pub struct ReportBack {
     pub summary: String,
     /// See [`OpenChat`]. Minted by the app, spent once, never written down.
     pub ticket: String,
+    /// A task's outcome and what changed (#1436). Absent from a handoff's report back, which
+    /// is its summary alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskReport>,
 }
 
 /// A handoff the app is asked to open, as `charter handoff` hands it over.
@@ -898,6 +946,21 @@ pub enum Answer {
     Said {
         lines: Vec<crate::repocmd::Say>,
         code: u8,
+    },
+    /// A task was dispatched (#1436): the persona chat is running, under this number on the
+    /// app's board and this name, as `persona` (none for a chat on no persona).
+    Dispatched {
+        chat: u32,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persona: Option<String>,
+    },
+    /// Nothing was started: the asking chat's persona has no dispatch grant for `to`, and only
+    /// the person gives one (#1434). `from` is the asking chat's persona, by the app's record.
+    NeedsGrant {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+        to: String,
     },
 }
 
@@ -1052,6 +1115,7 @@ impl Line {
             Self::Ask(Ask::SessionRecord(record)) => record.chat,
             Self::Ask(Ask::Write(write)) => write.chat,
             Self::Ask(Ask::Git(git)) => git.chat,
+            Self::Ask(Ask::Dispatch(dispatch)) => dispatch.chat,
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
@@ -2603,6 +2667,182 @@ mod tests {
         }
     }
 
+    // ----- a dispatch (#1436) ----------------------------------------------------------------
+
+    fn a_dispatch(chat: u32) -> Ask {
+        Ask::Dispatch(Box::new(DispatchAsk {
+            chat,
+            to: Some("devops".to_owned()),
+            name: "check the queue".to_owned(),
+            brief: "# Check the queue\nbody\n".to_owned(),
+            ticket: "t".repeat(64),
+        }))
+    }
+
+    #[test]
+    fn a_dispatch_is_read_back_whole_and_names_the_chat_its_token_must_be() {
+        let ask = a_dispatch(7);
+        let token = ChatToken("t".repeat(64));
+        let line = line_with(Some(&token), &ask).expect("a line");
+        let (read, carried) =
+            read_line(std::str::from_utf8(&line).expect("text")).expect("it reads");
+        assert_eq!(carried.as_deref(), Some(token.expose()));
+        assert_eq!(read.chat(), 7, "sender binding checks this chat's token");
+        let Line::Ask(back) = read else {
+            panic!("a dispatch read as another kind of line");
+        };
+        assert_eq!(back, ask);
+    }
+
+    #[test]
+    fn a_dispatch_has_no_field_that_says_who_asks_but_the_chats_number() {
+        // The asker's persona, profile, folder and grants are the app's record of chat 7. A
+        // line that claims them anyway is read without them: there is nowhere to keep them.
+        let written = serde_json::to_value(a_dispatch(7)).expect("json");
+        let mut keys: Vec<&str> = written["dispatch"]
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["brief", "chat", "name", "ticket", "to"]);
+
+        let forged = concat!(
+            r#"{"dispatch":{"chat":7,"name":"x","brief":"a b","ticket":"t","#,
+            r#""from":"devops","persona":"devops","asker":3,"profile":"prod","cwd":"/","#,
+            r#""grant":"in_force","mode":"handoff","depth":0,"without_sandbox":true,"#,
+            r#""permission_mode":"bypassPermissions","grants":{"hosts":["evil.example"]}}}"#
+        );
+        let (read, _) = read_line(forged).expect("it reads");
+        assert_eq!(read.chat(), 7);
+        let Line::Ask(Ask::Dispatch(read)) = read else {
+            panic!("a dispatch");
+        };
+        assert_eq!(
+            *read,
+            DispatchAsk {
+                chat: 7,
+                to: None,
+                name: "x".to_owned(),
+                brief: "a b".to_owned(),
+                ticket: "t".to_owned(),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dispatch_that_names_another_chat_as_its_asker_is_refused_and_never_reaches_the_app() {
+        // A forged line: chat 4's own token, naming chat 3 as the asker. And no token at all.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let three = listener.tokens().issue_to_this_process(3).expect("a token");
+        let four = listener.tokens().issue_to_this_process(4).expect("a token");
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let heard = Arc::clone(&asked);
+        let _reading = listener.each_answering(
+            Box::new(|_| {}),
+            Box::new(move |_, ask| {
+                heard.lock().unwrap().push(ask);
+                Answer::Dispatched {
+                    chat: 9,
+                    name: "check the queue".to_owned(),
+                    persona: None,
+                }
+            }),
+        );
+        let within = std::time::Duration::from_secs(5);
+
+        for token in [None, Some(four)] {
+            let answered = Asking::on(&path, token)
+                .expect("connected")
+                .ask(&a_dispatch(3), within);
+            assert!(
+                matches!(&answered, Ok(Answer::No { why }) if why.contains("token")),
+                "answered {answered:?}"
+            );
+        }
+        assert!(asked.lock().unwrap().is_empty(), "the app was never asked");
+
+        // The chat's own line is the one the app hears.
+        let answered = Asking::on(&path, Some(three))
+            .expect("connected")
+            .ask(&a_dispatch(3), within);
+        assert!(
+            matches!(answered, Ok(Answer::Dispatched { chat: 9, .. })),
+            "{answered:?}"
+        );
+        assert_eq!(asked.lock().unwrap().clone(), vec![a_dispatch(3)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dispatch_with_its_chats_token_from_outside_the_chat_is_refused_saying_why() {
+        // D-1407-6/10: the token alone is not enough. A process that is not inside the chat's
+        // own program is told so, and the app is never asked.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let (token, mut elsewhere) = a_chat_elsewhere(&listener.tokens(), 5);
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
+        let _reading = listener.each_answering(
+            Box::new(|_| {}),
+            Box::new(move |_, _| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Answer::Dispatched {
+                    chat: 9,
+                    name: "x".to_owned(),
+                    persona: None,
+                }
+            }),
+        );
+
+        let answered = Asking::on(&path, Some(token))
+            .expect("connected")
+            .ask(&a_dispatch(5), std::time::Duration::from_secs(5));
+
+        let _ = elsewhere.kill();
+        let _ = elsewhere.wait();
+        assert_eq!(
+            answered.ok(),
+            Some(Answer::No {
+                why: OUTSIDE_THE_CHAT.to_owned()
+            })
+        );
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_report_back_is_written_as_it_always_was_and_a_task_s_adds_its_outcome() {
+        let plain = Ask::Report(Box::new(ReportBack {
+            chat: 7,
+            summary: "done".to_owned(),
+            ticket: "t".to_owned(),
+            task: None,
+        }));
+        let as_before = r#"{"report":{"chat":7,"summary":"done","ticket":"t"}}"#;
+        assert_eq!(serde_json::to_string(&plain).unwrap(), as_before);
+        // And a line from a purlis older than tasks reads as a report with no task part.
+        let (read, _) = read_line(as_before).expect("reads");
+        assert!(matches!(read, Line::Ask(back) if back == plain));
+
+        let task = Ask::Report(Box::new(ReportBack {
+            chat: 7,
+            summary: "done".to_owned(),
+            ticket: "t".to_owned(),
+            task: Some(TaskReport {
+                outcome: crate::handback::Outcome::Blocked,
+                changed: Some("svc: 2 files".to_owned()),
+            }),
+        }));
+        let line = line_with(None, &task).expect("a line");
+        let (read, _) = read_line(std::str::from_utf8(&line).unwrap()).expect("reads");
+        assert!(matches!(read, Line::Ask(back) if back == task));
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_answer_that_takes_longer_than_a_report_may_still_reaches_the_asker() {
@@ -3510,6 +3750,7 @@ mod tests {
             chat: 7,
             summary: "done".to_owned(),
             ticket: "t".to_owned(),
+            task: None,
         }));
         let line = serde_json::to_string(&ask).unwrap();
 
@@ -3761,11 +4002,13 @@ mod tests {
                             Err(why) => Answer::No { why },
                         }
                     }
-                    Ask::Report(_) | Ask::SessionRecord(_) | Ask::Write(_) | Ask::Git(_) => {
-                        Answer::No {
-                            why: "not here".to_owned(),
-                        }
-                    }
+                    Ask::Report(_)
+                    | Ask::SessionRecord(_)
+                    | Ask::Write(_)
+                    | Ask::Git(_)
+                    | Ask::Dispatch(_) => Answer::No {
+                        why: "not here".to_owned(),
+                    },
                 }
             }),
         );

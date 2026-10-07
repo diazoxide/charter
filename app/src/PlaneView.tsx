@@ -977,7 +977,9 @@ export const PlaneView = memo(function PlaneView({
       if (arrived.plane !== plane) return;
       // Already drawn: the adoption above can race the event and draw it first.
       if (alreadyShows(now.current, arrived.session)) return;
-      setStartedIn((was) => ({ ...was, [arrived.session]: arrived.workspace }));
+      // A task dispatched by a chat at the project's root is in no workspace, as that chat is.
+      const filed = arrived.workspace ?? OUTSIDE;
+      setStartedIn((was) => ({ ...was, [arrived.session]: filed }));
       const note = handedFromNote(arrived.from);
       if (note) setHandedFrom((was) => ({ ...was, [arrived.session]: note }));
       // Named for its task where the handoff named one, and `<persona> <N>` where it did not
@@ -5775,7 +5777,8 @@ type Arrived = {
   plane: string;
   session: number;
   name: string;
-  workspace: string;
+  /** The workspace whose strip it is filed on, or none for one at the project's root. */
+  workspace: string | null;
   persona: string | null;
   /** The harness it runs, for its default name when it adopted no persona. */
   harness?: string | null;

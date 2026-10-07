@@ -250,6 +250,7 @@ and none takes a workspace, a project or a path:
 | `persona_remember` | One memory of the chat's own persona, or of shared memory; in a chat purlis started, purlis writes it for the chat, and the tool never writes it itself there (under Codex, which hands the tool no connection to purlis, run `purlis persona remember` in the chat) |
 | `session_record_list`, `session_record_read` | The session records where the chat works, by file name |
 | `change_status` | The workspace's cross-repo changes, from their records; the forge is not asked |
+| `dispatch`, `dispatch_report` | A task for a persona, which purlis starts as a chat of its own under this one, and the one report that chat sends back; purlis decides and starts the chat, and the tool never does (under Codex, run `purlis dispatch` in the chat) |
 | `ask_operator` | A question put to you through the harness's own prompt; the model never answers it |
 
 The server runs where each harness runs its MCP servers, which for Claude Code and Codex is

@@ -225,6 +225,12 @@ pub struct HandedFrom {
     pub workspace: crate::active::Place,
     /// Whether it asked for a report, and whether one has been sent.
     pub report: Owed,
+    /// What the dispatch that opened this chat was for (#1436): a handoff, which is every
+    /// record written before this field, or a task, which is listed under the chat that asked.
+    pub mode: crate::dispatchdecision::Mode,
+    /// How many dispatches stand between this chat and the chat the person started: 1 for a
+    /// chat that one dispatched. 0 is a record written before this field.
+    pub depth: u32,
 }
 
 /// **The persona grants a chat holds instead of its own persona's** (#1362, D-1362-5 and
@@ -1268,6 +1274,12 @@ struct FromOnDisk {
     /// `"owed"`, `"sent"`, or absent for a handoff that asked for nothing.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     report: String,
+    /// `"task"`, or absent for a handoff (#1436).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    mode: String,
+    /// How deep in its chain of dispatches, or absent for 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    depth: u32,
 }
 
 impl From<&HandedFrom> for FromOnDisk {
@@ -1277,6 +1289,11 @@ impl From<&HandedFrom> for FromOnDisk {
             name: from.name.clone(),
             workspace: from.workspace.word().to_owned(),
             report: from.report.word().to_owned(),
+            mode: match from.mode {
+                crate::dispatchdecision::Mode::Handoff => String::new(),
+                mode @ crate::dispatchdecision::Mode::Task => mode.word().to_owned(),
+            },
+            depth: from.depth,
         }
     }
 }
@@ -1291,6 +1308,9 @@ impl FromOnDisk {
             name: label(&self.name).ok().flatten()?,
             workspace: crate::active::Place::read(&self.workspace)?,
             report: Owed::of(&self.report),
+            mode: crate::dispatchdecision::Mode::of(&self.mode),
+            // Held to the ceiling: a depth no chain can have never reads as a shallower one.
+            depth: self.depth.min(crate::dispatchdecision::DEEPEST),
         })
     }
 }
@@ -3225,7 +3245,63 @@ pub(crate) mod tests {
             name: "steward 3".into(),
             workspace: crate::active::Place::Workspace("platform-next".into()),
             report: Owed::Due,
+            mode: crate::dispatchdecision::Mode::Handoff,
+            depth: 0,
         }
+    }
+
+    #[test]
+    fn a_task_comes_back_a_task_at_its_depth_and_a_handoff_writes_neither_key() {
+        // #1436: the lineage a dispatch recorded outlives a relaunch, which is what keeps a
+        // task listed under the chat that asked and its depth counted.
+        let plane = tempfile::tempdir().unwrap();
+        let task = HandedFrom {
+            mode: crate::dispatchdecision::Mode::Task,
+            depth: 2,
+            ..handed()
+        };
+        let record = Record {
+            chats: vec![
+                Chat {
+                    from: Some(task.clone()),
+                    ..claude("3", None)
+                },
+                Chat {
+                    from: Some(handed()),
+                    ..claude("4", None)
+                },
+            ],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let back = read(plane.path());
+        assert_eq!(back.chats[0].from, Some(task));
+        assert_eq!(back.chats[1].from, Some(handed()));
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("\"mode\"").count(), 1, "{text}");
+        assert_eq!(text.matches("\"depth\"").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_depth_no_chain_can_have_reads_as_the_deepest_one_can() {
+        // The file is writable by anything running as the person: a depth past the ceiling
+        // is held to it, so a record never says a chain is shallower than it could be.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        let from =
+            r#"{"chat":16,"name":"steward 3","workspace":"ops","mode":"task","depth":4000000000}"#;
+        std::fs::write(
+            path(plane.path()),
+            format!(
+                r#"{{"version":1,"at":0,"chats":[{{"program":"claude","name":"3","from":{from}}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let back = read(plane.path()).chats[0].from.clone().expect("it reads");
+        assert_eq!(back.depth, crate::dispatchdecision::DEEPEST);
+        assert_eq!(back.mode, crate::dispatchdecision::Mode::Task);
     }
 
     #[test]

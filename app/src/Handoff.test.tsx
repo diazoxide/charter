@@ -150,7 +150,7 @@ describe("a chat a handoff opened, named for its task (charter-app#258)", () => 
       {
         ...chat(1),
         label: "drop commons",
-        from: { name: "steward 3", workspace: "platform-next" },
+        from: { name: "steward 3", workspace: "platform-next", chat: 3, task: false },
       },
     ]);
     render(<App />);
@@ -160,6 +160,27 @@ describe("a chat a handoff opened, named for its task (charter-app#258)", () => 
     expect(document.querySelector(".pane-from")).toHaveTextContent(
       "↳ from steward 3 · platform-next",
     );
+  });
+
+  it("draws a task a dispatch started as a tab named for it, behind the chat being read (#1436)", async () => {
+    const { arrive } = core([chat(1)]);
+    render(<App />);
+    await waitFor(() => expect(tabNames()).toEqual(["ide.1"]));
+
+    arrive({
+      plane: "/home/dev/plane",
+      session: 2,
+      name: "2",
+      label: "check the queue",
+      from: { name: "ide.1", workspace: "ide", chat: 1, task: true },
+      workspace: "ide",
+      persona: "steward",
+      harness: "claude",
+    });
+
+    await waitFor(() => expect(tabNames()).toEqual(["ide.1", "check the queue"]));
+    expect(tabNamed("check the queue")).toHaveAttribute("title", "↳ from ide.1 · ide");
+    expect(selected()).toEqual(["ide.1"]);
   });
 
   it("says nothing of where a chat the operator opened came from", async () => {

@@ -365,6 +365,19 @@ pub struct Chats {
     /// conversation keeps it and no other chat ever gets it. **In memory only**: a grant for
     /// one chat ends with the app.
     grants: Mutex<HashMap<String, Vec<ChatGrant>>>,
+    /// The session record the app last wrote for each open chat, project-relative (#1436): what
+    /// a task's report names as its record. The app's own knowledge of what it wrote, so a
+    /// report never names a path its chat chose. **In memory only**, and gone with the chat.
+    records: Mutex<HashMap<u32, String>>,
+    /// **The one lock a dispatch is decided under** (#1436): held from reading where the asking
+    /// chat stands until the new chat's slot is reserved, and across a report's "is one owed"
+    /// and its "one was sent". Asks arrive a thread each, so without it two in flight would
+    /// both read the counts the other is about to change. Never held across a chat's start.
+    deciding: Mutex<()>,
+    /// The persona chats that are starting (#1436), by the number each was dealt, as the
+    /// record each will have: decided, not yet open, and counted as if they were. Each is
+    /// taken out when its start ends, whichever way ([`Reserved`]). **In memory only.**
+    reserved: Mutex<HashMap<u32, Chat>>,
     /// What each chat is owed once its turn ends (#1342): a restart on its conversation, with
     /// each sentence it is to be told, in order, as its first message. Queued, so a second
     /// grant before the restart adds to the first rather than replacing it.
@@ -447,6 +460,9 @@ impl Chats {
             ending: AtomicBool::new(false),
             most_at_once: MOST_AT_ONCE,
             grants: Mutex::new(HashMap::new()),
+            records: Mutex::new(HashMap::new()),
+            deciding: Mutex::new(()),
+            reserved: Mutex::new(HashMap::new()),
             owed: Mutex::new(HashMap::new()),
             restarting: Mutex::new(std::collections::HashSet::new()),
         }
@@ -1435,6 +1451,7 @@ impl Chats {
     pub fn close(&self, session: u32) -> Result<(), String> {
         let gone = lock(&self.open).remove(&session);
         lock(&self.owed).remove(&session);
+        lock(&self.records).remove(&session);
         if let Some(gone) = gone {
             // A chat's grants end with it (D-1348-1): kept only while a session of that chat is
             // open, which a restart for a grant is, since it starts before the old one ends.
@@ -1569,6 +1586,104 @@ impl Chats {
     /// reads its grants from (#1362), never the request.
     pub fn recorded_chat(&self, session: u32) -> Option<Chat> {
         lock(&self.open).get(&session).map(|one| one.chat.clone())
+    }
+
+    /// Where chat `session` stands among the chats open here (#1436): its depth, the personas
+    /// above it, how many tasks it has running and how many chats its lineage holds, read from
+    /// the app's own records of them ([`purlis_core::dispatchdecision::lineage_of`]). `default`
+    /// is the persona a chat that names none runs as.
+    ///
+    /// `working` says whether an open chat's program still runs, which only the board knows. A
+    /// chat that is starting ([`Self::reserve`]) is counted as one that is.
+    pub fn lineage(
+        &self,
+        session: u32,
+        default: Option<&str>,
+        working: &dyn Fn(u32) -> bool,
+    ) -> purlis_core::dispatchdecision::Lineage {
+        let open = lock(&self.open);
+        let reserved = lock(&self.reserved);
+        let records: Vec<(u32, &Chat)> = open
+            .iter()
+            .map(|(number, one)| (*number, &one.chat))
+            // One that has opened is in `open`, and is counted once.
+            .chain(
+                reserved
+                    .iter()
+                    .filter(|(number, _)| !open.contains_key(number))
+                    .map(|(number, chat)| (*number, chat)),
+            )
+            .collect();
+        let starting = |number: u32| !open.contains_key(&number) && reserved.contains_key(&number);
+        purlis_core::dispatchdecision::lineage_of(session, &records, default, &|number| {
+            starting(number) || working(number)
+        })
+    }
+
+    /// The lock a dispatch is decided under, and a report is taken under: see
+    /// [`Self::deciding`]'s field. Held for the few lines that read and then reserve or
+    /// record, never across a start.
+    pub fn deciding(&self) -> MutexGuard<'_, ()> {
+        lock(&self.deciding)
+    }
+
+    /// Holds a slot for the persona chat that is about to start as `number`, recorded as
+    /// `starting`: from now it counts toward its asking chat's tasks and its lineage, as the
+    /// open chat it is about to be. Made under [`Self::deciding`], in the same hold as the
+    /// decision that allowed it. The slot is let go when what this returns is dropped: by
+    /// then the chat is open and counts for itself, or its start failed and nothing does.
+    pub fn reserve(&self, number: u32, starting: Chat) -> Reserved<'_> {
+        lock(&self.reserved).insert(number, starting);
+        Reserved {
+            chats: self,
+            number,
+        }
+    }
+
+    /// **Chat `session` was started again as `started`** (a restart for a grant, Restart now,
+    /// Start fresh): everything that named it by its number names the new one. The tasks it
+    /// dispatched are still its tasks, so they stay counted against it and listed under it,
+    /// and their reports find it. The session record the app wrote for it is still its own.
+    pub fn followed(&self, session: u32, started: u32) {
+        if session == started {
+            return;
+        }
+        let mut moved = false;
+        for one in lock(&self.open).values_mut() {
+            if let Some(from) = one.chat.from.as_mut()
+                && from.chat == session
+            {
+                from.chat = started;
+                moved = true;
+            }
+        }
+        for starting in lock(&self.reserved).values_mut() {
+            if let Some(from) = starting.from.as_mut()
+                && from.chat == session
+            {
+                from.chat = started;
+            }
+        }
+        let mut records = lock(&self.records);
+        if let Some(record) = records.remove(&session) {
+            records.insert(started, record);
+        }
+        drop(records);
+        if moved {
+            self.write_it_down();
+        }
+    }
+
+    /// The app wrote chat `session`'s session record at `path`, project-relative.
+    pub fn wrote_record(&self, session: u32, path: &str) {
+        if lock(&self.open).contains_key(&session) {
+            lock(&self.records).insert(session, path.to_owned());
+        }
+    }
+
+    /// The session record the app last wrote for chat `session`, where it wrote one.
+    pub fn last_record(&self, session: u32) -> Option<String> {
+        lock(&self.records).get(&session).cloned()
     }
 
     /// Whose persona grants chat `session` holds instead of its own (#1362, D-1362-5/6): the
@@ -2149,6 +2264,19 @@ impl Chats {
 impl Default for Chats {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A slot held for a persona chat while it starts ([`Chats::reserve`]). Dropping it lets the
+/// slot go.
+pub struct Reserved<'a> {
+    chats: &'a Chats,
+    number: u32,
+}
+
+impl Drop for Reserved<'_> {
+    fn drop(&mut self) {
+        lock(&self.chats.reserved).remove(&self.number);
     }
 }
 

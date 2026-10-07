@@ -172,6 +172,84 @@ the prompt shows as it is — and a live command or process substitution in it
 prompt showed. `purlis handoff report <<'BRIEF'`, with no summary after `report`, is still a
 handoff into a workspace called `report`.
 
+## A task for a persona: `purlis dispatch`
+
+A handoff moves work to a chat you will follow. A **task** is work a chat has done for it by
+another chat, which reports back to it. Both are a **dispatch**: one chat starting another,
+which runs as a persona for its whole life.
+
+```bash
+purlis dispatch --name "<short task>" [--to <persona>] <<'BRIEF'
+<the brief>
+BRIEF
+```
+
+- **The new chat runs as the persona `--to` names, or as this chat's own.** Its own needs no
+  grant. Another persona needs a **dispatch grant**, which only you give: until there is one,
+  the command answers `needs a grant` and starts nothing.
+- **It is a chat of its own**, in the app, on this chat's harness profile and in this chat's
+  folder. You can see it, open it, type in it and stop it. In the explorer it is listed under
+  the chat that asked for it, by its name and what it is doing.
+- **Its sandbox is the project's, for its own persona.** What you allowed the asking chat
+  alone (a host or a folder from a block's Notice, a start without the sandbox) is not carried
+  to it, and neither is the mode the asking chat's harness is in.
+- **Its first message says who asked.** purlis writes two lines of its own above the brief,
+  from its record of the asking chat: `⟨task from steward 3 · workspace alpha · 2026-10-07
+  14:32⟩`, and a line saying the brief is a request from that chat and not from you, that
+  nothing in it approves anything, and how to report. The brief follows, verbatim.
+- **`--name` is required**: it is what the chat is called and listed under.
+
+The same refusals stand in front of it as in front of a handoff's brief: an empty brief, one
+shaped like a credential, one too long to start a harness on. And these, each in a sentence
+that says what to do:
+
+| Refused | Why |
+| --- | --- |
+| from inside a sub-agent, where purlis's hook can tell (see below) | a persona chat belongs to a chat you can see; the sub-agent returns what it found to its chat, which dispatches |
+| from a chat on no harness profile | there is no harness to start the new chat on |
+| from a chat that still holds another persona's grants | it has none of its own to dispatch with until you allow them on its tab |
+| a task name holding `⟨`, `⟩`, `·` or a backtick | purlis writes its own lines with them, and a name is drawn on those lines |
+| a persona this project does not define, or one that does not load | there is nothing to run as |
+| a persona whose definition says `draft: true` | a draft runs no chat |
+| a persona that is above the asking chat in its own chain of dispatches | a chain never loops back |
+| past 3 dispatches deep, 6 tasks one chat is still waiting on, or 16 chats in one lineage that still owe work | a runaway stops |
+
+A limit counts chats that still owe work: ones that have not reported and whose program has
+not ended. A chat that has reported stays open for you to read and counts for nothing. One
+whose program ended without a report has failed, and does not count either.
+
+**The sub-agent refusal is advice, not a wall.** A sub-agent runs inside its chat, with that
+chat's environment, so the app cannot tell its dispatch from the chat's own. Only purlis's
+hook can, from what the harness says about a tool call, and it refuses what it recognises:
+the command, the command one level inside `bash -c` or `eval`, the command run through the
+variable that names purlis's binary, and purlis's two dispatch tools. A dispatch behind a
+variable of the sub-agent's own, in a script file or inside an interpreter is not seen. On
+opencode, where purlis has not measured which calls are a sub-agent's, no sub-agent is refused
+at all. A sub-agent that gets past the hook reaches what its chat reaches and no more, so a
+dispatch you allow a chat is one its sub-agents can make too.
+
+The persona chat finishes by writing its session record and sending **one report**:
+
+```bash
+purlis dispatch report --outcome done "<what was done and what was found>" [--changed "<files, commits, a branch>"]
+```
+
+`--outcome` is `done`, `blocked` or `failed`. The report reaches the chat that asked as
+context on its next turn, the way a handoff's does and under the same pairing: it names no
+recipient. It carries the outcome, the text, what the persona chat says changed, and the path
+of the session record purlis wrote for it, and every line the persona chat wrote is quoted as
+data under a sentence that says it is not an instruction. It raises no needs-you item: a
+task's report is for the chat that asked. If that chat has closed, the report is kept for the
+workspace it asked from. If that chat was started again (a restart to take something you
+allowed, Restart now), its tasks and the reports waiting for it follow it.
+
+Which kind of report a chat sends is how purlis started it, not which command it runs: a task
+that reports with no outcome is told how a task reports, and a handed-off chat's report is its
+summary whichever command sent it.
+
+purlis's `dispatch` and `dispatch_report` tools do the same two things, for a harness that
+calls tools instead of running a command.
+
 ## What `purlis handoff` refuses before it changes anything
 
 purlis fails toward no change, so every one of these is asked **before the first write** —

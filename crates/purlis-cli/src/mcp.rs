@@ -91,6 +91,12 @@ impl ServerHandler for Server {
         if name == chattools::PERSONA_REMEMBER {
             return Ok(done(blocking(move || persona_remember(&args)).await));
         }
+        if name == chattools::DISPATCH {
+            return Ok(done(blocking(move || dispatch(&args)).await));
+        }
+        if name == chattools::DISPATCH_REPORT {
+            return Ok(done(blocking(move || dispatch_report(&args)).await));
+        }
         let name = name.to_owned();
         Ok(done(
             blocking(move || {
@@ -201,6 +207,44 @@ fn persona_remember(args: &serde_json::Map<String, serde_json::Value>) -> Result
             )?;
             Ok(said(&crate::voice::rel(root, &path)))
         }
+    }
+}
+
+/// `dispatch`: the one operation `purlis dispatch` run in the chat performs
+/// ([`crate::dispatch::send`]), so the app that started the chat decides and starts the persona
+/// chat (#1436). Answered with what the command prints; a refusal is a tool error.
+///
+/// **Only the app starts a chat**, so where this server has no connection to it (under Codex,
+/// which hands it only [`chattools::SCOPE_ENV`]) nothing is started, and the answer says to run
+/// the command in the chat.
+fn dispatch(args: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
+    let (to, name, brief) = chattools::dispatch_args(args)?;
+    let here = crate::Here::read()?;
+    crate::dispatch::send(&here, to.as_deref(), &name, &brief).map_err(|why| in_the_chat(&why))
+}
+
+/// `dispatch_report`: the one operation `purlis dispatch report` performs
+/// ([`crate::dispatch::report`]).
+fn dispatch_report(args: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
+    let (outcome, text, changed) = chattools::dispatch_report_args(args)?;
+    crate::dispatch::report(&outcome, &text, changed.as_deref()).map_err(|why| in_the_chat(&why))
+}
+
+/// `why`, with where to go when this server was handed no connection to the app.
+fn dispatch_tools_have_no_connection() -> bool {
+    purlis_core::envvar::var_os(purlis_core::hookwire::SOCKET_ENV)
+        .filter(|socket| !socket.is_empty())
+        .is_none()
+}
+
+fn in_the_chat(why: &str) -> String {
+    if dispatch_tools_have_no_connection() {
+        format!(
+            "{why} This harness hands purlis's tools no connection to the app: run `purlis \
+             dispatch` in the chat instead."
+        )
+    } else {
+        why.to_owned()
     }
 }
 

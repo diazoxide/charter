@@ -27,7 +27,7 @@ each is wired to.
 | `pretooluse` on `Bash` | the guards below, then the persona tool gate |
 | `pretooluse-read` on `Read`/`Grep` | the vault guard on those tools (*Vault read*, below) |
 | `pretooluse-edit` on `Write`/`Edit`/`MultiEdit` | the state-directory guard (*A hand-written state file*, below) |
-| `pretooluse-dispatch` on `Task`/`Agent` | asks before a persona that writes code is dispatched beside an agent already running (*A dispatch beside a running agent*, below) |
+| `pretooluse-dispatch` on `Task`/`Agent` and on purlis's `dispatch` tools | asks before a persona that writes code is dispatched beside an agent already running (*A dispatch beside a running agent*, below), and refuses purlis's `dispatch` and `dispatch_report` tools to a sub-agent (*A dispatch from a sub-agent*, below) |
 | `posttooluse` on `Write`/`Edit`/`MultiEdit`, in a plane | warns when a memory or ref just written looks like it holds a secret; says what the workspace flow expects on the first edit in a LIVE workspace's clone; and every twelfth change without a memory, reminds the session to record one |
 | `posttooluse-skill`, `posttooluse-dispatch`, `posttooluse-message`, in a plane | log which skill the active persona used, which persona was dispatched, and a message that resumes one |
 | `posttooluse-blocked` and `posttoolusefailure-blocked` on `Bash`, in a chat the app started sandboxed | read the `<sandbox_violations>` block Claude Code appended to the command's result, and, from the command's standard error alone, an egress proxy's refusal and a program's own "Operation not permitted" for a path outside what the chat may write. Each block goes to the app as an operation and the kind of path or host, and as purlis's own only when the process the sandbox names is `purlis`. Never the path, the command or its output. The harness is told nothing; the window shows a notice on the chat's tab and `purlis doctor` counts them (#1338) |
@@ -491,6 +491,27 @@ rule while one who reads a bare refusal files an issue.
   that touches purlis's control surface. The ceiling is frozen at `SessionStart`: a session
   that edits its own persona's `tools:` can narrow the grant mid-session, never widen it.
   Gated on a control plane.
+- **A dispatch from a sub-agent.** `purlis dispatch` starts a chat of its own for a persona,
+  listed under the chat that asked ([handoff.md](handoff.md), *A task for a persona*). A
+  harness's sub-agent is not a chat: it runs inside one, with that chat's environment, so the
+  app cannot tell its call from the chat's own. The hook can, from the `agent_id` on the call,
+  on the harnesses where that was measured to mean a sub-agent (Claude Code and Codex). It
+  refuses a Bash command that runs `purlis dispatch` in any segment, a report included; the
+  same one level inside a string a shell runs (`bash -c '…'`, `sh -c "…"`, `eval …`); the same
+  run through the variable that names purlis's own binary (`$PURLIS_HOOK_BINARY`, under either
+  name); and a call of purlis's `dispatch` or `dispatch_report` tool. It tells the sub-agent
+  to return what it found to its chat. Gated on a control plane.
+
+  **This refusal is hook-level, and it is advice.** Nothing behind it enforces it: the app
+  cannot tell a sub-agent's dispatch from its chat's, so a dispatch the hook does not
+  recognise starts. The hook reads a command's words and is not a shell: a dispatch behind a
+  variable of the sub-agent's own (`p=purlis; $p dispatch …`), in a script file, or inside an
+  interpreter is not seen. Per harness: Claude Code has both the Bash guard and the tool hook;
+  Codex has the Bash guard only, and hands purlis's tools no connection to the app, so the
+  tool starts nothing there; **opencode refuses no sub-agent at all**, because which of its
+  calls come from one has not been measured. What a sub-agent that gets past reaches is
+  exactly what its chat reaches, so a dispatch allowed to a chat is allowed to its sub-agents.
+
 - **A dispatch beside a running agent.** A `Task`/`Agent` call that sends out a persona
   declaring `dispatch-isolation: worktree` while another dispatched agent is still running is
   **asked** about, because the two share one working tree and their edits interleave. In an

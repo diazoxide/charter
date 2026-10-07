@@ -597,6 +597,10 @@ pub struct HandedFromNote {
     /// The workspace it came from, or `plane root` for a chat that handed off from there
     /// (SI-1b) — `purlis_core::active::Place::word`, drawn as it is.
     pub workspace: String,
+    /// The app's number for the chat it came from: what the explorer lists a task under.
+    pub chat: u32,
+    /// Whether a dispatch started it as a task, which is listed under the chat that asked.
+    pub task: bool,
 }
 
 impl From<&purlis_core::reopen::HandedFrom> for HandedFromNote {
@@ -604,6 +608,8 @@ impl From<&purlis_core::reopen::HandedFrom> for HandedFromNote {
         Self {
             name: from.name.clone(),
             workspace: from.workspace.word().to_owned(),
+            chat: from.chat,
+            task: from.mode == purlis_core::dispatchdecision::Mode::Task,
         }
     }
 }
@@ -832,8 +838,12 @@ fn resume_session(
     let size = Size { columns, rows };
     let session = match instead_of {
         Some(instead_of) => {
-            held.chats()
-                .start_ready_instead_of(instead_of, &chat, &resumed.ready, size)?
+            let started =
+                held.chats()
+                    .start_ready_instead_of(instead_of, &chat, &resumed.ready, size)?;
+            // The same chat under a new number: its tasks and its waiting reports follow it.
+            held.followed(instead_of, started);
+            started
         }
         None => held.chats().start_ready(&chat, &resumed.ready, size)?,
     };

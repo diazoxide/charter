@@ -703,6 +703,8 @@ pub fn record(held: &Held, ask: &purlis_core::hookwire::RecordAsk) -> Answer {
         Ok(recorded) => recorded,
         Err(why) => return Answer::No { why },
     };
+    // What a task's report names as this chat's record (#1436): the path the app wrote.
+    held.chats().wrote_record(ask.chat, &recorded.shown);
     let title = purlis_core::sessionrecord::saved(held.root(), &recorded.path)
         .map_or_else(|| ask.title.trim().to_owned(), |listed| listed.title);
     let saved = SavedRecord {

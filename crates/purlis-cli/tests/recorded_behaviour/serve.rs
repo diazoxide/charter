@@ -1,10 +1,14 @@
 //! What a scenario needs RUNNING while its command runs, which no file can carry.
 //!
-//! One kind: `an-app-that-opens`, the stand-in for the desktop app's half of charter-app#204.
-//! It binds the app's hook socket, answers a ticket ask with a ticket and an open with "opened
-//! as chat 9", and is gone — the differential's `_AN_APP_THAT_OPENS`, answer for answer. It
-//! checks nothing, because what is under test is the COMMAND's side; the app's half is
-//! `app/src-tauri/src/handoff.rs` and its own tests.
+//! Two kinds, each a stand-in for the desktop app's half of a conversation on its hook socket.
+//! Both bind the socket, answer a ticket ask with a ticket, answer the ask that spends it, and
+//! are gone. They check nothing, because what is under test is the COMMAND's side; the app's
+//! half is `app/src-tauri/src/handoff.rs` and its own tests.
+//!
+//! - `an-app-that-opens` (charter-app#204) answers the spending ask with "opened as chat 9":
+//!   the differential's `_AN_APP_THAT_OPENS`, answer for answer.
+//! - `an-app-that-answers` (#1436) answers it with the scenario's own `answer`, one JSON value
+//!   written as one line: what a dispatch is told, whichever of the app's answers that is.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
@@ -21,7 +25,14 @@ pub struct Served {
 
 pub fn start(serve: &Map<String, Value>, side: &Path) -> Served {
     let kind = serve["kind"].as_str().expect("a kind");
-    assert_eq!(kind, "an-app-that-opens", "no stand-in named {kind:?}");
+    let answers = match kind {
+        "an-app-that-opens" => "{\"opened\": {\"chat\": 9}}\n".to_owned(),
+        "an-app-that-answers" => {
+            let answer = serve.get("answer").expect("an answer");
+            format!("{}\n", serde_json::to_string(answer).expect("one line"))
+        }
+        _ => panic!("no stand-in named {kind:?}"),
+    };
     let socket = side.join(serve["socket"].as_str().expect("a socket"));
     std::fs::create_dir_all(socket.parent().expect("a parent")).expect("the socket's directory");
     let listener = UnixListener::bind(&socket).expect("the stand-in binds");
@@ -53,7 +64,7 @@ pub fn start(serve: &Map<String, Value>, side: &Path) -> Served {
             let answer = if ask.get("ticket").is_some() {
                 format!("{{\"ticket\": {{\"ticket\": \"{}\"}}}}\n", "0".repeat(64))
             } else {
-                "{\"opened\": {\"chat\": 9}}\n".to_owned()
+                answers.clone()
             };
             if writer
                 .write_all(answer.as_bytes())
