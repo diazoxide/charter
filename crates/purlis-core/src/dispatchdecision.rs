@@ -1414,6 +1414,72 @@ mod tests {
     }
 
     #[test]
+    fn a_handoff_is_held_to_the_limits_of_the_workspace_it_moves_into_and_its_own() {
+        // D-T61-7. The asking chat works in `alpha` and hands off into `works_in`: the same
+        // two reads a task's `--in workspace:` gets, whoever is at the chat.
+        let ask = |manifest: &str, works_in: Option<&str>, counted: Counted| {
+            let root = a_project(manifest);
+            std::fs::create_dir_all(root.path().join("workspaces/beta")).unwrap();
+            let asking = Chat {
+                cwd: Some(root.path().join("workspaces/alpha")),
+                ..chat(Some("steward"))
+            };
+            asked_by_a_chat(
+                root.path(),
+                1,
+                &asking,
+                None,
+                &Moment {
+                    open: &[(1, &asking)],
+                    working: &|_| true,
+                    default: None,
+                    grants: &InForce::default(),
+                    profile: None,
+                    by: By::Chat,
+                    mode: Mode::Handoff,
+                    counted,
+                    works_in,
+                },
+            )
+        };
+        let off_there = "[dispatch.workspaces.beta]\nrunning-per-chat = 0\n";
+        let off_here = "[dispatch.workspaces.alpha]\nrunning-per-chat = 0\n";
+        let persona = "[dispatch.personas.steward]\nrunning-per-chat = 3\n";
+        for counted in [Counted::Tasks, Counted::HandoffsToo] {
+            // Off where it would move to: said, and a handoff that stays is not held to it.
+            assert_eq!(
+                ask(off_there, Some("alpha"), counted).decision,
+                Decision::Start
+            );
+            let said = refusal(&ask(off_there, Some("beta"), counted));
+            assert!(
+                said.starts_with(
+                    "dispatch is off in the workspace beta: running per chat is set to 0"
+                ),
+                "{said}"
+            );
+            // A persona's own value does not lift the destination's 0 (D-1453-17).
+            let said = refusal(&ask(
+                &format!("{off_there}{persona}"),
+                Some("beta"),
+                counted,
+            ));
+            assert!(
+                said.starts_with("dispatch is off in the workspace beta"),
+                "{said}"
+            );
+            // Off where the asking chat works: the first refusal is the answer.
+            let said = refusal(&ask(off_here, Some("beta"), counted));
+            assert!(
+                said.starts_with("dispatch is off in the workspace alpha"),
+                "{said}"
+            );
+            // And where neither says anything, it opens.
+            assert_eq!(ask("", Some("beta"), counted).decision, Decision::Start);
+        }
+    }
+
+    #[test]
     fn every_count_a_refusal_names_is_the_one_the_records_hold() {
         let none = InForce::default();
         // Depth: the asking chat is one dispatch down, and a chain may go one deep.

@@ -1521,9 +1521,8 @@ fn dispatch_it(
     //
     // **A handoff's place is the workspace it names, and nothing here** (D-T61-2): where its
     // work moves is its own word, checked by [`moving`], so it is given no `--in` and its
-    // persona's default worktree is not cut for it. It is neither held to the destination's
-    // limits nor to the rule for a chat nobody is at that crosses workspaces, which are a
-    // task's (#1453): a handoff is decided as #1444 left it.
+    // persona's default worktree is not cut for it. The rule for a chat nobody is at that
+    // crosses workspaces is a task's (D-1453-16): a handoff's own is ruling V99f's.
     let ground = match &wanted.moved {
         Some(_) => Ground::Asker { fell_back: false },
         None => dispatchplace::asked(wanted.place.as_deref())
@@ -1543,6 +1542,15 @@ fn dispatch_it(
         }
         _ => None,
     };
+    // **A handoff is held to the limits of the workspace it moves into, as a task sent into
+    // one is** (D-T61-7, D-1453-17): they are the project's own configuration, and a handoff
+    // has always named a workspace. By the name the folder itself has, where it is there, so
+    // a spelling that differs only in case reads the same limits; one a handoff is about to
+    // create is read by the name it gives.
+    let moves_into = wanted.moved.as_ref().map(|moved| {
+        dispatchplace::workspace_folder(root, &moved.workspace)
+            .map_or_else(|_| moved.workspace.clone(), |(name, _)| name)
+    });
     // **The profile**: the one the dispatch names, else the persona's own, else the asking
     // chat's (#1445). Chosen before the decision, which refuses where there is none, and kept
     // with the read it was chosen from, which is the read the chat is then started from.
@@ -1678,7 +1686,7 @@ fn dispatch_it(
                         Attendance::Attended => dispatchdecision::Counted::Tasks,
                         Attendance::Unattended => dispatchdecision::Counted::HandoffsToo,
                     },
-                    works_in: ground.workspace(),
+                    works_in: moves_into.as_deref().or(ground.workspace()),
                 },
             )
         });
@@ -6558,6 +6566,36 @@ mod tests {
             "check the queue",
         );
         assert!(matches!(here, Answer::Dispatched { .. }), "{here:?}");
+    }
+
+    #[test]
+    fn a_handoff_into_a_workspace_that_switched_dispatch_off_opens_nothing() {
+        // D-T61-7: the limits of the workspace a handoff moves into hold, as they do for a
+        // task sent into one.
+        let plane = a_plane_with_personas();
+        std::fs::create_dir_all(plane.root.join("workspaces/beta")).expect("beta");
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n[dispatch.workspaces.beta]\nrunning-per-chat = 0\n",
+        )
+        .expect("the manifest");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+
+        let (there, told) = a_handoff(&held, &id, asking, None, None, ("beta", None));
+
+        assert!(
+            refused(&there).starts_with("dispatch is off in the workspace beta"),
+            "{there:?}"
+        );
+        assert!(told.is_none());
+        assert_eq!(held.chats().open_now().len(), before, "nothing opened");
+        // Into a workspace that says nothing, the same chat still hands off.
+        let (elsewhere, _) = a_handoff(&held, &id, asking, None, None, INTO_ALPHA);
+        assert!(matches!(elsewhere, Answer::Opened { .. }), "{elsewhere:?}");
     }
 
     /// git for a fixture's own setup: the status is checked, and no file of the developer's
