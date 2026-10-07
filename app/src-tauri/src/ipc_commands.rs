@@ -200,6 +200,8 @@ macro_rules! app_commands {
                 personas::persona_edit,
                 personas::persona_marks,
                 personas::persona_mark_set,
+                personas::persona_profile,
+                personas::persona_set_profile,
                 todos::todo_add,
                 todos::todo_done,
                 todos::todo_forget,

@@ -72,8 +72,13 @@ below. Then, from a chat the app started:
 
 1. The command asks the app, over the chat's hook socket, to open the chat.
 2. With `--create`, the app creates the workspace and records its vision.
-3. The app opens a chat in the target workspace's directory, on **the same harness profile as
-   the chat that asked** — read from the app's own record of that chat, never from the request.
+3. The app opens a chat in the target workspace's directory, on **its persona's own profile**
+   where that persona's definition names one (`profile:`), else on the same harness profile as
+   the chat that asked, read from the app's own record of that chat and never from the request.
+   The profile is always one the project offers on this machine and has approved. A name in
+   a persona's definition is only looked up, never run: where this machine does not offer it,
+   the chat starts on the asking chat's profile, and the command's answer and the new chat's
+   stamp say so. A profile that is offered and not approved opens nothing.
 4. Its first message is the stamp line, a blank line, then the brief verbatim — with, for
    `--report`, one more line under the stamp saying how to report. It rides the harness's own
    argv (`claude "<message>"`, `codex "<message>"`), never typed into its pane.
@@ -223,7 +228,11 @@ the two numbers are both on screen. Name long material by its path instead of pa
 ## Limits
 
 - **A handed-off chat reports back only when asked** (`--report`), and then exactly once. If you need the answer in this turn of this conversation, you wanted a sub-agent.
-- **The same harness only.** A Claude Code chat hands off to a Claude Code chat.
+- **The harness follows the profile.** A chat handed to a persona whose profile runs another
+  harness starts on that harness: a Claude Code chat can hand work to a persona that runs on
+  Codex, and the brief reaches it as that harness takes a first message. A persona that names
+  no profile gets the asking chat's, so the harness stays the same. Claude Code and Codex are
+  tested in this version; an opencode profile goes the same way and is untested.
 - **The brief is a command-line argument.** It reaches the harness as `claude "<brief>"` or
   `codex "<brief>"`, so any process on this machine that can list processes can read it while
   the harness starts. A brief never carries a secret, and a credential-shaped one is refused by

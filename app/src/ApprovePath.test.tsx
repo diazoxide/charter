@@ -41,6 +41,7 @@ const START_OPTIONS = {
   refused: [],
   personas: ["steward", "release"],
   persona: "steward",
+  persona_profiles: {},
   ignore_fix: null,
   declares_none: false,
 };

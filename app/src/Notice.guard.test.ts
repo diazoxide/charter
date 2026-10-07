@@ -184,6 +184,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     why: "the palette's answers, counts and refusals, inside the palette dialog",
   },
   "Panels.tsx": { count: 3, why: "a panel's read refusal and its blocks' tone, inside the panel" },
+  "PersonaProfile.tsx": {
+    count: 2,
+    why: ACTION + ". Also its read refusal: " + READ_ONCE,
+  },
   "ProfileApproval.tsx": {
     count: 1,
     why: WARNING,

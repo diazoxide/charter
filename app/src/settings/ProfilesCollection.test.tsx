@@ -172,6 +172,7 @@ function core({
             refused: [],
             personas: [],
             persona: null,
+            persona_profiles: {},
             ignore_fix: null,
             declares_none: false,
           };

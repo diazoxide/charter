@@ -152,6 +152,7 @@ describe("what a menu lists", () => {
     expect(shown.above).toEqual([
       "Show what steward is",
       "Edit steward's persona.md",
+      "Set steward's profile…",
       "New persona…",
     ]);
     expect(shown.below).toEqual(["Delete persona steward…"]);

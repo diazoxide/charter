@@ -1296,6 +1296,22 @@ export const commands = {
 	 *  persona goes back to what it inherits, or to its initials.
 	 */
 	personaMarkSet: (plane: PlaneId, name: string, icon: string | null, colour: string | null) => typedError<null, string>(__TAURI_INVOKE("persona_mark_set", { plane, name, icon, colour })),
+	/**
+	 *  The profile a persona's chats start on, and the project's profiles it may be set to.
+	 * 
+	 *  Off the window's thread: reading the profiles asks git whether the local file would travel.
+	 */
+	personaProfile: (plane: PlaneId, name: string) => typedError<PersonaProfile, string>(__TAURI_INVOKE("persona_profile", { plane, name })),
+	/**
+	 *  Set the profile a persona's chats start on, or name none: one `profile:` line in the
+	 *  persona's own definition (`purlis_core::personaprofile::set`). None removes the line, or
+	 *  writes `profile: none` where the persona would otherwise inherit one.
+	 * 
+	 *  The core refuses a profile the project does not offer on this machine. The window sends a
+	 *  name it listed; a name it did not is refused all the same, because the line is read back as
+	 *  what a chat starts on.
+	 */
+	personaSetProfile: (plane: PlaneId, name: string, profile: string | null) => typedError<null, string>(__TAURI_INVOKE("persona_set_profile", { plane, name, profile })),
 	/**  Record a todo in `workspace`, and answer with what was said. */
 	todoAdd: (plane: PlaneId, workspace: string, text: string) => typedError<string, string>(__TAURI_INVOKE("todo_add", { plane, workspace, text })),
 	/**  Close a todo as done: the journal records it, then the todo goes. */
@@ -3802,6 +3818,22 @@ export type PersonaMark = {
 	trouble: string[],
 };
 
+/**  A persona's profile, as the persona view's control draws it (#1445). */
+export type PersonaProfile = {
+	/**
+	 *  The profile the definition names with `profile:`, as written, or none. It is shown
+	 *  even where the project does not offer it, so the control can say so.
+	 */
+	named: string | null,
+	/**
+	 *  The persona it inherits that profile from (`extends:`), where the line is not its own.
+	 *  Picking none then writes `profile: none` in its own definition.
+	 */
+	inherited_from: string | null,
+	/**  Every profile the project offers on this machine, by name: what may be picked. */
+	offered: string[],
+};
+
 /**  Where a smart close stands. */
 export type Phase = 
 /**  Waiting for the chat's turn to end before the prompt is sent. */
@@ -5055,6 +5087,12 @@ export type StartOptions = {
 	personas: string[],
 	/**  The plane's `[persona] default`, which is the persona row the picker starts on. */
 	persona: string | null,
+	/**
+	 *  Each persona's own profile, by the persona's name, where its definition names one the
+	 *  project offers (#1445): the harness row the picker moves to when that persona is
+	 *  picked. The person can still pick another.
+	 */
+	persona_profiles: { [key in string]: string },
 	/**
 	 *  Set when git would carry `charter.local.toml`: every declared profile is refused
 	 *  until it is fixed, and this is the one fix for that state.

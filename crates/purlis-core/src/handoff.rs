@@ -279,6 +279,14 @@ you found. It is sent once, and that chat reads it the next time it is prompted�
 /// naming the parent as `from`, and [`REPORT_ASK`] under it when `report` — or `None` for a
 /// message that is not stamped at all.
 pub fn delivered(msg: &str, from: &str, report: bool) -> Option<String> {
+    delivered_noting(msg, from, report, None)
+}
+
+/// [`delivered`], with `note` as one more line under the stamp: something the app has to tell
+/// the new chat about how it was started (that it runs on the asking chat's profile because
+/// its persona's own is not offered on this machine, #1445). Purlis's own words, never the
+/// asking chat's.
+pub fn delivered_noting(msg: &str, from: &str, report: bool, note: Option<&str>) -> Option<String> {
     let read = stamped(msg)?;
     let place = if read.from_root {
         Place::PLANE_ROOT.to_owned()
@@ -295,7 +303,10 @@ pub fn delivered(msg: &str, from: &str, report: bool) -> Option<String> {
     } else {
         String::new()
     };
-    Some(format!("{line}{ask}\n\n{}", read.brief))
+    let note = note
+        .map(|note| format!("\n⟨{}⟩", crate::personas::one_line(note)))
+        .unwrap_or_default();
+    Some(format!("{line}{ask}{note}\n\n{}", read.brief))
 }
 
 // ----------------------------------------------------------------------------------------
@@ -824,6 +835,37 @@ mod tests {
             "{ask}"
         );
         assert_eq!(brief, "# Drop account-console-commons\nbody");
+    }
+
+    #[test]
+    fn what_the_app_has_to_say_about_the_start_is_one_line_under_the_stamp() {
+        // #1445, D-1445-8: the chat runs on another profile than its persona names.
+        let told = delivered_noting(
+            &wire(),
+            "steward 3",
+            true,
+            Some("persona 'ops' names profile 'work',\nwhich this machine does not offer"),
+        )
+        .expect("a stamped message");
+
+        let (head, brief) = told.split_once("\n\n").unwrap();
+        let lines: Vec<&str> = head.lines().collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "the stamp, the report ask, the note: {head}"
+        );
+        assert!(lines[0].starts_with("⟨handoff from steward 3 · "), "{head}");
+        assert_eq!(lines[1], REPORT_ASK);
+        assert!(
+            lines[2].starts_with("⟨persona 'ops' names profile 'work',") && lines[2].ends_with('⟩'),
+            "one line, whatever the note held: {head}"
+        );
+        assert_eq!(brief, "# Drop account-console-commons\nbody");
+        assert_eq!(
+            delivered_noting(&wire(), "steward 3", true, None),
+            delivered(&wire(), "steward 3", true)
+        );
     }
 
     #[test]

@@ -37,9 +37,11 @@ pub const BIN_DIR: &str = "bin";
 /// The keys whose unreadability makes an absent `borrows:` a lie — `_GRANT_DECIDING_KEYS`.
 const GRANT_DECIDING_KEYS: [&str; 2] = ["borrows", "extends"];
 
-/// The whole frontmatter vocabulary — `persona.KNOWN_KEYS`. Only its case-folded spellings are
-/// used here, to recognise a MISSPELLED grant-deciding key.
-const KNOWN_KEYS: [&str; 22] = [
+/// The whole frontmatter vocabulary — `persona.KNOWN_KEYS`, and `profile` (#1445,
+/// [`crate::personaprofile`]) and `icon` (#1449), which purlis added. Only its case-folded
+/// spellings are used here, to recognise a MISSPELLED grant-deciding key.
+const KNOWN_KEYS: [&str; 23] = [
+    "profile",
     "model",
     "color",
     "icon",

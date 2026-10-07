@@ -250,7 +250,11 @@ fn opens_as_nine(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
         },
         Ask::Open(open) => {
             match tickets.spend(open.chat, connection, &open.ticket, Instant::now()) {
-                Ok(()) => Answer::Opened { chat: 9, row: None },
+                Ok(()) => Answer::Opened {
+                    chat: 9,
+                    row: None,
+                    note: None,
+                },
                 Err(why) => Answer::No { why },
             }
         }
@@ -737,6 +741,7 @@ fn opens_as_nine_and_answers_its_row(
         Answer::Opened { chat, .. } => Answer::Opened {
             chat,
             row: Some(row.clone()),
+            note: None,
         },
         other => other,
     }
