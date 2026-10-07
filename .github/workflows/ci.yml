@@ -463,6 +463,27 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: The plane writes, hooks, status line and doctor, as recorded
         run: cargo test --locked -p purlis-cli --test recorded_behaviour
+      # A red replay offers the file a bless would write, so rows that moved on purpose can be
+      # taken from here where no machine at hand can run the recorder (a sandboxed chat cannot
+      # lay out a project's harness files). The run stays red: nothing is committed, and
+      # `tools/recorded-bless-check.mjs` is what holds the downloaded file to the rows and the
+      # fields that were meant to move, before anyone commits it. A row's verdict (`denies`,
+      # `allows`) is never moved by a bless.
+      - name: What a bless would record, where the replay differs
+        if: failure()
+        continue-on-error: true
+        env:
+          CHARTER_RECORDED_BLESS: "1"
+        run: cargo test --locked -p purlis-cli --test recorded_behaviour
+      - name: The blessed file, to check and commit by hand
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recorded-behaviour-blessed
+          path: |
+            tests/fixtures/recorded/behaviour.jsonl
+            tests/fixtures/recorded/behaviour-blobs.jsonl.gz
+          if-no-files-found: error
       - name: The shell reader and the plane-root guards, as recorded
         run: >-
           cargo test --locked -p purlis-core
