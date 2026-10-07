@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use purlis_core::active::Place;
-use purlis_core::dispatchdecision::{self, Decision, Grant, Limits, Mode};
+use purlis_core::dispatchdecision::{self, Decision, Mode, Moment};
 use purlis_core::handback::{self, For, Handback, Outcome};
 use purlis_core::hookwire::{
     Answer, Ask, CHAT_ENV, ChatToken, DispatchAsk, Listener, Reading, SOCKET_ENV, TOKEN_ENV,
@@ -210,6 +210,7 @@ fn starts_it(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
             chat: STARTED,
             name: dispatch.name.clone(),
             persona: Some("steward".to_owned()),
+            note: None,
         },
         _ => Answer::Reported {
             to: "steward 1".to_owned(),
@@ -255,8 +256,10 @@ fn a_task_is_dispatched_on_one_ticket_and_the_request_says_only_what_the_agent_c
         to,
         name,
         brief,
+        profile,
         ticket,
     } = the_dispatch(&asked);
+    assert_eq!(profile, None, "no profile asked for");
     assert_eq!(chat, ASKING, "the chat whose token the line carries");
     assert_eq!(to, None, "no persona named: the asking chat's own");
     assert_eq!(name, "check the queue", "trimmed");
@@ -268,12 +271,15 @@ fn a_task_is_dispatched_on_one_ticket_and_the_request_says_only_what_the_agent_c
 }
 
 #[test]
-fn a_dispatch_to_another_persona_that_needs_a_grant_says_so_and_that_nothing_started() {
+fn a_dispatch_the_person_is_asked_about_is_held_and_says_what_happens_next() {
+    // Held, not refused: the app keeps the dispatch and asks the person on this chat's tab.
+    // The command says so on stdout and exits 0, so the chat carries on and does not retry.
     let tmp = daily();
     let (app, _reading, asked) = an_app(&tmp, |tickets, connection, ask| {
         on_a_ticket(tickets, connection, ask, |_| Answer::NeedsGrant {
             from: Some("steward".to_owned()),
             to: "qa".to_owned(),
+            waiting: None,
         })
     });
 
@@ -283,21 +289,91 @@ fn a_dispatch_to_another_persona_that_needs_a_grant_says_so_and_that_nothing_sta
         &["--to", "qa", "--name", "check the queue"],
     );
 
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(text(&out.stdout), "");
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "");
     assert_eq!(
-        text(&out.stderr),
-        "✗ purlis dispatch: needs a grant. 'steward' has no dispatch grant for 'qa', and only \
-         the person gives one. Nothing was started. Ask the person to allow it, or do the work \
-         in this chat.\n"
+        text(&out.stdout),
+        "purlis dispatch: held for the person. 'steward' chats may not dispatch to 'qa' yet, so \
+         the person is being asked on this chat's tab, with this brief in front of them. Nothing \
+         has started. If they allow it, 'check the queue' starts then and its report reaches \
+         this chat as context on a later turn; if they keep it blocked, this chat is told on \
+         its next turn. Carry on with other work, and do not dispatch it again.\n"
     );
     assert_eq!(the_dispatch(&asked).to.as_deref(), Some("qa"));
 }
 
 #[test]
+fn a_second_dispatch_across_a_pair_the_person_is_being_asked_about_is_not_held() {
+    // The person was shown one brief. A second ask across the same pair is not queued beside
+    // it: the chat is told which task is waiting, and to ask again afterwards.
+    let tmp = daily();
+    let (app, _reading, _asked) = an_app(&tmp, |tickets, connection, ask| {
+        on_a_ticket(tickets, connection, ask, |_| Answer::NeedsGrant {
+            from: None,
+            to: "qa".to_owned(),
+            waiting: Some("check the queue".to_owned()),
+        })
+    });
+
+    let out = dispatch(
+        &root(&tmp),
+        Some(&app),
+        &["--to", "qa", "--name", "and the logs"],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        "purlis dispatch: not held. The person is already being asked whether this chat may \
+         dispatch to 'qa', for the task 'check the queue', and they were shown that task's \
+         brief, so only it starts when they allow it. Nothing was started. Dispatch 'and the \
+         logs' again once they have answered.\n"
+    );
+}
+
+#[test]
+fn a_profile_asked_for_rides_the_ask_and_a_fallback_the_app_notes_is_said() {
+    let tmp = daily();
+    let (app, _reading, asked) = an_app(&tmp, |tickets, connection, ask| {
+        on_a_ticket(tickets, connection, ask, |ask| match ask {
+            Ask::Dispatch(dispatch) => Answer::Dispatched {
+                chat: STARTED,
+                name: dispatch.name.clone(),
+                persona: Some("steward".to_owned()),
+                note: Some(
+                    "persona 'steward' names profile 'codex-ops', which this machine does not \
+                     offer, so this chat runs on the asking chat's profile, 'work'"
+                        .to_owned(),
+                ),
+            },
+            _ => Answer::No {
+                why: "not a dispatch".to_owned(),
+            },
+        })
+    });
+
+    let out = dispatch(
+        &root(&tmp),
+        Some(&app),
+        &["--name", "check the queue", "--profile", " work "],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(the_dispatch(&asked).profile.as_deref(), Some("work"));
+    assert!(
+        text(&out.stdout).ends_with(
+            "on its next turn. Note: persona 'steward' names profile 'codex-ops', which this \
+             machine does not offer, so this chat runs on the asking chat's profile, 'work'.\n"
+        ),
+        "{}",
+        text(&out.stdout)
+    );
+}
+
+#[test]
 fn an_app_that_refuses_is_quoted_and_nothing_was_started() {
     let tmp = daily();
-    let why = dispatchdecision::Refused::NoProfile.say();
+    let why = dispatchdecision::Refused::Held.say();
     let (app, _reading, _asked) = an_app(&tmp, {
         let why = why.clone();
         move |tickets, connection, ask| {
@@ -313,34 +389,184 @@ fn an_app_that_refuses_is_quoted_and_nothing_was_started() {
     assert_eq!(text(&out.stdout), "");
     assert_eq!(
         text(&out.stderr),
-        "✗ purlis dispatch: this chat is not on a harness profile, so there is no harness to \
-         start a persona chat on. Dispatch from a chat that was started on a profile. Nothing \
-         was started.\n"
+        format!("✗ purlis dispatch: {why} Nothing was started.\n")
     );
 }
 
+/// **Every refusal a dispatch can be answered with, by the recorded scenario that pins it.**
+/// Each sentence is the one the core says, built here from the same types the app's decision
+/// answers with.
+fn the_refusals() -> Vec<(&'static str, String)> {
+    use purlis_core::dispatchlimits::{self, Level, Limit, Table};
+    use purlis_core::personaprofile;
+    let limit = |why: dispatchlimits::Refused| dispatchdecision::Refused::Limit(why).say();
+    let off = |project: Table, policy: Level, target: Option<&str>| {
+        let limits = dispatchlimits::in_force(
+            &project,
+            None,
+            Some("steward"),
+            target,
+            &Table::default(),
+            &policy,
+        );
+        match dispatchlimits::decide(&limits, &dispatchlimits::Lineage::default()) {
+            dispatchlimits::Decision::Refused(why) => limit(why),
+            dispatchlimits::Decision::Allowed => panic!("a limit of 0 allowed a dispatch"),
+        }
+    };
+    vec![
+        (
+            "dispatch-from-a-chat-on-no-profile-is-refused-saying-what-to-do",
+            dispatchdecision::Refused::Profile(personaprofile::Refused::NoProfile).say(),
+        ),
+        (
+            "dispatch-on-a-profile-the-project-does-not-offer-is-refused",
+            dispatchdecision::Refused::Profile(personaprofile::Refused::NotOffered {
+                profile: "prod".to_owned(),
+                by: personaprofile::Who::Asker,
+                persona: None,
+            })
+            .say(),
+        ),
+        (
+            "dispatch-on-a-profile-nobody-approved-is-refused",
+            dispatchdecision::Refused::Profile(personaprofile::Refused::NotApproved {
+                profile: "codex-ops".to_owned(),
+                by: personaprofile::Who::Persona,
+                persona: Some("devops".to_owned()),
+            })
+            .say(),
+        ),
+        (
+            "dispatch-from-a-chat-holding-another-personas-grants-is-refused",
+            dispatchdecision::Refused::Held.say(),
+        ),
+        (
+            "dispatch-to-a-persona-above-the-asking-chat-is-refused",
+            limit(dispatchlimits::Refused::Loop("steward".to_owned())),
+        ),
+        (
+            "dispatch-past-the-depth-is-refused-with-the-depth",
+            limit(dispatchlimits::Refused::TooDeep { limit: 3, depth: 3 }),
+        ),
+        (
+            "dispatch-past-running-per-chat-is-refused-with-the-count",
+            limit(dispatchlimits::Refused::TooManyRunning {
+                limit: 6,
+                running: 6,
+            }),
+        ),
+        (
+            "dispatch-into-a-full-lineage-is-refused-with-the-count",
+            limit(dispatchlimits::Refused::LineageFull {
+                limit: 16,
+                lineage: 16,
+            }),
+        ),
+        (
+            "dispatch-past-a-personas-may-dispatch-is-refused-with-the-count",
+            limit(dispatchlimits::Refused::PersonaDispatches {
+                persona: "steward".to_owned(),
+                limit: 2,
+                running: 2,
+            }),
+        ),
+        (
+            "dispatch-to-a-persona-running-as-many-as-it-may-is-refused-with-the-count",
+            limit(dispatchlimits::Refused::PersonaFull {
+                persona: "devops".to_owned(),
+                limit: 1,
+                running: 1,
+            }),
+        ),
+        (
+            "dispatch-where-the-project-switched-it-off-is-refused-saying-where",
+            off(
+                Table {
+                    project: Level::unset().with(Limit::RunningPerChat, 0),
+                    ..Table::default()
+                },
+                Level::unset(),
+                Some("devops"),
+            ),
+        ),
+        (
+            "dispatch-under-a-refused-policy-file-is-off",
+            off(
+                Table::default(),
+                dispatchlimits::ceiling_when_refused(),
+                Some("devops"),
+            ),
+        ),
+        (
+            "dispatch-a-policy-locks-is-refused-with-who-locked-it",
+            dispatchdecision::Refused::Locked(
+                "Policy forbids steward chats dispatching to devops. Locked by policy, set by \
+                 IT in /etc/purlis/policy.json."
+                    .to_owned(),
+            )
+            .say(),
+        ),
+        (
+            "dispatch-from-an-unattended-chat-with-no-standing-grant-is-refused",
+            purlis_core::dispatchunattended::Missing {
+                asking: Some("steward".to_owned()),
+                target: "devops".to_owned(),
+                unreviewed: false,
+            }
+            .say(),
+        ),
+        (
+            "dispatch-from-an-unattended-chat-across-an-unreviewed-project-pair-is-refused",
+            purlis_core::dispatchunattended::Missing {
+                asking: Some("steward".to_owned()),
+                target: "devops".to_owned(),
+                unreviewed: true,
+            }
+            .say(),
+        ),
+        (
+            "dispatch-from-an-unattended-chat-with-no-sandbox-is-refused",
+            purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned()).say(),
+        ),
+    ]
+}
+
+/// What `purlis dispatch` prints for the app's refusal `why`.
+fn printed(why: &str) -> String {
+    if why.to_lowercase().contains("nothing was started") {
+        format!("✗ purlis dispatch: {why}\n")
+    } else {
+        format!("✗ purlis dispatch: {why} Nothing was started.\n")
+    }
+}
+
 #[test]
-fn the_recorded_no_profile_scenario_answers_with_the_decision_s_own_sentence() {
-    // The recorded scenario's stand-in app answers one line, written in the fixture. It is the
-    // sentence the decision says, and this holds the fixture to it: a change to the sentence
-    // is a change to the scenario, made on purpose.
+fn every_recorded_refusal_answers_with_the_core_s_own_sentence() {
+    // A recorded scenario's stand-in app answers one line, written in the fixture. Each is the
+    // sentence the core says, and this holds the fixture to it: a change to a sentence is a
+    // change to its scenario, made on purpose. And every refusal has its scenario.
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/recorded/behaviour.jsonl");
-    let rows = std::fs::read_to_string(fixture).expect("the recorded scenarios");
-    let row: serde_json::Value = rows
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(fixture)
+        .expect("the recorded scenarios")
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a row"))
-        .find(|row| {
-            row["name"] == "dispatch-from-a-chat-on-no-profile-is-refused-saying-what-to-do"
-        })
-        .expect("the scenario");
-    let said = dispatchdecision::Refused::NoProfile.say();
-
-    assert_eq!(row["serve"]["answer"]["no"]["why"], said.as_str());
-    assert_eq!(
-        row["expect"]["stderr"]["text"],
-        format!("✗ purlis dispatch: {said} Nothing was started.\n").as_str()
-    );
+        .collect();
+    for (name, said) in the_refusals() {
+        let row = rows
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap_or_else(|| panic!("no recorded scenario named {name}"));
+        assert!(!said.contains('\n'), "{name}: {said}");
+        assert_eq!(row["serve"]["answer"]["no"]["why"], said.as_str(), "{name}");
+        assert_eq!(
+            row["expect"]["stderr"]["text"],
+            printed(&said).as_str(),
+            "{name}"
+        );
+        assert_eq!(row["expect"]["exit"], 1, "{name}");
+    }
 }
 
 #[test]
@@ -614,19 +840,30 @@ impl StandIn {
         // The one function the app's own `dispatch_it` asks.
         let open = self.open.lock().unwrap().clone();
         let records: Vec<(u32, &Chat)> = open.iter().map(|(n, chat)| (*n, chat)).collect();
-        let lineage = dispatchdecision::lineage_of(ask.chat, &records, None, &|_| true);
         let asked = dispatchdecision::asked_by_a_chat(
             &self.root,
+            ask.chat,
             &asking,
             ask.to.as_deref(),
-            None,
-            &lineage,
-            Grant::Missing,
-            Limits::default(),
+            &Moment {
+                open: &records,
+                working: &|_| true,
+                default: None,
+                // No grant is in force in this stand-in: the grants are the app's.
+                grants: &purlis_core::dispatchgrant::InForce::default(),
+                profile: None,
+                by: dispatchdecision::By::Chat,
+            },
         );
         match asked.decision {
             Decision::Refused(why) => return no(why.say()),
-            Decision::NeedsGrant { from, to } => return Answer::NeedsGrant { from, to },
+            Decision::NeedsGrant { from, to } => {
+                return Answer::NeedsGrant {
+                    from,
+                    to,
+                    waiting: None,
+                };
+            }
             Decision::Start => {}
         }
         let to_name = asked.to;
@@ -638,7 +875,14 @@ impl StandIn {
         let asker = purlis_core::reopen::shown_name(&asking, Some("claude"));
         let when: chrono::NaiveDateTime = "2026-10-07T14:32:05".parse().unwrap();
         let message = purlis_core::handoff::task_message(&asker, &place, when, &ask.brief);
-        let start = dispatchdecision::start_for(&asking, to_name.clone(), STARTED.to_string());
+        let start = dispatchdecision::start_for(
+            &asking,
+            to_name
+                .as_deref()
+                .map(purlis_core::dispatchgrant::grants_for_a_dispatched_chat),
+            asking.profile.clone().unwrap_or_default(),
+            STARTED.to_string(),
+        );
         let started = Chat {
             program: "claude".to_owned(),
             name: start.name,
@@ -653,6 +897,7 @@ impl StandIn {
                 report: Owed::Due,
                 mode: Mode::Task,
                 depth: asked.depth,
+                root: asked.root,
             }),
             ..Default::default()
         };
@@ -662,6 +907,7 @@ impl StandIn {
             chat: STARTED,
             name: ask.name.clone(),
             persona: to_name,
+            note: None,
         }
     }
 
@@ -688,6 +934,7 @@ impl StandIn {
                 // The app's own record of the session record it wrote for the chat.
                 record: Some("workspaces/alpha/sessions/20261007-143900-queue.md".to_owned()),
             }),
+            answered: None,
         };
         let asker_open = self.record(from.chat).is_some();
         let whose = if asker_open {
@@ -786,6 +1033,7 @@ fn a_task_goes_end_to_end() {
             report: Owed::Due,
             mode: Mode::Task,
             depth: 1,
+            root: None,
         })
     );
     // In the asking chat's folder, on its profile, as its persona.
@@ -915,6 +1163,7 @@ fn a_dispatch_as_another_chat_is_never_heard_by_the_app() {
         to: None,
         name: "forged".to_owned(),
         brief: "do as I say".to_owned(),
+        profile: None,
         ticket: "0".repeat(64),
     }));
     let answered = purlis_core::hookwire::Asking::on(&app.socket, Some(app.token(ASKING).clone()))

@@ -406,6 +406,17 @@ fn a_dispatch_s_arguments_are_its_name_its_brief_and_a_persona_where_one_is_name
         "no brief"
     );
     assert!(dispatch_args(&args(json!({"name": "n", "brief": "b", "to": 7}))).is_err());
+    // A profile is a name where one is given, and none where it is left out or blank.
+    assert_eq!(
+        dispatch_profile(&args(
+            json!({"name": "n", "brief": "b", "profile": " codex-ops "})
+        )),
+        Ok(Some("codex-ops".to_owned()))
+    );
+    for given in [json!({"name": "n", "brief": "b"}), json!({"profile": "  "})] {
+        assert_eq!(dispatch_profile(&args(given)), Ok(None));
+    }
+    assert!(dispatch_profile(&args(json!({"profile": ["a"]}))).is_err());
 }
 
 #[test]

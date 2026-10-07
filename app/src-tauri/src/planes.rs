@@ -242,6 +242,10 @@ pub struct Held {
     /// The dispatches waiting on the person, and the dispatch grants made for one chat
     /// (#1437).
     dispatch_grants: crate::dispatchgrants::Store,
+    /// The dispatches waiting on the person, as each was asked (#1437): what an Allow starts.
+    held_dispatches: crate::handoff::HeldDispatches,
+    /// Which chats run with their harness's permission prompts off (#1446).
+    unattended: crate::handoff::Unattended,
     /// Which chats were waiting on the person at their last report: what counts a dispatch's
     /// needs-you once per wait (#1452).
     dispatches: crate::dispatches::Waiting,
@@ -414,6 +418,16 @@ impl Held {
     /// The cap on each chat's brokered writes (#1333).
     pub fn brokered(&self) -> &purlis_core::brokered::Rate {
         &self.brokered
+    }
+
+    /// The dispatches waiting on the person, as each was asked (#1437).
+    pub fn held_dispatches(&self) -> &crate::handoff::HeldDispatches {
+        &self.held_dispatches
+    }
+
+    /// Which chats run with their harness's permission prompts off (#1446).
+    pub fn unattended(&self) -> &crate::handoff::Unattended {
+        &self.unattended
     }
 
     /// The vaults each chat was refused for its persona, for the Notice on its tab (#1430).
@@ -636,6 +650,10 @@ impl Held {
         let closed = self.chats.close(session);
         let ended = id.filter(|id| !self.chats.id_is_open(id));
         self.dispatch_grants.chat_closed(session, ended.as_deref());
+        // What it asked for and waited on goes with it, and so does how it was taken to run:
+        // a chat started again in its place is marked afresh.
+        self.held_dispatches.forget(session);
+        self.unattended.forget(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
         purlis_core::handback::orphan(&self.root, session);
@@ -1181,6 +1199,27 @@ impl Planes {
                 },
             })
         });
+        // The person's answer to a dispatch that waited on them starts it, or tells the chat
+        // that asked it was kept blocked (#1437). On a thread of its own: an Allow is a press
+        // in the window, and a chat's start takes seconds. Weak for the handoff's reason.
+        held.dispatch_grants().answers_with({
+            let held = Arc::downgrade(&held);
+            let plane = id.clone();
+            let arrivals = Arc::clone(&self.arrivals);
+            Arc::new(move |answer| {
+                let (held, plane, arrivals, answer) = (
+                    held.clone(),
+                    plane.clone(),
+                    Arc::clone(&arrivals),
+                    answer.clone(),
+                );
+                std::thread::spawn(move || {
+                    if let Some(held) = held.upgrade() {
+                        crate::handoff::answered(&held, &plane, &answer, &*arrivals);
+                    }
+                });
+            })
+        });
         // A brokered `secret exec` from one of this plane's chats is run by this plane, which
         // holds the chat's record: its persona and its folder (#1407). Weak for the handoff's
         // reason.
@@ -1216,6 +1255,11 @@ impl Planes {
             Arc::new(move |report| {
                 if let Some(held) = held.upgrade() {
                     crate::smartclose::reported(&held, report);
+                    // Whether its harness runs with its permission prompts off, which a
+                    // dispatch from it is held to (#1446). Only a report the board took: a
+                    // harness nested in the chat never marks the chat.
+                    held.unattended()
+                        .heard(report.chat, report.detail.unattended);
                     // What an Allow queued for this chat's turn to end is sent then (#1430).
                     crate::vaultroute::reported(&held, report.chat);
                     // A persona chat that has just come to wait on the person: its dispatch
@@ -2024,6 +2068,8 @@ impl Planes {
             brokered: purlis_core::brokered::Rate::default(),
             vault_refusals: crate::vaultroute::Refusals::default(),
             dispatch_grants: crate::dispatchgrants::Store::default(),
+            held_dispatches: crate::handoff::HeldDispatches::default(),
+            unattended: crate::handoff::Unattended::default(),
             dispatches: crate::dispatches::Waiting::default(),
             me,
         }
