@@ -112,6 +112,7 @@ fn the_tools_are_the_ones_charter_names_and_each_says_what_it_does() {
             "session_record",
             "change_status",
             "dispatch",
+            "dispatch_list",
             "dispatch_report",
             "ask_operator",
         ]
@@ -417,6 +418,41 @@ fn a_dispatch_s_arguments_are_its_name_its_brief_and_a_persona_where_one_is_name
         assert_eq!(dispatch_profile(&args(given)), Ok(None));
     }
     assert!(dispatch_profile(&args(json!({"profile": ["a"]}))).is_err());
+}
+
+#[test]
+fn a_dispatch_waits_only_when_told_to_and_for_the_default_unless_told_how_long() {
+    // #1441: carry on is the default.
+    assert_eq!(
+        dispatch_waits(&args(json!({"name": "n", "brief": "b"}))),
+        Ok(None)
+    );
+    assert_eq!(
+        dispatch_waits(&args(json!({"wait": false, "wait_seconds": 30}))),
+        Ok(None)
+    );
+    assert_eq!(dispatch_waits(&args(json!({"wait": true}))), Ok(Some(100)));
+    assert_eq!(
+        dispatch_waits(&args(json!({"wait": true, "wait_seconds": 30}))),
+        Ok(Some(30))
+    );
+    assert!(dispatch_waits(&args(json!({"wait": "yes"}))).is_err());
+    assert!(dispatch_waits(&args(json!({"wait": true, "wait_seconds": -1}))).is_err());
+}
+
+#[test]
+fn the_list_of_dispatched_tasks_is_the_apps_to_answer_and_is_not_run_unasked() {
+    let p = tempfile::tempdir().unwrap();
+    let refused = call(
+        p.path(),
+        &in_ws("alpha"),
+        DISPATCH_LIST,
+        &args(json!({})),
+        at(9, 0),
+    )
+    .unwrap_err();
+    assert!(refused.contains(DISPATCH_LIST), "{refused}");
+    assert!(!PRE_ALLOWED.contains(&DISPATCH_LIST));
 }
 
 #[test]

@@ -96,8 +96,9 @@ pub fn refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, String)> 
 }
 
 /// purlis's chat tools that dispatch, by the names [`crate::chattools`] gives them.
-const OUR_TOOLS: [&str; 2] = [
+const OUR_TOOLS: [&str; 3] = [
     crate::chattools::DISPATCH,
+    crate::chattools::DISPATCH_LIST,
     crate::chattools::DISPATCH_REPORT,
 ];
 

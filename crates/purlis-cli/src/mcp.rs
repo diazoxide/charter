@@ -97,6 +97,11 @@ impl ServerHandler for Server {
         if name == chattools::DISPATCH {
             return Ok(done(blocking(move || dispatch(&args)).await));
         }
+        if name == chattools::DISPATCH_LIST {
+            return Ok(done(
+                blocking(|| crate::dispatch::list().map_err(|why| in_the_chat(&why))).await,
+            ));
+        }
         if name == chattools::DISPATCH_REPORT {
             return Ok(done(blocking(move || dispatch_report(&args)).await));
         }
@@ -223,9 +228,17 @@ fn persona_remember(args: &serde_json::Map<String, serde_json::Value>) -> Result
 fn dispatch(args: &serde_json::Map<String, serde_json::Value>) -> Result<String, String> {
     let (to, name, brief) = chattools::dispatch_args(args)?;
     let profile = chattools::dispatch_profile(args)?;
+    let waits = chattools::dispatch_waits(args)?;
     let here = crate::Here::read()?;
-    crate::dispatch::send(&here, to.as_deref(), &name, &brief, profile.as_deref())
-        .map_err(|why| in_the_chat(&why))
+    crate::dispatch::send(
+        &here,
+        to.as_deref(),
+        &name,
+        &brief,
+        profile.as_deref(),
+        waits,
+    )
+    .map_err(|why| in_the_chat(&why))
 }
 
 /// `dispatch_report`: the one operation `purlis dispatch report` performs

@@ -251,7 +251,7 @@ and none takes a workspace, a project or a path:
 | `persona_where` | Where the chat is working, from purlis's own record: the chat that asked for it, that chat's other tasks, and the other chats running as its persona, by name, workspace and state; never another chat's content (under Codex, run `purlis persona where` in the chat) |
 | `session_record_list`, `session_record_read` | The session records where the chat works, by file name |
 | `change_status` | The workspace's cross-repo changes, from their records; the forge is not asked |
-| `dispatch`, `dispatch_report` | A task for a persona, which purlis starts as a chat of its own under this one, and the one report that chat sends back; purlis decides and starts the chat, and the tool never does (under Codex, run `purlis dispatch` in the chat) |
+| `dispatch`, `dispatch_list`, `dispatch_report` | A task for a persona, which purlis starts as a chat of its own under this one (waiting for its report when asked to), the list of the tasks this chat dispatched, and the one report a task's chat sends back; purlis decides and starts the chat, and the tool never does (under Codex, run `purlis dispatch` in the chat) |
 | `ask_operator` | A question put to you through the harness's own prompt; the model never answers it |
 
 The server runs where each harness runs its MCP servers, which for Claude Code and Codex is

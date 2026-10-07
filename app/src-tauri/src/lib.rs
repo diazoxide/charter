@@ -26,6 +26,7 @@ mod changes;
 mod chats;
 mod clipath;
 mod curation;
+mod dispatched;
 mod dispatches;
 mod dispatchgrants;
 mod dispatchlimits;

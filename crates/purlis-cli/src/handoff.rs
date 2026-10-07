@@ -468,7 +468,8 @@ fn in_the_app(
             | Answer::Vaults { .. }
             | Answer::Working(_)
             | Answer::Dispatched { .. }
-            | Answer::NeedsGrant { .. },
+            | Answer::NeedsGrant { .. }
+            | Answer::Task(_),
         )
         | Err(_) => Host::None,
     }
@@ -510,7 +511,8 @@ pub(crate) fn ticketed() -> Ticketed {
             | Answer::Vaults { .. }
             | Answer::Working(_)
             | Answer::Dispatched { .. }
-            | Answer::NeedsGrant { .. },
+            | Answer::NeedsGrant { .. }
+            | Answer::Task(_),
         )
         | Err(_) => Ticketed::NoApp,
     }
@@ -586,7 +588,8 @@ fn report_back(summary: &str) -> ExitCode {
             | Answer::Vaults { .. }
             | Answer::Working(_)
             | Answer::Dispatched { .. }
-            | Answer::NeedsGrant { .. },
+            | Answer::NeedsGrant { .. }
+            | Answer::Task(_),
         )
         | Err(_) => {
             voice::err(

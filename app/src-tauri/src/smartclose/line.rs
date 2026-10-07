@@ -84,6 +84,11 @@ impl Line {
         submitted
     }
 
+    /// Whether nothing is typed: a line this followed, with no bytes in it.
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Typed(typed) if typed.is_empty())
+    }
+
     fn push(&mut self, byte: u8) {
         if let Self::Typed(typed) = self {
             if typed.len() >= LONGEST {

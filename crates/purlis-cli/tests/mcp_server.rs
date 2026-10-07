@@ -145,6 +145,7 @@ fn a_harness_lists_charter_s_tools() {
             "session_record",
             "change_status",
             "dispatch",
+            "dispatch_list",
             "dispatch_report",
             "ask_operator",
         ]
