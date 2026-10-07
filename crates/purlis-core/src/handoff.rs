@@ -293,16 +293,23 @@ pub fn delivered(msg: &str, from: &str, report: bool) -> Option<String> {
     delivered_noting(msg, from, report, None)
 }
 
-/// **The lines of a handoff's first message, in the one order they are written:**
+/// **The lines of a first message, in the one order they are written, for a handoff and for a
+/// task alike** (D-T61-4):
 ///
-/// 1. the stamp ([`SHOWN_STAMP`]): who handed it off, from where, when;
+/// 1. the stamp ([`SHOWN_STAMP`], or a task's [`TASK_STAMP`] or [`PERSON_TASK_STAMP`]): who
+///    asked, from where, when;
 /// 2. the request note ([`HANDOFF_NOTE`]): what the brief is, always;
-/// 3. the report line ([`REPORT_ASK`]), where the handoff asked for an answer;
+/// 3. the report line ([`REPORT_ASK`]), where the handoff asked for an answer. A task always
+///    owes one, so its note says 2 and 3 in one line ([`TASK_NOTE`], [`PERSON_TASK_NOTE`]);
 /// 4. the app's note about the start (`note`), where it has one;
+/// 5. where the chat works, a line each, where that is not the asking chat's folder (#1453,
+///    [`task_message_telling`]'s `whole`): the worktree and branch purlis cut for it, or the
+///    workspace it was started in. Only a task has these: a handoff's place is the workspace
+///    its own command named, which its chat stands in from the start;
 ///
 /// then a blank line, then the brief verbatim. Every line above the blank one is purlis's own,
 /// and nothing a brief holds can stand there. A reader finds a line by what it says, never by
-/// its place: 3 and 4 are each there or not.
+/// its place: 3, 4 and 5 are each there or not.
 ///
 /// [`delivered`], with `note` as one more line under the stamp: something the app has to tell
 /// the new chat about how it was started (that it runs on the asking chat's profile because
@@ -374,7 +381,8 @@ pub fn task_message_noting(
     task_message_telling(from, place, when, brief, note, &[])
 }
 
-/// [`task_message_noting`], with each of `whole` as one more line of purlis's own under it:
+/// [`task_message_noting`], with each of `whole` as one more line of purlis's own under it,
+/// last of purlis's lines (the order is [`delivered_noting`]'s, stated there once):
 /// what the app tells a chat it gave a worktree of its own (#1453,
 /// [`crate::dispatchplace::told_the_chat`]). **One line each, and never cut**: a line that
 /// names the branch a chat is to commit on is no use to it shortened. Every character with no
