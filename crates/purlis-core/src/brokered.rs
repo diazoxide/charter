@@ -14,7 +14,7 @@
 //! **Nothing brokered changes what a chat runs under.** A persona's store is held by descriptor,
 //! as a workspace's is (V74), and every file a write touches is asked of [`guard`]: never under
 //! a name the sandbox denies as later code, never an ignore file, and never a manifest change
-//! to `[sandbox]` or `[chat_env]` (the #1341 review).
+//! to `[sandbox]`, `[chat_env]` or `[dispatch]` (the #1341 review; #1439).
 
 use std::path::{Path, PathBuf};
 
@@ -297,8 +297,9 @@ fn shown(root: &Path, path: &Path) -> String {
         .join("/")
 }
 
-/// The tables of a manifest a chat runs under, which no brokered write may change.
-const RUNS_UNDER: [&str; 2] = ["sandbox", "chat_env"];
+/// The tables of a manifest a chat runs under, which no brokered write may change: its
+/// sandbox, its environment, and the limits on what it may dispatch (#1439).
+const RUNS_UNDER: [&str; 3] = ["sandbox", "chat_env", crate::dispatchlimits::TABLE];
 
 /// Whether a brokered write may write `target` in the project at `root`, with `after` the whole
 /// text it would leave there when that is known; or the sentence saying why not.
@@ -310,8 +311,8 @@ const RUNS_UNDER: [&str; 2] = ["sandbox", "chat_env"];
 ///   ([`crate::sandbox::PLANTED`]: git's folder, hook managers', every harness's and editor's
 ///   project config, shell startup files), at any depth;
 /// - any `.gitignore`;
-/// - a manifest or local settings file whose `[sandbox]` or `[chat_env]` would change, or whose
-///   new text is not known.
+/// - a manifest or local settings file whose `[sandbox]`, `[chat_env]` or `[dispatch]` would
+///   change, or whose new text is not known.
 ///
 /// What decides whether the local settings file is this machine's own (the index and the
 /// ignore files) is what decides which sandbox a chat runs under, so it is refused with the
@@ -347,7 +348,8 @@ pub fn guard(root: &Path, target: &Path, after: Option<&str>) -> Result<(), Stri
             if changes {
                 return Err(format!(
                     "{} is not purlis's to change for a chat this way: a chat never changes its \
-                     sandbox settings ([sandbox]) or its environment ([chat_env])",
+                     sandbox settings ([sandbox]), its environment ([chat_env]) or its dispatch \
+                     limits ([dispatch])",
                     said()
                 ));
             }
@@ -376,8 +378,8 @@ fn planted_name(name: &str) -> bool {
     })
 }
 
-/// Whether `after` holds different `[sandbox]` or `[chat_env]` tables from `before` (none: no
-/// file). A text that is not TOML changes them: it cannot be read to say it does not.
+/// Whether `after` holds different `[sandbox]`, `[chat_env]` or `[dispatch]` tables from
+/// `before` (none: no file). A text that is not TOML changes them: it cannot be read to say it does not.
 fn changes_what_a_chat_runs_under(before: Option<&str>, after: &str) -> bool {
     let tables = |text: &str| -> Option<Vec<Option<toml::Value>>> {
         let top = text.parse::<toml::Table>().ok()?;
