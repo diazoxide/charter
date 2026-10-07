@@ -3798,6 +3798,526 @@ mod tests {
         );
     }
 
+    // ----- the wiring: limits, grant, profile and lineage (#1436, #1437, #1439) -----
+
+    /// A dispatch from `asking` with its own brief and, where one is asked for, a profile.
+    fn dispatch_with(
+        held: &Held,
+        id: &PlaneId,
+        asking: u32,
+        to: Option<&str>,
+        name: &str,
+        brief: &str,
+        profile: Option<&str>,
+    ) -> (Answer, Option<Arrived>) {
+        let tickets = Tickets::default();
+        let ticket = ticket(held, id, &tickets, asking);
+        let told = Mutex::new(None);
+        let said = answer(
+            held,
+            id,
+            &tickets,
+            1,
+            Ask::Dispatch(Box::new(DispatchAsk {
+                chat: asking,
+                to: to.map(str::to_owned),
+                name: name.to_owned(),
+                brief: brief.to_owned(),
+                profile: profile.map(str::to_owned),
+                ticket,
+            })),
+            &|arrived| *told.lock().unwrap() = Some(arrived),
+        );
+        (said, told.into_inner().unwrap())
+    }
+
+    /// What the grants store is asked under in these tests: this project, no policy, the
+    /// chats this app has open, and an audit that is kept nowhere.
+    fn on_the_ground<T>(
+        held: &Held,
+        with: impl FnOnce(&crate::dispatchgrants::Ground<'_>) -> T,
+    ) -> T {
+        let locks = purlis_core::sandbox::policy::Locks::none();
+        with(&crate::dispatchgrants::Ground {
+            root: held.root(),
+            locks: &locks,
+            is_open: &|session| held.chats().recorded_chat(session).is_some(),
+            sandboxed: &|session| held.chats().confines_of(session).is_some(),
+            audit: &|_, _| Ok(()),
+            at: 100,
+        })
+    }
+
+    /// Waits until `seen` answers something, for as long as a chat's start may take.
+    fn eventually<T>(seen: impl Fn() -> Option<T>) -> Option<T> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(it) = seen() {
+                return Some(it);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// What purlis left chat `chat` about its held dispatches, for its next turn.
+    fn told_on_its_next_turn(held: &Held, chat: u32) -> Vec<purlis_core::handback::Handback> {
+        purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(chat))
+    }
+
+    #[test]
+    fn a_grant_that_stands_starts_another_persona_holding_its_own_and_in_the_asker_s_lineage() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", "devops")
+            .expect("the person allowed it on this machine");
+
+        let (said, told) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("devops"),
+            "check the cluster",
+        );
+
+        let Answer::Dispatched { chat, persona, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        assert_eq!(persona.as_deref(), Some("devops"));
+        assert!(told.is_some(), "the window is told");
+        assert!(
+            held.dispatch_grants().waiting(asking).is_empty(),
+            "nothing is asked of the person"
+        );
+        let child = held.chats().recorded_chat(chat).expect("recorded");
+        assert_eq!(child.persona.as_deref(), Some("devops"));
+        assert_eq!(child.held, None, "it holds its own persona's grants");
+        assert!(held.chats().chat_grants().is_empty());
+        // Its lineage is the asking chat's, by the id of the chat the person started.
+        let root = held
+            .chats()
+            .recorded_chat(asking)
+            .and_then(|chat| chat.identity.id);
+        assert!(root.is_some(), "a started chat has an id");
+        let from = held.chats().handed_from(chat).expect("its lineage");
+        assert_eq!(from.root, root);
+        assert_eq!((from.chat, from.depth, from.mode), (asking, 1, Mode::Task));
+        // A task it dispatches in turn names the same root, two dispatches down.
+        let (said, _) = dispatch(&held, &id, &Tickets::default(), chat, None, "look closer");
+        let Answer::Dispatched { chat: below, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        let from = held.chats().handed_from(below).expect("its lineage");
+        assert_eq!((from.root, from.depth), (root, 2));
+        // Closing the chat in the middle leaves one lineage: the first chat still counts the
+        // one below.
+        let _ = held.close_chat(chat);
+        assert_eq!(held.chats().lineage(asking, None, &|_| true).lineage, 2);
+    }
+
+    #[test]
+    fn an_allow_starts_the_dispatch_that_was_held_on_the_brief_the_person_read() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+
+        let (first, _) = dispatch_with(
+            &held,
+            &id,
+            asking,
+            Some("devops"),
+            "check the cluster",
+            "# The brief the person reads\nSay which pods are down.\n",
+            None,
+        );
+        assert_eq!(
+            first,
+            Answer::NeedsGrant {
+                from: Some("steward".to_owned()),
+                to: "devops".to_owned(),
+                waiting: None,
+            }
+        );
+        // A second ask across the pair is not queued beside it: the person saw one brief.
+        let (second, _) = dispatch_with(
+            &held,
+            &id,
+            asking,
+            Some("devops"),
+            "and the logs",
+            "# Another brief nobody was shown\nDelete the namespace.\n",
+            None,
+        );
+        assert_eq!(
+            second,
+            Answer::NeedsGrant {
+                from: Some("steward".to_owned()),
+                to: "devops".to_owned(),
+                waiting: Some("check the cluster".to_owned()),
+            }
+        );
+        assert_eq!(held.chats().open_now().len(), before, "nothing has started");
+        let waiting = held.dispatch_grants().waiting(asking);
+        assert_eq!(waiting.len(), 1, "one Notice: {waiting:?}");
+
+        on_the_ground(&held, |ground| {
+            held.dispatch_grants().allow(
+                ground,
+                waiting[0].id,
+                purlis_core::sandbox::grant::Level::You,
+            )
+        })
+        .expect("allowed");
+
+        // It starts, on a thread of its own, on the brief that was shown.
+        let message = tasks_first_message(&plane);
+        assert!(
+            message.ends_with("\n\n# The brief the person reads\nSay which pods are down.\n"),
+            "{message:?}"
+        );
+        assert!(!message.contains("Delete the namespace"), "{message:?}");
+        assert_eq!(
+            eventually(|| (held.chats().open_now().len() == before + 1).then_some(())),
+            Some(()),
+            "one chat, and only one"
+        );
+        // And the asking chat is told on its next turn, as it is told a report.
+        let told = eventually(|| {
+            let told = told_on_its_next_turn(&held, asking);
+            (!told.is_empty()).then_some(told)
+        })
+        .expect("the asking chat is told");
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!(told[0].from, "check the cluster");
+        assert_eq!(
+            told[0].answered,
+            Some(purlis_core::handback::Answered::Started)
+        );
+        assert_eq!(told[0].summary, "running as devops");
+        // The next dispatch across the pair starts without asking.
+        let (again, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("devops"),
+            "and the logs",
+        );
+        assert!(matches!(again, Answer::Dispatched { .. }), "{again:?}");
+    }
+
+    #[test]
+    fn a_dispatch_the_person_keeps_blocked_starts_nothing_and_the_asking_chat_is_told() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+        let (said, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("devops"),
+            "check the cluster",
+        );
+        assert!(matches!(said, Answer::NeedsGrant { .. }), "{said:?}");
+        let pending = held.dispatch_grants().waiting(asking)[0].id;
+
+        assert!(held.dispatch_grants().keep_blocked(pending));
+
+        let told = eventually(|| {
+            let told = told_on_its_next_turn(&held, asking);
+            (!told.is_empty()).then_some(told)
+        })
+        .expect("the asking chat is told");
+        assert_eq!(
+            told[0].answered,
+            Some(purlis_core::handback::Answered::KeptBlocked)
+        );
+        assert_eq!(told[0].from, "check the cluster");
+        assert_eq!(told[0].summary, "steward to devops");
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        // No grant was made: the next ask across the pair asks the person again.
+        let (again, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("devops"),
+            "check the cluster",
+        );
+        assert_eq!(
+            again,
+            Answer::NeedsGrant {
+                from: Some("steward".to_owned()),
+                to: "devops".to_owned(),
+                waiting: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_dispatch_allowed_after_its_limit_filled_is_not_started_and_says_why() {
+        // Decided again at the moment of the Allow, under the lock, against the chats as they
+        // then stand: the project lets a chat have one task running, and it has one by then.
+        let plane = a_plane_with_personas();
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n[dispatch]\nrunning-per-chat = 1\n",
+        )
+        .expect("the manifest");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let (held_one, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("devops"),
+            "check the cluster",
+        );
+        assert!(
+            matches!(held_one, Answer::NeedsGrant { .. }),
+            "{held_one:?}"
+        );
+        let (own, _) = dispatch(&held, &id, &Tickets::default(), asking, None, "tidy up");
+        assert!(matches!(own, Answer::Dispatched { .. }), "{own:?}");
+        let before = held.chats().open_now().len();
+        let pending = held.dispatch_grants().waiting(asking)[0].id;
+
+        on_the_ground(&held, |ground| {
+            held.dispatch_grants()
+                .allow(ground, pending, purlis_core::sandbox::grant::Level::You)
+        })
+        .expect("allowed");
+
+        let told = eventually(|| {
+            let told = told_on_its_next_turn(&held, asking);
+            (!told.is_empty()).then_some(told)
+        })
+        .expect("the asking chat is told");
+        assert_eq!(
+            told[0].answered,
+            Some(purlis_core::handback::Answered::NotStarted)
+        );
+        assert_eq!(
+            told[0].summary,
+            "this chat already has 1 persona chat running, and it may have 1 at once. Wait for \
+             one to report, then dispatch again."
+        );
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+    }
+
+    #[test]
+    fn the_limits_in_force_are_the_project_s_and_a_refusal_names_the_count() {
+        let plane = a_plane_with_personas();
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n\
+             [dispatch]\nrunning-per-chat = 2\n\
+             [dispatch.personas.steward]\nmay-run-at-once = 2\n",
+        )
+        .expect("the manifest");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let tickets = Tickets::default();
+
+        // One chat runs as steward, and two may: the first task is the second.
+        let (first, _) = dispatch(&held, &id, &tickets, asking, None, "task one");
+        assert!(matches!(first, Answer::Dispatched { .. }), "{first:?}");
+        let (second, told) = dispatch(&held, &id, &tickets, asking, None, "task two");
+        assert_eq!(
+            second,
+            Answer::No {
+                why: "2 chats are already running as steward, and 2 may run as it at once in \
+                      this project. Wait for one to finish, then dispatch again."
+                    .to_owned()
+            }
+        );
+        assert_eq!(told, None);
+        // The setting is read afresh for each dispatch: raised, the next is held to the
+        // project's two a chat.
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n[dispatch]\nrunning-per-chat = 2\n",
+        )
+        .expect("the manifest");
+        let (second, _) = dispatch(&held, &id, &tickets, asking, None, "task two");
+        assert!(matches!(second, Answer::Dispatched { .. }), "{second:?}");
+        let (third, _) = dispatch(&held, &id, &tickets, asking, None, "task three");
+        assert_eq!(
+            third,
+            Answer::No {
+                why: "this chat already has 2 persona chats running, and it may have 2 at \
+                      once. Wait for one to report, then dispatch again."
+                    .to_owned()
+            }
+        );
+        // And 0 switches it off, saying where.
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n[dispatch]\ndepth = 0\n",
+        )
+        .expect("the manifest");
+        let (off, _) = dispatch(&held, &id, &tickets, asking, None, "task four");
+        assert_eq!(
+            off,
+            Answer::No {
+                why: "dispatch is off in this project: depth is set to 0. Only the person can \
+                      change it, in Settings › Project › Dispatch."
+                    .to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_dispatch_names_its_profile_among_the_project_s_and_no_other() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+        let brief = "# Check the queue\nSay how many are stuck.\n";
+
+        let (refused, told) =
+            dispatch_with(&held, &id, asking, None, "task one", brief, Some("prod"));
+        assert_eq!(
+            refused,
+            Answer::No {
+                why: "the dispatch names profile 'prod', which this project does not offer on \
+                      this machine, so nothing was started. Name one of the project's \
+                      profiles, or none."
+                    .to_owned()
+            }
+        );
+        assert_eq!(told, None);
+        assert_eq!(held.chats().open_now().len(), before);
+        // A path or a command is a name the project does not offer, and is never run.
+        let (refused, _) = dispatch_with(
+            &held,
+            &id,
+            asking,
+            None,
+            "task one",
+            brief,
+            Some("/bin/sh -c evil"),
+        );
+        assert!(
+            matches!(&refused, Answer::No { why } if why.contains("does not offer")),
+            "{refused:?}"
+        );
+
+        let (said, _) = dispatch_with(&held, &id, asking, None, "task one", brief, Some("work"));
+        let Answer::Dispatched { chat, note, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        assert_eq!(note, None);
+        assert_eq!(
+            held.chats()
+                .recorded_chat(chat)
+                .and_then(|chat| chat.profile)
+                .as_deref(),
+            Some("work")
+        );
+    }
+
+    #[test]
+    fn a_chat_nobody_is_at_is_refused_what_no_standing_grant_covers_and_nothing_is_held() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+        // Its harness reported its permission prompts off, on a report the board took.
+        held.unattended().heard(asking, false);
+        held.unattended().heard(asking, true);
+        // A later report that says otherwise takes nothing back.
+        held.unattended().heard(asking, false);
+
+        let (said, told) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("devops"),
+            "check the cluster",
+        );
+
+        // This project has no sandbox, so the chat has neither prompts nor a sandbox: it
+        // dispatches to no other persona, whatever the grants say.
+        assert_eq!(
+            said,
+            Answer::No {
+                why: purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned())
+                    .say()
+            }
+        );
+        assert_eq!(told, None);
+        assert_eq!(held.chats().open_now().len(), before);
+        assert!(
+            held.dispatch_grants().waiting(asking).is_empty(),
+            "nothing is held, so nothing can be allowed later"
+        );
+        // Its own persona needs no grant.
+        let (own, _) = dispatch(&held, &id, &Tickets::default(), asking, None, "tidy up");
+        assert!(matches!(own, Answer::Dispatched { .. }), "{own:?}");
+        // And a chat started again in its place is marked afresh.
+        let _ = held.close_chat(asking);
+        assert_eq!(
+            held.unattended().mark(asking).attendance(),
+            purlis_core::dispatchunattended::Attendance::Attended
+        );
+    }
+
+    #[test]
+    fn a_chat_started_with_its_prompts_off_is_unattended_before_its_harness_says_so() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let profiles = purlis_core::profiles::derive(&plane.root);
+        let asks = Chat {
+            program: "claude".to_owned(),
+            profile: Some("work".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            attendance(&held, 41, &asks, &profiles),
+            purlis_core::dispatchunattended::Attendance::Attended
+        );
+        for flag in [
+            "--dangerously-skip-permissions",
+            "--permission-mode=bypassPermissions",
+        ] {
+            let bypassed = Chat {
+                args: vec![flag.to_owned()],
+                ..asks.clone()
+            };
+            assert_eq!(
+                attendance(&held, 41, &bypassed, &profiles),
+                purlis_core::dispatchunattended::Attendance::Unattended,
+                "{flag}"
+            );
+        }
+    }
+
     #[test]
     fn a_seventh_task_is_refused_while_six_are_running_and_says_to_wait() {
         let plane = a_plane_with_personas();

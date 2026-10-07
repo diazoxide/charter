@@ -160,7 +160,9 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
     <Notice cause={cause} at="pane" tone="trouble" label={label} fixes={fixes} under={brief}>
       {who} wants to dispatch to {first.target}. Nothing starts until you answer. Allowing it lets{" "}
       {first.asking === null ? "this chat" : `${first.asking} chats`} ask {first.target} for
-      anything {first.target} can do, without asking you again.
+      anything {first.target} can do, without asking you again. The grant covers the helper
+      sub-agents {first.asking === null ? "this chat runs" : "those chats run"} too: what one of
+      them asks is asked as its chat.
       {said !== undefined && ` ${said}`}
       {behind}
     </Notice>
