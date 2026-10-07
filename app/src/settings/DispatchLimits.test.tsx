@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { DispatchLimits, DispatchRow } from "../bindings";
+import type { DispatchLimits, DispatchLimitRow } from "../bindings";
 import { DISPATCH, DispatchLimitsTable, dispatchGroup, workspaceDispatchGroup } from "./dispatch";
 import type { LiveSetting } from "./groups";
 
@@ -41,7 +41,7 @@ function row(
   name: string,
   values: (number | null)[] = [null, null, null, null, null, null],
   beneath: (number | null)[] = DEFAULTS,
-): DispatchRow {
+): DispatchLimitRow {
   return { scope, name, values, beneath, ignored: [] };
 }
 

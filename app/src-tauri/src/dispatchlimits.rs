@@ -34,7 +34,7 @@ pub struct DispatchLimit {
 
 /// One row: what one level of one file sets.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
-pub struct DispatchRow {
+pub struct DispatchLimitRow {
     /// `project`, `workspace` or `persona`.
     pub scope: String,
     /// The workspace's or the persona's name; empty for the project's row.
@@ -65,9 +65,9 @@ pub struct DispatchLimits {
     pub limits: Vec<DispatchLimit>,
     /// The committed file's rows: the project's first, then each workspace's, then each
     /// persona's.
-    pub rows: Vec<DispatchRow>,
+    pub rows: Vec<DispatchLimitRow>,
     /// This machine's rows, in the same order: they only ever lower.
-    pub mine: Vec<DispatchRow>,
+    pub mine: Vec<DispatchLimitRow>,
     /// "Locked by policy, set by <who> in <file>.", where a policy caps any limit.
     pub locked_by: Option<String>,
     /// What either file holds in `[dispatch]` that is not read, each as one sentence.
@@ -101,11 +101,11 @@ fn rows(
     table: &Table,
     beneath: impl Fn(Option<&str>, Option<&str>) -> Vec<Option<u32>>,
     ignored: impl Fn(Option<&str>, Option<&str>, &Level) -> Vec<String>,
-) -> Vec<DispatchRow> {
+) -> Vec<DispatchLimitRow> {
     let row = |scope: &str, name: &str, level: &Level| {
         let workspace = (scope == "workspace").then_some(name);
         let persona = (scope == "persona").then_some(name);
-        DispatchRow {
+        DispatchLimitRow {
             scope: scope.to_owned(),
             name: name.to_owned(),
             values: values(level),
