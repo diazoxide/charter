@@ -503,6 +503,48 @@ what follows either one is still brief. A brief whose terminator never appears i
 not treated as data at all — bash reads such a body to the end of the input, and skipping it
 would hide every command after it from the guard.
 
+## A dispatch from an unattended chat
+
+A chat is **unattended** when its harness runs with its permission prompts off: the hook
+payload says `permission_mode: bypassPermissions`. Nobody is there to answer a prompt, so a
+dispatch from such a chat is never one that asks.
+
+- **It starts only under a grant that already stands.** A dispatch to another persona starts
+  when a dispatch grant covers the pair for you on this machine or for everyone in this project.
+  A grant you made **for this chat** never counts for it, the one you made while you were still
+  answering that chat included. A dispatch to the chat's own persona needs no grant, as for any
+  chat, and a pair an administrator's policy locks is refused with the policy's sentence.
+- **A missing grant is a refusal, not a Notice.** Nothing starts, nothing is kept waiting for
+  you and nothing appears on the chat's tab, so no grant can be made from an unattended chat's
+  ask. The chat is told which pair is missing and that only a person makes the grant: dispatch
+  to that persona once from a chat you are at, and choose **Allow for me on this machine** or
+  **Allow for everyone in this project**. Settings › Project › Dispatch lists the grants that
+  stand, and **Revoke** takes one back.
+- **Only from inside the sandbox.** A grant that stands is kept in files, and so is how a
+  harness starts in a folder. What keeps a chat from writing them is the sandbox. A chat with
+  its prompts off and no sandbox, because the project has none or because it was started
+  without it, has neither a person nor the sandbox between it and those files, so purlis
+  starts no other persona's chat for it, whatever the grants say. This is what closes the two
+  routes a grant alone leaves open: a chat granting itself, and a chat arranging how the chat
+  it starts will run. A dispatch to its own persona still starts. Whether a chat is sandboxed
+  is purlis's own record of how it started the chat, never something the chat says.
+- **Once unattended, unattended until it starts again.** purlis keeps what a chat's harness
+  reported, and a chat that reported its prompts off is treated so for the rest of its life,
+  whatever a later report says. The report is the harness's, sent from beside the chat's own
+  commands, so a chat that hid it from its first report on would be treated as one a person
+  answers. What that gets it is a Notice, which only a person can answer.
+- **The chat it starts is not unattended.** The persona chat starts as the project and this
+  machine declare it, as any chat you open on that profile does. It takes nothing of how the
+  asking chat runs: no grant that chat holds, no opt-out from the sandbox, and not its
+  permission mode. A persona chat is not started on the asking chat's profile where that
+  profile's own command switches the prompts off (`--dangerously-skip-permissions`,
+  `--permission-mode bypassPermissions`, `--dangerously-bypass-approvals-and-sandbox`,
+  `--yolo`): the dispatch is refused, and says to dispatch from a chat on a profile that asks.
+  A wrapper script that adds such a flag itself is not seen.
+- **When the persona chat needs you, it waits.** Every command of its that asks still asks, in
+  its own tab, and the chat is shown as needing you, like any chat that asks. Nothing in a
+  brief answers for you.
+
 ## What purlis's hook does not see
 
 The hook refuses the spellings of a handoff it can recognise, so a chat working in good faith

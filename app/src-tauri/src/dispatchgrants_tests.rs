@@ -73,6 +73,7 @@ impl World {
             root: self.root(),
             locks: &self.locks,
             is_open: &is_open,
+            sandboxed: &|_| true,
             audit: &audit,
             at: 100,
         })
@@ -1048,10 +1049,12 @@ fn asked_to_refuse_and_not_ask_an_uncovered_dispatch_is_a_refusal_with_no_notice
     assert_eq!(
         asked,
         Requested::Refused(
-            "no dispatch grant covers steward chats dispatching to devops, and nobody is at \
-             this chat to ask. A person allows it from a chat they are at, for themselves on \
-             this machine or for everyone in this project."
-                .to_owned()
+            purlis_core::dispatchunattended::Missing {
+                asking: Some("steward".to_owned()),
+                target: "devops".to_owned(),
+                unreviewed: false,
+            }
+            .say()
         )
     );
     assert_eq!(raised, None);

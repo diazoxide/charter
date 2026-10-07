@@ -29,6 +29,7 @@ mod curation;
 mod dispatches;
 mod dispatchgrants;
 mod dispatchlimits;
+mod dispatchunattended;
 mod doctor;
 mod extensions;
 mod filewatch;

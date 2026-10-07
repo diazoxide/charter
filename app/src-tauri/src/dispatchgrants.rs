@@ -218,6 +218,9 @@ pub struct Ground<'a> {
     pub locks: &'a sandbox::policy::Locks,
     /// Whether chat `session` is one this app has open now.
     pub is_open: &'a dyn Fn(u32) -> bool,
+    /// Whether this app started chat `session` inside a sandbox: its own record of what the
+    /// chat's sandbox was compiled to, never a word the chat sent (#1446).
+    pub sandboxed: &'a dyn Fn(u32) -> bool,
     /// Writes the audit of a grant or revoke, and answers whether it was written.
     pub audit: Audit<'a>,
     /// Now, in seconds since 1970.
@@ -251,8 +254,10 @@ impl Store {
     /// **A chat asked to dispatch to `target` with `brief`**: covered, held for the person, or
     /// locked. `asking` is the app's record of the chat. Asked twice for the same target while
     /// the first waits, it is the same held dispatch: one Notice, showing the first brief.
-    /// With [`Uncovered::Refuse`] nothing is ever held: what is not covered is refused. A chat
-    /// that runs on another chat's grants is refused whatever it asks.
+    /// With [`Uncovered::Refuse`] nothing is ever held: what is not covered is refused, in the
+    /// one place a chat nobody is at is answered ([`crate::dispatchunattended::unattended`]),
+    /// which reads no grant made for one chat. A chat that runs on another chat's grants is
+    /// refused whatever it asks.
     pub fn request(
         &self,
         ground: &Ground<'_>,
@@ -261,6 +266,22 @@ impl Store {
         brief: &str,
         uncovered: Uncovered,
     ) -> (Requested, Option<Pending>) {
+        if uncovered == Uncovered::Refuse {
+            // Nothing is held and nothing is raised: the answer is whole, here and now.
+            return (
+                crate::dispatchunattended::unattended(
+                    ground.root,
+                    ground.locks,
+                    &asking,
+                    crate::dispatchunattended::Runs {
+                        holds_anothers: asking.held,
+                        sandboxed: (ground.sandboxed)(asking.session),
+                    },
+                    target,
+                ),
+                None,
+            );
+        }
         if asking.held {
             return (
                 Requested::Refused(HELD_DISPATCHES_TO_NO_ONE.to_owned()),
@@ -282,23 +303,10 @@ impl Store {
                 Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat(target)),
                 None,
             ),
-            Covers::Locked(why) if uncovered == Uncovered::Refuse => (Requested::Locked(why), None),
             Covers::Locked(why) => {
                 let told = self.hold(ground, asking, target, brief, Some(why.clone()));
                 (Requested::Locked(why), told.ok().map(|(held, _)| held))
             }
-            Covers::NeedsGrant if uncovered == Uncovered::Refuse => (
-                Requested::Refused(format!(
-                    "no dispatch grant covers {} dispatching to {target}, and nobody is at \
-                     this chat to ask. A person allows it from a chat they are at, for \
-                     themselves on this machine or for everyone in this project.",
-                    asking
-                        .persona
-                        .as_deref()
-                        .map_or_else(|| "this chat".to_owned(), |who| format!("{who} chats"))
-                )),
-                None,
-            ),
             Covers::NeedsGrant => match self.hold(ground, asking, target, brief, None) {
                 Ok((held, new)) => (
                     Requested::NeedsGrant { pending: held.id },
@@ -748,6 +756,7 @@ fn requested(
             root,
             locks: &locks,
             is_open: &|session| held.chats().recorded_chat(session).is_some(),
+            sandboxed: &|session| held.chats().confines_of(session).is_some(),
             audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
             at: now_secs(),
         },
@@ -805,6 +814,7 @@ pub fn allow_dispatch(
                 root,
                 locks: &locks,
                 is_open: &|session| held.chats().recorded_chat(session).is_some(),
+                sandboxed: &|session| held.chats().confines_of(session).is_some(),
                 audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
                 at: now_secs(),
             },
@@ -1138,6 +1148,7 @@ pub fn acknowledge_dispatch_grants(
             root,
             locks: &locks,
             is_open: &|session| held.chats().recorded_chat(session).is_some(),
+            sandboxed: &|session| held.chats().confines_of(session).is_some(),
             audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
             at: now_secs(),
         },
