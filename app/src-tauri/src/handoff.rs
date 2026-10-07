@@ -6174,6 +6174,75 @@ mod tests {
         assert!(matches!(said, Answer::Dispatched { .. }), "{said:?}");
     }
 
+    /// #1446, at the joined start: the profile a persona chat would take from the chat that
+    /// dispatched it is that chat's own, and here its command switches the prompts off. The
+    /// person may run their own chat so; nothing it dispatches inherits it.
+    #[test]
+    fn a_chat_on_a_profile_that_asks_nobody_passes_it_on_to_no_chat_it_dispatches() {
+        let plane = a_plane_with_a_profile_that_asks_nobody();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        // The asking chat, as `a_chat_as` starts one, on the profile that asks nobody.
+        let start = purlis_core::start::Start {
+            profile: Some("yolo".to_owned()),
+            persona: Some("steward".to_owned()),
+            name: "1".to_owned(),
+            cwd: Some(plane.root.clone()),
+            ..Default::default()
+        };
+        let ready = purlis_core::start::ready(&start, &plane.root).expect("the person's own");
+        let chat = Chat {
+            program: ready.program.clone(),
+            cwd: ready.cwd.clone(),
+            name: "1".to_owned(),
+            resume: ready.session.clone(),
+            profile: Some("yolo".to_owned()),
+            persona: Some("steward".to_owned()),
+            ..Default::default()
+        };
+        let asking = held
+            .chats()
+            .start_ready(&chat, &ready, STARTING)
+            .expect("it runs");
+        purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", "devops")
+            .expect("the person allowed the pair");
+        let before = held.chats().open_now().len();
+        let brief = "# Check the queue\nSay how many are stuck.\n";
+
+        // Its own persona, which needs no grant, and another under a grant that stands: the
+        // profile is refused before either is looked at, in the words for an inherited one.
+        for to in [None, Some("devops")] {
+            let (said, _) = dispatch_with(&held, &id, asking, to, "task", brief, None);
+            let Answer::No { why } = said else {
+                panic!("{to:?}: refused, not {said:?}")
+            };
+            assert!(
+                why.starts_with(
+                    "profile 'yolo' starts its harness with the permission prompts off \
+                     (--dangerously-skip-permissions), and a persona chat never takes that \
+                     from the chat that dispatched it."
+                ),
+                "{to:?}: {why}"
+            );
+        }
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        assert!(held.dispatch_grants().waiting(asking).is_empty());
+
+        // Naming a profile that asks, the same chat's task starts, on that profile.
+        let (said, _) = dispatch_with(&held, &id, asking, None, "task", brief, Some("work"));
+        let Answer::Dispatched { chat: task, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        assert_eq!(
+            held.chats()
+                .recorded_chat(task)
+                .and_then(|chat| chat.profile)
+                .as_deref(),
+            Some("work")
+        );
+    }
+
     #[test]
     fn a_held_dispatch_whose_profile_asks_nobody_by_the_time_it_is_allowed_is_not_started() {
         // Held on a profile that asks. Before the person answers, that profile's command is

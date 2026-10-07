@@ -26,6 +26,8 @@ struct World {
     open: Vec<u32>,
     /// Whether the event log takes an audit.
     logging: bool,
+    /// The chats this app started with no sandbox: every other one is sandboxed.
+    unsandboxed: Vec<u32>,
 }
 
 impl World {
@@ -36,6 +38,7 @@ impl World {
             audited: Mutex::new(Vec::new()),
             open: vec![3, 4, 5],
             logging: true,
+            unsandboxed: Vec::new(),
         }
     }
 
@@ -56,6 +59,7 @@ impl World {
     /// Runs `with` on the ground this world is.
     fn on<T>(&self, with: impl FnOnce(&Ground<'_>) -> T) -> T {
         let is_open = |session: u32| self.open.contains(&session);
+        let sandboxed = |session: u32| !self.unsandboxed.contains(&session);
         let audit = |number: Option<u32>, audited: &dispatchgrant::Audited<'_>| {
             if !self.logging {
                 return Err("the event log is not open".to_owned());
@@ -73,7 +77,7 @@ impl World {
             root: self.root(),
             locks: &self.locks,
             is_open: &is_open,
-            sandboxed: &|_| true,
+            sandboxed: &sandboxed,
             audit: &audit,
             at: 100,
         })
@@ -1075,6 +1079,62 @@ fn asked_to_refuse_and_not_ask_an_uncovered_dispatch_is_a_refusal_with_no_notice
     // A grant for one chat is that chat's alone, attended or not.
     let (asked, _) = world.request_unattended(&store, chat(5, Some("qa")), "devops", BRIEF);
     assert!(matches!(asked, Requested::Refused(_)), "{asked:?}");
+}
+
+/// #1446, V98i, asked through the store: whether a chat is sandboxed is the ground's answer
+/// (the app's record of how it started the chat), and a chat nobody is at that has no sandbox
+/// either dispatches to no other persona, whatever stands in a file it could have written.
+#[test]
+fn a_chat_nobody_is_at_and_outside_a_sandbox_is_refused_another_persona_whatever_is_granted() {
+    let world = World {
+        unsandboxed: vec![3],
+        ..World::new()
+    };
+    let (store, answered) = store();
+    // The pair is granted for the person on this machine, and for this chat too.
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.allow(&store, id, Level::Chat).expect("allowed");
+    purlis_core::sandbox::local::grant_dispatch(world.root(), "steward", "devops")
+        .expect("granted");
+    answered.lock().unwrap().clear();
+    let audited = world.audited().len();
+
+    let (asked, raised) =
+        world.request_unattended(&store, chat(3, Some("steward")), "devops", BRIEF);
+
+    assert_eq!(
+        asked,
+        Requested::Refused(
+            "this chat runs with its harness's permission prompts off and with no sandbox. A \
+             chat with neither can change who it may dispatch to, so purlis starts nobody for \
+             it but a chat of its own persona, and devops is another. Run this work in a \
+             sandboxed chat, or in one a person answers."
+                .to_owned()
+        )
+    );
+    assert_eq!(raised, None);
+    assert!(store.waiting(3).is_empty(), "nothing is held or raised");
+    assert!(answered.lock().unwrap().is_empty());
+    assert_eq!(world.audited().len(), audited, "and nothing is granted");
+    // Its own persona is still its own.
+    assert_eq!(
+        world
+            .request_unattended(&store, chat(3, Some("steward")), "steward", BRIEF)
+            .0,
+        Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat("steward"))
+    );
+    // The same standing grant covers a chat nobody is at that the app did start in a sandbox.
+    assert_eq!(
+        world
+            .request_unattended(&store, chat(4, Some("steward")), "devops", BRIEF)
+            .0,
+        Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat("devops"))
+    );
+    // And the missing sandbox refuses nothing of a chat a person answers.
+    assert_eq!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat("devops"))
+    );
 }
 
 #[test]
