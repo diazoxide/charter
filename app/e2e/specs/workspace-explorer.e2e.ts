@@ -1009,11 +1009,15 @@ describe("the explorer's rows, in a region too narrow for them", () => {
   /**
    * **The tree's elbows, against the line they are drawn for.**
    *
-   * #154 draws them per row at a fixed offset (`0.9em` for a clone and a piece, `0.72em` for a
-   * chat) tuned to the padding and the font size of each of those rows, and its author wrote
-   * that *"any padding change misaligns them, and no test would notice"*. This is the test that
-   * notices: the elbow's painted position against the middle of the name it points at, read off
-   * the real WebView. A row's padding changed by 0.2rem moves one and not the other.
+   * #154 draws a clone's and a piece's at a fixed offset down the row (`0.9em`) tuned to the
+   * padding and the font size of those rows, and its author wrote that *"any padding change
+   * misaligns them, and no test would notice"*. This is the test that notices: the elbow's
+   * painted position against the middle of the name it points at, read off the real WebView. A
+   * row's padding changed by 0.2rem moves one and not the other.
+   *
+   * A chat's elbow is drawn by its own button at half the button's height (train 58: a persona's
+   * mark made the row taller than the length it was tuned to), so there it is the button's
+   * `::before` that is read, and what goes red is a name that is no longer in the row's middle.
    */
   it("draws each elbow at the middle of the line it points at", async () => {
     await onAlpha();
@@ -1023,19 +1027,28 @@ describe("the explorer's rows, in a region too narrow for them", () => {
       const explorer = document.querySelector<HTMLElement>('[data-testid="explorer"]');
       if (!explorer) throw new Error("no explorer");
 
-      /** Where the row's `::after` — its elbow — was actually painted. */
-      const elbowOf = (li: Element) => {
-        const css = getComputedStyle(li, "::after");
+      /** Where the elbow `drawn` draws, as the pseudo-element `pseudo`, was actually painted. */
+      const elbowOf = (drawn: Element | null, pseudo: "::after" | "::before") => {
+        if (!drawn) return Number.NaN;
+        const css = getComputedStyle(drawn, pseudo);
+        // A row that draws no elbow at all is crooked, not straight.
+        if (css.content === "none") return Number.NaN;
         // The rule is written in logical properties; a computed style answers in whichever of
         // the two this engine resolves, so both are asked and the first number wins.
         for (const value of [css.insetBlockStart, css.top]) {
           const at = Number.parseFloat(value);
-          if (Number.isFinite(at)) return li.getBoundingClientRect().top + at;
+          if (Number.isFinite(at)) return drawn.getBoundingClientRect().top + at;
         }
         return Number.NaN;
       };
 
-      const measure = (selector: string, name: string, what: string) =>
+      /** `by` is what draws the row's elbow: the row itself, or its child of that selector. */
+      const measure = (
+        selector: string,
+        name: string,
+        what: string,
+        by?: { child: string; pseudo: "::before" },
+      ) =>
         [...explorer.querySelectorAll(selector)].flatMap((li) => {
           const label = li.querySelector(name);
           if (!label) return [];
@@ -1043,7 +1056,9 @@ describe("the explorer's rows, in a region too narrow for them", () => {
           return [
             {
               what: `${what} (${label.textContent ?? ""})`,
-              elbow: elbowOf(li),
+              elbow: by
+                ? elbowOf(li.querySelector(`:scope > ${by.child}`), by.pseudo)
+                : elbowOf(li, "::after"),
               middle: box.top + box.height / 2,
             },
           ];
@@ -1052,7 +1067,10 @@ describe("the explorer's rows, in a region too narrow for them", () => {
       return [
         ...measure(".clones > .clone", "summary .repo", "a clone's elbow"),
         ...measure(".pieces > li", ".spot-name", "a piece's elbow"),
-        ...measure(".here > li", ".session", "a chat's elbow"),
+        ...measure(".here > li", ".session", "a chat's elbow", {
+          child: ".chat",
+          pseudo: "::before",
+        }),
       ];
     });
 

@@ -1424,9 +1424,10 @@ button.show-more:focus-visible {
    second — because a run with only one of them in place still looks right.
 
    **Nothing here touches padding, font size or line height**, and that is deliberate rather
-   than incidental: the elbows below are drawn at a fixed offset down each row (`0.9em`,
-   `0.72em`) tuned to exactly those three, and #154's author flagged that any change to them
-   misaligns the tree with nothing going red. `workspace-explorer.e2e.ts` now measures the
+   than incidental: a clone's and a piece's elbows below are drawn at a fixed offset down each
+   row (`0.9em`) tuned to exactly those three, and #154's author flagged that any change to them
+   misaligns the tree with nothing going red. A chat's elbow is drawn by its own row at that
+   row's middle, so it has no such number. `workspace-explorer.e2e.ts` now measures the
    elbow against the middle of the row's first line in the real WebView, so a change to them
    does go red — but this rule still had no business making one. */
 .explorer .spot,
@@ -1451,9 +1452,15 @@ button.show-more:focus-visible {
    that draws only its own segment never has to know what is behind it. `Explorer.tsx` says the
    same thing from the other side.
 
-   The elbow's offset differs per level because the rows differ: a clone's first line is a
-   `<summary>`, a piece's is a `.spot` button, and a chat's is a `.chat` button one font step
-   smaller. Each is half a line down its own row. */
+   A clone's first line is a `<summary>` and a piece's is a `.spot` button, and their elbow is
+   half a line down the row, as a length.
+
+   **A chat's elbow is drawn by the `.chat` button itself, at half its own height**, and its
+   last row's guide by the button too, down to there. The button is one line with everything
+   in it centred, so its middle is the middle of the name whatever the row holds: a persona's
+   mark (#1449) is taller than the terminal it stands in for, and a length tuned to the old row
+   pointed above the name. `vertical-align: top` puts the button at the top of its `<li>`, so
+   the guide the button draws starts where the row above's ended. */
 .explorer .clones,
 .explorer .pieces,
 .explorer .files,
@@ -1472,7 +1479,7 @@ button.show-more:focus-visible {
 .explorer .clones > .clone::before,
 .explorer .pieces > li::before,
 .explorer .files > li::before,
-.explorer .here > li::before {
+.explorer .here > li:not(:last-child)::before {
   content: "";
   position: absolute;
   inset-block: 0;
@@ -1487,15 +1494,23 @@ button.show-more:focus-visible {
   height: 0.9em;
 }
 
-.explorer .here > li:last-child::before {
-  inset-block-end: auto;
-  height: 0.72em;
+.explorer .here > li > .chat {
+  position: relative;
+  vertical-align: top;
+}
+
+.explorer .here > li:last-child > .chat::after {
+  content: "";
+  position: absolute;
+  inset-block: 0 50%;
+  inset-inline-start: -0.85rem;
+  border-inline-start: 1px solid var(--border-subtle);
 }
 
 .explorer .clones > .clone::after,
 .explorer .pieces > li::after,
 .explorer .files > li::after,
-.explorer .here > li::after {
+.explorer .here > li > .chat::before {
   content: "";
   position: absolute;
   inset-inline-start: -0.85rem;
@@ -1509,8 +1524,8 @@ button.show-more:focus-visible {
   inset-block-start: 0.9em;
 }
 
-.explorer .here > li::after {
-  inset-block-start: 0.72em;
+.explorer .here > li > .chat::before {
+  inset-block-start: 50%;
 }
 
 /* An icon per kind of node, which is what tells the two kinds of leaf apart: a worktree is a
