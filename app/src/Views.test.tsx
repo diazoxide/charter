@@ -232,6 +232,84 @@ describe("the persona view", () => {
     expect(screen.queryByRole("button", { name: "Statistics" })).toBeNull();
   });
 
+  it("edits the persona's own dispatch limits, which the project's file keeps", async () => {
+    const saves: unknown[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "open_view") return PERSONA;
+      if (cmd === "dispatch_limits")
+        return {
+          file: "purlis.toml",
+          local_file: "purlis.local.toml",
+          base: "schema = 1\n",
+          local_base: null,
+          limits: [
+            {
+              word: "depth",
+              label: "Depth",
+              help: "How many dispatches deep a chain may go.",
+              default: 3,
+              persona_only: false,
+              most: 8,
+              ceiling: null,
+            },
+            {
+              word: "may-run-at-once",
+              label: "May run at once",
+              help: "The chats that may run as this persona at once.",
+              default: null,
+              persona_only: true,
+              most: 10000,
+              ceiling: null,
+            },
+          ],
+          rows: [
+            { scope: "project", name: "", values: [null, null], beneath: [3, null], ignored: [] },
+          ],
+          mine: [],
+          locked_by: null,
+          refused: [],
+          local_left_out: null,
+        };
+      if (cmd === "save_project_settings") {
+        saves.push(args);
+        return { kind: "saved", file: {} };
+      }
+      return undefined;
+    });
+    draw(STEWARD);
+
+    const limits = await screen.findByRole("region", { name: "Dispatch limits" });
+    const most = await within(limits).findByLabelText("May run at once for this persona");
+    await userEvent.type(most, "1{Enter}");
+
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      which: "shared",
+      change: {
+        kind: "edits",
+        edits: [
+          {
+            path: [
+              { key: "dispatch" },
+              { key: "personas" },
+              { key: "steward" },
+              { key: "may-run-at-once" },
+            ],
+            value: { kind: "integer", value: 1 },
+          },
+        ],
+      },
+    });
+  });
+
+  it("draws no dispatch limits on a view that is not a persona's", async () => {
+    core(() => CHARTED);
+    draw(THE_PLANE_S_STATISTICS, { title: "Statistics" });
+
+    await screen.findByText("4 memories across 2 personas");
+    expect(screen.queryByRole("region", { name: "Dispatch limits" })).toBeNull();
+  });
+
   it("says a persona the plane no longer has is gone, in the middle of the tab and not as an error", async () => {
     core(() => ({ kind: "gone", why: "This plane has no persona called steward any more." }));
     draw(STEWARD);
