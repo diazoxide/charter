@@ -11,6 +11,7 @@ import {
 } from "../bindings";
 import { Notice } from "../Notice";
 import type { RowIds } from "./components";
+import { DispatchGrantsList, useDispatchLocks } from "./DispatchGrants";
 import type { LiveSetting, SettingsGroup } from "./groups";
 
 /**
@@ -434,14 +435,17 @@ export function DispatchLimitsTable({
 /** What an administrator's policy caps, each line locked: said, with who set it, and no control. */
 function PolicyLocks({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
   const { page, read, said } = useDispatchLimits(plane);
-  if (page === undefined)
+  /** What policy locks of who may dispatch to whom (#1437): all dispatch, or a pair. */
+  const pairs = useDispatchLocks(plane);
+  if (page === undefined || pairs === undefined)
     return (
       <p id={ids.id} className="ui-setting-status" aria-labelledby={ids.labelledBy}>
-        {read ? said.join(" ") : "Reading the policy…"}
+        {read && page === undefined ? said.join(" ") : "Reading the policy…"}
       </p>
     );
-  const capped = page.limits.filter((limit) => limit.ceiling !== null);
-  if (capped.length === 0 || page.locked_by === null)
+  const capped =
+    page.locked_by === null ? [] : page.limits.filter((limit) => limit.ceiling !== null);
+  if (capped.length === 0 && pairs.length === 0)
     return (
       <p id={ids.id} className="ui-setting-status" aria-labelledby={ids.labelledBy}>
         No policy limits dispatch on this machine.
@@ -457,40 +461,33 @@ function PolicyLocks({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
           {page.locked_by}
         </li>
       ))}
+      {pairs.map((line) => (
+        <li key={line}>{line}</li>
+      ))}
     </ul>
   );
 }
 
 /**
- * **The dispatch grants' place** on the page: which persona may dispatch to which, each
- * revocable. The grants ticket (#1437) draws its list here; until then the page says there are
- * none, which is true.
+ * **The dispatch grants** on the page (#1437): which persona's chats may dispatch to which, at
+ * each level, with who granted it and when, each revocable. What policy locks is the next row's.
  */
-export function dispatchGrantsSetting(): LiveSetting {
+export function dispatchGrantsSetting(plane: PlaneId, file: string): LiveSetting {
   return {
     id: `${DISPATCH}.grants`,
     label: "Dispatch grants",
-    help: "Which persona may dispatch to which without asking you.",
+    help: `Which persona may dispatch to which without asking you. Revoke makes the next dispatch ask again. Everyone in this project is kept in ${file}, which your team follows.`,
     useControl: function useDispatchGrants() {
       return {
         grouped: true,
-        control: (ids) => (
-          <p
-            id={ids.id}
-            className="ui-setting-status"
-            aria-labelledby={ids.labelledBy}
-            aria-describedby={ids.describedBy}
-          >
-            No dispatch grants yet.
-          </p>
-        ),
+        control: (ids) => <DispatchGrantsList plane={plane} file={file} ids={ids} locks={false} />,
       };
     },
   };
 }
 
-/** The Dispatch page of the project at `plane`. */
-export function dispatchGroup(plane: PlaneId): SettingsGroup {
+/** The Dispatch page of the project at `plane`, whose committed file is `file`. */
+export function dispatchGroup(plane: PlaneId, file = "the project's settings file"): SettingsGroup {
   return {
     id: DISPATCH,
     label: "Dispatch",
@@ -507,11 +504,11 @@ export function dispatchGroup(plane: PlaneId): SettingsGroup {
           };
         },
       },
-      dispatchGrantsSetting(),
+      dispatchGrantsSetting(plane, file),
       {
         id: `${DISPATCH}.locks`,
         label: "Policy locks",
-        help: "What this machine's administrator caps. No setting here goes above it.",
+        help: "What this machine's administrator caps or forbids. No setting or grant here goes past it.",
         useControl: function useLocks() {
           return { grouped: true, control: (ids) => <PolicyLocks plane={plane} ids={ids} /> };
         },

@@ -32,6 +32,13 @@
 //! record's `persona:` is something a chat can write. A handoff to a persona whose hosts the
 //! asking chat already reaches, and a chat the person starts from the window, hold their own.
 //!
+//! **A dispatch is not held** (#1437, spec #1434). A persona chat started by a dispatch that a
+//! dispatch grant covers holds its own persona's grants from its first command
+//! ([`crate::dispatchgrant::grants_for_a_dispatched_chat`]): the grant is the person's consent
+//! to the pair, given before anything started, so nothing is left to allow on the new chat's
+//! tab. Without a grant the dispatch does not start at all. The hold above stays for the
+//! handoff command until that is converted to a dispatch (#1444).
+//!
 //! **Policy** (#1343) can forbid persona grants: [`super::hosts::Locks`] is asked of every
 //! persona host. The vault-backed tools a persona runs (`tools = { kubectl = … }`, brokered
 //! `purlis secret exec`) are the next slice of #1362 and are not read yet.

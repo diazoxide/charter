@@ -27,6 +27,7 @@ pub mod curation;
 pub mod datahome;
 pub mod diffscan;
 pub mod dispatch;
+pub mod dispatchgrant;
 pub mod dispatchlimits;
 pub mod docsrc;
 pub mod doctor;

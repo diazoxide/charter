@@ -966,6 +966,33 @@ impl Hooks {
             .map_err(|why| format!("the event log refused it ({why}), so nothing was changed"))
     }
 
+    /// **Audits a dispatch grant or revoke** (#1437) in the host's event log, under chat
+    /// `number` where it was allowed from one, and made durable before it answers. Refused
+    /// where this machine has no event log open: a grant nobody recorded is never made.
+    pub fn record_dispatch_grant(
+        &self,
+        root: &Path,
+        number: Option<u32>,
+        audited: &purlis_core::dispatchgrant::Audited<'_>,
+    ) -> Result<(), String> {
+        let Some(events) = self
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        else {
+            return Err(
+                "purlis's event log is not open on this machine, so nothing was changed: every \
+                 dispatch grant is recorded"
+                    .to_owned(),
+            );
+        };
+        let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+        log.dispatch_grant(root, number, audited)
+            .map(|_| ())
+            .map_err(|why| format!("the event log refused it ({why}), so nothing was changed"))
+    }
+
     /// Drains this project's hook spool into the event log (FD-30, ADR 0068 §6): the lines its
     /// chats' hooks spooled while no host took them, each checked, and every gap and rejected
     /// line recorded as such.

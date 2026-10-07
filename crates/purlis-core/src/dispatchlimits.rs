@@ -826,7 +826,27 @@ pub fn read(text: Option<&str>, file: &str) -> Read {
         return out;
     };
     let refused = &mut out.refused;
-    out.table.project = level_of(table, TABLE, file, false, &[WORKSPACES, PERSONAS], refused);
+    // `grants` is the project's dispatch grants (#1437), read by `dispatchgrant`: not a limit
+    // and not a level, and what it holds that grants nothing is said with the rest.
+    let grants = crate::dispatchgrant::KEY;
+    out.table.project = level_of(
+        table,
+        TABLE,
+        file,
+        false,
+        &[WORKSPACES, PERSONAS, grants],
+        refused,
+    );
+    if table.contains_key(grants) {
+        if file == crate::profiles::LOCAL_FILE {
+            refused.push(format!(
+                "{TABLE}.{grants} in {file} is not read: a dispatch grant of your own is kept \
+                 by purlis on this machine, and the project's are in its committed file"
+            ));
+        } else {
+            refused.extend(crate::dispatchgrant::committed(text).refused);
+        }
+    }
     out.table.workspaces = named_levels(
         table.get(WORKSPACES),
         WORKSPACES,

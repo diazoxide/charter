@@ -243,6 +243,43 @@ fn a_change_to_sandbox_or_chat_env_is_a_change_and_the_same_tables_are_not() {
 }
 
 #[test]
+fn no_brokered_write_creates_widens_or_revokes_a_dispatch_grant() {
+    // #1437: who may dispatch to whom is the person's to say, so a write a chat asks purlis to
+    // make never changes `[dispatch]`, in a file that had it or one that did not.
+    let granted = "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\"]\n";
+    for (before, after) in [
+        // Created.
+        (Some("schema = 1\n"), granted),
+        (None, granted),
+        // Widened.
+        (
+            Some(granted),
+            "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\", \"qa\"]\n",
+        ),
+        (
+            Some(granted),
+            "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\"]\nqa = [\"devops\"]\n",
+        ),
+        // Revoked.
+        (Some(granted), "schema = 1\n"),
+        (
+            Some(granted),
+            "schema = 1\n\n[dispatch.grants]\nsteward = []\n",
+        ),
+    ] {
+        assert!(
+            changes_what_a_chat_runs_under(before, after),
+            "{before:?} to {after}"
+        );
+    }
+    // The same grants under another line of the file are no change.
+    assert!(!changes_what_a_chat_runs_under(
+        Some(granted),
+        "schema = 2\n\n[dispatch.grants]\nsteward = [\"devops\"]\n"
+    ));
+}
+
+#[test]
 fn a_brokered_write_never_touches_what_decides_whether_the_local_settings_are_ignored() {
     let (_dir, root) = a_project();
     for path in [

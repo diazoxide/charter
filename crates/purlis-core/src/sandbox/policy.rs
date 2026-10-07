@@ -34,7 +34,9 @@
 //!   "dispatch": {
 //!     "running-per-chat": 4,
 //!     "depth": 2,
-//!     "may-run-at-once": 3
+//!     "may-run-at-once": 3,
+//!     "allow": false,
+//!     "locked": [{ "from": "steward", "to": "devops" }]
 //!   }
 //! }
 //! ```
@@ -52,6 +54,11 @@
 //!   turn the sandbox on in a project that has not (#1423).
 //! - `write-grants`: `false` forbids every folder a block's Allow or Settings would let a chat
 //!   write.
+//! - `dispatch.allow`: `false` forbids one chat dispatching to another at all (#1437), a chat's
+//!   own persona included.
+//! - `dispatch.locked`: the pairs no chat may dispatch across, each a `from` persona and a `to`
+//!   persona. No grant covers a locked pair, one already made included, and its Notice offers
+//!   no Allow.
 //!
 //! - `dispatch`: a **ceiling** on each dispatch limit it names (#1440,
 //!   [`crate::dispatchlimits`]): no project, workspace, persona or person's own setting gives
@@ -104,6 +111,10 @@ pub struct Locks {
     no_write_grants: bool,
     /// The most each dispatch limit may be, where the policy says (#1440).
     dispatch: crate::dispatchlimits::Level,
+    /// Whether every dispatch from one chat to another is forbidden (#1437).
+    no_dispatch: bool,
+    /// The pairs no chat may dispatch across: asking persona, target persona.
+    dispatch_locked: Vec<(String, String)>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -176,6 +187,8 @@ impl Locks {
             no_opt_out: true,
             no_write_grants: true,
             dispatch: crate::dispatchlimits::ceiling_when_refused(),
+            no_dispatch: true,
+            dispatch_locked: Vec::new(),
         }
     }
 
@@ -316,6 +329,32 @@ impl Locks {
         })
     }
 
+    /// Whether policy forbids every dispatch from one chat to another (#1437).
+    pub fn forbids_dispatch(&self) -> bool {
+        self.no_dispatch
+    }
+
+    /// The pairs policy lets no chat dispatch across: asking persona, target persona.
+    pub fn locked_pairs(&self) -> &[(String, String)] {
+        &self.dispatch_locked
+    }
+
+    /// **Why a chat running as `asking` may not dispatch to `target`**, where policy says so
+    /// (#1437): every dispatch is forbidden, or this pair is locked. The sentence names the
+    /// policy and who set it. `asking` is `None` for a chat on no persona, which no pair names.
+    pub fn dispatch_refused(&self, asking: Option<&str>, target: &str) -> Option<String> {
+        let why = if self.no_dispatch {
+            "Policy forbids one chat dispatching to another.".to_owned()
+        } else {
+            let asking = asking?;
+            self.dispatch_locked
+                .iter()
+                .any(|(from, to)| from == asking && to == target)
+                .then(|| format!("Policy forbids {asking} chats dispatching to {target}."))?
+        };
+        Some(format!("{why} {}", self.locked_by()))
+    }
+
     /// Why no chat may start without the sandbox, where policy forbids it.
     pub fn opt_out_refused(&self) -> Option<String> {
         self.no_opt_out.then(|| {
@@ -366,11 +405,7 @@ fn parsed(text: &str, file: &Path) -> Result<Locks, String> {
         Some(serde_json::Value::Object(sandbox)) => sandbox,
         Some(_) => return Err("its \"sandbox\" is not an object".to_owned()),
     };
-    let dispatch = match top.get("dispatch") {
-        None => crate::dispatchlimits::Level::unset(),
-        Some(serde_json::Value::Object(dispatch)) => crate::dispatchlimits::ceiling(dispatch)?,
-        Some(_) => return Err("its \"dispatch\" is not an object".to_owned()),
-    };
+    let (dispatch, no_dispatch, dispatch_locked) = dispatch(top.get("dispatch"))?;
     if let Some(key) = sandbox.keys().find(|key| !KEYS.contains(&key.as_str())) {
         return Err(format!(
             "its sandbox says \"{}\", which purlis does not know",
@@ -439,7 +474,66 @@ fn parsed(text: &str, file: &Path) -> Result<Locks, String> {
         no_opt_out: forbids("opt-out")?,
         no_write_grants: forbids("write-grants")?,
         dispatch,
+        no_dispatch,
+        dispatch_locked,
     })
+}
+
+/// The keys of `dispatch` that are locks; every other key is a limit's ceiling.
+const DISPATCH_LOCKS: [&str; 2] = ["allow", "locked"];
+
+/// What one dispatch reads of a policy: the limits' ceiling, whether every dispatch is
+/// forbidden, and the pairs it locks.
+type Dispatch = (crate::dispatchlimits::Level, bool, Vec<(String, String)>);
+
+/// **What a policy's `dispatch` says**, the one reader of that object: the ceiling on each
+/// dispatch limit it names (#1440, [`crate::dispatchlimits::ceiling`]), whether every dispatch
+/// is forbidden, and the pairs it locks (#1437); or why the file is refused. A key that is
+/// neither a lock nor a limit refuses the file.
+fn dispatch(value: Option<&serde_json::Value>) -> Result<Dispatch, String> {
+    let said = match value {
+        None => return Ok((crate::dispatchlimits::Level::unset(), false, Vec::new())),
+        Some(serde_json::Value::Object(said)) => said,
+        Some(_) => return Err("its \"dispatch\" is not an object".to_owned()),
+    };
+    let limits: serde_json::Map<String, serde_json::Value> = said
+        .iter()
+        .filter(|(key, _)| !DISPATCH_LOCKS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let ceiling = crate::dispatchlimits::ceiling(&limits)?;
+    let forbidden = match said.get("allow") {
+        None => false,
+        Some(serde_json::Value::Bool(allowed)) => !allowed,
+        Some(_) => return Err("its dispatch \"allow\" is not true or false".to_owned()),
+    };
+    let pairs = match said.get("locked") {
+        None => Vec::new(),
+        Some(serde_json::Value::Array(pairs)) => pairs
+            .iter()
+            .map(|pair| {
+                let persona = |key: &str| {
+                    pair.get(key)
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|name| crate::personas::valid_name(name))
+                        .map(str::to_owned)
+                };
+                let only_these = pair
+                    .as_object()
+                    .is_some_and(|pair| pair.keys().all(|key| key == "from" || key == "to"));
+                match (only_these, persona("from"), persona("to")) {
+                    (true, Some(from), Some(to)) => Ok((from, to)),
+                    _ => Err(
+                        "its dispatch \"locked\" holds something that is not a \"from\" persona \
+                         and a \"to\" persona"
+                            .to_owned(),
+                    ),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err("its dispatch \"locked\" is not a list".to_owned()),
+    };
+    Ok((ceiling, forbidden, pairs))
 }
 
 /// A word of the file as a refusal quotes it: one line, short.

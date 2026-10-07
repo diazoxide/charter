@@ -237,6 +237,9 @@ pub struct Held {
     smart: crate::smartclose::Teller,
     /// How many brokered writes each chat has made lately (#1333).
     brokered: purlis_core::brokered::Rate,
+    /// The dispatches waiting on the person, and the dispatch grants made for one chat
+    /// (#1437).
+    dispatch_grants: crate::dispatchgrants::Store,
     /// This plane, once it is in its `Arc`: what a program's end writes the record through.
     me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
 }
@@ -401,6 +404,16 @@ impl Held {
     /// The cap on each chat's brokered writes (#1333).
     pub fn brokered(&self) -> &purlis_core::brokered::Rate {
         &self.brokered
+    }
+
+    /// The dispatches waiting on the person, and the grants made for one chat (#1437).
+    pub fn dispatch_grants(&self) -> &crate::dispatchgrants::Store {
+        &self.dispatch_grants
+    }
+
+    /// This project, as the window names it.
+    pub fn plane_id(&self) -> &PlaneId {
+        &self.id
     }
 
     /// Tells the window chat `session`'s smart close is at `phase`.
@@ -1948,6 +1961,7 @@ impl Planes {
             closing,
             smart: Arc::clone(&self.smart),
             brokered: purlis_core::brokered::Rate::default(),
+            dispatch_grants: crate::dispatchgrants::Store::default(),
             me,
         }
     }

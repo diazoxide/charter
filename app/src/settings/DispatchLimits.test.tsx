@@ -363,10 +363,81 @@ describe("Settings › Project › Dispatch", () => {
     ).toBeInTheDocument();
   });
 
-  it("holds a place for the dispatch grants", () => {
+  it("lists the dispatch grants, each with Revoke", async () => {
+    core(page());
+    const grants = {
+      grants: [
+        {
+          id: "you\u001fsteward\u001fdevops",
+          asking: "steward",
+          target: "devops",
+          level: "you",
+          by: null,
+          at: null,
+          chat: null,
+          locked: null,
+        },
+      ],
+      all_locked: null,
+      locked_pairs: [{ asking: "qa", target: "devops" }],
+      locked_by: "Locked by policy, set by IT in /etc/purlis/policy.json.",
+      changed: null,
+    };
+    // After `core`, so this is the one the window asks.
+    mockIPC((cmd) => (cmd === "dispatch_grants" ? grants : undefined));
+    render(<Setting id={`${DISPATCH}.grants`} />);
+
+    const list = await screen.findByRole("list", { name: "Dispatch grants" });
+    expect(within(list).getByRole("listitem")).toHaveTextContent(
+      "steward chats may dispatch to devops · Me on this machine · granted by you",
+    );
+    expect(
+      screen.getByRole("button", { name: "Revoke steward dispatching to devops" }),
+    ).toBeInTheDocument();
+    // What policy locks is the next row's, not said twice.
+    expect(screen.queryByRole("list", { name: "Locked by policy" })).not.toBeInTheDocument();
+  });
+
+  it("says there are no dispatch grants where there are none", async () => {
     core(page());
     render(<Setting id={`${DISPATCH}.grants`} />);
-    expect(screen.getByText("No dispatch grants yet.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("No persona's chats may dispatch to another persona yet."),
+    ).toBeInTheDocument();
+  });
+
+  it("lists a locked pair and a lock on all dispatch with the policy's ceilings", async () => {
+    const limits = page({
+      limits: LIMITS.map((one) => (one.word === "depth" ? { ...one, ceiling: 2 } : one)),
+      locked_by: "Locked by policy, set by IT in /etc/purlis/policy.json.",
+    });
+    const all =
+      "Policy forbids one chat dispatching to another. Locked by policy, set by IT in /etc/purlis/policy.json.";
+    mockIPC((cmd) => {
+      if (cmd === "dispatch_limits") return limits;
+      if (cmd === "dispatch_grants")
+        return {
+          grants: [],
+          all_locked: all,
+          locked_pairs: [{ asking: "steward", target: "devops" }],
+          locked_by: "Locked by policy, set by IT in /etc/purlis/policy.json.",
+          changed: null,
+        };
+      return undefined;
+    });
+    render(<Setting id={`${DISPATCH}.locks`} />);
+
+    const locks = await screen.findByRole("list", { name: "Policy locks" });
+    expect(
+      within(locks)
+        .getAllByRole("listitem")
+        .map((one) => one.textContent),
+    ).toEqual([
+      "Depth is at most 2, whatever is set here. Locked by policy, set by IT in /etc/purlis/policy.json.",
+      all,
+      "steward chats may not dispatch to devops. Locked by policy, set by IT in /etc/purlis/policy.json.",
+    ]);
+    expect(within(locks).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("says what the core could not read, and offers no table", async () => {

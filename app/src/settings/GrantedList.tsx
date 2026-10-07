@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { commands, type PlaneId, type SandboxGrant } from "../bindings";
 import { Notice } from "../Notice";
+import { DispatchGrantsList } from "./DispatchGrants";
 import type { RowIds } from "./components";
 import type { SettingsGroup } from "./groups";
 
@@ -278,6 +279,18 @@ export function grantedGroup(
                   {writesLocked}
                 </p>
               ),
+          };
+        },
+      },
+      {
+        id: `${GRANTED}.dispatch`,
+        // Its own words: "Dispatch grants" is the row of the Dispatch page, and a label is one row's.
+        label: "Who may dispatch to whom",
+        help: `Which personas' chats may dispatch to which, and who allowed it. Revoke makes the next dispatch ask again. Everyone in this project is kept in ${file}, which your team follows.`,
+        useControl: function useDispatchGrants() {
+          return {
+            grouped: true,
+            control: (ids) => <DispatchGrantsList plane={plane} file={file} ids={ids} />,
           };
         },
       },
