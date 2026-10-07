@@ -65,6 +65,7 @@ macro_rules! app_commands {
                 sandboxing::grantable_folders,
                 sandboxing::list_grantable_folder,
                 sandboxing::unlist_grantable_folder,
+                dispatchlimits::dispatch_limits,
                 firstrun::open_repo,
                 firstrun::template_that_fits,
                 firstrun::open_local_project,

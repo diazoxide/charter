@@ -30,6 +30,11 @@
 //!     "persona-hosts": false,
 //!     "opt-out": false,
 //!     "write-grants": false
+//!   },
+//!   "dispatch": {
+//!     "running-per-chat": 4,
+//!     "depth": 2,
+//!     "may-run-at-once": 3
 //!   }
 //! }
 //! ```
@@ -47,6 +52,11 @@
 //!   turn the sandbox on in a project that has not (#1423).
 //! - `write-grants`: `false` forbids every folder a block's Allow or Settings would let a chat
 //!   write.
+//!
+//! - `dispatch`: a **ceiling** on each dispatch limit it names (#1440,
+//!   [`crate::dispatchlimits`]): no project, workspace, persona or person's own setting gives
+//!   more. `may-dispatch` and `may-run-at-once` cap every persona. 0 switches dispatch off on
+//!   this machine. A file that is refused is read as 0 for every one.
 //!
 //! Absent keys lock nothing. `true` is the same as absent.
 
@@ -92,6 +102,8 @@ pub struct Locks {
     no_persona_hosts: bool,
     no_opt_out: bool,
     no_write_grants: bool,
+    /// The most each dispatch limit may be, where the policy says (#1440).
+    dispatch: crate::dispatchlimits::Level,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -163,6 +175,7 @@ impl Locks {
             no_persona_hosts: true,
             no_opt_out: true,
             no_write_grants: true,
+            dispatch: crate::dispatchlimits::ceiling_when_refused(),
         }
     }
 
@@ -247,6 +260,12 @@ impl Locks {
         self.no_opt_out
     }
 
+    /// **The most each dispatch limit may be** (#1440): a ceiling over the project's, a
+    /// workspace's, a persona's and your own. A limit it does not name is not capped.
+    pub fn dispatch_ceiling(&self) -> &crate::dispatchlimits::Level {
+        &self.dispatch
+    }
+
     /// Whether policy forbids every folder a grant would let a chat write.
     pub fn forbids_write_grants(&self) -> bool {
         self.no_write_grants
@@ -327,7 +346,7 @@ fn parsed(text: &str, file: &Path) -> Result<Locks, String> {
         .ok_or_else(|| "it is not a JSON object".to_owned())?;
     if let Some(key) = top
         .keys()
-        .find(|key| !["owner", "sandbox"].contains(&key.as_str()))
+        .find(|key| !["owner", "sandbox", "dispatch"].contains(&key.as_str()))
     {
         return Err(format!(
             "it says \"{}\", which purlis does not know",
@@ -346,6 +365,11 @@ fn parsed(text: &str, file: &Path) -> Result<Locks, String> {
         None => &empty,
         Some(serde_json::Value::Object(sandbox)) => sandbox,
         Some(_) => return Err("its \"sandbox\" is not an object".to_owned()),
+    };
+    let dispatch = match top.get("dispatch") {
+        None => crate::dispatchlimits::Level::unset(),
+        Some(serde_json::Value::Object(dispatch)) => crate::dispatchlimits::ceiling(dispatch)?,
+        Some(_) => return Err("its \"dispatch\" is not an object".to_owned()),
     };
     if let Some(key) = sandbox.keys().find(|key| !KEYS.contains(&key.as_str())) {
         return Err(format!(
@@ -414,6 +438,7 @@ fn parsed(text: &str, file: &Path) -> Result<Locks, String> {
         no_persona_hosts: forbids("persona-hosts")?,
         no_opt_out: forbids("opt-out")?,
         no_write_grants: forbids("write-grants")?,
+        dispatch,
     })
 }
 

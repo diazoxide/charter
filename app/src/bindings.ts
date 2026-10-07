@@ -406,6 +406,13 @@ export const commands = {
 	/**  Takes `folder` off the folders chats here may be granted. Answers the list as it is now. */
 	unlistGrantableFolder: (plane: PlaneId, folder: string) => typedError<string[], string>(__TAURI_INVOKE("unlist_grantable_folder", { plane, folder })),
 	/**
+	 *  The project's dispatch limits, for Settings › Project › Dispatch, a workspace's settings
+	 *  and the persona view.
+	 * 
+	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
+	 */
+	dispatchLimits: (plane: PlaneId) => typedError<DispatchLimits, string>(__TAURI_INVOKE("dispatch_limits", { plane })),
+	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
 	 *  a workspace named after it, and the plane is opened **through the trust gate**, exactly as
@@ -2256,6 +2263,73 @@ export type Curations = {
 	 *  click.
 	 */
 	cannot: string | null,
+};
+
+/**  One limit, as a column of the table. */
+export type DispatchLimit = {
+	/**  The key it is written as: `running-per-chat`. */
+	word: string,
+	label: string,
+	/**  One line on what it limits. */
+	help: string,
+	/**  What is in force where no file sets it; `null` is no cap. */
+	default: number | null,
+	/**  Whether only a persona's row holds it. */
+	persona_only: boolean,
+	/**  The most it may be set to. */
+	most: number,
+	/**  The most an administrator's policy lets it be, where it says. */
+	ceiling: number | null,
+};
+
+/**  What Settings › Project › Dispatch draws. */
+export type DispatchLimits = {
+	/**  The committed file's name, as this project has it. */
+	file: string,
+	/**  This machine's own file's name. */
+	local_file: string,
+	/**  The committed file's text (`null`: not there): what a write is sent against. */
+	base: string | null,
+	/**  This machine's file's text (`null`: not there). */
+	local_base: string | null,
+	/**  Every limit, in the order the table draws them. */
+	limits: DispatchLimit[],
+	/**
+	 *  The committed file's rows: the project's first, then each workspace's, then each
+	 *  persona's.
+	 */
+	rows: DispatchRow[],
+	/**  This machine's rows, in the same order: they only ever lower. */
+	mine: DispatchRow[],
+	/**  "Locked by policy, set by <who> in <file>.", where a policy caps any limit. */
+	locked_by: string | null,
+	/**  What either file holds in `[dispatch]` that is not read, each as one sentence. */
+	refused: string[],
+	/**  Why this machine's file is not read, where git would carry it. */
+	local_left_out: string | null,
+};
+
+/**  One row: what one level of one file sets. */
+export type DispatchRow = {
+	/**  `project`, `workspace` or `persona`. */
+	scope: string,
+	/**  The workspace's or the persona's name; empty for the project's row. */
+	name: string,
+	/**
+	 *  What it sets each limit to, in [`DispatchLimits::limits`]' order; `null` where it does
+	 *  not, and the level beneath it is in force.
+	 */
+	values: (number | null)[],
+	/**
+	 *  What is in force beneath this row for each limit, which an unset one shows; `null` is
+	 *  no cap.
+	 */
+	beneath: (number | null)[],
+	/**
+	 *  For a row of yours: each limit of it that is above the project's and so is ignored, as
+	 *  one sentence.
+	 */
+	ignored: string[],
 };
 
 /**  What applying a fix came to, as the Doctor dialog draws it. */

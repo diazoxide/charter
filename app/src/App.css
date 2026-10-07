@@ -5857,6 +5857,33 @@ h2.sidebar-title .node-icon {
   border-radius: 3px;
 }
 
+/* Settings › Project › Dispatch (#1439): the limits table, a row per level and a box per
+   limit; and the same table on a persona's view, under its own heading. */
+.dispatch-limits table {
+  border-collapse: collapse;
+  margin: 0 0 0.4rem;
+}
+
+.dispatch-limits th,
+.dispatch-limits td {
+  padding: 0.15rem 0.6rem 0.15rem 0;
+  text-align: left;
+  font-weight: normal;
+  vertical-align: baseline;
+}
+
+.dispatch-limits thead th {
+  color: var(--text-secondary);
+}
+
+.dispatch-limit {
+  width: 5.5em;
+}
+
+.view-dispatch {
+  margin-top: 1rem;
+}
+
 /* Settings › Sandbox › Granted (#1348): one grant a row, its Revoke beside it; and the folders
    chats may be granted, each with Remove. */
 .granted-list li {
