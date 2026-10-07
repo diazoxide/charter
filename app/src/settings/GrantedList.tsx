@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { commands, type PlaneId, type SandboxGrant } from "../bindings";
 import { Notice } from "../Notice";
+import { sandboxCommandReturned } from "../sandboxAsked";
 import type { RowIds } from "./components";
 import type { SettingsGroup } from "./groups";
 
@@ -74,7 +75,9 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
         if (done.status === "error") setSaid(done.error);
         else setGrants(done.data);
       })
-      .catch((err: unknown) => setSaid(`purlis could not revoke it: ${String(err)}`));
+      .catch((err: unknown) => setSaid(`purlis could not revoke it: ${String(err)}`))
+      // What chats may write moved, or did not: the Notice for chats left behind asks again.
+      .finally(sandboxCommandReturned);
   };
 
   return (
@@ -153,7 +156,9 @@ function GrantableFolders({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
           setTyped("");
         }
       })
-      .catch((err: unknown) => setSaid(`purlis could not add the folder: ${String(err)}`));
+      .catch((err: unknown) => setSaid(`purlis could not add the folder: ${String(err)}`))
+      // What chats may write moved, or did not: the Notice for chats left behind asks again.
+      .finally(sandboxCommandReturned);
   };
   const remove = (folder: string) => {
     setSaid(undefined);
@@ -163,7 +168,9 @@ function GrantableFolders({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
         if (done.status === "error") setSaid(done.error);
         else setFolders(done.data);
       })
-      .catch((err: unknown) => setSaid(`purlis could not remove the folder: ${String(err)}`));
+      .catch((err: unknown) => setSaid(`purlis could not remove the folder: ${String(err)}`))
+      // What chats may write moved, or did not: the Notice for chats left behind asks again.
+      .finally(sandboxCommandReturned);
   };
 
   return (

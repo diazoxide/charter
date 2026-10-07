@@ -376,7 +376,7 @@ export const commands = {
 	/**
 	 *  **Allow** on a block's Notice (#1342): `target` is the host or folder the Notice showed whole
 	 *  (or the person typed). The window then restarts the chat once its turn has ended
-	 *  (`restart_chat_for_grant`).
+	 *  (`restart_chat`).
 	 */
 	allowSandboxBlock: (plane: PlaneId, session: number, what: GrantWhat, target: string, level: GrantLevel) => typedError<Allowed, string>(__TAURI_INVOKE("allow_sandbox_block", { plane, session, what, target, level })),
 	/**  Every grant in force here, for Settings' Granted list (#1348). */
@@ -387,8 +387,8 @@ export const commands = {
 	 */
 	revokeSandboxGrant: (plane: PlaneId, id: string) => typedError<SandboxGrant[], string>(__TAURI_INVOKE("revoke_sandbox_grant", { plane, id })),
 	/**
-	 *  The chats of this project owed a restart to take a grant (#1342), for the window that drives
-	 *  it once each one's turn has ended.
+	 *  The chats of this project owed a restart (#1342, #1428): to take a grant, or because the
+	 *  person asked. For the window that drives it once each one's turn has ended.
 	 */
 	owedRestarts: (plane: PlaneId) => typedError<number[], string>(__TAURI_INVOKE("owed_restarts", { plane })),
 	/**
@@ -543,20 +543,38 @@ export const commands = {
 	 */
 	startChatFresh: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("start_chat_fresh", { plane, session, columns, rows })),
 	/**
-	 *  **Restart now** (#1362): chat `session` started again as the same chat, resuming its
-	 *  conversation, so what changed for it at its start (the persona grants the person just
-	 *  allowed) applies. The window asks once the chat's turn has ended. The answer is the new one
-	 *  as the window draws it; the old one is ended once the new one has started.
+	 *  **Restart chat** (#1428): the person asks for chat `session` to be restarted on its
+	 *  conversation, from its tab's menu, from the Notice after a sandbox setting changed, or
+	 *  from Restart now on a Notice (#1362). It is owed the restart from here on, and the window
+	 *  drives it with `restart_chat` once the chat's turn has ended.
+	 * 
+	 *  **The person's action only.** This is a command of the window; no hook line, and nothing
+	 *  else a chat can send, reaches it.
 	 */
-	restartChat: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<OpenChat, string>(__TAURI_INVOKE("restart_chat", { plane, session, columns, rows })),
+	askChatRestart: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ask_chat_restart", { plane, session })),
 	/**
-	 *  **Restarts chat `session` to take a sandbox grant** (#1342): the same chat on its
-	 *  conversation, started again with what it was granted compiled in and told, as its first
-	 *  message, what was allowed. The window asks once the chat's turn has ended; a chat owed
-	 *  nothing is refused, and one waiting on a permission prompt is not restarted yet. The answer
-	 *  is the new one as the window draws it, in the old one's place.
+	 *  **Restarts chat `session`**: the same chat on its conversation, started again with the
+	 *  project's sandbox as it is compiled now and what the chat was granted, and told, as its
+	 *  first message, what was allowed where something was (#1342). The one restart: a sandbox
+	 *  grant, the persona grants a person allowed (#1362) and Restart chat (#1428) all come here.
+	 *  The window asks once the chat's turn has ended; a chat owed no restart is refused, and one
+	 *  waiting on a permission prompt is not restarted yet. The answer is the new one as the
+	 *  window draws it, in the old one's place.
 	 */
-	restartChatForGrant: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<GrantRestart, string>(__TAURI_INVOKE("restart_chat_for_grant", { plane, session, columns, rows })),
+	restartChat: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<ChatRestart, string>(__TAURI_INVOKE("restart_chat", { plane, session, columns, rows })),
+	/**
+	 *  **The chats this project has open that run under a sandbox other than the one the
+	 *  project's settings decide for them now** (#1428), or none. The window asks when the
+	 *  project's settings change, when its chats do, and after each of its own sandbox commands
+	 *  returns. It is decided by compiling, never by a file's having been written, and by what
+	 *  settings decide alone: the hosts, what the presets widen, and the folders every chat may
+	 *  write. A chat already owed a restart, or restarting, is not among them. On a blocking
+	 *  thread: compiling reads the project's files.
+	 */
+	chatsOnOlderSandbox: (plane: PlaneId) => typedError<{
+	/**  The chats, by session, lowest first. */
+	chats: OnOlderSandbox[],
+} | null, string>(__TAURI_INVOKE("chats_on_older_sandbox", { plane })),
 	/**
 	 *  **Starts chat `session` again without the sandbox** (#1342): the person's choice on a block's
 	 *  Notice that purlis grants nothing for, for this one chat's next run, on its conversation.
@@ -2149,6 +2167,20 @@ export type ChatBlocked = {
 };
 
 /**
+ *  What a restart answered (#1342, #1428): the chat in its new run with what its start found
+ *  to say, or, while it waits on a permission prompt, why it is not restarted yet.
+ */
+export type ChatRestart = {
+	chat: OpenChat | null,
+	/**
+	 *  What the new run's start says on its tab: that a chat which ran without the sandbox
+	 *  runs in it again.
+	 */
+	notices: string[],
+	not_yet: string | null,
+};
+
+/**
  *  A file a chat's tool touched, as the window marks it in the tree for a few seconds (FM-6,
  *  #1109). It travels in memory only and is never written anywhere (D-86a).
  */
@@ -2820,15 +2852,6 @@ export type GrantLevel =
 /**  Everyone in the project: committed. A host only. */
 "project";
 
-/**
- *  What a restart for a sandbox grant answered (#1342): the chat in its new run, or, while it
- *  waits on a permission prompt, why it is not restarted yet.
- */
-export type GrantRestart = {
-	chat: OpenChat | null,
-	not_yet: string | null,
-};
-
 /**  What a grant names, as the window sends it. */
 export type GrantWhat = 
 /**  A host to reach. */
@@ -3440,6 +3463,26 @@ export type Offered = {
 	label: string,
 	/**  Whether choosing it lets the call run. */
 	allows: boolean,
+};
+
+/**
+ *  The chats of a project still running under an older sandbox (#1428), for the Notice after
+ *  a sandbox setting changes.
+ */
+export type OlderSandbox = {
+	/**  The chats, by session, lowest first. */
+	chats: OnOlderSandbox[],
+};
+
+/**  One chat still running under an older sandbox. */
+export type OnOlderSandbox = {
+	session: number,
+	/**
+	 *  What stands for what the project's settings decide of this chat's sandbox now: a
+	 *  dismissal of the Notice is kept for each chat by it, so the Notice is shown once for
+	 *  each change, and one chat restarting does not bring it back for another.
+	 */
+	change: string,
 };
 
 /**  One chat the app has open, as the UI draws it and as the quit warning lists it. */

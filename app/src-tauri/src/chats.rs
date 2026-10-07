@@ -225,6 +225,17 @@ struct Running {
     /// What its sandbox was compiled to as it started, which a command run on its behalf is
     /// held to (#1407); `None` for a chat started without one.
     confines: Option<purlis_core::sandbox::Confines>,
+    /// What decided its sandbox as it started besides the project's settings (#1428): the
+    /// persona grants a handoff left it holding, and what a person had granted this chat. A
+    /// start compiled now with the same two differs from [`Self::confines`] only by settings.
+    started_with: StartedWith,
+}
+
+/// [`Running::started_with`].
+#[derive(Debug, Clone, Default)]
+struct StartedWith {
+    held: Option<purlis_core::reopen::HeldGrants>,
+    grants: purlis_core::sandbox::grant::Grants,
 }
 
 /// A chat a launch could not start, as the window lists it (NO-3): by its id, which Retry now
@@ -372,7 +383,152 @@ pub struct Chats {
     /// The chats being started again in their place right now (#1342): one restart at a time
     /// per chat, whichever asked for it.
     restarting: Mutex<std::collections::HashSet<u32>>,
+    /// What decides the sandbox of a chat on no profile in a test, in place of
+    /// [`Self::sandbox_off_profile`]: that asks this machine and checks the real program, and a
+    /// test's stand-in harness lives where a chat can write, so it could never start sandboxed.
+    #[cfg(test)]
+    deciding: Option<Deciding>,
 }
+
+/// [`Chats::deciding`]: the chat, what it was granted, and a person's opt-out.
+#[cfg(test)]
+type Deciding = Box<
+    dyn Fn(
+            &Chat,
+            &purlis_core::sandbox::grant::Grants,
+            Option<&purlis_core::sandbox::OptOut>,
+        ) -> Result<Decided, String>
+        + Send
+        + Sync,
+>;
+
+/// The chats of a project that run under a sandbox other than the one a start would compile
+/// for them now (#1428): what the window's Notice counts after a sandbox setting changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OlderSandbox {
+    /// The chats, by session, lowest first.
+    pub chats: Vec<OnOlder>,
+}
+
+#[cfg(test)]
+impl OlderSandbox {
+    /// The chats, by session, lowest first.
+    pub fn sessions(&self) -> Vec<u32> {
+        self.chats.iter().map(|one| one.session).collect()
+    }
+}
+
+/// One chat on an older sandbox ([`OlderSandbox`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnOlder {
+    pub session: u32,
+    /// What stands for what the project's settings would decide of this chat's sandbox at a
+    /// start now ([`Settled::key`]): the same while that stays the same, so one change is told
+    /// once however often it is asked about, and whichever other chat restarts meanwhile. It
+    /// is kept on disk with a dismissal, so it is the same on every build of purlis.
+    pub change: String,
+}
+
+/// **What a project's settings decide of a chat's sandbox** (#1428, D-1428-10): the hosts it
+/// may reach, what the presets widen, and the folders every chat may write. The Notice after a
+/// sandbox setting changes compares this alone. What a start finds by walking the project's
+/// tree (a clone's hooks folder, a script a harness's config runs) is denied as it is found
+/// and is not in it: an agent making a clone or running an install is not the project's
+/// sandbox changing.
+///
+/// Each list is sorted, so the same settings written in another order are the same.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Settled {
+    hosts: Vec<String>,
+    /// What the project's package caches let a chat write, where a preset widens to them.
+    caches: Vec<std::path::PathBuf>,
+    /// Whether a chat may ask the system's certificate check.
+    trust: bool,
+    writable: Vec<std::path::PathBuf>,
+}
+
+impl Settled {
+    fn of(confines: &purlis_core::sandbox::Confines) -> Self {
+        let sorted = |mut list: Vec<std::path::PathBuf>| {
+            list.sort();
+            list.dedup();
+            list
+        };
+        let mut hosts = confines.hosts.clone();
+        hosts.sort();
+        hosts.dedup();
+        Self {
+            hosts,
+            caches: sorted(
+                confines
+                    .widened
+                    .caches
+                    .as_ref()
+                    .map(purlis_core::sandbox::caches::CacheHome::writable)
+                    .unwrap_or_default(),
+            ),
+            trust: confines.widened.trust,
+            writable: sorted(confines.writable.clone()),
+        }
+    }
+
+    /// What stands for `settled`, or for a start with no sandbox: a SHA-256 over one canonical
+    /// text of it, so it does not move with the toolchain as a `Debug` text or the standard
+    /// hasher may.
+    fn key(settled: Option<&Self>) -> String {
+        use sha2::Digest as _;
+        // One line for each entry, under a heading, with a NUL after each: no entry can read
+        // as another list's, or as two.
+        let mut text = String::new();
+        let mut list = |heading: &str, entries: &mut dyn Iterator<Item = String>| {
+            text.push_str(heading);
+            text.push('\0');
+            for entry in entries {
+                text.push_str(&entry);
+                text.push('\0');
+            }
+        };
+        match settled {
+            None => list("no sandbox", &mut std::iter::empty()),
+            Some(settled) => {
+                let paths = |paths: &[std::path::PathBuf]| -> Vec<String> {
+                    paths
+                        .iter()
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .collect()
+                };
+                list("hosts", &mut settled.hosts.iter().cloned());
+                list("caches", &mut paths(&settled.caches).into_iter());
+                list(
+                    "certificate checks",
+                    &mut std::iter::once(settled.trust.to_string()),
+                );
+                list("writable", &mut paths(&settled.writable).into_iter());
+            }
+        }
+        let digest = sha2::Sha256::digest(text.as_bytes());
+        digest[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
+
+/// Why chat `session` was not restarted when purlis holds no conversation to resume it by, and
+/// what to do (#1428). True of a chat that has not said which conversation it is in yet, and of
+/// one whose harness never says: the first way out is for the one, the second for both.
+fn no_conversation(session: u32) -> String {
+    format!(
+        "purlis did not restart chat {session}: it has no conversation to resume. If it has \
+         only just started, send it a message and restart it again. Start fresh on its tab's \
+         menu starts it again without a conversation."
+    )
+}
+
+/// What a chat that ran without the sandbox is told on its tab when a restart puts it back in
+/// one (#1428): a person's opt-out is for one start, never inherited (ADR 0067 §7).
+pub const SANDBOXED_AGAIN: &str = "This chat ran without the sandbox until this restart. It runs \
+                                   in the sandbox now, because that choice lasts for one start.";
 
 /// One grant a person made for one chat (#1342), as Settings' Granted list shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,6 +605,17 @@ impl Chats {
             grants: Mutex::new(HashMap::new()),
             owed: Mutex::new(HashMap::new()),
             restarting: Mutex::new(std::collections::HashSet::new()),
+            #[cfg(test)]
+            deciding: None,
+        }
+    }
+
+    /// These chats, with `deciding` deciding the sandbox of each chat on no profile.
+    #[cfg(test)]
+    fn deciding_by(self, deciding: Deciding) -> Self {
+        Self {
+            deciding: Some(deciding),
+            ..self
         }
     }
 
@@ -885,6 +1052,28 @@ impl Chats {
         lock(&self.owed).entry(session).or_default().push(told);
     }
 
+    /// **Owes chat `session` a restart the person asked for** (#1428): Restart chat on its
+    /// tab's menu, or Restart them on the Notice after a sandbox setting changed. It tells the
+    /// chat nothing, and anything it is owed besides is still told. The one restart
+    /// ([`Self::restart`]) then takes it, once the chat's turn has ended. Refused for a chat
+    /// that is not open.
+    ///
+    /// **Nothing while the chat is restarting**: that restart is the one asked for, and an ask
+    /// queued behind it would restart the new run a second time, which nobody asked for.
+    pub fn ask_restart(&self, session: u32) -> Result<(), String> {
+        if !lock(&self.open).contains_key(&session) {
+            return Err(format!(
+                "purlis did not restart chat {session}: it is not open."
+            ));
+        }
+        // Read on its own: a lock is never taken while another of these is held.
+        let restarting = lock(&self.restarting).contains(&session);
+        if !restarting {
+            lock(&self.owed).entry(session).or_default();
+        }
+        Ok(())
+    }
+
     /// The folder chat `session` was started in: what a write grant for it is judged against.
     pub fn folder_of(&self, session: u32) -> Option<std::path::PathBuf> {
         lock(&self.open).get(&session)?.chat.cwd.clone()
@@ -924,12 +1113,20 @@ impl Chats {
         made.len() != before
     }
 
-    /// **Restarts chat `session` on its conversation** (#1342, spike #1347): the same chat,
-    /// under its id, its conversation resumed, so its new start compiles in what it was granted
-    /// and its first message is what it was owed. Refused for a chat owed nothing. The old one
-    /// stays open until the new one has started, as [`Self::start_fresh`]'s does; ending it is
-    /// the caller's next step.
-    pub fn restart_owed(&self, session: u32, size: Size) -> Result<u32, String> {
+    /// **Restarts chat `session` on its conversation**: the one restart (#1342, #1362, #1428).
+    /// The same chat, under its id, its conversation resumed, in a new run. What is decided at
+    /// a start is decided again: its sandbox is compiled from the project's settings as they
+    /// are now, with what the person granted it and the persona grants it holds, and its first
+    /// message is whatever it was owed to be told.
+    ///
+    /// Refused for a chat owed nothing: a restart is owed by a grant ([`Self::grant`],
+    /// [`Self::owe_restart`]) or asked for by the person ([`Self::ask_restart`]), and by
+    /// nothing a chat sends. The old one stays open until the new one has started, as
+    /// [`Self::start_fresh`]'s does; ending it is the caller's next step.
+    ///
+    /// **A person's opt-out is never inherited** (ADR 0067 §7): a chat that ran without the
+    /// sandbox restarts in it, and its tab says so ([`SANDBOXED_AGAIN`]).
+    pub fn restart(&self, session: u32, size: Size) -> Result<u32, String> {
         self.claim(session)?;
         // Taken under the lock, so a grant made while this restart runs queues for the next one
         // and is never erased by this one.
@@ -941,21 +1138,35 @@ impl Chats {
         };
         let started = self.again_on_its_conversation(session).and_then(|again| {
             if again.resume.is_none() {
-                return Err(format!(
-                    "purlis did not restart chat {session}: it has no conversation to resume \
-                     yet. What was allowed reaches it when it next starts."
-                ));
+                let reaches = if told.is_empty() {
+                    ""
+                } else {
+                    " What was allowed reaches it when it next starts."
+                };
+                return Err(format!("{}{reaches}", no_conversation(session)));
             }
-            self.start_recorded_told(&again, size, Why::Relaunch, Some(&told.join("\n\n")), None)
+            let first = (!told.is_empty()).then(|| told.join("\n\n"));
+            let started =
+                self.start_recorded_told(&again, size, Why::Relaunch, first.as_deref(), None)?;
+            if again.unsandboxed && self.confines_of(started).is_some() {
+                lock(&self.late_notes)
+                    .entry(started)
+                    .or_default()
+                    .push(SANDBOXED_AGAIN.to_owned());
+            }
+            Ok(started)
         });
         match started {
             Ok(started) => self.restarted(session, started, true),
             Err(why) => {
-                // Owed still: put back ahead of anything queued since.
+                // Owed still: put back ahead of anything queued since. A restart the person
+                // asked for, with nothing to tell, is not: they were told why, and ask again.
                 let mut owed = lock(&self.owed);
                 let mut back = told;
                 back.extend(owed.remove(&session).unwrap_or_default());
-                owed.insert(session, back);
+                if !back.is_empty() {
+                    owed.insert(session, back);
+                }
                 drop(owed);
                 self.unclaim(session);
                 Err(why)
@@ -1007,7 +1218,8 @@ impl Chats {
     /// What follows a restart of chat `session` as `started`: if the chat was closed while it
     /// restarted, the new run is ended (nobody asked for it any more, and it would keep the
     /// chat's grants alive unseen); otherwise the new run takes its place, and what was queued
-    /// for the old one meanwhile is owed to the new one where `keep_owed`, else dropped.
+    /// for the old one meanwhile to tell it is owed to the new one where `keep_owed`, else
+    /// dropped.
     fn restarted(&self, session: u32, started: u32, keep_owed: bool) -> Result<u32, String> {
         if !lock(&self.open).contains_key(&session) {
             lock(&self.owed).remove(&session);
@@ -1020,9 +1232,13 @@ impl Chats {
                  started again."
             ));
         }
-        if let Some(queued) = lock(&self.owed).remove(&session)
-            && keep_owed
-        {
+        // Taken out in a statement of its own: the guard of a lock taken in an `if let` lives
+        // through its body, and putting the queue back under it waited on this thread's own
+        // lock for good (issue 1428's review, S1; the hang was on main since issue 1342).
+        let queued = lock(&self.owed).remove(&session).unwrap_or_default();
+        // Only what has something to tell is carried: an ask alone, queued while this restart
+        // ran, is answered by this restart.
+        if keep_owed && !queued.is_empty() {
             lock(&self.owed).insert(started, queued);
         }
         self.took_the_place_of(session, started);
@@ -1058,8 +1274,97 @@ impl Chats {
         self.write_it_down();
     }
 
-    /// The chats owed a restart to take a grant (#1342): what the window drives once each one's
-    /// turn has ended, read again whenever the window is drawn anew.
+    /// **The chats running under a sandbox other than the one a start would compile for them
+    /// now** (#1428), or none: what the Notice after a sandbox setting changes is about.
+    ///
+    /// Decided by comparing what each chat's sandbox was compiled to as it started
+    /// ([`Running::confines`]) with what the same start compiles now, never by a settings file
+    /// having been written: a change that compiles to the same sandbox leaves nothing behind.
+    pub fn on_older_sandbox(&self) -> Option<OlderSandbox> {
+        self.on_older_sandbox_on(
+            &purlis_core::sandbox::Machine::this(),
+            &purlis_core::sandbox::backend::installed,
+        )
+    }
+
+    /// [`Self::on_older_sandbox`], on `machine` with `has` saying what is installed.
+    ///
+    /// **Only what the project's settings decide is compared** ([`Settled`], D-1428-10), and
+    /// each chat is compiled with the persona grants and the chat's own grants it started
+    /// with: a grant for one chat, or a persona's hosts allowed on its tab, is not the
+    /// project's sandbox changing, and has its own Notice and its own restart.
+    ///
+    /// Not counted: a chat a person started without the sandbox (it runs under no compiled
+    /// sandbox, old or new, by their own choice for that start); a shell, which is the
+    /// person's own; a chat whose sandbox could not be compiled now (its restart would be
+    /// refused, and say why); and a chat already owed a restart or restarting, which gets the
+    /// sandbox the project has now without being asked again.
+    fn on_older_sandbox_on(
+        &self,
+        machine: &purlis_core::sandbox::Machine,
+        has: &dyn Fn(&str) -> bool,
+    ) -> Option<OlderSandbox> {
+        use purlis_core::sandbox::Decided;
+        // Each read out from under its lock, one at a time: compiling reads the project's
+        // files, and no lock here is taken while another is held.
+        let owed: std::collections::HashSet<u32> = lock(&self.owed).keys().copied().collect();
+        let restarting = lock(&self.restarting).clone();
+        let running: Vec<_> = lock(&self.open)
+            .iter()
+            .filter(|(session, one)| {
+                !one.chat.unsandboxed && !owed.contains(session) && !restarting.contains(session)
+            })
+            .filter_map(|(session, one)| {
+                Some((
+                    *session,
+                    one.chat.clone(),
+                    one.harness?,
+                    one.confines.as_ref().map(Settled::of),
+                    one.started_with.clone(),
+                ))
+            })
+            .collect();
+        let mut chats = Vec::new();
+        for (session, chat, harness, started, with) in running {
+            // A chat on a profile takes a persona's grants (#1362); one on no profile, none.
+            let persona = chat.profile.as_ref().and_then(|_| {
+                let as_started = Chat {
+                    held: with.held.clone(),
+                    ..chat.clone()
+                };
+                purlis_core::start::runs_with(&as_started, &self.project)
+            });
+            let Ok(decided) = purlis_core::sandbox::decide_granted(
+                harness,
+                &self.project,
+                machine,
+                has,
+                None,
+                persona.as_deref(),
+                &with.grants,
+            ) else {
+                continue;
+            };
+            let now = match decided {
+                Some(Decided::Sandboxed(applied)) => Some(Settled::of(applied.confines())),
+                Some(Decided::Unsandboxed(_)) | None => None,
+            };
+            if now != started {
+                chats.push(OnOlder {
+                    session,
+                    change: Settled::key(now.as_ref()),
+                });
+            }
+        }
+        if chats.is_empty() {
+            return None;
+        }
+        chats.sort_unstable_by_key(|one| one.session);
+        Some(OlderSandbox { chats })
+    }
+
+    /// The chats owed a restart (#1342, #1428): what the window drives once each one's turn
+    /// has ended, read again whenever the window is drawn anew.
     pub fn owed_restarts(&self) -> Vec<u32> {
         let mut owed: Vec<u32> = lock(&self.owed).keys().copied().collect();
         owed.sort_unstable();
@@ -1101,8 +1406,15 @@ impl Chats {
         opt_out: Option<&purlis_core::sandbox::OptOut>,
     ) -> Result<u32, String> {
         // Before anything is resolved or run, as for a chat on a profile.
-        let (sandboxed, unsandboxed) =
-            self.sandbox_off_profile(chat, &self.grants_of(chat), opt_out)?;
+        let grants = self.grants_of(chat);
+        #[cfg(test)]
+        let decided = match &self.deciding {
+            Some(deciding) => deciding(chat, &grants, opt_out),
+            None => self.sandbox_off_profile(chat, &grants, opt_out),
+        };
+        #[cfg(not(test))]
+        let decided = self.sandbox_off_profile(chat, &grants, opt_out);
+        let (sandboxed, unsandboxed) = decided?;
         let mut launch = chat.launch();
         let sandbox = sandboxed.map(|(applied, program)| {
             launch.program = program;
@@ -1425,6 +1737,10 @@ impl Chats {
                 workspace,
                 confinement,
                 confines: sandbox.map(|applied| applied.confines().clone()),
+                started_with: StartedWith {
+                    held: chat.held.clone(),
+                    grants: self.grants_of(chat),
+                },
             },
         );
         self.write_it_down();
@@ -2085,17 +2401,7 @@ impl Chats {
     /// started**, so a refused start leaves it running and recorded as it was; while both are
     /// open, [`Self::record`] writes the newer. Ending the old one is the caller's next step
     /// (`Held::start_chat_fresh`), which takes it off the board too.
-    /// The tests' name for [`Self::start_again`] without the conversation; the app asks
-    /// through `Held::start_chat_fresh`.
-    #[cfg(test)]
     pub fn start_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
-        self.start_again(session, size, false)
-    }
-
-    /// [`Self::start_fresh`], or with `resuming` the same chat started again resuming its
-    /// conversation (**Restart now**, #1362): what is decided at a start — its sandbox, the
-    /// persona grants it holds — is decided again, and the conversation carries on.
-    pub fn start_again(&self, session: u32, size: Size, resuming: bool) -> Result<u32, String> {
         let was = lock(&self.open)
             .get(&session)
             .map(|one| one.chat.clone())
@@ -2105,15 +2411,12 @@ impl Chats {
                 run: None,
                 ..was.identity.clone()
             },
-            resume: if resuming { was.resume.clone() } else { None },
+            resume: None,
             pid: None,
             number: None,
             ..was
         };
-        // A restart that resumes begins its run as a relaunch does: `reopen` where the
-        // conversation came back.
-        let why = if resuming { Why::Relaunch } else { Why::Again };
-        let started = self.start_recorded(&again, size, why)?;
+        let started = self.start_recorded(&again, size, Why::Again)?;
         // **It keeps its place** (#1246): the window puts the new session in the old one's pane,
         // so the record puts it where the old one was in the strip's order. Unplaced, it would
         // go last, and the next launch would draw it at the end of the strip.
@@ -2247,7 +2550,7 @@ pub(crate) mod tests {
         assert!(chats.holds(&id(session), &host));
         assert!(!chats.holds(&id(other), &host));
         // A chat with no conversation yet is not restarted, and keeps what it is owed.
-        let refused = chats.restart_owed(session, size).unwrap_err();
+        let refused = chats.restart(session, size).unwrap_err();
         assert!(refused.contains("no conversation to resume"), "{refused}");
         assert_eq!(chats.owed_restarts(), [session]);
         assert_eq!(
@@ -2263,7 +2566,7 @@ pub(crate) mod tests {
         // One restart at a time: a second, from either way in, is refused while one runs, and
         // a grant made meanwhile queues rather than being lost.
         chats.claim(session).expect("claimed");
-        let twice = chats.restart_owed(session, size).unwrap_err();
+        let twice = chats.restart(session, size).unwrap_err();
         assert!(twice.contains("already starting"), "{twice}");
         let twice = chats.restart_without_sandbox(session, size).unwrap_err();
         assert!(twice.contains("already starting"), "{twice}");
@@ -3198,15 +3501,519 @@ pub(crate) mod tests {
     /// The sandbox the core compiles for a `harness` chat in `plane`, on a machine that has
     /// every backend program — so the answer does not depend on the machine the test runs on.
     fn a_sandbox_for(harness: Harness, plane: &std::path::Path) -> purlis_core::sandbox::Applied {
-        let machine = purlis_core::sandbox::Machine {
+        purlis_core::sandbox::for_start(harness, plane, &a_machine(), &|_| true)
+            .expect("compiles")
+            .expect("sandboxed")
+    }
+
+    /// A machine that has every backend program, whatever machine the test runs on.
+    fn a_machine() -> purlis_core::sandbox::Machine {
+        purlis_core::sandbox::Machine {
             env: purlis_core::secrets::Env::of(&[]),
             home: None,
             // Where every harness has a sandbox charter compiles.
             os: purlis_core::sandbox::Os::MacOs,
+        }
+    }
+
+    // ----- Restart chat, and the chats a sandbox change leaves behind (#1428) -----
+
+    /// Chats of the sandboxed project at `plane` on `host`, armed to carry a sandbox, whose
+    /// chats on no profile are decided as the core decides them, on [`a_machine`] and without
+    /// the check of the real program: a stand-in harness can then start sandboxed, and start
+    /// again, which is what these tests are about.
+    fn restartable_chats_of(plane: &std::path::Path, host: Pretend) -> Chats {
+        let root = plane.to_path_buf();
+        let mut chats = Chats::on_host(Box::new(|_| {}), Box::new(host), root.clone()).deciding_by(
+            Box::new(move |chat, grants, opt_out| {
+                use purlis_core::sandbox::Decided;
+                // A shell is the person's own, as in the start this stands in for.
+                let Some(harness) = chat.harness() else {
+                    return Ok((None, None));
+                };
+                let decided = purlis_core::sandbox::decide_granted(
+                    harness,
+                    &root,
+                    &a_machine(),
+                    &|_| true,
+                    opt_out,
+                    None,
+                    grants,
+                )
+                .map_err(|not| not.to_string())?;
+                Ok(match decided {
+                    Some(Decided::Sandboxed(applied)) => {
+                        (Some((applied, chat.program.clone())), None)
+                    }
+                    Some(Decided::Unsandboxed(lifted)) => (None, Some(lifted)),
+                    None => (None, None),
+                })
+            }),
+        );
+        chats.arming_with(crate::Shipped {
+            binary: Some(plane.join("charter")),
+            plugin: Some(plane.join("plugin")),
+            shims: None,
+            git_hooks: None,
+        });
+        chats
+    }
+
+    /// A Claude Code chat on no profile, with a conversation to resume, standing in `plane`.
+    fn a_resumable_chat_in(plane: &std::path::Path) -> Chat {
+        a_chat_in_with(plane, Some(ID))
+    }
+
+    fn a_chat_in_with(plane: &std::path::Path, resume: Option<&str>) -> Chat {
+        Chat {
+            cwd: Some(plane.to_path_buf()),
+            ..chat("/nowhere/claude", "restarted", resume)
+        }
+    }
+
+    /// The project at `plane` sets its sandbox to `settings`, the lines under `[sandbox]`.
+    fn the_sandbox_becomes(plane: &std::path::Path, settings: &str) {
+        std::fs::write(
+            plane.join(purlis_core::plane::MANIFEST),
+            format!("[sandbox]\nmode = \"on\"\n{settings}"),
+        )
+        .expect("charter.toml");
+    }
+
+    fn older(chats: &Chats) -> Option<OlderSandbox> {
+        chats.on_older_sandbox_on(&a_machine(), &|_| true)
+    }
+
+    fn reaches(confines: &purlis_core::sandbox::Confines, host: &str) -> bool {
+        confines.hosts.iter().any(|one| one.contains(host))
+    }
+
+    #[test]
+    fn a_restart_keeps_the_conversation_and_compiles_the_sandbox_the_project_has_now() {
+        let plane = a_sandboxed_plane();
+        let host = Pretend::default();
+        let chats = restartable_chats_of(plane.path(), host.clone());
+        let session = chats
+            .start(&a_resumable_chat_in(plane.path()), SIZE)
+            .expect("starts");
+        let id = chats.record().chats[0].identity.id.clone();
+        let before = chats.confines_of(session).expect("it started sandboxed");
+        assert!(!reaches(&before, "a.example"), "{before:?}");
+
+        the_sandbox_becomes(plane.path(), "hosts = [\"a.example\"]\n");
+        assert_eq!(
+            chats.confines_of(session),
+            Some(before.clone()),
+            "a running chat keeps the sandbox it started with"
+        );
+        // Nothing a chat sends restarts it: a restart is owed, or asked for by the person.
+        let unasked = chats.restart(session, SIZE).unwrap_err();
+        assert!(unasked.contains("owed no restart"), "{unasked}");
+
+        chats.ask_restart(session).expect("asked");
+        assert_eq!(chats.owed_restarts(), [session]);
+        let started = chats.restart(session, SIZE).expect("restarts");
+
+        let after = chats.confines_of(started).expect("sandboxed still");
+        assert!(reaches(&after, "a.example"), "{after:?}");
+        assert_eq!(
+            &after,
+            a_claude_sandbox(plane.path()).confines(),
+            "what a start compiles from the project's settings now"
+        );
+        assert_ne!(before, after);
+        let opening = host.openings().pop().expect("opened");
+        assert!(
+            opening
+                .args
+                .windows(2)
+                .any(|pair| pair[0] == "--resume" && pair[1] == ID),
+            "{:?}",
+            opening.args
+        );
+        chats.close(session).expect("the old run ends");
+        let record = chats.record();
+        assert_eq!(record.chats.len(), 1);
+        assert_eq!(record.chats[0].identity.id, id, "the same chat");
+        assert!(chats.owed_restarts().is_empty());
+        assert!(
+            chats.start_notes(started).is_empty(),
+            "a sandboxed chat's restart has nothing to say"
+        );
+    }
+
+    #[test]
+    fn a_changed_sandbox_leaves_running_chats_on_the_older_one_and_a_rewrite_alone_does_not() {
+        let plane = a_sandboxed_plane();
+        let chats = restartable_chats_of(plane.path(), Pretend::default());
+        // Nothing runs: nothing is left behind, whatever changes.
+        the_sandbox_becomes(plane.path(), "hosts = [\"early.example\"]\n");
+        assert_eq!(older(&chats), None);
+        the_sandbox_becomes(plane.path(), "");
+        let session = chats
+            .start(&a_resumable_chat_in(plane.path()), SIZE)
+            .expect("starts");
+        // A shell is the person's own, and never counted.
+        let shell = chats
+            .start(&a_chat_in(plane.path(), "/bin/sh"), SIZE)
+            .expect("starts");
+        assert_eq!(older(&chats), None, "it started on what is there");
+
+        // The file is written, and compiles to the same sandbox.
+        the_sandbox_becomes(plane.path(), "# a note\n");
+        assert_eq!(older(&chats), None);
+
+        the_sandbox_becomes(plane.path(), "hosts = [\"a.example\"]\n");
+        let first = older(&chats).expect("the chat is on the older sandbox");
+        assert_eq!(first.sessions(), [session]);
+        assert_eq!(older(&chats), Some(first.clone()), "one change, told once");
+
+        the_sandbox_becomes(plane.path(), "hosts = [\"b.example\"]\n");
+        let second = older(&chats).expect("on the older sandbox still");
+        assert_eq!(second.sessions(), [session]);
+        assert_ne!(
+            second.chats[0].change, first.chats[0].change,
+            "another change"
+        );
+        // The same hosts in another order are the same sandbox, under the same key.
+        the_sandbox_becomes(plane.path(), "hosts = [\"b.example\", \"c.example\"]\n");
+        let one_way = older(&chats).expect("behind");
+        the_sandbox_becomes(plane.path(), "hosts = [\"c.example\", \"b.example\"]\n");
+        assert_eq!(older(&chats), Some(one_way));
+
+        chats.ask_restart(session).expect("asked");
+        let started = chats.restart(session, SIZE).expect("restarts");
+        chats.close(session).expect("the old run ends");
+        assert_eq!(older(&chats), None, "it restarted on what is there");
+        let _ = chats.close(started);
+        let _ = chats.close(shell);
+    }
+
+    #[test]
+    fn a_chat_that_ran_without_the_sandbox_restarts_in_it_and_its_tab_says_so() {
+        // ADR 0067 §7: a person's opt-out is for one start, and a restart is another.
+        let plane = a_sandboxed_plane();
+        let mut chats = restartable_chats_of(plane.path(), Pretend::default());
+        let said = saying(&mut chats);
+        let opt_out = purlis_core::sandbox::OptOut { reason: None };
+        let session = chats
+            .start_as_opted(
+                &a_resumable_chat_in(plane.path()),
+                SIZE,
+                false,
+                Why::New,
+                Some(&opt_out),
+            )
+            .expect("starts");
+        assert!(chats.unsandboxed(session));
+        assert_eq!(chats.confines_of(session), None);
+        // By the person's choice, so no setting leaves it "on an older sandbox".
+        the_sandbox_becomes(plane.path(), "hosts = [\"a.example\"]\n");
+        assert_eq!(older(&chats), None);
+
+        chats.ask_restart(session).expect("asked");
+        let started = chats.restart(session, SIZE).expect("restarts");
+
+        assert!(!chats.unsandboxed(started), "the opt-out was not inherited");
+        assert!(chats.confines_of(started).is_some());
+        assert_eq!(chats.start_notes(started), [SANDBOXED_AGAIN]);
+        assert!(
+            lock(&said)
+                .iter()
+                .any(|line| line.starts_with("trust.sandbox.on")),
+            "{:?}",
+            lock(&said)
+        );
+    }
+
+    #[test]
+    fn a_restart_the_person_asked_for_that_is_refused_is_not_owed_again() {
+        let plane = a_sandboxed_plane();
+        let chats = restartable_chats_of(plane.path(), Pretend::default());
+        let session = chats
+            .start(&a_chat_in_with(plane.path(), None), SIZE)
+            .expect("starts");
+        // The stand-in never reports a conversation, and none was recorded for it.
+        lock(&chats.open)
+            .get_mut(&session)
+            .expect("open")
+            .chat
+            .resume = None;
+
+        chats.ask_restart(session).expect("asked");
+        let refused = chats.restart(session, SIZE).unwrap_err();
+
+        // Why, and a way out that is true of a harness that never records a conversation
+        // too: nothing here says "yet", and nothing was allowed, so nothing "reaches" it.
+        assert_eq!(
+            refused,
+            format!(
+                "purlis did not restart chat {session}: it has no conversation to resume. If it \
+                 has only just started, send it a message and restart it again. Start fresh on \
+                 its tab's menu starts it again without a conversation."
+            )
+        );
+        assert!(
+            chats.owed_restarts().is_empty(),
+            "the person was told why, and asks again"
+        );
+        assert!(lock(&chats.restarting).is_empty());
+        let closed = chats.ask_restart(session + 100).unwrap_err();
+        assert!(closed.contains("is not open"), "{closed}");
+    }
+
+    /// `restarted`, on a thread of its own: its answer, or a panic if it has not answered in
+    /// ten seconds. It once waited for good on a lock its own thread held (S1).
+    fn restarted_in_time(
+        chats: &std::sync::Arc<Chats>,
+        session: u32,
+        started: u32,
+    ) -> Result<u32, String> {
+        let (answer, answered) = std::sync::mpsc::channel();
+        let on_a_thread = std::sync::Arc::clone(chats);
+        std::thread::spawn(move || {
+            let _ = answer.send(on_a_thread.restarted(session, started, true));
+        });
+        answered
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a restart with something queued behind it answers")
+    }
+
+    /// A chat mid-restart, as [`Chats::restart`] leaves it between starting its new run and
+    /// [`Chats::restarted`]: claimed, what it was owed taken, its new run open.
+    fn mid_restart(plane: &std::path::Path) -> (std::sync::Arc<Chats>, u32, u32) {
+        let chats = std::sync::Arc::new(restartable_chats_of(plane, Pretend::default()));
+        let session = chats
+            .start(&a_resumable_chat_in(plane), SIZE)
+            .expect("starts");
+        chats.ask_restart(session).expect("asked");
+        chats.claim(session).expect("claimed");
+        assert_eq!(lock(&chats.owed).remove(&session), Some(Vec::new()));
+        let again = chats.again_on_its_conversation(session).expect("open");
+        let started = chats.start(&again, SIZE).expect("its new run starts");
+        (chats, session, started)
+    }
+
+    #[test]
+    fn a_grant_queued_while_a_chat_restarts_is_carried_to_its_new_run() {
+        // D-1342-13 said so and it hung instead: on main too, where Allow on a block's Notice
+        // while the chat restarted locked every chat's close, grant and owed list for good.
+        let plane = a_sandboxed_plane();
+        let (chats, session, started) = mid_restart(plane.path());
+        let host = purlis_core::sandbox::grant::What::Host(
+            purlis_core::sandbox::hosts::Host::parse("a.example").unwrap(),
+        );
+        chats
+            .grant(session, host, 1, "allowed meanwhile".to_owned())
+            .expect("granted");
+
+        assert_eq!(restarted_in_time(&chats, session, started), Ok(started));
+
+        assert_eq!(chats.owed_restarts(), [started], "owed to the new run");
+        assert_eq!(lock(&chats.owed)[&started], ["allowed meanwhile"]);
+        assert!(lock(&chats.restarting).is_empty());
+        // And nothing is left locked behind it.
+        chats.close(session).expect("the old run ends");
+        chats.close(started).expect("closed");
+    }
+
+    #[test]
+    fn an_ask_while_a_chat_restarts_asks_for_nothing_more_and_is_not_carried() {
+        let plane = a_sandboxed_plane();
+        let (chats, session, started) = mid_restart(plane.path());
+
+        // The restart under way is the one asked for.
+        chats.ask_restart(session).expect("answered");
+        assert!(chats.owed_restarts().is_empty(), "nothing queued behind it");
+        // And an entry with nothing to tell, however it got there, is not carried over: the
+        // new run would be restarted a second time, which nobody asked for.
+        lock(&chats.owed).insert(session, Vec::new());
+
+        assert_eq!(restarted_in_time(&chats, session, started), Ok(started));
+
+        assert!(chats.owed_restarts().is_empty());
+        chats.close(session).expect("the old run ends");
+        // The new run can be asked again once it is the chat.
+        chats.ask_restart(started).expect("asked");
+        assert_eq!(chats.owed_restarts(), [started]);
+        chats.close(started).expect("closed");
+    }
+
+    #[test]
+    fn a_chat_owed_a_restart_or_restarting_is_not_among_the_chats_a_setting_left_behind() {
+        let plane = a_sandboxed_plane();
+        let chats = restartable_chats_of(plane.path(), Pretend::default());
+        let session = chats
+            .start(&a_resumable_chat_in(plane.path()), SIZE)
+            .expect("starts");
+
+        // A grant for this chat alone is not the project's sandbox changing, owed or not.
+        let host = purlis_core::sandbox::grant::What::Host(
+            purlis_core::sandbox::hosts::Host::parse("mine.example").unwrap(),
+        );
+        chats
+            .grant(session, host, 1, "allowed".to_owned())
+            .expect("granted");
+        assert_eq!(chats.owed_restarts(), [session]);
+        assert_eq!(older(&chats), None);
+        lock(&chats.owed).clear();
+        assert_eq!(older(&chats), None, "compiled with what it started with");
+
+        the_sandbox_becomes(plane.path(), "hosts = [\"a.example\"]\n");
+        assert_eq!(older(&chats).expect("behind").sessions(), [session]);
+        // Owed a restart already: it gets the sandbox the project has now without being asked.
+        chats.ask_restart(session).expect("asked");
+        assert_eq!(older(&chats), None);
+        lock(&chats.owed).clear();
+        // Restarting: the same.
+        chats.claim(session).expect("claimed");
+        assert_eq!(older(&chats), None);
+        chats.unclaim(session);
+        assert_eq!(older(&chats).expect("behind again").sessions(), [session]);
+        chats.close(session).expect("closed");
+    }
+
+    #[test]
+    fn only_what_settings_decide_leaves_a_chat_behind_and_each_chat_has_its_own_key() {
+        // D-1428-10.
+        let plane = a_sandboxed_plane();
+        let chats = restartable_chats_of(plane.path(), Pretend::default());
+        let session = chats
+            .start(&a_resumable_chat_in(plane.path()), SIZE)
+            .expect("starts");
+        let other = chats
+            .start(&a_resumable_chat_in(plane.path()), SIZE)
+            .expect("starts");
+        let recorded = |session: u32, change: &dyn Fn(&mut purlis_core::sandbox::Confines)| {
+            change(
+                lock(&chats.open)
+                    .get_mut(&session)
+                    .expect("open")
+                    .confines
+                    .as_mut()
+                    .expect("sandboxed"),
+            );
         };
-        purlis_core::sandbox::for_start(harness, plane, &machine, &|_| true)
-            .expect("compiles")
-            .expect("sandboxed")
+
+        // What a start finds by walking the project's tree is denied as it is found: a start
+        // now that denies other paths (a clone gained a hooks folder, say) is no change.
+        recorded(session, &|confines| confines.denied.clear());
+        assert_eq!(older(&chats), None);
+
+        // A folder every chat could write when this one started, revoked since in Settings:
+        // the chat goes on writing there until it restarts.
+        recorded(session, &|confines| {
+            confines.writable.push("/opt/tools/cache".into());
+        });
+        let behind = older(&chats).expect("it keeps the folder until it restarts");
+        assert_eq!(behind.sessions(), [session]);
+        let key = behind.chats[0].change.clone();
+        assert_eq!(key.len(), 16, "{key}");
+        assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()), "{key}");
+        // The same on every build of purlis: SHA-256 over one canonical text, not a `Debug`
+        // text under the standard hasher. A start with no sandbox has a key of its own.
+        assert_eq!(Settled::key(None), "fa38af3a7ad96915");
+
+        // Another chat falls behind for a reason of its own, and each keeps its own key: one
+        // restarting does not change what stands for the other.
+        recorded(other, &|confines| {
+            confines.hosts.push("gone.example".to_owned())
+        });
+        let both = older(&chats).expect("both behind");
+        assert_eq!(both.sessions(), [session, other]);
+        assert_eq!(both.chats[0].change, key);
+        chats.close(other).expect("closed");
+        assert_eq!(older(&chats).expect("one behind").chats[0].change, key);
+        chats.close(session).expect("closed");
+    }
+
+    #[test]
+    fn a_chat_on_a_profile_is_compared_under_the_persona_grants_it_started_with() {
+        // S10: every chat from the picker is on a profile, and takes a persona's grants.
+        let plane = a_sandboxed_plane();
+        let chats = restartable_chats_of(plane.path(), Pretend::default());
+        let devops_reaches = |hosts: &str| {
+            the_sandbox_becomes(
+                plane.path(),
+                &format!("\n[sandbox.personas.devops]\nhosts = [{hosts}]\n"),
+            );
+        };
+        devops_reaches("\"ops.example\"");
+        let compiled_as = |persona: Option<&str>| {
+            let decided = purlis_core::sandbox::decide_granted(
+                Harness::ClaudeCode,
+                plane.path(),
+                &a_machine(),
+                &|_| true,
+                None,
+                persona,
+                &purlis_core::sandbox::grant::Grants::default(),
+            )
+            .expect("compiles");
+            match decided {
+                Some(purlis_core::sandbox::Decided::Sandboxed(applied)) => {
+                    applied.confines().clone()
+                }
+                other => panic!("not sandboxed: {other:?}"),
+            }
+        };
+        // A chat on a profile, as its start left it: no stand-in can go through the real
+        // start's program check, so it is recorded here as that start records it.
+        let open_as = |session: u32, held: Option<purlis_core::reopen::HeldGrants>| {
+            let chat = Chat {
+                profile: Some("claude".to_owned()),
+                persona: Some("devops".to_owned()),
+                held: held.clone(),
+                ..a_resumable_chat_in(plane.path())
+            };
+            let persona = purlis_core::start::runs_with(&chat, plane.path());
+            lock(&chats.open).insert(
+                session,
+                Running {
+                    chat,
+                    how: Reopened::Resumed(SessionId::new(ID).expect("an id")),
+                    harness: Some(Harness::ClaudeCode),
+                    workspace: None,
+                    confinement: None,
+                    confines: Some(compiled_as(persona.as_deref())),
+                    started_with: StartedWith {
+                        held,
+                        grants: purlis_core::sandbox::grant::Grants::default(),
+                    },
+                },
+            );
+        };
+        open_as(7, None);
+        assert!(reaches(
+            &chats.confines_of(7).expect("sandboxed"),
+            "ops.example"
+        ));
+        assert_eq!(
+            older(&chats),
+            None,
+            "its persona's hosts are compiled in now, as its start compiled them"
+        );
+
+        devops_reaches("\"ops.example\", \"more.example\"");
+        assert_eq!(older(&chats).expect("behind").sessions(), [7]);
+        devops_reaches("\"ops.example\"");
+        assert_eq!(older(&chats), None);
+
+        // A handed-off chat holds the asking chat's persona grants (here, no persona's)
+        // until the person allows its own on its tab. That Allow has its own Notice and its
+        // own restart, and is not the project's sandbox changing.
+        open_as(8, Some(purlis_core::reopen::HeldGrants { persona: None }));
+        assert!(!reaches(
+            &chats.confines_of(8).expect("sandboxed"),
+            "ops.example"
+        ));
+        assert_eq!(older(&chats), None);
+        assert!(chats.allow_own_grants(8));
+        assert_eq!(older(&chats), None);
+        // A setting that changes what it was started holding still leaves it behind.
+        the_sandbox_becomes(plane.path(), "hosts = [\"a.example\"]\n");
+        assert_eq!(older(&chats).expect("both behind").sessions(), [7, 8]);
+        lock(&chats.open).clear();
     }
 
     fn a_claude_sandbox(plane: &std::path::Path) -> purlis_core::sandbox::Applied {

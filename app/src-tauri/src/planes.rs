@@ -604,54 +604,40 @@ impl Held {
     }
 
     /// **Start fresh** (NO-3): chat `session` started again on the plane as it is now
-    /// ([`crate::chats::Chats::start_again`]), and then the old one ended here, as a close ends
+    /// ([`crate::chats::Chats::start_fresh`]), and then the old one ended here, as a close ends
     /// it — off the board, its program gone — so nothing the window does or fails to do can leave
     /// it running. A refused start ends nothing. The new one takes the old one's place in front.
     pub fn start_chat_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
-        self.start_chat_again(session, size, false)
-    }
-
-    /// **Restart now** (#1362): [`Self::start_chat_fresh`], resuming the chat's conversation,
-    /// so a change made for it at its start (persona grants the person allowed) applies.
-    pub fn restart_chat(&self, session: u32, size: Size) -> Result<u32, String> {
-        self.start_chat_again(session, size, true)
-    }
-
-    fn start_chat_again(&self, session: u32, size: Size, resuming: bool) -> Result<u32, String> {
-        let started = self.chats.start_again(session, size, resuming)?;
-        let in_front = self.chats.front() == Some(session);
+        let started = self.chats.start_fresh(session, size)?;
         // The new one has started, so it is the answer whatever the old one's end says: a
         // program that had already ended answers its close with an error, and the new chat
         // must still reach the window.
-        if let Err(why) = self.close_chat(session) {
-            tracing::warn!("purlis: chat {session}, started fresh, did not end cleanly ({why})");
-        }
-        if in_front {
-            self.chats.bring_to_front(Some(started));
-        }
+        self.in_its_place(session, started);
         Ok(started)
     }
 
-    /// **Restarts chat `session` on its conversation to take a sandbox grant** (#1342, spike
-    /// #1347): the window asks once the chat's turn has ended. The new session takes the old
-    /// one's place, as [`Self::start_chat_fresh`]'s does, and the old one is ended once it has
+    /// **Restarts chat `session` on its conversation**: the one restart
+    /// ([`crate::chats::Chats::restart`]), for a sandbox grant (#1342, spike #1347), for the
+    /// persona grants a person allowed (#1362), and for the person's own Restart chat (#1428).
+    /// The window asks once the chat's turn has ended. The new session takes the old one's
+    /// place, as [`Self::start_chat_fresh`]'s does, and the old one is ended once it has
     /// started; a refused start leaves the old one running.
     ///
     /// Not while the chat waits on a permission prompt: its turn has not ended, and a restart
     /// would answer the prompt for the person. `None` then, and the window asks again at the
     /// chat's next move.
-    pub fn restart_chat_owed(&self, session: u32, size: Size) -> Result<Option<u32>, String> {
+    pub fn restart_chat(&self, session: u32, size: Size) -> Result<Option<u32>, String> {
         if self.asks().asks.iter().any(|ask| ask.session == session) {
             return Ok(None);
         }
-        let started = self.chats.restart_owed(session, size)?;
+        let started = self.chats.restart(session, size)?;
         self.in_its_place(session, started);
         Ok(Some(started))
     }
 
     /// **Starts chat `session` again without the sandbox** (#1342): the person's own choice on a
     /// block's Notice that purlis grants nothing for, for this chat's next run only, and audited
-    /// as any opt-out is. In the old one's place, as [`Self::restart_chat_owed`]'s is.
+    /// as any opt-out is. In the old one's place, as [`Self::restart_chat`]'s is.
     pub fn restart_chat_without_sandbox(&self, session: u32, size: Size) -> Result<u32, String> {
         let started = self.chats.restart_without_sandbox(session, size)?;
         self.in_its_place(session, started);

@@ -31,7 +31,15 @@ function core(held: GrantsHeld | null) {
 describe("the persona grants Notice", () => {
   it("says which chat opened it and whose hosts it cannot reach yet", async () => {
     core({ from: "steward 3", persona: "devops", locked: null });
-    render(<PersonaGrantsNotice plane={PLANE} session={7} running={false} onRestart={() => {}} />);
+    render(
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={false}
+        owed={false}
+        onRestart={() => {}}
+      />,
+    );
 
     const notice = await screen.findByRole("status", { name: "Persona's hosts held" });
     expect(notice).toHaveTextContent(
@@ -43,7 +51,15 @@ describe("the persona grants Notice", () => {
     const locked =
       "Policy forbids a persona's own hosts. Locked by policy, set by Platform team in /etc/purlis/policy.json.";
     const asked = core({ from: "steward 3", persona: "devops", locked });
-    render(<PersonaGrantsNotice plane={PLANE} session={7} running={false} onRestart={() => {}} />);
+    render(
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={false}
+        owed={false}
+        onRestart={() => {}}
+      />,
+    );
 
     const notice = await screen.findByRole("status", { name: "Persona's hosts held" });
     expect(notice).toHaveTextContent(`This chat can't reach devops's hosts. ${locked}`);
@@ -54,7 +70,15 @@ describe("the persona grants Notice", () => {
 
   it("says nothing for a chat that holds its own", async () => {
     const asked = core(null);
-    render(<PersonaGrantsNotice plane={PLANE} session={7} running={false} onRestart={() => {}} />);
+    render(
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={false}
+        owed={false}
+        onRestart={() => {}}
+      />,
+    );
 
     await waitFor(() => expect(asked.map((one) => one.cmd)).toContain("persona_grants_held"));
     expect(screen.queryByRole("status", { name: "Persona's hosts held" })).not.toBeInTheDocument();
@@ -62,38 +86,87 @@ describe("the persona grants Notice", () => {
 
   it("says when a Resume, not a handoff, started it", async () => {
     core({ from: null, persona: "devops", locked: null });
-    render(<PersonaGrantsNotice plane={PLANE} session={7} running={false} onRestart={() => {}} />);
+    render(
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={false}
+        owed={false}
+        onRestart={() => {}}
+      />,
+    );
 
     expect(await screen.findByRole("status", { name: "Persona's hosts held" })).toHaveTextContent(
       "This chat was resumed from a session record as devops.",
     );
   });
 
-  it("restarts it on Restart now only once its turn has ended", async () => {
+  it("asks for its restart on Restart now, and says a chat mid-turn waits for the turn", async () => {
+    // The wait is the window's: one restart, whoever asked for it (`RestartChat.window.test`).
     core({ from: "steward 3", persona: "devops", locked: null });
     const onRestart = vi.fn();
-    const { rerender } = render(
-      <PersonaGrantsNotice plane={PLANE} session={7} running={true} onRestart={onRestart} />,
+    const notice = (owed: boolean) => (
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={true}
+        owed={owed}
+        onRestart={onRestart}
+      />
     );
+    const { rerender } = render(notice(false));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Allow" }));
+    const allowed = screen.getByRole("status", { name: "Persona's hosts allowed" });
+    expect(allowed).not.toHaveTextContent("when this turn ends");
+    await user.click(await screen.findByRole("button", { name: "Restart now" }));
+    expect(onRestart).toHaveBeenCalledOnce();
+
+    // The window owes it the restart from here, and the Notice says when it happens.
+    rerender(notice(true));
+    expect(allowed).toHaveTextContent("when this turn ends");
+  });
+
+  it("asks again on Restart now after a restart that was refused", async () => {
+    // S8: the Notice once remembered that it had asked, and its button went dead for good.
+    core({ from: "steward 3", persona: "devops", locked: null });
+    const onRestart = vi.fn();
+    const notice = (owed: boolean) => (
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={true}
+        owed={owed}
+        onRestart={onRestart}
+      />
+    );
+    const { rerender } = render(notice(false));
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Allow" }));
     await user.click(await screen.findByRole("button", { name: "Restart now" }));
+    rerender(notice(true));
 
-    expect(onRestart).not.toHaveBeenCalled();
-    expect(screen.getByRole("status", { name: "Persona's hosts allowed" })).toHaveTextContent(
+    // Refused: the window owes it nothing any more, and says why on the chat's pane.
+    rerender(notice(false));
+    expect(screen.getByRole("status", { name: "Persona's hosts allowed" })).not.toHaveTextContent(
       "when this turn ends",
     );
+    await user.click(screen.getByRole("button", { name: "Restart now" }));
 
-    rerender(
-      <PersonaGrantsNotice plane={PLANE} session={7} running={false} onRestart={onRestart} />,
-    );
-
-    await waitFor(() => expect(onRestart).toHaveBeenCalledOnce());
+    expect(onRestart).toHaveBeenCalledTimes(2);
   });
 
   it("allows them on Allow, from the chat's next start", async () => {
     const asked = core({ from: "steward 3", persona: "devops", locked: null });
-    render(<PersonaGrantsNotice plane={PLANE} session={7} running={false} onRestart={() => {}} />);
+    render(
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={false}
+        owed={false}
+        onRestart={() => {}}
+      />,
+    );
 
     await userEvent.setup().click(await screen.findByRole("button", { name: "Allow" }));
 
@@ -108,7 +181,15 @@ describe("the persona grants Notice", () => {
 
   it("keeps holding on Keep, and allows nothing", async () => {
     const asked = core({ from: "steward 3", persona: "devops", locked: null });
-    render(<PersonaGrantsNotice plane={PLANE} session={7} running={false} onRestart={() => {}} />);
+    render(
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={false}
+        owed={false}
+        onRestart={() => {}}
+      />,
+    );
 
     await userEvent.setup().click(await screen.findByRole("button", { name: "Keep" }));
 

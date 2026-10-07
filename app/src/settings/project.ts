@@ -47,6 +47,7 @@ import type { Collection, FileSetting, SettingsFileId, SettingsGroup } from "./g
 import { settled } from "../PlaneEdits";
 import { GRANTED, grantedGroup } from "./GrantedList";
 import { onAMac } from "../tabKeys";
+import { sandboxCommandReturned } from "../sandboxAsked";
 import {
   SANDBOX_MODE,
   lockedRow,
@@ -786,6 +787,9 @@ export function useProjectLevel(plane: PlaneId): ProjectLevel {
     if (asked === undefined)
       return Promise.resolve(refused([`A ${home.noun} is not changed that way here.`]));
     return asked.then((said): EntryWrote<ProjectFiles> => {
+      // A host confirmed as yours is kept in the project's state folder, which no watcher
+      // reports: the Notice for chats left on an older sandbox asks again (#1428).
+      if (hosts) sandboxCommandReturned();
       if (said.status === "error") return refused([said.error]);
       const answer = said.data;
       if (answer.kind === "refused") {

@@ -228,6 +228,8 @@ import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
 import { opensAShell } from "./shellKey";
 import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
+import { SandboxChangedNotice, useOlderSandbox } from "./SandboxChanged";
+import { useSandboxCommands } from "./sandboxAsked";
 import { SandboxOffer } from "./SandboxOffer";
 import { ProjectHostsNotice } from "./ProjectHostsNotice";
 import type {
@@ -3395,10 +3397,10 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
-   * **A chat restarted to take a sandbox grant** (#1342): the same chat on its conversation, in a
-   * new session, which takes the old one's place as Start fresh's does.
+   * **A chat restarted** (#1342, #1428): the same chat on its conversation, in a new session,
+   * which takes the old one's place as Start fresh's does.
    */
-  const restartedForGrant = useCallback(
+  const chatRestarted = useCallback(
     (was: number, chat: OpenChat) => {
       setReopened((all) => all.filter((one) => one.session !== was));
       setPinnedChats((all) => all.filter((one) => one !== was));
@@ -3409,15 +3411,23 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
-   * **The chats owed a restart to take a sandbox grant** (#1342), and the driver that restarts
-   * each once its turn has ended: here and not in the Notice, so dismissing the Notice or
-   * redrawing the pane loses none. The core holds the same list (`owed_restarts`), which is read
-   * again when the view is drawn anew.
+   * **The chats owed a restart** (#1342, #1428) — to take a sandbox grant, or because the person
+   * asked with Restart chat — and the driver that restarts each once its turn has ended: here
+   * and not in a Notice, so dismissing the Notice or redrawing the pane loses none. The core
+   * holds the same list (`owed_restarts`), which is read again when the view is drawn anew.
+   *
+   * **One restart, whoever asked** (`restart_chat`): a block's Allow, Restart now on a Notice,
+   * a tab's Restart chat and the Notice after a sandbox setting changed all come through here.
    */
   const [owedRestarts, setOwedRestarts] = useState<readonly number[]>([]);
-  /** Why a restart for a grant did not happen, by session, until it is retried or put away. */
+  /** Why a restart did not happen, by session, until it is retried or put away. */
   const [restartTrouble, setRestartTrouble] = useState<Readonly<Record<number, string>>>({});
+  /** Why a restart has not happened yet, in the core's sentence, by session: the chat waits on
+   *  a permission prompt, and restarts once that is answered. */
+  const [restartNotYet, setRestartNotYet] = useState<Readonly<Record<number, string>>>({});
   const restartingNow = useRef(new Set<number>());
+  /** The chats a restart is under way for, which each one's pane says while it is. */
+  const [restartsRunning, setRestartsRunning] = useState<readonly number[]>([]);
   useEffect(() => {
     let gone = false;
     void commands
@@ -3437,30 +3447,46 @@ export const PlaneView = memo(function PlaneView({
       setOwedRestarts((owed) => (owed.includes(session) ? owed : [...owed, session])),
     [],
   );
-  /** Restarts chat `session` for what it was granted, now: the driver's step and Restart now. */
-  const restartForGrant = useCallback(
+  /** Restarts chat `session`, which is owed it, now: the driver's step. */
+  const restartOwed = useCallback(
     (session: number) => {
       if (restartingNow.current.has(session)) return;
       restartingNow.current.add(session);
+      setRestartsRunning((running) => [...running, session]);
       const failed = (why: string) => {
         setOwedRestarts((owed) => owed.filter((one) => one !== session));
+        setRestartNotYet((was) => withoutKey(was, session));
         setRestartTrouble((was) => ({ ...was, [session]: why }));
       };
       void commands
-        .restartChatForGrant(plane, session, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .restartChat(plane, session, STARTING_SIZE.columns, STARTING_SIZE.rows)
         .then((done) => {
           if (done.status === "error") failed(done.error);
           else if (done.data.chat !== null) {
+            const chat = done.data.chat;
             setOwedRestarts((owed) => owed.filter((one) => one !== session));
             setRestartTrouble((was) => withoutKey(was, session));
-            restartedForGrant(session, done.data.chat);
+            setRestartNotYet((was) => withoutKey(was, session));
+            chatRestarted(session, chat);
+            // What the new run's start found to say: that a chat which ran without the
+            // sandbox runs in it again. `?? []`, as a start's notices are read.
+            const notes = done.data.notices ?? [];
+            if (notes.length > 0)
+              setStartNotes((was) => ({ ...was, [chat.session]: { notes, agentsMd: [] } }));
+          } else {
+            // Not yet (a permission prompt is open): still owed, asked again at its next move.
+            // Said on its pane in the core's sentence, so a press is never answered by nothing.
+            const why = done.data.not_yet ?? NOT_YET;
+            setRestartNotYet((was) => (was[session] === why ? was : { ...was, [session]: why }));
           }
-          // Not yet (a permission prompt is open): still owed, asked again at its next move.
         })
         .catch((err: unknown) => failed(`purlis could not restart the chat: ${String(err)}`))
-        .finally(() => restartingNow.current.delete(session));
+        .finally(() => {
+          restartingNow.current.delete(session);
+          setRestartsRunning((running) => running.filter((one) => one !== session));
+        });
     },
-    [plane, restartedForGrant],
+    [plane, chatRestarted],
   );
   // **Only once the turn has ended** (#1342): the chat is waiting for you, or its program is
   // done. Mid-turn it would lose what it was doing; a harness that reports no state is never
@@ -3471,28 +3497,96 @@ export const PlaneView = memo(function PlaneView({
       const states = chats.store.statesFor(chats.plane);
       for (const session of owedRestarts) {
         const state = stateOf(states, session);
-        if (state === "waiting" || state === "done" || state === "failed") restartForGrant(session);
+        if (state === "waiting" || state === "done" || state === "failed") restartOwed(session);
       }
     };
     drive();
     return chats.store.subscribe(drive);
-  }, [owedRestarts, chats, restartForGrant]);
-  /** What each chat's pane says of a restart for a grant: owed by hand, or why it failed. */
-  const grantRestarts = useMemo(() => {
+  }, [owedRestarts, chats, restartOwed]);
+  /**
+   * What each chat's pane says of its restart ({@link RestartSaid}): under way, not yet, owed by
+   * hand, or why it failed.
+   */
+  const restartsSaid = useMemo(() => {
     const states = chats.store.statesFor(chats.plane);
-    const out: Record<number, GrantRestartSaid> = {};
+    const out: Record<number, RestartSaid> = {};
     for (const session of owedRestarts)
-      if (stateOf(states, session) === "unknown") out[session] = { byHand: true };
+      out[session] = { owed: true, byHand: stateOf(states, session) === "unknown" };
+    for (const session of restartsRunning) out[session] = { ...out[session], running: true };
+    for (const [session, notYet] of Object.entries(restartNotYet))
+      if (owedRestarts.includes(Number(session)))
+        out[Number(session)] = { ...out[Number(session)], notYet };
     for (const [session, trouble] of Object.entries(restartTrouble))
       out[Number(session)] = { trouble };
     return out;
-  }, [owedRestarts, restartTrouble, chats]);
-  const answerGrantRestart = useCallback(
+  }, [owedRestarts, restartsRunning, restartNotYet, restartTrouble, chats]);
+  /**
+   * **The person asks for chat `session` to restart** (#1428, and #1362's Restart now): the core
+   * owes it the restart (`ask_chat_restart`), and it happens when the chat's turn has ended.
+   * Mid-turn it waits, as a restart for a grant does. A chat whose harness reports no state
+   * restarts now: the person pressed for it, so there is nobody else to wait for.
+   */
+  const askRestart = useCallback(
+    async (session: number) => {
+      const said = await commands
+        .askChatRestart(plane, session)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") {
+        setRestartTrouble((was) => ({ ...was, [session]: said.error }));
+        return;
+      }
+      setRestartTrouble((was) => withoutKey(was, session));
+      oweRestart(session);
+      if (stateOf(chats.store.statesFor(chats.plane), session) !== "running") restartOwed(session);
+    },
+    [chats, oweRestart, plane, restartOwed],
+  );
+  const answerRestart = useCallback(
     (session: number, act: "now" | "dismiss") => {
       setRestartTrouble((was) => withoutKey(was, session));
-      if (act === "now") restartForGrant(session);
+      setRestartNotYet((was) => withoutKey(was, session));
+      // Asked again, so a restart the core no longer owes is owed once more.
+      if (act === "now") void askRestart(session);
     },
-    [restartForGrant],
+    [askRestart],
+  );
+  /** Restart chat, from a tab's menu or the palette. */
+  const restartTab = useCallback(
+    (tab: number) => {
+      const session = chatOf(now.current, tab);
+      if (session !== undefined) void askRestart(session);
+    },
+    [askRestart],
+  );
+  /** Whether a chat has a Restart chat row: not a shell, which has no conversation. */
+  const restartable = useCallback((session: number) => !shells.has(session), [shells]);
+  /** The chats on the strip, as one word: what is open, for a read that follows it. */
+  const chatsOpen = useMemo(
+    () =>
+      tabs.order
+        .map((tab) => chatOf(tabs, tab))
+        .filter((chat) => chat !== undefined)
+        .join(","),
+    [tabs],
+  );
+  /** Moves when one of the window's own sandbox commands returns: what those write is in the
+   *  project's state folder, which the watcher of its root does not report (D-1428-10). */
+  const sandboxCommands = useSandboxCommands();
+  /**
+   * The chats still running under an older sandbox than the project's settings decide now
+   * (#1428), asked again when those settings change on disk, when the window changes them
+   * itself, when its chats change, and when a chat comes to be owed a restart or stops being
+   * (the core leaves out a chat that is owed one).
+   */
+  const olderSandbox = useOlderSandbox(
+    plane,
+    `${settingsChanges}:${sandboxCommands}:${chatsOpen}:${owedRestarts.join(",")}`,
+  );
+  const restartThem = useCallback(
+    (sessions: readonly number[]) => {
+      for (const session of sessions) void askRestart(session);
+    },
+    [askRestart],
   );
 
   /** The waiting chats a Retry now is under way for, by id, so a second press starts nothing. */
@@ -3676,27 +3770,6 @@ export const PlaneView = memo(function PlaneView({
     change((tabs) => replaceSession(tabs, asked.session, chat.session));
   }, [change, freshening, noteStarted, plane]);
 
-  /**
-   * **Restart now** (#1362): the core starts the same chat again resuming its conversation
-   * (`restart_chat`) and ends the old one once the new one runs; the new session takes the old
-   * one's pane, as a Start fresh's does. Refused, nothing changes.
-   */
-  const restartChat = useCallback(
-    async (session: number) => {
-      const said = await commands
-        .restartChat(plane, session, STARTING_SIZE.columns, STARTING_SIZE.rows)
-        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (said.status === "error") return;
-      const chat = said.data;
-      setReopened((was) => was.filter((one) => one.session !== session));
-      // The same chat, so a pin stays with it.
-      setPinnedChats((was) => was.map((one) => (one === session ? chat.session : one)));
-      noteStarted(chat);
-      change((tabs) => replaceSession(tabs, session, chat.session));
-    },
-    [change, noteStarted, plane],
-  );
-
   // A resumed chat whose harness ended without a word — it could not find the conversation — is
   // replaced by a fresh chat with the same record, once (SI-8d). Everything else a resumed chat
   // does only marks it heard, and a heard chat is the operator's from then on.
@@ -3828,6 +3901,7 @@ export const PlaneView = memo(function PlaneView({
       linkWorkItem,
       unlinkWorkItem,
       startFresh: askStartFresh,
+      restartChat: restartTab,
       pinTab,
       pinWorkspace,
       pinProject: windowDoes.pinProject,
@@ -3885,6 +3959,7 @@ export const PlaneView = memo(function PlaneView({
     }),
     [
       beginRename,
+      restartTab,
       linkWorkItem,
       unlinkWorkItem,
       askStartFresh,
@@ -4119,6 +4194,7 @@ export const PlaneView = memo(function PlaneView({
             // offered no work link (ADR 0088 §4).
             linkable: (session) => filedIn(session) !== OUTSIDE,
             planeUpdated: planeUpdates,
+            restartable,
           }),
     [
       clones,
@@ -4156,6 +4232,7 @@ export const PlaneView = memo(function PlaneView({
       workItems,
       filedIn,
       planeUpdates,
+      restartable,
     ],
   );
 
@@ -5031,6 +5108,15 @@ export const PlaneView = memo(function PlaneView({
         {/* **The sandbox's one-time offer** to a project made before it (ADR 0067 §1, V21 1):
           a notice like the one below, answered once, never a dialog. */}
         <SandboxOffer plane={plane} />
+        {/* **A sandbox setting changed under running chats** (#1428): how many keep the old
+          sandbox, and the restart that gives them the new one. */}
+        <SandboxChangedNotice
+          older={olderSandbox}
+          dismissed={dismissed}
+          dismiss={dismiss}
+          settle={settleNotices}
+          onRestart={restartThem}
+        />
         {/* **The project's own hosts changed** (#1341): told once to each teammate. */}
         <ProjectHostsNotice
           plane={plane}
@@ -5227,13 +5313,13 @@ export const PlaneView = memo(function PlaneView({
                   onByHand={answerByHand}
                   startNotes={startNotes}
                   onDismissStartNote={dismissStartNote}
-                  onRestartChat={restartChat}
+                  onRestartChat={askRestart}
                   blocks={sandboxBlocks}
                   onDismissBlock={dismissBlock}
-                  onRestartedForGrant={restartedForGrant}
+                  onRestarted={chatRestarted}
                   onAllowed={oweRestart}
-                  grantRestarts={grantRestarts}
-                  onGrantRestart={answerGrantRestart}
+                  restartsSaid={restartsSaid}
+                  onRestartAnswer={answerRestart}
                   offered={views}
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
@@ -5762,13 +5848,46 @@ function withoutKey<T>(record: Readonly<Record<number, T>>, key: number): Record
   return Object.fromEntries(Object.entries(record).filter(([held]) => Number(held) !== key));
 }
 
-/** What a chat's pane says of a restart it is owed for a sandbox grant (#1342). */
-type GrantRestartSaid = {
+/** The core's sentence for a restart held back by a permission prompt, where it sent none. */
+const NOT_YET = "It is waiting on a permission prompt, so it restarts once that is answered.";
+
+/**
+ * What a chat's pane says of its restart (#1342, #1428), whoever asked for it. One line at a
+ * time: why the last one failed, else why it has not happened yet, else that it is under way,
+ * else that it waits for the person.
+ */
+type RestartSaid = {
+  /** The window owes it a restart: one was asked for, or a grant needs it, and it is not made. */
+  owed?: boolean;
   /** Its harness reports no state, so the person restarts it when ready. */
   byHand?: boolean;
+  /** The restart is under way. */
+  running?: boolean;
+  /** Why it is not restarted yet, in the core's sentence: it waits on a permission prompt. */
+  notYet?: string;
   /** Why the last restart did not happen. */
   trouble?: string;
 };
+
+/**
+ * **This chat is restarting** (#1428, S5): said on its pane while the core starts its new run,
+ * in place of the line that asks the person to restart it by hand. Put away, it stays away for
+ * this restart: it is drawn only while one is under way.
+ */
+function RestartingLine({ session }: { session: number }) {
+  const [away, setAway] = useState(false);
+  if (away) return null;
+  return (
+    <Notice
+      cause={`restart-running:${session}`}
+      at="pane"
+      label="Restart"
+      onDismiss={() => setAway(true)}
+    >
+      Restarting this chat…
+    </Notice>
+  );
+}
 
 /** What the core says when a handoff has opened a chat — `handoff::Arrived` in the app. */
 type Arrived = {
@@ -6083,10 +6202,10 @@ function PaneFrame({
   blocks,
   onDismissBlock,
   onRestart,
-  onRestartedForGrant,
+  onRestarted,
   onAllowed,
-  grantRestart,
-  onGrantRestart,
+  restartSaid,
+  onRestartAnswer,
   doing,
   children,
 }: {
@@ -6106,18 +6225,18 @@ function PaneFrame({
   /** What this chat's start found to say, while it is up (ADR 0085). */
   startNotes?: StartNotes;
   onDismissStartNote: () => void;
-  /** Starts this chat again, resuming its conversation, in this pane (#1362: Restart now). */
+  /** Asks for this chat's restart on its conversation, in this pane (#1362: Restart now). */
   onRestart: () => void;
   /** What this chat's sandbox blocked, newest last, while any is up (#1338). */
   blocks?: readonly ChatBlocked[];
   onDismissBlock: (block: ChatBlocked) => void;
-  /** This chat started again in its place from a sandbox block's Notice (#1342). */
-  onRestartedForGrant: (chat: OpenChat) => void;
+  /** This chat started again in its place, without the sandbox, from a block's Notice (#1342). */
+  onRestarted: (chat: OpenChat) => void;
   /** Something was allowed for this chat: it is owed a restart once its turn has ended. */
   onAllowed: () => void;
-  /** What this pane says of a restart it is owed for a grant (#1342), while there is one. */
-  grantRestart?: GrantRestartSaid;
-  onGrantRestart: (act: "now" | "dismiss") => void;
+  /** What this pane says of this chat's restart (#1342, #1428), while there is something to say. */
+  restartSaid?: RestartSaid;
+  onRestartAnswer: (act: "now" | "dismiss") => void;
   doing: ReactNode;
   children: ReactNode;
 }) {
@@ -6159,6 +6278,7 @@ function PaneFrame({
           plane={plane}
           session={session}
           running={running}
+          owed={restartSaid?.owed === true}
           onRestart={onRestart}
         />
         {newest !== undefined && (
@@ -6168,27 +6288,40 @@ function PaneFrame({
             more={(blocks?.length ?? 1) - 1}
             onDismiss={() => onDismissBlock(newest)}
             onAllowed={onAllowed}
-            onRestarted={onRestartedForGrant}
+            onRestarted={onRestarted}
           />
         )}
-        {grantRestart?.trouble !== undefined && (
+        {restartSaid?.trouble !== undefined && (
           <Notice
-            cause={`grant-restart:${session}`}
+            cause={`restart:${session}`}
             at="pane"
             tone="trouble"
             label="Restart"
-            fixes={[{ label: "Restart now", onPress: () => onGrantRestart("now") }]}
-            onDismiss={() => onGrantRestart("dismiss")}
+            fixes={[{ label: "Restart now", onPress: () => onRestartAnswer("now") }]}
+            onDismiss={() => onRestartAnswer("dismiss")}
           >
-            {grantRestart.trouble}
+            {restartSaid.trouble}
           </Notice>
         )}
-        {grantRestart?.byHand && (
+        {restartSaid?.trouble === undefined && restartSaid?.notYet !== undefined && (
           <Notice
-            cause={`grant-restart-by-hand:${session}`}
+            cause={`restart-not-yet:${session}`}
             at="pane"
             label="Restart"
-            fixes={[{ label: "Restart now", onPress: () => onGrantRestart("now") }]}
+            onDismiss={() => onRestartAnswer("dismiss")}
+          >
+            {restartSaid.notYet}
+          </Notice>
+        )}
+        {restartSaid?.running && restartSaid.notYet === undefined && (
+          <RestartingLine session={session} />
+        )}
+        {restartSaid?.byHand && !restartSaid.running && restartSaid.notYet === undefined && (
+          <Notice
+            cause={`restart-by-hand:${session}`}
+            at="pane"
+            label="Restart"
+            fixes={[{ label: "Restart now", onPress: () => onRestartAnswer("now") }]}
           >
             What you allowed reaches this chat when it restarts on the same conversation. Its
             harness does not say when a turn ends, so restart it when you are ready.
@@ -6558,10 +6691,10 @@ function LayoutPanes({
   onRestartChat,
   blocks,
   onDismissBlock,
-  onRestartedForGrant,
+  onRestarted,
   onAllowed,
-  grantRestarts,
-  onGrantRestart,
+  restartsSaid,
+  onRestartAnswer,
   offered,
   onOpenView,
   onAsk,
@@ -6601,12 +6734,12 @@ function LayoutPanes({
   onDismissBlock: (session: number, block: ChatBlocked) => void;
   /** A chat started again in its place from a sandbox block's Notice (#1342): `was` is its old
    *  session. */
-  onRestartedForGrant: (was: number, chat: OpenChat) => void;
+  onRestarted: (was: number, chat: OpenChat) => void;
   /** Something was allowed for chat `session`: it is owed a restart (#1342). */
   onAllowed: (session: number) => void;
-  /** What each chat's pane says of a restart it is owed for a grant, by session (#1342). */
-  grantRestarts: Readonly<Record<number, GrantRestartSaid>>;
-  onGrantRestart: (session: number, act: "now" | "dismiss") => void;
+  /** What each chat's pane says of its restart, by session (#1342, #1428). */
+  restartsSaid: Readonly<Record<number, RestartSaid>>;
+  onRestartAnswer: (session: number, act: "now" | "dismiss") => void;
   /** The views approved extensions offer, for the buttons a view draws beside itself. */
   offered: readonly ExtensionView[];
   onOpenView: (view: ViewRef, title: string) => void;
@@ -6686,10 +6819,10 @@ function LayoutPanes({
         onRestart={() => onRestartChat(content.session)}
         blocks={blocks[content.session]}
         onDismissBlock={(block) => onDismissBlock(content.session, block)}
-        onRestartedForGrant={(chat) => onRestartedForGrant(content.session, chat)}
+        onRestarted={(chat) => onRestarted(content.session, chat)}
         onAllowed={() => onAllowed(content.session)}
-        grantRestart={grantRestarts[content.session]}
-        onGrantRestart={(act) => onGrantRestart(content.session, act)}
+        restartSaid={restartsSaid[content.session]}
+        onRestartAnswer={(act) => onRestartAnswer(content.session, act)}
         doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
       >
         <SessionPane
@@ -6741,10 +6874,10 @@ function LayoutPanes({
               onRestartChat={onRestartChat}
               blocks={blocks}
               onDismissBlock={onDismissBlock}
-              onRestartedForGrant={onRestartedForGrant}
+              onRestarted={onRestarted}
               onAllowed={onAllowed}
-              grantRestarts={grantRestarts}
-              onGrantRestart={onGrantRestart}
+              restartsSaid={restartsSaid}
+              onRestartAnswer={onRestartAnswer}
               offered={offered}
               onOpenView={onOpenView}
               onAsk={onAsk}

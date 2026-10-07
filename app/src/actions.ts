@@ -190,6 +190,7 @@ export type Does =
   /** Asks, then starts a chat again on the project's instructions as they are now (NO-3): the
    *  same chat, in a new run with no conversation resumed. */
   | { verb: "startFresh"; tab: number }
+  | { verb: "restartChat"; tab: number }
   /** Pins or unpins a chat, a workspace or a project (ADR 0039).
    *
    *  Three verbs and not one, because they are three stores: a project's pin and a
@@ -432,6 +433,18 @@ export type Offer = {
    */
   note?: string;
   /**
+   * For a row about one chat whose words differ while that chat is mid-turn: the chat, and
+   * what the row reads then. **The surface that draws the row reads the chat's state as it
+   * draws** ({@link titleOf}), so the catalogue is not built again each time a chat moves,
+   * which would redraw the whole window for one chat's turn.
+   */
+  midTurn?: { session: number; title: string };
+  /**
+   * For a row about one chat whose note differs while that chat reports no state: the chat, and
+   * what the note reads then. Read as the row is drawn ({@link noteOf}), as `midTurn` is.
+   */
+  noState?: { session: number; note: string };
+  /**
    * The group a submenu draws this row under, for a row that is in one: a curation action's
    * declaring persona, or [`LEFT_OUT`] for an action the core left out. None for charter's own
    * — they come first, ungrouped. The palette ignores it: its rows name their group in the
@@ -583,6 +596,9 @@ export type Now = {
   /** The files each chat started on that the project has changed since, by session
    *  (`chats_plane_updated`, charter#369): such a chat is offered Start fresh (NO-3). */
   planeUpdated?: Readonly<Record<number, readonly string[]>>;
+  /** Whether a chat can be restarted on its conversation: it has a Restart chat row. A shell
+   *  has no conversation, and no row. */
+  restartable?: (session: number) => boolean;
   /** Why each chat's Smart close stopped without its record (SI-8f), for its needs-you rows. */
   stopped?: Readonly<Record<number, string>>;
 };
@@ -603,6 +619,8 @@ export type Doing = {
   linkWorkItem: (tab: number) => void;
   /** Asks whether to start the tab's chat fresh, and does on a yes (NO-3). */
   startFresh: (tab: number) => void;
+  /** Restarts the tab's chat on its conversation, once its turn has ended. */
+  restartChat: (tab: number) => void;
   /** Ends the chat's work link, through `chat_work_unlink`; a refusal is the core's sentence. */
   unlinkWorkItem: (tab: number) => Promise<Ran>;
   /** Each answers a `Ran`, because a pin can be refused: the stores are bounded, and
@@ -987,6 +1005,33 @@ function can(id: string, title: string, does: Does, name?: string): Offer {
   return { id, title, available: true, reason: "", does, name };
 }
 
+/** What Restart chat keeps and what it changes. */
+const RESTART_KEEPS =
+  "It keeps its conversation and starts on this project's settings as they are now.";
+
+/**
+ * What Restart chat keeps, what it changes and when it happens, said beside its row. The wait
+ * is in the note, so the palette, which shows a row's plain title, says it as a menu does.
+ */
+export const RESTART_NOTE = `${RESTART_KEEPS} Mid-turn, it restarts when the turn ends.`;
+
+/**
+ * The note for a chat that reports no state (docs/ui-copy.md, "Uncertainty is stated, not
+ * hidden"): purlis cannot wait for the end of a turn it cannot see, so it does not say it will.
+ */
+export const restartNoteNoState = (name: string): string =>
+  `${name} reports no state, so purlis cannot tell whether it is mid-turn, and restarts it at once. ${RESTART_KEEPS}`;
+
+/** What a row reads now: its mid-turn words while the chat it is about is `running`. */
+export function titleOf(offer: Offer, running: boolean): string {
+  return running && offer.midTurn !== undefined ? offer.midTurn.title : offer.title;
+}
+
+/** What a row's note reads now: its no-state words while the chat it is about reports none. */
+export function noteOf(offer: Offer, unknown: boolean): string | undefined {
+  return unknown && offer.noState !== undefined ? offer.noState.note : offer.note;
+}
+
 /** An offer that cannot, which therefore has to say why. */
 function cannot(id: string, title: string, reason: string, name?: string): Offer {
   return { id, title, available: false, reason, does: { verb: "nothing" }, name };
@@ -1184,6 +1229,24 @@ export function catalogue(now: Now): Offer[] {
     offers.push({
       ...can(`tab.fresh:${tab}`, `Start chat ${name} fresh`, { verb: "startFresh", tab }, name),
       note: `Changed since it started: ${files.join(", ")}`,
+    });
+  }
+
+  // **Restart chat**: the chat's program ends and starts again on the same conversation, with
+  // the project's settings as they are now — what a chat needs after a sandbox setting changed.
+  // Mid-turn the restart waits for the turn to end, and the row says so (`midTurn`, and the
+  // note everywhere). A chat that reports no state restarts at once, and its note says that
+  // instead (`noState`). Asking twice asks for one restart. It ends a program, so it sits
+  // below the line.
+  for (const tab of now.tabs.order) {
+    const chat = chatOf(now.tabs, tab);
+    if (chat === undefined || !(now.restartable?.(chat) ?? false)) continue;
+    const name = now.tabs.byId[tab].name;
+    offers.push({
+      ...can(`tab.restart:${tab}`, `Restart chat ${name}`, { verb: "restartChat", tab }, name),
+      note: RESTART_NOTE,
+      midTurn: { session: chat, title: `Restart chat ${name} when this turn ends` },
+      noState: { session: chat, note: restartNoteNoState(name) },
     });
   }
 
@@ -2068,6 +2131,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "startFresh":
       doing.startFresh(does.tab);
       return DID;
+    case "restartChat":
+      doing.restartChat(does.tab);
+      return DID;
     case "unlinkWorkItem":
       return doing.unlinkWorkItem(does.tab);
     case "pinTab":
@@ -2625,7 +2691,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `tab.worklink:${what.tab}`,
           `tab.workunlink:${what.tab}`,
         ],
-        below: [`tab.fresh:${what.tab}`, `tab.close:${what.tab}`],
+        below: [`tab.restart:${what.tab}`, `tab.fresh:${what.tab}`, `tab.close:${what.tab}`],
       };
     case "workspace":
       return {

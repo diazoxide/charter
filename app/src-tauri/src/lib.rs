@@ -1547,10 +1547,41 @@ async fn start_chat_fresh(
     .map_err(|err| format!("purlis could not start the chat: {err}"))?
 }
 
-/// **Restart now** (#1362): chat `session` started again as the same chat, resuming its
-/// conversation, so what changed for it at its start (the persona grants the person just
-/// allowed) applies. The window asks once the chat's turn has ended. The answer is the new one
-/// as the window draws it; the old one is ended once the new one has started.
+/// **Restart chat** (#1428): the person asks for chat `session` to be restarted on its
+/// conversation, from its tab's menu, from the Notice after a sandbox setting changed, or
+/// from Restart now on a Notice (#1362). It is owed the restart from here on, and the window
+/// drives it with `restart_chat` once the chat's turn has ended.
+///
+/// **The person's action only.** This is a command of the window; no hook line, and nothing
+/// else a chat can send, reaches it.
+#[tauri::command]
+#[specta::specta]
+fn ask_chat_restart(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<(), String> {
+    planes.held(&plane)?.chats().ask_restart(session)
+}
+
+/// What a restart answered (#1342, #1428): the chat in its new run with what its start found
+/// to say, or, while it waits on a permission prompt, why it is not restarted yet.
+#[derive(serde::Serialize, specta::Type)]
+struct ChatRestart {
+    chat: Option<OpenChat>,
+    /// What the new run's start says on its tab: that a chat which ran without the sandbox
+    /// runs in it again.
+    notices: Vec<String>,
+    not_yet: Option<String>,
+}
+
+/// **Restarts chat `session`**: the same chat on its conversation, started again with the
+/// project's sandbox as it is compiled now and what the chat was granted, and told, as its
+/// first message, what was allowed where something was (#1342). The one restart: a sandbox
+/// grant, the persona grants a person allowed (#1362) and Restart chat (#1428) all come here.
+/// The window asks once the chat's turn has ended; a chat owed no restart is refused, and one
+/// waiting on a permission prompt is not restarted yet. The answer is the new one as the
+/// window draws it, in the old one's place.
 #[tauri::command]
 #[specta::specta]
 async fn restart_chat(
@@ -1559,47 +1590,18 @@ async fn restart_chat(
     session: u32,
     columns: u16,
     rows: u16,
-) -> Result<OpenChat, String> {
+) -> Result<ChatRestart, String> {
     let held = planes.held(&plane)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let started = held.restart_chat(session, Size { columns, rows })?;
-        drawn(&held, started)
-    })
-    .await
-    .map_err(|err| format!("purlis could not start the chat: {err}"))?
-}
-
-/// What a restart for a sandbox grant answered (#1342): the chat in its new run, or, while it
-/// waits on a permission prompt, why it is not restarted yet.
-#[derive(serde::Serialize, specta::Type)]
-struct GrantRestart {
-    chat: Option<OpenChat>,
-    not_yet: Option<String>,
-}
-
-/// **Restarts chat `session` to take a sandbox grant** (#1342): the same chat on its
-/// conversation, started again with what it was granted compiled in and told, as its first
-/// message, what was allowed. The window asks once the chat's turn has ended; a chat owed
-/// nothing is refused, and one waiting on a permission prompt is not restarted yet. The answer
-/// is the new one as the window draws it, in the old one's place.
-#[tauri::command]
-#[specta::specta]
-async fn restart_chat_for_grant(
-    planes: tauri::State<'_, Planes>,
-    plane: PlaneId,
-    session: u32,
-    columns: u16,
-    rows: u16,
-) -> Result<GrantRestart, String> {
-    let held = planes.held(&plane)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        match held.restart_chat_owed(session, Size { columns, rows })? {
-            Some(started) => Ok(GrantRestart {
+        match held.restart_chat(session, Size { columns, rows })? {
+            Some(started) => Ok(ChatRestart {
                 chat: Some(drawn(&held, started)?),
+                notices: held.chats().start_notes(started),
                 not_yet: None,
             }),
-            None => Ok(GrantRestart {
+            None => Ok(ChatRestart {
                 chat: None,
+                notices: Vec::new(),
                 not_yet: Some(
                     "It is waiting on a permission prompt, so it restarts once that is answered."
                         .to_owned(),
@@ -1609,6 +1611,54 @@ async fn restart_chat_for_grant(
     })
     .await
     .map_err(|err| format!("purlis could not restart the chat: {err}"))?
+}
+
+/// The chats of a project still running under an older sandbox (#1428), for the Notice after
+/// a sandbox setting changes.
+#[derive(serde::Serialize, specta::Type)]
+struct OlderSandbox {
+    /// The chats, by session, lowest first.
+    chats: Vec<OnOlderSandbox>,
+}
+
+/// One chat still running under an older sandbox.
+#[derive(serde::Serialize, specta::Type)]
+struct OnOlderSandbox {
+    session: u32,
+    /// What stands for what the project's settings decide of this chat's sandbox now: a
+    /// dismissal of the Notice is kept for each chat by it, so the Notice is shown once for
+    /// each change, and one chat restarting does not bring it back for another.
+    change: String,
+}
+
+/// **The chats this project has open that run under a sandbox other than the one the
+/// project's settings decide for them now** (#1428), or none. The window asks when the
+/// project's settings change, when its chats do, and after each of its own sandbox commands
+/// returns. It is decided by compiling, never by a file's having been written, and by what
+/// settings decide alone: the hosts, what the presets widen, and the folders every chat may
+/// write. A chat already owed a restart, or restarting, is not among them. On a blocking
+/// thread: compiling reads the project's files.
+#[tauri::command]
+#[specta::specta]
+async fn chats_on_older_sandbox(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Option<OlderSandbox>, String> {
+    let held = planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        held.chats().on_older_sandbox().map(|older| OlderSandbox {
+            chats: older
+                .chats
+                .into_iter()
+                .map(|one| OnOlderSandbox {
+                    session: one.session,
+                    change: one.change,
+                })
+                .collect(),
+        })
+    })
+    .await
+    .map_err(|err| format!("purlis could not read the chats' sandbox: {err}"))
 }
 
 /// **Starts chat `session` again without the sandbox** (#1342): the person's choice on a block's

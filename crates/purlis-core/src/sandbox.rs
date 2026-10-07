@@ -2496,6 +2496,7 @@ pub(crate) fn applied_of(
             denied: held,
             hosts: compiled.hosts.clone(),
             widened: compiled.widened.clone(),
+            writable: compiled.writable.clone(),
         }),
     })
 }
@@ -2513,6 +2514,10 @@ pub struct Confines {
     /// What the chat's sandbox widens (#1337): its cache grants and certificate check, so a
     /// run for the chat gets them too.
     pub widened: Widened,
+    /// The folders a person let the chat write besides its own ([`Compiled::writable`], #1342):
+    /// its own grants and the every-chat ones. Recorded so a start compiled later can be told
+    /// from this one by them (#1428); a run for the chat is not widened by it.
+    pub writable: Vec<PathBuf>,
 }
 
 /// `policy` for a chat of `harness` in `plane` at `root`, with no `charter.toml` written and no

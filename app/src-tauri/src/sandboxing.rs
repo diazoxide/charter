@@ -724,7 +724,7 @@ fn allow(
 
 /// **Allow** on a block's Notice (#1342): `target` is the host or folder the Notice showed whole
 /// (or the person typed). The window then restarts the chat once its turn has ended
-/// (`restart_chat_for_grant`).
+/// (`restart_chat`).
 #[tauri::command]
 #[specta::specta]
 pub fn allow_sandbox_block(
@@ -748,8 +748,8 @@ pub fn allow_sandbox_block(
     )
 }
 
-/// The chats of this project owed a restart to take a grant (#1342), for the window that drives
-/// it once each one's turn has ended.
+/// The chats of this project owed a restart (#1342, #1428): to take a grant, or because the
+/// person asked. For the window that drives it once each one's turn has ended.
 #[tauri::command]
 #[specta::specta]
 pub fn owed_restarts(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<u32>, String> {
