@@ -159,6 +159,13 @@ pub enum Outcome {
     Done,
     Blocked,
     Failed,
+    /// Its asking chat cancelled the task (#1441): the app's own record of what happened,
+    /// whatever the task's chat said. Not a failure of the work.
+    Cancelled,
+    /// The person stopped the chat before it reported (#1443, #1448): Stop, "Stop them", or
+    /// the Close of a task that had not reported. The app's own record, and not a failure of
+    /// the work either.
+    Stopped,
 }
 
 impl Outcome {
@@ -167,6 +174,8 @@ impl Outcome {
             Self::Done => "done",
             Self::Blocked => "blocked",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Stopped => "stopped",
         }
     }
 }

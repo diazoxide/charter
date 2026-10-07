@@ -962,7 +962,6 @@ impl StandIn {
                 record: Some("workspaces/alpha/sessions/20261007-143900-queue.md".to_owned()),
                 by_person: false,
                 unreported: false,
-                stopped: false,
                 stepped_in: false,
             }),
             answered: None,
@@ -1260,7 +1259,6 @@ fn the_report() -> Handback {
             record: None,
             by_person: false,
             unreported: false,
-            stopped: false,
             stepped_in: false,
         }),
         answered: None,
@@ -1433,6 +1431,7 @@ fn the_list_prints_each_task_s_persona_name_place_state_and_age() {
                 place: "alpha".to_owned(),
                 state: "running".to_owned(),
                 age_secs: Some(185),
+                by_person: false,
             }],
         }))
     });

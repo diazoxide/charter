@@ -185,7 +185,7 @@ describe("closing a chat with chats at work below it", () => {
 
     await userEvent.click(within(asking).getByRole("radio", { name: "Stop them" }));
     expect(asking).toHaveTextContent(
-      "Their programs end now, and so do the chats they started. There is no undo.",
+      "They are stopped now, and so are the chats they started: each gets one short turn to write what it did, then ends. There is no undo.",
     );
     await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
 

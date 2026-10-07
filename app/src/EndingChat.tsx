@@ -217,7 +217,7 @@ export const KEEP_SAYS =
 
 /** What stopping them does, said under the choice. */
 export const STOP_SAYS =
-  "Their programs end now, and so do the chats they started. There is no undo.";
+  "They are stopped now, and so are the chats they started: each gets one short turn to write what it did, then ends. There is no undo.";
 
 /** What the dialog says of the reported persona chats that close with a closing chat. */
 export function CLOSING_SAYS(closing: readonly string[]): string {

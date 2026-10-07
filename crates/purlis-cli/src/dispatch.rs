@@ -521,10 +521,7 @@ fn words(bad: &handoff::BadReport) -> String {
 }
 
 fn not_sent(why: &str) -> String {
-    format!(
-        "{REPORT_SAYS} {} — nothing was sent.",
-        purlis_core::personas::one_line(why)
-    )
+    format!("{REPORT_SAYS} {} — nothing was sent.", whole(why))
 }
 
 /// `purlis dispatch report …`, `wait`, `list` and `cancel`, printed.
@@ -845,6 +842,8 @@ mod tests {
             purlis_core::dispatched::not_yours(9),
             purlis_core::dispatchtalk::NO_ASKING_CHAT.to_owned(),
             purlis_core::dispatchtalk::ALREADY_REPORTED.to_owned(),
+            purlis_core::dispatchtalk::ASKED_BY_THE_PERSON.to_owned(),
+            purlis_core::dispatched::being_stopped("check the queue", 9),
         ];
         let longest = refusals
             .iter()

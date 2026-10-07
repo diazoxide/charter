@@ -985,6 +985,14 @@ mod tests {
                 "Bash(purlis dispatch --to *)",
                 "Bash(purlis dispatch --profile *)",
                 "Bash(purlis dispatch report *)",
+                "Bash(purlis dispatch --wait *)",
+                "Bash(purlis dispatch wait *)",
+                "Bash(purlis dispatch list)",
+                "Bash(purlis dispatch cancel *)",
+                "Bash(purlis dispatch tell *)",
+                "Bash(purlis dispatch note *)",
+                "Bash(purlis dispatch ask *)",
+                "Bash(purlis dispatch answer *)",
                 "mcp__purlis__dispatch",
                 "mcp__purlis__dispatch_report",
                 "mcp__purlis__todo_list",
@@ -1011,6 +1019,9 @@ mod tests {
             .filter_map(serde_json::Value::as_str)
             .filter(|rule| rule.starts_with("Bash(purlis dispatch"))
             .collect();
+        // The task and its report, then what a chat asks after a task it dispatched and what
+        // a task sends the chat that asked (#1441, #1442, D-T59-j8): both lists, exactly, in
+        // the order they are handed over, and nothing else that names the command.
         assert_eq!(
             dispatch,
             [
@@ -1018,17 +1029,48 @@ mod tests {
                 "Bash(purlis dispatch --to *)",
                 "Bash(purlis dispatch --profile *)",
                 "Bash(purlis dispatch report *)",
+                "Bash(purlis dispatch --wait *)",
+                "Bash(purlis dispatch wait *)",
+                "Bash(purlis dispatch list)",
+                "Bash(purlis dispatch cancel *)",
+                "Bash(purlis dispatch tell *)",
+                "Bash(purlis dispatch note *)",
+                "Bash(purlis dispatch ask *)",
+                "Bash(purlis dispatch answer *)",
             ]
+        );
+        assert_eq!(
+            dispatch,
+            super::claude::DISPATCH_ALLOW
+                .iter()
+                .chain(super::claude::DISPATCH_TASK_ALLOW.iter())
+                .copied()
+                .collect::<Vec<_>>(),
+            "the two lists and no third"
         );
         for rule in &dispatch {
             assert_ne!(*rule, "Bash(purlis dispatch *)");
-            // And every flag the rules start with is one the command takes.
-            if let Some(flag) = rule
+            let rest = rule
                 .strip_prefix("Bash(purlis dispatch ")
-                .and_then(|rest| rest.split(' ').next())
-                .filter(|word| word.starts_with("--"))
-            {
-                assert!(["--name", "--to", "--profile"].contains(&flag), "{flag}");
+                .and_then(|rest| rest.strip_suffix(')'))
+                .expect("a rule for the command");
+            let first = rest.split(' ').next().expect("a word");
+            // No rule is a wildcard over the rest: each opens with a flag the command takes
+            // or a subcommand it has, by name.
+            assert_ne!(first, "*", "{rule}");
+            if first.starts_with("--") {
+                assert!(
+                    ["--name", "--to", "--profile", "--wait"].contains(&first),
+                    "{first}"
+                );
+            } else {
+                assert!(
+                    [
+                        "report", "wait", "list", "cancel", "tell", "note", "ask", "answer"
+                    ]
+                    .contains(&first),
+                    "{first}"
+                );
             }
         }
     }
@@ -1278,6 +1320,14 @@ mod tests {
                 "Bash(purlis dispatch --to *)",
                 "Bash(purlis dispatch --profile *)",
                 "Bash(purlis dispatch report *)",
+                "Bash(purlis dispatch --wait *)",
+                "Bash(purlis dispatch wait *)",
+                "Bash(purlis dispatch list)",
+                "Bash(purlis dispatch cancel *)",
+                "Bash(purlis dispatch tell *)",
+                "Bash(purlis dispatch note *)",
+                "Bash(purlis dispatch ask *)",
+                "Bash(purlis dispatch answer *)",
                 "mcp__purlis__dispatch",
                 "mcp__purlis__dispatch_report",
                 "mcp__purlis__todo_list",

@@ -92,12 +92,24 @@ pub const NO_ASKING_CHAT: &str = "this chat was not started as a dispatched task
 
 /// The sender's own record, where a dispatch started it as a task: it names the one chat a
 /// message may go *up* to. `record` is what the app holds for the sender.
+///
+/// **A task the person started from a chat's tab sends nothing up** (D-T59-j1): that chat
+/// dispatched nothing, can answer nothing, and receives the report and no more.
 pub fn up(record: Option<&HandedFrom>) -> Result<&HandedFrom, String> {
     match record {
+        Some(from) if from.mode == Mode::Task && from.by_person => {
+            Err(ASKED_BY_THE_PERSON.to_owned())
+        }
         Some(from) if from.mode == Mode::Task => Ok(from),
         _ => Err(NO_ASKING_CHAT.to_owned()),
     }
 }
+
+/// What a task the person started from a chat's tab is told when it sends a message up.
+pub const ASKED_BY_THE_PERSON: &str = "the person started this task from another chat's tab, and \
+    that chat did not dispatch it: it reads this task's report and nothing else, and cannot \
+    answer. Nothing was sent. A question for the person is asked in this chat itself, and \
+    everything else goes in the report.";
 
 /// A task that has reported sends nothing more up, and is sent nothing more down.
 pub fn still_working(name: &str, chat: u32, from: &HandedFrom, state: &str) -> Result<(), String> {
@@ -568,6 +580,13 @@ mod tests {
         for record in [None, Some(&handed)] {
             assert_eq!(up(record), Err(NO_ASKING_CHAT.to_owned()));
         }
+        // A task the person started from that chat's tab: the chat receives its report and
+        // nothing before it (D-T59-j1).
+        let theirs = HandedFrom {
+            by_person: true,
+            ..task_of(ASKER)
+        };
+        assert_eq!(up(Some(&theirs)), Err(ASKED_BY_THE_PERSON.to_owned()));
     }
 
     #[test]

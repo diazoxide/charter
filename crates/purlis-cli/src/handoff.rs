@@ -252,7 +252,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
             // What the app said about the profile it started on (#1445, D-1445-8): the new chat
             // is not on its persona's own. One line, contained: it names a value out of a file.
             if let Some(note) = note {
-                voice::info(&purlis_core::personas::one_line(&note));
+                voice::info(&whole(&note));
             }
             return ExitCode::SUCCESS;
         }
@@ -268,7 +268,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         Some(why) => format!(
             "{HANDOFF_SAYS} the purlis app that started this chat was asked, and would not \
              open one: {} — nothing was opened.",
-            purlis_core::personas::one_line(&why)
+            whole(&why)
         ),
         None => format!(
             "{HANDOFF_SAYS} no purlis app answered this call, so nothing was opened. Open \
@@ -603,9 +603,16 @@ fn report_back(summary: &str) -> ExitCode {
 fn report_refused(why: &str) -> ExitCode {
     voice::err(&format!(
         "charter handoff report: {} — nothing was sent.",
-        purlis_core::personas::one_line(why)
+        whole(why)
     ));
     ExitCode::FAILURE
+}
+
+/// What the app said, as one line and **whole**: escaped as anything a chat may have had a
+/// hand in is, and never cut. The app's refusals end with what to do, and the budget a name
+/// is drawn within (160 characters) would cut most of them off before it.
+fn whole(said: &str) -> String {
+    purlis_core::shown::one_line(said, purlis_core::shown::NO_CLIP)
 }
 
 /// The brief on stdin, or why there is none.

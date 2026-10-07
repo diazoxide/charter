@@ -288,6 +288,8 @@ fn settings(
         ),
     ];
     allow.extend(DISPATCH_ALLOW.iter().map(|rule| (*rule).to_owned()));
+    // And what a chat asks after a task it dispatched, each by its own name (D-T59-j8).
+    allow.extend(DISPATCH_TASK_ALLOW.iter().map(|rule| (*rule).to_owned()));
     allow.extend(
         crate::chattools::DISPATCH_TOOLS
             .iter()
@@ -440,6 +442,28 @@ pub const DISPATCH_ALLOW: [&str; 4] = [
     "Bash(purlis dispatch --to *)",
     "Bash(purlis dispatch --profile *)",
     "Bash(purlis dispatch report *)",
+];
+
+/// The permission rules a Claude Code chat the app starts carries for **what it asks after a
+/// task it dispatched, and what a task sends the chat that asked** (#1441, #1442, D-T59-j8,
+/// amending ADR 0064 under V98b): each subcommand by its own name, pinned, so a word added to
+/// `purlis dispatch` later still asks until it is ruled in.
+///
+/// **Each reaches only what the app's own record lets its caller reach**
+/// (`crate::dispatched::owned`, `crate::dispatchtalk::up`): `wait`, `cancel`, `tell` and
+/// `answer` name a task the chat itself dispatched, and are refused for any other chat;
+/// `list` lists those tasks; `note` and `ask` name nobody, and go to the one chat that
+/// dispatched the caller. None starts a chat. `--wait` is the dispatch itself, waited on: it
+/// is matched only where the flag comes first, and asked about otherwise.
+pub const DISPATCH_TASK_ALLOW: [&str; 8] = [
+    "Bash(purlis dispatch --wait *)",
+    "Bash(purlis dispatch wait *)",
+    "Bash(purlis dispatch list)",
+    "Bash(purlis dispatch cancel *)",
+    "Bash(purlis dispatch tell *)",
+    "Bash(purlis dispatch note *)",
+    "Bash(purlis dispatch ask *)",
+    "Bash(purlis dispatch answer *)",
 ];
 
 /// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.

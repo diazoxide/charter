@@ -685,8 +685,20 @@ impl Held {
     /// work are the person's choice, asked before the close ([`Self::close_chat_stopping`]),
     /// and where they are kept their reports go to the workspace this chat asked from.
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
-        let deciding = self.chats.deciding();
-        self.close_chat_held(session, &deciding)
+        let closed = {
+            let deciding = self.chats.deciding();
+            self.close_chat_held(session, &deciding)
+        };
+        self.stops_carry_on();
+        closed
+    }
+
+    /// What a stop asked for while a close held the deciding lock is carried out now that it
+    /// is let go (`crate::stopping::carry_pending`): ending the next chat takes that lock.
+    fn stops_carry_on(&self) {
+        if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
+            crate::stopping::carry_pending(&me);
+        }
     }
 
     /// [`Self::close_chat`], under the caller's hold of the lock a dispatch is decided under
@@ -697,14 +709,26 @@ impl Held {
         session: u32,
         deciding: &crate::handoff::Deciding<'_>,
     ) -> Result<(), String> {
-        use crate::handoff::{self, Unreported};
+        use crate::handoff;
 
         // The person's answer when its Smart close began, where they gave one: what it
-        // started while it wrote its record goes with it.
+        // started while it wrote its record is stopped with it.
         if self.chats.takes_stop_below(session) {
             handoff::stop_below(self, session, deciding);
         }
-        handoff::unreported(self, session, Unreported::Stopped, deciding);
+        // A task closed before it reported was stopped by the person: the chat that asked is
+        // told so, in the one word a stop is told in (D-T59-j3). One a stop has ended already
+        // is settled, and nothing is said twice.
+        if self.chats.owed_task_report(session).is_some() {
+            handoff::operator_stopped(self, session, false, true, deciding);
+        }
+        // **Settled before the program is ended, whatever became of the word** (D-1443-13,
+        // D-T59-j15): the end of a program waits for this lock only while the chat still owes
+        // a report, and this close holds the lock while it ends that program. A word that
+        // could not be kept is logged above, and is not owed again by a chat that is going.
+        if self.chats.owed_task_report(session).is_some() {
+            self.chats.owes(session, purlis_core::reopen::Owed::Failed);
+        }
         let reported = handoff::reported_by(self, session);
         let closed = self.end_chat(session);
         if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
@@ -714,22 +738,29 @@ impl Held {
     }
 
     /// **Stop them, and close** (#1443): the person's answer to what closing chat `session`
-    /// asks. Every chat at work below it is ended, deepest first, and then, where `close`, the
-    /// chat itself, **under one hold**: the chat is still running until its own close, and
-    /// between two calls it could start another that outlives the answer. Where it is to be
-    /// smart-closed instead, the answer is remembered for the close its record brings.
-    /// Answers every chat this closed, `session` among them where it was.
+    /// asks. Every chat at work below it is stopped, by the stop every chat is stopped by
+    /// (`crate::stopping`, D-T59-j3), and then, where `close`, the chat itself is closed,
+    /// **under one hold**: the chat is still running until its own close, and between two
+    /// calls it could start another that outlives the answer. Where it is to be smart-closed
+    /// instead, the answer is remembered for the close its record brings.
+    ///
+    /// Answers every chat this closed now: `session`, where it was. The chats below end as
+    /// their stops do, each after its one short turn, and the window is told of each.
     pub fn close_chat_stopping(&self, session: u32, close: bool) -> Vec<u32> {
-        let deciding = self.chats.deciding();
-        let mut closed = crate::handoff::stop_below(self, session, &deciding);
-        if close {
-            if let Err(why) = self.close_chat_held(session, &deciding) {
-                tracing::warn!("purlis: chat {session} did not end cleanly ({why})");
+        let mut closed = Vec::new();
+        {
+            let deciding = self.chats.deciding();
+            crate::handoff::stop_below(self, session, &deciding);
+            if close {
+                if let Err(why) = self.close_chat_held(session, &deciding) {
+                    tracing::warn!("purlis: chat {session} did not end cleanly ({why})");
+                }
+                closed.push(session);
+            } else {
+                self.chats.stop_below_on_close(session, true);
             }
-            closed.push(session);
-        } else {
-            self.chats.stop_below_on_close(session, true);
         }
+        self.stops_carry_on();
         closed
     }
 
@@ -737,6 +768,14 @@ impl Held {
     /// without what a close owes a persona chat. For a chat that is being started again in its
     /// own place, which is the same chat going on and not one that ended.
     fn end_chat(&self, session: u32) -> Result<(), String> {
+        // **A stop of it is let go of before its program is ended** (#1448, D-T59-j15), and a
+        // chat above it that waited for it to end waits no more. First, because the end of
+        // that program is heard on another thread, which ends a chat still in a stop
+        // (`stopping::exited`) and takes the deciding lock to do it: the lock a close holds
+        // while it ends the program. With the stop already let go of, that thread finds
+        // nothing to end. What letting go asks for (the chat above beginning its own stop) is
+        // carried out by whoever holds the lock this runs under, once it is let go.
+        crate::stopping::closed(self, session);
         // Before it is off the board, while its conversation is still known: a dispatch it
         // was working on ends with it (#1452), unless a chat started in its place carries it.
         crate::dispatches::ended(self, session);
@@ -753,9 +792,8 @@ impl Held {
             .chats
             .recorded_chat(session)
             .and_then(|chat| chat.identity.id);
-        // While its record is still here: a cancelled task that sent no report has one written
-        // for it, and who asked for it is read, so a wait on it says how it ended (#1441).
-        crate::dispatched::closing(self, session);
+        // While its record is still here: who asked for it is read, so a wait on it says how
+        // it ended (#1441).
         let task_of = self
             .chats
             .handed_from(session)
@@ -779,11 +817,6 @@ impl Held {
         // needs-you item that says so: nobody else will read what it wrote. purlis's own word
         // that a chat was stopped is no report, and raises none.
         self.reports_have_nowhere_to_go(session, &orphaned);
-        // A stop of it is over, and a chat above it that waited for it to end waits no more
-        // (#1448). Last, with the chat already gone, so nothing here ends it a second time.
-        if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
-            crate::stopping::closed(&me, session);
-        }
         closed
     }
 
@@ -864,6 +897,7 @@ impl Held {
         if in_front {
             self.chats.bring_to_front(Some(started));
         }
+        self.stops_carry_on();
     }
 
     /// **Chat `session` is now `started`**: the same chat, started again under a new number.
@@ -2265,10 +2299,17 @@ impl Planes {
                     // program that ended on its own** (D-1443-10): not at a quit or as the
                     // project is let go of, and not when every agent was stopped. Those chats
                     // are kept, and report when they are started again.
+                    //
+                    // **One word for one end** (D-T59-j3). A task its asking chat cancelled
+                    // reports as cancelled, so that is written first (#1441) and nothing is
+                    // then owed. A chat the person is stopping is told of by its stop, below
+                    // (#1448), and is not also said to have failed by itself.
                     if let Some(held) = me.get().and_then(std::sync::Weak::upgrade)
                         && !held.chats.ending()
                         && !every_agent.is_stopped()
+                        && !held.stopping().is_stopping(session)
                     {
+                        crate::dispatched::moved(&held, session);
                         crate::handoff::its_program_ended(&held, session);
                     }
                     if changed {
@@ -2282,8 +2323,8 @@ impl Planes {
                     // And the record no longer names the ended program's pid (V82, #1018).
                     if let Some(held) = me.get().and_then(std::sync::Weak::upgrade) {
                         held.chats.a_program_ended();
-                        // A cancelled task that ended has its report written, and a command
-                        // waiting on it is told (#1441).
+                        // A command waiting on it is told, and so is whatever waited for it
+                        // to move (#1441).
                         crate::dispatched::moved(&held, session);
                         // A chat being stopped whose program ended on its own has ended: the
                         // chat that asked is told, and its tab goes (#1448).
@@ -6168,10 +6209,9 @@ mod tests {
         // word (D-1443-11). The asking chat is told once, and not that it was cancelled.
         let waiting = purlis_core::handback::take(&root, purlis_core::handback::For::Chat(asker));
         assert_eq!(waiting.len(), 1, "the asking chat is told once");
-        assert_ne!(
-            waiting[0].task.as_ref().map(|task| task.outcome),
-            Some(purlis_core::handback::Outcome::Cancelled)
-        );
+        // In the one word a stop is told in (D-T59-j3): purlis's own, and no report.
+        assert!(waiting[0].stopped.is_some(), "{waiting:?}");
+        assert_eq!(waiting[0].task, None);
         // And a wait on the closed task is the owner's: it is answered with that word.
         let said = asks_after(
             &held,

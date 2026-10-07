@@ -6,7 +6,8 @@
   what it did, then it ends, and the chat that asked is told you stopped it. Nothing is typed
   into a chat that is showing a prompt: that one ends as it stands. The stop of a subtree ends
   the deepest chats first and touches nothing outside it. Pressing Stop on a chat that is
-  already stopping ends it without waiting. Only you can stop a chat: no chat can. A chat that
+  already stopping ends it without waiting. Only you stop a chat: a chat can cancel a task it dispatched itself, which asks that task
+  for its report, and can stop no other chat. A chat that
   is being stopped, and any chat below it, cannot start another chat or be started again, so
   nothing outlives the stop. The chat that asked reads the stop as purlis's own line, which no
   report can pass for, and its row says the chat was stopped (#1448).

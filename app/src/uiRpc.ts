@@ -644,11 +644,12 @@ export const commands = {
 	personaChatsOf: (plane: PlaneId, session: number) => typedError<ClosingChat, string>(__TAURI_INVOKE("persona_chats_of", { plane, session })),
 	/**
 	 *  **Stop them**, your answer to what closing chat `session` asks: every chat at work below
-	 *  it is ended, deepest first, and then it is closed (`then: close`), in one step, so it
+	 *  it is stopped, and then it is closed (`then: close`), in one step, so it
 	 *  cannot start another in between. For a Smart close (`then: smart_close`) the chats below
-	 *  are ended now, and any it starts while it writes its record are ended as it closes.
-	 *  Answers every chat this closed. A stopped task's asking chat is told it was stopped by
-	 *  the operator.
+	 *  are stopped now, and any it starts while it writes its record are stopped as it closes.
+	 *  Each chat below gets one short turn to write what it did, as any stopped chat does, and
+	 *  the chat that asked for it is told the operator stopped it. Answers the chats this closed
+	 *  at once: the chat itself, where it was closed.
 	 */
 	closeChatStopping: (plane: PlaneId, session: number, then: ThenClose) => typedError<number[], string>(__TAURI_INVOKE("close_chat_stopping", { plane, session, then })),
 	/**
@@ -2318,13 +2319,6 @@ export type ChatBlocked = {
 	levels: GrantLevel[],
 };
 
-/**  One step of one chat's stop, as the window is told it. */
-export type ChatStop = {
-	plane: PlaneId,
-	session: number,
-	phase: StopPhase,
-};
-
 /**
  *  What a restart answered (#1342, #1428): the chat in its new run with what its start found
  *  to say, or, while it waits on a permission prompt, why it is not restarted yet.
@@ -2337,6 +2331,13 @@ export type ChatRestart = {
 	 */
 	notices: string[],
 	not_yet: string | null,
+};
+
+/**  One step of one chat's stop, as the window is told it. */
+export type ChatStop = {
+	plane: PlaneId,
+	session: number,
+	phase: StopPhase,
 };
 
 /**

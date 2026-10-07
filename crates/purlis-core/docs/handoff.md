@@ -174,9 +174,17 @@ the chat that wrote it becomes a needs-you item that says so.
 **A chat you stop from the window** gets one short turn to write what it did, and may send one
 report in it, whatever it owed before. The chat that asked is then told the operator stopped
 it, on its next turn, as a line of purlis's own (`purlis: the operator stopped …`) that quotes
-nothing: a report is what a chat said, and this is not one, so no report can pass for it. Only
-you can stop a chat: no command or tool does. A chat that is being stopped, and any chat below
-it, cannot hand off or dispatch: it is refused, so nothing it starts outlives the stop.
+nothing: a report is what a chat said, and this is not one, so no report can pass for it. It is
+the same line however you stopped it: **Stop** on the chat or on a chat above it, *Stop them*
+as you close the chat that asked, or closing the tab of a task that had not reported.
+
+A chat can cancel a task it dispatched itself (`purlis dispatch cancel`, below), which asks
+that task for a short report and ends nothing. **Only you stop any other chat**: no command or
+tool stops a chat its caller did not dispatch, and none ends one. A chat that is being
+stopped, and any chat below it, cannot hand off or dispatch: it is refused, so nothing it
+starts outlives the stop. You can still ask a persona from its tab yourself. A task you are
+stopping cannot be cancelled as well, and a cancel under way stands down when you stop its
+task: the stop is the later word.
 
 Reports wait in `.charter/handbacks/` in the plane, one file each, until a hook takes them.
 
@@ -375,11 +383,13 @@ purlis dispatch list
 purlis dispatch cancel <chat>
 ```
 
-`list` prints the tasks this chat dispatched, one a line: the chat's number, the task's name,
-its persona, where it works, its state and how long ago it started. The states are `running`,
-`idle, with no report yet`, `waiting on the person`, `asking this chat a question`,
+`list` prints the tasks under this chat, one a line: the chat's number, the task's name, its
+persona, where it works, its state and how long ago it started. The states are `running`,
+`idle, with no report yet`, `waiting on the operator`, `asking this chat a question`,
 `cancelling`, `reported: <outcome>` and `ended without a report`. A task is listed until its
-chat is closed. The `dispatch_list` tool prints the same list.
+chat is closed. The `dispatch_list` tool prints the same list. A task you started yourself
+from this chat's tab (*Ask <persona>…*) is listed too, and its row says so: its report comes
+to this chat, and the chat can wait on, send to, answer and cancel nothing of it.
 
 `cancel` records the cancel, so the task's report arrives with the outcome `cancelled` whatever
 its chat calls it. Then, where purlis may type into that chat:
@@ -390,8 +400,9 @@ its chat calls it. Then, where purlis may type into that chat:
 
 Where it may not, the cancel takes effect when the task's turn ends: it is asked then, or, on a
 harness purlis does not type into, a report is written for it. A task that ends the turn it was
-asked in without reporting, whose program ends, or whose tab is closed has a report written
-for it too. So a cancel always ends in a report, and `purlis dispatch wait <chat>` returns it.
+asked in without reporting, or whose program ends, has a report written for it too. So a
+cancel ends in a report, and `purlis dispatch wait <chat>` returns it; unless you stop the
+task or close its tab first, and then the chat that asked is told the operator stopped it.
 
 **A chat can wait on, list and cancel only the tasks it dispatched itself.** Which those are is
 purlis's record of each chat, written when the chat was started; the command names a chat by
@@ -463,7 +474,8 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   report`, in its own words and with the path of that chat's session record where one was
   written. It is said as soon as the program is gone, once, and it is final: a chat started
   again in that tab cannot report for the task. If you close the tab before it reported, the
-  chat that asked is told it was `stopped by the operator` instead.
+  chat that asked is told the operator stopped it instead, in the line every stop is told in
+  (`purlis: the operator stopped …`), and that is final too.
 - **Stopping every agent, quitting, closing the project and restarting a chat report
   nothing.** Those chats are kept, and each reports when it runs again.
 - **A persona chat stays open after it reports.** It is marked `reported` under the chat that
@@ -472,7 +484,9 @@ A task is never lost for want of the chat that was doing it, or of the chat that
   have not reported, the chats it handed work to that are mid-turn, and the same below those,
   however deep. Keep them running, or stop them. Kept, they go on working, and a persona
   chat's report goes to the workspace that chat asked from, where the next chat to start
-  reads it. Stopped, their programs end, deepest first, and the chat closes in the same step.
+  reads it. Stopped, they are stopped as **Stop** stops a chat: each gets one short turn to
+  write what it did, deepest first, then ends, and none of them starts another chat
+  meanwhile. The chat you were closing closes in the same step.
 - **The persona chats that have reported and are at rest close with the chat that asked**,
   each once its session record is written, and the dialog says which. One with no record yet
   is asked for it first, and closes when it is saved. One you gave more to do, one asking you

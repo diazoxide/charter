@@ -554,32 +554,56 @@ pub fn wait(held: &Weak<Held>, asked: &Asked, connection: u64) -> Answer {
     }
 }
 
-/// The tasks chat `asker` dispatched that are still open, in the order they were started.
+/// The tasks under chat `asker` that are still open, in the order they were started.
+///
+/// **One list, read from the one place that says which chats those are and where each stands**
+/// ([`crate::handoff::persona_chats`], #1443, D-T59-j2): what closing the chat asks about, what
+/// the window marks a task with and what `purlis dispatch list` prints are the same chats in
+/// the same words. A task the chat dispatched itself says more where the app knows more: that
+/// it is idle, cancelling, asking this chat a question, or how it reported. A task the person
+/// started from this chat's tab is listed too, by name and standing, and marked as theirs:
+/// the list gives the chat nothing over it ([`dispatched::owned`]).
 fn list(held: &Held, asker: u32) -> Vec<Row> {
+    use crate::handoff::PersonaChatState;
+
     let now = SystemTime::now();
-    let mut open = held.chats().open_now();
-    open.sort_by_key(|open| open.session);
-    open.into_iter()
-        .filter_map(|open| {
-            let from = dispatched::owned(asker, open.session, open.from.as_ref()).ok()?;
-            let seen = seen(held, open.session);
-            let name = held
-                .chats()
-                .shown_name(open.session)
-                .unwrap_or_else(|| open.name.clone());
+    let open = held.chats().open_now();
+    crate::handoff::persona_chats(held, asker)
+        .into_iter()
+        .filter_map(|listed| {
+            let open = open.iter().find(|open| open.session == listed.session)?;
+            let from = open.from.as_ref()?;
             let ledger = held.tasks().ledger();
+            let own = dispatched::owned(asker, listed.session, Some(from)).is_ok();
+            let state = match (own, listed.state) {
+                // Waiting on the person, by the board or by an ask the app holds open: the
+                // standing knows both, and is the word for it. A cancel under way is said
+                // first: that is what this chat asked for.
+                // Asked of the hold this row is built under: the ledger's lock is not one a
+                // thread may take twice.
+                (true, PersonaChatState::WaitingOnOperator)
+                    if !ledger.cancelling(listed.session) =>
+                {
+                    listed.said.clone()
+                }
+                (true, _) => ledger
+                    .state(listed.session, from, seen(held, listed.session))
+                    .say(),
+                (false, _) => listed.said.clone(),
+            };
             Some(Row {
-                chat: open.session,
-                name,
-                persona: open.persona.clone(),
+                chat: listed.session,
+                name: listed.name,
+                persona: listed.persona,
                 place: open
                     .workspace
                     .clone()
                     .map_or(Place::PlaneRoot, Place::Workspace)
                     .word()
                     .to_owned(),
-                state: ledger.state(open.session, from, seen).say(),
-                age_secs: ledger.age(open.session, now).map(|age| age.as_secs()),
+                state,
+                age_secs: ledger.age(listed.session, now).map(|age| age.as_secs()),
+                by_person: !own,
             })
         })
         .collect()
@@ -594,6 +618,11 @@ fn cancel(held: &Held, asker: u32, of: u32) -> Result<Answer, String> {
         // recorded first and the report is delivered as cancelled.
         let _deciding = held.chats().deciding();
         let (from, name) = owned(held, asker, of)?;
+        // The person is stopping it already: that ends it and tells this chat, and a chat in
+        // a stop is not cancelled as well (D-T59-j3).
+        if held.stopping().is_stopping(of) {
+            return Err(dispatched::being_stopped(&name, of));
+        }
         (held.tasks().ledger().cancel(of, &name, &from)?, name)
     };
     if began {
@@ -641,6 +670,10 @@ pub fn told(held: &Held, chat: u32) {
 /// questions of tasks it dispatched, and a message from the chat that dispatched it. Answers
 /// whether a line was typed.
 fn tell_the_chat(held: &Held, chat: u32) -> bool {
+    // A chat the person is stopping is typed its stop's one line and no other.
+    if held.stopping().is_stopping(chat) {
+        return false;
+    }
     let seen = seen(held, chat);
     let landed = held.tasks().ledger().nudge_step(chat, seen);
     if landed.is_empty() {
@@ -669,6 +702,10 @@ fn advance_cancel(held: &Held, task: u32, settled: bool) -> bool {
     let Some(from) = held.chats().handed_from(task) else {
         return false;
     };
+    // The person's stop is the later word: nothing more is sent for a cancel (D-T59-j3).
+    if held.stopping().is_stopping(task) {
+        return false;
+    }
     let seen = seen(held, task);
     let step = held
         .tasks()
@@ -770,18 +807,6 @@ pub fn moved(held: &Held, chat: u32) {
         }
     }
     held.tasks().changed();
-}
-
-/// Chat `chat` is about to be closed, while the app still holds its record: a cancelled task
-/// that has sent no report has one written for it now, so a cancel always ends in a report.
-pub fn closing(held: &Held, chat: u32) {
-    let owes = held
-        .chats()
-        .handed_from(chat)
-        .is_some_and(|from| from.mode == Mode::Task && from.report == Owed::Due);
-    if owes && held.tasks().ledger().cancelling(chat) {
-        write_cancelled(held, chat, dispatched::ENDED_UNREPORTED);
-    }
 }
 
 /// Chat `chat` was closed. `task_of` is its asking chat and its name, where it was a task,

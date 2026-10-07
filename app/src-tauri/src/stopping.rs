@@ -1,9 +1,18 @@
 //! **Stop this chat**, and **Stop this chat and everything below it** (#1448): the person ends
 //! a chat another chat started, or a whole run of them, from the window.
 //!
-//! **Only the person can.** The two are one window command ([`stop_chat`]), and it is the one
-//! caller of `press`, which is private to this file: the compiler holds that. No line on the
-//! hook socket reads as a stop, so no chat can stop another, or itself, or have a brief do it.
+//! **Only the person can stop a chat they did not ask it to start.** The two are one window
+//! command ([`stop_chat`]), the one caller of `press`, which is private to this file: the
+//! compiler holds that. The close dialog's "Stop them" (#1443) is the same stop
+//! ([`press_below`]), begun by the window's close and by nothing else. No line on the hook
+//! socket reads as a stop, so no chat can stop another, or itself, or have a brief do it. What
+//! a chat has is `purlis dispatch cancel` (#1441), for a task it dispatched itself and for no
+//! other chat: it ends nothing, and asks that task for its report.
+//!
+//! **One stop, whoever asked for it** (D-T59-j3). Stop, "Stop them" and the Close of a task
+//! that had not reported end in one word to the chat that asked, written in one place
+//! ([`crate::handoff::operator_stopped`]). A task being stopped is not cancelled as well: its
+//! cancel stands down when the stop begins, and a cancel asked for after it is refused.
 //!
 //! **A chat being stopped starts no chat** ([`refuses_a_start`]), and nor does a chat below one:
 //! a ticket, a handoff and a dispatch from it are refused in fixed words
@@ -465,6 +474,9 @@ impl Stops {
 #[derive(Debug, Default)]
 pub struct Stopping {
     stops: Mutex<Stops>,
+    /// What a stop asked for while the lock a close is made under was held: carried out when
+    /// that hold is let go ([`carry_pending`]), because ending a chat takes the same lock.
+    pending: Mutex<Vec<Act>>,
 }
 
 impl Stopping {
@@ -491,6 +503,35 @@ impl Stopping {
     /// Every chat being stopped.
     pub fn now(&self) -> Vec<u32> {
         self.stops().now()
+    }
+
+    /// Keeps `acts` for [`carry_pending`].
+    fn pend(&self, acts: Vec<Act>) {
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(acts);
+    }
+}
+
+/// Carries out what stops asked for under a hold of the deciding lock, now that it is let go.
+/// Called by whoever held it: a close, "Stop them", a chat started again in its own place.
+pub(crate) fn carry_pending(held: &Arc<Held>) {
+    let acts = std::mem::take(
+        &mut *held
+            .stopping()
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+    );
+    carry_out(held, acts);
+}
+
+/// A cancel of each of `chats` stands down: the person's stop is the later word (D-T59-j3).
+fn cancels_stand_down(held: &Held, chats: &[u32]) {
+    let mut ledger = held.tasks().ledger();
+    for chat in chats {
+        ledger.stood_down(*chat);
     }
 }
 
@@ -544,22 +585,51 @@ fn started_in(lineage: &[(u32, Option<u32>)], chat: u32) -> Option<u32> {
 /// **The lineage is read and the stop recorded in one hold**, the one [`refuses_a_start`] and
 /// [`sweeps`] take: a chat that opens is either read here, and stopped with the rest, or opens
 /// after the stop is recorded, and is refused or ended as it opens.
+///
+/// **And under the lock a dispatch is decided and its slot reserved under** (D-T59-j4), so a
+/// stop and a decision come one after the other: a dispatch decided first has its slot by the
+/// time the stop is recorded, and is refused before its chat is started
+/// ([`refuses_a_start`], asked again as it starts).
 fn press(held: &Arc<Held>, session: u32, below: bool) -> Result<(), String> {
     let acts = {
-        let mut stops = held.stopping().stops();
+        let _deciding = held.chats().deciding();
         let lineage = lineage_of(held);
         if !lineage.iter().any(|(chat, _)| *chat == session) {
             return Err("That chat is not open any more.".to_owned());
         }
         let order = subtree(&lineage, session, below);
-        stops.press(
+        let acts = held.stopping().stops().press(
             &order,
             |chat| started_in(&lineage, chat),
             |chat| facts_of(held, chat),
-        )
+        );
+        cancels_stand_down(held, &order);
+        acts
     };
     carry_out(held, acts);
     Ok(())
+}
+
+/// **"Stop them"** (#1443): the person's answer as they close chat `asker`. Every chat at work
+/// below it (`order`, deepest first) is stopped by the stop every chat is stopped by: one short
+/// turn for a chat another chat started, then its end, and the one word to the chat that asked.
+///
+/// Under the caller's hold of the deciding lock, which the close of `asker` is made under too:
+/// no chat below starts another between the answer and the stop, and from here on none of them
+/// starts one at all ([`refuses_a_start`]). What the stop asks for is carried out when the hold
+/// is let go ([`carry_pending`]).
+pub(crate) fn press_below(held: &Held, order: &[u32], _deciding: &crate::handoff::Deciding<'_>) {
+    if order.is_empty() {
+        return;
+    }
+    let lineage = lineage_of(held);
+    let acts = held.stopping().stops().press(
+        order,
+        |chat| started_in(&lineage, chat),
+        |chat| facts_of(held, chat),
+    );
+    cancels_stand_down(held, order);
+    held.stopping().pend(acts);
 }
 
 /// [`press`], for a test in another file that holds a plane open. Not in the app.
@@ -569,7 +639,13 @@ pub(crate) fn press_in_a_test(held: &Arc<Held>, session: u32, below: bool) -> Re
 }
 
 /// **Whether chat `chat` may start no chat**: it is being stopped, or is below a chat that is
-/// (#1448). Asked before a ticket is minted and before a handoff or a dispatch starts anything.
+/// (#1448). Asked as a ticket is spent on a handoff or a dispatch, before either starts
+/// anything, and never as one is minted: a ticket is also what the chat's one last report is
+/// sent on, so a chat in a stop is still given one (D-T59-j9).
+///
+/// **It is a chat's own start that is refused.** The person asking a persona from that chat's
+/// tab (#1438) is not the chat starting one: they pressed Stop, and they may still ask
+/// (D-T59-j4). The callers ask this of a chat's own ask only.
 pub(crate) fn refuses_a_start(held: &Held, chat: u32) -> bool {
     let stops = held.stopping().stops();
     if !stops.any() {
@@ -614,13 +690,14 @@ pub fn exited(held: &Arc<Held>, session: u32) {
 }
 
 /// Chat `session` was closed by another road: its stop is let go of, and whatever waited for
-/// it begins.
-pub fn closed(held: &Arc<Held>, session: u32) {
+/// it begins once the close's hold is let go ([`carry_pending`]): a close is made under the
+/// lock that ending the next chat takes.
+pub fn closed(held: &Held, session: u32) {
     let acts = held
         .stopping()
         .stops()
         .forget(session, |chat| facts_of(held, chat));
-    carry_out(held, acts);
+    held.stopping().pend(acts);
 }
 
 /// Carries `acts` out in order, and whatever each one leads to.
@@ -673,16 +750,11 @@ fn carry_out(held: &Arc<Held>, acts: Vec<Act>) {
 /// purlis's own marked word, then the chat is closed as its tab's Close closes it, and the
 /// window takes its tab away.
 fn end(held: &Held, session: u32, wrote: bool, tell: bool) {
-    if let Some(from) = held.chats().handed_from(session).filter(|_| tell) {
-        let stopped = purlis_core::handback::Stopped { wrote };
-        let told =
-            crate::handoff::deliver(held, session, &from, String::new(), None, Some(stopped));
-        if let Err(why) = told {
-            tracing::warn!(
-                "purlis: chat {session} was stopped, and the chat that asked could not be told \
-                 ({why})"
-            );
-        }
+    {
+        // The one word, by the one function, under the lock a report is taken under: the
+        // close that follows finds the task settled and says nothing a second time.
+        let deciding = held.chats().deciding();
+        crate::handoff::operator_stopped(held, session, wrote, tell, &deciding);
     }
     if let Err(why) = held.close_chat(session) {
         tracing::warn!("purlis: chat {session}, stopped, did not end cleanly ({why})");
