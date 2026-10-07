@@ -86,7 +86,7 @@
 //!
 //! **Nothing of charter's but its two sockets.** A program is handed its stdin, stdout and
 //! stderr and no other descriptor: every one above 2 is closed as it starts
-//! ([`inherit_nothing_else`], this workspace's one audited `unsafe`), and the executor's pairs
+//! ([`inherit_nothing_else`], this crate's one audited `unsafe`), and the executor's pairs
 //! are made under [`crate::forklock::while_descriptors_are_made`], so no *other* program can
 //! inherit them half-made either.
 //!
@@ -1343,7 +1343,8 @@ fn highest_descriptor() -> i32 {
 const MOST_DESCRIPTORS: u64 = 1 << 20;
 
 /// Every descriptor above 2 is closed in the program as it starts: **the one `unsafe` in this
-/// workspace**, allowed by the operator on 2026-09-23 ("Allow one audited block").
+/// crate**, and the first of the workspace's two (the other reads a process's parent on macOS,
+/// in `purlis-same-user`), allowed by the operator on 2026-09-23 ("Allow one audited block").
 ///
 /// charter's own descriptors are close-on-exec, but not everything in the process is charter's:
 /// a C library can hold a descriptor without the flag, and on macOS every socket the standard
@@ -1385,7 +1386,7 @@ const MOST_DESCRIPTORS: u64 = 1 << 20;
 #[cfg(unix)]
 #[allow(
     unsafe_code,
-    reason = "the one audited block the operator allowed (2026-09-23); see the SAFETY comment"
+    reason = "the first audited block the operator allowed (2026-09-23); see the SAFETY comment"
 )]
 fn inherit_nothing_else(command: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;

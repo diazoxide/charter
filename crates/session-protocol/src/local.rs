@@ -55,23 +55,14 @@ pub trait Chats: Send + Sync + 'static {
     /// - a program's pid is in the set from the moment the program can run, before its first
     ///   instruction, never only once the start has returned.
     fn programs(&self) -> Vec<u32>;
-
-    /// Runs a program the check needs: `/bin/ps`, where the kernel's process table is not a
-    /// filesystem (everywhere but Linux). Through the host's own gate, so it is started the way
-    /// every program the host starts is (purlis-core's fork lock); an error refuses.
-    fn run(&self, command: &mut std::process::Command) -> std::io::Result<std::process::Output>;
 }
 
-/// A host that holds no chats: no process is inside one, and nothing is ever run for it.
+/// A host that holds no chats: no process is inside one.
 pub struct NoChats;
 
 impl Chats for NoChats {
     fn programs(&self) -> Vec<u32> {
         Vec::new()
-    }
-
-    fn run(&self, _: &mut std::process::Command) -> std::io::Result<std::process::Output> {
-        Err(std::io::Error::other("a host with no chats runs nothing"))
     }
 }
 
@@ -87,11 +78,10 @@ pub(crate) async fn inside_a_chat<C: Chats>(
         return Ok(None);
     }
     tokio::task::spawn_blocking(move || {
-        let parents = purlis_same_user::Parents::now(|ps| chats.run(ps))?;
         purlis_same_user::inside_a_chat(
             pid,
             &programs,
-            |at| parents.of(at),
+            purlis_same_user::Parents::of,
             purlis_same_user::session_of,
         )
     })

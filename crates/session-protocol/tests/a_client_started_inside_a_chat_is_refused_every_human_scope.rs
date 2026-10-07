@@ -13,7 +13,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purlis_session_protocol::auth::Scope;
 use purlis_session_protocol::link::{self, LinkError};
@@ -30,33 +29,18 @@ fn v1() -> Speaks {
     Speaks::new([Version { major: 1, minor: 0 }])
 }
 
-/// The chats a host holds, by their programs' pids, and the host's own way to start a program,
-/// which counts what it started and can be made to fail.
+/// The chats a host holds, by their programs' pids.
 struct Held {
     programs: Vec<u32>,
-    started: AtomicUsize,
-    fails: bool,
 }
 
 fn held(programs: Vec<u32>) -> Arc<Held> {
-    Arc::new(Held {
-        programs,
-        started: AtomicUsize::new(0),
-        fails: false,
-    })
+    Arc::new(Held { programs })
 }
 
 impl Chats for Held {
     fn programs(&self) -> Vec<u32> {
         self.programs.clone()
-    }
-
-    fn run(&self, command: &mut Command) -> std::io::Result<std::process::Output> {
-        self.started.fetch_add(1, Ordering::SeqCst);
-        if self.fails {
-            return Err(std::io::Error::other("the host's gate refused"));
-        }
-        command.output()
     }
 }
 
@@ -218,37 +202,4 @@ async fn a_client_orphaned_from_its_chat_is_still_refused_by_its_session() {
         .expect("the orphan connected");
 
     assert!(is_inside_a_chat(&verdict), "{verdict:?}");
-}
-
-/// Where the process table is read by a program (`/bin/ps`, everywhere but Linux), the program
-/// is started by the host's own runner ([`Chats::run`]), so a host starts it through its own
-/// gate; and a runner that fails is a doubt, which refuses (FD-27).
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-#[tokio::test]
-async fn the_process_table_is_read_through_the_hosts_own_runner_and_its_failure_refuses() {
-    for fails in [false, true] {
-        let socket = listening();
-        let shell = shell_running_the_peer(Scope::Terminal, &socket.path, "")
-            .spawn()
-            .unwrap();
-        let chats = Arc::new(Held {
-            programs: vec![std::process::id() + 100_000],
-            started: AtomicUsize::new(0),
-            fails,
-        });
-
-        let verdict = served(&socket, &chats).await;
-
-        assert_eq!(
-            chats.started.load(Ordering::SeqCst),
-            1,
-            "ps, through the runner"
-        );
-        if fails {
-            assert!(is_inside_a_chat(&verdict), "{verdict:?}");
-        } else {
-            assert_eq!(verdict.unwrap(), Scope::Terminal);
-        }
-        let _ = said(shell).await;
-    }
 }

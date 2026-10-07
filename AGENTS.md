@@ -37,13 +37,19 @@ in `purlis/purlis-plane` as history (ADR 0044). A new decision is the next numbe
   `CHARTER_RECORDED_BLESS=1 cargo test -p purlis-cli --test recorded_behaviour -- <name>`, read
   the fixture's diff, and say in the PR which contract moved and why. Never re-record to make a
   red run green without that sentence (ADR 0046).
-- **No `unsafe`, with one audited exception** (`unsafe_code = "deny"` workspace-wide). The
-  exception is `purlis_core::executor::inherit_nothing_else`: the `pre_exec` hook that closes
-  every descriptor above 2 in an extension's program, because nothing but code run between
-  `fork` and `exec` can. The operator's ruling, 2026-09-23: *"Allow one audited block."* It has
-  a `// SAFETY:` comment (clippy's `undocumented_unsafe_blocks` is denied), and
-  `crates/purlis-core/tests/one_unsafe_block.rs` fails if `unsafe` or an allow of the lint
-  appears anywhere else. A second block is a new ruling, not an edit.
+- **No `unsafe`, with two audited exceptions** (`unsafe_code = "deny"` workspace-wide), each
+  by the operator's ruling:
+  1. `purlis_core::executor::inherit_nothing_else`: the `pre_exec` hook that closes every
+     descriptor above 2 in an extension's program, because nothing but code run between `fork`
+     and `exec` can. Ruling, 2026-09-23: *"Allow one audited block."*
+  2. `purlis_same_user`'s `ancestry::pidinfo::read`: the one `proc_pidinfo` call, behind a
+     safe wrapper, that reads a process's parent and start time in-process on macOS, where
+     each hook line cost a `/bin/ps` run before. Ruling D-1407-8, 2026-10-07: a second audited
+     block, in `purlis-same-user`, for `proc_pidinfo`.
+
+  Each has a `// SAFETY:` comment (clippy's `undocumented_unsafe_blocks` is denied), and
+  `crates/purlis-core/tests/two_unsafe_blocks.rs` names both and fails if `unsafe` or an
+  allow of the lint appears anywhere else. A third block is a new ruling, not an edit.
 - **UI is built from Radix primitives, never hand-rolled markup**, and never behind a purlis API
   of our own — no `<Modal>`, no `<Field>`. A shadcn/ui component's source **copied into the repo
   is allowed** and is not that layer (ADR 0037, amended 2026-09-22). **One house set is the

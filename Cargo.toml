@@ -29,10 +29,14 @@ tempfile = "3"
 portable-pty = "0.9"
 
 [workspace.lints.rust]
-# `deny`, not `forbid`, for exactly one audited block: `executor::inherit_nothing_else`, the
-# `pre_exec` that closes every inherited descriptor in an extension's program (the operator,
-# 2026-09-23: "Allow one audited block"). `forbid` cannot be allowed anywhere, even there.
-# `crates/purlis-core/tests/one_unsafe_block.rs` fails the build if `unsafe` or an allow of
+# `deny`, not `forbid`, for exactly two audited blocks, each by the operator's ruling:
+# 1. `purlis_core::executor::inherit_nothing_else`, the `pre_exec` that closes every inherited
+#    descriptor in an extension's program (2026-09-23: "Allow one audited block");
+# 2. `purlis_same_user`'s `ancestry::pidinfo::read`, the `proc_pidinfo` call that reads a
+#    process's parent and start time in-process on macOS instead of running `/bin/ps`
+#    (D-1407-8, 2026-10-07: a second audited block, in purlis-same-user, for `proc_pidinfo`).
+# `forbid` cannot be allowed anywhere, even there.
+# `crates/purlis-core/tests/two_unsafe_blocks.rs` fails the build if `unsafe` or an allow of
 # this lint appears anywhere else.
 unsafe_code = "deny"
 
@@ -43,7 +47,7 @@ all = { level = "warn", priority = -1 }
 disallowed_methods = "deny"
 # The same, for the macros a `clippy.toml` names: `eprintln!` in purlis-core and the app (#647).
 disallowed_macros = "deny"
-# The one `unsafe` block says why it is sound, and so would any other.
+# Each audited `unsafe` block says why it is sound, and so would any other.
 undocumented_unsafe_blocks = "deny"
 
 # persona-statistics is an extension's program, and charter hashes an extension's whole directory

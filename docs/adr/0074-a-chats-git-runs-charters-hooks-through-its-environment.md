@@ -208,16 +208,25 @@ is in `docs/plane-format.md`, *Provenance trailers*.
   terminal opened from the chat keeps it, and the operator's commits there are theirs. So
   purlis stamps only when the committing process descends from the program the app started for
   that chat, whose pid the app's record keeps (`chats[].pid`). The walk reads `/proc` on Linux
-  and one `ps` elsewhere, and every doubt answers "not the agent". The pid is recorded only
+  and asks the kernel in its own process on macOS (`proc_pidinfo`, amended 2026-10-07,
+  D-1407-8; it was one `ps` run before), and every doubt answers "not the agent". The pid is recorded only
   while that program runs: the record is written again when it ends, and the record written at
   quit names no pid, so a pid the system may hand to another process is never one purlis
   vouches for. The same rule covers `purlis save` from inside a chat.
 
   Its limits, each of which fails closed (the commit is left as written, never stamped wrongly):
-  - **A sandboxed chat gets no trailers yet** (operator ruling, 2026-10-03). Inside the sandbox
-    ADR 0067 runs a chat's commands in, the walk cannot reach the harness: on Linux the sandbox
-    gives commands their own pid namespace, and on macOS it does not let them run `ps`. Binding
-    provenance to the sandbox purlis launched is a follow-up (#1021).
+  - **A sandboxed chat on Linux gets no trailers yet** (operator ruling, 2026-10-03). Inside
+    the sandbox ADR 0067 runs a chat's commands in, the walk cannot reach the harness: the
+    sandbox gives commands their own pid namespace. Binding provenance to the sandbox purlis
+    launched is a follow-up (#1021).
+
+    **On macOS that ruling is lifted** (operator ruling D-1407-8b, 2026-10-07). It held there
+    only because the sandbox does not let a chat's commands run `ps`. The walk now asks the
+    kernel in its own process, which a sandbox allows for the processes inside it, and the
+    harness is one of them: the walk stops on the recorded pid without reading anything
+    above it. So a sandboxed macOS chat's commits get the trailers, as an unsandboxed chat's
+    do. A sandbox that hides a process between the commit and the harness still ends the
+    walk early, and that commit is left as written.
   - **Windows is never stamped.** purlis has no way to read another process's parent there
     yet, so the answer is always "not the agent".
   - **A process that left the tree is not stamped**: a detached editor, or a job that outlived

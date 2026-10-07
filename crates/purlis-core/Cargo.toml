@@ -182,7 +182,7 @@ workspace = true
 [target."cfg(unix)".dependencies]
 # `termios` is for `ttyname`: the last rung of `session.terminal()` is the controlling tty's
 # device name, and the workspace denies `unsafe_code`, which rules out calling libc for it
-# directly (the one exception is `executor::inherit_nothing_else`; see CLAUDE.md). `system` is
+# directly (this crate's one exception is `executor::inherit_nothing_else`; see AGENTS.md). `system` is
 # for `uname`: the dispatch and skill logs are one file per machine, named by its host.
 rustix = { version = "1", features = ["fs", "process", "stdio", "system", "termios"] }
 # Whether a hook socket's peer and its directory are this user's alone (FD-6).
