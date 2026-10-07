@@ -938,6 +938,33 @@ pub struct Denied {
 }
 
 impl Denied {
+    /// **These denials, and what waits to be told to a chat on its next turn**
+    /// (`<state>/handbacks/`, D-T59-19): the reports of the chats it dispatched, and purlis's
+    /// own word on a dispatch the person was asked about (#1436, #1437). Neither read nor
+    /// written, under every spelling of the state folder.
+    ///
+    /// **Only for a harness whose hooks run outside its sandbox**
+    /// ([`crate::harness::adapter::HarnessAdapter::sandbox_holds_what_it_starts`] says no).
+    /// The app leaves those files and purlis's hooks take them, reading and then removing
+    /// each. Where the sandbox confines the harness's tools and not its hooks, nothing inside
+    /// it needs the folder, and a chat that could write there could put a line in purlis's
+    /// voice into another chat's turn. Where the sandbox is a wrap around the whole harness,
+    /// its hooks run inside it, and denying the folder would cut every report off: there it
+    /// stays as it was, until delivery moves onto the hook socket (#1457), and what stands is
+    /// the check each file gets as it is read ([`crate::handback`]).
+    #[must_use]
+    pub fn and_what_waits_for_a_chat(mut self, root: &Path) -> Self {
+        for state in crate::names::STATE_DIR.spellings() {
+            self.paths.push(Denial {
+                class: Class::Integrity,
+                path: root.join(state).join(crate::handback::DIR_NAME),
+                access: Access::ReadWrite,
+                named: None,
+            });
+        }
+        self
+    }
+
     /// The denials for a chat in the plane at `root`, on `machine`.
     pub fn of(root: &Path, machine: &Machine) -> Self {
         let ctx = crate::secrets::Ctx::new(root, machine.env.clone());
@@ -2655,6 +2682,18 @@ pub(crate) fn applied_of(
     root: &Path,
     machine: &Machine,
 ) -> Result<Applied, NotStarted> {
+    // What waits for a chat's next turn is denied where the harness's hooks, which deliver
+    // it, run outside the sandbox ([`Denied::and_what_waits_for_a_chat`]).
+    let with_what_waits;
+    let compiled = if harness.adapter().sandbox_holds_what_it_starts() {
+        compiled
+    } else {
+        with_what_waits = Compiled {
+            denied: compiled.denied.clone().and_what_waits_for_a_chat(root),
+            ..compiled.clone()
+        };
+        &with_what_waits
+    };
     let (form, denied) = compile_checked(compile, compiled, root, machine)?;
     let mut held = denied.clone();
     if let Some(keychains) = seatbelt::keychains(machine.home.as_deref())

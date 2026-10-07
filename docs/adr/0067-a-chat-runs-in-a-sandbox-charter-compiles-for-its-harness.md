@@ -296,6 +296,29 @@ brief or a report written for one persona is not readable by a chat running as a
 gets its own dispatch's report on the delivery path, and its own list from the app's answer,
 never from the file.
 
+*Amended 2026-10-07 (D-T59-19, train 59; amends class 2):* **class 2 also holds what waits to
+be told to a chat on its next turn, where the harness's hooks run outside its sandbox.**
+`<state>/handbacks/`, where the app leaves a dispatched chat's report and its own word on a
+dispatch the person was asked about, is denied for reading as well as writing, under every
+spelling of the state folder, to a chat of a harness whose sandbox confines its tools and not
+its hooks (`sandbox_holds_what_it_starts` says no: Claude Code today). The app leaves those
+files and purlis's hooks take them, so nothing inside such a chat needs the folder; a chat that
+could write there could put a line in purlis's voice into another chat's turn, and one that
+could read there could read a report written for another chat.
+
+**It is not denied where the sandbox is a wrap around the whole harness** (Codex and opencode
+today), because the hooks that deliver run inside the wrap (amended 2026-10-04, V73c) and read
+and then remove each file: a denial there would cut every report, stop word and answer off.
+On those harnesses a chat can still read and write that folder. What stands there is the check
+each file gets as it is read (a name purlis would not have written, a summary it would not
+have sent, drop the file), until delivery moves onto the hook socket (#1457) and the denial can
+cover them too.
+
+One command a chat can run did move a folder there: `purlis workspace rename` moves
+`handbacks/workspace-<old>`. Run inside a chat that is denied the folder it now leaves it and
+says so, and the app moves it when the project is next opened, from the rename's own journal.
+Where the project's sandbox is off, nothing here holds, as for every class.
+
 *Amended 2026-10-03 (rulings V87d and V87f):*
 
 - **Linked folders, every harness.** No sandboxed chat starts in a folder reached through a

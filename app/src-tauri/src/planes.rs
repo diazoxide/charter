@@ -1166,6 +1166,11 @@ impl Planes {
         // so it runs only when no chat of this plane is running in this app — the chats its
         // reopen record will bring back are what it keeps.
         purlis_core::retention::on_open(&root, std::time::SystemTime::now());
+        // The reports kept for a workspace a sandboxed chat renamed: that chat's sandbox does
+        // not let it move them, so the app does, here, where it is not sandboxed (D-T59-19).
+        if let Err(why) = purlis_core::wscmd::rename::kept_reports_follow(&root) {
+            tracing::warn!("purlis: reports kept for a renamed workspace were not moved ({why})");
+        }
         // And a dispatch whose persona chat that record does not bring back has ended (#1452).
         purlis_core::dispatchrecord::settle_on_open(&root, chrono::Utc::now());
         let held = Arc::new(self.hold(id.clone(), root));

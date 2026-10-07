@@ -3254,7 +3254,15 @@ before it is stored.
   A report waits here from the moment a handed-off chat sends it (`purlis handoff report`),
   or a dispatched task sends its own (`purlis dispatch report`, #1436), until the turn it is
   handed to.
-- **Tier:** Clone state, transient — a report waiting to be taken by one chat's hook.
+- **Tier:** Clone state, transient — a report waiting to be taken by one chat's hook. **Not
+  readable or writable by a sandboxed chat of a harness whose hooks run outside its sandbox**
+  (Claude Code today; ADR 0067 class 2 as amended, D-T59-19): the app leaves these files and
+  purlis's hooks take them. **On Codex and opencode a chat can still read and write this
+  folder**: the wrap holds the whole harness, hooks included, and the hooks are what deliver,
+  so it is not denied there until delivery moves onto the hook socket (#1457); the checks each
+  file gets as it is read are what stand. `purlis workspace rename` run inside a chat that is
+  denied the folder leaves `workspace-<old>/` where it is and says so; the app moves it to `workspace-<new>/` when the project is next opened, from the rename's
+  journal (`wscmd::rename::kept_reports_follow`).
 - **Written by:** `purlis_core::handback::leave` (purlis#259), from the app's answer to a
   report, from `handback::orphan` when a chat with reports waiting is closed, and from
   `handback::moved` when a chat with reports waiting is started again under a new number,
