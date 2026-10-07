@@ -15,6 +15,10 @@ import type { LiveSetting } from "./groups";
  * **An administrator's policy has the last word** (#1343, ADR 0067 §1): each value it locks is
  * shown as "Locked by policy", with who set it ({@link SandboxPolicy}'s `locked_by`), and offers
  * no control. The presets in force are the project's within the policy's.
+ *
+ * **A policy that forbids the opt-out requires the sandbox** (#1423, ADR 0067 §4 as amended): the
+ * mode then reads "On, required by policy" with who set it (`required`), in a project that has
+ * not turned it on too, and offers no control.
  */
 
 /** `[sandbox] mode`, which this page turns on and never back off (D-SE17g). */
@@ -120,25 +124,29 @@ function capitalised(said: string): string {
  * on writes `mode = "on"`; nothing here takes it back off, and it has no Undo (D-SE17g).
  */
 function modeStatus(sandbox: SandboxState | undefined): Control {
-  const policy = sandbox?.policy ?? null;
+  // Where policy requires the sandbox (#1423), that is the mode, whatever the file says, and
+  // there is nothing to turn on.
+  const required = sandbox?.policy?.required ?? null;
   return {
     ...textAt(SANDBOX_MODE, "Sandbox"),
     kind: "status",
-    hint: "Settings can turn it on, never off.",
+    hint:
+      required === null
+        ? "Settings can turn it on, never off."
+        : "Policy on this machine turns it on for every project.",
     // Any `mode` reads as on: one that is not "on" is refused and read as on (ADR 0067).
     status: (value) =>
-      value !== ""
+      required !== null || value !== ""
         ? [
-            policy?.opt_out === true
-              ? `On for everyone in this project, and no chat runs without it. ${policy.locked_by}`
-              : "On for everyone in this project. To run one chat without it, use that chat's tab.",
+            required ??
+              "On for everyone in this project. To run one chat without it, use that chat's tab.",
             // The opt-out count is this machine's, and is never sent (ADR 0067 §7, V78 d).
             ...(sandbox?.on === true && sandbox.said !== null
               ? [`${capitalised(sandbox.said)}. Counted on this machine only, and never sent.`]
               : []),
           ].join(" ")
         : "Off in this project.",
-    turnOn: { label: "Turn the sandbox on", value: "on" },
+    ...(required === null ? { turnOn: { label: "Turn the sandbox on", value: "on" } } : {}),
   };
 }
 
@@ -433,7 +441,10 @@ export function sandboxReasons(
   local: SettingsFile,
   sandbox: SandboxState | undefined,
 ): LiveSetting[] {
-  const when = valueAt(shared, SANDBOX_MODE) !== undefined ? "" : " Once the sandbox is on.";
+  const when =
+    valueAt(shared, SANDBOX_MODE) !== undefined || sandbox?.on === true
+      ? ""
+      : " Once the sandbox is on.";
   const caches = presetsOn(shared, sandbox?.presets ?? [], sandbox?.policy ?? null).some(
     (one) => one.word === PACKAGES,
   );

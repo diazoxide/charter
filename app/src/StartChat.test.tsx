@@ -641,7 +641,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
 
   it("shows why the sandbox cannot be applied, and the one way on is said on the button", async () => {
     const why =
-      "this plane runs every chat sandboxed, and this machine cannot apply the sandbox: socat is not installed";
+      "this project runs every chat sandboxed, and this machine cannot apply the sandbox: socat is not installed";
     const { onStart, user } = showWith({
       state: "refused",
       said: why,
@@ -717,6 +717,25 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
     expect(onStart).not.toHaveBeenCalled();
   });
 
+  it("starts nothing on a system with no backend where policy requires the sandbox, and names no opt-out (#1423)", () => {
+    const said =
+      "purlis has no sandbox backend on Windows yet, and policy requires the sandbox for every chat on this machine, so nothing was started.";
+    const locked =
+      "Policy forbids starting a chat without the sandbox. Locked by policy, set by Platform team in /etc/purlis/policy.json.";
+    const { onStart } = showWith({ state: "refused", said, install: null, locked });
+
+    const sandbox = screen.getByRole("region", { name: "Sandbox" });
+    expect(sandbox).toHaveTextContent(said);
+    // Who to ask, once: the policy and its owner.
+    expect(sandbox).toHaveTextContent(locked);
+    expect(sandbox.textContent?.split("Locked by policy")).toHaveLength(2);
+    expect(sandbox).not.toHaveTextContent("new-chat picker");
+    expect(screen.queryByRole("checkbox", { name: "start without the sandbox" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start without the sandbox" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it("carries the opt-out through the approval, and says so on its button", async () => {
     const onApprove = vi.fn();
     render(
@@ -754,7 +773,7 @@ describe("a chat in a project that runs every chat sandboxed (ADR 0067 §7, V78 
 describe("a harness charter cannot wrap on this system in a sandboxed project", () => {
   it("shows Codex's refusal and starts it only without the sandbox", async () => {
     const said =
-      "this plane runs every chat sandboxed, and purlis runs Codex inside a sandbox of its own, which it can apply on macOS but not yet on Linux (#1040), so it was not started. Start this chat on a Claude Code profile.";
+      "this project runs every chat sandboxed, and purlis runs Codex inside a sandbox of its own, which it can apply on macOS but not yet on Linux (#1040), so it was not started. Start this chat on a Claude Code profile.";
     const onStart = vi.fn();
     render(
       <StartChat
@@ -792,23 +811,23 @@ describe("a program the sandbox will not bind (V87g)", () => {
   it.each([
     [
       "a program where the chat can write",
-      "this plane runs every chat sandboxed, and the program lives where this chat can write: /work/acme/bin/claude, so it was not started sandboxed. Keep the program outside the plane and outside what a chat may write.",
+      "this project runs every chat sandboxed, and the program lives where this chat can write: /work/acme/bin/claude, so it was not started sandboxed. Keep the program outside the plane and outside what a chat may write.",
     ],
     [
       "a command naming a file where the chat can write",
-      "this plane runs every chat sandboxed, and this profile's command names /tmp/run.sh, which lies where this chat can write, so it was not started sandboxed. Keep every file the command names outside the plane and outside what a chat may write.",
+      "this project runs every chat sandboxed, and this profile's command names /tmp/run.sh, which lies where this chat can write, so it was not started sandboxed. Keep every file the command names outside the plane and outside what a chat may write.",
     ],
     [
       "a command word too long to check",
-      "this plane runs every chat sandboxed, and a word of this profile's command is longer than 4 KiB, which purlis does not check, so it was not started sandboxed. Keep what it says in a file outside the plane and name that file instead.",
+      "this project runs every chat sandboxed, and a word of this profile's command is longer than 4 KiB, which purlis does not check, so it was not started sandboxed. Keep what it says in a file outside the plane and name that file instead.",
     ],
     [
       "a program named by a relative path",
-      "this plane runs every chat sandboxed, and this profile's program is a relative path, which would be found in a folder the chat can write, so it was not started sandboxed. Name the program by its full path.",
+      "this project runs every chat sandboxed, and this profile's program is a relative path, which would be found in a folder the chat can write, so it was not started sandboxed. Name the program by its full path.",
     ],
     [
       "a program that does not answer as Claude Code",
-      "this plane runs every chat sandboxed, and this profile's program does not answer as Claude Code, whose sandbox it was given, so it was not started sandboxed.",
+      "this project runs every chat sandboxed, and this profile's program does not answer as Claude Code, whose sandbox it was given, so it was not started sandboxed.",
     ],
   ])("shows %s, and starts it only without the sandbox", async (_, said) => {
     const onStart = vi.fn();

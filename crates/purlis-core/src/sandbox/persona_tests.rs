@@ -143,7 +143,7 @@ fn a_change_to_a_persona_s_hosts_is_told_naming_whose_chats_reach_it() {
             "[sandbox]\nmode = \"on\"\nhosts = [\"a.example\"]\n\
              [sandbox.personas.devops]\nhosts = [\"10.100.39.145:6443\"]\n"
         ))
-        .granted_hosts(),
+        .granted_hosts(&crate::sandbox::policy::Locks::none()),
         ["a.example", "10.100.39.145:6443 for devops chats"]
     );
 }

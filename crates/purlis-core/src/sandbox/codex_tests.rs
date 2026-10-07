@@ -47,6 +47,7 @@ fn line_in(
             cwd: Some(cwd),
             hook_socket: None,
             confinement: Some(confinement),
+            no_opt_out: false,
         },
     )
 }
@@ -456,6 +457,7 @@ fn started_in(plane: &Path, home: &Path, armed: &[String]) -> PathBuf {
                 cwd: Some(&cwd),
                 hook_socket: None,
                 confinement: Some(&confinement),
+                no_opt_out: false,
             },
         )
         .expect("starts");
@@ -617,7 +619,7 @@ fn a_codex_chat_with_no_data_home_is_refused_and_no_home_is_made() {
     let refused = line_in(&applied, &cwd, "", &confinement).expect_err("refused");
     assert_eq!(
         refused,
-        "this plane runs every chat sandboxed, and purlis has no data folder on this machine \
+        "this project runs every chat sandboxed, and purlis has no data folder on this machine \
          to keep this project's Codex home in, so nothing was started."
     );
 }
@@ -740,7 +742,7 @@ fn a_chat_whose_directory_holds_codexs_home_is_not_wrapped() {
     let refused = line_in(&applied, plane.path(), "", &confinement).expect_err("refused");
     assert_eq!(
         refused,
-        "this plane runs every chat sandboxed, and purlis cannot wrap a Codex chat whose \
+        "this project runs every chat sandboxed, and purlis cannot wrap a Codex chat whose \
          directory holds Codex's own files, or is inside them, so nothing was started."
     );
 }
@@ -771,12 +773,13 @@ fn a_wrapped_codex_chat_with_no_confinement_is_refused() {
                 cwd: Some(&cwd),
                 hook_socket: None,
                 confinement: None,
+                no_opt_out: false,
             },
         )
         .expect_err("refused");
     assert_eq!(
         refused,
-        "this plane runs every chat sandboxed, and purlis's egress proxy was not started for \
+        "this project runs every chat sandboxed, and purlis's egress proxy was not started for \
          this Codex chat, so nothing was started."
     );
 }
@@ -800,6 +803,7 @@ fn line_reporting_on(
                 cwd: Some(cwd),
                 hook_socket: socket,
                 confinement: Some(confinement),
+                no_opt_out: false,
             },
         )
         .expect("starts")

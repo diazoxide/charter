@@ -529,9 +529,11 @@ describe("values an administrator's policy locks (#1343)", () => {
     personal_hosts: false,
     persona_hosts: false,
     opt_out: false,
+    required: null,
     write_grants: false,
     ...more,
   });
+  const REQUIRED = "On, required by policy, set by Platform team in /etc/purlis/policy.json.";
 
   it("shows locked presets as locked, with who set them, and no box to tick", async () => {
     const { sent } = core({ sandbox: state({ policy: policy({ presets: ["model-providers"] }) }) });
@@ -550,15 +552,48 @@ describe("values an administrator's policy locks (#1343)", () => {
     expect(sent).toEqual([]);
   });
 
-  it("says the opt-out is locked on the mode's status line", async () => {
-    core({ sandbox: state({ policy: policy({ opt_out: true }) }) });
+  it("says the sandbox is on and required by policy on the mode's status line (#1423)", async () => {
+    core({ sandbox: state({ policy: policy({ opt_out: true, required: REQUIRED }) }) });
     const page = await atSandbox();
 
     const status = await within(page).findByRole("group", { name: "Sandbox" });
-    expect(status).toHaveTextContent(
-      `On for everyone in this project, and no chat runs without it. ${LOCKED}`,
-    );
+    expect(status).toHaveTextContent(REQUIRED);
+    expect(status).toHaveTextContent("Counted on this machine only, and never sent.");
     expect(status).not.toHaveTextContent("use that chat's tab");
+    expect(within(status).queryByRole("button")).toBeNull();
+  });
+
+  it("shows a project that has not turned the sandbox on as on, required by policy, with no control (#1423)", async () => {
+    // No `mode` in the committed file: policy turns the sandbox on here all the same.
+    const { sent } = core({
+      shared: [],
+      sandbox: state({ said: null, policy: policy({ opt_out: true, required: REQUIRED }) }),
+    });
+    const page = await atSandbox();
+
+    const status = await within(page).findByRole("group", { name: "Sandbox" });
+    expect(status).toHaveTextContent(REQUIRED);
+    expect(status).not.toHaveTextContent("Off in this project");
+    expect(within(status).queryByRole("button", { name: "Turn the sandbox on" })).toBeNull();
+    expect(within(status).queryByRole("button")).toBeNull();
+    // The page says what a chat here reaches, as for any sandboxed project.
+    await waitFor(() =>
+      expect(page).toHaveTextContent(
+        "A chat here can change files in the folder it works in and in the project's package caches, and reach AI providers, code hosting and package registries.",
+      ),
+    );
+    expect(page).not.toHaveTextContent("Chats here run without a sandbox");
+    expect(page).not.toHaveTextContent("Once the sandbox is on.");
+    expect(sent).toEqual([]);
+  });
+
+  it("offers Turn the sandbox on where a policy requires nothing", async () => {
+    core({ shared: [], sandbox: state({ on: false, said: null, policy: policy() }) });
+    const page = await atSandbox();
+
+    const status = await within(page).findByRole("group", { name: "Sandbox" });
+    expect(status).toHaveTextContent("Off in this project.");
+    expect(within(status).getByRole("button", { name: "Turn the sandbox on" })).toBeInTheDocument();
   });
 
   it("says which hosts policy allows, and that a persona's own are locked out", async () => {

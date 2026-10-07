@@ -157,7 +157,7 @@ pub fn bound(root: &Path, cwd: Option<&Path>, workspace: &str) -> Result<(), Str
 
 /// The hosts a clone made for `asker` may reach: its sandbox's egress where it runs sandboxed
 /// (D-5), or `None`, no limit, where it does not — a shell tab, a chat a person started without
-/// the sandbox, or a project that has not turned it on. A `charter.toml` that cannot be read
+/// the sandbox, or a project where none is in force. A `charter.toml` that cannot be read
 /// may turn it on, so it refuses rather than reading as no limit.
 pub fn hosts(root: &Path, asker: &Asker) -> Result<Option<Vec<String>>, String> {
     if !asker.harnessed || asker.unsandboxed {
@@ -170,8 +170,7 @@ pub fn hosts(root: &Path, asker: &Asker) -> Result<Option<Vec<String>>, String> 
     // An administrator's policy holds a clone's egress as it holds the chat's (#1343).
     let locks = crate::sandbox::policy::Locks::of(root);
     Ok(plane
-        .said()
-        .policy
+        .in_force(&locks)
         .map(|policy| crate::sandbox::hosts(&locks.presets(&policy.egress), &plane, &locks)))
 }
 

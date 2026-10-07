@@ -201,7 +201,7 @@ impl CacheHome {
 /// Why a chat does not start when purlis cannot make or write `path` of its project's caches.
 fn unwritable(path: &Path, err: &std::io::Error) -> String {
     format!(
-        "this plane runs every chat sandboxed, and purlis could not make {} for the project's \
+        "this project runs every chat sandboxed, and purlis could not make {} for the project's \
          package caches ({err}), so nothing was started.",
         path.display()
     )

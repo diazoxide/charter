@@ -170,14 +170,14 @@ impl HarnessAdapter for Codex {
         ] {
             if let Some(flag) = crate::sandbox::codex::loosened_by(words) {
                 return Err(format!(
-                    "this plane runs every chat sandboxed, and {named} {flag}, which would run \
+                    "this project runs every chat sandboxed, and {named} {flag}, which would run \
                      {} outside the sandbox purlis compiled for it, so nothing was started. \
                      {fix}",
                     Harness::Codex.title()
                 ));
             }
         }
-        let lead = "this plane runs every chat sandboxed, and";
+        let lead = "this project runs every chat sandboxed, and";
         let Some(cwd) = at.cwd else {
             return Err(format!(
                 "{lead} a Codex chat with no directory of its own has nowhere the sandbox lets \
@@ -204,7 +204,7 @@ impl HarnessAdapter for Codex {
             confinement.proxy_port(),
             at.hook_socket,
         )
-        .map_err(|why| crate::sandbox::seatbelt::not_started(lead, why))?;
+        .map_err(|why| crate::sandbox::seatbelt::not_started(lead, why, !at.no_opt_out))?;
         // Only now, with the line known to start (review F6): a refused chat seeds no home.
         crate::sandbox::codex::prepare(wrap, cwd, &armed);
         let mut charters = charters;

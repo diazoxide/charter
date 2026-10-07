@@ -4552,7 +4552,10 @@ export type SandboxGrant = {
 	at: number | null,
 	/**  The chat it was granted from, where it came from one. */
 	chat: string | null,
-	/**  Why a policy locks it out, where one does. */
+	/**
+	 *  Why an administrator's policy locks it out, where one does: it is kept, and reaches or
+	 *  writes nothing while the policy stands. The list marks it "Locked by policy".
+	 */
 	locked: string | null,
 };
 
@@ -4573,6 +4576,12 @@ export type SandboxPolicy = {
 	persona_hosts: boolean,
 	/**  Whether starting a chat without the sandbox is forbidden. */
 	opt_out: boolean,
+	/**
+	 *  Where the policy requires the sandbox (#1423): "On, required by policy, set by <who> in
+	 *  <file>.", which Settings says of the mode, with no control. One that forbids the opt-out
+	 *  does, in every project on this machine. `null` where it does not.
+	 */
+	required: string | null,
 	/**  Whether every folder a grant would let a chat write is forbidden. */
 	write_grants: boolean,
 };
@@ -4592,7 +4601,10 @@ export type SandboxPreset = {
 
 /**  What the project view says about the sandbox. */
 export type SandboxState = {
-	/**  Whether the project turned the sandbox on. */
+	/**
+	 *  Whether chats here run sandboxed: the project turned the sandbox on, or an
+	 *  administrator's policy requires it on this machine (`policy.required`, #1423).
+	 */
 	on: boolean,
 	/**
 	 *  Whether the one-time offer is due: an existing project that has not turned it on, and

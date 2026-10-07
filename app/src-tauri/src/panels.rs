@@ -674,8 +674,7 @@ pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRe
         .clone()
         .filter(|who| purlis_core::start::persona_for(root, who));
     let persona_hosts = purlis_core::sandbox::Plane::read(root)
-        .said()
-        .policy
+        .in_force(&purlis_core::sandbox::policy::Locks::of(root))
         .and_then(|policy| {
             let who = persona.as_deref()?;
             policy

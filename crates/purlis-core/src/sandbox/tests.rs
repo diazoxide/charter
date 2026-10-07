@@ -998,7 +998,7 @@ fn a_sandbox_is_refused_a_line_that_would_drop_it_and_says_where_the_flag_came_f
             Vec::new()
         ),
         Err(
-            "this plane runs every chat sandboxed, and the profile's command names `-s`, which \
+            "this project runs every chat sandboxed, and the profile's command names `-s`, which \
              would run Codex outside the sandbox purlis compiled for it, so nothing was \
              started. Take it out of the profile's command."
                 .to_owned()
@@ -1012,7 +1012,7 @@ fn a_sandbox_is_refused_a_line_that_would_drop_it_and_says_where_the_flag_came_f
             words("-c sandbox_mode=\"danger-full-access\"")
         ),
         Err(
-            "this plane runs every chat sandboxed, and the chat's own arguments name \
+            "this project runs every chat sandboxed, and the chat's own arguments name \
              `-c sandbox_mode`, which would run Codex outside the sandbox purlis compiled for \
              it, so nothing was started. Start it without that argument."
                 .to_owned()
@@ -1102,7 +1102,7 @@ fn a_linux_machine_without_socat_is_told_which_program_and_how_to_install_it() {
     .expect_err("refused");
     assert_eq!(
         refused.to_string(),
-        "this plane runs every chat sandboxed, and this machine cannot apply the sandbox: socat \
+        "this project runs every chat sandboxed, and this machine cannot apply the sandbox: socat \
          is not installed — install it with `sudo apt install socat` or `sudo dnf install \
          socat`. Nothing was started."
     );
@@ -1488,12 +1488,12 @@ fn no_sandboxed_chat_starts_in_a_folder_reached_through_a_link() {
         let confinement = applied.confine().expect("confined");
         let at = |cwd: std::path::PathBuf| (cwd, confinement.as_ref());
         for (cwd, want) in [
-            (workspaces.join("swapped"), FOLDER_LINKED),
-            (workspaces.join("swapped/below"), FOLDER_LINKED),
-            (plane.path().join("ws-link"), FOLDER_LINKED),
-            (workspaces.join("a-file"), FOLDER_LINKED),
-            (workspaces.join("missing"), FOLDER_LINKED),
-            (elsewhere.path().to_path_buf(), FOLDER_OUTSIDE),
+            (workspaces.join("swapped"), FolderRefusal::Linked),
+            (workspaces.join("swapped/below"), FolderRefusal::Linked),
+            (plane.path().join("ws-link"), FolderRefusal::Linked),
+            (workspaces.join("a-file"), FolderRefusal::Linked),
+            (workspaces.join("missing"), FolderRefusal::Linked),
+            (elsewhere.path().to_path_buf(), FolderRefusal::Outside),
         ] {
             let (cwd, confinement) = at(cwd);
             assert_eq!(
@@ -1505,7 +1505,7 @@ fn no_sandboxed_chat_starts_in_a_folder_reached_through_a_link() {
                         ..At::default()
                     }
                 ),
-                Err(want.to_owned()),
+                Err(want.said(&policy::Locks::none())),
                 "{harness:?} in {}",
                 cwd.display()
             );
@@ -1598,7 +1598,7 @@ fn a_folder_is_found_inside_its_plane_whichever_side_names_it_through_a_link() {
     ] {
         assert_eq!(
             folder_refusal(&root, &cwd),
-            Some(FOLDER_LINKED),
+            Some(FolderRefusal::Linked),
             "{}",
             cwd.display()
         );
@@ -1778,6 +1778,7 @@ fn a_manifest_of_the_chats_folders_linked_to_its_ground_refuses_the_chat() {
                 cwd: Some(&sub),
                 hook_socket: None,
                 confinement: None,
+                no_opt_out: false,
             },
         );
         let why = line.expect_err("refused");
@@ -2538,7 +2539,7 @@ fn a_denial_that_covers_the_chat_s_ground_refuses_it_naming_the_file_and_the_wor
         )
         .map(|it| it.to_string()),
         Some(
-            "this plane runs every chat sandboxed, and `../ws` in /plane/ws/.mcp.json reads as \
+            "this project runs every chat sandboxed, and `../ws` in /plane/ws/.mcp.json reads as \
              a script purlis keeps this chat from changing, which would leave it unable to \
              write /plane/ws, so nothing was started. Change that word in /plane/ws/.mcp.json, \
              or start this chat without the sandbox from the new-chat picker."
@@ -2552,7 +2553,7 @@ fn a_denial_that_covers_the_chat_s_ground_refuses_it_naming_the_file_and_the_wor
         )
         .map(|it| it.to_string()),
         Some(
-            "this plane runs every chat sandboxed, and its vaults rules would keep the chat \
+            "this project runs every chat sandboxed, and its vaults rules would keep the chat \
              from writing /home/op, so nothing was started. Start this chat without the \
              sandbox from the new-chat picker."
                 .to_owned()
@@ -2812,7 +2813,7 @@ fn a_config_purlis_could_not_read_through_refuses_the_chat() {
     assert_eq!(refused, NotStarted::Unread(named));
     assert_eq!(
         refused.to_string(),
-        "this plane runs every chat sandboxed, and a command in \
+        "this project runs every chat sandboxed, and a command in \
          /plane/ws/.claude/settings.json changes folder or names scripts more often than purlis \
          follows, from `./d64` on, so purlis cannot tell what it runs, and nothing was started. \
          Move that command into a script of its own, or start this chat without the sandbox \
@@ -2872,12 +2873,18 @@ fn the_hosts_a_teammate_is_told_of_include_the_forge_hosts() {
         "[sandbox]\nmode = \"on\"\nhosts = [\"10.0.0.5:6443\"]\n\n[[forge]]\nkind = \"gitlab\"\n\
          host = \"git.example.org:8443\"\n",
     ));
-    assert_eq!(plane.granted_hosts(), ["10.0.0.5:6443", "git.example.org"]);
+    assert_eq!(
+        plane.granted_hosts(&policy::Locks::none()),
+        ["10.0.0.5:6443", "git.example.org"]
+    );
     let without = Plane::of(Some(
         "[sandbox]\nmode = \"on\"\negress = []\n\n[[forge]]\nkind = \"gitlab\"\n\
          host = \"git.example.org\"\n",
     ));
-    assert_eq!(without.granted_hosts(), Vec::<String>::new());
+    assert_eq!(
+        without.granted_hosts(&policy::Locks::none()),
+        Vec::<String>::new()
+    );
 }
 
 /// Review of #1341, round 3: a chat can write all of a clone's git state, so this machine's
@@ -3294,7 +3301,7 @@ fn a_cache_link_purlis_cannot_take_out_is_named_in_the_refusal() {
     let path = std::path::Path::new("/data/cache-homes/k/npm");
     assert_eq!(
         caches_linked(path, "after"),
-        "this plane runs every chat sandboxed, and /data/cache-homes/k/npm of the project's \
+        "this project runs every chat sandboxed, and /data/cache-homes/k/npm of the project's \
          package caches is a link purlis could not take out (after making them), so nothing \
          was started. Remove that link and start the chat again."
     );
@@ -3914,14 +3921,18 @@ fn a_profile_too_large_to_hand_seatbelt_is_refused_by_name() {
     );
     // The way out, after what happened, as every refusal names one.
     assert_eq!(
-        seatbelt::not_started("purlis could not start this chat.", seatbelt::TOO_LARGE),
+        seatbelt::not_started(
+            "purlis could not start this chat.",
+            seatbelt::TOO_LARGE,
+            true
+        ),
         "purlis could not start this chat. purlis cannot hand the sandbox a profile this long: \
          the project's configs name more paths than one chat's sandbox can hold, so nothing was \
          started. Have the configs name fewer scripts, or start this chat without the sandbox \
          from the new-chat picker."
     );
     assert_eq!(
-        seatbelt::not_started("Lead.", seatbelt::CONTROL),
+        seatbelt::not_started("Lead.", seatbelt::CONTROL, true),
         format!("Lead. {}, so nothing was started.", seatbelt::CONTROL)
     );
 }

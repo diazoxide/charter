@@ -433,11 +433,12 @@ command before it runs a command that could write (`crates/purlis-cli/src/main.r
 
 ## `/etc/purlis/policy.json` — an administrator's policy (this machine, not the plane)
 
-Not a plane file: no project carries it and no chat writes it (#1343; ADR 0067 §1 and §4, C9).
-An administrator puts it on a machine to lock what every project's sandbox, and everyone working
-in it, may widen. The strictest value wins over the project's committed settings, your own and a
-persona's, and every value it locks shows "Locked by policy" in Settings with who set it, and
-offers no control. It is read by `crates/purlis-core/src/sandbox/policy.rs` (`Locks::of`).
+Not a plane file: no project carries it and no chat writes it (#1343, #1423; ADR 0067 §1 and §4
+as amended, C9). An administrator puts it on a machine to lock what every project's sandbox, and
+everyone working in it, may widen, and to require the sandbox in every project. The strictest
+value wins over the project's committed settings, your own and a persona's, and every value it
+locks shows "Locked by policy" in Settings with who set it, and offers no control. It is read by
+`crates/purlis-core/src/sandbox/policy.rs` (`Locks::of`).
 
 ```json
 {
@@ -460,17 +461,23 @@ offers no control. It is read by `crates/purlis-core/src/sandbox/policy.rs` (`Lo
 | `sandbox.hosts` | list of hosts | the hosts the project (its own and its `[[forge]]` blocks'), you, a persona or a block's Allow may add (`*.domain` covers every name under it; no port covers every port); any other is not reached. A preset's fixed list is `presets`' to lock |
 | `sandbox.personal-hosts` | bool | `false`: your own hosts, and a block's Allow for one chat or for you, reach no chat |
 | `sandbox.persona-hosts` | bool | `false`: a persona's own hosts reach no chat |
-| `sandbox.opt-out` | bool | `false`: forbids a person's opt-out in a project whose sandbox is on — no chat there starts without the sandbox from the new-chat picker or a block's Notice. It does not turn the sandbox on in a project that has not, and it does not hold a system with no sandbox backend |
+| `sandbox.opt-out` | bool | `false`: forbids a person's opt-out, and so **requires the sandbox** in every project on this machine. No chat starts without the sandbox from the new-chat picker or a block's Notice. A project with no `[sandbox]`, or one that has not turned it on, runs every chat sandboxed here as if it had, with the default presets (what its `[sandbox]` says applies, and `presets` and `hosts` hold it as they hold any project). Settings shows the mode as "On, required by policy" with who set it, and no control. On a system purlis has no sandbox backend for, no harness chat starts: the refusal names the policy and who set it |
 | `sandbox.write-grants` | bool | `false`: no folder is granted to a chat, from a block's Allow or Settings |
 
 Absent keys and `true` lock nothing. **It is read only when no one but an administrator could
 have written it**: a regular file, never a link, owned by root, in a folder owned by root, and
-neither writable by anyone else; every chat is denied writing its folder. A file that is there
-and fails that (or a folder that is there and fails it, file or no file), does not parse, or
-says anything this version does not know is refused, and
-then every lock but the presets is set, so purlis never reads a policy it cannot trust as no
-policy. No other layer of C9 (an MDM profile, a Windows policy key, an organisation's policy) is
-read yet.
+neither writable by anyone else by its permission bits; every chat is denied writing its folder.
+A file that is there and fails that (or a folder that is there and fails it, file or no file),
+does not parse, or says anything this version does not know is refused, and then every lock but
+the presets is set, the required sandbox among them, so purlis never reads a policy it cannot
+trust as no policy. No other layer of C9 (an MDM profile, a Windows policy key, an
+organisation's policy) is read yet, so no policy is read on Windows.
+
+**Access-control lists are not read.** On Linux an ACL that grants write shows in the
+permission bits (the group bits are its mask) and is refused. On macOS an ACL is kept apart from
+the bits, so a policy file or folder whose ACL lets someone else write passes this check. Only
+root can set one there: `ls -le /etc/purlis` shows it, and `chmod -N` removes it. The folders
+above `/etc/purlis` are not checked either; they are root's on a stock system, as for `sudoers`.
 
 ## Finding the plane, and the plane root
 

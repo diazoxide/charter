@@ -10,7 +10,19 @@
 //!
 //! **Only a file a chat cannot have written is read** ([`judge`]): a regular file, never a
 //! link, owned by the system's administrator (root), in a folder owned by root, neither of
-//! them writable by anyone else. Its folder is denied to every chat's writes as well
+//! them writable by anyone else by its permission bits.
+//!
+//! **An access-control list is not read** (D-1423-5). On Linux one cannot hide from the bits:
+//! the group bits of a file that carries a POSIX ACL are its mask, the most any named user or
+//! group is given, so an ACL that grants write shows as group-writable and is refused. On macOS
+//! an ACL is kept apart from the bits and is read only through `acl_get_link_np`, a C call
+//! this crate cannot make without `unsafe`, so a file or folder whose ACL grants someone else
+//! write passes. Only root can set one on a file root owns, so it is an administrator's
+//! misconfiguration and never a chat's way in; `ls -le /etc/purlis` shows one. The folders
+//! above the policy's own are not judged either: they are root's on every system purlis reads
+//! a policy on, as for `sudoers`.
+//!
+//! Its folder is denied to every chat's writes as well
 //! ([`super::Denied::of`], [`super::Class::HumanPowers`]). A file that is there and fails any
 //! of that, a folder that is there and fails it with or without the file in it ([`judge_folder`],
 //! D-1343-11), a file that does not parse, or one that says anything this version does not
@@ -42,9 +54,13 @@
 //!   every port.
 //! - `personal-hosts`, `persona-hosts`: `false` forbids your own hosts on this machine (and a
 //!   block's Allow for this chat or for you), and a persona's own hosts.
-//! - `opt-out`: `false` forbids a person's opt-out in a project whose sandbox is on: no chat
-//!   there starts without the sandbox from the new-chat picker or a block's Notice. It does not
-//!   turn the sandbox on in a project that has not (#1423).
+//! - `opt-out`: `false` forbids a person's opt-out, and so **requires the sandbox** (D-1423-1,
+//!   the operator's ruling of 2026-10-07): no chat on this machine starts without the sandbox,
+//!   from the new-chat picker or a block's Notice, in any project. A project with no `[sandbox]`,
+//!   or one that has not turned it on, runs every chat sandboxed here as if it had, with the
+//!   default presets ([`super::Plane::in_force`]); `presets` and `hosts` hold it like any other.
+//!   On a system purlis has no sandbox backend for, no harness chat starts at all
+//!   ([`super::NotStarted::RequiredWithoutBackend`]).
 //! - `write-grants`: `false` forbids every folder a block's Allow or Settings would let a chat
 //!   write.
 //!
@@ -191,19 +207,32 @@ impl Locks {
             .and_then(|source| source.refused.as_deref())
     }
 
-    /// **"Locked by policy", and who set it**: the words every locked value is shown with.
-    pub fn locked_by(&self) -> String {
+    /// `lead`, then who set the policy and in which file; or, for a refused file, why it is
+    /// refused and that everything it could lock is locked.
+    fn led_by(&self, lead: &str) -> String {
         let file = self.file().map_or_else(
             || MACHINE_FILE.to_owned(),
             |file| file.display().to_string(),
         );
         match self.refused_because() {
             Some(why) => format!(
-                "Locked by policy: this machine's policy file, {file}, is refused ({why}), so \
-                 everything it could lock is locked until {NOBODY_NAMED} fixes it."
+                "{lead}: this machine's policy file, {file}, is refused ({why}), so everything \
+                 it could lock is locked until {NOBODY_NAMED} fixes it."
             ),
-            None => format!("Locked by policy, set by {} in {file}.", self.owner()),
+            None => format!("{lead}, set by {} in {file}.", self.owner()),
         }
+    }
+
+    /// **"Locked by policy", and who set it**: the words every locked value is shown with.
+    pub fn locked_by(&self) -> String {
+        self.led_by("Locked by policy")
+    }
+
+    /// **"On, required by policy", and who set it**: what Settings says of the mode where
+    /// policy requires the sandbox ([`Self::forbids_opt_out`]); none where it does not.
+    pub fn required_by(&self) -> Option<String> {
+        self.forbids_opt_out()
+            .then(|| self.led_by("On, required by policy"))
     }
 
     /// The presets of `asked` the policy lets a project turn on, in `asked`'s order.
@@ -242,7 +271,9 @@ impl Locks {
         self.no_persona_hosts
     }
 
-    /// Whether policy forbids starting a chat without the sandbox.
+    /// Whether policy forbids starting a chat without the sandbox, **and so requires the
+    /// sandbox** (D-1423-1): in every project on this machine, whatever the project's own file
+    /// says ([`super::Plane::in_force`]).
     pub fn forbids_opt_out(&self) -> bool {
         self.no_opt_out
     }
