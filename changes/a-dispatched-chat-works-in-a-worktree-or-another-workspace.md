@@ -38,6 +38,7 @@
   it from elsewhere, whatever a persona's own limits say.
 - **A chat nobody is at starts a chat in another workspace only under a grant that already
   stands** for the pair, yours on this machine or the project's, also for its own persona.
-  Both rules are a dispatched task's. A handoff names its workspace itself and takes no
-  `--in`: it is held to the asking chat's limits, and a chat nobody is at still hands off to
-  its own persona.
+  This rule is a dispatched task's: a chat nobody is at still hands off to its own persona.
+- **A handoff is held to the dispatch limits of the workspace it moves into** as well as the
+  asking chat's, as a task sent into one is. A handoff into a workspace whose limit is set to
+  0 opens nothing and says so.
