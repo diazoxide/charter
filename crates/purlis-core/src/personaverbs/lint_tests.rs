@@ -81,7 +81,9 @@ fn a_key_that_only_fed_the_retired_sub_agent_is_a_warning_that_names_its_ticket(
     )]);
     let issues = linter(&p).definition("r");
     let said: Vec<&str> = issues.iter().map(|i| i.message.as_str()).collect();
-    assert_eq!(issues.len(), 4, "{said:#?}");
+    // Three, not four: `dispatch-isolation` is read again (#1453), as the persona's default
+    // place to work when a dispatch names none.
+    assert_eq!(issues.len(), 3, "{said:#?}");
     assert!(issues.iter().all(|i| i.level == Level::Warn));
     for key in ["agent-tools", "skills", "memory"] {
         assert!(
@@ -99,12 +101,12 @@ fn a_key_that_only_fed_the_retired_sub_agent_is_a_warning_that_names_its_ticket(
         "{said:#?}"
     );
     assert!(
-        said.iter().any(
-            |m| m.starts_with("`dispatch-isolation:` is no longer read: ")
-                && m.contains("nothing asks")
-                && m.ends_with("(#1453)")
-        ),
-        "{said:#?}"
+        !said.iter().any(|m| m.contains("dispatch-isolation")),
+        "a key purlis reads is no warning: {said:#?}"
+    );
+    assert_eq!(
+        crate::personaverbs::retired::key_notice("dispatch-isolation", "worktree"),
+        None
     );
 }
 

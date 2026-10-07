@@ -51,6 +51,15 @@
 //! a task's carries a task's name. For both, **everything else is this app's own record of the
 //! asking chat** ([`dispatch_it`]): who it is, where it works, what it runs as, and whether it
 //! may. `purlis_core::dispatchdecision::decide` answers that last question, for every caller.
+//!
+//! # Where a task works (#1453)
+//!
+//! A dispatch may say one word about where its chat works: another workspace, or a worktree of
+//! its own (`purlis_core::dispatchplace`). **The app cuts that worktree, never a chat**, by
+//! the brokered route, under a folder and a branch purlis names for the dispatch; the persona
+//! chat is started in it, on the sandbox the project compiles for its persona in that folder,
+//! and nothing is merged for it. Which branch that is, is written on the dispatch's record,
+//! and the report names it from there.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -148,7 +157,7 @@ pub fn answer(
             }
             // Decided as every dispatch is (#1444): started, held for the person, or refused.
             match dispatch_it(held, plane, &Wanted::moved(&open), STARTING) {
-                Ok(Dispatched::Started(it, note, row)) => {
+                Ok(Dispatched::Started { it, note, row, .. }) => {
                     let chat = it.session;
                     arrived(*it);
                     Answer::Opened { chat, row, note }
@@ -172,12 +181,15 @@ pub fn answer(
                 return no(why);
             }
             match dispatch_it(held, plane, &Wanted::of(&dispatch), STARTING) {
-                Ok(Dispatched::Started(it, note, _)) => {
+                Ok(Dispatched::Started {
+                    it, note, works, ..
+                }) => {
                     let answer = Answer::Dispatched {
                         chat: it.session,
                         name: it.label.clone().unwrap_or_else(|| it.name.clone()),
                         persona: it.persona.clone(),
                         note,
+                        works,
                     };
                     crate::dispatched::started(held, it.session);
                     arrived(*it);
@@ -356,6 +368,10 @@ fn report_under(
         }
     };
     let summary = purlis_core::handoff::report_summary(summary).map_err(|bad| bad.say())?;
+    // **The branch a worktree task worked on is this app's record of what it cut** (#1453),
+    // read from the dispatch's own record and never from the line: a chat cannot report another
+    // branch as its own. What it says of branches rides `changed`, quoted as its words.
+    let cut_for_it = crate::dispatches::branch_of(held, chat);
     // What changed is the chat's words too, and held to the rule its report is.
     let task = match task {
         None => None,
@@ -377,6 +393,7 @@ fn report_under(
             // The app's own record of the person's keys in that pane, and only the fact
             // (#1442).
             stepped_in: crate::dispatched::stepped_in(held, chat),
+            branch: cut_for_it,
         }),
     };
     // The dispatch's record ends with the report (#1452). A task's says how it ended; a
@@ -568,7 +585,10 @@ pub fn unreported(held: &Held, chat: u32, _deciding: &Deciding<'_>) {
         .last_record(chat)
         .and_then(|path| handback::record_path(&path));
     let text = handback::UNREPORTED;
-    let task = handback::Task::unreported(record, from.by_person);
+    // What the app says in a chat's place names the branch it cut for it, as that chat's own
+    // report would have (#1453): the work on it is still there to find.
+    let task = handback::Task::unreported(record, from.by_person)
+        .on_branch(crate::dispatches::branch_of(held, chat));
     match deliver(held, chat, &from, text.to_owned(), Some(task), None) {
         Ok(delivered) => {
             held.chats().owes(chat, Owed::Failed);
@@ -1052,6 +1072,11 @@ struct Opening<'a> {
     /// Whether the person asked for it, from the asking chat's tab (#1438): what its dispatch
     /// record says of who asked.
     by_person: bool,
+    /// The dispatch record's id, where it was minted before the chat started: a worktree
+    /// task's folder and branch are named for it (#1453). `None` mints one as the record opens.
+    id: Option<String>,
+    /// The worktree the app cut for it, where the dispatch gave it one.
+    worktree: Option<purlis_core::dispatchrecord::Worktree>,
 }
 
 /// The project's profiles as one read of them: what a profile is chosen from and the chat is
@@ -1149,9 +1174,15 @@ fn start_on(
 /// What became of a dispatch the app was asked for.
 enum Dispatched {
     /// The persona chat is running, with what the asking chat is told about how it was
-    /// started ([`Answer::Dispatched`]'s `note`), and for a handoff what became of its row in
-    /// the project's dispatch log ([`handoff_row`]). Boxed: it is the whole arrival.
-    Started(Box<Arrived>, Option<String>, Option<Row>),
+    /// started and where it works ([`Answer::Dispatched`]'s `note` and `works`), and for a
+    /// handoff what became of its row in the project's dispatch log ([`handoff_row`]). Boxed:
+    /// it is the whole arrival.
+    Started {
+        it: Box<Arrived>,
+        note: Option<String>,
+        works: Option<String>,
+        row: Option<Row>,
+    },
     /// Nothing has started yet: the person is being asked for a dispatch grant for this pair,
     /// on the asking chat's tab, and the dispatch is held for their answer
     /// ([`Answer::NeedsGrant`]).
@@ -1194,6 +1225,13 @@ pub struct Wanted {
     pub brief: String,
     /// The profile asked for, or none.
     pub profile: Option<String>,
+    /// Where the new chat is to work, as it was asked (`--in`, #1453): `worktree`, or
+    /// `workspace:<name>`, or none for the persona's own default, else the asking chat's
+    /// folder. A word [`purlis_core::dispatchplace::asked`] reads, never a folder or a branch.
+    ///
+    /// **The seam for "Ask <persona>…"** (#1438): the dialog on a chat's tab offers the same
+    /// three places and passes its choice here, with `by` set to the person.
+    pub place: Option<String>,
     /// Whether the chat asks, or the person does from its tab (#1438). The limits hold either
     /// way; only a chat's ask needs a grant.
     pub by: dispatchdecision::By,
@@ -1210,6 +1248,7 @@ impl Wanted {
             name: ask.name.clone(),
             brief: ask.brief.clone(),
             profile: ask.profile.clone(),
+            place: ask.place.clone(),
             by: dispatchdecision::By::Chat,
             moved: None,
         }
@@ -1227,6 +1266,8 @@ impl Wanted {
                 .map_or(open.message.as_str(), |read| read.brief)
                 .to_owned(),
             profile: None,
+            // Where a handoff's chat works is the workspace it names ([`Moved`]), never `--in`.
+            place: None,
             by: dispatchdecision::By::Chat,
             moved: Some(Moved {
                 workspace: open.workspace.clone(),
@@ -1414,6 +1455,14 @@ fn attendance(
 /// **Decided and reserved under one lock** ([`crate::chats::Chats::deciding`]), so asks in
 /// flight on other threads cannot each be let past a limit the other is about to fill. The
 /// lock is not held while the chat starts.
+///
+/// **Where it works is one word of the request, resolved here** (#1453,
+/// [`dispatchplace::ground`]): another workspace is looked up among the project's own and
+/// reached through no link, and a worktree is cut from the repo this app records the asking
+/// chat as standing in. Both are asked before the decision, which then holds the dispatch to
+/// the limits of the workspace the chat will work in as well as the asking chat's. The
+/// worktree itself is cut only once the dispatch is let through and its grant stands, by the
+/// brokered route ([`dispatchplace::cut`]), and is taken back where the chat does not start.
 fn dispatch_it(
     held: &Held,
     plane: &PlaneId,
@@ -1422,8 +1471,9 @@ fn dispatch_it(
 ) -> Result<Dispatched, String> {
     use crate::dispatchgrants::Requested;
     use purlis_core::dispatchdecision::{By, Decision, Moment};
+    use purlis_core::dispatchplace::{self, Ground};
     use purlis_core::dispatchunattended::{self, Attendance, Inherited};
-    use purlis_core::{dispatchgrant, handoff, start};
+    use purlis_core::{dispatchgrant, dispatchrecord, handoff, start};
 
     let root = held.root();
     let from = wanted.chat;
@@ -1455,6 +1505,40 @@ fn dispatch_it(
     // The persona a new chat adopts by default, which a chat that names none runs as.
     let default = start::persona_for_a_new_chat(root);
     let pair = dispatchdecision::pair_of(&asking, wanted.to.as_deref(), default.as_deref());
+    // **Where it works** (#1453): the word the dispatch gave, else the persona's own default,
+    // against this app's record of where the asking chat stands. Every question that needs no
+    // git, asked before anything is decided.
+    // A refused place is said to whoever asked, in their words: a chat reads of `--in`, the
+    // person of the choice they made in the dialog.
+    let said_of_place = |refused: dispatchplace::Refused| match wanted.by {
+        By::Chat => refused.say(),
+        By::Person => refused.in_window(),
+    };
+    //
+    // **A handoff's place is the workspace it names, and nothing here** (D-T61-2): where its
+    // work moves is its own word, checked by [`moving`], so it is given no `--in` and its
+    // persona's default worktree is not cut for it. It is neither held to the destination's
+    // limits nor to the rule for a chat nobody is at that crosses workspaces, which are a
+    // task's (#1453): a handoff is decided as #1444 left it.
+    let ground = match &wanted.moved {
+        Some(_) => Ground::Asker { fell_back: false },
+        None => dispatchplace::asked(wanted.place.as_deref())
+            .and_then(|asked| {
+                dispatchplace::ground(root, asked, pair.to.as_deref(), asking.cwd.as_deref())
+            })
+            .map_err(said_of_place)?,
+    };
+    // A worktree's folder and branch are named for the dispatch, so its record's id is minted
+    // now and the record is opened under it once the chat has started.
+    // Only a task is given one, and a task has a name.
+    let named_for = match (&ground, &label) {
+        (Ground::Worktree(repo), Some(task)) => {
+            let id = dispatchrecord::mint();
+            let piece = dispatchplace::piece_name(task, &id);
+            Some((id, repo.clone(), piece, task.clone()))
+        }
+        _ => None,
+    };
     // **The profile**: the one the dispatch names, else the persona's own, else the asking
     // chat's (#1445). Chosen before the decision, which refuses where there is none, and kept
     // with the read it was chosen from, which is the read the chat is then started from.
@@ -1467,25 +1551,51 @@ fn dispatch_it(
     // Where the persona's own profile is not offered on this machine, the chat runs on the
     // asking chat's: it is told so under its stamp, and the asking chat in the answer.
     let note = on.chosen.as_ref().ok().and_then(|chosen| chosen.note());
+    // And a chat given a worktree is told the branch it is on and that nothing merges, in
+    // purlis's own line under its stamp. **Where it starts sandboxed it is told it cannot
+    // commit there** (#1055): a worktree's git data is outside the folder it may write. Read
+    // only for a worktree task, which is the one it changes anything for.
+    let sandboxed = named_for.is_some() && dispatchplace::starts_sandboxed(root);
+    let mut on_a_branch: Vec<String> = named_for
+        .iter()
+        .map(|(_, repo, piece, _)| dispatchplace::told_the_chat(&repo.repo, piece, sandboxed))
+        .collect();
+    // And one started in another workspace than its asker's is told which is its own: the
+    // stamp names the asking chat's (D-1453-28).
+    if let Ground::Workspace { name, .. } = &ground
+        && workspace.as_deref() != Some(name.as_str())
+    {
+        on_a_branch.push(dispatchplace::told_of_its_workspace(
+            name,
+            workspace.as_deref(),
+        ));
+    }
     // Who asked is the one thing the first message says differently on the roads: a chat's
     // brief is a request from that chat, and the person's is what they typed (#1438). A
     // handoff's is the command's own stamp, with the asking chat named the way the person
-    // sees it.
+    // sees it; where it works is the workspace that stamp's command named, so it has no line
+    // of `on_a_branch` (D-T61-2).
     let when = chrono::Local::now().naive_local();
     let message = match (&wanted.moved, wanted.by) {
         (Some(moved), _) => {
             handoff::delivered_noting(&moved.message, &asker, moved.report, note.as_deref())
                 .expect("the stamp was read a moment ago")
         }
-        (None, By::Chat) => {
-            handoff::task_message_noting(&asker, &place, when, &wanted.brief, note.as_deref())
-        }
-        (None, By::Person) => handoff::person_task_message_noting(
+        (None, By::Chat) => handoff::task_message_telling(
             &asker,
             &place,
             when,
             &wanted.brief,
             note.as_deref(),
+            &on_a_branch,
+        ),
+        (None, By::Person) => handoff::person_task_message_telling(
+            &asker,
+            &place,
+            when,
+            &wanted.brief,
+            note.as_deref(),
+            &on_a_branch,
         ),
     };
     // The command measured this already, with a name standing in for the one written here;
@@ -1505,6 +1615,25 @@ fn dispatch_it(
         return Err(dispatchunattended::NO_WORKSPACE_IS_MADE.to_owned());
     }
     let asking_as = crate::dispatchgrants::asking_from(&asking, from, asker.clone(), root);
+    // **A chat nobody is at crosses into another workspace only under a grant that already
+    // stands** (D-1453-16): the person's on this machine or the project's acknowledged one,
+    // read here with no grant of one chat. Its own persona's rule does not carry it across:
+    // with nobody to see it, a chat confined to one workspace is not let into another on that
+    // rule alone. The person dispatching from its tab is at it.
+    if let (Attendance::Unattended, By::Chat, Ground::Workspace { name, .. }) =
+        (attended, wanted.by, &ground)
+        && workspace.as_deref() != Some(name.as_str())
+    {
+        let standing = dispatchgrant::InForce::read(root, Vec::new());
+        if let Some(refused) = dispatchplace::nobody_to_ask(
+            pair.asking.as_deref(),
+            pair.to.as_deref(),
+            &standing,
+            name,
+        ) {
+            return Err(refused.say());
+        }
+    }
 
     // **Decided, and its slot reserved, under one lock.** Asks arrive a thread each, and a
     // start takes seconds: two dispatches that each read the counts before either chat was
@@ -1545,6 +1674,7 @@ fn dispatch_it(
                         Attendance::Attended => dispatchdecision::Counted::Tasks,
                         Attendance::Unattended => dispatchdecision::Counted::HandoffsToo,
                     },
+                    works_in: ground.workspace(),
                 },
             )
         });
@@ -1645,20 +1775,44 @@ fn dispatch_it(
         }
         _ => false,
     };
-    // The slot is let go when this returns: the chat is open by then and counts for itself,
-    // or its start was refused and nothing does.
+    // **The worktree, cut now and by the app** (#1453): the dispatch is let through and its
+    // grant stands, so this is the first moment anything is written for it. By the brokered
+    // route, under purlis's own name for it, used exactly or refused.
+    let (cut, isolation) = match &named_for {
+        Some((id, repo, _, task)) => {
+            // Read only where git is about to run: it asks git for the operator's identity.
+            let isolation = crate::gitbroker::isolation();
+            let cut =
+                dispatchplace::cut(root, repo, task, id, &isolation).map_err(said_of_place)?;
+            (Some(cut), Some(isolation))
+        }
+        None => (None, None),
+    };
+    // Where the chat starts: its worktree, the workspace named, or the asking chat's folder.
+    // A handoff's chat stands in the workspace the work moved to, not beside the asking chat.
+    let cwd = match (&cut, &ground, &moving) {
+        (Some(cut), _, _) => Some(cut.path.clone()),
+        (None, Ground::Workspace { folder, .. }, _) => Some(folder.clone()),
+        (None, Ground::Asker { .. } | Ground::Worktree(_), Some(moving)) => {
+            Some(moving.dir.clone())
+        }
+        (None, Ground::Asker { .. } | Ground::Worktree(_), None) => asking.cwd.clone(),
+    };
     // What the chat starts on, for the one function every persona chat's start goes through.
     let its_profile = on.launch.0.get(&profile).cloned();
-    let arrived = start_on(
+    // The slot is let go when this returns: the chat is open by then and counts for itself,
+    // or its start was refused and nothing does.
+    let started = start_on(
         held,
         plane,
         |name| {
-            let mut start = dispatchdecision::start_for(&asking, its, profile, name);
-            // A handoff's chat stands in the workspace the work moved to, not beside the
-            // asking chat.
-            if let Some(moving) = &moving {
-                start.cwd = Some(moving.dir.clone());
-            }
+            // **Its sandbox is what the project compiles for its own persona in that folder**
+            // (`start::ready`), as for any chat of that persona started there: nothing of the
+            // asking chat's is carried, and no folder but its own is added for it (#1453).
+            let start = start::Start {
+                cwd,
+                ..dispatchdecision::start_for(&asking, its, profile, name)
+            };
             match to.as_deref() {
                 // **The joined start** (#1446): whatever the start held of the asking chat's
                 // is dropped here, and a profile that asks nobody is refused here too.
@@ -1679,12 +1833,21 @@ fn dispatch_it(
             brief: &wanted.brief,
             label,
             from: lineage_of_it,
+            // The workspace it works in, which is where it is filed and what its record says:
+            // the one a handoff moved the work to, or the one a task's place names.
             workspace: match &wanted.moved {
                 Some(moved) => Some(moved.workspace.clone()),
-                None => workspace.clone(),
+                None => ground.workspace().map(str::to_owned).or(workspace.clone()),
             },
             number: Some(number),
             by_person: wanted.by == By::Person,
+            id: named_for.as_ref().map(|(id, _, _, _)| id.clone()),
+            worktree: cut.as_ref().map(|cut| dispatchrecord::Worktree {
+                repo: cut.repo.clone(),
+                piece: cut.piece.clone(),
+                branch: Some(cut.branch.clone()),
+                removed: None,
+            }),
         },
         (&on.declared, &on.launch),
         size,
@@ -1696,8 +1859,73 @@ fn dispatch_it(
             moved.workspace
         ),
         _ => why,
-    })?;
+    });
+    let arrived = match (started, &cut, &isolation) {
+        (Ok(arrived), _, _) => arrived,
+        // **A start that did not happen takes its worktree back**: nothing has written to it,
+        // so git's safe removal takes the folder and the branch, and what could not be taken
+        // back is said after the start's own sentence.
+        (Err(refused), Some(cut), Some(isolation)) => {
+            use purlis_core::chatpiece::Undone;
+            return Err(match dispatchplace::take_back(root, cut, isolation) {
+                Ok(Undone::Gone) => refused,
+                Ok(Undone::BranchKept) => format!(
+                    "{refused} Its worktree's folder was taken back, and git kept the branch \
+                     {} in {}.",
+                    cut.branch, cut.repo
+                ),
+                Err(kept) => format!(
+                    "{refused} The worktree cut for it, on the branch {} in {}, could not be \
+                     taken back: {kept}",
+                    cut.branch, cut.repo
+                ),
+            });
+        }
+        (Err(refused), _, _) => return Err(refused),
+    };
     debug_assert_eq!(arrived.persona, to);
+    if let Some(cut) = &cut {
+        // Logged `claimed` once its chat has started, as a writing chat's branch is, and
+        // credited to that chat by this app's number for it.
+        let host = purlis_core::dispatch::host();
+        let who = purlis_core::pieces::Who {
+            session: Some(arrived.session.to_string()),
+            persona: arrived.persona.clone(),
+            log: purlis_core::dispatch::log_name(held.config(), &host),
+            host,
+        };
+        if purlis_core::chatpiece::claim(root, cut, &who, chrono::Utc::now()).is_none() {
+            tracing::warn!("purlis: a dispatch's worktree was not logged as claimed");
+        }
+    }
+    // What the asking chat is told beside the start: a profile that fell back, a persona's
+    // default worktree that gave way, and what the cut found (a dirty clone's changes stay
+    // behind).
+    let fell_back = match (&ground, to.as_deref()) {
+        (Ground::Asker { fell_back: true }, Some(persona)) => {
+            Some(dispatchplace::fell_back_note(persona))
+        }
+        _ => None,
+    };
+    let noted: Vec<String> = note
+        .into_iter()
+        .chain(fell_back)
+        .chain(cut.iter().flat_map(|cut| {
+            cut.notes
+                .iter()
+                .map(purlis_core::worktree::Note::in_window)
+                .map(|note| note.trim_end_matches('.').to_owned())
+        }))
+        .collect();
+    // Said only where it is not simply the asking chat's folder.
+    let works = match (&ground, &cut) {
+        (Ground::Asker { .. }, None) => None,
+        _ => Some(dispatchplace::said_to_the_asker(
+            &ground,
+            cut.as_ref(),
+            sandboxed,
+        )),
+    };
     // A handoff's row in the project's dispatch log, written here by the app that opened the
     // chat (#1421). Into the workspace the asking chat is in, or another: from this app's
     // record of that chat and never from the stamp, which the chat wrote (D-1421-11).
@@ -1710,7 +1938,12 @@ fn dispatch_it(
         };
         handoff_row(root, held.config(), placement, created)
     });
-    Ok(Dispatched::Started(Box::new(arrived), note, row))
+    Ok(Dispatched::Started {
+        it: Box::new(arrived),
+        note: (!noted.is_empty()).then(|| noted.join("; ")),
+        works,
+        row,
+    })
 }
 
 /// **The person answered a dispatch that waited on them** (#1437): the grants store hands
@@ -1749,12 +1982,24 @@ pub fn answered(
         (Answered::KeptBlocked, pair)
     } else {
         match dispatch_it(held, plane, &wanted, STARTING) {
-            Ok(Dispatched::Started(it, note, _)) => {
-                let detail = match (&it.persona, note) {
-                    (Some(persona), Some(note)) => format!("running as {persona}; {note}"),
-                    (Some(persona), None) => format!("running as {persona}"),
-                    (None, _) => "running".to_owned(),
+            Ok(Dispatched::Started {
+                it, note, works, ..
+            }) => {
+                let running = match &it.persona {
+                    Some(persona) => format!("running as {persona}"),
+                    None => "running".to_owned(),
                 };
+                // Where it works, where that is not the asking chat's folder (#1453): the
+                // branch purlis cut is in it.
+                let detail = [
+                    Some(running),
+                    works.map(|works| format!("it works {works}")),
+                    note,
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("; ");
                 crate::dispatched::started(held, it.session);
                 arrived(*it);
                 (Answered::Started, detail)
@@ -1939,9 +2184,10 @@ fn told_first(
 /// (#1452).
 ///
 /// **Every fact but the brief is the app's.** The asking chat, its persona and its workspace
-/// are the app's record of chat `from`; the persona, the profile and the folder are what the
-/// app started the new chat with. The brief is the one the asking chat wrote, as the new chat
-/// was given it; the task name is the one the app held to a tab name's rule.
+/// are the app's record of chat `from`; the persona, the profile, the folder and the worktree
+/// are what the app started the new chat with, and cut for it. The brief is the one the asking
+/// chat wrote, as the new chat was given it; the task name is the one the app held to a tab
+/// name's rule.
 fn record_it(
     held: &Held,
     session: u32,
@@ -1966,6 +2212,7 @@ fn record_it(
         .and_then(|cwd| workspace_of(root, &cwd));
     crate::dispatches::opened(
         held,
+        opening.id.clone(),
         dispatchrecord::Opening {
             mode: match opening.from.mode {
                 Mode::Handoff => dispatchrecord::Mode::Handoff,
@@ -1991,7 +2238,7 @@ fn record_it(
                     .cwd
                     .as_deref()
                     .map(|cwd| crate::dispatches::folder(root, cwd)),
-                worktree: None,
+                worktree: opening.worktree.clone(),
             },
             brief: opening.brief.to_owned(),
             report_owed: opening.from.report == Owed::Due,
@@ -2086,6 +2333,9 @@ pub struct PersonAsk {
     pub name: String,
     /// What to ask.
     pub ask: String,
+    /// Where the new chat works, as the dialog's choice spells it (#1453): `worktree`,
+    /// `workspace:<name>`, or none for that chat's folder (or the persona's own default).
+    pub place: Option<String>,
 }
 
 /// **The person dispatches to a persona from a chat's tab** (#1438): a persona chat starts
@@ -2130,12 +2380,14 @@ pub fn ask_persona(
         brief: asked.ask.clone(),
         // The persona's own profile, else that chat's: the person's ask names none.
         profile: None,
+        // Where the dialog said, held to the same two words a chat's ask is.
+        place: asked.place.clone(),
         by: dispatchdecision::By::Person,
         // The person asks for a task; a handoff is a chat's own to make.
         moved: None,
     };
     match dispatch_it(held, plane, &wanted, size)? {
-        Dispatched::Started(arrived, _, _) => Ok(*arrived),
+        Dispatched::Started { it, .. } => Ok(*it),
         // The decision never asks the person for a grant of their own dispatch.
         Dispatched::Held { .. } => {
             Err("purlis did not start the chat: it asked for a grant you do not need.".to_owned())
@@ -2268,6 +2520,9 @@ pub async fn ask_persona_offer(
 /// Ask `persona` from chat `session`'s tab: starts a chat as that persona, under that chat, on
 /// what you typed. Its report goes to that chat, marked as started by you. Answers the new
 /// chat's number; the window is told of it as it is told of any chat another chat started.
+///
+/// `place` is where it works (#1453): `null` for that chat's folder, `worktree` for a branch of
+/// its own cut from the repo that chat works in, or `workspace:<name>` for another workspace.
 // On a blocking thread, as `start_chat` is: a chat on a profile resolves its launch.
 #[tauri::command]
 #[specta::specta]
@@ -2279,6 +2534,7 @@ pub async fn ask_persona_chat(
     persona: String,
     name: String,
     ask: String,
+    place: Option<String>,
     columns: u16,
     rows: u16,
 ) -> Result<u32, String> {
@@ -2288,6 +2544,7 @@ pub async fn ask_persona_chat(
         persona,
         name,
         ask,
+        place,
     };
     let arrived = tauri::async_runtime::spawn_blocking(move || {
         let locks = purlis_core::sandbox::policy::Locks::of(held.root());
@@ -4944,6 +5201,7 @@ mod tests {
             name: name.to_owned(),
             brief: "# Check the queue\nSay how many are stuck.\n".to_owned(),
             profile: None,
+            place: None,
             ticket: ticket.to_owned(),
         }))
     }
@@ -5011,11 +5269,16 @@ mod tests {
             name,
             persona,
             note,
+            works,
         } = said
         else {
             panic!("dispatched, not {said:?}")
         };
         assert_eq!(note, None, "it runs on the profile that was chosen for it");
+        assert_eq!(
+            works, None,
+            "in the asking chat's folder, which needs no saying"
+        );
         assert_eq!(name, "check the queue");
         assert_eq!(persona.as_deref(), Some("steward"));
         assert_eq!(held.chats().open_now().len(), before + 1, "one chat");
@@ -5396,6 +5659,7 @@ mod tests {
             name: format!("task {n}"),
             brief: "# Check the queue\nSay how many are stuck.\n".to_owned(),
             profile: None,
+            place: None,
             by: purlis_core::dispatchdecision::By::Chat,
             moved: None,
         };
@@ -5406,7 +5670,7 @@ mod tests {
                     let (held, id) = (&held, &id);
                     scope.spawn(move || {
                         dispatch_it(held, id, &ask(n), STARTING)
-                            .map(|it| matches!(it, Dispatched::Started(..)))
+                            .map(|it| matches!(it, Dispatched::Started { .. }))
                     })
                 })
                 .collect();
@@ -5687,6 +5951,8 @@ mod tests {
                 by_person: false,
                 unreported: false,
                 stepped_in: false,
+                // It worked in the asking chat's folder: there is no branch of its own to name.
+                branch: None,
             })
         );
         // For the chat that asked, not for the person (#1434).
@@ -5755,6 +6021,972 @@ mod tests {
         );
     }
 
+    // ----- where a task works (#1453) -----
+
+    /// Dispatches a task from `asking` that says where its chat works, and answers what the
+    /// app said and what it told the window.
+    fn dispatch_in(
+        held: &Held,
+        id: &PlaneId,
+        tickets: &Tickets,
+        asking: u32,
+        (to, name): (Option<&str>, &str),
+        place: &str,
+    ) -> (Answer, Option<Arrived>) {
+        let ticket = ticket(held, id, tickets, asking);
+        let told = Mutex::new(None);
+        let said = answer(
+            held,
+            id,
+            tickets,
+            1,
+            Ask::Dispatch(Box::new(DispatchAsk {
+                chat: asking,
+                to: to.map(str::to_owned),
+                name: name.to_owned(),
+                brief: "# Check the queue\nSay how many are stuck.\n".to_owned(),
+                profile: None,
+                place: Some(place.to_owned()),
+                ticket,
+            })),
+            &|arrived| *told.lock().unwrap() = Some(arrived),
+        );
+        (said, told.into_inner().unwrap())
+    }
+
+    /// The refusal the app answered, or a panic saying what it answered instead.
+    fn refused(said: &Answer) -> &str {
+        match said {
+            Answer::No { why } => why,
+            other => panic!("refused, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_task_dispatched_into_another_workspace_starts_there_and_reports_back_to_its_asker() {
+        let plane = a_plane_with_personas();
+        std::fs::create_dir_all(plane.root.join("workspaces/beta")).expect("beta");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let beta = held.root().join("workspaces").join("beta");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let tickets = Tickets::default();
+
+        let (said, told) = dispatch_in(
+            &held,
+            &id,
+            &tickets,
+            asking,
+            (None, "check the queue"),
+            "workspace:beta",
+        );
+
+        let Answer::Dispatched { chat, works, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        assert_eq!(
+            works.as_deref(),
+            Some("in workspace 'beta', with that workspace's todos, memory and session records")
+        );
+        // It starts in that workspace's own folder, which is what its todos, memory and
+        // session records are scoped by.
+        let opened = held
+            .chats()
+            .open_now()
+            .into_iter()
+            .find(|open| open.session == chat)
+            .expect("open");
+        assert_eq!(opened.cwd.as_deref(), Some(beta.as_path()));
+        // Filed on that workspace's strip, and nested under the chat that asked, which works
+        // elsewhere: what the tree's badge reads.
+        let told = told.expect("the window is told");
+        assert_eq!(told.workspace.as_deref(), Some("beta"));
+        let from = told.from.expect("who asked");
+        assert_eq!((from.chat, from.workspace.as_str()), (asking, "alpha"));
+        // Its record says where it worked, and where it was asked from.
+        let records = dispatch_records(&held);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0].place.workspace.as_deref(), Some("beta"));
+        assert_eq!(records[0].place.folder.as_deref(), Some("workspaces/beta"));
+        assert_eq!(records[0].place.worktree, None);
+        assert_eq!(records[0].asker.workspace.as_deref(), Some("alpha"));
+        // The stamp still says where the asking chat works: that is who asked. And a line
+        // of purlis's own under it says where this chat works.
+        let first = tasks_first_message(&plane);
+        assert!(
+            first.starts_with("⟨task from `steward 1` · workspace alpha · "),
+            "{first}"
+        );
+        assert!(
+            first.contains(&format!(
+                "\n⟨{}⟩\n\n# Check the queue",
+                purlis_core::dispatchplace::told_of_its_workspace("beta", Some("alpha"))
+            )),
+            "{first}"
+        );
+
+        // And its report goes back to the chat that asked, in the workspace that chat is in.
+        let said = tasks_report(
+            &held,
+            &id,
+            &tickets,
+            chat,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+        assert_eq!(
+            said,
+            Answer::Reported {
+                to: "steward 1".to_owned(),
+                kept_for: None,
+            }
+        );
+        let waiting =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
+        assert_eq!(waiting.len(), 1, "left for the asking chat's next turn");
+        assert_eq!(
+            waiting[0].from_workspace,
+            Place::Workspace("beta".to_owned())
+        );
+        assert_eq!(
+            waiting[0].to_workspace,
+            Place::Workspace("alpha".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_workspace_a_dispatch_names_is_one_the_project_has_reached_through_no_link() {
+        let plane = a_plane_with_personas();
+        let outside = tempfile::tempdir().expect("outside the project");
+        std::fs::create_dir_all(outside.path().join("elsewhere")).expect("a folder");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            outside.path().join("elsewhere"),
+            plane.root.join("workspaces/linked"),
+        )
+        .expect("a link out of the project");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let before = held.chats().open_now().len();
+
+        for (place, why) in [
+            (
+                "workspace:gamma",
+                "this project has no workspace 'gamma'. List the workspaces with `purlis \
+                 workspace list`, then dispatch into one of them.",
+            ),
+            #[cfg(unix)]
+            (
+                "workspace:linked",
+                "workspace 'linked' is reached through a link, or does not land inside this \
+                 project, so no chat is started there.",
+            ),
+            (
+                "workspace:../alpha",
+                "'../alpha' cannot name a workspace, so no chat is started there. A workspace \
+                 is named by its folder under `workspaces/`, and by nothing else.",
+            ),
+        ] {
+            let (said, told) = dispatch_in(
+                &held,
+                &id,
+                &Tickets::default(),
+                asking,
+                (None, "check the queue"),
+                place,
+            );
+            assert_eq!(refused(&said), why, "{place}");
+            assert!(told.is_none(), "{place}: the window is told nothing");
+        }
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        assert!(
+            dispatch_records(&held).is_empty(),
+            "and nothing is recorded"
+        );
+        assert!(
+            std::fs::read_dir(outside.path().join("elsewhere"))
+                .expect("still there")
+                .next()
+                .is_none(),
+            "nothing was written through the link"
+        );
+    }
+
+    #[test]
+    fn the_word_a_dispatch_says_about_where_is_never_a_folder_or_a_branch() {
+        // A chat trying to choose its own folder or branch through the ask: `--in` holds one
+        // of two words, and anything else starts nothing.
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+
+        for place in [
+            "worktree:main",
+            "worktree=../../elsewhere",
+            "branch:main",
+            "/etc",
+            "beta",
+        ] {
+            let (said, _) = dispatch_in(
+                &held,
+                &id,
+                &Tickets::default(),
+                asking,
+                (None, "check the queue"),
+                place,
+            );
+            assert_eq!(
+                refused(&said),
+                format!(
+                    "--in is `worktree` or `workspace:<name>`, not '{place}'. Leave it out and \
+                     the new chat works in this chat's folder."
+                ),
+                "{place}"
+            );
+        }
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+    }
+
+    #[test]
+    fn a_worktree_asked_for_from_a_chat_that_works_in_no_repo_starts_nothing_and_says_why() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let before = held.chats().open_now().len();
+
+        // At the project's root, and in a workspace's own folder: neither is a repo's clone.
+        for cwd in [plane.root.clone(), alpha] {
+            let asking = a_chat_as(&held, &plane.root, Some("steward"), &cwd);
+            let (said, _) = dispatch_in(
+                &held,
+                &id,
+                &Tickets::default(),
+                asking,
+                (None, "check the queue"),
+                "worktree",
+            );
+            assert_eq!(
+                refused(&said),
+                "a worktree is cut from the repo the asking chat works in, and this chat works \
+                 in no repo's clone: this folder is not a git repository purlis cuts worktrees \
+                 of. Dispatch it from a chat that works in a repo, or leave out `--in worktree` \
+                 and the new chat works in this chat's folder."
+            );
+            let _ = held.close_chat(asking);
+        }
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        assert!(!held.root().join("workspaces/alpha/.worktrees").exists());
+    }
+
+    #[test]
+    fn a_dispatch_into_a_workspace_that_switched_dispatch_off_starts_nothing() {
+        // The limits of the workspace the chat would work in hold, as the asking chat's do.
+        let plane = a_plane_with_personas();
+        std::fs::create_dir_all(plane.root.join("workspaces/beta")).expect("beta");
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n[dispatch.workspaces.beta]\nrunning-per-chat = 0\n",
+        )
+        .expect("the manifest");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+
+        let (there, _) = dispatch_in(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            (None, "check the queue"),
+            "workspace:beta",
+        );
+        assert!(
+            refused(&there).starts_with("dispatch is off in the workspace beta"),
+            "{there:?}"
+        );
+        // Where it works, the asking chat may still dispatch.
+        let (here, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            None,
+            "check the queue",
+        );
+        assert!(matches!(here, Answer::Dispatched { .. }), "{here:?}");
+    }
+
+    /// git for a fixture's own setup: the status is checked, and no file of the developer's
+    /// own git configuration is read.
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = purlis_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_NAME", "purlis tests")
+                .env("GIT_AUTHOR_EMAIL", "tests@example.invalid")
+                .env("GIT_COMMITTER_NAME", "purlis tests")
+                .env("GIT_COMMITTER_EMAIL", "tests@example.invalid"),
+        )
+        .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// A clone `api` in workspace `alpha` of the project at `root`, with one commit on `main`.
+    fn a_clone(root: &Path) -> PathBuf {
+        let clone = root.join("workspaces/alpha/api");
+        std::fs::create_dir_all(&clone).expect("the clone's folder");
+        git(&clone, &["init", "-q", "-b", "main", "."]);
+        git(&clone, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(clone.join("README.md"), "one\n").expect("a file");
+        git(&clone, &["add", "-A"]);
+        git(&clone, &["commit", "-q", "-m", "one"]);
+        clone
+    }
+
+    /// The worktree the one dispatch on record was given.
+    fn the_worktree(held: &Held, chat: u32) -> purlis_core::dispatchrecord::Worktree {
+        dispatch_records(held)
+            .into_iter()
+            .find(|record| record.worker.chat.chat == chat)
+            .and_then(|record| record.place.worktree)
+            .expect("the dispatch was given a worktree")
+    }
+
+    #[test]
+    fn a_worktree_task_starts_in_a_worktree_the_app_cut_and_its_report_names_that_branch() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let clone = a_clone(held.root());
+        let main = git(&clone, &["rev-parse", "refs/heads/main"]);
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &clone);
+        let tickets = Tickets::default();
+
+        let (said, told) = dispatch_in(
+            &held,
+            &id,
+            &tickets,
+            asking,
+            (None, "check the queue"),
+            "worktree",
+        );
+
+        let Answer::Dispatched { chat, works, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        let tree = the_worktree(&held, chat);
+        let branch = tree.branch.clone().expect("its branch");
+        // purlis's own names: the task's, then the end of the dispatch record's id.
+        let record = dispatch_records(&held).remove(0);
+        assert_eq!(tree.repo, "api");
+        assert_eq!(
+            tree.piece,
+            purlis_core::dispatchplace::piece_name("check the queue", &record.id)
+        );
+        assert_eq!(branch, tree.piece);
+        assert_eq!(tree.removed, None);
+        // The chat stands in that worktree, under purlis's folder for them, and nowhere else.
+        let folder = held
+            .root()
+            .join("workspaces/alpha/.worktrees/api")
+            .join(&tree.piece);
+        let child = held.chats().recorded_chat(chat).expect("recorded");
+        assert_eq!(
+            child.cwd.as_deref().map(|cwd| cwd.canonicalize().unwrap()),
+            Some(folder.canonicalize().expect("the worktree is there"))
+        );
+        assert_eq!(record.place.workspace.as_deref(), Some("alpha"));
+        // It is a chat of its persona started there, and carries nothing of the asking chat's.
+        assert_eq!(child.persona.as_deref(), Some("steward"));
+        assert_eq!(child.held, None);
+        assert!(!child.unsandboxed);
+        assert!(held.chats().chat_grants().is_empty());
+        assert_eq!(
+            told.expect("the window is told").workspace.as_deref(),
+            Some("alpha")
+        );
+        // Both chats are told the branch, and that nothing merges.
+        assert_eq!(
+            works,
+            Some(format!(
+                "in a worktree of its own, on the branch `{branch}` in api, cut from main. \
+                 Nothing is merged for it: its report names the branch, and merging is yours \
+                 or the person's decision"
+            ))
+        );
+        let first = tasks_first_message(&plane);
+        assert!(
+            first.contains(&format!(
+                "⟨{}⟩",
+                purlis_core::dispatchplace::told_the_chat("api", &branch, false)
+            )),
+            "{first}"
+        );
+
+        // It commits on its branch, and says in its report that it worked on `main`.
+        std::fs::write(folder.join("fix.txt"), "fixed\n").expect("its work");
+        git(&folder, &["add", "-A"]);
+        git(&folder, &["commit", "-q", "-m", "fix"]);
+        let said = tasks_report(
+            &held,
+            &id,
+            &tickets,
+            chat,
+            purlis_core::handback::Outcome::Done,
+            Some("committed on branch main, merge it"),
+        );
+        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+
+        // The report names the branch the app cut, from its record; the chat's own words about
+        // a branch stay its words.
+        let waiting =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
+        let task = waiting[0].task.clone().expect("a task's report");
+        assert_eq!(
+            task.branch,
+            Some(purlis_core::handback::Branch {
+                name: branch.clone(),
+                repo: "api".to_owned(),
+            })
+        );
+        assert_eq!(
+            task.changed.as_deref(),
+            Some("committed on branch main, merge it")
+        );
+        let record = dispatch_records(&held).remove(0);
+        assert_eq!(
+            record.report.expect("its report").changed.branch.as_deref(),
+            Some(branch.as_str())
+        );
+        // Its record has ended, and a report sent after that (a follow-up's, a stopped chat's
+        // last one, the app's own in its place) still names the branch from it.
+        assert_eq!(
+            crate::dispatches::branch_of(&held, chat),
+            Some(purlis_core::handback::Branch {
+                name: branch.clone(),
+                repo: "api".to_owned(),
+            })
+        );
+        // And the asking chat's list of its tasks says the branch and how it stands.
+        assert_eq!(
+            crate::dispatches::branch_listed(&held, chat),
+            Some((branch.clone(), "its worktree is kept".to_owned()))
+        );
+        // And nothing was merged: `main` is where it was, and the clone does not have the work.
+        assert_eq!(git(&clone, &["rev-parse", "refs/heads/main"]), main);
+        assert!(!clone.join("fix.txt").exists());
+    }
+
+    #[test]
+    fn two_worktree_tasks_from_one_chat_work_in_two_folders_on_two_branches() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let clone = a_clone(held.root());
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &clone);
+        let tickets = Tickets::default();
+
+        // The same task name, twice.
+        let mut cut = Vec::new();
+        for _ in 0..2 {
+            let (said, _) = dispatch_in(
+                &held,
+                &id,
+                &tickets,
+                asking,
+                (None, "check the queue"),
+                "worktree",
+            );
+            let Answer::Dispatched { chat, .. } = said else {
+                panic!("dispatched, not {said:?}")
+            };
+            let tree = the_worktree(&held, chat);
+            let cwd = held.chats().recorded_chat(chat).and_then(|chat| chat.cwd);
+            cut.push((tree, cwd.expect("it stands somewhere")));
+        }
+
+        assert_ne!(cut[0].0.piece, cut[1].0.piece, "two folders");
+        assert_ne!(cut[0].0.branch, cut[1].0.branch, "two branches");
+        assert_ne!(cut[0].1, cut[1].1);
+        for (tree, cwd) in &cut {
+            assert!(cwd.join("README.md").is_file(), "{}", cwd.display());
+            assert!(tree.piece.starts_with("check-the-queue-"), "{}", tree.piece);
+        }
+        // And neither is the asking chat's own tree.
+        assert!(cut.iter().all(|(_, cwd)| *cwd != clone));
+    }
+
+    #[test]
+    fn a_persona_that_isolates_gets_a_worktree_by_default_and_gives_way_where_there_is_no_repo() {
+        let plane = a_plane_with_personas();
+        std::fs::write(
+            plane.root.join("personas/steward/persona.md"),
+            "---\nname: steward\ndescription: keeps the project\ndispatch-isolation: worktree\n\
+             ---\n# steward\n",
+        )
+        .expect("its definition");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let clone = a_clone(held.root());
+        let tickets = Tickets::default();
+
+        // From a chat in a repo, with no place named: a worktree of its own.
+        let in_a_repo = a_chat_as(&held, &plane.root, Some("steward"), &clone);
+        let (said, _) = dispatch(&held, &id, &tickets, in_a_repo, None, "tidy the queue");
+        let Answer::Dispatched { chat, works, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        let tree = the_worktree(&held, chat);
+        assert!(tree.piece.starts_with("tidy-the-queue-"), "{}", tree.piece);
+        assert!(
+            works.is_some_and(|works| works.starts_with("in a worktree of its own")),
+            "the asking chat is told"
+        );
+
+        // What the dispatch names wins over the persona's default.
+        std::fs::create_dir_all(held.root().join("workspaces/beta")).expect("beta");
+        let (said, _) = dispatch_in(
+            &held,
+            &id,
+            &tickets,
+            in_a_repo,
+            (None, "look in beta"),
+            "workspace:beta",
+        );
+        let Answer::Dispatched { chat, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        let record = dispatch_records(&held)
+            .into_iter()
+            .find(|record| record.worker.chat.chat == chat)
+            .expect("its record");
+        assert_eq!(record.place.worktree, None);
+        assert_eq!(record.place.workspace.as_deref(), Some("beta"));
+
+        // From a chat that works in no repo, the default gives way, and the chat is told.
+        let at_the_root = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let (said, _) = dispatch(&held, &id, &tickets, at_the_root, None, "from the root");
+        let Answer::Dispatched {
+            chat, works, note, ..
+        } = said
+        else {
+            panic!("dispatched, not {said:?}")
+        };
+        assert_eq!(works, None);
+        assert_eq!(
+            note,
+            Some(purlis_core::dispatchplace::fell_back_note("steward"))
+        );
+        let opened = held.chats().recorded_chat(chat).expect("recorded");
+        assert_eq!(opened.cwd.as_deref(), Some(plane.root.as_path()));
+    }
+
+    #[test]
+    fn a_worktree_the_broker_will_not_cut_starts_nothing_and_leaves_nothing_behind() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let clone = a_clone(held.root());
+        // The repository's own config names a program git would run at a checkout.
+        git(&clone, &["config", "filter.x.smudge", "cat"]);
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &clone);
+        let before = held.chats().open_now().len();
+
+        let (said, told) = dispatch_in(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            (None, "check the queue"),
+            "worktree",
+        );
+
+        let why = refused(&said);
+        assert!(
+            why.starts_with("purlis could not cut a worktree for this task: "),
+            "{why}"
+        );
+        assert!(
+            why.contains(
+                "which names a program git would run outside the chat's sandbox, so the app \
+                 will not run git there for the chat."
+            ),
+            "{why}"
+        );
+        assert!(told.is_none());
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        assert!(dispatch_records(&held).is_empty(), "nothing is recorded");
+        assert!(!held.root().join("workspaces/alpha/.worktrees").exists());
+        // The slot it held is let go: the asking chat has nothing running.
+        assert_eq!(held.chats().lineage(asking, None, &|_| true).running, 0);
+    }
+
+    #[test]
+    fn a_discard_asks_first_is_refused_while_a_chat_is_open_and_removes_what_was_shown() {
+        use crate::dispatches::{WorktreeLoss, discard, loss_of};
+
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let clone = a_clone(held.root());
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &clone);
+        let (said, _) = dispatch_in(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            (None, "check the queue"),
+            "worktree",
+        );
+        let Answer::Dispatched { chat, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        let tree = the_worktree(&held, chat);
+        let branch = tree.branch.clone().expect("its branch");
+        let dispatch = dispatch_records(&held).remove(0).id;
+        let folder = held
+            .root()
+            .join("workspaces/alpha/.worktrees/api")
+            .join(&tree.piece);
+        std::fs::write(folder.join("fix.txt"), "fixed\n").expect("its work");
+        git(&folder, &["add", "-A"]);
+        git(&folder, &["commit", "-q", "-m", "fix"]);
+        let tip = git(&folder, &["rev-parse", "HEAD"]);
+        std::fs::write(folder.join("scratch.txt"), "not committed\n").expect("more of it");
+
+        // While its chat is open, the question is not even asked.
+        let open = "A chat is still open in the folder of the branch cut for 'check the queue'. \
+                    Close it first: purlis will not remove a folder a chat is working in.";
+        assert_eq!(loss_of(&held, &dispatch), Err(open.to_owned()));
+        let nothing = WorktreeLoss {
+            task: "check the queue".to_owned(),
+            repo: "api".to_owned(),
+            branch: Some(branch.clone()),
+            on: Some(branch.clone()),
+            changes: Vec::new(),
+            ignored: Vec::new(),
+            unmerged: 0,
+            lost: Vec::new(),
+        };
+        assert_eq!(discard(&held, &dispatch, &nothing), Err(open.to_owned()));
+        assert!(folder.join("scratch.txt").is_file());
+
+        // Its chat closed. Its branch is not merged, so purlis leaves it listed.
+        let _ = held.close_chat(chat);
+        assert_eq!(
+            crate::dispatches::tidy_closed(held.root(), &dispatch),
+            purlis_core::dispatchplace::Tidied::Kept
+        );
+        let listed = crate::dispatches::worktree_row(
+            held.root(),
+            &purlis_core::dispatchrecord::read(held.root(), &dispatch).expect("the record"),
+        )
+        .expect("its row lists the worktree");
+        assert_eq!((listed.standing.as_str(), listed.discard), ("kept", true));
+        assert_eq!(listed.branch.as_deref(), Some(branch.as_str()));
+
+        // The question names exactly what would go, and how much the branch holds.
+        let loss = loss_of(&held, &dispatch).expect("what would be lost");
+        assert_eq!(loss.task, "check the queue");
+        assert_eq!(loss.repo, "api");
+        assert_eq!(loss.branch.as_deref(), Some(branch.as_str()));
+        assert!(
+            loss.changes.iter().any(|path| path == "?? scratch.txt"),
+            "{:?}",
+            loss.changes
+        );
+        assert_eq!(loss.unmerged, 1);
+        // The folder is on the branch purlis cut, so that commit stays on it: none is lost.
+        assert_eq!(loss.on.as_deref(), Some(branch.as_str()));
+        assert_eq!(loss.lost, Vec::<String>::new());
+        // What purlis itself wrote and hides in the folder is not listed as the task's.
+        assert!(
+            !loss
+                .ignored
+                .iter()
+                .any(|path| path.starts_with(".claude/") || path == "AGENTS.md"),
+            "{:?}",
+            loss.ignored
+        );
+
+        // An answer to a question that showed less than is there now removes nothing.
+        assert_eq!(
+            discard(&held, &dispatch, &nothing),
+            Err(
+                "What that branch's folder holds has changed since you were asked, so nothing \
+                 was removed. Press Discard again to see what would be lost now."
+                    .to_owned()
+            )
+        );
+        assert!(folder.join("scratch.txt").is_file());
+        // Nor does one given while another chat stands in the folder.
+        let squatter = a_chat_as(&held, &plane.root, Some("steward"), &folder);
+        assert_eq!(discard(&held, &dispatch, &loss), Err(open.to_owned()));
+        assert!(folder.join("scratch.txt").is_file());
+        let _ = held.close_chat(squatter);
+
+        // The answer to what was shown removes the folder. The branch holds a commit that is
+        // nowhere else, so it stays: no commit is lost, and nothing is merged.
+        let main = git(&clone, &["rev-parse", "refs/heads/main"]);
+        // What stands there now is what a chat standing in it may have left; asked again.
+        let loss = loss_of(&held, &dispatch).expect("what would be lost now");
+        assert_eq!(discard(&held, &dispatch, &loss), Ok(()));
+        assert!(folder.symlink_metadata().is_err(), "its folder is gone");
+        assert_eq!(
+            git(&clone, &["rev-parse", &format!("refs/heads/{branch}")]),
+            tip,
+            "its branch stays, with the commit"
+        );
+        assert_eq!(git(&clone, &["rev-parse", "refs/heads/main"]), main);
+        assert!(!clone.join("fix.txt").exists());
+        let record = purlis_core::dispatchrecord::read(held.root(), &dispatch).expect("kept");
+        let listed = crate::dispatches::worktree_row(held.root(), &record).expect("still listed");
+        assert_eq!(
+            (listed.standing.as_str(), listed.discard),
+            ("discarded", false)
+        );
+        // There is nothing to discard twice.
+        assert_eq!(
+            loss_of(&held, &dispatch),
+            Err("That branch's folder is already gone, so there is nothing to discard.".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_chat_nobody_is_at_starts_no_chat_in_another_workspace_without_a_standing_grant() {
+        // D-1453-16: never to its own persona, for which no grant is ever kept, and to
+        // another only with a grant that already stands for the pair.
+        let plane = a_plane_with_personas();
+        std::fs::create_dir_all(plane.root.join("workspaces/beta")).expect("beta");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let before = held.chats().open_now().len();
+        // Its harness reported its permission prompts off.
+        held.unattended().heard(asking, true);
+
+        let (said, told) = dispatch_in(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            (None, "check the queue"),
+            "workspace:beta",
+        );
+
+        assert_eq!(
+            refused(&said),
+            purlis_core::dispatchplace::Refused::NobodyToAsk {
+                workspace: "beta".to_owned(),
+                asking: Some("steward".to_owned()),
+                target: Some("steward".to_owned()),
+            }
+            .say()
+        );
+        assert!(told.is_none());
+        assert_eq!(held.chats().open_now().len(), before, "nothing started");
+        assert!(
+            held.dispatch_grants().waiting(asking).is_empty(),
+            "nothing is held: nobody is there to ask"
+        );
+        // Into its own workspace, by name or by saying nothing, its own persona needs none.
+        for place in [Some("workspace:alpha"), None] {
+            let (own, _) = match place {
+                Some(place) => dispatch_in(
+                    &held,
+                    &id,
+                    &Tickets::default(),
+                    asking,
+                    (None, "tidy up"),
+                    place,
+                ),
+                None => dispatch(&held, &id, &Tickets::default(), asking, None, "tidy up"),
+            };
+            assert!(
+                matches!(own, Answer::Dispatched { .. }),
+                "{place:?}: {own:?}"
+            );
+        }
+        // To another persona it is this rule that answers first, naming the pair.
+        let across = |held: &Held| {
+            dispatch_in(
+                held,
+                &id,
+                &Tickets::default(),
+                asking,
+                (Some("devops"), "check the queue"),
+                "workspace:beta",
+            )
+        };
+        let (said, _) = across(&held);
+        let no_grant = purlis_core::dispatchplace::Refused::NobodyToAsk {
+            workspace: "beta".to_owned(),
+            asking: Some("steward".to_owned()),
+            target: Some("devops".to_owned()),
+        }
+        .say();
+        assert_eq!(refused(&said), no_grant);
+        // With a grant that already stands for the pair, the person's on this machine, this
+        // rule lets it by. What an unattended dispatch to another persona needs besides is
+        // that rule's own to say (`dispatchunattended`): a chat started with no sandbox, as
+        // one of a project with none is, is refused there, in that rule's words.
+        purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", "devops")
+            .expect("the person allowed it on this machine");
+        let (said, told) = across(&held);
+        match &said {
+            Answer::Dispatched { .. } => assert_eq!(
+                told.expect("the window is told").workspace.as_deref(),
+                Some("beta")
+            ),
+            Answer::No { why } => assert_eq!(
+                why,
+                &purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned()).say()
+            ),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_workspace_named_in_another_case_is_filed_and_limited_under_its_folder_s_own_name() {
+        // #1453 review, M1. On a volume that folds case `workspace:BETA` opens the folder
+        // `beta`: the limits read for it, the record and where it is filed all say `beta`.
+        // On one that does not, there is no such workspace.
+        let plane = a_plane_with_personas();
+        std::fs::create_dir_all(plane.root.join("workspaces/beta")).expect("beta");
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n[dispatch.workspaces.beta]\nrunning-per-chat = 0\n",
+        )
+        .expect("the manifest");
+        let folds = plane.root.join("workspaces/BETA").is_dir();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+
+        let (said, told) = dispatch_in(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            (None, "check the queue"),
+            "workspace:BETA",
+        );
+
+        let why = refused(&said);
+        if folds {
+            assert!(
+                why.starts_with("dispatch is off in the workspace beta"),
+                "the limits of `beta` hold under any spelling of it: {why}"
+            );
+        } else {
+            assert!(
+                why.starts_with("this project has no workspace 'BETA'"),
+                "{why}"
+            );
+        }
+        assert!(told.is_none());
+        assert!(dispatch_records(&held).is_empty());
+    }
+
+    #[test]
+    fn closing_a_worktree_task_s_chat_takes_its_worktree_away_once_its_branch_is_merged() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let clone = a_clone(held.root());
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &clone);
+        let (said, _) = dispatch_in(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            (None, "check the queue"),
+            "worktree",
+        );
+        let Answer::Dispatched { chat, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        let tree = the_worktree(&held, chat);
+        let branch = tree.branch.clone().expect("its branch");
+        let dispatch = dispatch_records(&held).remove(0).id;
+        let folder = held
+            .root()
+            .join("workspaces/alpha/.worktrees/api")
+            .join(&tree.piece);
+        std::fs::write(folder.join("fix.txt"), "fixed\n").expect("its work");
+        git(&folder, &["add", "-A"]);
+        git(&folder, &["commit", "-q", "-m", "fix"]);
+        // The person merged it, themselves.
+        git(&clone, &["merge", "-q", "--ff-only", &branch]);
+
+        // While its chat is open, the app has nothing to look at.
+        assert_eq!(
+            crate::dispatches::tidy_closed(held.root(), &dispatch),
+            purlis_core::dispatchplace::Tidied::Kept,
+            "a running dispatch's worktree is never looked at"
+        );
+        assert_eq!(
+            crate::dispatches::worktree_to_look_at(&held, asking),
+            None,
+            "and the asking chat's own close looks at no worktree"
+        );
+
+        // Its chat closes: its dispatch ends, and the merged worktree goes with it.
+        crate::dispatches::ended(&held, chat);
+        assert_eq!(
+            crate::dispatches::worktree_to_look_at(&held, chat).as_deref(),
+            Some(dispatch.as_str())
+        );
+        assert_eq!(
+            crate::dispatches::tidy_closed(held.root(), &dispatch),
+            purlis_core::dispatchplace::Tidied::Removed
+        );
+        assert!(folder.symlink_metadata().is_err(), "its folder is gone");
+        assert_eq!(git(&clone, &["branch", "--list", &branch]), "");
+        assert!(
+            clone.join("fix.txt").is_file(),
+            "the work is where it was merged"
+        );
+        let record = purlis_core::dispatchrecord::read(held.root(), &dispatch).expect("kept");
+        assert_eq!(
+            crate::dispatches::worktree_row(held.root(), &record)
+                .map(|listed| (listed.standing, listed.discard)),
+            Some(("merged".to_owned(), false))
+        );
+        let _ = held.close_chat(chat);
+    }
+
     // ----- the wiring: limits, grant, profile and lineage (#1436, #1437, #1439) -----
 
     /// A dispatch from `asking` with its own brief and, where one is asked for, a profile.
@@ -5781,6 +7013,7 @@ mod tests {
                 name: name.to_owned(),
                 brief: brief.to_owned(),
                 profile: profile.map(str::to_owned),
+                place: None,
                 ticket,
             })),
             &|arrived| *told.lock().unwrap() = Some(arrived),
@@ -6507,10 +7740,67 @@ mod tests {
                 persona: persona.to_owned(),
                 name: name.to_owned(),
                 ask: "Is prod healthy? Say what you checked.\n".to_owned(),
+                place: None,
             },
             &purlis_core::sandbox::policy::Locks::none(),
             STARTING,
         )
+    }
+
+    #[test]
+    fn the_person_s_ask_names_where_the_new_chat_works_and_a_refusal_is_in_the_window_s_words() {
+        // #1453: "Ask <persona>…" offers the same three places a chat's dispatch has, and the
+        // dialog's pick rides the same word.
+        let plane = a_plane_with_personas();
+        std::fs::create_dir_all(plane.root.join("workspaces/beta")).expect("beta");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let steward = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let ask_in = |place: &str| {
+            ask_persona(
+                &held,
+                &id,
+                &PersonAsk {
+                    chat: steward,
+                    persona: "devops".to_owned(),
+                    name: "check prod".to_owned(),
+                    ask: "Is prod healthy?".to_owned(),
+                    place: Some(place.to_owned()),
+                },
+                &purlis_core::sandbox::policy::Locks::none(),
+                STARTING,
+            )
+        };
+
+        // Another workspace: the chat starts there, filed there, under the chat it was asked from.
+        let arrived = ask_in("workspace:beta").expect("it starts");
+        assert_eq!(arrived.workspace.as_deref(), Some("beta"));
+        let started = held
+            .chats()
+            .recorded_chat(arrived.session)
+            .expect("recorded");
+        assert_eq!(
+            started.cwd.as_deref(),
+            Some(held.root().join("workspaces/beta").as_path())
+        );
+        assert_eq!(started.persona.as_deref(), Some("devops"));
+
+        // A branch of its own, from a chat that works in no repo: said as the window says it,
+        // of a branch, with no flag of a command.
+        let refused = ask_in("worktree").expect_err("that chat works in no repo");
+        assert_eq!(
+            refused,
+            purlis_core::dispatchplace::Refused::NotInARepo.in_window()
+        );
+        for leak in ["--in", "worktree"] {
+            assert!(!refused.contains(leak), "{leak}: {refused}");
+        }
+        assert_eq!(
+            ask_in("workspace:gamma").expect_err("no such workspace"),
+            "This project has no workspace 'gamma', so no chat was started there."
+        );
     }
 
     /// The vault registry of the operator's case: `prod` is tagged for `devops`.
@@ -6790,6 +8080,7 @@ mod tests {
                 persona: "devops".to_owned(),
                 name: "check prod".to_owned(),
                 ask: " \n".to_owned(),
+                place: None,
             },
             &purlis_core::sandbox::policy::Locks::none(),
             STARTING,
@@ -6971,6 +8262,7 @@ mod tests {
                 persona: "devops".to_owned(),
                 name: "check prod".to_owned(),
                 ask: "Is prod healthy?".to_owned(),
+                place: None,
             },
             &locks,
             STARTING,
@@ -7125,6 +8417,7 @@ mod tests {
                 by_person: false,
                 unreported: true,
                 stepped_in: false,
+                branch: None,
             })
         );
         let told = purlis_core::handback::context(&left, false).expect("a turn's context");
@@ -7842,6 +9135,7 @@ mod tests {
                     persona: persona.to_owned(),
                     name: "x y".to_owned(),
                     ask: "Is prod healthy?".to_owned(),
+                    place: None,
                 },
                 &locks,
                 STARTING,

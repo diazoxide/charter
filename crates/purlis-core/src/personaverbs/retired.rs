@@ -76,9 +76,11 @@ pub const HELPERS: [&str; 6] = [
 ///
 /// `model`, `color`, `description` and `agent-description` fed the file too and are not here:
 /// each has a job now ([`crate::personaprofile`], [`crate::personamark`], [`description`]).
-/// So has `disallowed-tools` ([`DENIED_TOOLS`]). `skills` is here for what it did in a chat;
+/// So has `disallowed-tools` ([`DENIED_TOOLS`]), and so has `dispatch-isolation` since #1453:
+/// it is the persona's default place to work when a dispatch names none
+/// ([`crate::dispatchplace::isolates`]). `skills` is here for what it did in a chat;
 /// `persona stats` still reads it as the persona's declared skills.
-pub const KEYS: [&str; 4] = ["agent-tools", "skills", "memory", "dispatch-isolation"];
+pub const KEYS: [&str; 3] = ["agent-tools", "skills", "memory"];
 
 /// The tools of a sub-agent's allow-list that write a file.
 const WRITERS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
@@ -114,12 +116,6 @@ pub fn key_notice(key: &str, value: &str) -> Option<String> {
         "memory" => "it chose the harness's own memory store for the generated sub-agent. A \
                      persona chat has the persona's memory in `personas/<name>/memory/`, and \
                      choosing a harness store for it is not in this version yet (#1460)"
-            .to_owned(),
-        "dispatch-isolation" => "it started the generated sub-agent in its own worktree, and \
-                                 purlis asked before a second one wrote in the same tree. A \
-                                 persona chat works in the asking chat's folder and nothing \
-                                 asks. A persona chat in its own worktree is not in this \
-                                 version yet (#1453)"
             .to_owned(),
         _ => return None,
     };

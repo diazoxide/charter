@@ -795,7 +795,7 @@ pub struct WhereWorking {
 /// carries ([`crate::dispatchdecision`]). A request cannot say who asks, where from, or that a
 /// grant exists: there is no field to say it in. What it does say is what an agent chooses:
 /// which persona, what the task is called, which of the project's profiles to start it on,
-/// and the brief. A profile is a name, only ever looked up among the profiles the project
+/// whether it works in another workspace or a worktree of its own, and the brief. A profile is a name, only ever looked up among the profiles the project
 /// offers on this machine and has approved ([`crate::personaprofile::for_dispatch`]).
 ///
 /// The ticket is [`OpenChat`]'s, minted and spent the same way, so one run of the command
@@ -818,6 +818,13 @@ pub struct DispatchAsk {
     /// here, or has not approved, is a refusal and never another profile in its place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Where the new chat is to work (`--in`, #1453): `worktree`, or `workspace:<name>`.
+    /// `None` is the persona's own default, else the asking chat's folder. **A word, never a
+    /// place**: which repo a worktree is cut from, and what its folder and branch are called,
+    /// are the app's ([`crate::dispatchplace`]), and a workspace is looked up among the
+    /// project's own. There is no field for a folder or a branch.
+    #[serde(default, rename = "in", skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
     /// See [`OpenChat`]. Minted by the app, spent once, never written down.
     pub ticket: String,
 }
@@ -1081,6 +1088,10 @@ pub enum Answer {
     /// [`Self::Opened`]'s: something the asking chat should be told about how it was started,
     /// today that it runs on the asking chat's profile because its persona's own is not
     /// offered on this machine (#1445, D-1445-8).
+    ///
+    /// `works` says where the new chat works, where that is not the asking chat's folder
+    /// (#1453): another workspace, or a worktree of its own with the branch purlis cut for
+    /// it. The app's words, said after "It works".
     Dispatched {
         chat: u32,
         name: String,
@@ -1088,6 +1099,8 @@ pub enum Answer {
         persona: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        works: Option<String>,
     },
     /// Nothing has started **yet**: the asking chat's persona has no dispatch grant for `to`,
     /// and the person is being asked for one on the asking chat's tab (#1434, #1437). `from`
@@ -2967,6 +2980,7 @@ mod tests {
             name: "check the queue".to_owned(),
             brief: "# Check the queue\nbody\n".to_owned(),
             profile: None,
+            place: None,
             ticket: "t".repeat(64),
         }))
     }
@@ -3022,9 +3036,41 @@ mod tests {
                 name: "x".to_owned(),
                 brief: "a b".to_owned(),
                 profile: Some("prod".to_owned()),
+                place: None,
                 ticket: "t".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn a_dispatch_says_where_in_one_word_and_has_no_field_for_a_folder_or_a_branch() {
+        // #1453: `in` is the only thing a line says about where the new chat works. A line
+        // that names a folder, a repo, a piece or a branch anyway is read without them.
+        let forged = concat!(
+            r#"{"dispatch":{"chat":7,"name":"x","brief":"a b","ticket":"t","in":"worktree","#,
+            r#""branch":"main","piece":"../../main","folder":"/etc","repo":"other","#,
+            r#""worktree":{"branch":"main","path":"/"},"workspace":"beta","base":"main"}}"#
+        );
+        let (read, _) = read_line(forged).expect("it reads");
+        let Line::Ask(Ask::Dispatch(read)) = read else {
+            panic!("a dispatch");
+        };
+        assert_eq!(
+            *read,
+            DispatchAsk {
+                chat: 7,
+                to: None,
+                name: "x".to_owned(),
+                brief: "a b".to_owned(),
+                profile: None,
+                place: Some("worktree".to_owned()),
+                ticket: "t".to_owned(),
+            }
+        );
+        // And it is written back as that one word.
+        let written = serde_json::to_value(Ask::Dispatch(read)).expect("json");
+        assert_eq!(written["dispatch"]["in"], "worktree");
+        assert_eq!(written["dispatch"].get("place"), None);
     }
 
     #[cfg(unix)]
@@ -3047,6 +3093,7 @@ mod tests {
                     name: "check the queue".to_owned(),
                     persona: None,
                     note: None,
+                    works: None,
                 }
             }),
         );
@@ -3094,6 +3141,7 @@ mod tests {
                     name: "x".to_owned(),
                     persona: None,
                     note: None,
+                    works: None,
                 }
             }),
         );
@@ -4398,6 +4446,7 @@ mod tests {
                                 name: dispatch.name.clone(),
                                 persona: None,
                                 note: None,
+                                works: None,
                             },
                             Err(why) => Answer::No { why },
                         };
@@ -4572,6 +4621,7 @@ mod tests {
                 name: "check the queue".to_owned(),
                 brief: "# Check the queue\nbody\n".to_owned(),
                 profile: None,
+                place: None,
                 ticket: ticket.to_owned(),
             }))
         });

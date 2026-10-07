@@ -1,16 +1,29 @@
 import { Fragment, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, LoaderCircle, Send, UserRound } from "lucide-react";
+import { ChatAsk } from "./ChatAsk";
 import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
-import { commands, type DispatchRow, type Dispatches, type PlaneId } from "./bindings";
+import {
+  commands,
+  type DispatchRow,
+  type Dispatches,
+  type PlaneId,
+  type WorktreeLoss,
+} from "./bindings";
 import {
   askersOf,
+  branchSaid,
+  counted,
+  discardSays,
   EVERY_DISPATCH,
+  losesNothing,
+  lostSaid,
   NO_PERSONA,
   NO_PERSONA_SAID,
   personasOf,
   saidAt,
   shownDispatches,
+  worktreeSaid,
   type DispatchFilter,
 } from "./dispatches";
 
@@ -29,6 +42,17 @@ const WHILE_RUNNING_MS = 5000;
  * **Cost is what the chat's harness reported**, relayed by the chat's status line: a figure a
  * chat can alter, so the column says *Cost (reported)* and nothing is decided by it. A row whose
  * harness reports none says so in words, never as a zero.
+ *
+ * **A dispatch that was given a branch of its own lists it under *Where*** (#1453), with how
+ * it stands. Nothing merges a task's branch for it, so it is listed until it is merged or the
+ * person discards its folder. **Discard** asks first: the core reads what the folder holds, and
+ * the question names every uncommitted file and every ignored path of the task's that would
+ * go, and says what becomes of the branch. The branch purlis cut loses no commit by it: one
+ * that holds work stays. Commits made in the folder on no branch are the one thing a discard
+ * loses, and the question names them as lost. The paths the person was shown go back with the
+ * answer, and the core removes nothing where the folder holds other paths by then. A refusal (a chat is still open in it) stands as a Notice.
+ *
+ * The window says this of a branch and its folder, never of a worktree (ADR 0072 §4).
  */
 export function DispatchesTab({
   plane,
@@ -48,6 +72,43 @@ export function DispatchesTab({
   const [filter, setFilter] = useState<DispatchFilter>(EVERY_DISPATCH);
   const [read, setRead] = useState<string>();
   const [again, setAgain] = useState(0);
+  /** The discard being asked about: the row, what the core says would be lost, and its refusal
+   *  of the last answer. */
+  const [discarding, setDiscarding] = useState<{
+    row: DispatchRow;
+    loss: WorktreeLoss;
+    trouble?: string;
+  }>();
+  /** Why the core would not ask about a row's worktree at all. */
+  const [kept, setKept] = useState<{ id: string; task: string; why: string }>();
+  const [busy, setBusy] = useState(false);
+  const askToDiscard = async (row: DispatchRow) => {
+    setKept(undefined);
+    const answer = await commands
+      .dispatchWorktreeLoss(plane, row.id)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (answer.status === "error") {
+      // Verbatim: the sentence says what stands in the way and what to do about it.
+      setKept({ id: row.id, task: row.task, why: answer.error });
+      setAgain((was) => was + 1);
+      return;
+    }
+    setDiscarding({ row, loss: answer.data });
+  };
+  const discard = async () => {
+    if (discarding === undefined) return;
+    setBusy(true);
+    const answer = await commands
+      .dispatchWorktreeDiscard(plane, discarding.row.id, discarding.loss)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    setBusy(false);
+    if (answer.status === "error") {
+      setDiscarding({ ...discarding, trouble: answer.error });
+      return;
+    }
+    setDiscarding(undefined);
+    setAgain((was) => was + 1);
+  };
   useEffect(() => {
     let gone = false;
     void commands
@@ -205,7 +266,25 @@ export function DispatchesTab({
                     )}
                   </td>
                   <td>{row.by_person ? `you, from ${row.asker}` : row.asker}</td>
-                  <td title={row.folder ?? undefined}>{row.place}</td>
+                  <td title={row.folder ?? undefined}>
+                    {row.place}
+                    {row.worktree !== null && (
+                      <span className="dispatch-worktree" data-standing={row.worktree.standing}>
+                        {worktreeSaid(row.worktree)}
+                        {row.worktree.discard && (
+                          <button
+                            type="button"
+                            className="dispatch-discard"
+                            tabIndex={0}
+                            aria-label={`Discard the branch folder of ${row.task}`}
+                            onClick={() => void askToDiscard(row)}
+                          >
+                            Discard
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </td>
                   <td>{row.outcome}</td>
                   <td>{row.duration}</td>
                   <td>{row.needed_you}</td>
@@ -242,7 +321,78 @@ export function DispatchesTab({
         </table>
       )}
       {refused}
+      {kept !== undefined && (
+        <Notice
+          cause={`dispatch-worktree-kept:${kept.id}`}
+          tone="trouble"
+          label={`The branch folder of ${kept.task} was not discarded`}
+          onDismiss={() => setKept(undefined)}
+        >
+          {kept.why}
+        </Notice>
+      )}
+      {discarding !== undefined && (
+        <ChatAsk
+          title="Discard this branch's folder?"
+          says={discardSays(discarding.loss)}
+          answer="Discard"
+          trouble={discarding.trouble}
+          busy={busy}
+          onAnswer={() => void discard()}
+          onCancel={() => setDiscarding(undefined)}
+        >
+          <Loss loss={discarding.loss} />
+        </ChatAsk>
+      )}
     </>
+  );
+}
+
+/** What goes with a discarded folder, as the core read it: every uncommitted file by its path,
+ *  every ignored path of the task's own, the commits made on no branch (the one thing a discard
+ *  loses for good), then what becomes of the branch. */
+function Loss({ loss }: { loss: WorktreeLoss }) {
+  const lost = lostSaid(loss);
+  return (
+    <div className="dispatch-loss" data-testid="discard-loses">
+      {losesNothing(loss) && (
+        <p className="honest" data-testid="discard-loses-nothing">
+          The folder holds no uncommitted file and no ignored one, so nothing in it would be lost.
+        </p>
+      )}
+      {loss.changes.length > 0 && (
+        <>
+          <p className="honest">
+            {`${counted(loss.changes.length, "uncommitted file", "uncommitted files")} would be lost:`}
+          </p>
+          <pre>{loss.changes.join("\n")}</pre>
+        </>
+      )}
+      {loss.ignored.length > 0 && (
+        <>
+          <p className="honest">
+            {`${counted(loss.ignored.length, "ignored path goes", "ignored paths go")} with it:`}
+          </p>
+          <pre>{loss.ignored.join("\n")}</pre>
+        </>
+      )}
+      {lost !== undefined && (
+        <>
+          <p className="honest" data-testid="discard-loses-commits">
+            {lost}
+          </p>
+          <pre>
+            {loss.lost.join("\n")}
+            {loss.unmerged > loss.lost.length
+              ? `\n… and ${loss.unmerged - loss.lost.length} more`
+              : ""}
+          </pre>
+        </>
+      )}
+      <p className="honest" data-testid="discard-branch">
+        {branchSaid(loss)}
+      </p>
+    </div>
   );
 }
 

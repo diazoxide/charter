@@ -325,7 +325,11 @@ fn a_key_nothing_reads_is_reported_with_what_widened_and_its_line_is_kept() {
         "{}",
         about("agent-tools")
     );
-    assert!(about("dispatch-isolation").contains("(#1453)"));
+    // `dispatch-isolation` is read again (#1453), so the fix says nothing of it.
+    assert!(
+        !said.iter().any(|line| line.contains("dispatch-isolation")),
+        "{said:#?}"
+    );
     // `disallowed-tools` is not retired: it says where it holds.
     assert_eq!(
         about("disallowed-tools"),

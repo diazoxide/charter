@@ -96,6 +96,7 @@ export function ChatsSection({
                   name={row.name}
                   persona={row.persona}
                   workspace={row.workspace}
+                  branch={row.branch}
                   shell={row.shell}
                   level={row.level}
                   posinset={row.posinset}
@@ -129,6 +130,7 @@ const Row = memo(function Row({
   name,
   persona,
   workspace,
+  branch,
   shell,
   level,
   posinset,
@@ -149,6 +151,8 @@ const Row = memo(function Row({
   name: string;
   persona: string | null;
   workspace: string;
+  /** The branch of its own a task works on, where it was given one. */
+  branch: string | null;
   shell: boolean;
   level: number;
   posinset: number;
@@ -228,6 +232,11 @@ const Row = memo(function Row({
             )}
             <span className="session">{name}</span>
             <span className="workspace">{workspace}</span>
+            {branch !== null && (
+              <span className="own-branch" title="A branch of its own, which nothing merges for it">
+                own branch {branch}
+              </span>
+            )}
             <ChatStateMark session={session} shell={shell} />
             {needs === session && (
               <span

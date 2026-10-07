@@ -28,7 +28,22 @@ export type ListedChat = {
   from: string | null;
   /** Whether it has a tab. A task chat has none until its row is clicked. */
   tab: boolean;
+  /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
+   *  it, in a folder of its own, and nothing merges it. */
+  branch: string | null;
 };
+
+/**
+ * **The branch of its own a task chat works on**, read from where it stands: a folder purlis
+ * cut for it under its workspace's `.worktrees/<repo>/`, whose name is the branch's. Only a
+ * task: a chat the person started in a branch's folder is not a dispatch's, and the explorer
+ * already draws it under that branch.
+ */
+export function ownBranch(chat: OpenChat): string | null {
+  if (!chat.from?.task || chat.cwd === null) return null;
+  const at = /\/workspaces\/[^/]+\/\.worktrees\/[^/]+\/([^/]+)(?:\/|$)/.exec(chat.cwd);
+  return at?.[1] ?? null;
+}
 
 /** A listed chat at its place in the tree. */
 export type ChatRow = ListedChat & {
@@ -57,6 +72,7 @@ export function listedChat(
     mode: chat.from ? (chat.from.task ? "task" : "handoff") : null,
     from: chat.from?.name ?? null,
     tab,
+    branch: ownBranch(chat),
   };
 }
 

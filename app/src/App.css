@@ -4823,6 +4823,35 @@ h2.sidebar-title .node-icon {
   color: var(--text-primary);
 }
 
+/* A task's own branch, after its workspace on its row of the Chats tree (#1453). */
+.own-branch {
+  color: var(--text-muted);
+}
+
+/* A dispatch's worktree, under where it worked (#1453): how it stands, then Discard. */
+.dispatch-worktree {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.dispatch-discard {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.dispatch-loss pre {
+  max-height: 12rem;
+  margin: 0 0 0.5rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 .dispatch-read td {
   padding: 0.5rem 0.5rem 0.75rem 1.75rem;
   white-space: normal;

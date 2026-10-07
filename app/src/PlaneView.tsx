@@ -4038,7 +4038,7 @@ export const PlaneView = memo(function PlaneView({
    * started, so its tab arrives behind the one being read. A refusal stays in the dialog.
    */
   const sendAsk = useCallback(
-    async (name: string, ask: string) => {
+    async (name: string, ask: string, place: string | null) => {
       const asked = askingPersona;
       if (asked === undefined || asked.busy) return;
       setAskingPersona({ ...asked, trouble: undefined, busy: true });
@@ -4049,6 +4049,7 @@ export const PlaneView = memo(function PlaneView({
           asked.persona,
           name,
           ask,
+          place,
           STARTING_SIZE.columns,
           STARTING_SIZE.rows,
         )
@@ -5898,10 +5899,14 @@ export const PlaneView = memo(function PlaneView({
           key={`${askingPersona.session}:${askingPersona.persona}`}
           persona={askingPersona.persona}
           chat={nameOf(askingPersona.session)}
+          // Every workspace but the one that chat works in: there, "this chat's folder" is it.
+          workspaces={(sidebar?.workspaces ?? [])
+            .filter((ws) => !ws.chats.some((chat) => chat.session === askingPersona.session))
+            .map((ws) => ws.name)}
           prefill={askingPersona.prefill}
           trouble={askingPersona.trouble}
           asking={askingPersona.busy}
-          onAsk={(name, ask) => void sendAsk(name, ask)}
+          onAsk={(name, ask, place) => void sendAsk(name, ask, place)}
           onCancel={() => setAskingPersona(undefined)}
         />
       )}

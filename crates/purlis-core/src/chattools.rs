@@ -408,6 +408,16 @@ pub static TOOLS: [Tool; 15] = [
                                         on. Leave it out for the persona's own, else this \
                                         chat's.",
                     },
+                    "in": {
+                        "type": "string",
+                        "description": "Where it works: `workspace:<name>` for another \
+                                        workspace of the project, or `worktree` for a new \
+                                        worktree of the repo this chat works in, on a new \
+                                        branch purlis names, which nothing merges. A \
+                                        sandboxed chat can edit there and cannot commit yet: \
+                                        its changes stay in that folder. Leave it out for \
+                                        this chat's folder.",
+                    },
                     "wait": {
                         "type": "boolean",
                         "description": "Wait for the task's report and answer with it, \
@@ -757,6 +767,17 @@ pub fn dispatch_profile(args: &Map<String, Value>) -> Result<Option<String>, Str
         }
         Some(Value::String(_)) => Ok(None),
         Some(_) => Err("`profile` is a profile's name".to_owned()),
+    }
+}
+
+/// The `dispatch` tool's `in`: where the new chat works, where that is asked for (#1453). One
+/// of two words and nothing more: the app reads it ([`crate::dispatchplace::asked`]).
+pub fn dispatch_place(args: &Map<String, Value>) -> Result<Option<String>, String> {
+    match args.get("in") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(place)) if !place.trim().is_empty() => Ok(Some(place.trim().to_owned())),
+        Some(Value::String(_)) => Ok(None),
+        Some(_) => Err("`in` is `worktree` or `workspace:<name>`".to_owned()),
     }
 }
 

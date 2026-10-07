@@ -12,7 +12,9 @@ pub mod confine;
 pub mod git;
 pub mod listing;
 pub mod name;
+pub mod pointer;
 pub mod porcelain;
+pub mod standing;
 
 use std::path::{Path, PathBuf};
 

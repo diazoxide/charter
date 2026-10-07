@@ -631,6 +631,7 @@ const DISPATCHES: DispatchRow[] = [
     report: null,
     open_session: 7,
     session_record: null,
+    worktree: null,
   },
   {
     id: "01K6A",
@@ -655,6 +656,7 @@ const DISPATCHES: DispatchRow[] = [
     report: "Tidied.",
     open_session: null,
     session_record: "sessions/20261007-110100-tidy.md",
+    worktree: null,
   },
 ];
 

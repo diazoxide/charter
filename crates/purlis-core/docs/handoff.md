@@ -219,7 +219,8 @@ another chat, which reports back to it. Both are a **dispatch**: one chat starti
 which runs as a persona for its whole life.
 
 ```bash
-purlis dispatch --name "<short task>" [--to <persona>] [--profile <profile>] <<'BRIEF'
+purlis dispatch --name "<short task>" [--to <persona>] [--profile <profile>] \
+                [--in workspace:<name> | --in worktree] <<'BRIEF'
 <the brief>
 BRIEF
 ```
@@ -239,8 +240,8 @@ BRIEF
   dispatch across the same pair while you are being asked is refused, not queued beside the
   first: the chat is told which task is waiting and to dispatch again once you have answered. A chat
   nobody is at is never asked for; see *A dispatch from an unattended chat*, below.
-- **It is a chat of its own**, in the app, in this chat's folder. You can see it, open it, type
-  in it and stop it. It is listed in the Chats section under the chat that asked for it, by
+- **It is a chat of its own**, in the app, in this chat's folder unless the dispatch says
+  otherwise (*Where it works*, below). You can see it, open it, type in it and stop it. It is listed in the Chats section under the chat that asked for it, by
   its name and what it is doing, and has a tab once you open it.
 - **Its harness profile is its persona's own** where the persona's definition names one, else
   this chat's; `--profile` names another of the project's profiles. A profile is only ever one
@@ -287,6 +288,10 @@ that says what to do:
 | past a limit: how deep a chain may go (3), how many tasks one chat is still waiting on (6), how many chats one lineage holds that still owe work (16) | a runaway stops |
 | past a persona's own two limits, where the project sets them: how many tasks the chats running as it wait on between them, and how many chats run as it at once | the project said how much of that persona it wants at once |
 | where a limit is set to 0 | dispatch is off at the level that set it, and the refusal says where |
+| `--in` that is neither `worktree` nor `workspace:<name>`, or a name that cannot be a workspace's | `--in` holds one of two words, never a folder or a branch |
+| `--in workspace:<name>` for a workspace the project does not have, or one reached through a link | a chat starts only in a workspace's own folder, inside the project |
+| `--in worktree` from a chat that works in no repo (the project's root, a workspace's own folder) | a worktree is cut from the repo the asking chat works in, and there is none |
+| `--in worktree` where the worktree cannot be cut: its folder or branch is already there, or the repo's own git config names a program | purlis's name for it is used exactly, and the app runs no git in a repo that could run a program outside the chat's sandbox |
 
 **The limits are the project's**, set in Settings › Project › Dispatch for the project, a
 workspace or a persona, lowered by your own on this machine and capped by an administrator's
@@ -303,6 +308,84 @@ not split a lineage into two that are each counted from zero.
 
 A limit is said before you are asked for a grant: a dispatch that would start nothing does not
 spend your answer.
+
+### Where it works
+
+The new chat works in the asking chat's folder unless the dispatch says one word about where:
+
+- **`--in workspace:<name>`** starts it in another workspace of the project, in that
+  workspace's own folder, with that workspace's todos, memory and session records. The
+  workspace must be one the project has, reached through no link. The chat is listed under
+  the chat that asked, with the workspace named, and reports back to that chat as any task
+  does. The name used is the folder's own: on a disk that folds case, `workspace:BETA` is the
+  workspace `beta`, with `beta`'s limits. The dispatch grant is the same one. **The limits of
+  both workspaces hold**: the asking chat's, as for every dispatch, and then the one the new
+  chat will work in. A limit set to 0 on the workspace the chat would work in switches it off
+  there whatever a persona's own limits say, so a workspace with dispatch switched off is not
+  worked in by a chat that names it from elsewhere; and a chat in a workspace with dispatch
+  off cannot dispatch by naming another. **A chat nobody is at** (its harness's permission
+  prompts are off) starts a chat in another workspace only under a grant that already stands
+  for the pair, yours on this machine or the project's. Its own persona does not cross at all
+  that way: no grant is kept for a persona's dispatch to itself, so none can stand, and the
+  person starts such a chat from the asking chat's tab. A chat started in another workspace than its
+  asker's is told so in a line under its stamp: the stamp names the asking chat's workspace,
+  and the line names its own.
+- **`--in worktree`** gives it a new worktree of the repo the asking chat works in, on a new
+  branch. **The app cuts it, never a chat**, under a folder and a branch purlis names: the
+  task's name as a branch name can carry it, then the end of the dispatch's own id, so two
+  tasks never share a folder or a branch. A dispatch has no way to name a folder or a branch.
+  It is cut from the clone's current commit, as every worktree purlis cuts is, also when the
+  asking chat itself works in a worktree. What the asking chat has not committed stays where it
+  is, and the command says so.
+- **A persona whose definition says `dispatch-isolation: worktree`** gets a worktree by
+  default, when the dispatch names no place. Where the asking chat works in no repo, that
+  default gives way to the asking chat's folder and the command says so. `--in` wins over it.
+
+**Nothing is merged for a worktree task, ever.** Its report names the branch, in a line
+purlis writes from its own record of what it cut, whatever the chat says; merging is the
+asking chat's decision or yours. The chat's sandbox is the one the project gives its persona
+in that folder, as for any chat of that persona started in a worktree: it gains nothing of
+the asking chat's tree.
+
+**What it can leave on that branch depends on the sandbox.** In a project with no sandbox,
+a worktree task commits on its branch. **Where the new chat is sandboxed it cannot commit
+there yet**: a worktree's git data is kept in its repo's `.git`, outside the one folder a
+sandboxed chat may write (purlis issue 1055). It can edit every file in its folder. Its
+changes stay there, uncommitted, and its report should list them; you or the asking chat
+commit them from outside the sandbox. purlis tells the new chat and the asking chat which of
+the two it is as the task starts.
+
+The worktree is listed on its dispatch's row in the Dispatches tab, as the task's own branch
+(the window says *branch* and its *folder*, as it does everywhere), with how it stands:
+
+- **folder kept** while its folder is there, merged or not. **Discard** on the row removes
+  the folder, for good, with every uncommitted file and every ignored file in it. It is a
+  window command, so only you run it. It asks first, naming each uncommitted file by its
+  path and each ignored path that is not purlis's own; it is refused while any chat is still
+  open in the folder; and where the folder holds other paths by the time you answer, nothing
+  is removed and you are asked again. (It compares paths: a listed file changed again, or a
+  file added inside a folder git ignores whole, is the same list.) **The branch purlis cut
+  loses no commit by a discard**: it is deleted only where git already finds it merged, and
+  one that holds a commit found nowhere else stays, an ordinary branch of the repo. The one
+  thing a discard can lose is a commit made in the folder on no branch at all; the question
+  names those commits and says they would be lost.
+- **merged and removed** once purlis found the branch merged into the branch it was cut from
+  and took the worktree away. purlis looks when the task's chat is closed and when the
+  project is opened, and at no other time. **It takes away only a folder that holds nothing
+  else**: no uncommitted file, and no ignored path that is not purlis's own. A task whose
+  output is something git ignores (a results folder, a database file, a `.env`) keeps its
+  folder, listed with Discard, where you are shown what is in it. A task that committed
+  nothing and left nothing leaves no worktree behind once its chat is closed. Where git will
+  not delete the merged branch (the repo is on another branch than the one it landed in), the
+  folder goes and the row says the branch was kept.
+- **folder discarded**, or **folder removed** for one removed from the explorer or by hand.
+- A repo whose own git settings name a program (a filter, a diff or merge driver, an
+  include) gets no worktree task and no Discard: purlis runs no git there for a chat or for
+  its own account. Remove such a folder from its branch's row in the explorer.
+
+A worktree whose task was started and whose app was quit before the chat came up is not
+listed on any dispatch: it shows in the explorer as an ordinary branch folder, and is yours to
+remove there.
 
 **The sub-agent refusal is advice, not a wall.** A sub-agent runs inside its chat, with that
 chat's environment, so the app cannot tell its dispatch from the chat's own. Only purlis's
@@ -323,9 +406,10 @@ purlis dispatch report --outcome done "<what was done and what was found>" [--ch
 `--outcome` is `done`, `blocked` or `failed` (and `cancelled`, from a task its asking chat
 cancelled, and from no other). The report reaches the chat that asked as
 context on its next turn, the way a handoff's does and under the same pairing: it names no
-recipient. It carries the outcome, the text, what the persona chat says changed, and the path
-of the session record purlis wrote for it, and every line the persona chat wrote is quoted as
-data under a sentence that says it is not an instruction. It raises no needs-you item: a
+recipient. It carries the outcome, the text, what the persona chat says changed, the branch
+purlis cut for it where it worked in a worktree of its own, and the path of the session record
+purlis wrote for it, and every line the persona chat wrote is quoted as data under a sentence
+that says it is not an instruction. It raises no needs-you item: a
 task's report is for the chat that asked. If that chat has closed, the report is kept for the
 workspace it asked from. If that chat was started again (a restart to take something you
 allowed, Restart now), its tasks and the reports waiting for it follow it.
@@ -403,7 +487,9 @@ purlis dispatch cancel <chat>
 `list` prints the tasks under this chat, one a line: the chat's number, the task's name, its
 persona, where it works, its state and how long ago it started. The states are `running`,
 `idle, with no report yet`, `waiting on the operator`, `asking this chat a question`,
-`cancelling`, `reported: <outcome>` and `ended without a report`. A task is listed until its
+`cancelling`, `reported: <outcome>` and `ended without a report`. A task that was given a
+worktree of its own says so after where it works: the branch purlis cut for it, and whether
+its worktree is kept, was merged and removed, or was discarded. A task is listed until its
 chat is closed. The `dispatch_list` tool prints the same list. A task you started yourself
 from this chat's tab (*Ask <persona>…*) is listed too, and its row says so: its report comes
 to this chat, and the chat can wait on, send to, answer and cancel nothing of it.
@@ -518,8 +604,11 @@ A task is never lost for want of the chat that was doing it, or of the chat that
 ### Asking a persona yourself
 
 You can dispatch too, from the app: **Ask <persona>…** on a chat's tab menu and in the palette,
-one entry for each persona the project has finished. It asks for the task's name and what to
-ask, and starts a chat as that persona under the chat whose tab you used.
+one entry for each persona the project has finished. It asks for the task's name, what to
+ask and where it works, and starts a chat as that persona under the chat whose tab you used.
+*Where it works* offers the three places a chat's dispatch has (*Where it works*, above): this
+chat's folder, a branch of its own that purlis cuts from the repo this chat works in, or
+another workspace. The window says *branch* where the command says worktree.
 
 - **It needs no dispatch grant.** A grant is what a chat asks you for, and here you are the one
   asking.
