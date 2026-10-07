@@ -149,7 +149,7 @@ impl HarnessAdapter for Opencode {
             confinement.proxy_port(),
             at.hook_socket,
         )
-        .map_err(|why| format!("{lead} {why}, so nothing was started."))?;
+        .map_err(|why| crate::sandbox::seatbelt::not_started(lead, why))?;
         let mut env = crate::sandbox::seatbelt::env(&confinement.proxy_url(), confinement.tmp());
         env.push((
             crate::sandbox::opencode::STATE_ENV.to_owned(),

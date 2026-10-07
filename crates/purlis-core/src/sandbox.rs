@@ -1883,7 +1883,12 @@ fn folded(path: &Path) -> PathBuf {
 /// exists, with a letter in its name, is found again under that name with its case swapped.
 /// A path that does not exist yet and differs from one that does only in case is that folder
 /// there, which resolving it ([`real`]) cannot tell.
+///
+/// Asked of `path` as the kernel names it, and of the swapped name itself, not what it links
+/// to (#1418): a link on the way could put the folder on another volume, and a link beside it
+/// whose name differs only in case would answer as the folder.
 fn folds_case(path: &Path) -> bool {
+    let path = real(path);
     path.ancestors()
         .filter(|folder| folder.exists())
         .find_map(|folder| {
@@ -1902,8 +1907,23 @@ fn folds_case(path: &Path) -> bool {
         })
         .is_some_and(|(folder, swapped)| {
             let id = crate::pypath::file_identity(folder);
-            id.is_some() && id == crate::pypath::file_identity(&swapped)
+            id.is_some() && id == entry_identity(&swapped)
         })
+}
+
+/// `(st_dev, st_ino)` of the entry `path` itself, a link not followed.
+fn entry_identity(path: &Path) -> Option<(u64, u64)> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
 }
 
 /// Where macOS keeps what its firmlinks reach: `/Users` is also `/System/Volumes/Data/Users`.

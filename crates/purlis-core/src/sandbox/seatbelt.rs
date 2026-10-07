@@ -19,6 +19,34 @@ use super::{Access, Denial, PLANTED, Reach, real};
 pub const CONTROL: &str = "purlis cannot write a sandbox profile for a path holding a control \
                            character";
 
+/// Why a profile could not be handed over: longer than [`MOST_PROFILE`].
+pub const TOO_LARGE: &str = "purlis cannot hand the sandbox a profile this long: the project's \
+                             configs name more paths than one chat's sandbox can hold";
+
+/// What a person can do about a refusal `why` of [`profile`], where there is something.
+fn way_out(why: &str) -> Option<&'static str> {
+    (why == TOO_LARGE).then_some(
+        "Have the configs name fewer scripts, or start this chat without the sandbox from the \
+         new-chat picker.",
+    )
+}
+
+/// The refusal of a chat whose profile could not be written for `why`: after `lead`, what
+/// happened, then the way out where there is one (#1418).
+pub fn not_started(lead: &str, why: &str) -> String {
+    match way_out(why) {
+        Some(then) => format!("{lead} {why}, so nothing was started. {then}"),
+        None => format!("{lead} {why}, so nothing was started."),
+    }
+}
+
+/// The longest profile a wrap hands `sandbox-exec` (#1418). It goes in argv (`-p`), which
+/// holds 1 MiB on macOS with the environment in it: one config at [`super::planted::MOST_NAMED`]
+/// writes about 300 KB, so two fit, and a quarter is left for the environment and the
+/// harness's own words. A longer one is refused by [`TOO_LARGE`], not left to fail the start
+/// with `E2BIG`.
+pub const MOST_PROFILE: usize = 768 * 1024;
+
 /// What a harness charter wraps keeps for itself, beside the chat's own directory and temp
 /// directory: each grant is only what a turn of that harness writes (rulings V73 and V73a).
 #[derive(Debug, Clone, Default)]
@@ -330,6 +358,9 @@ pub fn profile(
     }
     for rule in own.deny.iter().chain(&own.after) {
         line(rule.clone());
+    }
+    if out.len() > MOST_PROFILE {
+        return Err(TOO_LARGE);
     }
     Ok(out)
 }

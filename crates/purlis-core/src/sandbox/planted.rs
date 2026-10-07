@@ -248,7 +248,8 @@ enum Command {
 }
 
 /// Every script the project config files in `dir` name for a harness to run: each word of a
-/// command, its arguments or a plugin entry that reads as a path ([`reads_as_a_path`]), made
+/// command, its arguments or a plugin entry that reads as a path ([`reads_as_a_path`]), and
+/// each word a program opens as a file of code, `/` or not ([`files_of`], D-1418-1), made
 /// absolute against `dir`.
 ///
 /// **Fail closed** for what is a path (ADR 0067 §5, the later-code class). A word is left out
@@ -340,6 +341,7 @@ pub fn scripts_in(
         seen: std::collections::HashSet::new(),
         moves: 0,
         unread: None,
+        roots: std::cell::OnceCell::new(),
     };
     for command in commands {
         let mut bases = Bases::at(dir);
@@ -417,6 +419,9 @@ struct Scan<'a> {
     moves: usize,
     /// Where reading stopped, past [`MOST_MOVES`] or [`MOST_NAMED`].
     unread: Option<Unread>,
+    /// Every spelling of each folder [`Scan::holds`] counts, and whether its volume folds
+    /// case: worked out at the first value that asks.
+    roots: std::cell::OnceCell<Vec<(PathBuf, bool)>>,
 }
 
 impl Scan<'_> {
@@ -472,10 +477,21 @@ impl Scan<'_> {
                         bases.go(folder);
                     }
                 }
+                MoveKind::Visit => {
+                    let written = self.substituted(&one.word);
+                    if let Some(path) = absolute(&written, &bases.now, self.home)
+                        && !bases.visited.contains(&path)
+                    {
+                        bases.visited.push(path);
+                    }
+                }
             }
         }
         for word in read.words {
             self.word(&word, bases, depth, read.runner);
+        }
+        for file in read.files {
+            self.file_word(&file, bases, read.runner);
         }
         if let Some(depth) = depth.checked_sub(1) {
             for text in read.commands {
@@ -491,8 +507,13 @@ impl Scan<'_> {
         if self.unread.is_some() {
             return;
         }
-        for written in self.values(word) {
-            self.named_as(&written, word, bases, runner);
+        for (written, file_only) in self.values(word) {
+            self.named_as(&written, word, bases, runner, file_only);
+        }
+        if let Some((name, value)) = word.split_once('=')
+            && let Some(carries) = runs_code(name)
+        {
+            self.code_value(carries, value, bases, depth, runner);
         }
         let split_again = word.contains(|c: char| {
             c.is_whitespace()
@@ -506,22 +527,143 @@ impl Scan<'_> {
         }
     }
 
-    /// `written`, one value of `word`, named where it reads as a path.
-    fn named_as(&mut self, written: &str, word: &str, bases: &Bases, runner: bool) {
+    /// `value`, of a variable or git setting that loads code as `carries` says: named whatever
+    /// is at the path, as a chat can make a folder where a file will be (D-1418-10).
+    fn code_value(
+        &mut self,
+        carries: Carries,
+        value: &str,
+        bases: &mut Bases,
+        depth: usize,
+        runner: bool,
+    ) {
+        let file = |value: &str| FileWord {
+            value: value.to_owned(),
+            finds: Finds::Exact,
+        };
+        match carries {
+            Carries::Path => self.file_word(&file(value), bases, runner),
+            Carries::Paths => {
+                for one in value.split([':', ' ']).filter(|it| !it.is_empty()) {
+                    self.file_word(&file(one), bases, runner);
+                }
+            }
+            Carries::Command => {
+                if let Some(depth) = depth.checked_sub(1) {
+                    self.line(value, bases, depth);
+                }
+            }
+            Carries::Options(program) => {
+                if let Some(depth) = depth.checked_sub(1) {
+                    self.line(&format!("{program} {value}"), bases, depth);
+                }
+            }
+            Carries::Perl => {
+                let mut words = value.split_whitespace();
+                let mut dirs = Vec::new();
+                let mut modules = Vec::new();
+                while let Some(word) = words.next() {
+                    let Some(option) = word.strip_prefix('-') else {
+                        continue;
+                    };
+                    let mut chars = option.chars();
+                    let Some(letter) = chars.next() else {
+                        continue;
+                    };
+                    let rest = chars.as_str();
+                    let given = if rest.is_empty() {
+                        words.next().unwrap_or_default()
+                    } else {
+                        rest
+                    };
+                    match letter {
+                        'I' => dirs.push(given.to_owned()),
+                        'M' | 'm' => {
+                            let module = given.trim_start_matches('-');
+                            let module = module.split(['=', ' ']).next().unwrap_or_default();
+                            modules.push(format!("{}.pm", module.replace("::", "/")));
+                        }
+                        _ => {}
+                    }
+                }
+                for dir in &dirs {
+                    self.file_word(&file(dir), bases, runner);
+                }
+                for module in &modules {
+                    self.file_word(&file(module), bases, runner);
+                    for dir in &dirs {
+                        self.file_word(&file(&format!("{dir}/{module}")), bases, runner);
+                    }
+                }
+            }
+        }
+    }
+
+    /// `written`, one value of `word`, named where it reads as a path; only as a file where
+    /// `file_only` ([`Self::values`]).
+    fn named_as(
+        &mut self,
+        written: &str,
+        word: &str,
+        bases: &Bases,
+        runner: bool,
+        file_only: bool,
+    ) {
         let folder_word = runner && matches!(written, "." | "..");
         if reads_as_a_path(written) || folder_word {
-            for base in bases.visited.clone() {
-                let Some(path) = absolute(written, &base, self.home) else {
-                    continue;
-                };
-                // A folder that holds the config is no script: replaced, it would take the
-                // config naming it along (D-1327-8). What a runner loads from it is (D-1327-9).
-                if self.dir.starts_with(lexical(&path)) {
-                    if runner {
-                        for entry in ENTRY_FILES {
-                            self.name(path.join(entry), word);
-                        }
+            self.named_at(written, word, bases, runner, &[], file_only);
+        }
+    }
+
+    /// `written`, named by `word`, from each folder the command went to; and, where its name
+    /// carries none of `extensions`, with each of them, as a runner tries it (D-1418-2). A
+    /// folder that is there is, to such a runner, the files it loads from it, not the folder
+    /// (D-1327-9). Where `file_only`, a path is named only as a file: one that is there, or
+    /// one not there yet with an extension (D-1418-10).
+    fn named_at(
+        &mut self,
+        written: &str,
+        word: &str,
+        bases: &Bases,
+        runner: bool,
+        extensions: &[&str],
+        file_only: bool,
+    ) {
+        for base in bases.visited.clone() {
+            let Some(path) = absolute(written, &base, self.home) else {
+                continue;
+            };
+            // A folder that holds the config is no script: replaced, it would take the
+            // config naming it along (D-1327-8). What a runner loads from it is (D-1327-9).
+            if self.dir.starts_with(lexical(&path)) {
+                if runner {
+                    for entry in ENTRY_FILES {
+                        self.name(path.join(entry), word);
                     }
+                }
+                continue;
+            }
+            if !extensions.is_empty() && path.is_dir() {
+                for entry in ENTRY_FILES {
+                    self.name(path.join(entry), word);
+                }
+                continue;
+            }
+            let tried: Vec<PathBuf> = match path.file_name().and_then(|name| name.to_str()) {
+                Some(name)
+                    if !written.ends_with('/')
+                        && !extensions.iter().any(|it| name.ends_with(it)) =>
+                {
+                    extensions
+                        .iter()
+                        .map(|it| path.with_file_name(format!("{name}{it}")))
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            for path in std::iter::once(path).chain(tried) {
+                if file_only && !(path.is_file() || (!path.exists() && path.extension().is_some()))
+                {
                     continue;
                 }
                 // As written and with `..` taken off, which a sandbox matches when the folder
@@ -529,6 +671,29 @@ impl Scan<'_> {
                 let plain = lexical(&path);
                 self.name(path, word);
                 self.name(plain, word);
+            }
+        }
+    }
+
+    /// A word a program opens as a file of code (D-1418-1): named from each folder the command
+    /// went to, with or without a `/`, and as the runner looks it up ([`Finds`]).
+    fn file_word(&mut self, file: &FileWord, bases: &Bases, runner: bool) {
+        if self.unread.is_some() {
+            return;
+        }
+        let written = self.substituted(&file.value);
+        if written.is_empty() || written == "-" || written.contains("://") {
+            return;
+        }
+        match file.finds {
+            Finds::Exact => self.named_at(&written, &file.value, bases, runner, &[], false),
+            Finds::Extensions(extensions) => {
+                self.named_at(&written, &file.value, bases, runner, extensions, false);
+            }
+            Finds::Module => {
+                for path in module_files(&written) {
+                    self.named_at(&path, &file.value, bases, runner, &[], false);
+                }
             }
         }
     }
@@ -573,34 +738,64 @@ impl Scan<'_> {
     /// A value taken out of a word that starts with `~` is named as written too, below the
     /// folder the command runs in: a shell expands `~` only at a word's start, and bash after
     /// an option's `=` as well, so the program may open either (D-1356-8).
-    fn values(&self, word: &str) -> Vec<String> {
+    ///
+    /// Each comes with whether it is named only as a file (D-1418-10): a value after `=`, an
+    /// assignment's or an option's, is a search path or an output folder as often as code, so
+    /// a folder named only that way is never denied.
+    fn values(&self, word: &str) -> Vec<(String, bool)> {
         let written = self.substituted(word);
-        let taken: Vec<String> = if let Some(value) = COLON_OPTIONS
+        let mut whole = false;
+        let mut taken: Vec<(String, bool)> = Vec::new();
+        if let Some(list) = comma_list(&written) {
+            // Each value a compiler hands on (`-Wl,-rpath,./lib`), a word of its own (D-1418-5).
+            for value in list.split(',') {
+                if value.starts_with('-') {
+                    taken.extend(self.values(value));
+                } else {
+                    taken.push((value.to_owned(), false));
+                }
+            }
+        } else if let Some(value) = COLON_OPTIONS
             .iter()
             .find_map(|option| written.strip_prefix(option))
         {
             // A JVM agent's file, and its options after `=`, which can name files.
-            value.splitn(2, '=').map(str::to_owned).collect()
-        } else if let Some((flag, value)) = written.split_once('=')
-            && flag.starts_with('-')
-        {
-            vec![value.to_owned()]
+            let mut parts = value.splitn(2, '=');
+            taken.extend(parts.next().map(|it| (it.to_owned(), false)));
+            taken.extend(parts.next().map(|it| (it.to_owned(), true)));
         } else {
-            attached_values(&written)
-                .into_iter()
-                .filter(|(value, first)| *first || !value.starts_with('/') || self.holds(value))
-                .map(|(value, _)| value)
-                .collect()
-        };
+            if let Some((flag, value)) = written.split_once('=') {
+                if flag.starts_with('-') {
+                    taken.push((value.to_owned(), true));
+                } else if is_assigned(flag) {
+                    // `BASH_ENV=./x.sh`: the value, as a guess held to where a chat could
+                    // write, and the whole word (D-1418-3).
+                    whole = true;
+                    if !value.starts_with('/') || self.holds(value) {
+                        taken.push((value.to_owned(), true));
+                    }
+                }
+            }
+            // And what follows a short option's letter, `=` and all (D-1418-4).
+            taken.extend(
+                attached_values(&written)
+                    .into_iter()
+                    .filter(|(value, first)| *first || !value.starts_with('/') || self.holds(value))
+                    .map(|(value, _)| (value, false)),
+            );
+        }
         if taken.is_empty() {
-            return vec![written];
+            return vec![(written, false)];
         }
         let mut out = Vec::new();
-        for value in taken {
+        if whole {
+            out.push((written.clone(), true));
+        }
+        for (value, file_only) in taken {
             if value.starts_with('~') {
-                out.push(format!("./{value}"));
+                out.push((format!("./{value}"), file_only));
             }
-            out.push(value);
+            out.push((value, file_only));
         }
         out
     }
@@ -608,16 +803,70 @@ impl Scan<'_> {
     /// Whether the absolute `path` is where a chat could write it: in the project, the home
     /// folder, a folder you list as one chats may be granted, or the project's cache home
     /// (D-1356-7, D-T56-1). Counting too many only names more files, which fails closed.
+    ///
+    /// Each by every name it and `path` have ([`super::spellings`]): through a link, on the
+    /// data volume's other side, and case-folded where the folder's volume folds case (#1418).
     fn holds(&self, path: &str) -> bool {
-        let path = lexical(Path::new(path));
-        path.starts_with(self.project)
-            || self.home.is_some_and(|home| path.starts_with(home))
-            || self.writable.iter().any(|dir| path.starts_with(dir))
+        let roots = self.roots.get_or_init(|| {
+            std::iter::once(self.project)
+                .chain(self.home)
+                .chain(self.writable.iter().map(PathBuf::as_path))
+                .flat_map(|root| {
+                    let folds = super::folds_case(root);
+                    super::spellings(root)
+                        .into_iter()
+                        .map(move |name| (name, folds))
+                })
+                .collect()
+        });
+        let names = super::spellings(Path::new(path));
+        names.iter().any(|name| {
+            roots.iter().any(|(root, folds)| {
+                name.starts_with(root)
+                    || (*folds && super::folded(name).starts_with(super::folded(root)))
+            })
+        })
     }
 }
 
 /// Options whose value is written after a colon: a JVM's agents (`-javaagent:<jar>[=<options>]`).
 const COLON_OPTIONS: [&str; 3] = ["-javaagent:", "-agentpath:", "-agentlib:"];
+
+/// The values after a compiler's `-W<letter>,` (`-Wl,`, `-Wa,`, `-Wp,`), which it hands on
+/// split at each comma.
+fn comma_list(word: &str) -> Option<&str> {
+    let rest = word.strip_prefix("-W")?;
+    let mut chars = rest.chars();
+    let letter = chars.next()?;
+    (letter.is_ascii_alphabetic() && chars.next() == Some(',')).then(|| &rest[2..])
+}
+
+/// The files Python runs for `-m <module>` (#1418 review M2): `a/b.py`, or the package
+/// `a/b`'s `__main__.py` and `__init__.py`, and each parent package's `__init__.py`. Never the
+/// package folder, which holds the code a chat works on.
+fn module_files(module: &str) -> Vec<String> {
+    let path = module.replace('.', "/");
+    let mut out = vec![
+        format!("{path}.py"),
+        format!("{path}/__main__.py"),
+        format!("{path}/__init__.py"),
+    ];
+    let mut parent = path.as_str();
+    while let Some((up, _)) = parent.rsplit_once('/') {
+        out.push(format!("{up}/__init__.py"));
+        parent = up;
+    }
+    out
+}
+
+/// Whether `name`, before a word's first `=`, reads as what is assigned: a variable
+/// (`BASH_ENV`) or a git setting (`core.hooksPath`).
+fn is_assigned(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
 
 /// The values a cluster of short options may have written against one of them, `-L./lib` or
 /// `-bf./x.awk`: what follows each of its leading letters, where that holds a `/`, and whether
@@ -674,6 +923,8 @@ struct Read {
     moves: Vec<Move>,
     /// Whether the program runs what a folder holds when pointed at one ([`RUNNERS`]).
     runner: bool,
+    /// Words the program opens as a file of code ([`LOADS`]).
+    files: Vec<FileWord>,
 }
 
 /// A change of the folder later commands run in.
@@ -694,6 +945,9 @@ enum MoveKind {
     Back,
     /// `popd`.
     Pop,
+    /// A folder this command alone runs in (`uv --directory D`, `env -C D`): its words are
+    /// found from it too, and the shell stays where it is.
+    Visit,
 }
 
 /// Whether `word` is a cluster of short options (`-rf`) that holds `letter`; one with a value
@@ -704,6 +958,288 @@ fn short_holds(word: &str, letter: char) -> bool {
             && short.chars().all(|c| c.is_ascii_alphabetic())
             && short.contains(letter)
     })
+}
+
+/// What the value of a variable or a git setting that loads code holds (D-1418-10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Carries {
+    /// A file or folder it loads code from.
+    Path,
+    /// Several, apart at `:` or a space.
+    Paths,
+    /// A command it runs.
+    Command,
+    /// Options for this program, which may load files.
+    Options(&'static str),
+    /// Perl's options: `-I<dir>` and `-M<Module>`.
+    Perl,
+}
+
+/// The variables, and the git settings (`-c <key>=<value>`, any case), whose value loads code
+/// (D-1418-10): named whatever is at the path, never only as a file.
+const RUNS_CODE: [(&str, Carries); 36] = [
+    ("BASH_ENV", Carries::Path),
+    ("ENV", Carries::Path),
+    ("ZDOTDIR", Carries::Path),
+    ("PROMPT_COMMAND", Carries::Command),
+    ("PYTHONSTARTUP", Carries::Path),
+    ("NODE_OPTIONS", Carries::Options("node")),
+    ("RUBYOPT", Carries::Options("ruby")),
+    ("PERL5OPT", Carries::Perl),
+    ("JAVA_TOOL_OPTIONS", Carries::Options("java")),
+    ("JDK_JAVA_OPTIONS", Carries::Options("java")),
+    ("_JAVA_OPTIONS", Carries::Options("java")),
+    ("LD_PRELOAD", Carries::Paths),
+    ("LD_AUDIT", Carries::Paths),
+    ("DYLD_INSERT_LIBRARIES", Carries::Paths),
+    ("GIT_SSH", Carries::Path),
+    ("GIT_SSH_COMMAND", Carries::Command),
+    ("GIT_EXTERNAL_DIFF", Carries::Command),
+    ("GIT_PAGER", Carries::Command),
+    ("GIT_EDITOR", Carries::Command),
+    ("GIT_SEQUENCE_EDITOR", Carries::Command),
+    ("GIT_ASKPASS", Carries::Path),
+    ("GIT_PROXY_COMMAND", Carries::Command),
+    ("SSH_ASKPASS", Carries::Path),
+    ("EDITOR", Carries::Command),
+    ("VISUAL", Carries::Command),
+    ("PAGER", Carries::Command),
+    ("core.hooksPath", Carries::Path),
+    ("core.fsmonitor", Carries::Path),
+    ("core.sshCommand", Carries::Command),
+    ("core.pager", Carries::Command),
+    ("core.editor", Carries::Command),
+    ("core.askPass", Carries::Path),
+    ("sequence.editor", Carries::Command),
+    ("diff.external", Carries::Command),
+    ("gpg.program", Carries::Path),
+    ("credential.helper", Carries::Command),
+];
+
+/// What `name`'s value holds where it loads code ([`RUNS_CODE`]): a variable as written, a git
+/// setting in any case.
+fn runs_code(name: &str) -> Option<Carries> {
+    RUNS_CODE.iter().find_map(|(it, carries)| {
+        let same = if it.contains('.') {
+            it.eq_ignore_ascii_case(name)
+        } else {
+            *it == name
+        };
+        same.then_some(*carries)
+    })
+}
+
+/// `name` without a version after it where it is a program purlis reads (`python3.12`,
+/// `node22`, `bash5`); any other name as it is.
+fn plain_name(name: &str) -> &str {
+    let plain = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let known = LOADS.iter().any(|it| it.programs.contains(&plain)) || RUNNERS.contains(&plain);
+    if plain != name && !plain.is_empty() && known {
+        plain
+    } else {
+        name
+    }
+}
+
+/// A command a launcher runs ([`launched`]).
+#[derive(Debug, Default)]
+struct Launched {
+    /// The command, its program first.
+    command: Vec<String>,
+    /// The launcher's own words that are still words: variables `env` sets.
+    words: Vec<String>,
+    /// Folders the command runs in (`uv --directory D`).
+    folders: Vec<String>,
+}
+
+/// The command the launcher `name` runs with `rest` (D-1418-9): `env`, `exec`, `nohup`,
+/// `npx`/`bunx`, `pnpm exec`/`dlx`, `yarn`, `uv run`, `poetry run` and `pipenv run`. A
+/// package runner's command is read only where it is a program purlis reads ([`LOADS`]);
+/// anything else is a package's own tool, whose words are read as they were.
+fn launched(name: &str, rest: &[String]) -> Option<Launched> {
+    let known = |word: &String| {
+        let word = unversioned(word);
+        let plain = plain_name(word.rsplit('/').next().unwrap_or(word));
+        // A shell's own `.` and `source` are no package's program.
+        !matches!(plain, "." | "source") && LOADS.iter().any(|it| it.programs.contains(&plain))
+    };
+    let mut out = Launched::default();
+    let mut words = rest.iter().peekable();
+    match name {
+        "env" => {
+            while let Some(word) = words.peek() {
+                match word.as_str() {
+                    "-u" | "--unset" => {
+                        words.next();
+                        words.next();
+                    }
+                    "-C" | "--chdir" => {
+                        words.next();
+                        out.folders.extend(words.next().cloned());
+                    }
+                    // BSD's: where the program is looked up, not a folder anything runs in.
+                    "-P" | "-S" => {
+                        words.next();
+                        words.next();
+                    }
+                    "--" => {
+                        words.next();
+                    }
+                    _ if word.starts_with("--chdir=") || word.starts_with("-C") => {
+                        let folder = word
+                            .strip_prefix("--chdir=")
+                            .or_else(|| word.strip_prefix("-C"))
+                            .unwrap_or_default();
+                        out.folders.push(folder.to_owned());
+                        words.next();
+                    }
+                    _ if word.starts_with('-') => {
+                        words.next();
+                    }
+                    _ if word.contains('=') => {
+                        out.words.extend(words.next().cloned());
+                    }
+                    _ => break,
+                }
+            }
+        }
+        "exec" => {
+            while let Some(word) = words.peek() {
+                if *word == "-a" {
+                    words.next();
+                    words.next();
+                } else if word.starts_with('-') {
+                    words.next();
+                } else {
+                    break;
+                }
+            }
+        }
+        "nohup" => {}
+        "npx" | "bunx" | "pnpx" => {
+            skip_options(&mut words, &["-p", "--package", "-c", "--call"]);
+            if !words.peek().is_some_and(|word| known(word)) {
+                return None;
+            }
+        }
+        "pnpm" | "yarn" => {
+            if words
+                .peek()
+                .is_some_and(|word| matches!(word.as_str(), "exec" | "dlx"))
+            {
+                words.next();
+                skip_options(&mut words, &["-p", "--package"]);
+            }
+            if !words.peek().is_some_and(|word| known(word)) {
+                return None;
+            }
+        }
+        "uv" => {
+            loop {
+                let word = words.next()?;
+                match word.as_str() {
+                    "--directory" | "--project" => out.folders.extend(words.next().cloned()),
+                    "--cache-dir" | "--config-file" | "--color" => {
+                        words.next();
+                    }
+                    "run" => break,
+                    _ if let Some(folder) = uv_folder(word) => out.folders.push(folder),
+                    _ if word.starts_with('-') => {}
+                    _ => return None,
+                }
+            }
+            loop {
+                let word = words.peek()?;
+                match word.as_str() {
+                    "--directory" | "--project" => {
+                        words.next();
+                        out.folders.extend(words.next().cloned());
+                    }
+                    "--with"
+                    | "--with-requirements"
+                    | "--with-editable"
+                    | "--python"
+                    | "-p"
+                    | "--extra"
+                    | "--group"
+                    | "--package"
+                    | "--env-file"
+                    | "--index" => {
+                        words.next();
+                        words.next();
+                    }
+                    "--" => {
+                        words.next();
+                    }
+                    // `uv run -m mod` runs the module with Python.
+                    "-m" | "--module" => {
+                        words.next();
+                        out.command.extend(["python".to_owned(), "-m".to_owned()]);
+                        break;
+                    }
+                    _ if let Some(folder) = uv_folder(word) => {
+                        out.folders.push(folder);
+                        words.next();
+                    }
+                    _ if word.starts_with('-') => {
+                        words.next();
+                    }
+                    // A folder: what a runner loads from it, read as uv's own words (D-1327-9).
+                    _ if matches!(word.as_str(), "." | "..") || word.ends_with('/') => {
+                        return None;
+                    }
+                    // `uv run x.py` runs it with Python.
+                    _ if word.ends_with(".py") || word.ends_with(".pyw") => {
+                        out.command.push("python".to_owned());
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        "poetry" | "pipenv" => {
+            if words.next().is_none_or(|word| word != "run") {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    out.command.extend(words.cloned());
+    // A package runner's `tsx@4` is the program `tsx`.
+    if let Some(program) = out.command.first_mut() {
+        *program = unversioned(program).to_owned();
+    }
+    (!out.command.is_empty()).then_some(out)
+}
+
+/// The folder of uv's `--directory=<dir>` or `--project=<dir>`.
+fn uv_folder(word: &str) -> Option<String> {
+    word.strip_prefix("--directory=")
+        .or_else(|| word.strip_prefix("--project="))
+        .map(str::to_owned)
+}
+
+/// A package's name without the version a package runner is given (`tsx@4`); a scoped name's
+/// own `@` (`@scope/x`) is kept.
+fn unversioned(word: &str) -> &str {
+    match word.rfind('@') {
+        Some(at) if at > 0 => &word[..at],
+        _ => word,
+    }
+}
+
+/// Takes the options at the front of `words`: those in `valued` with the word after them.
+fn skip_options(words: &mut std::iter::Peekable<std::slice::Iter<'_, String>>, valued: &[&str]) {
+    while let Some(word) = words.peek() {
+        if !word.starts_with('-') {
+            break;
+        }
+        let takes = valued.contains(&word.as_str());
+        words.next();
+        if takes {
+            words.next();
+        }
+    }
 }
 
 /// `segment`'s words, sorted ([`Read`]).
@@ -723,10 +1259,29 @@ fn read_segment(segment: &[String]) -> Read {
         return read;
     };
     let rest = &segment[at + 1..];
-    let name = program.rsplit('/').next().unwrap_or(program);
+    let name = plain_name(program.rsplit('/').next().unwrap_or(program));
     read.words.push(program.clone());
+    // A launcher's command, read as a command of its own (D-1418-9).
+    if let Some(launched) = launched(name, rest) {
+        let mut inner = read_segment(&launched.command);
+        read.words.extend(launched.words);
+        read.words.append(&mut inner.words);
+        inner.words = read.words;
+        let mut moves: Vec<Move> = launched
+            .folders
+            .into_iter()
+            .map(|word| Move {
+                kind: MoveKind::Visit,
+                word,
+            })
+            .collect();
+        moves.append(&mut inner.moves);
+        inner.moves = moves;
+        return inner;
+    }
     read.runner = RUNNERS.contains(&name)
         || (matches!(name, "go" | "uv") && rest.first().is_some_and(|word| word == "run"));
+    read.files = files_of(name, rest);
     let mut words = rest.iter();
     if name == "popd" {
         read.moves.push(Move {
@@ -764,6 +1319,10 @@ fn read_segment(segment: &[String]) -> Read {
             if word == "-C" {
                 // The folder git runs in, which no later command does.
                 words.next();
+            } else if word == "-c" {
+                // A setting, read as an assignment is: one that names code git runs is named
+                // whatever it is ([`RUNS_CODE`]).
+                read.words.extend(words.next().cloned());
             } else {
                 read.words.push(word.clone());
             }
@@ -805,6 +1364,379 @@ fn read_segment(segment: &[String]) -> Read {
     }
     read.words.extend(rest.iter().cloned());
     read
+}
+
+/// How a program finds a file of code it is given by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Finds {
+    /// As named.
+    Exact,
+    /// As named, or with one of these after it where it has none of them.
+    Extensions(&'static [&'static str]),
+    /// A Python module, `a.b`: `a/b.py` or the package folder `a/b`.
+    Module,
+}
+
+/// A word a program opens as a file of code, and how it finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileWord {
+    value: String,
+    finds: Finds,
+}
+
+/// What Node, and the runners that load as it does, try after a name given without its
+/// extension.
+const JS: &[&str] = &[
+    ".js", ".mjs", ".cjs", ".json", ".node", ".ts", ".mts", ".cts", ".tsx", ".jsx",
+];
+
+/// Node's long options whose value is a file of code it loads first.
+const NODE_FILES: &[(&str, Finds)] = &[
+    ("--require", Finds::Extensions(JS)),
+    ("--import", Finds::Extensions(JS)),
+    ("--loader", Finds::Extensions(JS)),
+    ("--experimental-loader", Finds::Extensions(JS)),
+];
+
+/// Node's long options whose value is anything else (#1418 review F1): never its script.
+const NODE_VALUED: &[&str] = &[
+    "--conditions",
+    "--title",
+    "--env-file",
+    "--env-file-if-exists",
+    "--input-type",
+    "--inspect-port",
+    "--stack-size",
+    "--watch-path",
+    "--experimental-default-type",
+    "--diagnostic-dir",
+    "--report-dir",
+    "--redirect-warnings",
+];
+
+/// The programs that open a file of code they are given by name, and where on their command
+/// line it is (D-1418-1).
+struct Loads {
+    programs: &'static [&'static str],
+    /// The script: the first operand, how it is found. `None` where the first operand is
+    /// program text or data.
+    script: Option<Finds>,
+    /// Short options whose value is a file of code, how it is found, and whether that file is
+    /// the script, so no operand is.
+    letters: &'static [(char, Finds, bool)],
+    /// Long options whose value is a file of code.
+    long: &'static [(&'static str, Finds)],
+    /// Short options, and long ones, whose value is anything else.
+    valued: &'static [char],
+    valued_long: &'static [&'static str],
+    /// Options after which there is no script: code given on the line (`-c`, `-e`).
+    ends: &'static [char],
+    ends_long: &'static [&'static str],
+    /// How its own subcommands come before the script ([`Sub`]).
+    sub: Sub,
+}
+
+/// How a program's own subcommands stand before its script (#1418 review M1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sub {
+    /// It has none: its first operand is the script.
+    None,
+    /// deno: a script only after `run`; any other subcommand (`test`, `task`, `fmt`) ends it.
+    Deno,
+    /// bun: after `run`, or alone, a word is a file only with a `/` or a JS extension, and
+    /// otherwise a package script's name or one of bun's own subcommands (`test`, `install`,
+    /// `x`), none of which carries either.
+    Bun,
+    /// tsx: `watch` comes before the script.
+    Tsx,
+}
+
+/// [`Loads`] for each program (D-1418-1, D-1418-2).
+const LOADS: [Loads; 14] = [
+    Loads {
+        programs: &SHELLS,
+        script: Some(Finds::Exact),
+        letters: &[],
+        long: &[("--rcfile", Finds::Exact), ("--init-file", Finds::Exact)],
+        valued: &['o', 'O'],
+        valued_long: &[],
+        ends: &['c'],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["source", "."],
+        script: Some(Finds::Exact),
+        letters: &[],
+        long: &[],
+        valued: &[],
+        valued_long: &[],
+        ends: &[],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["node", "ts-node"],
+        script: Some(Finds::Extensions(JS)),
+        letters: &[('r', Finds::Extensions(JS), false)],
+        long: NODE_FILES,
+        valued: &['C'],
+        valued_long: NODE_VALUED,
+        ends: &['e', 'p'],
+        ends_long: &["--eval", "--print", "--run"],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["tsx"],
+        script: Some(Finds::Extensions(JS)),
+        letters: &[('r', Finds::Extensions(JS), false)],
+        long: NODE_FILES,
+        valued: &['C'],
+        valued_long: NODE_VALUED,
+        ends: &['e', 'p'],
+        ends_long: &["--eval", "--print", "--run"],
+        sub: Sub::Tsx,
+    },
+    Loads {
+        programs: &["bun"],
+        script: Some(Finds::Extensions(JS)),
+        letters: &[('r', Finds::Extensions(JS), false)],
+        long: &[
+            ("--preload", Finds::Extensions(JS)),
+            ("--require", Finds::Extensions(JS)),
+            ("--import", Finds::Extensions(JS)),
+        ],
+        valued: &['c'],
+        valued_long: &[
+            "--config",
+            "--cwd",
+            "--env-file",
+            "--tsconfig-override",
+            "--filter",
+        ],
+        ends: &['e', 'p'],
+        ends_long: &["--eval", "--print"],
+        sub: Sub::Bun,
+    },
+    Loads {
+        programs: &["deno"],
+        script: Some(Finds::Extensions(JS)),
+        letters: &[],
+        long: &[("--preload", Finds::Extensions(JS))],
+        valued: &['c', 'L'],
+        valued_long: &[
+            "--config",
+            "--import-map",
+            "--cert",
+            "--location",
+            "--seed",
+            "--log-level",
+        ],
+        ends: &[],
+        ends_long: &["--eval"],
+        sub: Sub::Deno,
+    },
+    Loads {
+        programs: &["make", "gmake"],
+        script: None,
+        letters: &[('f', Finds::Exact, false)],
+        long: &[("--file", Finds::Exact), ("--makefile", Finds::Exact)],
+        valued: &['C', 'I', 'o', 'W'],
+        valued_long: &["--directory", "--include-dir"],
+        ends: &[],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["python", "python3"],
+        script: Some(Finds::Exact),
+        letters: &[('m', Finds::Module, true)],
+        long: &[],
+        valued: &['W', 'X', 'Q'],
+        valued_long: &[],
+        ends: &['c'],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["ruby"],
+        script: Some(Finds::Exact),
+        letters: &[('r', Finds::Extensions(&[".rb", ".so", ".bundle"]), false)],
+        long: &[("--require", Finds::Extensions(&[".rb", ".so", ".bundle"]))],
+        valued: &['I', 'C', 'E'],
+        valued_long: &[],
+        ends: &['e'],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["perl"],
+        script: Some(Finds::Exact),
+        letters: &[],
+        long: &[],
+        valued: &['I', 'M', 'm', 'x'],
+        valued_long: &[],
+        ends: &['e', 'E'],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["php"],
+        script: Some(Finds::Exact),
+        letters: &[('f', Finds::Exact, true)],
+        long: &[],
+        valued: &['c', 'd', 'z'],
+        valued_long: &[],
+        ends: &['r'],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["awk", "gawk", "mawk", "nawk"],
+        script: None,
+        letters: &[
+            ('f', Finds::Extensions(&[".awk"]), false),
+            ('E', Finds::Extensions(&[".awk"]), false),
+            ('i', Finds::Extensions(&[".awk"]), false),
+        ],
+        long: &[
+            ("--file", Finds::Extensions(&[".awk"])),
+            ("--exec", Finds::Extensions(&[".awk"])),
+            ("--include", Finds::Extensions(&[".awk"])),
+        ],
+        valued: &['F', 'v'],
+        valued_long: &["--field-separator", "--assign"],
+        ends: &[],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &["sed", "gsed"],
+        script: None,
+        letters: &[('f', Finds::Exact, false)],
+        long: &[("--file", Finds::Exact)],
+        valued: &['e', 'l'],
+        valued_long: &["--expression"],
+        ends: &[],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+    Loads {
+        programs: &INERT_TEXT,
+        script: None,
+        letters: &[('f', Finds::Exact, false)],
+        long: &[("--from-file", Finds::Exact)],
+        valued: &['L'],
+        valued_long: &["--indent"],
+        ends: &[],
+        ends_long: &[],
+        sub: Sub::None,
+    },
+];
+
+/// The words of `rest`, the words after the program `name`, that it opens as a file of code
+/// ([`LOADS`]): the script operand, and each value of an option that names such a file,
+/// attached (`-fsum.awk`, `--file=sum.awk`) or given apart.
+///
+/// Each is read by the program's own options, not guessed at, so one that is absolute is named
+/// wherever it is, as a separate word is: unlike a later letter's split of a cluster whose
+/// letters purlis does not know (D-1356-7).
+fn files_of(name: &str, rest: &[String]) -> Vec<FileWord> {
+    let Some(loads) = LOADS.iter().find(|it| it.programs.contains(&name)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut words = rest.iter();
+    let mut first_operand = true;
+    while let Some(word) = words.next() {
+        if word == "--" {
+            if let (Some(finds), Some(script)) = (loads.script, words.next()) {
+                out.push(FileWord {
+                    value: script.clone(),
+                    finds,
+                });
+            }
+            break;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (flag, value) = match long.split_once('=') {
+                Some((flag, value)) => (format!("--{flag}"), Some(value.to_owned())),
+                None => (word.clone(), None),
+            };
+            if let Some((_, finds)) = loads.long.iter().find(|(it, _)| *it == flag) {
+                if let Some(value) = value.or_else(|| words.next().cloned()) {
+                    out.push(FileWord {
+                        value,
+                        finds: *finds,
+                    });
+                }
+            } else if loads.ends_long.contains(&flag.as_str()) {
+                return out;
+            } else if value.is_none() && loads.valued_long.contains(&flag.as_str()) {
+                words.next();
+            }
+            continue;
+        }
+        if let Some(short) = word
+            .strip_prefix('-')
+            .or_else(|| word.strip_prefix('+'))
+            .filter(|short| !short.is_empty())
+        {
+            for (at, letter) in short.char_indices() {
+                let value = &short[at + letter.len_utf8()..];
+                if let Some((_, finds, script)) =
+                    loads.letters.iter().find(|(it, ..)| *it == letter)
+                {
+                    let value = if value.is_empty() {
+                        words.next().cloned()
+                    } else {
+                        Some(value.to_owned())
+                    };
+                    out.extend(value.map(|value| FileWord {
+                        value,
+                        finds: *finds,
+                    }));
+                    if *script {
+                        return out;
+                    }
+                    break;
+                }
+                if loads.valued.contains(&letter) {
+                    if value.is_empty() {
+                        words.next();
+                    }
+                    break;
+                }
+                if loads.ends.contains(&letter) {
+                    return out;
+                }
+                if !letter.is_ascii_alphanumeric() {
+                    break;
+                }
+            }
+            continue;
+        }
+        let first = std::mem::replace(&mut first_operand, false);
+        match loads.sub {
+            Sub::Deno if first && word == "run" => continue,
+            Sub::Deno if first => return out,
+            Sub::Tsx if first && word == "watch" => continue,
+            Sub::Bun if first && word == "run" => continue,
+            // A package script's name, not a file (`bun run lint`, `bun dev`).
+            Sub::Bun if !word.contains('/') && !JS.iter().any(|it| word.ends_with(it)) => {
+                return out;
+            }
+            _ => {}
+        }
+        if let Some(finds) = loads.script {
+            out.push(FileWord {
+                value: word.clone(),
+                finds,
+            });
+            break;
+        }
+    }
+    out
 }
 
 /// Whether `word`, as a shell left it, reads as a path a harness could run: it holds a `/`, and
@@ -1534,8 +2466,10 @@ mod tests {
         // D-T56-1: the project's cache home (#1337) can sit outside the home folder, where
         // `XDG_DATA_HOME` moves purlis's data home; a chat writes it, so a value there is named.
         let cache = PathBuf::from("/srv/data/purlis/cache-homes/0123abcd");
-        let command = "gawk -bf/srv/data/purlis/cache-homes/0123abcd/npm/x.awk data";
-        let want = cache.join("npm/x.awk");
+        // A compiler's cluster, whose letters purlis does not know: gawk's `-bf` is read by
+        // gawk's own options (D-1418-1), which name its `-f` file wherever it is.
+        let command = "cc -xI/srv/data/purlis/cache-homes/0123abcd/npm/x.h a.c";
+        let want = cache.join("npm/x.h");
         assert!(!named_at_home(command).contains(&want));
         let found = named_writing(command, std::slice::from_ref(&cache));
         assert!(found.contains(&want), "{found:?}");
@@ -1656,6 +2590,439 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_script_named_without_a_slash_is_named_where_its_program_reads_it() {
+        // #1418, D-1418-1: a word a program opens as its script or program file is a path
+        // from the folder the command runs in, `/` or not.
+        for (command, want) in [
+            ("bash hook.sh", "hook.sh"),
+            ("sh -e -o pipefail hook.sh arg", "hook.sh"),
+            ("bash --rcfile rc.sh -i", "rc.sh"),
+            ("source env.sh", "env.sh"),
+            (". env.sh", "env.sh"),
+            ("awk -f sum.awk data", "sum.awk"),
+            ("awk -fsum.awk data", "sum.awk"),
+            ("gawk --file=sum.awk data", "sum.awk"),
+            ("gawk -v x=1 -f sum.awk data", "sum.awk"),
+            ("sed -n -f fix.sed x", "fix.sed"),
+            ("jq -rf filter.jq in.json", "filter.jq"),
+            ("python3 hook.py", "hook.py"),
+            ("python3 -u -W ignore hook.py", "hook.py"),
+            ("python3 -mtools.x", "tools/x.py"),
+            ("python3 -m tools.x --flag", "tools/x/__main__.py"),
+            ("node server.js", "server.js"),
+            ("deno run main.ts", "main.ts"),
+            ("ruby hook.rb", "hook.rb"),
+            ("perl -w hook.pl", "hook.pl"),
+            ("php -f hook.php", "hook.php"),
+            // Its letters read as gawk reads them: `-f`'s file, wherever it is.
+            ("gawk -bf/opt/tools/x.awk data", "/opt/tools/x.awk"),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(found.contains(&dir.join(want)), "{command}: {found:?}");
+        }
+        let found = named_by_server(r#"{"command": "node", "args": ["server.js"]}"#);
+        assert!(
+            found.contains(&PathBuf::from("/plane/ws/repo/server.js")),
+            "{found:?}"
+        );
+        // Found from every folder the command went to, as a word with a `/` is.
+        let (dir, found) = named_by_hook("cd tools && bash fmt.sh");
+        assert!(found.contains(&dir.join("tools/fmt.sh")), "{found:?}");
+    }
+
+    #[test]
+    fn a_word_no_program_opens_as_its_script_is_still_no_path() {
+        // D-1418-1: only the script operand and a program-file option's value; the script's
+        // own arguments, code handed with `-c` or `-e`, and a module's arguments name nothing.
+        for command in [
+            "bash -c 'echo hi' arg0",
+            "python3 -c 'print(1)' data.txt",
+            "node -e 'x()' data.txt",
+            "python3 -m pytest tests",
+            "awk '{ print }' data.txt",
+            "sed -n p data.txt",
+            "npx prettier --write src",
+            "jq -r .a in.json",
+        ] {
+            let (dir, found) = named_by_hook(command);
+            for not in ["data.txt", "arg0", "tests", "src", "in.json", "prettier"] {
+                assert!(!found.contains(&dir.join(not)), "{command}: {found:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_file_named_without_its_extension_is_named_with_each_one_its_runner_tries() {
+        // #1418, D-1418-2.
+        for (command, want) in [
+            ("node -r ./hook x.js", "hook.js"),
+            ("node -r ./hook x.js", "hook.cjs"),
+            ("node --require=./hook x.js", "hook.json"),
+            ("node --import ./tools/reg x.js", "tools/reg.mjs"),
+            ("tsx ./tools/run", "tools/run.ts"),
+            ("node ./tools/run", "tools/run.js"),
+            ("ruby -r./x hook.rb", "x.rb"),
+            ("ruby -r ./x hook.rb", "x.so"),
+            ("gawk -i ./lib/util '{ print }'", "lib/util.awk"),
+            ("gawk -f ./lib/sum data", "lib/sum.awk"),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(found.contains(&dir.join(want)), "{command}: {found:?}");
+        }
+        // A name that already carries one of them is the file itself.
+        let (dir, found) = named_by_hook("node ./tools/server.js");
+        assert_eq!(once(found), [dir.join("tools/server.js")]);
+    }
+
+    #[test]
+    fn an_assignment_s_value_is_named_as_well_as_the_whole_word() {
+        // #1418, D-1418-3: `BASH_ENV=./x.sh`, git's `-c <key>=<value>`.
+        for (command, want) in [
+            ("BASH_ENV=./x.sh bash -c 'true'", "x.sh"),
+            // The folder of git's hooks, which is code, whatever it is (D-1418-10).
+            ("git -c core.hooksPath=./h commit", "h"),
+            ("git -c core.fsmonitor=./tools/fsm commit", "tools/fsm"),
+            ("make CC=./tools/cc.sh", "tools/cc.sh"),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(found.contains(&dir.join(want)), "{command}: {found:?}");
+        }
+        // As written too: a file may hold an `=` in its name.
+        let (dir, found) = named_by_hook("./run x=tools/y.sh");
+        assert!(found.contains(&dir.join("x=tools/y.sh")), "{found:?}");
+        // An absolute value is a guess, held to where a chat could write (D-1356-7).
+        let found = named_at_home("PREFIX=/usr/local make && HOOKS=/opt/h.sh x");
+        for not in ["/usr/local", "/opt/h.sh"] {
+            assert!(!found.contains(&PathBuf::from(not)), "{found:?}");
+        }
+        let found = named_at_home("git -c core.hooksPath=/plane/h x && X=/home/op/y.sh z");
+        for want in ["/plane/h", "/home/op/y.sh"] {
+            assert!(found.contains(&PathBuf::from(want)), "{found:?}");
+        }
+    }
+
+    #[test]
+    fn a_folder_named_only_after_an_equals_sign_is_never_denied() {
+        // #1418, D-1418-10: a search path or an output folder, not code.
+        for (command, not) in [
+            ("CARGO_TARGET_DIR=./target cargo clippy", "target"),
+            (
+                "CARGO_TARGET_DIR=$CLAUDE_PROJECT_DIR/target cargo build",
+                "target",
+            ),
+            ("OUT=./dist npm run build", "dist"),
+            ("PYTHONPATH=./src python3 -c 'import x'", "src"),
+            ("env NODE_PATH=./lib node", "lib"),
+            ("cargo test --target-dir=./target", "target"),
+            ("make CC=./tools/cc", "tools/cc"),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(!found.contains(&dir.join(not)), "{command}: {found:?}");
+        }
+        // A file that is there is named, extension or not.
+        let base = tempfile::tempdir().expect("a base");
+        let project = base.path().canonicalize().expect("the base");
+        let repo = project.join("ws/repo");
+        std::fs::create_dir_all(repo.join("target")).expect("a folder");
+        std::fs::write(repo.join("hook"), "#!/bin/sh\n").expect("a file");
+        let found = named_in(&project, &project, "X=./hook Y=./target z --t=./target");
+        assert!(found.contains(&repo.join("hook")), "{found:?}");
+        assert!(!found.contains(&repo.join("target")), "{found:?}");
+    }
+
+    #[test]
+    fn a_variable_that_loads_code_names_its_value_whatever_is_there() {
+        // #1418 round 2, D-1418-10 as amended: what a chat can make at the path never decides.
+        let base = tempfile::tempdir().expect("a base");
+        let project = base.path().canonicalize().expect("the base");
+        let repo = project.join("ws/repo");
+        for folder in ["envsh", "envsh.sh"] {
+            std::fs::create_dir_all(repo.join(folder)).expect("a folder");
+        }
+        for (command, want) in [
+            ("BASH_ENV=./.bashenv bash -c true", ".bashenv"),
+            ("ENV=./rc sh -c true", "rc"),
+            ("BASH_ENV=./envsh bash -c true", "envsh"),
+            ("BASH_ENV=./envsh.sh bash -c true", "envsh.sh"),
+            ("env PYTHONSTARTUP=./st python3", "st"),
+            ("ZDOTDIR=./zd zsh -c x", "zd"),
+            ("LD_PRELOAD=./lib/a.so:./lib/b x", "lib/b"),
+            ("DYLD_INSERT_LIBRARIES=./i x", "i"),
+            ("NODE_OPTIONS='--require ./hook' node s.js", "hook"),
+            ("NODE_OPTIONS='--import=./reg' node s.js", "reg.mjs"),
+            ("RUBYOPT=-r./rx ruby y.rb", "rx.rb"),
+            ("PERL5OPT='-I./plib -MMy::Mod' perl x.pl", "plib"),
+            ("PERL5OPT='-I./plib -MMy::Mod' perl x.pl", "My/Mod.pm"),
+            ("GIT_SSH=./ssh git fetch", "ssh"),
+            ("GIT_SSH_COMMAND='./ssh2 -i k' git fetch", "ssh2"),
+            ("GIT_EXTERNAL_DIFF=./d git diff", "d"),
+            ("GIT_PAGER=./p git log", "p"),
+            ("git -c core.sshCommand=./s3 fetch", "s3"),
+            ("JAVA_TOOL_OPTIONS=-javaagent:./ag java x", "ag"),
+        ] {
+            let found = named_in(&project, &project, command);
+            assert!(found.contains(&repo.join(want)), "{command}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_launcher_s_folder_and_value_written_against_its_option_are_read() {
+        // #1418 round 2: `--chdir=`, `-C<dir>`, `--directory=`, `--project=`, BSD `env -P`,
+        // a versioned package and `uv run -m`.
+        for (command, want) in [
+            ("env --chdir=/elsewhere node x.js", "/elsewhere/x.js"),
+            ("env -C/elsewhere node x.js", "/elsewhere/x.js"),
+            ("env -P /opt/bin node x.js", "/plane/ws/repo/x.js"),
+            ("uv --directory=/x run server.py", "/x/server.py"),
+            ("uv run --project=/y server.py", "/y/server.py"),
+            ("npx tsx@4 server.ts", "/plane/ws/repo/server.ts"),
+            ("npx -y tsx@4.7.0 s2.ts", "/plane/ws/repo/s2.ts"),
+            ("uv run -m mod", "/plane/ws/repo/mod/__main__.py"),
+        ] {
+            let (_, found) = named_by_hook(command);
+            assert!(found.contains(&PathBuf::from(want)), "{command}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_runner_s_own_subcommand_is_no_script() {
+        // #1418 review M1: `bun test`, `deno task`, a package script, never a folder.
+        for command in [
+            "bun test",
+            "deno test",
+            "bun run lint",
+            "bun lint",
+            "bun install",
+            "bun x prettier",
+            "node --run build",
+            "deno task dev",
+            "deno fmt",
+            "tsx watch src/index.ts",
+        ] {
+            let (_, found) = named_by_hook(command);
+            for path in &found {
+                let name = path.file_name().and_then(|it| it.to_str()).unwrap_or("");
+                assert!(
+                    ![
+                        "test", "lint", "install", "x", "prettier", "build", "task", "dev", "fmt",
+                        "watch"
+                    ]
+                    .contains(&name.split('.').next().unwrap_or("")),
+                    "{command}: {found:?}"
+                );
+            }
+        }
+        for (command, want) in [
+            ("tsx watch src/index.ts", "src/index.ts"),
+            ("bun run ./tools/x", "tools/x.ts"),
+            ("bun run tools/y.ts", "tools/y.ts"),
+            ("bun ./tools/z", "tools/z.js"),
+            ("deno run -A main.ts", "main.ts"),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(found.contains(&dir.join(want)), "{command}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_python_module_names_the_files_python_runs_never_its_package_folder() {
+        // #1418 review M2.
+        let (dir, found) = named_by_hook("python3 -m app.lint --fix");
+        for want in [
+            "app/lint.py",
+            "app/lint/__main__.py",
+            "app/lint/__init__.py",
+            "app/__init__.py",
+        ] {
+            assert!(found.contains(&dir.join(want)), "{want}: {found:?}");
+        }
+        for not in ["app", "app/lint"] {
+            assert!(!found.contains(&dir.join(not)), "{not}: {found:?}");
+        }
+        let found = named_by_server(r#"{"command": "python", "args": ["-m", "myserver"]}"#);
+        let dir = Path::new("/plane/ws/repo");
+        for want in [
+            "myserver.py",
+            "myserver/__main__.py",
+            "myserver/__init__.py",
+        ] {
+            assert!(found.contains(&dir.join(want)), "{want}: {found:?}");
+        }
+        assert!(!found.contains(&dir.join("myserver")), "{found:?}");
+    }
+
+    #[test]
+    fn an_option_s_value_is_not_its_runner_s_script() {
+        // #1418 review F1.
+        for (command, want, not) in [
+            ("node --env-file .env server.js", "server.js", ".env"),
+            (
+                "node --env-file-if-exists .env.local s.js",
+                "s.js",
+                ".env.local",
+            ),
+            ("node --input-type module s.js", "s.js", "module"),
+            ("node -C dev s.js", "s.js", "dev"),
+            ("node --title t s.js", "s.js", "t"),
+            (
+                "deno run --config deno.json main.ts",
+                "main.ts",
+                "deno.json",
+            ),
+            ("deno run -c deno.json main.ts", "main.ts", "deno.json"),
+            (
+                "deno run --import-map map.json main.ts",
+                "main.ts",
+                "map.json",
+            ),
+            ("deno run --cert ca.pem main.ts", "main.ts", "ca.pem"),
+            (
+                "deno run --location https://x.test main.ts",
+                "main.ts",
+                "https:",
+            ),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(found.contains(&dir.join(want)), "{command}: {found:?}");
+            assert!(!found.contains(&dir.join(not)), "{command}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_command_a_launcher_runs_is_read_as_a_command() {
+        // #1418, D-1418-9: the rest of the line after a launcher is a command of its own.
+        for (command, want) in [
+            ("uv run server.py", "server.py"),
+            ("uv run --with x python server.py", "server.py"),
+            ("uv --directory tools run server.py", "tools/server.py"),
+            ("uv run tsx s.ts", "s.ts"),
+            ("npx tsx server.ts", "server.ts"),
+            ("npx -y tsx server.ts", "server.ts"),
+            ("pnpm exec tsx x.ts", "x.ts"),
+            ("pnpm dlx tsx y.ts", "y.ts"),
+            ("yarn tsx z.ts", "z.ts"),
+            ("bunx tsx w.ts", "w.ts"),
+            ("poetry run python p.py", "p.py"),
+            ("env node server.js", "server.js"),
+            ("env -i FOO=1 -u BAR node a.js", "a.js"),
+            ("/usr/bin/env python3 hook.py", "hook.py"),
+            ("exec node server.js", "server.js"),
+            ("nohup bash run.sh", "run.sh"),
+            ("python3.12 hook.py", "hook.py"),
+            ("node22 s.js", "s.js"),
+            ("make -f build.mk all", "build.mk"),
+            ("make --file=rules.mk", "rules.mk"),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(found.contains(&dir.join(want)), "{command}: {found:?}");
+        }
+        let dir = Path::new("/plane/ws/repo");
+        for (server, want) in [
+            (
+                r#"{"command": "uv", "args": ["run", "server.py"]}"#,
+                "server.py",
+            ),
+            (
+                r#"{"command": "npx", "args": ["tsx", "server.ts"]}"#,
+                "server.ts",
+            ),
+            (
+                r#"{"command": "env", "args": ["node", "server.js"]}"#,
+                "server.js",
+            ),
+        ] {
+            let found = named_by_server(server);
+            assert!(found.contains(&dir.join(want)), "{server}: {found:?}");
+        }
+        // A package's own tool is no file.
+        let (dir, found) = named_by_hook("npx prettier --write src");
+        assert!(!found.contains(&dir.join("prettier")), "{found:?}");
+    }
+
+    #[test]
+    fn a_value_attached_to_a_short_option_and_one_after_its_equals_sign_are_both_named() {
+        // #1418, D-1418-4: `-f./a=b.awk` may be the file `./a=b.awk`.
+        let (dir, found) = named_by_hook("awk -f./a=tools/b.awk data");
+        for want in ["a=tools/b.awk", "tools/b.awk"] {
+            assert!(found.contains(&dir.join(want)), "{want}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn each_comma_separated_value_a_compiler_passes_on_is_named() {
+        // #1418, D-1418-5: `-Wl,<a>,<b>` hands the linker each as a word of its own.
+        for (command, want) in [
+            ("gcc -Wl,-rpath,./lib a.c", "lib"),
+            ("gcc -Wl,-T,./link/x.ld a.c", "link/x.ld"),
+            ("gcc -Wl,--script=./link/y.ld a.c", "link/y.ld"),
+            ("gcc -Wp,-include,./inc/z.h a.c", "inc/z.h"),
+        ] {
+            let (dir, found) = named_by_hook(command);
+            assert!(found.contains(&dir.join(want)), "{command}: {found:?}");
+        }
+    }
+
+    /// What `scripts_in` names for a hook running `command` in `project/ws/repo`, with
+    /// `home` the home folder.
+    fn named_in(project: &Path, home: &Path, command: &str) -> Vec<PathBuf> {
+        let settings = serde_json::json!({"hooks": {"PostToolUse": [{"hooks": [
+            {"type": "command", "command": command}
+        ]}]}});
+        scripts_in(
+            project,
+            &project.join("ws/repo"),
+            ".claude/settings.json",
+            &settings.to_string(),
+            Some(home),
+            &[],
+        )
+        .expect("read")
+        .into_iter()
+        .map(|named| named.path)
+        .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_later_letter_s_absolute_value_is_held_to_the_project_by_any_name() {
+        // #1418, D-1418-6: through a link to the project, and in another case where the volume
+        // folds it.
+        let base = tempfile::tempdir().expect("a base");
+        let base = base.path().canonicalize().expect("the base");
+        let project = base.join("plane");
+        std::fs::create_dir_all(project.join("ws/repo")).expect("the project");
+        let home = base.join("home");
+        std::fs::create_dir_all(&home).expect("a home");
+        std::os::unix::fs::symlink(&project, base.join("alias")).expect("a link");
+        let linked = base.join("alias/inc/x.h");
+        let found = named_in(&project, &home, &format!("cc -xI{} a.c", linked.display()));
+        assert!(found.contains(&linked), "{found:?}");
+        let folds = std::fs::metadata(base.join("PLANE")).is_ok();
+        let cased = base.join("PLANE/inc/y.h");
+        let found = named_in(&project, &home, &format!("cc -xI{} a.c", cased.display()));
+        assert_eq!(found.contains(&cased), folds, "{found:?}");
+        // Beside it, by any name, is still beside it.
+        let beside = base.join("elsewhere/z.h");
+        let found = named_in(&project, &home, &format!("cc -xI{} a.c", beside.display()));
+        assert!(!found.contains(&beside), "{found:?}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_later_letter_s_absolute_value_is_held_to_the_project_under_its_data_volume_name() {
+        // #1418, D-1418-6.
+        let base = tempfile::tempdir().expect("a base");
+        let base = base.path().canonicalize().expect("the base");
+        let project = base.join("plane");
+        std::fs::create_dir_all(project.join("ws/repo")).expect("the project");
+        let spelled = Path::new("/System/Volumes/Data")
+            .join(project.strip_prefix("/").expect("absolute"))
+            .join("inc/x.h");
+        let found = named_in(&project, &base, &format!("cc -xI{} a.c", spelled.display()));
+        assert!(found.contains(&spelled), "{found:?}");
     }
 
     #[test]

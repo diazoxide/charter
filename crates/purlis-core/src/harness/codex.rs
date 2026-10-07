@@ -204,7 +204,7 @@ impl HarnessAdapter for Codex {
             confinement.proxy_port(),
             at.hook_socket,
         )
-        .map_err(|why| format!("{lead} {why}, so nothing was started."))?;
+        .map_err(|why| crate::sandbox::seatbelt::not_started(lead, why))?;
         // Only now, with the line known to start (review F6): a refused chat seeds no home.
         crate::sandbox::codex::prepare(wrap, cwd, &armed);
         let mut charters = charters;
