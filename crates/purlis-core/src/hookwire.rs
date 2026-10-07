@@ -349,14 +349,14 @@ pub struct Program {
 
 impl Program {
     /// The process `pid` is now, or `None` where when it started cannot be read: such a program
-    /// is never recorded, so its chat has no line read.
+    /// is never recorded, so its chat has no line read. A program that has already exited is
+    /// one, whether or not it has been reaped (on macOS a zombie answers nothing).
     pub fn of(pid: u32) -> Option<Self> {
         #[cfg(unix)]
         {
-            let processes = purlis_same_user::Parents::now(crate::forklock::output).ok()?;
             Some(Self {
                 pid,
-                started: processes.started(pid)?,
+                started: purlis_same_user::Parents::started(pid)?,
             })
         }
         #[cfg(not(unix))]
@@ -539,7 +539,7 @@ impl ChatTokens {
 }
 
 /// A process as the channel sees it (D-1407-10): itself, the leader of its session and its
-/// ancestors, each with when it started, all from one reading of the process table. A line is
+/// ancestors, each with when it started, read from the kernel in this process. A line is
 /// judged by this once its token has checked, so a connection with no token, or one that never
 /// writes, costs no reading at all. Every purlis sender stays until the app has let its
 /// connection go, so it is still running when it is read; a process given a sender's number
@@ -553,31 +553,30 @@ pub struct Seen {
 }
 
 impl Seen {
-    /// Process `pid` now, or `None` where it cannot be read (it has gone, or the process table
-    /// would not say), which no chat admits.
+    /// Process `pid` now, or `None` where it cannot be read (it has gone, or the kernel would
+    /// not say), which no chat admits.
     pub fn of(pid: u32) -> Option<Self> {
         Self::all(&[pid]).and_then(|mut seen| seen.pop())
     }
 
-    /// Each of `pids` now, from ONE reading of the process table, or `None` where any cannot be
-    /// read.
+    /// Each of `pids` now, or `None` where any cannot be read.
     ///
-    /// On macOS the table is one `/bin/ps` run, through the fork lock: reading a process's
-    /// parent and start in-process there is `proc_pidinfo`, which needs an `unsafe` block this
-    /// workspace allows only by the operator's ruling (D-1407-8). Linux reads `/proc`.
+    /// Read in this process, a pid at a time: `/proc` on Linux, and `proc_pidinfo` on macOS
+    /// (D-1407-8, `purlis_same_user::Parents`), where it was one `/bin/ps` run under the fork
+    /// lock before. No program is started, so a burst of lines no longer queues on that lock.
     pub fn all(pids: &[u32]) -> Option<Vec<Self>> {
         #[cfg(unix)]
         {
-            let processes = purlis_same_user::Parents::now(crate::forklock::output).ok()?;
+            use purlis_same_user::Parents;
             pids.iter()
                 .map(|&pid| {
-                    let started = processes.started(pid)?;
+                    let started = Parents::started(pid)?;
                     let mut around = Vec::new();
                     if let Ok(session) = purlis_same_user::session_of(pid) {
-                        around.push((session, processes.started(session)));
+                        around.push((session, Parents::started(session)));
                     }
-                    for up in processes.chain(pid) {
-                        around.push((up, processes.started(up)));
+                    for up in Parents::chain(pid) {
+                        around.push((up, Parents::started(up)));
                     }
                     Some(Self {
                         pid,
@@ -2128,8 +2127,8 @@ fn serve(
             .ok()
             .map(|(_, pid)| pid);
         // The process that connected and the one the socket names now (a connection handed on
-        // mid-line names its new holder on macOS): each must run inside the chat, read in one
-        // snapshot, and only once the line's token has checked (D-1407-10).
+        // mid-line names its new holder on macOS): each must run inside the chat, read from
+        // the kernel only once the line's token has checked (D-1407-10).
         let senders: Vec<u32> = match (peer, now) {
             (Some(peer), Some(now)) if peer != now => vec![peer, now],
             (Some(pid), _) | (None, Some(pid)) => vec![pid],

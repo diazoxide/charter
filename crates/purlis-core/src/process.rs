@@ -101,9 +101,8 @@ pub fn alive(_pid: u32) -> bool {
 /// environment.
 ///
 /// **The parent chain as the kernel has it now**, one hop at a time from this process:
-/// `/proc/<pid>/stat` on Linux, and one `ps -A -o pid= -o ppid=` everywhere else on unix (macOS
-/// keeps no `/proc`, and reading another process's parent there without `ps` is `libproc`,
-/// which is `unsafe` this crate forbids).
+/// `/proc/<pid>/stat` on Linux and `proc_pidinfo` on macOS, in this process
+/// (`purlis_same_user::Parents`, D-1407-8). No other unix has an answer.
 ///
 /// **Every doubt answers no**, which is the direction V67 sets: a commit left unstamped loses
 /// one line of a claim, while a stamped one puts the agent's name on a human's work. So a table
@@ -115,10 +114,19 @@ pub fn alive(_pid: u32) -> bool {
 ///   subreaper) and no longer descends from anything: a background job that outlived its
 ///   harness stamps nothing, and neither does an editor that detached itself — which is the
 ///   case this exists for.
-/// - **A sandbox.** A sandbox that gives the chat's commands a pid namespace of their own
+/// - **A Linux sandbox.** One that gives the chat's commands a pid namespace of their own
 ///   (`bwrap --unshare-pid`) shows a chain that ends at the namespace's first process, without
-///   the host pid the app recorded; a macOS sandbox that refuses to run the setuid `/bin/ps`
-///   leaves an empty table. Either way a commit made inside is not stamped (ADR 0074, #1021).
+///   the host pid the app recorded, so a commit made inside is not stamped (ADR 0074, #1021).
+///
+/// **A macOS sandbox does not hide the harness** (D-1407-8b, 2026-10-07). A seatbelt profile
+/// lets a process read the processes of its own sandbox, the harness the app started is one
+/// of them (`sandbox-exec` becomes it), and the walk stops ON the recorded pid: it reads each
+/// process's parent and never the recorded process itself, so nothing outside the sandbox is
+/// asked about. A sandboxed macOS chat's commits are stamped, which they were not while this
+/// ran `ps`, which a sandbox refuses. A sandbox of the harness's own that puts a process it
+/// cannot read between the commit and the harness still ends the chain early: unstamped.
+///
+/// And:
 /// - **A recycled pid.** The app records a pid only while its program runs (it writes the
 ///   record again when one ends, and names no pid at quit), so a reused pid is on disk only
 ///   for the moment between a program's reap and that write, and after an app that crashed or
@@ -133,10 +141,7 @@ pub fn descends_from(ancestor: u32) -> bool {
     {
         // The one walker, `purlis_same_user`'s (HP-6 shares it), with every process this
         // crate starts going through its fork lock.
-        let Ok(parents) = purlis_same_user::Parents::now(crate::forklock::output) else {
-            return false;
-        };
-        purlis_same_user::walk(std::process::id(), ancestor, |pid| parents.of(pid))
+        purlis_same_user::walk(std::process::id(), ancestor, purlis_same_user::Parents::of)
     }
     #[cfg(not(unix))]
     false
