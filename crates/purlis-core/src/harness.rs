@@ -941,9 +941,10 @@ mod tests {
         assert!(args.iter().all(|arg| !arg.contains("plugins")), "{args:?}");
     }
 
-    /// The one write tool a Claude Code chat runs without asking: `session_record`, the record
-    /// command's twin (#1332), beside the read-only tools of `chattools::PRE_ALLOWED`.
-    const THE_RECORD_TOOLS_ALLOW: usize = 1;
+    /// The tools that are not reads and that a Claude Code chat runs without asking:
+    /// `session_record`, the record command's twin (#1332), and the two dispatch tools (V98b),
+    /// beside the read-only tools of `chattools::PRE_ALLOWED`.
+    const THE_RECORD_TOOLS_ALLOW: usize = 1 + crate::chattools::DISPATCH_TOOLS.len();
 
     #[test]
     fn a_claude_code_chat_may_run_charter_session_record_and_read_charter_without_asking() {
@@ -954,6 +955,8 @@ mod tests {
         // no `ask`, no `deny`, no mode — so every rule of the operator's and the project's
         // still stands beside them (measured on 2.1.283: `--settings` permissions merge with
         // them, and a compound command holding the record command is still asked about).
+        // And a dispatch, by its command and its two tools (V98b): consent to one is purlis's
+        // own dispatch grant, which the app asks the person for, never the harness's prompt.
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
         let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
@@ -963,6 +966,9 @@ mod tests {
             serde_json::json!({"allow": [
                 "Bash(purlis session record *)",
                 "mcp__purlis__session_record",
+                "Bash(purlis dispatch *)",
+                "mcp__purlis__dispatch",
+                "mcp__purlis__dispatch_report",
                 "mcp__purlis__todo_list",
                 "mcp__purlis__memory_search",
                 "mcp__purlis__session_record_list",
@@ -994,6 +1000,9 @@ mod tests {
             "change_status",
             "persona_where",
             "session_record",
+            // And a dispatch (V98b): the app asks the person, so the harness does not.
+            "dispatch",
+            "dispatch_report",
         ];
         let others: Vec<&str> = crate::chattools::TOOLS
             .iter()
@@ -1211,6 +1220,9 @@ mod tests {
             serde_json::json!([
                 "Bash(purlis session record *)",
                 "mcp__purlis__session_record",
+                "Bash(purlis dispatch *)",
+                "mcp__purlis__dispatch",
+                "mcp__purlis__dispatch_report",
                 "mcp__purlis__todo_list",
                 "mcp__purlis__memory_search",
                 "mcp__purlis__session_record_list",

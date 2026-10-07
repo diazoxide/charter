@@ -271,6 +271,12 @@ fn settings(
     // record of the open chats and answers what the chat is told at its start. Each by its
     // full name, never the server as a whole, so the other writes and `ask_operator` still
     // ask, and an operator's `ask` or `deny` for any of them still wins.
+    //
+    // **And a dispatch, by its command and by its two tools** (operator's ruling V98b,
+    // D-T59-prealllow, amending ADR 0064): the harness's prompt is not what consents to a
+    // dispatch. purlis's own dispatch grant is, asked of the person by the app, the same on
+    // every harness (spec #1434, decision 4), so the harness asking as well would ask twice
+    // for one thing and, for a chat's own persona, ask where nothing is at stake.
     let mut allow = vec![
         SMART_CLOSE_ALLOW.to_owned(),
         format!(
@@ -279,6 +285,12 @@ fn settings(
             crate::chattools::SESSION_RECORD
         ),
     ];
+    allow.extend(DISPATCH_ALLOW.iter().map(|rule| (*rule).to_owned()));
+    allow.extend(
+        crate::chattools::DISPATCH_TOOLS
+            .iter()
+            .map(|tool| format!("mcp__{}__{tool}", crate::chattools::SERVER)),
+    );
     allow.extend(
         crate::chattools::PRE_ALLOWED
             .iter()
@@ -366,6 +378,14 @@ fn permission_hook(binary: &std::path::Path) -> serde_json::Value {
 /// session record`, with any arguments, runs without asking (SI-8e, ADR 0064). Beside it, the
 /// read-only charter tools of [`crate::chattools::PRE_ALLOWED`] (V79).
 pub const SMART_CLOSE_ALLOW: &str = "Bash(purlis session record *)";
+
+/// The permission rules a Claude Code chat the app starts carries for a dispatch (V98b,
+/// amending ADR 0064): `purlis dispatch`, with any arguments, runs without asking, which is
+/// the task and its report (`purlis dispatch report …`). **Consent is the dispatch grant**,
+/// which purlis asks the person for itself; this only stops the harness asking beside it.
+/// A compound command that holds one beside another is still asked about, and an operator's
+/// own `ask` or `deny` still wins, as for [`SMART_CLOSE_ALLOW`].
+pub const DISPATCH_ALLOW: [&str; 1] = ["Bash(purlis dispatch *)"];
 
 /// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.
 ///

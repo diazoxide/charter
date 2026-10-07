@@ -392,7 +392,9 @@ how it is cited and nothing here is renumbered.
     the command that ends it, and, since V79, an `allow` for each of purlis's five read-only
     MCP tools (`todo_list`, `memory_search`, `session_record_list`, `session_record_read`,
     `change_status`) and for `persona_where` (#1450), while its writes and `ask_operator`
-    still ask. Codex's approval and
+    still ask. Since V98b it also carries `Bash(purlis dispatch *)` and an `allow` for the
+    `dispatch` and `dispatch_report` tools: consent to a dispatch is purlis's own dispatch
+    grant, which the app asks the person for, so the harness does not ask beside it. Codex's approval and
     sandbox are whole-session switches, so it carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
     in front. **Smart close puts the chat into the background** (SI-8f): its tab shrinks to a
     fixed chip — the chat's icon and the breathing mark, the name in its tooltip — at the chat
