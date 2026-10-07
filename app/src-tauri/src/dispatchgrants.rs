@@ -2,24 +2,55 @@
 //! that no grant covers, held here until the person answers its Notice; the grants made for one
 //! chat; and the commands the Notice and Settings press.
 //!
-//! # The entry point the dispatch core calls
+//! # The contract the dispatch core builds on
 //!
-//! [`request_dispatch_grant`]`(held, session, target, brief)`. It answers [`Requested`]:
-//! covered (start it, with [`purlis_core::dispatchgrant::grants_for_a_dispatched_chat`]'s
-//! answer), needs a grant (nothing starts; the Notice is raised on the asking chat's tab, and
-//! the dispatch is held here: the brief, the asking chat from this app's record, the target),
-//! locked by policy, or refused. On Allow the held dispatch is handed to whatever
-//! [`Store::answers_with`] registered, which is the core's to start.
+//! Two entry points, one answer type ([`Requested`]):
+//!
+//! - [`request_dispatch_grant`]`(held, session, target, brief)`, for a chat a person is at.
+//!   Covered: start it, with what [`Requested::Covered`] carries. Needs a grant: nothing
+//!   starts, the Notice is raised on the asking chat's tab, and the dispatch is held here.
+//!   Locked: refused with the policy's sentence, and the Notice says the same. Refused: a
+//!   sentence for the chat.
+//! - [`request_dispatch_grant_or_refuse`], for **a chat nobody is at** (an unattended chat,
+//!   spec decision 20): the same, but an uncovered or locked dispatch is a plain refusal.
+//!   Nothing is held and no Notice is raised, so nobody can allow it later by accident.
+//!
+//! What the caller must hold to, because this module cannot:
+//!
+//! - **`session` is the sender's**, taken from the chat the line's token is bound to, and a
+//!   helper sub-agent is refused before either entry point is called. Both trust `session`.
+//! - **The asking persona is the one the chat runs with**
+//!   ([`purlis_core::start::runs_with`]), never the one its record or the request names. A
+//!   chat that runs on another chat's grants until the person allows its own (a handoff's or a
+//!   Resume's hold) dispatches to no one: its request is refused with a sentence, never held.
+//! - **Start only what an answer carries.** Asked twice for one target while the first waits,
+//!   the second request gets the first's number and its brief is dropped: the person saw one
+//!   brief, so only [`Answered::pending`] starts, never a second brief queued beside it.
+//! - **[`Pending::brief`] is the brief as shown** (escaped, and cut past the bound), for the
+//!   Notice. The caller keeps the brief it will send.
+//! - **A held dispatch whose chat closes is dropped**, and the [`Store::answers_with`] listener
+//!   is not told: there is no chat left to tell.
+//! - On Allow, and when the person allows a teammate's committed pair on the project's Notice,
+//!   every held dispatch the grant covers is handed to the listener, which starts it.
 //!
 //! # What a chat cannot do
 //!
 //! **Nothing a chat sends creates, widens or revokes a grant.** A grant is made by
-//! [`allow_dispatch`], a window command the person's press sends, and by nothing on the hook
-//! socket: a request carries a target and a brief, and neither is read for anything but the
-//! Notice. **The asking persona is this app's record of the chat** ([`asking_of`]), so a
-//! request cannot name another's. **The brief is a chat's text**: it is shown inert and capped
-//! ([`purlis_core::dispatchgrant::shown_brief`]), apart from purlis's own words. Every Allow
-//! and every Revoke is audited before it takes effect.
+//! [`allow_dispatch`] or [`acknowledge_dispatch_grants`], window commands a person's press
+//! sends, and by nothing on the hook socket: a request carries a target and a brief, and
+//! neither is read for anything but the Notice. **The brief is a chat's text**: it is shown
+//! inert and capped ([`purlis_core::dispatchgrant::shown_brief`]), apart from purlis's own
+//! words. Every Allow and every Revoke is audited before it takes effect, and one that cannot
+//! be written is found before it is audited.
+//!
+//! **Where the sandbox is what holds that.** "Me on this machine" and "everyone in this
+//! project" are files. A sandboxed chat is denied writing both. A chat in a project with the
+//! sandbox off, or one a person started without it, runs as the person and can write either:
+//! nothing here is a boundary against that chat (D-1437-R2).
+//!
+//! **A "this chat" grant ends with the chat** ([`Store::chat_closed`]), as its sandbox grants
+//! do, and stays through a restart, which starts the new run before the old one ends
+//! (D-1437-R3).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -50,27 +81,54 @@ pub struct Asking {
     pub id: Option<String>,
     /// Its name as its tab shows it.
     pub name: String,
-    /// The persona it runs as: its own, or the one a new chat here adopts. None for a chat on
-    /// no persona.
+    /// The persona whose authority it runs with ([`purlis_core::start::runs_with`]): the
+    /// grants a handoff or a Resume left it holding, else its own, else the one a new chat
+    /// here adopts. None for a chat on no persona.
     pub persona: Option<String>,
+    /// Whether it runs on another chat's grants until the person allows its own on its tab
+    /// (D-1362-5, D-1362-6). Such a chat dispatches to no one.
+    pub held: bool,
+}
+
+/// The chat `chat` records, as an asking chat: session `session`, shown as `name`, in the
+/// project at `root`.
+pub fn asking_from(
+    chat: &purlis_core::reopen::Chat,
+    session: u32,
+    name: String,
+    root: &Path,
+) -> Asking {
+    Asking {
+        session,
+        id: chat.identity.id.clone(),
+        name,
+        persona: purlis_core::start::runs_with(chat, root),
+        held: chat.held.is_some(),
+    }
 }
 
 /// Chat `session` as `chats` records it, in the project at `root`; none for a chat this app
 /// does not have open.
 pub fn asking_of(chats: &crate::chats::Chats, root: &Path, session: u32) -> Option<Asking> {
     let chat = chats.recorded_chat(session)?;
-    Some(Asking {
-        session,
-        id: chat.identity.id.clone(),
-        name: chats
-            .shown_name(session)
-            .unwrap_or_else(|| chat.name.clone()),
-        persona: chat
-            .persona
-            .clone()
-            .or_else(|| purlis_core::start::persona_for_a_new_chat(root)),
-    })
+    let name = chats
+        .shown_name(session)
+        .unwrap_or_else(|| chat.name.clone());
+    Some(asking_from(&chat, session, name, root))
 }
+
+/// What a request is answered where nothing covers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Uncovered {
+    /// Hold it and raise the Notice: a person is at the chat.
+    AskThePerson,
+    /// Refuse it, hold nothing and raise nothing: nobody is at the chat.
+    Refuse,
+}
+
+/// What a chat that runs on another chat's grants is told when it asks to dispatch.
+pub const HELD_DISPATCHES_TO_NO_ONE: &str = "this chat runs on another chat's grants until the person allows its own on its tab, so it \
+     dispatches to no one yet. Ask the person to press Allow on this chat's tab.";
 
 /// A dispatch held until the person answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,13 +251,22 @@ impl Store {
     /// **A chat asked to dispatch to `target` with `brief`**: covered, held for the person, or
     /// locked. `asking` is the app's record of the chat. Asked twice for the same target while
     /// the first waits, it is the same held dispatch: one Notice, showing the first brief.
+    /// With [`Uncovered::Refuse`] nothing is ever held: what is not covered is refused. A chat
+    /// that runs on another chat's grants is refused whatever it asks.
     pub fn request(
         &self,
         ground: &Ground<'_>,
         asking: Asking,
         target: &str,
         brief: &str,
+        uncovered: Uncovered,
     ) -> (Requested, Option<Pending>) {
+        if asking.held {
+            return (
+                Requested::Refused(HELD_DISPATCHES_TO_NO_ONE.to_owned()),
+                None,
+            );
+        }
         if !purlis_core::personas::valid_name(target) {
             return (
                 Requested::Refused(format!(
@@ -215,10 +282,23 @@ impl Store {
                 Requested::Covered(dispatchgrant::grants_for_a_dispatched_chat(target)),
                 None,
             ),
+            Covers::Locked(why) if uncovered == Uncovered::Refuse => (Requested::Locked(why), None),
             Covers::Locked(why) => {
                 let told = self.hold(ground, asking, target, brief, Some(why.clone()));
                 (Requested::Locked(why), told.ok().map(|(held, _)| held))
             }
+            Covers::NeedsGrant if uncovered == Uncovered::Refuse => (
+                Requested::Refused(format!(
+                    "no dispatch grant covers {} dispatching to {target}, and nobody is at \
+                     this chat to ask. A person allows it from a chat they are at, for \
+                     themselves on this machine or for everyone in this project.",
+                    asking
+                        .persona
+                        .as_deref()
+                        .map_or_else(|| "this chat".to_owned(), |who| format!("{who} chats"))
+                )),
+                None,
+            ),
             Covers::NeedsGrant => match self.hold(ground, asking, target, brief, None) {
                 Ok((held, new)) => (
                     Requested::NeedsGrant { pending: held.id },
@@ -337,15 +417,35 @@ impl Store {
                 );
             }
         };
-        (ground.audit)(
-            Some(held.asking.session),
-            &dispatchgrant::Audited {
-                granted: true,
-                asking,
-                target: &held.target,
-                level,
-            },
-        )?;
+        // Whether it can be written is asked before it is recorded, so the log holds no grant
+        // that was refused.
+        if let (Level::Project, Kept::Pair(pair)) = (level, &kept) {
+            purlis_core::settings::dispatch::can_grant(ground.root, pair)?;
+        }
+        let audited = dispatchgrant::Audited {
+            granted: true,
+            asking,
+            target: &held.target,
+            level,
+        };
+        (ground.audit)(Some(held.asking.session), &audited)?;
+        // A write that fails all the same is recorded as taken back, so the log never ends on
+        // a grant that is not there.
+        let not_kept = |why: String| {
+            if let Err(unsaid) = (ground.audit)(
+                Some(held.asking.session),
+                &dispatchgrant::Audited {
+                    granted: false,
+                    ..audited
+                },
+            ) {
+                tracing::warn!(
+                    "purlis: a dispatch grant that was not kept is still recorded as made \
+                     ({unsaid})"
+                );
+            }
+            why
+        };
         match &kept {
             Kept::Chat(chat) => {
                 let pair = ChatPair {
@@ -364,10 +464,12 @@ impl Store {
             }
             Kept::Pair(pair) => {
                 if level == Level::Project {
-                    purlis_core::settings::dispatch::grant(ground.root, pair)?;
+                    purlis_core::settings::dispatch::grant(ground.root, pair).map_err(not_kept)?;
                 } else {
                     sandbox::local::grant_dispatch(ground.root, &pair.asking, &pair.target)
-                        .map_err(|why| format!("purlis could not keep the grant: {why}"))?;
+                        .map_err(|why| {
+                            not_kept(format!("purlis could not keep the grant: {why}"))
+                        })?;
                 }
                 if let Err(why) = sandbox::local::record_made(
                     ground.root,
@@ -411,6 +513,59 @@ impl Store {
                 });
             }
         }
+    }
+
+    /// **Chat `session` closed.** What it had waiting on the person goes with it, and where no
+    /// session of the chat is still open, `id` names it and its "this chat" grants end
+    /// (D-1348-1's rule for its sandbox grants: a restart starts the new run before the old
+    /// one ends, so a restarted chat keeps them, D-1437-R3). Nothing is told to anyone: there
+    /// is no chat left to tell.
+    pub fn chat_closed(&self, session: u32, id: Option<&str>) {
+        lock(&self.pending).retain(|one| one.asking.session != session);
+        if let Some(id) = id {
+            lock(&self.chat).remove(id);
+        }
+    }
+
+    /// **The person allowed `shown` on the project's Notice** (D-1437-R1): each pair of it the
+    /// committed file holds and this machine had not acknowledged is audited as a grant for
+    /// everyone, then in force here, and every held dispatch it covers is handed on. A pair
+    /// the file does not hold is nothing. What the file no longer holds is taken off what was
+    /// acknowledged, so its going is told once.
+    pub fn acknowledge(&self, ground: &Ground<'_>, shown: &[String]) -> Result<(), String> {
+        for pair in dispatchgrant::unacknowledged(ground.root) {
+            if !shown.contains(&pair.to_string()) {
+                continue;
+            }
+            (ground.audit)(
+                None,
+                &dispatchgrant::Audited {
+                    granted: true,
+                    asking: Some(&pair.asking),
+                    target: &pair.target,
+                    level: Level::Project,
+                },
+            )?;
+            dispatchgrant::acknowledge_pair(ground.root, &pair)
+                .map_err(|why| format!("purlis could not record it as allowed: {why}"))?;
+        }
+        let committed: Vec<String> = dispatchgrant::committed_at(ground.root)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        if let Some(seen) = sandbox::local::dispatch_seen(ground.root) {
+            let kept: Vec<String> = seen
+                .iter()
+                .filter(|one| committed.contains(one))
+                .cloned()
+                .collect();
+            if kept != seen {
+                dispatchgrant::acknowledge(ground.root, &kept)
+                    .map_err(|why| format!("purlis could not record what was read: {why}"))?;
+            }
+        }
+        self.start_what_is_covered(ground);
+        Ok(())
     }
 
     /// **Keep blocked** on the Notice of held dispatch `id`: it goes, nothing is granted, and
@@ -479,6 +634,9 @@ pub struct DispatchPending {
     pub brief: String,
     /// Whether the brief was longer than the Notice shows and is cut.
     pub brief_cut: bool,
+    /// How many lines the brief is, blank ones counted: the Notice says it, since its box
+    /// shows only the first of a long one.
+    pub brief_lines: u32,
     /// The levels Allow is offered at. Empty where policy locks it.
     pub levels: Vec<GrantLevel>,
     /// Where policy locks it: the policy's sentence, naming who set it. No Allow is offered.
@@ -508,6 +666,7 @@ fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
         target: held.target.clone(),
         brief: held.brief.text.clone(),
         brief_cut: held.brief.cut,
+        brief_lines: held.brief.lines,
         levels,
         locked: held.locked.clone(),
     }
@@ -520,12 +679,13 @@ fn now_secs() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// **THE DISPATCH CORE'S ENTRY POINT (#1436 calls this; #1437 built it).**
+/// **THE DISPATCH CORE'S ENTRY POINT, for a chat a person is at (#1436 calls this).**
 ///
 /// Chat `session` of `held`'s project asks to dispatch to persona `target` with `brief`. The
-/// asking persona is read from this app's record of chat `session`; nothing in the request
-/// names it. Answers whether the dispatch is covered, held for the person (the Notice is
-/// raised on the asking chat's tab), locked by policy, or refused.
+/// asking persona is the one this app's record of chat `session` runs with; nothing in the
+/// request names it. Answers whether the dispatch is covered, held for the person (the Notice
+/// is raised on the asking chat's tab), locked by policy, or refused. The module's own doc is
+/// the contract.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "the dispatch core calls it (#1436)")
@@ -535,6 +695,39 @@ pub fn request_dispatch_grant(
     session: u32,
     target: &str,
     brief: &str,
+) -> Requested {
+    requested(held, session, target, brief, Uncovered::AskThePerson)
+}
+
+/// **THE DISPATCH CORE'S ENTRY POINT, for a chat nobody is at (an unattended chat, #1446).**
+///
+/// [`request_dispatch_grant`], but a dispatch nothing covers is a plain refusal: nothing is
+/// held, no Notice is raised, and a locked one raises none either. So an unattended chat
+/// dispatches only under a grant that already exists and that this machine has acknowledged,
+/// and a missing grant is a sentence for the chat, never a prompt nobody is there to answer.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the dispatch core calls it for an unattended chat (#1446)"
+    )
+)]
+pub fn request_dispatch_grant_or_refuse(
+    held: &crate::planes::Held,
+    session: u32,
+    target: &str,
+    brief: &str,
+) -> Requested {
+    requested(held, session, target, brief, Uncovered::Refuse)
+}
+
+/// Both entry points.
+fn requested(
+    held: &crate::planes::Held,
+    session: u32,
+    target: &str,
+    brief: &str,
+    uncovered: Uncovered,
 ) -> Requested {
     let root = held.root();
     let Some(asking) = asking_of(held.chats(), root, session) else {
@@ -561,6 +754,7 @@ pub fn request_dispatch_grant(
         asking,
         target,
         brief,
+        uncovered,
     );
     if let (Some(raised), Some(tell)) = (raised, TELL.get()) {
         tell(told(held.plane_id(), root, &raised));
@@ -650,6 +844,9 @@ pub struct DispatchGrant {
     pub chat: Option<String>,
     /// Why a policy locks it out, where one does: it covers nothing while it is locked.
     pub locked: Option<String>,
+    /// Whether it is the project's and nobody on this machine has allowed it yet: it covers
+    /// nothing here until the project's Notice, or a chat's, is answered (D-1437-R1).
+    pub waiting: bool,
 }
 
 /// A pair policy locks, as Settings shows it locked.
@@ -726,6 +923,7 @@ fn grants_of(
             .cloned()
     };
     let locked = |asking: Option<&str>, target: &str| locks.dispatch_refused(asking, target);
+    let unseen = dispatchgrant::unacknowledged(root);
     let mut out: Vec<DispatchGrant> = store
         .chat_grants(open)
         .into_iter()
@@ -744,6 +942,7 @@ fn grants_of(
                 by: None,
                 at: u32::try_from(one.at).ok(),
                 chat: Some(one.chat),
+                waiting: false,
             }
         })
         .collect();
@@ -758,6 +957,7 @@ fn grants_of(
             at: record.as_ref().and_then(|one| u32::try_from(one.at).ok()),
             chat: record.and_then(|one| one.chat),
             locked: locked(Some(&pair.asking), &pair.target),
+            waiting: false,
         }
     };
     out.extend(
@@ -768,6 +968,7 @@ fn grants_of(
     for pair in dispatchgrant::committed_at(root) {
         let committed = committed_by(root, &pair);
         let mut one = row(&pair, Level::Project);
+        one.waiting = unseen.contains(&pair);
         if let Some((name, at)) = committed {
             one.at = u32::try_from(at).ok().or(one.at);
             one.by = Some(name);
@@ -918,8 +1119,10 @@ pub fn revoke_dispatch_grant(
     }))
 }
 
-/// The person read the Notice of the project's dispatch grants as it showed them, `shown`: it
-/// is not shown again until they change from that. Answers what is still to tell, if anything.
+/// **Allow** on the Notice of the project's dispatch grants (D-1437-R1): `shown` is the pairs
+/// the person allowed, as the Notice showed them, all of them or one. Each the committed file
+/// holds is audited and is in force on this machine from now on; what the file no longer
+/// holds is read. Answers what is still to tell, if anything.
 #[tauri::command]
 #[specta::specta]
 pub fn acknowledge_dispatch_grants(
@@ -928,8 +1131,19 @@ pub fn acknowledge_dispatch_grants(
     shown: Vec<String>,
 ) -> Result<Option<DispatchGrantsChanged>, String> {
     let held = planes.held(&plane)?;
-    dispatchgrant::acknowledge(held.root(), &shown).map_err(|why| why.to_string())?;
-    Ok(changed_of(held.root()))
+    let root = held.root();
+    let locks = sandbox::policy::Locks::of(root);
+    held.dispatch_grants().acknowledge(
+        &Ground {
+            root,
+            locks: &locks,
+            is_open: &|session| held.chats().recorded_chat(session).is_some(),
+            audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
+            at: now_secs(),
+        },
+        &shown,
+    )?;
+    Ok(changed_of(root))
 }
 
 #[cfg(test)]

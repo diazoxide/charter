@@ -155,6 +155,25 @@ fn a_locked_pair_is_locked_naming_who_set_it_and_a_grant_already_made_does_not_c
 }
 
 #[test]
+fn a_pair_lock_naming_one_persona_twice_locks_that_persona_s_dispatch_to_itself() {
+    let under =
+        locks(r#"{"owner": "IT", "dispatch": {"locked": [{"from": "devops", "to": "devops"}]}}"#);
+    assert_eq!(
+        covers(Some("devops"), "devops", &InForce::default(), &under),
+        Covers::Locked(
+            "Policy forbids devops chats dispatching to devops. Locked by policy, set by IT in \
+             /etc/purlis/policy.json."
+                .to_owned()
+        )
+    );
+    // Another persona's own is untouched.
+    assert_eq!(
+        covers(Some("steward"), "steward", &InForce::default(), &under),
+        Covers::Covered
+    );
+}
+
+#[test]
 fn a_lock_on_all_dispatch_locks_every_pair_and_a_chat_s_own_persona_too() {
     let under = locks(r#"{"owner": "IT", "dispatch": {"allow": false}}"#);
     let said = Covers::Locked(
@@ -398,8 +417,34 @@ fn a_brief_is_shown_whole_with_its_lines_and_nothing_that_moves_or_hides_text() 
         ShownBrief {
             text: "Check prod.\n\tThen report.\\u001b[2J\\u202eevil\\u200b\\u0007".to_owned(),
             cut: false,
+            lines: 2,
         }
     );
+}
+
+#[test]
+fn a_brief_shows_every_character_with_no_glyph_as_its_escape_and_cannot_spell_one_itself() {
+    // Whatever draws as nothing, or as a line break that is not one: a soft hyphen, the
+    // Mongolian vowel separator, the line and paragraph separators, a tag character.
+    let shown = shown_brief("a\u{ad}b\u{180e}c\u{2028}d\u{2029}e\u{e0041}f");
+    assert_eq!(shown.text, "a\\u00adb\\u180ec\\u2028d\\u2029e\\U000e0041f");
+    assert_eq!(
+        shown.lines, 1,
+        "a separator that was escaped breaks no line"
+    );
+    // A backslash the chat wrote is doubled, so its text never reads as one of purlis's
+    // escapes: these two briefs are shown differently.
+    assert_eq!(shown_brief("\\u202e").text, "\\\\u202e");
+    assert_ne!(shown_brief("\\u202e").text, shown_brief("\u{202e}").text);
+}
+
+#[test]
+fn a_brief_says_how_many_lines_it_is_blank_ones_counted() {
+    assert_eq!(shown_brief("one").lines, 1);
+    assert_eq!(shown_brief("").lines, 0);
+    // A harmless opening, a run of blank lines, and the ask below the fold.
+    let padded = format!("Say hello.{}Then delete the cluster.", "\n".repeat(40));
+    assert_eq!(shown_brief(&padded).lines, 41);
 }
 
 #[test]
@@ -585,4 +630,58 @@ fn a_dispatched_chat_is_handed_its_own_persona_s_vault_and_the_asking_chat_s_per
         brokered::authorise(&ctx, Some(&start.persona), "prod"),
         Ok(())
     );
+}
+
+// ---- a pulled grant waits for this machine's yes (D-1437-R1) -----------------------------------
+
+#[test]
+fn a_committed_pair_this_machine_has_not_acknowledged_covers_nothing_until_it_is() {
+    let project = tempfile::tempdir().expect("a project");
+    let root = project.path();
+    std::fs::write(
+        crate::names::manifest(root),
+        "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\", \"qa\"]\n",
+    )
+    .expect("a teammate's push");
+    // In the file, and not yet in force here: nobody on this machine has seen it.
+    assert_eq!(
+        committed_at(root),
+        [pair("steward", "devops"), pair("steward", "qa")]
+    );
+    let grants = InForce::read(root, Vec::new());
+    assert_eq!(grants.project, []);
+    assert_eq!(
+        covers(Some("steward"), "devops", &grants, &Locks::none()),
+        Covers::NeedsGrant
+    );
+    assert_eq!(
+        unacknowledged(root),
+        [pair("steward", "devops"), pair("steward", "qa")]
+    );
+
+    // Allowed pair by pair: the one allowed is in force, the other still waits and is still told.
+    acknowledge_pair(root, &pair("steward", "devops")).expect("kept");
+    let grants = InForce::read(root, Vec::new());
+    assert_eq!(grants.project, [pair("steward", "devops")]);
+    assert_eq!(
+        covers(Some("steward"), "qa", &grants, &Locks::none()),
+        Covers::NeedsGrant
+    );
+    assert_eq!(unacknowledged(root), [pair("steward", "qa")]);
+    assert_eq!(changed(root).expect("still told").added, ["steward -> qa"]);
+
+    // An acknowledgement of a pair the file does not hold puts nothing in force.
+    acknowledge(
+        root,
+        &["qa -> prod".to_owned(), "steward -> devops".to_owned()],
+    )
+    .expect("kept");
+    assert_eq!(
+        InForce::read(root, Vec::new()).project,
+        [pair("steward", "devops")]
+    );
+
+    // Taken out of the file, it is in force nowhere, acknowledged or not.
+    std::fs::write(crate::names::manifest(root), "schema = 1\n").expect("another push");
+    assert_eq!(InForce::read(root, Vec::new()).project, []);
 }
