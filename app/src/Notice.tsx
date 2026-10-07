@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { PersonaMark } from "./PersonaMark";
 
 /**
  * **A Notice: a standing line in a project's window about something true now** (CONTEXT.md,
@@ -74,6 +75,9 @@ export type NoticeProps = WayOut & {
   at?: "band" | "pane" | "drawer";
   /** The accessible name, where the sentence alone would not make a good one. */
   label?: string;
+  /** The persona the line names, when it names one: its mark is drawn before the sentence
+   *  (#1449). */
+  persona?: string | null;
   /** The sentence (and anything else the line says before its ways out). */
   children: ReactNode;
   /** What a way out opened (a fix's form, #1250): drawn right after the line, outside its live
@@ -82,7 +86,7 @@ export type NoticeProps = WayOut & {
 };
 
 export function Notice(props: NoticeProps) {
-  const { cause, tone = "news", at = "band", label, children, under } = props;
+  const { cause, tone = "news", at = "band", label, persona, children, under } = props;
   const { fixes, link, copy, onDismiss } = props as Ways;
   const band = useContext(Band);
   const stacked = band !== null && at === "band";
@@ -99,6 +103,7 @@ export function Notice(props: NoticeProps) {
     .join(" ");
   const line = (
     <div className={classes} role="status" aria-label={label} data-cause={cause}>
+      {persona != null && <PersonaMark persona={persona} />}
       <div className="notice-says">{children}</div>
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#186). */}
       {fixes?.map((fix) => (

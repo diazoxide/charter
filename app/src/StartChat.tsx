@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { PersonaMark } from "./PersonaMark";
 import * as Dialog from "@radix-ui/react-dialog";
 import { HarnessSummary } from "./HarnessCard";
 import { ApprovalSentence, ProfileMeta } from "./ProfileApproval";
@@ -287,6 +288,7 @@ export function StartChat({
                   ...options.personas.map((who) => ({
                     value: who,
                     label: who,
+                    mark: <PersonaMark persona={who} />,
                     says: who === options.persona ? "plane default" : undefined,
                   })),
                 ]}

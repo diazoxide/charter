@@ -22,6 +22,8 @@ import {
   Settings2,
   UserRound,
 } from "lucide-react";
+import { PersonaMark } from "./PersonaMark";
+import { PersonaMarkPicker } from "./PersonaMarkPicker";
 import { EmptyState } from "./EmptyState";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { LandAsk, PushAsk, askLand } from "./ChangeActions";
@@ -249,6 +251,9 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
  *  extension offers — which says *a plugin's* before any word is read. */
 export function ViewMark({ view }: { view: ViewRef }) {
+  // A persona's own view wears that persona's mark (#1449), on its tab and its heading.
+  if (view.from === null && view.view === "persona" && view.key !== "")
+    return <PersonaMark persona={view.key} className="tab-mark" />;
   const Mark = view.from !== null ? Puzzle : (OWN_MARKS[view.view] ?? ChartColumn);
   return <Mark className="tab-mark" aria-hidden="true" />;
 }
@@ -409,6 +414,10 @@ export function ViewPane({
           );
         })}
       </header>
+      {/* A persona's icon and colour, picked here and written to its definition (#1449). */}
+      {view.from === null && view.view === "persona" && view.key !== "" && (
+        <PersonaMarkPicker key={`${plane}\u0000${view.key}`} plane={plane} persona={view.key} />
+      )}
       <div className="view-body">
         {holding ? (
           <EmptyState

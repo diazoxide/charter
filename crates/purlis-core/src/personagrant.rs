@@ -39,9 +39,10 @@ const GRANT_DECIDING_KEYS: [&str; 2] = ["borrows", "extends"];
 
 /// The whole frontmatter vocabulary — `persona.KNOWN_KEYS`. Only its case-folded spellings are
 /// used here, to recognise a MISSPELLED grant-deciding key.
-const KNOWN_KEYS: [&str; 21] = [
+const KNOWN_KEYS: [&str; 22] = [
     "model",
     "color",
+    "icon",
     "memory",
     "name",
     "role",

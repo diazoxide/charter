@@ -4778,6 +4778,92 @@ h2.sidebar-title .node-icon {
   max-height: none;
 }
 
+/* **A persona's mark** (#1449, `PersonaMark.tsx`): its custom image, its icon or its initials,
+   on its colour. The two tokens are the accent's, turned to the persona's hue on the element
+   itself (`theme.tintVariables`), so the mark follows light and dark and clears the contrast the
+   accent does. A square a line of text tall, wherever it is put; the classes a caller adds
+   (`tab-mark`, `node-icon`) may place it and never recolour it. */
+.persona-mark,
+.persona-mark.tab-mark,
+.persona-mark.node-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--accent-surface);
+  color: var(--accent-base);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+}
+/* Initials are two letters in a square: smaller than the text beside them, so they fit. */
+.persona-mark[data-mark="initials"] {
+  font-size: 0.7em;
+  width: 2.15em;
+  height: 2.15em;
+}
+.persona-mark[data-initials]::before {
+  content: attr(data-initials);
+}
+.persona-mark canvas {
+  width: 100%;
+  height: 100%;
+}
+.persona-mark-blank {
+  background: var(--accent-base);
+}
+
+/* The picker in a persona's view: what is drawn now, then the icons and the colours, each a
+   radio group that wraps. */
+.persona-mark-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.persona-mark-shown {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.5em;
+}
+.persona-mark-shown p {
+  margin: 0;
+  font-size: 0.6em;
+  color: var(--text-muted);
+}
+.persona-mark-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.persona-mark-choice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.8em;
+  font-weight: 600;
+}
+.persona-mark-choice:hover {
+  color: var(--text-primary);
+}
+.persona-mark-choice[data-state="checked"] {
+  border-color: var(--accent-base);
+  color: var(--text-primary);
+}
+
 /* The mark a view's tab carries in place of a chat's state: what kind of thing the tab holds. */
 .tab-mark {
   flex: none;

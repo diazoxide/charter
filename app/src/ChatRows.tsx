@@ -11,6 +11,7 @@ import {
 } from "./chatState";
 import { PlaneUpdatedMark, type PlaneUpdates } from "./PlaneUpdated";
 import { chatOf, contentsOf, panesOf, type Tabs } from "./tabs";
+import { PersonaMark } from "./PersonaMark";
 import { ViewMark } from "./Views";
 
 /*
@@ -115,9 +116,12 @@ export function TabMarks({
   shells,
   pin,
   wrapping,
+  persona,
 }: {
   tabs: Tabs;
   id: number;
+  /** The persona the tab's chat runs as, when it runs as one: its mark is the tab's. */
+  persona?: string | null;
   /** The chats wrapping up — being smart-closed (ADR 0064). */
   wrapping: ReadonlySet<number>;
   /** The chats the plane's instructions changed under, by session (charter#369). Left out on the
@@ -146,9 +150,12 @@ export function TabMarks({
   return (
     <>
       {/* A shell tab's mark, before its name as a view's is: what kind of thing the tab holds,
-          read before the name is. A harness chat wears none — it is the ordinary case. */}
-      {chat !== undefined && shells.has(chat) && (
+          read before the name is. A chat that runs as a persona wears that persona's (#1449);
+          one that runs as none wears nothing. */}
+      {chat !== undefined && shells.has(chat) ? (
         <SquareTerminal className="tab-mark" data-mark="shell" aria-hidden="true" />
+      ) : (
+        persona != null && <PersonaMark persona={persona} className="tab-mark" />
       )}
       <span className="tab-name">{tabs.byId[id].name}</span>
       {pin}

@@ -92,6 +92,7 @@ pub mod panel;
 pub mod personacmd;
 pub mod personagate;
 pub mod personagrant;
+pub mod personamark;
 pub mod personas;
 pub mod personaverbs;
 pub mod piececmd;
