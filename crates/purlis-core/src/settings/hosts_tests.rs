@@ -253,3 +253,42 @@ fn a_notice_grants_and_settings_revokes_a_host_against_the_file_as_it_is_now() {
     // Revoking what is not there changes nothing.
     revoke(dir.path(), Which::Shared, &host).expect("nothing to do");
 }
+
+// ---- an administrator's policy (#1423) ----
+
+#[test]
+fn a_host_policy_does_not_allow_is_refused_as_it_is_added_and_nothing_is_written() {
+    use crate::sandbox::policy::{Locks, set_for_this_test};
+    let dir = project(ON);
+    set_for_this_test(Locks::parse(
+        r#"{"owner": "IT", "sandbox": {"hosts": ["*.corp.example"], "personal-hosts": false}}"#,
+        Path::new("/etc/purlis/policy.json"),
+    ));
+    let project_s = add(dir.path(), Which::Shared, Some(ON), "pastebin.example");
+    let allowed = add(dir.path(), Which::Shared, Some(ON), "build.corp.example");
+    let yours = add(dir.path(), Which::Local, None, "git.corp.example");
+    set_for_this_test(Locks::none());
+
+    let refused = project_s.expect_err("refused");
+    assert_eq!(refused.fields.len(), 1);
+    assert_eq!(refused.fields[0].field, "host");
+    assert_eq!(
+        refused.fields[0].why,
+        "pastebin.example is not a host policy allows. Locked by policy, set by IT in \
+         /etc/purlis/policy.json."
+    );
+    // One the policy allows is written; one of yours is refused where policy forbids yours.
+    allowed.expect("added");
+    assert_eq!(
+        text(dir.path(), "charter.toml").unwrap(),
+        format!("{ON}hosts = [\"build.corp.example\"]\n")
+    );
+    let refused = yours.expect_err("refused");
+    assert!(
+        refused.fields[0].why.starts_with(
+            "git.corp.example is a host of yours, and policy forbids hosts of your own."
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(text(dir.path(), "charter.local.toml"), None);
+}

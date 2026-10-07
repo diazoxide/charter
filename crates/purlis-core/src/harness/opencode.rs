@@ -128,7 +128,7 @@ impl HarnessAdapter for Opencode {
         let Form::Opencode(wrap) = form else {
             return Err(super::adapter::not_compiled_for(Harness::Opencode));
         };
-        let lead = "this plane runs every chat sandboxed, and";
+        let lead = "this project runs every chat sandboxed, and";
         let Some(cwd) = at.cwd else {
             return Err(format!(
                 "{lead} an opencode chat with no directory of its own has nowhere the sandbox \
@@ -149,7 +149,7 @@ impl HarnessAdapter for Opencode {
             confinement.proxy_port(),
             at.hook_socket,
         )
-        .map_err(|why| crate::sandbox::seatbelt::not_started(lead, why))?;
+        .map_err(|why| crate::sandbox::seatbelt::not_started(lead, why, !at.no_opt_out))?;
         let mut env = crate::sandbox::seatbelt::env(&confinement.proxy_url(), confinement.tmp());
         env.push((
             crate::sandbox::opencode::STATE_ENV.to_owned(),

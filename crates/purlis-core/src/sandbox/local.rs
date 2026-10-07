@@ -135,8 +135,10 @@ pub enum Answer {
     KeepItOff,
 }
 
-/// Whether the project at `root` is offered the sandbox: it is a project, it has not turned
-/// the sandbox on, and nobody on this machine has answered the offer. A project charter made
+/// Whether the project at `root` is offered the sandbox: it is a project, no sandbox is in
+/// force in it (it has not turned the sandbox on, and no policy requires it here, D-1423-1:
+/// an offer to turn on what is on already would ask nothing), and nobody on this machine has
+/// answered the offer. A project charter made
 /// turned it on already, so only one made before the sandbox existed is ever offered it.
 ///
 /// A `charter.toml` charter cannot read is never offered anything: what it says about the
@@ -145,7 +147,7 @@ pub fn offer_due(root: &Path) -> bool {
     let plane = Plane::read(root);
     crate::names::has_manifest(root)
         && !plane.unreadable()
-        && plane.said().policy.is_none()
+        && plane.in_force(&super::policy::Locks::of(root)).is_none()
         && read(root).offer.is_empty()
 }
 
@@ -262,10 +264,16 @@ pub struct HostsChange {
 ///
 /// A persona's own hosts (#1362) are committed too, so they are told the same way, each named
 /// with the persona whose chats reach it ([`Plane::granted_hosts`]).
+///
+/// **Held to an administrator's policy** (#1423): a host policy locks out reaches no chat, so
+/// the Notice never names it as one that does. A policy that comes to lock a host out, or lets
+/// one back in, is a change to what chats reach, and is told as one.
 pub fn hosts_changed(root: &Path) -> Option<HostsChange> {
     let plane = Plane::read(root);
-    plane.said().policy?;
-    let now = plane.granted_hosts();
+    // Only the hosts a chat reaches: none an administrator's policy locks out (#1423).
+    let locks = super::policy::Locks::of(root);
+    plane.in_force(&locks)?;
+    let now = plane.granted_hosts(&locks);
     let seen = read(root).hosts_seen.unwrap_or_default();
     let added: Vec<String> = now
         .iter()

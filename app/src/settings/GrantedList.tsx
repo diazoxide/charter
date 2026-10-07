@@ -61,7 +61,9 @@ function Trouble({ said, onDismiss }: { said: string; onDismiss: () => void }) {
  * with who granted it and when. A vault you let a persona's chats use on this machine although
  * it is not tagged for the persona is one of them (#1430). **Revoke** takes it out of every later start, through the core,
  * which audits it; a project host's revoke is a change to the committed file, which teammates
- * follow. One a policy locks out says so, and is drawn locked.
+ * follow. One a policy locks out (a host it does not allow, a folder where it forbids write
+ * grants) is kept and not in force: it says so, with the policy and who set it, and is drawn
+ * locked.
  */
 function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: RowIds }) {
   const [grants, setGrants] = useState<readonly SandboxGrant[]>();
@@ -104,7 +106,9 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
                 <span className="granted-note">Revoking it edits the committed {file}.</span>
               )}
               {one.locked !== null ? (
-                <span className="granted-locked"> Locked by policy: {one.locked}</span>
+                // Kept, and not in force (#1423): the core's sentence ends "Locked by policy",
+                // with who set it.
+                <span className="granted-locked"> Not in force. {one.locked}</span>
               ) : (
                 <button
                   type="button"

@@ -24,17 +24,24 @@ pub const TOO_LARGE: &str = "purlis cannot hand the sandbox a profile this long:
                              configs name more paths than one chat's sandbox can hold";
 
 /// What a person can do about a refusal `why` of [`profile`], where there is something.
-fn way_out(why: &str) -> Option<&'static str> {
-    (why == TOO_LARGE).then_some(
+/// `opt_out` is whether they may start the chat without the sandbox: where an administrator's
+/// policy forbids it, the way out does not name it.
+fn way_out(why: &str, opt_out: bool) -> Option<&'static str> {
+    (why == TOO_LARGE).then_some(if opt_out {
         "Have the configs name fewer scripts, or start this chat without the sandbox from the \
-         new-chat picker.",
-    )
+         new-chat picker."
+    } else {
+        "Have the configs name fewer scripts."
+    })
 }
 
 /// The refusal of a chat whose profile could not be written for `why`: after `lead`, what
-/// happened, then the way out where there is one (#1418).
-pub fn not_started(lead: &str, why: &str) -> String {
-    match way_out(why) {
+/// happened, then the way out where there is one (#1418). `opt_out` is whether the person may
+/// start the chat without the sandbox ([`super::At::no_opt_out`] says where policy forbids
+/// it): where they may not, the refusal names no opt-out (#1423), and [`super::Applied::line`]
+/// ends it with the policy and who set it.
+pub fn not_started(lead: &str, why: &str, opt_out: bool) -> String {
+    match way_out(why, opt_out) {
         Some(then) => format!("{lead} {why}, so nothing was started. {then}"),
         None => format!("{lead} {why}, so nothing was started."),
     }

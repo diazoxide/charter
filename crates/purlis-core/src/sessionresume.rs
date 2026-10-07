@@ -95,7 +95,9 @@ pub struct Resumed {
 pub fn resumed_holds(root: &Path, persona: Option<&str>) -> Option<crate::reopen::HeldGrants> {
     let default = start::persona_for_a_new_chat(root);
     crate::sandbox::persona::held_unless_within(
-        crate::sandbox::Plane::read(root).said().policy.as_ref(),
+        crate::sandbox::Plane::read(root)
+            .in_force(&crate::sandbox::policy::Locks::of(root))
+            .as_ref(),
         default.as_deref(),
         persona.or(default.as_deref()),
     )
