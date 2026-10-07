@@ -1,16 +1,23 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { DeleteVault, type VaultHolds } from "./DeleteVault";
 import { NewPersona } from "./NewPersona";
+import { PersonaProfile } from "./PersonaProfile";
 import { RemovePersona } from "./RemovePersona";
 import type { Doing, Ran } from "./actions";
-import { commands, type PlaneId } from "./bindings";
+import { commands, type PersonaProfile as PersonaProfileRead, type PlaneId } from "./bindings";
 import type { ViewRef } from "./tabs";
 import { todoView } from "./todos";
 
 /** The verbs of `Doing` this hook carries out (SI-3). */
 export type PlaneEditing = Pick<
   Doing,
-  "removeVault" | "createPersona" | "editPersona" | "removePersona" | "closeTodo" | "forgetTodo"
+  | "removeVault"
+  | "createPersona"
+  | "editPersona"
+  | "setPersonaProfile"
+  | "removePersona"
+  | "closeTodo"
+  | "forgetTodo"
 >;
 
 /**
@@ -57,6 +64,14 @@ export function usePlaneEdits({
   const [makingPersona, setMakingPersona] = useState<{ trouble?: string; busy: boolean }>();
   const [removingPersona, setRemovingPersona] = useState<{
     persona: string;
+    trouble?: string;
+    busy: boolean;
+  }>();
+
+  const [settingProfile, setSettingProfile] = useState<{
+    persona: string;
+    read?: PersonaProfileRead;
+    unreadable?: string;
     trouble?: string;
     busy: boolean;
   }>();
@@ -126,6 +141,40 @@ export function usePlaneEdits({
     [plane],
   );
 
+  /** Asks which profile a persona's chats start on (#1445), and reads what its definition
+   *  names and what the project offers for the dialog to list. */
+  const setPersonaProfile = useCallback(
+    (persona: string) => {
+      setSettingProfile({ persona, busy: false });
+      void settled(commands.personaProfile(plane, persona)).then((answer) =>
+        setSettingProfile((now) =>
+          now?.persona !== persona
+            ? now
+            : answer.status === "ok"
+              ? { ...now, read: answer.data }
+              : { ...now, unreadable: answer.error },
+        ),
+      );
+    },
+    [plane],
+  );
+
+  /** Writes it through the core, which refuses a profile the project does not offer, then has
+   *  the plane read again so the persona's view says what the file now does. */
+  const saveProfile = useCallback(
+    async (persona: string, profile: string | null) => {
+      setSettingProfile((now) => (now ? { ...now, busy: true, trouble: undefined } : now));
+      const answer = await settled(commands.personaSetProfile(plane, persona, profile));
+      if (answer.status === "error") {
+        setSettingProfile((now) => (now ? { ...now, busy: false, trouble: answer.error } : now));
+        return;
+      }
+      setSettingProfile(undefined);
+      reread();
+    },
+    [plane, reread],
+  );
+
   const removePersona = useCallback(
     (persona: string) => setRemovingPersona({ persona, busy: false }),
     [],
@@ -186,8 +235,24 @@ export function usePlaneEdits({
   );
 
   const doing = useMemo<PlaneEditing>(
-    () => ({ removeVault, createPersona, editPersona, removePersona, closeTodo, forgetTodo }),
-    [removeVault, createPersona, editPersona, removePersona, closeTodo, forgetTodo],
+    () => ({
+      removeVault,
+      createPersona,
+      editPersona,
+      setPersonaProfile,
+      removePersona,
+      closeTodo,
+      forgetTodo,
+    }),
+    [
+      removeVault,
+      createPersona,
+      editPersona,
+      setPersonaProfile,
+      removePersona,
+      closeTodo,
+      forgetTodo,
+    ],
   );
 
   const dialogs = (
@@ -210,6 +275,17 @@ export function usePlaneEdits({
           making={makingPersona.busy}
           onCreate={(name, role, when, parent) => void makePersona(name, role, when, parent)}
           onCancel={() => setMakingPersona(undefined)}
+        />
+      )}
+      {settingProfile && (
+        <PersonaProfile
+          persona={settingProfile.persona}
+          read={settingProfile.read}
+          unreadable={settingProfile.unreadable}
+          trouble={settingProfile.trouble}
+          saving={settingProfile.busy}
+          onSave={(profile) => void saveProfile(settingProfile.persona, profile)}
+          onCancel={() => setSettingProfile(undefined)}
         />
       )}
       {removingPersona && (

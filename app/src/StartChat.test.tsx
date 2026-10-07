@@ -23,6 +23,7 @@ const ONE: StartOptions = {
   refused: [],
   personas: ["steward", "release"],
   persona: "steward",
+  persona_profiles: {},
   ignore_fix: null,
   ignore_fix_id: null,
   declares_none: true,
@@ -45,6 +46,120 @@ function show(over: Partial<StartOptions> = {}, repo?: string) {
   );
   return { onStart, onApprove, onCancel, user: userEvent.setup() };
 }
+
+describe("a persona's own profile (#1445)", () => {
+  const codex = { ...ONE.profiles[0], name: "codex", kind: "codex", shown: "codex" };
+  const work = { ...ONE.profiles[0], name: "work", shown: "claude --work", is_default: false };
+  const TWO: Partial<StartOptions> = {
+    profiles: [ONE.profiles[0], { ...codex, is_default: false }, work],
+    personas: ["steward", "release", "ops"],
+    persona_profiles: { release: "codex" },
+  };
+
+  it("moves the harness to a persona's own profile when that persona is picked", async () => {
+    const { onStart, user } = show(TWO);
+    expect(screen.getByRole("radio", { name: /^claude/ })).toBeChecked();
+
+    await user.click(screen.getByRole("radio", { name: /^release/ }));
+
+    expect(screen.getByRole("radio", { name: /^codex/ })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    expect(onStart).toHaveBeenCalledWith("codex", "release", false, null, false, null);
+  });
+
+  it("says which profile is a persona's own on its row", () => {
+    show(TWO);
+
+    expect(screen.getByRole("radio", { name: /^release/ })).toHaveAccessibleDescription(
+      "its profile is codex",
+    );
+    expect(screen.getByRole("radio", { name: /^ops/ })).not.toHaveAccessibleDescription();
+  });
+
+  it("leaves the harness the person's to change after a persona is picked", async () => {
+    const { onStart, user } = show(TWO);
+
+    await user.click(screen.getByRole("radio", { name: /^release/ }));
+    await user.click(screen.getByRole("radio", { name: /^work/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    expect(onStart).toHaveBeenCalledWith("work", "release", false, null, false, null);
+  });
+
+  it("starts on the default persona's own profile", () => {
+    show({ ...TWO, persona_profiles: { steward: "codex" } });
+
+    expect(screen.getByRole("radio", { name: /^codex/ })).toBeChecked();
+  });
+
+  it("keeps a harness the person picked when a persona with its own profile is picked after", async () => {
+    // Harness first, then persona: the Harness row is drawn above the Persona row.
+    const { onStart, user } = show(TWO);
+
+    await user.click(screen.getByRole("radio", { name: /^work/ }));
+    await user.click(screen.getByRole("radio", { name: /^release/ }));
+
+    expect(screen.getByRole("radio", { name: /^work/ })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    expect(onStart).toHaveBeenCalledWith("work", "release", false, null, false, null);
+  });
+
+  it("keeps a harness the person picked for a persona that names no profile", async () => {
+    const { user } = show(TWO);
+
+    await user.click(screen.getByRole("radio", { name: /^work/ }));
+    await user.click(screen.getByRole("radio", { name: /^ops/ }));
+
+    expect(screen.getByRole("radio", { name: /^work/ })).toBeChecked();
+  });
+
+  it("goes back to the default when the persona picked next names no profile", async () => {
+    // Persona with a profile, then one without: codex must not be left over from `release`.
+    const { onStart, user } = show(TWO);
+
+    await user.click(screen.getByRole("radio", { name: /^release/ }));
+    expect(screen.getByRole("radio", { name: /^codex/ })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: /^ops/ }));
+
+    expect(screen.getByRole("radio", { name: /^claude/ })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    expect(onStart).toHaveBeenCalledWith("claude", "ops", false, null, false, null);
+  });
+
+  it("goes back to the default when no persona is picked after one with a profile", async () => {
+    const { user } = show(TWO);
+
+    await user.click(screen.getByRole("radio", { name: /^release/ }));
+    await user.click(screen.getByRole("radio", { name: "none" }));
+
+    expect(screen.getByRole("radio", { name: /^claude/ })).toBeChecked();
+  });
+
+  it("leaves a harness something asked for where it is", async () => {
+    const onStart = vi.fn();
+    render(
+      <StartChat
+        options={options(TWO)}
+        prefer="claude"
+        onStart={onStart}
+        onApprove={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("radio", { name: /^release/ }));
+
+    expect(screen.getByRole("radio", { name: /^claude/ })).toBeChecked();
+  });
+
+  it("moves nowhere for a profile the picker has no row for", async () => {
+    const { user } = show({ ...TWO, persona_profiles: { release: "gone" } });
+
+    await user.click(screen.getByRole("radio", { name: /^release/ }));
+
+    expect(screen.getByRole("radio", { name: /^claude/ })).toBeChecked();
+  });
+});
 
 describe("a chat that starts in a repo (GL-1)", () => {
   it("starts on a new branch in that repo unless told otherwise", async () => {
@@ -381,6 +496,7 @@ describe("the picker a chat starts from", () => {
     it("fixes the file git would carry with the doctor's own fix, where one line cures it", async () => {
       const { onFix, user } = withWays({
         declares_none: false,
+        persona_profiles: {},
         ignore_fix: "add /charter.local.toml to .gitignore",
         ignore_fix_id: "local-ignore",
       });

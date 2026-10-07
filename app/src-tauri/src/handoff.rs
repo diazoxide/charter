@@ -11,10 +11,15 @@
 //! What this module adds is **the questions only the app can answer**, and the one control
 //! that module's argument rests on, which is visibility:
 //!
-//! - **The asking chat is one this app has open**, and the new chat starts on the **same
-//!   profile**, read from the app's own record of that chat and never from the request. A
-//!   handoff never changes harness (`charter/commands_handoff.py:_printed_command`), and
-//!   taking the profile from the request would let the request choose one.
+//! - **The asking chat is one this app has open**, and the new chat starts on **its persona's
+//!   own profile** where that persona's definition names one, else on the asking chat's, read
+//!   from the app's own record of that chat (#1445). Either way it is a profile the project
+//!   already offers on this machine and has approved
+//!   (`purlis_core::personaprofile::for_dispatch`): a persona's file is one a chat can write,
+//!   so a name it gives is only looked up, never run. One this machine does not offer falls
+//!   back to the asking chat's profile, and the answer and the new chat's stamp say so
+//!   (D-1445-8). The harness follows the profile, so a Claude Code chat can hand work to a
+//!   persona that runs on Codex, and the first message reaches it by that harness's own route.
 //! - **The first message carries the stamp** of a handoff from that chat
 //!   (`purlis_core::handoff::is_stamped_from`), so the chat the operator finds on the strip
 //!   always says where it came from.
@@ -118,12 +123,13 @@ pub fn answer(
                 return no(why);
             }
             match open_it(held, plane, &open, STARTING) {
-                Ok((it, row)) => {
+                Ok((it, row, note)) => {
                     let chat = it.session;
                     arrived(it);
                     Answer::Opened {
                         chat,
                         row: Some(row),
+                        note,
                     }
                 }
                 Err(why) => no(why),
@@ -291,7 +297,7 @@ fn open_it(
     plane: &PlaneId,
     open: &OpenChat,
     size: Size,
-) -> Result<(Arrived, Row), String> {
+) -> Result<(Arrived, Row, Option<String>), String> {
     use purlis_core::{handoff, start, wscmd};
 
     let root = held.root();
@@ -329,19 +335,29 @@ fn open_it(
         Some(raw) => purlis_core::reopen::label(raw)?,
         None => None,
     };
-    let message = handoff::delivered(&open.message, &parent, open.report)
+    // `persona=args.persona or ""` in Python, which is the frame's own default: a handed-off
+    // chat does not inherit the asking chat's persona, it gets the one the operator named or
+    // the plane's.
+    let persona = open
+        .persona
+        .clone()
+        .or_else(|| start::persona_for_a_new_chat(root));
+    // **The profile is the persona's own, else the asking chat's** (#1445): the first from the
+    // persona's definition, held to what the project offers; the second from this app's record
+    // of the asking chat, never from the request. The request names none today.
+    let on = profile_for(root, asking.profile.as_deref(), persona.as_deref())?;
+    let profile = on.chosen.profile.clone();
+    // Where the persona's own profile is not offered on this machine, the chat runs on the
+    // asking chat's and is told so under its stamp; the asking chat is told in the answer
+    // (D-1445-8).
+    let note = on.chosen.note();
+    let message = handoff::delivered_noting(&open.message, &parent, open.report, note.as_deref())
         .expect("the stamp was read a moment ago");
     // The command asked this already; asked again because these bytes are about to become a
     // harness's argv, and the bound and the NUL are facts about argv.
     if let Some(bad) = handoff::bad_message(&message) {
         return Err(bad.say());
     }
-    let profile = asking.profile.clone().ok_or_else(|| {
-        format!(
-            "chat {from} is not on a harness profile, so there is no harness to start the new \
-             chat on, and a handoff never changes harness"
-        )
-    })?;
     let ws = open.workspace.as_str();
     let dir = wscmd::workspace_dir(root, ws).ok_or_else(|| {
         format!(
@@ -379,13 +395,6 @@ fn open_it(
             why
         }
     };
-    // `persona=args.persona or ""` in Python, which is the frame's own default: a handed-off
-    // chat does not inherit the asking chat's persona, it gets the one the operator named or
-    // the plane's.
-    let persona = open
-        .persona
-        .clone()
-        .or_else(|| start::persona_for_a_new_chat(root));
     // **A handoff never widens what the asking chat reaches** (#1362, D-1362-5): where the
     // persona it hands to has hosts the asking chat does not run with, the new chat holds the
     // asking chat's grants — read from this app's record of that chat, never from the
@@ -419,7 +428,9 @@ fn open_it(
     // and four handoffs from one chat are four different tabs (charter-app#258).
     let number = held.chats().sessions().deal();
     let name = number.to_string();
-    let mut ready = start::ready(
+    // From the read the profile was chosen from: git is asked once, and the profile that was
+    // judged is the one that runs.
+    let ready = start::ready_read(
         &start::Start {
             profile: Some(profile.clone()),
             persona: persona.clone(),
@@ -435,20 +446,11 @@ fn open_it(
             grants: Default::default(),
         },
         root,
+        &on.declared,
+        &on.launch,
     )
+    .and_then(|ready| told_first(ready, &profile, &message))
     .map_err(stays)?;
-    let Some(first) = ready
-        .harness
-        .and_then(|harness| handoff::first_message_argv(harness.name(), &message))
-    else {
-        return Err(stays(format!(
-            "profile '{profile}' runs a harness purlis has not measured the first message of, \
-             so it cannot be started on the brief."
-        )));
-    };
-    // Last on the line: a positional prompt is what nothing may come after, and the app's own
-    // hook arguments go in FRONT of these (`Chats::open_it`).
-    ready.args.extend(first);
     let chat = Chat {
         program: ready.program.clone(),
         // What the RECORD keeps, which is the profile's own words and not the brief: a
@@ -494,7 +496,74 @@ fn open_it(
         persona,
         harness: ready.harness.map(|harness| harness.name().to_owned()),
     };
-    Ok((arrived, row))
+    Ok((arrived, row, note))
+}
+
+/// The profile a handed-off chat starts on, with the one read of the project's profiles it
+/// was chosen from, which is the read the chat is then started from.
+struct On {
+    chosen: purlis_core::personaprofile::Chosen,
+    declared: purlis_core::harness_declaration::Declarations,
+    launch: (
+        purlis_core::profiles::ProfileSet,
+        purlis_core::profiles::IgnoreCheck,
+    ),
+}
+
+/// **The profile a chat handed to `persona` starts on** (#1445): the persona's own where its
+/// definition names one, else `asking`, the profile of the chat that asked as this app
+/// recorded it. Held to the profiles the project offers on this machine, approved
+/// (`purlis_core::personaprofile::for_dispatch`); the refusal is its sentence. A persona's own
+/// profile this machine does not offer falls back to `asking`, and the answer says so
+/// (D-1445-8).
+///
+/// The request names no profile today, so that function's first rule has nothing to answer.
+fn profile_for(
+    root: &std::path::Path,
+    asking: Option<&str>,
+    persona: Option<&str>,
+) -> Result<On, String> {
+    use purlis_core::personaprofile;
+    let declared = purlis_core::harness_declaration::read(root);
+    let launch = purlis_core::profiles::for_launch_in(root, &declared);
+    let chosen = personaprofile::for_dispatch(
+        &persona
+            .map(|who| personaprofile::named_by(root, who))
+            .unwrap_or_default(),
+        asking,
+        None,
+        &personaprofile::offers_of(root, &launch.0, &declared),
+    )
+    .map_err(|refused| refused.say())?;
+    Ok(On {
+        chosen,
+        declared,
+        launch,
+    })
+}
+
+/// `ready` with `message` as the chat's first message, **by the route the harness it runs
+/// takes one** (`purlis_core::handoff::first_message_argv`): the harness is the one `profile`
+/// names, whatever the asking chat runs, so nothing here knows which harness asked.
+///
+/// Last on the line: a positional prompt is what nothing may come after, and the app's own
+/// hook arguments go in FRONT of these (`Chats::open_it`).
+fn told_first(
+    mut ready: purlis_core::start::Ready,
+    profile: &str,
+    message: &str,
+) -> Result<purlis_core::start::Ready, String> {
+    let Some(first) = ready
+        .harness
+        .and_then(|harness| purlis_core::handoff::first_message_argv(harness.name(), message))
+    else {
+        return Err(format!(
+            "profile '{profile}' runs a harness purlis has not measured the first message of, \
+             so it cannot be started on the brief."
+        ));
+    };
+    ready.args.extend(first);
+    Ok(ready)
 }
 
 /// The handoff's row in the project's dispatch log (`purlis_core::dispatch::record_handoff`),
@@ -634,6 +703,350 @@ mod tests {
                 })
                 .collect()
         }
+    }
+
+    impl Plane {
+        /// A persona `ops` whose definition names the profile `cx`, and that profile: a
+        /// stand-in `codex`, approved, which writes its arguments down as `run.codex.<pid>`.
+        fn with_a_codex_persona(self) -> Self {
+            let runs = self.root.join("runs");
+            let program = stand_in::program(
+                &self.root,
+                "codex-stand-in",
+                &format!(
+                    "#!/bin/sh\nat=$(mktemp {runs:?}/.writing.XXXXXX) || exit 1\n\
+                     for a in \"$@\"; do printf '%s\\0' \"$a\"; done > \"$at\"\n\
+                     mv \"$at\" {runs:?}/run.codex.$$\n\
+                     sleep 10\n"
+                ),
+            );
+            let local = self.root.join(purlis_core::profiles::LOCAL_FILE);
+            let mut text = std::fs::read_to_string(&local).expect("the local file");
+            text.push_str(&format!(
+                "[harness.cx]\nkind = \"codex\"\ncommand = [{:?}]\n",
+                program.display().to_string()
+            ));
+            std::fs::write(&local, text).expect("the profile");
+            let set = purlis_core::profiles::current(&self.root);
+            purlis_core::profiletrust::record_launched(
+                &self.root,
+                "cx",
+                &purlis_core::profiletrust::fingerprint(set.get("cx").expect("cx reads")),
+            )
+            .expect("approved");
+            self.a_persona("ops", "profile: cx\n")
+        }
+
+        /// A persona `name`, whose definition holds `frontmatter` under its name.
+        fn a_persona(self, name: &str, frontmatter: &str) -> Self {
+            let dir = self.root.join("personas").join(name);
+            std::fs::create_dir_all(&dir).expect("the persona's folder");
+            std::fs::write(
+                dir.join("persona.md"),
+                format!("---\nname: {name}\nvault: none\n{frontmatter}---\n\n# {name}\n"),
+            )
+            .expect("the definition");
+            self
+        }
+
+        /// The argv the stand-in `codex` was started with, once it has written it whole.
+        fn codex_run(&self) -> Vec<String> {
+            let run = || {
+                std::fs::read_dir(self.root.join("runs"))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .find(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("run.codex.")
+                    })
+                    .map(|entry| {
+                        let written = std::fs::read_to_string(entry.path()).unwrap_or_default();
+                        written
+                            .split_terminator('\0')
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+            };
+            let deadline = Instant::now() + std::time::Duration::from_secs(30);
+            while run().is_none() && Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            run().unwrap_or_default()
+        }
+    }
+
+    /// A handoff from `asking` to `persona`, answered.
+    fn hand_off_to(
+        held: &Held,
+        id: &PlaneId,
+        tickets: &Tickets,
+        asking: u32,
+        persona: &str,
+    ) -> Result<(u32, Arrived), String> {
+        let ticket = ticket(held, id, tickets, asking);
+        let told = Mutex::new(None);
+        let open = Ask::Open(Box::new(OpenChat {
+            chat: asking,
+            workspace: "alpha".to_owned(),
+            create_vision: None,
+            persona: Some(persona.to_owned()),
+            message: stamped(asking),
+            ticket,
+            name: None,
+            report: true,
+        }));
+        match answer(held, id, tickets, 1, open, &|arrived| {
+            *told.lock().unwrap() = Some(arrived)
+        }) {
+            Answer::Opened { chat, .. } => Ok((chat, told.into_inner().unwrap().expect("told"))),
+            Answer::No { why } => Err(why),
+            other => panic!("opened or refused, not {other:?}"),
+        }
+    }
+
+    /// #1445, at the start seam, with no chat running: a Claude Code chat's handoff to a
+    /// persona whose profile is Codex resolves to that profile, and the start it is given
+    /// runs the Codex program with the stamped brief the way Codex takes a first message.
+    #[test]
+    fn the_start_for_a_codex_persona_runs_codex_on_the_brief_whatever_harness_asked() {
+        let plane = Plane::new().with_a_codex_persona();
+        let root = &plane.root;
+
+        let on = profile_for(root, Some("work"), Some("ops")).expect("a profile");
+        let profile = on.chosen.profile.clone();
+        assert_eq!(profile, "cx", "the persona's own, not the asking chat's");
+        assert_eq!(on.chosen.note(), None, "nothing fell back");
+        assert_eq!(
+            profile_for(root, Some("work"), None)
+                .map(|on| on.chosen.profile)
+                .as_deref(),
+            Ok("work"),
+            "no persona, so the asking chat's"
+        );
+
+        let message = purlis_core::handoff::delivered(&stamped(1), "claude 1", true)
+            .expect("a stamped message");
+        let ready = purlis_core::start::ready_read(
+            &purlis_core::start::Start {
+                profile: Some(profile.clone()),
+                persona: Some("ops".to_owned()),
+                name: "2".to_owned(),
+                cwd: Some(root.join("workspaces").join("alpha")),
+                ..Default::default()
+            },
+            root,
+            &on.declared,
+            &on.launch,
+        )
+        .and_then(|ready| told_first(ready, &profile, &message))
+        .expect("the chat may start");
+
+        assert_eq!(ready.harness, Some(purlis_core::harness::Harness::Codex));
+        assert!(
+            ready.program.ends_with("codex-stand-in"),
+            "the Codex profile's own program: {}",
+            ready.program
+        );
+        assert_eq!(
+            ready.args.last(),
+            Some(&message),
+            "Codex takes its first message as its last, positional argument"
+        );
+        assert!(
+            message.starts_with("⟨handoff from claude 1 · workspace default · ")
+                && message.contains(purlis_core::handoff::REPORT_ASK)
+                && message.ends_with("# Ship it\nnow"),
+            "{message:?}"
+        );
+        assert!(
+            !ready.args.iter().any(|word| word == "--prompt"),
+            "{:?}",
+            ready.args
+        );
+    }
+
+    /// D-1445-8, at the same seam: a persona's own profile this machine does not offer falls
+    /// back to the asking chat's, and the new chat reads so under its stamp. What the
+    /// definition names is never run. A profile nobody approved is still a refusal.
+    #[test]
+    fn the_start_for_a_persona_falls_back_from_an_unoffered_profile_and_refuses_an_unapproved_one()
+    {
+        let plane = Plane::new()
+            .with_a_codex_persona()
+            .a_persona("rogue", "profile: /bin/sh -c evil\n");
+        let on = profile_for(&plane.root, Some("work"), Some("rogue")).expect("it falls back");
+        assert_eq!(on.chosen.profile, "work", "the asking chat's profile");
+        let note = on.chosen.note().expect("and says so");
+        assert!(
+            note.starts_with("persona 'rogue' names profile '/bin/sh -c evil'")
+                && note.ends_with("runs on the asking chat's profile, 'work'"),
+            "{note}"
+        );
+        let message =
+            purlis_core::handoff::delivered_noting(&stamped(1), "claude 1", false, Some(&note))
+                .expect("a stamped message");
+        let mut lines = message.lines();
+        assert!(
+            lines
+                .next()
+                .unwrap()
+                .starts_with("⟨handoff from claude 1 · ")
+        );
+        assert_eq!(lines.next(), Some(format!("⟨{note}⟩").as_str()));
+        assert!(message.ends_with("\n\n# Ship it\nnow"), "{message:?}");
+        // No profile to fall back to: nothing is started.
+        let refused = profile_for(&plane.root, None, Some("rogue"))
+            .map(|on| on.chosen)
+            .unwrap_err();
+        assert!(
+            refused.starts_with("persona 'rogue' names profile")
+                && refused.contains("nothing was started"),
+            "{refused}"
+        );
+
+        let local = plane.root.join(purlis_core::profiles::LOCAL_FILE);
+        let text = std::fs::read_to_string(&local).expect("the local file");
+        std::fs::write(
+            &local,
+            format!("{text}env = {{ CODEX_HOME = \"/elsewhere\" }}\n"),
+        )
+        .expect("changed");
+        let refused = profile_for(&plane.root, Some("work"), Some("ops"))
+            .map(|on| on.chosen)
+            .unwrap_err();
+        assert!(refused.contains("has not been approved"), "{refused}");
+    }
+
+    /// #1445: the chat a persona is handed work in starts on that persona's own profile, on
+    /// whatever harness it runs. The asking chat is Claude Code; the persona's profile is
+    /// Codex; the stamp and the brief reach Codex the way Codex takes a first message, as its
+    /// last, positional argument.
+    #[test]
+    fn a_claude_chat_hands_off_to_a_persona_on_a_codex_profile_and_codex_gets_the_brief() {
+        let plane = Plane::new().with_a_codex_persona();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+
+        let (chat, arrived) =
+            hand_off_to(&held, &id, &tickets, asking, "ops").expect("the handoff opens");
+
+        assert_eq!(arrived.harness.as_deref(), Some("codex"));
+        assert_eq!(arrived.persona.as_deref(), Some("ops"));
+        let opened = held
+            .chats()
+            .open_now()
+            .into_iter()
+            .find(|open| open.session == chat)
+            .expect("the new chat is one the app has open");
+        assert_eq!(
+            opened.profile.as_deref(),
+            Some("cx"),
+            "the persona's own profile, not the asking chat's"
+        );
+        let argv = plane.codex_run();
+        let first = argv.last().cloned().unwrap_or_default();
+        assert!(
+            first.starts_with("⟨handoff from claude 1 · workspace default · 2026-05-04 11:32⟩\n")
+                && first.ends_with("\n\n# Ship it\nnow"),
+            "the stamp and the brief were not Codex's first message: {argv:?}"
+        );
+        assert!(
+            first.contains(purlis_core::handoff::REPORT_ASK),
+            "it is told how to report back: {first:?}"
+        );
+        assert!(
+            !argv.iter().any(|word| word == "--prompt"),
+            "Codex takes its first message as a positional argument: {argv:?}"
+        );
+        // And it can report back to the Claude Code chat that asked.
+        assert!(
+            matches!(
+                report(&held, &id, &tickets, chat, "done"),
+                Answer::Reported { .. }
+            ),
+            "the Codex chat's report reaches the chat that asked"
+        );
+    }
+
+    /// D-1445-8: a persona's own file is one a chat can write, and it is committed while a
+    /// local profile is one machine's. A profile it names that this machine does not offer is
+    /// never run: the chat starts on the asking chat's profile, reads so under its stamp, and
+    /// the asking chat is told in the answer.
+    #[test]
+    fn a_handoff_to_a_persona_naming_an_unoffered_profile_runs_on_the_asking_chats_and_says_so() {
+        let plane = Plane::new().a_persona("ops", "profile: /bin/sh -c evil\n");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let ticket = ticket(&held, &id, &tickets, asking);
+        let open = Ask::Open(Box::new(OpenChat {
+            chat: asking,
+            workspace: "alpha".to_owned(),
+            create_vision: None,
+            persona: Some("ops".to_owned()),
+            message: stamped(asking),
+            ticket,
+            name: None,
+            report: false,
+        }));
+
+        let said = answer(&held, &id, &tickets, 1, open, &nobody);
+
+        let Answer::Opened { chat, note, .. } = said else {
+            panic!("opened, not {said:?}")
+        };
+        let note = note.expect("the answer says it fell back");
+        assert!(
+            note.contains("'/bin/sh -c evil'") && note.ends_with("'work'"),
+            "{note}"
+        );
+        let opened = held
+            .chats()
+            .open_now()
+            .into_iter()
+            .find(|open| open.session == chat)
+            .expect("the new chat is one the app has open");
+        assert_eq!(opened.profile.as_deref(), Some("work"));
+        let told = first_message_of(&plane);
+        assert!(told.contains(&format!("\n⟨{note}⟩\n")), "{told:?}");
+    }
+
+    /// And one the project offers but nobody has approved is never started by a handoff: its
+    /// command is shown to a person first, and that is the picker's to do.
+    #[test]
+    fn a_handoff_to_a_persona_on_a_profile_nobody_approved_opens_nothing() {
+        let plane = Plane::new().with_a_codex_persona();
+        // The profile changes after its approval: what would run is not what was approved.
+        let local = plane.root.join(purlis_core::profiles::LOCAL_FILE);
+        let text = std::fs::read_to_string(&local).expect("the local file");
+        std::fs::write(
+            &local,
+            format!("{text}env = {{ CODEX_HOME = \"/elsewhere\" }}\n"),
+        )
+        .expect("changed");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+
+        let refused =
+            hand_off_to(&held, &id, &tickets, asking, "ops").expect_err("nothing is opened");
+
+        assert!(refused.contains("has not been approved"), "{refused}");
+        assert!(plane.runs().iter().all(|argv| {
+            !argv
+                .last()
+                .is_some_and(|last| last.starts_with("⟨handoff from"))
+        }));
     }
 
     fn planes() -> Planes {
@@ -1528,7 +1941,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_on_no_profile_cannot_hand_off_because_a_handoff_never_changes_harness() {
+    fn a_chat_on_no_profile_cannot_hand_off_to_a_persona_that_names_none() {
         let plane = Plane::new();
         let planes = planes();
         let id = planes.open(&plane.root);

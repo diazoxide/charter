@@ -62,6 +62,7 @@ const START_OPTIONS = {
   refused: [],
   personas: [],
   persona: null,
+  persona_profiles: {},
   ignore_fix: null,
   ignore_fix_id: null,
   declares_none: true,
@@ -454,6 +455,7 @@ describe("the ways out of the start dialogs' refusals (NO-8, #1233)", () => {
           : {
               ...START_OPTIONS,
               declares_none: false,
+              persona_profiles: {},
               ignore_fix: "add /charter.local.toml to .gitignore",
               ignore_fix_id: "local-ignore",
             },
@@ -482,6 +484,7 @@ describe("the ways out of the start dialogs' refusals (NO-8, #1233)", () => {
       start_options: () => ({
         ...START_OPTIONS,
         declares_none: false,
+        persona_profiles: {},
         ignore_fix: "x",
         ignore_fix_id: "local-ignore",
       }),

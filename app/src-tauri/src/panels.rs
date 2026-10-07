@@ -1101,6 +1101,16 @@ pub(crate) fn persona_view(
                 // **The vault's NAME, and never a thing inside it** — see `vault_line`.
                 fact("Vault", vault_line(shown.vault)),
             ];
+            // The profile its chats start on (#1445): what its definition names, held to what
+            // the project offers. Set from this view's heading. The read that shows, which
+            // asks git nothing: this is drawn on every read of a persona.
+            facts.push(fact(
+                "Profile",
+                purlis_core::personaprofile::line(
+                    &purlis_core::personaprofile::named_by(root, name),
+                    &purlis_core::personaprofile::offers_shown(root),
+                ),
+            ));
             if shown.lineage.len() > 1 {
                 facts.push(fact("Inherits", shown.lineage.join(" → ")));
             }

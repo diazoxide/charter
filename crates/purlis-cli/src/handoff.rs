@@ -235,7 +235,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     // ---- the host: the app that started this chat, if one did ---------------------------
     let create_vision = vision.filter(|_| args.create);
     let refused = match in_the_app(ws, &msg, create_vision, persona, name, args.report) {
-        Host::Opened(chat, row) => {
+        Host::Opened(chat, row, note) => {
             record_opened(&Opened {
                 here,
                 chat,
@@ -249,6 +249,11 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
             });
             // `commands_handoff.OPENED`, word for word, on stdout where Python prints it.
             println!("{HANDOFF_SAYS} opened chat {chat} in workspace '{ws}', started on the brief");
+            // What the app said about the profile it started on (#1445, D-1445-8): the new chat
+            // is not on its persona's own. One line, contained: it names a value out of a file.
+            if let Some(note) = note {
+                voice::info(&purlis_core::personas::one_line(&note));
+            }
             return ExitCode::SUCCESS;
         }
         Host::Refused(why) => Some(why),
@@ -399,7 +404,7 @@ struct Opened<'a> {
 enum Host {
     /// The chat is open, under this number on the app's board, and what became of its row in
     /// the dispatch log where the app wrote it ([`purlis_core::hookwire::Row`]).
-    Opened(u32, Option<purlis_core::hookwire::Row>),
+    Opened(u32, Option<purlis_core::hookwire::Row>, Option<String>),
     /// The app answered, and said no, in its own words.
     Refused(String),
     /// There is no app to ask, or it did not answer: the terminal path, unchanged.
@@ -452,7 +457,7 @@ fn in_the_app(
         report,
     };
     match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
-        Ok(Answer::Opened { chat, row }) => Host::Opened(chat, row),
+        Ok(Answer::Opened { chat, row, note }) => Host::Opened(chat, row, note),
         Ok(Answer::No { why }) => Host::Refused(why),
         Ok(
             Answer::Ticket { .. }

@@ -864,11 +864,16 @@ pub enum Answer {
     Ticket { ticket: String },
     /// The chat is open, under this number on the app's board, and what became of its row in
     /// the project's dispatch log, which the app writes (#1421). `None` from an app that leaves
-    /// the row to the command, as every app did before.
+    /// the row to the command, as every app did before. `note` is one sentence the app has to
+    /// say about how it opened it: that the chat runs on the asking chat's profile because its
+    /// persona's own is not offered on this machine (#1445, D-1445-8). None when there is
+    /// nothing to say, and from an app that never says it.
     Opened {
         chat: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         row: Option<Row>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// The report was handed back: to the chat named `to`, or — where that chat is gone —
     /// kept for its workspace, `kept_for`, for the next chat that starts there.
@@ -2401,7 +2406,14 @@ mod tests {
     fn an_opened_answer_carries_the_app_s_row_and_one_without_it_still_reads() {
         // #1421: an app that leaves the row to the command answers no `row` at all.
         let older: Answer = serde_json::from_str(r#"{"opened":{"chat":9}}"#).expect("parsed");
-        assert_eq!(older, Answer::Opened { chat: 9, row: None });
+        assert_eq!(
+            older,
+            Answer::Opened {
+                chat: 9,
+                row: None,
+                note: None,
+            }
+        );
         for row in [
             Row::Written,
             Row::Unwritten {
@@ -2411,6 +2423,8 @@ mod tests {
             let said = Answer::Opened {
                 chat: 9,
                 row: Some(row),
+                // #1445: and what the app has to say about the profile it started on.
+                note: Some("runs on the asking chat's profile".to_owned()),
             };
             let line = serde_json::to_string(&said).expect("written");
             assert_eq!(serde_json::from_str::<Answer>(&line).expect("read"), said);
@@ -3722,7 +3736,11 @@ mod tests {
             asking
                 .ask(&Ask::Open(open), within)
                 .expect("the largest first message is read"),
-            Answer::Opened { chat: 9, row: None }
+            Answer::Opened {
+                chat: 9,
+                row: None,
+                note: None,
+            }
         );
 
         // A line longer than the cap is cut, and a cut line is no ask: the connection ends,
@@ -3757,7 +3775,11 @@ mod tests {
                     },
                     Ask::Open(open) => {
                         match tickets.spend(open.chat, connection, &open.ticket, now) {
-                            Ok(()) => Answer::Opened { chat: 9, row: None },
+                            Ok(()) => Answer::Opened {
+                                chat: 9,
+                                row: None,
+                                note: None,
+                            },
                             Err(why) => Answer::No { why },
                         }
                     }
@@ -3795,7 +3817,11 @@ mod tests {
             asking
                 .ask(&an_open(3, &ticket), std::time::Duration::from_secs(2))
                 .expect("an answer"),
-            Answer::Opened { chat: 9, row: None }
+            Answer::Opened {
+                chat: 9,
+                row: None,
+                note: None,
+            }
         );
     }
 

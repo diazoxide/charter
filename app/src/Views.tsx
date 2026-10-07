@@ -561,6 +561,8 @@ export function ViewPane({
 const OWN_ROWS: Record<string, (key: string) => string[]> = {
   persona: (key) => [
     `persona.edit:${key}`,
+    // The profile its chats start on (#1445): the view's Profile fact, set here.
+    `persona.profile:${key}`,
     `persona.remove:${key}`,
     // The persona's memory list's `+` (SI-9c), and its archive (KN-4).
     `memory.new:persona/${key}`,

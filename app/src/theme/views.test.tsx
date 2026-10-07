@@ -713,6 +713,7 @@ const ORDINARY: Answers = {
     refused: [],
     personas: ["steward"],
     persona: "steward",
+    persona_profiles: {},
     ignore_fix: null,
     declares_none: true,
   },

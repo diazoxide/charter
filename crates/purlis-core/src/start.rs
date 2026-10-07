@@ -246,6 +246,39 @@ pub fn ready_on(
     machine: &crate::sandbox::Machine,
     has: &dyn Fn(&str) -> bool,
 ) -> Result<Ready, String> {
+    // The launch read, which has already asked git whether this plane's `charter.local.toml`
+    // would reach every clone of it.
+    let launch = profiles::for_launch_in(root, declared);
+    ready_given(start, root, declared, machine, has, &launch)
+}
+
+/// [`ready_in`] from a launch read the caller already made ([`profiles::for_launch_in`] of
+/// the same `declared`): a caller that chose the profile from that read starts the chat from
+/// it too, and git is asked once (#1445).
+pub fn ready_read(
+    start: &Start,
+    root: &Path,
+    declared: &crate::harness_declaration::Declarations,
+    launch: &(profiles::ProfileSet, profiles::IgnoreCheck),
+) -> Result<Ready, String> {
+    ready_given(
+        start,
+        root,
+        declared,
+        &crate::sandbox::Machine::this(),
+        &crate::sandbox::backend::installed,
+        launch,
+    )
+}
+
+fn ready_given(
+    start: &Start,
+    root: &Path,
+    declared: &crate::harness_declaration::Declarations,
+    machine: &crate::sandbox::Machine,
+    has: &dyn Fn(&str) -> bool,
+    (set, check): &(profiles::ProfileSet, profiles::IgnoreCheck),
+) -> Result<Ready, String> {
     let Some(name) = start.profile.as_deref() else {
         return Err(
             "this chat is not on a harness profile, so there is nothing to start it from — \
@@ -253,9 +286,6 @@ pub fn ready_on(
                 .to_owned(),
         );
     };
-    // The launch read, which has already asked git whether this plane's `charter.local.toml`
-    // would reach every clone of it.
-    let (set, check) = profiles::for_launch_in(root, declared);
     let Some(profile) = set.get(name) else {
         let refused = set
             .refused

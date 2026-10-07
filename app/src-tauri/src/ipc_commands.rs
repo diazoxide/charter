@@ -194,6 +194,8 @@ macro_rules! app_commands {
                 personas::persona_create,
                 personas::persona_remove,
                 personas::persona_edit,
+                personas::persona_profile,
+                personas::persona_set_profile,
                 todos::todo_add,
                 todos::todo_done,
                 todos::todo_forget,

@@ -579,10 +579,13 @@ describe("a persona's tab heading (SI-3)", () => {
     const head = screen.getByRole("heading", { name: /steward/ }).closest("header");
     if (head === null) throw new Error("the view has no heading");
     await userEvent.click(within(head).getByRole("button", { name: "Edit steward's persona.md" }));
+    // #1445: the profile its chats start on is set from the view that shows it.
+    await userEvent.click(within(head).getByRole("button", { name: "Set steward's profile…" }));
     await userEvent.click(within(head).getByRole("button", { name: "Delete persona steward…" }));
 
     expect(pressed.map((offer) => offer.does)).toEqual([
       { verb: "editPersona", persona: "steward" },
+      { verb: "setPersonaProfile", persona: "steward" },
       { verb: "removePersona", persona: "steward" },
     ]);
   });

@@ -486,6 +486,7 @@ describe("a persona row's menu", () => {
     ).toEqual([
       "Show what devops is",
       "Edit devops's persona.md",
+      "Set devops's profile…",
       "New persona…",
       "Delete persona devops…",
     ]);

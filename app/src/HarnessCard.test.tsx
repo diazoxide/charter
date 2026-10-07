@@ -53,6 +53,7 @@ const OPTIONS: StartOptions = {
   refused: [],
   personas: [],
   persona: null,
+  persona_profiles: {},
   ignore_fix: null,
   ignore_fix_id: null,
   declares_none: true,
