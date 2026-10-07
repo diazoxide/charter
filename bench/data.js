@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791403447717,
+  "lastUpdate": 1791406974028,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3276,6 +3276,48 @@ window.BENCHMARK_DATA = {
             "value": 104.068119,
             "unit": "ms",
             "extra": "median of 5 runs: 102.472, 103.623, 104.068, 104.764, 106.107 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "11cebd79cf8549c98e5d11022a240b4ec623fec2",
+          "message": "sandbox: what waits to be told to a chat is denied where its hooks run outside (D-T59-19)\n\nA dispatched chat's report, and purlis's own word on a dispatch the person\nwas asked about, wait in the project's state folder until the chat they\nare for takes its next turn. A chat could write there, so it could put a\nline into another chat's turn in purlis's voice, and it could read a report\nwritten for another chat.\n\nThat folder is now denied, for reading and writing and under both names of\nthe state folder, to a sandboxed chat of a harness whose hooks run outside\nits sandbox, which is asked of the harness and is Claude Code today. The\napp leaves those files and purlis's hooks take them, so nothing inside\nsuch a chat needs the folder.\n\nIt is not denied where the sandbox is a wrap around the whole harness,\nCodex and opencode today: the hooks that deliver run inside the wrap and\nread and remove each file, so a denial there would cut every report off.\nOn those a chat can still read and write the folder, and what stands is\nthe check each file gets as it is read. The denial reaches them once\ndelivery moves onto the hook socket (issue 1457).\n\nOne command a chat can run did touch the folder: a workspace rename moves\nthe reports kept for the workspace. Run inside a chat that is denied the\nfolder it now leaves them and says who moves them, and the app does, when\nthe project is next opened, from the rename's own journal: only where the\nold workspace is gone and the new one is there.\n\nTested in the compiled forms of both kinds of harness, and live under the\nwrap: a report left for a wrapped chat can still be taken. ADR 0067's\nclass 2 is amended, and docs/plane-format.md and the changelog say what\nholds on which harness.\n\nD-T59-19, delegated by the dispatcher and flagged for the operator.\n\nRefs #1437\nRefs #1457\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-08T00:35:09+04:00",
+          "tree_id": "195884ec47b498806e7ecf24efa0c375e1a7f74d",
+          "url": "https://github.com/purlis/purlis/commit/11cebd79cf8549c98e5d11022a240b4ec623fec2"
+        },
+        "date": 1791406973004,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.507305,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.493, 0.505, 0.507, 0.519, 0.532 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.194558999999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.756, 16.808, 17.195, 17.416, 17.543 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.818565,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.602, 103.479, 103.819, 105.280, 106.374 ms"
           }
         ]
       }
