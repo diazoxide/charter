@@ -26,6 +26,7 @@ mod changes;
 mod chats;
 mod clipath;
 mod curation;
+mod dispatchgrants;
 mod dispatchlimits;
 mod doctor;
 mod extensions;
@@ -2733,6 +2734,19 @@ pub fn run() {
             if let (Some(binary), Some(plugin)) = (binary.clone(), plugin.clone()) {
                 refresh_installed_plugin(binary, plugin);
             }
+            // A dispatch that needs the person: the window shows it as a Notice on the asking
+            // chat's tab (#1437).
+            dispatchgrants::telling({
+                let window = app.handle().clone();
+                std::sync::Arc::new(move |needed: dispatchgrants::DispatchPending| {
+                    windows::emit_for_plane(
+                        &window,
+                        &needed.plane.clone(),
+                        dispatchgrants::NEEDED,
+                        &needed,
+                    );
+                })
+            });
             // The registry is managed BEFORE a plane is opened, because opening one starts
             // programs, and a program that dies at once tells the board, which tells the
             // window, which asks this registry what the chat is called.
