@@ -16,7 +16,9 @@
 //! **A dispatch record is session data too** (#1452). `.charter/app/dispatches/<id>.json` holds
 //! a brief and a report, and is collected by the same rule: a month after it was last written,
 //! unless the chat that asked or the chat that worked is one the reopen record brings back,
-//! by its id and not its number, which another launch deals again.
+//! by its id and not its number, which another launch deals again. A write of one that was cut
+//! short leaves its temporary file beside it, holding the same brief: it is collected by the
+//! same rule.
 //!
 //! **A trace that records a secret handed out is kept** (V71). Those events
 //! ([`crate::secrets::cmd::HANDED_OUT`]) are the only record of which credential went where
@@ -95,7 +97,12 @@ pub fn sweep_keeping(
                 crate::dispatchrecord::DIR_NAME,
             ],
             now,
-            crate::dispatchrecord::a_record,
+            // A record, or what a record's write left behind when it was cut short: a
+            // temporary file holding a brief, which nothing else ever removes.
+            |name| {
+                crate::dispatchrecord::a_record(name)
+                    || crate::dispatchrecord::a_record_s_temp(name)
+            },
             |file| crate::dispatchrecord::of_a_live_chat(file, chats),
         ),
     }

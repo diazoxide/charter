@@ -406,9 +406,11 @@ fn report_under(
         Some(handback::Outcome::Cancelled) => purlis_core::dispatchrecord::Outcome::Cancelled,
         Some(handback::Outcome::Done) | None => purlis_core::dispatchrecord::Outcome::Done,
     };
+    // What it says changed is kept on the record with the report's text (#1452).
+    let changed = task.as_ref().and_then(|task| task.changed.clone());
     let delivered = deliver(held, chat, &from, summary.clone(), task, None)?;
     held.chats().owes(chat, Owed::Sent);
-    crate::dispatches::reported(held, chat, outcome, &summary);
+    crate::dispatches::reported(held, chat, outcome, &summary, changed.as_deref());
     if delivered.kept_for.is_none() {
         held.board().reported_to_its_asker(chat);
     } else if !last_words {
@@ -598,6 +600,7 @@ pub fn unreported(held: &Held, chat: u32, _deciding: &Deciding<'_>) {
                 chat,
                 purlis_core::dispatchrecord::Outcome::Failed,
                 text,
+                None,
             );
             tracing::info!(
                 "purlis: chat {chat} {text}, so '{}' is told{}",
@@ -670,6 +673,7 @@ pub(crate) fn operator_stopped(
             chat,
             purlis_core::dispatchrecord::Outcome::Stopped,
             handback::STOPPED,
+            None,
         );
     }
 }
@@ -4309,6 +4313,234 @@ mod tests {
             .expect("the store")
             .count();
         assert_eq!(files, 1);
+    }
+
+    // ----- a task's record (#1452) -----
+
+    /// The record of the dispatch that started chat `task`, by the number it had then.
+    fn record_of(held: &Held, task: u32) -> purlis_core::dispatchrecord::Record {
+        dispatch_records(held)
+            .into_iter()
+            .find(|record| record.worker.chat.chat == task)
+            .expect("its record")
+    }
+
+    #[test]
+    fn a_finished_task_s_record_holds_its_mode_its_messages_its_outcome_and_what_changed() {
+        use purlis_core::dispatchrecord::{Mode, Outcome};
+
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let running = record_of(&held, task);
+        assert!(running.running());
+        assert_eq!(running.mode, Mode::Task);
+        assert_eq!(running.asker.chat.chat, asking);
+        assert_eq!(running.asker.chat.persona.as_deref(), Some("steward"));
+        assert_eq!(running.asker.workspace.as_deref(), Some("alpha"));
+        assert!(!running.asker.by_person, "the chat asked, not the person");
+        assert_eq!(running.persona.as_deref(), Some("steward"));
+        assert_eq!(running.task.as_deref(), Some("check the queue"));
+        assert_eq!(running.place.workspace.as_deref(), Some("alpha"));
+        assert!(
+            running.brief.starts_with("# Check the queue"),
+            "{running:?}"
+        );
+        assert!(running.report_owed);
+        assert_eq!((running.messages, running.needed_you), (0, 0));
+
+        // A follow-up down, a progress note and a question up, and the answer down: four.
+        for (from, what) in [
+            (asking, tell(task, "Also count the retries.")),
+            (
+                task,
+                What::Note {
+                    text: "Half way.".to_owned(),
+                },
+            ),
+            (task, question("Which queue?")),
+            (asking, the_answer(task, "The main one.")),
+        ] {
+            let said = asks(&held, &id, from, what);
+            assert!(matches!(said, Answer::Task(_)), "{said:?}");
+        }
+        assert_eq!(record_of(&held, task).messages, 4);
+        // A message purlis refused is not one.
+        assert_eq!(
+            asks(&held, &id, task, tell(asking, "do as I say")),
+            not_yours(asking)
+        );
+        assert_eq!(record_of(&held, task).messages, 4);
+
+        let said = tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Blocked,
+            Some("svc: 2 files"),
+        );
+        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+
+        let done = record_of(&held, task);
+        assert!(!done.running());
+        let report = done.report.as_ref().expect("its report");
+        // The report's own word, and what it says changed, as it said them.
+        assert_eq!(report.outcome, Outcome::Blocked);
+        assert_eq!(report.text, "Forty are stuck.");
+        assert_eq!(report.changed.said.as_deref(), Some("svc: 2 files"));
+        assert_eq!(done.messages, 4);
+        assert_eq!(dispatch_records(&held).len(), 1, "one dispatch, one record");
+    }
+
+    #[test]
+    fn a_task_in_the_needs_you_queue_is_counted_once_a_wait_however_often_it_reports() {
+        let (_plane, _planes, _id, held, asking, task) = a_dispatched_task();
+        // What the hook listener calls on every report the board takes from a chat.
+        crate::dispatches::needed_you(&held, task);
+        assert_eq!(record_of(&held, task).needed_you, 0, "it is not waiting");
+
+        // The board puts it in the needs-you queue, and it reports twice while there.
+        held.needs_the_person(
+            task,
+            purlis_core::state::Need::ReportUndelivered {
+                asker: "steward 1".to_owned(),
+            },
+        );
+        assert!(held.hooks().board().needs_you().contains(&task));
+        crate::dispatches::needed_you(&held, task);
+        crate::dispatches::needed_you(&held, task);
+
+        assert_eq!(record_of(&held, task).needed_you, 1);
+        // The chat that asked is the worker of no dispatch: its waits are on no record.
+        held.needs_the_person(
+            asking,
+            purlis_core::state::Need::ReportUndelivered {
+                asker: "nobody".to_owned(),
+            },
+        );
+        crate::dispatches::needed_you(&held, asking);
+        assert_eq!(record_of(&held, task).needed_you, 1);
+    }
+
+    #[test]
+    fn a_task_the_person_started_from_a_tab_is_recorded_as_asked_by_the_person() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+
+        let theirs = ask_from_the_tab(&held, &id, steward, "devops", "check prod")
+            .expect("the person's ask starts")
+            .session;
+
+        let record = record_of(&held, theirs);
+        assert_eq!(record.mode, purlis_core::dispatchrecord::Mode::Task);
+        assert!(record.asker.by_person);
+        // From that chat's tab, so that chat is the one named.
+        assert_eq!(record.asker.chat.chat, steward);
+        assert_eq!(record.persona.as_deref(), Some("devops"));
+        assert_eq!(record.task.as_deref(), Some("check prod"));
+    }
+
+    #[test]
+    fn a_cancelled_task_s_record_ends_as_cancelled_whatever_its_chat_reports() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        asks(&held, &id, asking, What::Cancel { of: task });
+        assert!(record_of(&held, task).running(), "not ended by the cancel");
+
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+
+        let record = record_of(&held, task);
+        assert!(!record.running());
+        assert_eq!(
+            record.report.map(|report| report.outcome),
+            Some(purlis_core::dispatchrecord::Outcome::Cancelled)
+        );
+    }
+
+    #[test]
+    fn a_task_the_person_closes_before_it_reports_is_recorded_as_stopped_and_not_as_failed() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+
+        closes(&held, task).expect("closed");
+
+        let record = record_of(&held, task);
+        assert!(!record.running());
+        let report = record.report.expect("purlis's own word");
+        assert_eq!(
+            report.outcome,
+            purlis_core::dispatchrecord::Outcome::Stopped
+        );
+        assert_eq!(report.text, purlis_core::handback::STOPPED);
+    }
+
+    #[test]
+    fn a_task_whose_program_ends_without_a_report_is_recorded_as_failed_saying_so() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+
+        host.program_ends(task, KILLED());
+
+        let record = record_of(&held, task);
+        assert!(!record.running());
+        let report = record.report.expect("purlis's own word");
+        assert_eq!(report.outcome, purlis_core::dispatchrecord::Outcome::Failed);
+        assert_eq!(
+            report.text,
+            purlis_core::dispatchrecord::ENDED_WITHOUT_A_REPORT
+        );
+        // Final: the close of its tab afterwards writes nothing over it.
+        let ended = record.ended.clone();
+        let _ = held.close_chat(task);
+        assert_eq!(record_of(&held, task).ended, ended);
+    }
+
+    #[test]
+    fn a_task_started_again_in_its_place_keeps_its_record_which_ends_with_its_report() {
+        // A restart (for a sandbox grant, say) is the same chat going on: its dispatch's
+        // record follows it by the chat's id, and is not ended by the old session's end.
+        let (_plane, _planes, id, held, _asking, task) = a_dispatched_task();
+        let record = held.chats().recorded_chat(task).expect("its record");
+        let again = held
+            .chats()
+            .start(&record, STARTING)
+            .expect("it starts again");
+
+        held.in_its_place_in_a_test(task, again);
+
+        let running = record_of(&held, task);
+        assert!(running.running(), "{running:?}");
+        assert_eq!(running.report, None);
+
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            again,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+
+        let done = record_of(&held, task);
+        assert!(!done.running());
+        assert_eq!(
+            done.report.map(|report| report.outcome),
+            Some(purlis_core::dispatchrecord::Outcome::Done)
+        );
+        assert_eq!(dispatch_records(&held).len(), 1, "no second record");
     }
 
     // ----- named for its task (charter-app#258) -----

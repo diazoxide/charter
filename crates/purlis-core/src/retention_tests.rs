@@ -579,3 +579,28 @@ fn a_reopen_record_that_cannot_be_read_leaves_every_dispatch_record_alone() {
 
     assert!(old.exists());
 }
+
+#[test]
+fn what_a_cut_short_write_of_a_dispatch_record_left_behind_is_collected_with_the_records() {
+    // #1457: a write that is interrupted leaves its temporary file in the store, holding a
+    // brief, and nothing else ever removes it.
+    let (_d, root) = plane();
+    let record = a_dispatch_record(&root, (1, None), (2, None), YOUNG);
+    let id = record.file_stem().unwrap().to_string_lossy().into_owned();
+    let store = crate::dispatchrecord::dir(&root);
+    let old = store.join(format!(".purlis-generated.{id}.json.4171.9f3a.tmp"));
+    let young = store.join(format!(".purlis-generated.{id}.json.4172.9f3b.tmp"));
+    // Not a record's: another store's temporary file is never this sweep's.
+    let other = store.join(".purlis-generated.notes.json.4171.9f3a.tmp");
+    aged(&old, OLD);
+    aged(&young, YOUNG);
+    aged(&other, OLD);
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert_eq!(swept.dispatches, 1);
+    assert!(!old.exists());
+    assert!(young.exists());
+    assert!(other.exists());
+    assert!(record.exists());
+}

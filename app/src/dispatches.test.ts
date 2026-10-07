@@ -43,6 +43,7 @@ function row(
     tokens: null,
     brief: "",
     report: null,
+    changed: null,
     open_session: null,
     session_record: null,
     worktree: null,
