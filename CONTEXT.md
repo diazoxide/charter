@@ -39,10 +39,12 @@ plane root. It is where work happens and what needs you. It has a number the win
 _Avoid_: session (that is the process), thread, agent, conversation (that is the harness's)
 
 **Persona**:
-One of the five concepts: a role a chat can take, with its own charter (`persona.md`), memory
-and vault, handed to the harness as a sub-agent. Its curation actions and its logs are parts of
-it.
-_Avoid_: agent, sub-agent (that is the harness's form of it), bot, role (as the name)
+One of the five concepts: a role a chat runs as for its whole life, with its own charter
+(`persona.md`), memory and vault. A chat's persona is fixed when the chat starts and never
+changes, and work for another persona goes to a chat of its own, by **dispatch**. Its curation
+actions and its logs are parts of it (ADR 0072 as amended, ADR 0090).
+_Avoid_: agent, sub-agent (that is a harness's helper inside a chat, which carries the chat's
+persona and is never one itself), bot, role (as the name)
 
 **Memory**:
 One of the five concepts: what purlis keeps so the next chat starts knowing what earlier ones
@@ -468,56 +470,69 @@ cache, database
 
 ### Chats working together
 
-Every agent another agent starts is a chat, so each word here is a part of **Chat** (ADR 0090,
-proposed).
+Every agent another agent starts is a chat, so each word here is a part of **Chat** (ADR 0090).
 
 **Dispatch**:
-A chat starting another chat with a brief, after a person's yes: one per dispatch, or given ahead
-of time as a **dispatch grant**. Its mode is a **handoff** or a **task**. The new chat has its own
-persona, sandbox, budget and asks, and nothing the dispatcher was allowed travels with the brief.
-_Avoid_: spawn, delegate, sub-agent (that is the harness's child run)
-
-**Handoff**:
-A dispatch whose work now belongs to the operator to follow: it opens as a tab, and sends back at
-most one **report**. `purlis handoff` is its route from a shell.
-_Avoid_: transfer, session record (that is what a closing chat writes)
+One chat starting another, with a brief. Its mode is a **task** or a **handoff**. The chat it
+starts is a **persona chat**, with its own persona, sandbox, vaults and asks. Nothing the
+**asking chat** was allowed travels with the brief, and the brief is a request from a chat, never
+the person's word. The person can dispatch too.
+_Avoid_: spawn, delegate, delegation, sub-agent (that is the harness's child run)
 
 **Task** (of a dispatch):
-A dispatch done for the chat that started it, which polls or subscribes for its result. It opens
-headless, listed under its dispatcher.
+A dispatch that expects a **report**: work done for the asking chat. Its persona chat is listed
+under the asking chat, never hidden, and gets a tab when the person opens it.
 _Avoid_: job, todo (that is the workspace's), work item
 
+**Handoff**:
+A dispatch where the work moves: the persona chat takes it from there, and the asking chat does
+not wait on it. It opens as a tab.
+_Avoid_: transfer, session record (that is what a closing chat writes)
+
+**Asking chat**:
+The chat that dispatched. A task's report goes to it, and it may stop only the chats it started.
+_Avoid_: dispatcher, caller, parent (a parent run is a harness's child run's)
+
+**Persona chat**:
+The chat a dispatch starts, running as one persona for its whole life. It is told who asked,
+and it works under its own persona's charter and guards.
+_Avoid_: sub-agent, worker, child (unqualified: a child run is the harness's)
+
 **Report**:
-What a dispatched chat sends back to the chat that dispatched it: quoted to that chat as data,
-on its next turn, or kept for its workspace when that chat is gone.
+What a task returns to its asking chat: an outcome (done, blocked or failed), what the persona
+chat has to say, and what changed. It is data to the asking chat, never instructions, and it is
+kept for the workspace when the asking chat is gone.
 _Avoid_: reply, result (for a handoff), handback (in UI text)
 
 **Lineage** (of a chat):
-The chats a chat came from and the chats that came from it, by dispatch. It is what a chat may
-message and stop without a person, and what every ask the chat raises shows.
-_Avoid_: tree, family, parent (for a dispatcher: a parent run is a harness's child run's)
+Everything descended from one chat the person started: that chat, the chats it dispatched, and
+the chats those dispatched. Messages between chats travel only along it, and every ask a chat
+raises shows it.
+_Avoid_: tree, family, parent (for an asking chat: a parent run is a harness's child run's)
+
+**Dispatch grant**:
+The person's rule that one persona may dispatch to another: for this chat, for me on this
+machine, or for everyone in this project. Dispatching to the same persona needs none, and
+nothing a chat sends can make one.
+_Avoid_: permission (that is the harness's), approval (that answers an ask)
 
 **Headless chat**:
-A chat with no tab. It is listed, its asks reach needs you, and Stop and the kill switch reach it,
-like any chat's; the operator can open its tab at any time. Never a level-1 chat.
+A chat with no tab yet. It is listed, never hidden: its asks reach needs you, Stop and the kill
+switch reach it, like any chat's, and it gets a tab when the person opens it. Never a level-1
+chat.
 _Avoid_: background chat, unattended, hidden
 
-**Peer message**:
+**Peer message** (ADR 0090, proposed: not in the first version):
 Words one chat sends another live chat, in its lineage or over a **message link**. It reaches the
 receiver as quoted data at a turn boundary, and is never consent for anything.
 _Avoid_: prompt (that is the operator's), message (unqualified), mail
 
-**Mailbox** (of a chat):
+**Mailbox** (of a chat; ADR 0090, proposed: not in the first version):
 Whether a chat takes peer messages: deliver, hold or refuse, set by the operator. Held messages wait
 on the chat's row.
 _Avoid_: inbox (that is `purlis inbox`, a person's), queue
 
-**Dispatch grant**:
-A person's yes to a persona's dispatches, given ahead of time on a human scope: which personas it
-may start, where, in which modes, and within which caps.
-_Avoid_: permission (that is the harness's), approval (that answers an ask)
-
-**Message link**:
+**Message link** (ADR 0090, proposed: not in the first version):
 A person's leave for two chats, or the chats of two personas in a workspace, to send each other
 peer messages outside their lineage, until it ends.
 _Avoid_: link (unqualified: that is a runner's), channel, subscription

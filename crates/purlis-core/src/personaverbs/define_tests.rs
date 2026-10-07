@@ -198,6 +198,42 @@ fn create_refuses_a_value_that_would_write_a_second_frontmatter_line() {
 }
 
 #[test]
+fn create_with_use_inside_a_chat_is_refused_before_anything_is_made() {
+    // #1435: a chat's persona is fixed for its life, so `--use` has nothing to select there.
+    let plane = Plane::fixture("daily");
+    let ids = crate::active::Ids {
+        session: Some("s-9".into()),
+        terminal: None,
+    };
+    let mut registered: Vec<String> = Vec::new();
+    let mut heard = Heard::default();
+    let rc = create(
+        plane.root(),
+        &plane.state(),
+        &Create {
+            select: Some(Selecting {
+                ids: &ids,
+                env_persona: Some("steward"),
+                in_chat: true,
+            }),
+            ..ask("qa", Some("x"))
+        },
+        Some(&mut |vault: &str| registered.push(vault.to_string())),
+        &mut heard.sink(),
+    );
+    assert_eq!(rc, 1);
+    assert_eq!(
+        heard.err,
+        "✗ This chat runs as 'steward', and a chat's persona is fixed for its life, so --use \
+         cannot select 'qa' here and nothing was made. Create it without --use; to have it do \
+         work, dispatch to it: `purlis handoff <workspace> --persona qa`.\n"
+    );
+    assert!(registered.is_empty());
+    assert!(!plane.path("personas/qa").exists());
+    assert!(!plane.path(".charter/sessions").exists());
+}
+
+#[test]
 fn create_says_which_leftover_selections_it_revives_and_use_selects_it() {
     let plane = Plane::fixture("daily");
     plane.write(".charter/sessions/old.persona", "qa\n");
@@ -215,6 +251,7 @@ fn create_says_which_leftover_selections_it_revives_and_use_selects_it() {
             select: Some(Selecting {
                 ids: &ids,
                 env_persona: None,
+                in_chat: false,
             }),
             ..ask("qa", Some("x"))
         },

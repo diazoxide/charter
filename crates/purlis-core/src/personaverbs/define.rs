@@ -62,6 +62,9 @@ pub type RegisterVault<'a> = &'a mut dyn FnMut(&str);
 pub struct Selecting<'a> {
     pub ids: &'a Ids,
     pub env_persona: Option<&'a str>,
+    /// Whether this runs inside a chat the app started, whose persona is fixed for its life
+    /// (#1435): `--use` is refused there, before anything is made.
+    pub in_chat: bool,
 }
 
 /// The text of a new persona's `persona.md` — `commands_persona._TEMPLATE`, with
@@ -140,6 +143,13 @@ pub fn create(
     }
     if let Some(reserved) = crate::personas::reserved_refusal(name) {
         say(Say::Fail(format!("{reserved}. Choose another name")));
+        return 1;
+    }
+    if let Some(selecting) = ask.select.as_ref().filter(|s| s.in_chat) {
+        say(Say::Fail(super::select::create_use_refusal(
+            name,
+            selecting.env_persona,
+        )));
         return 1;
     }
     let existing = crate::personas::def_path(root, name);

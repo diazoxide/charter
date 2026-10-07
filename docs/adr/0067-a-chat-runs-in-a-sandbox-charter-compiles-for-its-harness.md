@@ -92,6 +92,13 @@ when they change, and lockable by policy.
   again; the tab offers Restart now, which starts it again resuming its conversation once its
   turn has ended.
 
+*Amended 2026-10-07 (#1435, with ADR 0090 accepted as amended):* **a chat's persona is fixed for
+its life, and a dispatch grant replaces the hold on a handoff.** No chat switches persona
+mid-chat, so the second half of "they are fixed when the chat starts" has no case left. Once
+dispatch ships (ADR 0090 as amended, change 3), a chat that another chat started under a
+dispatch grant starts with its own persona's hosts, because the grant is the person's yes to
+that, and D-1362-5's hold is retired for it. Until then a handoff holds as written above.
+
 ### 2. One schema, compiled per harness
 
 The policy is neutral data. Each harness gets an adapter that compiles it, in the same shape as
