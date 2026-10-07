@@ -3,7 +3,7 @@ import { Hand, X } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Offer } from "./actions";
-import { type State } from "./chatState";
+import { backSaid, type State } from "./chatState";
 import { PersonaMark, type PersonaMarkData } from "./PersonaMark";
 import { useArrived } from "./lib/arrived";
 import { moveAlong } from "./tabSequence";
@@ -139,10 +139,17 @@ export type Asking = {
   mark?: PersonaMarkData | null;
   /**
    * The chats that have reported back to this one and not been read, by name (charter-app#259).
-   * Its row then says `<child> reported back` — what the operator is being asked to look at —
+   * A report is no item of its own (#1448); a chat that is here for another reason says
+   * `<child> reported back` —
    * and Go still opens THIS chat, the one that asked, whose next turn is handed the report.
    */
   reported?: readonly string[];
+  /** The chats it started that the operator stopped, by name (#1448): its row says
+   *  `<child> was stopped`. */
+  stoppedBelow?: readonly string[];
+  /** Why the app found the chat needs the operator (#1448): a report of its own with nowhere to
+   *  go. Said first, before anything about the chats it started. */
+  needed?: string;
   /**
    * Why the chat needs the operator when it is not that it asked: its Smart close stopped
    * without a record (SI-8f). Its row then says `<name>: <why>`, and Go is still the chat.
@@ -338,9 +345,7 @@ export function NeedsYouMenu({
               {items.map((item) => {
                 const press = (offer: Offer) => onPress(item.plane, offer);
                 const back =
-                  item.reported && item.reported.length > 0
-                    ? `${item.reported.join(", ")} reported back`
-                    : item.why;
+                  item.needed ?? backSaid(item.reported ?? [], item.stoppedBelow) ?? item.why;
                 const where = `${back ? `${item.name}: ${back}` : item.name} · ${item.workspace} · ${item.project}`;
                 return (
                   <Menu.Group

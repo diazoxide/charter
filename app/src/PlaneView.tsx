@@ -254,7 +254,14 @@ import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { ChatsSection } from "./ChatsSection";
-import { chatsTree, listedChat, startedElsewhere } from "./chatsTree";
+import {
+  below as chatsBelow,
+  chatsTree,
+  listedChat,
+  startedElsewhere,
+  type ListedChat,
+} from "./chatsTree";
+import { stopAnswer, stopSays, stopTitle, useStopping, type StopAsked } from "./stopping";
 import { HarnessChip } from "./HarnessCard";
 import {
   ChatsHere,
@@ -432,6 +439,8 @@ export const PlaneView = memo(function PlaneView({
   const needsYou = useChatsSelect(chats, (states) => states.needsYou);
   const reports = useChatsSelect(chats, (states) => states.reports);
   const refusals = useChatsSelect(chats, (states) => states.refusals);
+  const needs = useChatsSelect(chats, (states) => states.needs);
+  const stoppedBelow = useChatsSelect(chats, (states) => states.stoppedBelow);
   /**
    * **What the last window action here refused, and which action** (NO-4): the picker's
    * options, or a shell. A Notice with Dismiss, and it clears itself when that same action next
@@ -448,6 +457,9 @@ export const PlaneView = memo(function PlaneView({
     [],
   );
   const [sidebar, setSidebar] = useState<SidebarModel>();
+  /** How many chats a stop has ended: the sidebar is read again for each, since a task chat
+   *  with no tab leaves the list without any tab changing (#1448). */
+  const [stopsEnded, setStopsEnded] = useState(0);
   /** This project's save standing (charter-app#302): every project reads its own, so the project
    *  strip can mark the ones with unsaved work and the title bar can show the one in front. */
   const { saving } = usePlaneSaving(plane);
@@ -524,6 +536,8 @@ export const PlaneView = memo(function PlaneView({
     busy: boolean;
     trouble?: string;
   }>();
+  /** The stop the person is being asked about, before anything is stopped (#1448). */
+  const [stopAsk, setStopAsk] = useState<StopAsking>();
   /**
    * **Start fresh** (NO-3, charter#369): the tab whose chat is about to be started again on the
    * project's instructions as they are now, while the question is up. The tab mark and the
@@ -1118,7 +1132,7 @@ export const PlaneView = memo(function PlaneView({
     return () => {
       gone = true;
     };
-  }, [change, sidebarChanges, plane, replan, startedIn, tabs, tasksMoved]);
+  }, [change, sidebarChanges, plane, replan, startedIn, stopsEnded, tabs, tasksMoved]);
 
   /**
    * What the machine store says this operator has pinned here, and what it says is gone.
@@ -1283,6 +1297,58 @@ export const PlaneView = memo(function PlaneView({
   );
   /** The chats wrapping up, as the core tells it. */
   const told = useSmartClosing(plane, smartCloseEnded);
+  /**
+   * **A chat the person stopped has ended** (#1448). The core ended it, so the window takes its
+   * pane away with `closeChat`, and never `close_session`, which would end it a second time.
+   */
+  const chatStopped = useCallback(
+    (session: number) => {
+      change((tabs) => closeChat(tabs, session, filedIn, isPinned, inTheBackground.current));
+      stoppedFor(session, undefined);
+      setStopsEnded((count) => count + 1);
+    },
+    [change, filedIn, isPinned, stoppedFor],
+  );
+  /** The chats being stopped, as the core tells it. */
+  const stopping = useStopping(plane, chatStopped);
+  /** Every chat the Chats section lists, as of the last render: what a stop is asked about. A
+   *  ref, so a read of the list does not make a new catalogue of the rows holding the ask. */
+  const chatsListed = useRef<readonly ListedChat[]>([]);
+  /**
+   * **Stop asks first** (#1448): a row of the catalogue opens the question, which says what
+   * ends, and nothing is stopped until it is answered. A chat with no chat below it is asked
+   * about alone, whichever row was pressed.
+   */
+  const askToStop = useCallback(
+    (session: number, below: boolean) => {
+      const chat = chatsListed.current.find((one) => one.session === session);
+      if (chat === undefined) return;
+      const under = chatsBelow(chatsListed.current, session);
+      setStopAsk({
+        session,
+        name: chat.name,
+        below: below && under.length > 0,
+        under: under.length,
+        dispatched: chat.parent !== null,
+        already: stopping.has(session),
+        waitingOn: under.filter((one) => stopping.has(one)).length,
+        busy: false,
+      });
+    },
+    [stopping],
+  );
+  /** The person answered: the core stops the chat, or says why not, in the question. */
+  const stopAsked = useCallback(async () => {
+    const asked = stopAsk;
+    if (asked === undefined) return;
+    setStopAsk({ ...asked, busy: true, trouble: undefined });
+    const said = await commands
+      .stopChat(plane, asked.session, asked.below)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    setStopAsk(
+      said.status === "error" ? { ...asked, busy: false, trouble: said.error } : undefined,
+    );
+  }, [plane, stopAsk]);
   /** A kept-open chat's Notice put away, by Dismiss or by its Close tab. */
   const forgetKeptOpen = useCallback(
     (session: number) => setKeptOpen((was) => was.filter((one) => one.session !== session)),
@@ -2588,13 +2654,22 @@ export const PlaneView = memo(function PlaneView({
       .catch((err: unknown) => refusedBy("start-options", String(err)));
   }, [change, firstChatAsked, focusWorkspace, plane, refusedBy, sidebar, startOn, succeeded]);
 
-  /** What a chat is called here: the tab holding it, or its session number. */
+  /** What a chat is called here: the tab holding it; for a task chat with no tab yet (#1447),
+   *  what its tab would say, so its needs-you item names it as its row does (#1448); or its
+   *  session number. */
   const nameOf = useCallback(
-    (session: number) =>
-      tabs.order
-        .filter((id) => panesOf(tabs, id).some((pane) => pane.session === session))
-        .map((id) => tabs.byId[id].name)[0] ?? String(session),
-    [tabs],
+    (session: number) => {
+      const held = tabs.order.find((id) =>
+        panesOf(tabs, id).some((pane) => pane.session === session),
+      );
+      if (held !== undefined) return tabs.byId[held].name;
+      const listed = [
+        ...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []),
+        ...(sidebar?.unfiled ?? []),
+      ].find((chat) => chat.session === session);
+      return listed === undefined ? String(session) : untabbedName(listed);
+    },
+    [sidebar, tabs],
   );
 
   const frontTab = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
@@ -4055,6 +4130,7 @@ export const PlaneView = memo(function PlaneView({
       ignoreNeedsYou,
       cancelSmartClose,
       dismissStopped: (session: number) => stoppedFor(session, undefined),
+      stopChat: askToStop,
       // The verb still names a persona — that is what the catalogue row is about — and the
       // window turns it into the row it opens. `charter/personas` is charter's own panel's
       // key (`purlis_core::panel::Panel::key`), and it is written here because the catalogue
@@ -4107,6 +4183,7 @@ export const PlaneView = memo(function PlaneView({
       unlinkWorkItem,
       askStartFresh,
       askPersona,
+      askToStop,
       bringToFront,
       cancelSmartClose,
       close,
@@ -4206,13 +4283,10 @@ export const PlaneView = memo(function PlaneView({
       const tab = tabs.order.find((id) =>
         panesOf(tabs, id).some((pane) => pane.session === chat.session),
       );
-      const who = whoOf(chat.persona, chat.harness);
       return listedChat(
         chat,
         workspace,
-        tab !== undefined
-          ? tabs.byId[tab].name
-          : (chat.label ?? (who ? `${who} ${chat.name}` : chat.name)),
+        tab !== undefined ? tabs.byId[tab].name : untabbedName(chat),
         tab !== undefined,
       );
     };
@@ -4223,6 +4297,9 @@ export const PlaneView = memo(function PlaneView({
       ...sidebar.unfiled.map((chat) => one(chat, ROOT_WORD)),
     ].sort((a, b) => a.session - b.session);
   }, [sidebar, tabs]);
+  useEffect(() => {
+    chatsListed.current = listedChats;
+  }, [listedChats]);
   const chatRows = useMemo(() => chatsTree(listedChats), [listedChats]);
   /** The chats each chat started that went to another workspace, which the explorer draws
    *  under its row with that workspace named. */
@@ -4363,6 +4440,10 @@ export const PlaneView = memo(function PlaneView({
             nameOf,
             reportsTo: (session) => reports[session] ?? [],
             refusedIn: (session) => refusals[session] ?? [],
+            neededFor: (session) => needs[session] ?? [],
+            stoppedBelow: (session) => stoppedBelow[session] ?? [],
+            listed: listedChats,
+            stopping: [...stopping],
             // The projects' pins are the WINDOW's, and travel down with the projects: a
             // project that is not in front draws nothing, so its pin cannot be held here.
             pinned: {
@@ -4408,6 +4489,10 @@ export const PlaneView = memo(function PlaneView({
       needsYou,
       refusals,
       reports,
+      needs,
+      stoppedBelow,
+      listedChats,
+      stopping,
       strips,
       tabs,
       vaultNames,
@@ -4734,8 +4819,18 @@ export const PlaneView = memo(function PlaneView({
   const asking = useMemo<Asking[]>(() => {
     const reportsTo = (session: number) => reports[session] ?? [];
     const refusedIn = (session: number) => refusals[session] ?? [];
+    const neededFor = (session: number) => needs[session] ?? [];
     const rows = catalogued([
-      ...needsYouRows(needsYou, nameOf, tabs, reportsTo, refusedIn),
+      ...needsYouRows(
+        needsYou,
+        nameOf,
+        tabs,
+        reportsTo,
+        refusedIn,
+        neededFor,
+        (session) => listedChats.some((chat) => chat.session === session),
+        (session) => stoppedBelow[session] ?? [],
+      ),
       ...stoppedRows(stopped, needsYou, nameOf, tabs),
     ]);
     const item = (session: number, ignore: string): Asking => {
@@ -4747,7 +4842,10 @@ export const PlaneView = memo(function PlaneView({
         persona,
         mark: persona === null ? null : (personaMarks.marks.get(persona) ?? null),
         reported: reportsTo(session),
-        // A Smart close that stopped says so first; a refused commit (SQ-16) says its latest.
+        stoppedBelow: stoppedBelow[session] ?? [],
+        // What the app found the chat needs you for is said first (#1448).
+        needed: neededFor(session)[neededFor(session).length - 1],
+        // A Smart close that stopped says so; a refused commit (SQ-16) says its latest.
         why: stopped[session] ?? refusedIn(session)[refusedIn(session).length - 1],
         workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
         go: rows.get(showId(session)),
@@ -4761,7 +4859,20 @@ export const PlaneView = memo(function PlaneView({
       ...needsYou.map((session) => item(session, ignoreId(session))),
       ...alsoStopped.map((session) => item(session, dismissId(session))),
     ];
-  }, [filedIn, nameOf, needsYou, personaMarks.marks, personaOf, refusals, reports, stopped, tabs]);
+  }, [
+    filedIn,
+    listedChats,
+    nameOf,
+    needs,
+    needsYou,
+    personaMarks.marks,
+    personaOf,
+    refusals,
+    reports,
+    stopped,
+    stoppedBelow,
+    tabs,
+  ]);
 
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
@@ -5074,7 +5185,11 @@ export const PlaneView = memo(function PlaneView({
                          `offscreen.ts` and the strip collapses rather than scrolls, so there is
                          nothing to scroll a tab into and nothing measuring tabs through the
                          markup. */
-                      <Menued on={{ on: "chat", tab: id }} offers={found} onPress={press}>
+                      <Menued
+                        on={{ on: "chat", tab: id, session: chatOf(tabs, id) }}
+                        offers={found}
+                        onPress={press}
+                      >
                         {isBackground(id) ? (
                           /* **In the background** (SI-8f): the chat is wrapping up, so its tab is a
                              chip — the chat's icon and the breathing mark, its name in the tooltip —
@@ -5515,6 +5630,9 @@ export const PlaneView = memo(function PlaneView({
                 rows={chatRows}
                 front={frontTab === undefined ? undefined : chatOf(tabs, frontTab.id)}
                 onOpen={showChat}
+                offers={found}
+                onPress={press}
+                stopping={stopping}
               />
               <Explorer
                 plane={plane}
@@ -5901,6 +6019,17 @@ export const PlaneView = memo(function PlaneView({
           <ApprovalSentence row={approving.approval} />
           <ProfileMeta row={approving.approval} />
         </ChatAsk>
+      )}
+      {stopAsk && (
+        <ChatAsk
+          title={stopTitle(stopAsk)}
+          says={stopSays(stopAsk)}
+          answer={stopAnswer(stopAsk)}
+          trouble={stopAsk.trouble}
+          busy={stopAsk.busy}
+          onAnswer={() => void stopAsked()}
+          onCancel={() => setStopAsk(undefined)}
+        />
       )}
       {freshening && (
         <ChatAsk
@@ -6894,6 +7023,16 @@ export type Hidden = {
   needs: number;
   children: ReactNode;
 };
+
+/** The stop the person is being asked about (#1448): what was asked, of which chat, and how
+ *  the answer is going. */
+type StopAsking = StopAsked & { session: number; busy: boolean; trouble?: string };
+
+/** What a chat with no tab is called: what its tab would say, were it opened (#1447). */
+function untabbedName(chat: OpenChat): string {
+  const who = whoOf(chat.persona, chat.harness);
+  return chat.label ?? (who ? `${who} ${chat.name}` : chat.name);
+}
 
 /**
  * The mark on something the operator pinned (ADR 0039).

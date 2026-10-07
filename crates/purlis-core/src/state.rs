@@ -219,6 +219,19 @@ impl Event {
     }
 }
 
+/// Why a chat needs the person when no hook of its own says so (#1448): something the app
+/// found out about it. Each is a needs-you item on that chat, which says the reason, until the
+/// chat's next prompt, the person's Ignore, or the chat's end.
+///
+/// **Where a new reason goes.** A chat waiting on a dispatch grant is the next one (#1437): a
+/// variant here, raised with [`Board::needs`], and a sentence for it in the window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Need {
+    /// The chat reported, and its report has nowhere to go: the chat that asked for it,
+    /// `asker` as the person saw it, has gone. The report is kept for that chat's workspace.
+    ReportUndelivered { asker: String },
+}
+
 /// One chat's state, and everything that is allowed to move it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chat {
@@ -236,10 +249,21 @@ pub struct Chat {
     /// holds, so a dead chat can never look alive.
     ended: bool,
     /// The chats that have reported back to this one since it was last prompted, by the name
-    /// the operator sees them under (charter-app#259). Each is a needs-you item of its own
-    /// kind — `<child> reported back` — and the report itself reaches this chat's next turn as
-    /// context, which is why the next prompt is what clears them.
+    /// the operator sees them under (charter-app#259). The report itself reaches this chat's
+    /// next turn as context, which is why the next prompt is what clears them. **Not a
+    /// needs-you item** (#1448): a report goes to the chat that asked, not to the person. A
+    /// chat that is in the queue for a reason of its own says `<child> reported back` there.
     reports: Vec<String>,
+    /// The chats this one started that the operator stopped since it was last prompted, by
+    /// name (#1448). purlis's own word, kept apart from `reports`, which are what chats said:
+    /// the row says `<child> was stopped`. No needs-you item, and cleared as reports are.
+    stopped: Vec<String>,
+    /// Why the chat needs the person when no hook of its own said so ([`Need`], #1448).
+    needs: Vec<Need>,
+    /// Whether the chat has reported to the chat that asked, in the turn it is in (#1448). Its
+    /// turn ending then waits on that chat and not on the person, so it raises no needs-you
+    /// item. The next prompt starts new work and clears it.
+    reported: bool,
     /// The commits of this chat charter's `pre-commit` refused since it was last prompted, each
     /// as the one masked line the item says (SQ-16, [`crate::diffscan`]). A needs-you item of
     /// its own kind, like a report back, and the next prompt clears them the same way.
@@ -267,6 +291,9 @@ impl Chat {
             needs_you: false,
             ended: false,
             reports: Vec::new(),
+            stopped: Vec::new(),
+            needs: Vec::new(),
+            reported: false,
             refusals: Vec::new(),
             asking: false,
             turns: 0,
@@ -333,13 +360,61 @@ impl Chat {
 
     /// What a reader of this chat is shown, so a move can be told from no move by comparing
     /// it before and after. [`Chat::asking`] and the turn count are not part of it.
-    fn seen(&self) -> (State, bool, usize, usize) {
+    fn seen(&self) -> (State, bool, usize, usize, usize, usize) {
         (
             self.state,
             self.needs_you,
             self.reports.len(),
             self.refusals.len(),
+            self.needs.len(),
+            self.stopped.len(),
         )
+    }
+
+    /// The chats this one started that the operator stopped and it has not been told of yet,
+    /// oldest first.
+    pub fn stopped(&self) -> &[String] {
+        &self.stopped
+    }
+
+    /// The operator stopped `from`, a chat this one started (#1448). The word waits for this
+    /// chat's next turn, as a report does, and is no needs-you item. Answers whether anything
+    /// a reader can see changed.
+    pub fn stopped_below(&mut self, from: &str) -> bool {
+        if self.ended {
+            return false;
+        }
+        self.stopped.push(from.to_owned());
+        true
+    }
+
+    /// Why the chat needs the person beyond what its own hooks said, oldest first.
+    pub fn needs(&self) -> &[Need] {
+        &self.needs
+    }
+
+    /// The app found that this chat needs the person, for `need` (#1448). A needs-you item
+    /// whatever the chat is doing, and its state is not touched. Answers whether anything a
+    /// reader can see changed: nothing does for a need it already has.
+    pub fn needs_the_person(&mut self, need: Need) -> bool {
+        if self.ended {
+            return false;
+        }
+        let was = self.seen();
+        if !self.needs.contains(&need) {
+            self.needs.push(need);
+        }
+        self.needs_you = true;
+        was != self.seen()
+    }
+
+    /// This chat's report reached the chat that asked for it (#1448). The turn it is in then
+    /// ends waiting on that chat: no needs-you item is raised for it, and the nudge of a chat
+    /// left idle raises none either. A question it asks mid-turn still does.
+    pub fn reported_to_its_asker(&mut self) {
+        if !self.ended {
+            self.reported = true;
+        }
     }
 
     /// The commits of this chat that were refused and not yet seen, oldest first.
@@ -360,18 +435,17 @@ impl Chat {
         true
     }
 
-    /// A chat this one handed work to, `from`, has reported back (charter-app#259). It needs
-    /// the operator whatever it is doing: the report waits for its next turn, and the queue is
-    /// how the operator learns there is one. Answers whether anything a reader can see changed.
+    /// A chat this one handed work to, `from`, has reported back (charter-app#259). The report
+    /// waits for this chat's next turn. Answers whether anything a reader can see changed.
     ///
-    /// **Not its state.** A chat in the middle of a turn is still running; the report does not
-    /// end the turn and nothing is typed into it.
+    /// **Not a needs-you item** (#1448): the report is this chat's to read, not the person's.
+    /// **And not its state.** A chat in the middle of a turn is still running; the report does
+    /// not end the turn and nothing is typed into it.
     pub fn reported_back(&mut self, from: &str) -> bool {
         if self.ended {
             return false;
         }
         self.reports.push(from.to_owned());
-        self.needs_you = true;
         true
     }
 
@@ -414,7 +488,10 @@ impl Chat {
                 self.state = State::Running;
                 self.needs_you = false;
                 self.reports.clear();
+                self.stopped.clear();
                 self.refusals.clear();
+                self.needs.clear();
+                self.reported = false;
                 self.asking = false;
                 self.turns = self.turns.saturating_add(1);
             }
@@ -423,7 +500,11 @@ impl Chat {
                 // Asked in the middle of a turn. After one has ended it is only a nudge.
                 self.asking = self.asking || self.state == State::Running;
                 self.state = State::Waiting;
-                self.needs_you = true;
+                // The nudge of a chat that reported to the chat that asked is not it waiting
+                // on the person (#1448). A question mid-turn always is.
+                if self.asking || !self.reported {
+                    self.needs_you = true;
+                }
             }
             // The falling edge: the agent has nothing more to do, so the next move is the
             // operator's. After a `Notification` the STATE does not change and the reason
@@ -435,9 +516,15 @@ impl Chat {
             // The case it would really have caught is the app MISSING a prompt event, and
             // there the guard gives the wrong answer: a turn has still ended, and the
             // operator still has the next move.
+            //
+            // **But not for a chat that reported to the chat that asked, in this turn**
+            // (#1448): the next move is that chat's. What it already needed the person for
+            // stays.
             Said::Turn(Turn::Ended) => {
                 self.state = State::Waiting;
-                self.needs_you = true;
+                if !self.reported {
+                    self.needs_you = true;
+                }
                 self.asking = false;
             }
             // Emphatically not `Stop`: a dispatched sub-agent finishing does not end the
@@ -475,9 +562,14 @@ impl Chat {
     /// leaves the queue. The report itself still reaches the chat's next turn — ignoring the
     /// item is not unreading what another chat said.
     pub fn ignored(&mut self) -> bool {
-        let had_reports = !self.reports.is_empty() || !self.refusals.is_empty();
+        let had_reports = !self.reports.is_empty()
+            || !self.refusals.is_empty()
+            || !self.needs.is_empty()
+            || !self.stopped.is_empty();
+        self.stopped.clear();
         self.reports.clear();
         self.refusals.clear();
+        self.needs.clear();
         std::mem::replace(&mut self.needs_you, false) || had_reports
     }
 
@@ -499,7 +591,9 @@ impl Chat {
         self.ended = true;
         // Nothing will prompt it again, so nothing it was waiting to read is an item any more.
         self.reports.clear();
+        self.stopped.clear();
         self.refusals.clear();
+        self.needs.clear();
         // A child still working ends with its parent, in the parent's end (ADR 0076 §6). It
         // shares the parent's process group, so the stop that ended the parent ended it.
         let children = self.children.end_with(self.state);
@@ -941,6 +1035,52 @@ impl Board {
             .get_mut(&number)
             .is_some_and(|tracked| tracked.chat.reported_back(from));
         self.stamp(number, changed)
+    }
+
+    /// The operator stopped `from`, a chat `number` started (#1448). Answers whether anything
+    /// a reader can see changed: nothing does for a chat the board does not have, or one whose
+    /// program is gone.
+    pub fn stopped_below(&mut self, number: u32, from: &str) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.stopped_below(from));
+        self.stamp(number, changed)
+    }
+
+    /// The chats `number` started that the operator stopped and it has not been told of yet.
+    pub fn stopped_of(&self, number: u32) -> Vec<String> {
+        self.chats
+            .get(&number)
+            .map(|tracked| tracked.chat.stopped().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// The app found that chat `number` needs the person, for `need` (#1448). Answers whether
+    /// anything a reader can see changed: nothing does for a chat the board does not have, or
+    /// one whose program is gone.
+    pub fn needs(&mut self, number: u32, need: Need) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.needs_the_person(need));
+        self.stamp(number, changed)
+    }
+
+    /// Why chat `number` needs the person beyond what its own hooks said, oldest first.
+    pub fn needs_of(&self, number: u32) -> Vec<Need> {
+        self.chats
+            .get(&number)
+            .map(|tracked| tracked.chat.needs().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Chat `number`'s report reached the chat that asked for it
+    /// ([`Chat::reported_to_its_asker`]). Nothing a reader can see changes.
+    pub fn reported_to_its_asker(&mut self, number: u32) {
+        if let Some(tracked) = self.chats.get_mut(&number) {
+            tracked.chat.reported_to_its_asker();
+        }
     }
 
     /// charter's `pre-commit` refused a commit chat `number` made (SQ-16). Answers whether
@@ -2231,7 +2371,7 @@ mod tests {
     // ----- a report back (charter-app#259) --------------------------------------------------
 
     #[test]
-    fn a_report_back_puts_the_chat_that_asked_in_the_queue_without_ending_its_turn() {
+    fn a_report_back_is_the_asking_chat_s_to_read_and_no_needs_you_item() {
         let mut board = Board::new();
         claude_chat(&mut board, 7, Some(A));
         board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
@@ -2239,8 +2379,171 @@ mod tests {
         assert!(board.reported_back(7, "drop commons"));
 
         assert_eq!(board.state(7), State::Running, "nothing is typed into it");
-        assert_eq!(board.needs_you(), vec![7]);
+        assert!(
+            board.needs_you().is_empty(),
+            "a report goes to the chat that asked, not to the person"
+        );
         assert_eq!(board.reports(7), vec!["drop commons".to_owned()]);
+    }
+
+    #[test]
+    fn a_chat_already_in_the_queue_says_who_reported_back_to_it() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::Stop, Some(A)));
+
+        board.reported_back(7, "drop commons");
+
+        assert_eq!(board.needs_you(), vec![7], "for its own turn's end");
+        assert_eq!(board.reports(7), vec!["drop commons".to_owned()]);
+    }
+
+    // ----- a chat it started was stopped (#1448) ----------------------------------------------
+
+    #[test]
+    fn a_stopped_child_is_said_on_the_chat_that_started_it_and_is_no_needs_you_item() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        assert!(board.stopped_below(7, "drop commons"));
+
+        assert_eq!(board.stopped_of(7), vec!["drop commons".to_owned()]);
+        assert!(board.reports(7).is_empty(), "it reported nothing");
+        assert!(board.needs_you().is_empty());
+        assert_eq!(board.state(7), State::Running);
+    }
+
+    #[test]
+    fn a_stopped_child_is_forgotten_at_the_next_prompt_an_ignore_or_the_end() {
+        for ends in [
+            |board: &mut Board| {
+                board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+            },
+            |board: &mut Board| {
+                board.ignored(7);
+            },
+            |board: &mut Board| {
+                board.exited(7, Some(0));
+            },
+        ] {
+            let mut board = Board::new();
+            claude_chat(&mut board, 7, Some(A));
+            board.stopped_below(7, "drop commons");
+
+            ends(&mut board);
+
+            assert!(board.stopped_of(7).is_empty());
+        }
+        let mut gone = Board::new();
+        assert!(!gone.stopped_below(7, "drop commons"), "not on the board");
+    }
+
+    // ----- what the app found a chat needs the person for (#1448) -----------------------------
+
+    fn undelivered() -> Need {
+        Need::ReportUndelivered {
+            asker: "steward 3".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_report_with_nowhere_to_go_is_a_needs_you_item_on_the_chat_that_wrote_it() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        assert!(board.needs(7, undelivered()));
+
+        assert_eq!(board.needs_you(), vec![7]);
+        assert_eq!(board.needs_of(7), vec![undelivered()]);
+        assert_eq!(board.state(7), State::Running, "its state is its own");
+        assert!(!board.needs(7, undelivered()), "said once");
+        assert_eq!(board.needs_of(7).len(), 1);
+    }
+
+    #[test]
+    fn what_a_chat_needs_the_person_for_goes_at_its_next_prompt_an_ignore_or_its_end() {
+        for ends in [
+            |board: &mut Board| {
+                board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+            },
+            |board: &mut Board| {
+                board.ignored(7);
+            },
+            |board: &mut Board| {
+                board.exited(7, Some(0));
+            },
+        ] {
+            let mut board = Board::new();
+            claude_chat(&mut board, 7, Some(A));
+            board.needs(7, undelivered());
+
+            ends(&mut board);
+
+            assert!(board.needs_of(7).is_empty());
+            assert!(board.needs_you().is_empty());
+        }
+    }
+
+    #[test]
+    fn nothing_is_needed_of_the_person_for_a_chat_that_is_gone() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.exited(7, Some(0));
+
+        assert!(!board.needs(7, undelivered()));
+        assert!(!board.needs(8, undelivered()), "not on the board");
+        assert!(board.needs_you().is_empty());
+    }
+
+    #[test]
+    fn a_chat_that_reported_to_its_asker_ends_its_turn_without_needing_the_person() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_to_its_asker(7);
+
+        board.reported(&report(7, Event::Stop, Some(A)));
+
+        assert_eq!(board.state(7), State::Waiting);
+        assert!(
+            board.needs_you().is_empty(),
+            "it waits on the chat that asked, not on the person"
+        );
+        // Claude Code's nudge of a chat left idle is not it asking either.
+        board.reported(&report(7, Event::Notification, Some(A)));
+        assert!(board.needs_you().is_empty());
+    }
+
+    #[test]
+    fn a_chat_that_reported_still_needs_the_person_for_a_question_and_for_its_next_turn() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported_to_its_asker(7);
+
+        // A permission prompt in the same turn, after the report.
+        board.reported(&report(7, Event::Notification, Some(A)));
+        assert_eq!(board.needs_you(), vec![7], "a question for the person");
+
+        // The person prompts it again: new work, whose end is theirs to read.
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(7, Event::Stop, Some(A)));
+        assert_eq!(board.needs_you(), vec![7]);
+    }
+
+    #[test]
+    fn a_report_with_nowhere_to_go_outlasts_the_turn_that_wrote_it() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.needs(7, undelivered());
+
+        board.reported(&report(7, Event::Stop, Some(A)));
+
+        assert_eq!(board.needs_you(), vec![7]);
+        assert_eq!(board.needs_of(7), vec![undelivered()]);
     }
 
     #[test]
@@ -2261,7 +2564,7 @@ mod tests {
     fn ignoring_a_reported_back_item_takes_it_out_of_the_queue() {
         let mut board = Board::new();
         claude_chat(&mut board, 7, Some(A));
-        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(7, Event::Stop, Some(A)));
         board.reported_back(7, "drop commons");
 
         assert!(board.ignored(7));
@@ -2270,7 +2573,7 @@ mod tests {
         assert!(board.reports(7).is_empty());
         assert_eq!(
             board.state(7),
-            State::Running,
+            State::Waiting,
             "the chat itself is untouched"
         );
     }

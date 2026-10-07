@@ -966,6 +966,7 @@ impl StandIn {
                 stepped_in: false,
             }),
             answered: None,
+            stopped: None,
         };
         let asker_open = self.record(from.chat).is_some();
         let whose = if asker_open {
@@ -1263,6 +1264,7 @@ fn the_report() -> Handback {
             stepped_in: false,
         }),
         answered: None,
+        stopped: None,
     }
 }
 

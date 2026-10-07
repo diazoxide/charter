@@ -236,6 +236,18 @@ pub trait ChatBoard: Send + Sync {
     /// A chat `session` handed work to, shown as `from`, has reported back to it
     /// (charter-app#259). Nothing when no reader would see a difference.
     fn reported_back(&self, session: u32, from: &str) -> Option<Moved>;
+
+    /// The operator stopped `from`, a chat `session` started (#1448): its row says so, and it
+    /// is no needs-you item. Nothing when no reader would see a difference.
+    fn stopped_below(&self, session: u32, from: &str) -> Option<Moved>;
+
+    /// The app found that chat `session` needs the person, for `need` (#1448): a needs-you
+    /// item on it. Nothing when no reader would see a difference.
+    fn needs(&self, session: u32, need: purlis_core::state::Need) -> Option<Moved>;
+
+    /// Chat `session`'s report reached the chat that asked for it (#1448): the turn it is in
+    /// ends without a needs-you item. Nothing a reader sees changes now.
+    fn reported_to_its_asker(&self, session: u32);
 }
 
 /// A session host that runs nothing, for a test of what sits above the seam.

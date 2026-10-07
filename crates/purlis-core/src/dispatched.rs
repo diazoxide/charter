@@ -983,6 +983,7 @@ mod tests {
                 stopped: false,
             }),
             answered: None,
+            stopped: None,
         }
     }
 

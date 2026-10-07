@@ -53,14 +53,25 @@ pub struct Moved {
     /// for.
     pub moved_at: u32,
     /// The chats that have reported back to this one and not been read yet, by the name the
-    /// operator sees them under, oldest first (charter-app#259). Each is a needs-you item that
-    /// says `<child> reported back` rather than only this chat's name. Empty for nearly every
-    /// chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
+    /// operator sees them under, oldest first (charter-app#259). No needs-you item of its own
+    /// (#1448): a chat in the queue for another reason says `<child> reported back` there.
+    /// Empty for nearly every chat, and emptied by this chat's next prompt, which is the turn
+    /// the reports are handed.
     pub reports: Vec<String>,
     /// The commits of this chat charter's `pre-commit` refused and the operator has not seen,
     /// each as the one masked line its item says, oldest first (SQ-16). Emptied by the chat's
     /// next prompt, or by Ignore.
     pub refusals: Vec<String>,
+    /// The chats this one started that the operator stopped, by name, oldest first (#1448):
+    /// its row says `<child> was stopped`. purlis's own word, apart from `reports`, which are
+    /// what chats said. `null` for nearly every chat, and emptied as `reports` is.
+    #[specta(optional)]
+    pub stopped: Option<Vec<String>>,
+    /// Why this chat needs the person when no hook of its own said so, oldest first (#1448):
+    /// its needs-you item says the latest. `null` for nearly every chat, which needs the person
+    /// for nothing of the kind, and emptied by the chat's next prompt, or by Ignore.
+    #[specta(optional)]
+    pub needs: Option<Vec<Need>>,
     /// Which snapshot of the board this is — bigger was taken later (charter-app#248).
     ///
     /// **What lets the window put its events back in order.** Every `Moved` is built under the
@@ -74,6 +85,25 @@ pub struct Moved {
     /// The child agents of this chat's current run, oldest first (FD-18, W8): each sub-agent
     /// or child its harness spawned, drawn under the chat. Empty for nearly every chat.
     pub children: Vec<ChildAgent>,
+}
+
+/// Why a chat needs the person, as the window says it (`purlis_core::state::Need`, #1448). A
+/// dispatch grant that is needed is the next kind (#1437).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Need {
+    /// Its report has nowhere to go: the chat that asked for it, `asker`, has gone.
+    ReportUndelivered { asker: String },
+}
+
+impl From<purlis_core::state::Need> for Need {
+    fn from(need: purlis_core::state::Need) -> Self {
+        match need {
+            purlis_core::state::Need::ReportUndelivered { asker } => {
+                Self::ReportUndelivered { asker }
+            }
+        }
+    }
 }
 
 /// One child agent of a chat, as the window draws it under the chat (ADR 0066, ADR 0076 §6).
@@ -1214,6 +1244,24 @@ impl ChatBoard for Hooks {
             .reported_back(session, from)
             .then(|| seen_by(&board, &self.plane, session))
     }
+
+    fn stopped_below(&self, session: u32, from: &str) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .stopped_below(session, from)
+            .then(|| seen_by(&board, &self.plane, session))
+    }
+
+    fn needs(&self, session: u32, need: purlis_core::state::Need) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .needs(session, need)
+            .then(|| seen_by(&board, &self.plane, session))
+    }
+
+    fn reported_to_its_asker(&self, session: u32) {
+        self.board().reported_to_its_asker(session);
+    }
 }
 
 /// What a reader sees for this chat right now.
@@ -1237,6 +1285,10 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         moved_at: board.moved_at(session),
         reports: board.reports(session),
         refusals: board.refusals(session),
+        stopped: Some(board.stopped_of(session)).filter(|stopped| !stopped.is_empty()),
+        needs: Some(board.needs_of(session))
+            .filter(|needs| !needs.is_empty())
+            .map(|needs| needs.into_iter().map(Need::from).collect()),
         children: board
             .children(session)
             .into_iter()
