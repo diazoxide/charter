@@ -4930,8 +4930,10 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `{"outcome": "done"|"blocked"|"failed"|"cancelled"|"stopped", "text", "changed": {"said"?,
   "files"?, "commits"?, "branch"?}}`, where `changed.said` is what a task's report says it
   changed, in the persona chat's own words (`purlis dispatch report --changed`), absent where
-  the report said nothing of it; `files`, `commits` and `branch` are for a dispatch that
-  works in its own worktree and are absent until one does (#1453); `cancelled` is a task its asking chat cancelled (#1441),
+  the report said nothing of it; `branch` is the branch the app cut for a dispatch that works
+  in its own worktree (#1453): the app's own `place.worktree.branch`, written beside `said`
+  and never read from the report, and absent for a dispatch given no worktree; `files` and
+  `commits` are kept for the same dispatch and not written yet; `cancelled` is a task its asking chat cancelled (#1441),
   recorded so whatever its chat said of its outcome, and `stopped` is a chat the person
   stopped or closed before it reported (#1443, #1448), with the text `stopped by the
   operator`; neither is recorded as `failed`. A purlis from before the two words does not
