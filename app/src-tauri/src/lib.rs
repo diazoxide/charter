@@ -70,6 +70,7 @@ mod thismachine;
 mod todos;
 mod updates;
 mod usage;
+mod vaultroute;
 mod vaults;
 mod vaultswaiting;
 mod views;
@@ -2704,6 +2705,19 @@ pub fn run() {
                             &window,
                             &told.plane.clone(),
                             hooks::SANDBOX_BLOCKED,
+                            &told,
+                        );
+                    })
+                })
+                // A vault a chat was refused for its persona: the window shows the ways
+                // forward as a Notice on the chat's tab (#1430).
+                .telling_vault_refusals({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |told: vaultroute::VaultRefused| {
+                        windows::emit_for_plane(
+                            &window,
+                            &told.plane.clone(),
+                            vaultroute::REFUSED,
                             &told,
                         );
                     })

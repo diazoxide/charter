@@ -265,6 +265,26 @@ fn only_worktree_isolation_isolates() {
 }
 
 #[test]
+fn a_sub_agent_reads_at_start_that_it_runs_with_its_chats_personas_vaults() {
+    // #1430: a sub-agent named for another persona keeps the chat's persona, and is told so.
+    let plane = Plane::fixture("minimal");
+    plane.write("personas/ops/persona.md", "---\nname: ops\n---\n\nOps.\n");
+    let def = super::super::resolve(plane.root(), "ops").unwrap();
+    let text = render(plane.root(), &plane.state(), "ops", &def);
+    assert!(
+        text.contains(
+            "\n- **In a sandboxed chat you run with that chat's persona's vaults, not this \
+             persona's.** charter hands a chat only the vaults tagged for the persona the chat \
+             was opened as, and a sub-agent is part of its chat. If `charter secret exec` is \
+             refused, report that to the chat that dispatched you: the operator can allow the \
+             vault in the notice on the chat's tab, or the work can go to a chat opened as this \
+             persona.\n- Follow the control plane's conventions"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_grant_already_named_a_blank_denylist_and_a_persona_using_itself_add_nothing() {
     let plane = ops_plane();
     plane.write(

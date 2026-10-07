@@ -636,6 +636,23 @@ fn an_app(
     crate::hookwire::Reading,
     Vec<(String, String)>,
 ) {
+    an_app_answering(
+        answer,
+        Box::new(|_, _| crate::hookwire::Answer::No { why: String::new() }),
+        asked,
+    )
+}
+
+/// [`an_app`], answering every ask as `answerer` does.
+fn an_app_answering(
+    answer: crate::hookwire::SecretExecuting,
+    answerer: crate::hookwire::Answerer,
+    asked: Arc<AtomicBool>,
+) -> (
+    tempfile::TempDir,
+    crate::hookwire::Reading,
+    Vec<(String, String)>,
+) {
     use crate::hookwire::{Hearing, Listener};
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("hooks.sock");
@@ -649,7 +666,7 @@ fn an_app(
         blocked: Box::new(|_| {}),
         touching: Box::new(|_| {}),
         each: Box::new(|_| Ok(())),
-        answer: Box::new(|_, _| crate::hookwire::Answer::No { why: String::new() }),
+        answer: answerer,
         noticed: Box::new(|_| {}),
         saved: Box::new(|_| {}),
         refused: Box::new(|_| Ok(())),
@@ -903,4 +920,471 @@ fn from_outside_the_chat_secret_exec_says_why_and_runs_nothing() {
     assert!(!marker.exists(), "no run here, nor in the app");
     let _ = program.kill();
     let _ = program.wait();
+}
+
+// ---- a refused vault offers a way forward, and `vault list` from a chat (#1430) ------------
+
+/// A project as [`project`]'s, with a third vault, `ops`, tagged for persona `ops`, which the
+/// project defines.
+fn project_with_ops() -> tempfile::TempDir {
+    let tmp = project();
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("personas/ops")).unwrap();
+    std::fs::write(
+        root.join("personas/ops/persona.md"),
+        "---\nname: ops\n---\n\nOps.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("vaults.json"),
+        serde_json::json!({ "vaults": {
+            "team": {"provider": "plain-file", "config": {"file": "team.json"}, "persona": "devops"},
+            "other": {"provider": "plain-file", "config": {"file": "other.json"}},
+            "ops": {"provider": "plain-file", "config": {"file": "team.json"}, "persona": "ops"},
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    tmp
+}
+
+/// The one refusal `frames` is.
+fn refusal(frames: &[Frame]) -> &str {
+    let [Frame::Refused { why, code: 1 }] = frames else {
+        panic!("one refusal: {frames:?}");
+    };
+    why
+}
+
+/// `echo ok` with the vault's `TOKEN`, asked of `vault`.
+fn wants_token(root: &Path, vault: &str) -> Wanted {
+    let mut want = wanted(root, vault, sh(r#"test -n "$X" && echo ok"#));
+    want.env = vec!["X=TOKEN".into()];
+    want
+}
+
+/// An administrator's policy for this test's thread, put back to none when dropped.
+struct Policed;
+
+impl Policed {
+    fn by(json: &str) -> Self {
+        crate::sandbox::policy::set_for_this_test(crate::sandbox::policy::Locks::parse(
+            json,
+            Path::new("/etc/purlis/policy.json"),
+        ));
+        Self
+    }
+}
+
+impl Drop for Policed {
+    fn drop(&mut self) {
+        crate::sandbox::policy::set_for_this_test(crate::sandbox::policy::Locks::none());
+    }
+}
+
+#[test]
+fn a_vault_tagged_for_another_persona_is_refused_naming_both_ways_forward() {
+    let project = project_with_ops();
+    let root = project.path();
+    let frames = served(&asker(root, Some("devops")), wants_token(root, "ops"));
+    assert_eq!(
+        refusal(&frames),
+        "vault 'ops' is not one persona 'devops' may use, so purlis did not open it (it may use \
+         'team'). Two ways forward: ask the operator to press Allow in the notice on this \
+         chat's tab, then run the command again (no restart is needed); or, to have 'ops', the \
+         persona the vault is tagged for, do the work, dispatch to it: `purlis handoff <workspace> \
+         --persona ops`. A chat's persona is fixed for its life, so nothing run in this chat \
+         changes which vaults it may use."
+    );
+}
+
+#[test]
+fn a_refusal_never_suggests_changing_the_chats_own_persona() {
+    let project = project_with_ops();
+    let root = project.path();
+    for vault in ["ops", "other"] {
+        let frames = served(&asker(root, Some("devops")), wants_token(root, vault));
+        let why = refusal(&frames);
+        assert!(!why.contains("persona use"), "{why}");
+        assert!(!why.contains("vault add"), "{why}");
+        assert!(why.contains("fixed for its life"), "{why}");
+    }
+}
+
+#[test]
+fn a_vault_tagged_for_nobody_names_the_one_way_forward() {
+    let project = project_with_ops();
+    let root = project.path();
+    let frames = served(&asker(root, Some("devops")), wants_token(root, "other"));
+    let why = refusal(&frames);
+    assert!(why.contains("The way forward: ask the operator"), "{why}");
+    assert!(!why.contains("--persona"), "nobody to hand off to: {why}");
+}
+
+#[test]
+fn a_tag_that_names_no_persona_the_project_defines_offers_no_dispatch() {
+    // The registry's tag is any text its committed half holds (#1057 allows a label), so a
+    // dispatch is named only for a persona the project defines.
+    let project = project_with_ops();
+    let root = project.path();
+    std::fs::write(
+        root.join("vaults.json"),
+        serde_json::json!({ "vaults": {
+            "team": {"provider": "plain-file", "config": {"file": "team.json"}, "persona": "devops"},
+            "label": {"provider": "plain-file", "config": {"file": "team.json"},
+                      "persona": "the platform team"},
+            "unknown": {"provider": "plain-file", "config": {"file": "team.json"},
+                        "persona": "ghost"},
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let ctx = Ctx::new(root, Env::of(&[]));
+    for vault in ["label", "unknown"] {
+        let not = not_tagged(&ctx, Some("devops"), vault).expect("still one to allow");
+        assert_eq!(dispatchable(&ctx, &not), None, "{vault}");
+        let frames = served(&asker(root, Some("devops")), wants_token(root, vault));
+        let why = refusal(&frames);
+        assert!(why.contains("The way forward: ask the operator"), "{why}");
+        assert!(!why.contains("dispatch"), "{why}");
+        assert!(!why.contains("--persona"), "{why}");
+    }
+    let ops = NotTagged {
+        vault: "ops".into(),
+        persona: "devops".into(),
+        tagged_for: Some("ops".into()),
+    };
+    assert_eq!(dispatchable(&ctx, &ops).as_deref(), Some("ops"));
+}
+
+#[test]
+fn a_vault_you_allowed_for_the_persona_runs_the_same_command_with_no_restart() {
+    let project = project_with_ops();
+    let root = project.path();
+    // One chat, as the app recorded it when it started: never rebuilt below.
+    let chat = asker(root, Some("devops"));
+    assert!(matches!(
+        served(&chat, wants_token(root, "ops")).as_slice(),
+        [Frame::Refused { .. }]
+    ));
+    assert_eq!(
+        not_tagged(&Ctx::new(root, chat.env.clone()), Some("devops"), "ops"),
+        Some(NotTagged {
+            vault: "ops".into(),
+            persona: "devops".into(),
+            tagged_for: Some("ops".into()),
+        })
+    );
+
+    crate::sandbox::local::grant_vault(root, "ops", "devops").unwrap();
+
+    let frames = served(&chat, wants_token(root, "ops"));
+    assert_eq!(frames.last(), Some(&Frame::Exit(0)), "{frames:?}");
+    assert_eq!(stdout(&frames), "ok\n");
+    assert_eq!(
+        not_tagged(&Ctx::new(root, chat.env.clone()), Some("devops"), "ops"),
+        None,
+        "nothing left to allow"
+    );
+    // The registry is as it was: the grant is this machine's, beside it.
+    let registry: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("vaults.json")).unwrap()).unwrap();
+    assert_eq!(registry["vaults"]["ops"]["persona"], "ops");
+    // And it is for that persona alone.
+    assert!(matches!(
+        served(&asker(root, Some("steward")), wants_token(root, "ops")).as_slice(),
+        [Frame::Refused { .. }]
+    ));
+
+    crate::sandbox::local::revoke_vault(root, "ops", "devops").unwrap();
+    assert!(
+        matches!(
+            served(&chat, wants_token(root, "ops")).as_slice(),
+            [Frame::Refused { .. }]
+        ),
+        "a revoke reaches the next run too"
+    );
+}
+
+#[test]
+fn a_grant_for_a_vault_the_registry_no_longer_holds_opens_nothing() {
+    let project = project_with_ops();
+    let root = project.path();
+    crate::sandbox::local::grant_vault(root, "gone", "devops").unwrap();
+    let frames = served(&asker(root, Some("devops")), wants_token(root, "gone"));
+    // In the registry's own words, with no way forward named: there is no Notice to press
+    // Allow on, and nobody to dispatch to. A mistyped name reads the same.
+    assert_eq!(
+        refusal(&frames),
+        "no vault named 'gone'. Register one with `purlis vault add gone`."
+    );
+    let typo = served(&asker(root, Some("devops")), wants_token(root, "op"));
+    assert_eq!(
+        refusal(&typo),
+        "no vault named 'op'. Register one with `purlis vault add op`."
+    );
+    for why in [refusal(&frames), refusal(&typo)] {
+        assert!(!why.contains("Allow"), "{why}");
+        assert!(!why.contains("way forward"), "{why}");
+        assert!(!why.contains("dispatch"), "{why}");
+    }
+    assert_eq!(
+        not_tagged(&Ctx::new(root, Env::of(&[])), Some("devops"), "op"),
+        None
+    );
+    assert_eq!(
+        not_tagged(&Ctx::new(root, Env::of(&[])), Some("devops"), "gone"),
+        None,
+        "and nothing is offered for it"
+    );
+}
+
+#[test]
+fn policy_can_forbid_the_allow_and_takes_a_grant_already_made_away() {
+    let project = project_with_ops();
+    let root = project.path();
+    crate::sandbox::local::grant_vault(root, "ops", "devops").unwrap();
+    let _policy = Policed::by(r#"{"owner": "IT", "sandbox": {"vault-grants": false}}"#);
+    let frames = served(&asker(root, Some("devops")), wants_token(root, "ops"));
+    let why = refusal(&frames);
+    assert!(
+        why.contains(
+            "Policy forbids allowing a persona a vault it is not tagged for. Locked by policy, \
+             set by IT in /etc/purlis/policy.json. The way forward: to have 'ops', the persona \
+             the vault is tagged for, do the work, dispatch to it: `purlis handoff <workspace> \
+             --persona ops`."
+        ),
+        "{why}"
+    );
+    assert!(!why.contains("press Allow"), "{why}");
+    // A vault the registry tags for the persona is not a grant, and still opens.
+    let frames = served(&asker(root, Some("devops")), wants_token(root, "team"));
+    assert_eq!(frames.last(), Some(&Frame::Exit(0)), "{frames:?}");
+}
+
+#[test]
+fn nothing_a_chats_line_says_changes_its_persona_or_tags_a_vault() {
+    let project = project_with_ops();
+    let root = project.path();
+    // The line a chat would forge: a persona and a grant beside what `secret exec` sends.
+    let forged = serde_json::json!({
+        "chat": 7,
+        "persona": "ops",
+        "allow": {"vault": "ops", "persona": "devops"},
+        "secret_exec": {
+            "vault": "ops",
+            "persona": "ops",
+            "tagged_for": "devops",
+            "grant": true,
+            "env": ["X=TOKEN"],
+            "command": ["/bin/sh", "-c", "echo ok"],
+            "cwd": root.join("work"),
+            "environment": [["PATH", "/usr/bin:/bin"], ["PURLIS_PERSONA", "ops"],
+                            ["CHARTER_PERSONA", "ops"]],
+        },
+    });
+    let ask: Ask = serde_json::from_value(forged).expect("read as a secret exec");
+    let frames = served(&asker(root, Some("devops")), ask.secret_exec);
+    assert!(
+        refusal(&frames).starts_with("vault 'ops' is not one persona 'devops' may use"),
+        "the app's record of the chat decides: {frames:?}"
+    );
+    assert_eq!(crate::sandbox::local::granted_vaults(root), Vec::new());
+    let registry: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("vaults.json")).unwrap()).unwrap();
+    assert_eq!(registry["vaults"]["ops"]["persona"], "ops");
+}
+
+#[test]
+fn the_app_lists_every_vault_with_its_tag_and_whether_the_persona_may_use_it() {
+    let project = project_with_ops();
+    let root = project.path();
+    crate::sandbox::local::grant_vault(root, "other", "devops").unwrap();
+    let said = listed(&Ctx::new(root, Env::of(&[])), Some("devops")).unwrap();
+    let row = |name: &str, persona: Option<&str>, usable| Listed {
+        name: name.into(),
+        provider: "plain-file".into(),
+        persona: persona.map(str::to_owned),
+        usable,
+    };
+    assert_eq!(
+        said,
+        vec![
+            row("ops", Some("ops"), false),
+            row("other", None, true),
+            row("team", Some("devops"), true),
+        ]
+    );
+    // Nothing of a vault's contents or of where it is kept is in the answer.
+    let wire = serde_json::to_string(&said).unwrap();
+    for never in [TOKEN, "TOKEN", "team.json", "other.json", "config"] {
+        assert!(!wire.contains(never), "{never} in {wire}");
+    }
+    // A chat on no persona may use none.
+    assert!(
+        listed(&Ctx::new(root, Env::of(&[])), None)
+            .unwrap()
+            .iter()
+            .all(|one| !one.usable)
+    );
+    // And under the policy lock a grant made here lists as it opens: not at all.
+    let _policy = Policed::by(r#"{"sandbox": {"vault-grants": false}}"#);
+    assert_eq!(
+        listed(&Ctx::new(root, Env::of(&[])), Some("devops")).unwrap(),
+        vec![
+            row("ops", Some("ops"), false),
+            row("other", None, false),
+            row("team", Some("devops"), true),
+        ]
+    );
+}
+
+/// The table a chat reads for [`project_with_ops`], as persona `devops`.
+const LISTED_FOR_DEVOPS: &str = "VAULT  PROVIDER    PERSONA  THIS CHAT\n\
+                                 -----  ----------  -------  ---------\n\
+                                 ops    plain-file  ops      not allowed\n\
+                                 other  plain-file  —        not allowed\n\
+                                 team   plain-file  devops   may use\n";
+
+#[test]
+fn a_chat_reads_each_vault_its_tag_and_whether_it_may_use_it_and_the_ways_forward() {
+    let project = project_with_ops();
+    let vaults = listed(&Ctx::new(project.path(), Env::of(&[])), Some("devops")).unwrap();
+    let said = |listing: Listing| {
+        let mut rec = Rec::default();
+        super::super::vaultcmd::list_for_a_chat(&listing, &mut rec);
+        (String::from_utf8_lossy(&rec.out).into_owned(), rec.said)
+    };
+    let devops = |vaults: &[Listed], allow_locked| Listing {
+        persona: Some("devops".into()),
+        vaults: vaults.to_vec(),
+        allow_locked,
+    };
+    let (out, lines) = said(devops(&vaults, false));
+    assert_eq!(out, LISTED_FOR_DEVOPS);
+    assert_eq!(
+        lines,
+        vec![
+            Say::Info("This chat runs as 'devops'.".into()),
+            Say::Info(super::super::vaultcmd::NOT_ALLOWED_ROUTES.into()),
+        ]
+    );
+    // Where policy forbids the Allow, it is not named: only the dispatch is.
+    let (out, lines) = said(devops(&vaults, true));
+    assert_eq!(out, LISTED_FOR_DEVOPS);
+    assert_eq!(
+        lines[1],
+        Say::Info(super::super::vaultcmd::NOT_ALLOWED_ROUTES_LOCKED.into())
+    );
+    assert!(!super::super::vaultcmd::NOT_ALLOWED_ROUTES_LOCKED.contains("Allow"));
+    assert!(super::super::vaultcmd::NOT_ALLOWED_ROUTES.contains("press Allow"));
+    // With nothing refused there is no way forward to name, and a chat on no persona says so.
+    let (_, lines) = said(devops(&vaults[2..], false));
+    assert_eq!(lines, vec![Say::Info("This chat runs as 'devops'.".into())]);
+    let (_, lines) = said(Listing {
+        persona: None,
+        vaults: Vec::new(),
+        allow_locked: false,
+    });
+    assert_eq!(lines, vec![Say::Info("No vaults configured.".into())]);
+}
+
+/// The app's answer to every ask: the vaults of the project at `root`, for a chat it started
+/// as `devops`, whatever the line says.
+fn the_app_lists(root: &Path) -> crate::hookwire::Answerer {
+    let root = root.to_path_buf();
+    Box::new(move |_, ask| match ask {
+        crate::hookwire::Ask::Vaults { chat: 7 } => {
+            match listed(&Ctx::new(&root, Env::of(&[])), Some("devops")) {
+                Ok(vaults) => crate::hookwire::Answer::Vaults {
+                    persona: Some("devops".into()),
+                    vaults,
+                    allow_locked: false,
+                },
+                Err(why) => crate::hookwire::Answer::No { why },
+            }
+        }
+        _ => crate::hookwire::Answer::No {
+            why: "not a listing".into(),
+        },
+    })
+}
+
+#[test]
+fn what_a_sandboxed_chat_is_compiled_to_denies_it_every_place_a_listing_would_read() {
+    // Why `vault list` in a chat is the app's answer: the chat's own sandbox denies it the
+    // provider's session and the project's vaults, reads included, on every harness.
+    let project = project_with_ops();
+    let root = project.path().canonicalize().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    for harness in [Harness::ClaudeCode, Harness::Codex, Harness::Opencode] {
+        let confined = confines_of(
+            harness,
+            &root,
+            &Machine {
+                env: Env::of(&[]),
+                home: Some(home.clone()),
+                os: Os::this(),
+            },
+        );
+        let denied_to_read = |path: &Path| {
+            confined.denied.iter().any(|denial| {
+                denial.class == crate::sandbox::Class::Vaults
+                    && denial.access == crate::sandbox::Access::ReadWrite
+                    && path.starts_with(&denial.path)
+            })
+        };
+        for place in [
+            home.join(".config/op/config"),
+            home.join(".op/config"),
+            Ctx::new(&root, Env::of(&[])).vaults_dir().join("team.json"),
+        ] {
+            assert!(denied_to_read(&place), "{harness:?}: {}", place.display());
+        }
+    }
+}
+
+#[test]
+fn vault_list_in_a_sandboxed_chat_is_the_apps_answer_and_asks_no_provider() {
+    let project = project_with_ops();
+    let root = project.path();
+    let (_dir, _reading, env) = an_app_answering(
+        Box::new(|_, _, writer| not_answered(writer)),
+        the_app_lists(root),
+        Arc::new(AtomicBool::new(false)),
+    );
+    // The chat's own view of the project has no registry to read at all.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let mut rec = Rec::default();
+    let code = super::super::vaultcmd::list(&chat_ctx(elsewhere.path(), &env), &mut rec);
+    assert_eq!(code, 0, "{:?}", rec.said);
+    assert_eq!(String::from_utf8_lossy(&rec.out), LISTED_FOR_DEVOPS);
+    assert_eq!(
+        rec.said,
+        vec![
+            Say::Info("This chat runs as 'devops'.".into()),
+            Say::Info(super::super::vaultcmd::NOT_ALLOWED_ROUTES.into()),
+        ]
+    );
+}
+
+#[test]
+fn vault_list_outside_a_sandboxed_chat_asks_no_app() {
+    let project = project_with_ops();
+    let asked = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&asked);
+    let (_dir, _reading, mut env) = an_app_answering(
+        Box::new(|_, _, writer| not_answered(writer)),
+        Box::new(move |_, _| {
+            seen.store(true, Ordering::SeqCst);
+            crate::hookwire::Answer::No {
+                why: "asked".into(),
+            }
+        }),
+        Arc::new(AtomicBool::new(false)),
+    );
+    env.retain(|(k, _)| k != crate::hookwire::SANDBOXED_ENV);
+    assert_eq!(listing_from_the_app(&chat_ctx(project.path(), &env)), None);
+    assert!(!asked.load(Ordering::SeqCst));
 }

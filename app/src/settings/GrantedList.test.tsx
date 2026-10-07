@@ -17,6 +17,7 @@ const CHAT: SandboxGrant = {
   id: "chat\u001fc1\u001fhost\u001fapi.example.com",
   what: "host",
   target: "api.example.com",
+  persona: null,
   level: "chat",
   by: null,
   at: 1_790_000_000,
@@ -27,6 +28,7 @@ const MINE: SandboxGrant = {
   id: "you\u001fwrite\u001f/opt/cache",
   what: "write",
   target: "/opt/cache",
+  persona: null,
   level: "you",
   by: null,
   at: null,
@@ -37,6 +39,7 @@ const PROJECT: SandboxGrant = {
   id: "project\u001fhost\u001f10.0.0.5:6443",
   what: "host",
   target: "10.0.0.5:6443",
+  persona: null,
   level: "project",
   by: "Dana",
   at: 1_790_000_000,
@@ -161,6 +164,43 @@ describe("the Granted list", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "off this list: it now leads somewhere else",
     );
+  });
+
+  it("lists a vault you let a persona's chats use, and revokes it by both names (#1430)", async () => {
+    const VAULT: SandboxGrant = {
+      id: "you\u001fvault\u001fdevops\u001fsteward",
+      what: "vault",
+      target: "devops",
+      persona: "steward",
+      level: "you",
+      by: null,
+      at: null,
+      chat: "steward 1",
+      locked: null,
+    };
+    expect(grantSaid(VAULT)).toBe(
+      "Use vault devops as steward · Me on this machine · granted by you, from steward 1",
+    );
+    const asked: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      asked.push({ cmd, args });
+      if (cmd === "sandbox_grants") return [VAULT];
+      if (cmd === "revoke_sandbox_grant") return [];
+      return null;
+    });
+    render(<Granted />);
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Revoke using vault devops as steward" }));
+    await waitFor(() =>
+      expect(asked).toContainEqual({
+        cmd: "revoke_sandbox_grant",
+        args: { plane: PLANE, id: VAULT.id },
+      }),
+    );
+    expect(
+      await screen.findByText("Nothing is granted past this project's sandbox."),
+    ).toBeVisible();
   });
 
   it("names a grant with no time as it is", () => {

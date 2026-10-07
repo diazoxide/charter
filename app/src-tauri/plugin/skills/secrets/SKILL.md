@@ -17,6 +17,8 @@ against. By default a vault lives in the system keyring. It is not a file in the
 
 ```bash
 purlis vault list                 # vaults: name, provider, persona, status. No values.
+                                  # In a sandboxed chat: name, provider, persona, and
+                                  # whether THIS chat may use each ("may use" / "not allowed").
 purlis secret list <vault>        # the KEYS in one vault. No values.
 ```
 
@@ -68,9 +70,17 @@ Scrubbing is a literal search-and-replace for the value's own bytes. So:
 The credential goes wherever the command sends it, and you choose that command.
 
 **In a sandboxed chat**, `purlis secret exec` is run by the app: you run the same command.
-The app checks that the vault is tagged for this chat's persona, runs the command in this chat's
-sandbox, and streams the output back with each value's literal text masked. If it is refused
-with a sentence, tell the user that sentence. Do not try to read the vault some other way.
+The app checks that this chat's persona may use the vault (the vault is tagged for it, or the
+user allowed it for that persona on this machine), runs the command in this chat's sandbox, and
+streams the output back with each value's literal text masked. If it is refused with a
+sentence, tell the user that sentence. Do not try to read the vault some other way.
+
+**When a vault is refused for this chat's persona**, the refusal names the ways forward. A
+notice on this chat's tab lets the user press *Allow*; once they have, run the same command
+again, with no restart. Or dispatch the work to the persona the vault is tagged for, with the
+command the refusal names. A chat's persona is fixed for its life: do not try to change it,
+and do not edit a persona's file or the vault registry to get at the vault. `purlis vault
+list` shows which vaults this chat may use.
 Prefer `--file` for a credential the command can read from a file. The rules above still hold:
 you choose the command, so the credential goes wherever that command sends it.
 

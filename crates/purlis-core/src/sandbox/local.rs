@@ -54,15 +54,39 @@ struct OnDisk {
     /// added to the allowlist a write grant must be inside, on this machine only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     grantable: Vec<String>,
+    /// The vaults you let a persona's chats use on this machine although the vault registry
+    /// does not tag them for it (#1430): the only place such a grant is kept. Never the
+    /// registry, whose shared half is committed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    vaults_mine: Vec<VaultGrant>,
 }
+
+/// One vault you let one persona's chats use on this machine (#1430), beside whatever the vault
+/// registry tags it for.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct VaultGrant {
+    pub vault: String,
+    pub persona: String,
+}
+
+impl VaultGrant {
+    /// The grant as the Granted list and the audit name it: `<vault> for <persona>`.
+    pub fn target(&self) -> String {
+        format!("{} for {}", self.vault, self.persona)
+    }
+}
+
+/// What a [`Made`] record and the audit call a vault grant.
+pub const VAULT: &str = "vault";
 
 /// One grant made on this machine that lasts past its chat (#1342), as `app/sandbox.json` keeps
 /// it: what Settings' Granted list says of it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Made {
-    /// `host` or `write`.
+    /// `host`, `write` or `vault`.
     pub what: String,
-    /// The host or the folder, as the sandbox writes it.
+    /// The host or the folder, as the sandbox writes it; a vault and the persona it was allowed
+    /// for, as [`VaultGrant::target`] says them.
     pub target: String,
     /// `you` or `project`.
     pub level: String,
@@ -370,6 +394,44 @@ pub fn forget_made(root: &Path, what: &str, target: &str, level: &str) -> io::Re
 /// Every grant made on this machine that lasts past its chat, as recorded.
 pub fn made(root: &Path) -> Vec<Made> {
     read(root).granted
+}
+
+// ---- the vaults you let a persona's chats use (#1430) ---------------------------------------
+
+/// The vaults you let a persona's chats use in the project at `root` on this machine, beside
+/// what the vault registry tags. A file that cannot be read grants nothing.
+pub fn granted_vaults(root: &Path) -> Vec<VaultGrant> {
+    read(root).vaults_mine
+}
+
+/// Lets `persona`'s chats in the project at `root` use `vault` on this machine: a refused
+/// vault's Notice, never a chat (a sandboxed chat cannot write this file, and no line on the
+/// hook channel reaches this).
+pub fn grant_vault(root: &Path, vault: &str, persona: &str) -> io::Result<()> {
+    let grant = VaultGrant {
+        vault: vault.to_owned(),
+        persona: persona.to_owned(),
+    };
+    change(root, |held| {
+        if !held.vaults_mine.contains(&grant) {
+            held.vaults_mine.push(grant);
+        }
+    })
+}
+
+/// Takes `vault` off what `persona`'s chats may use here: Settings' Revoke. The next brokered
+/// run reads it, so nothing restarts.
+pub fn revoke_vault(root: &Path, vault: &str, persona: &str) -> io::Result<()> {
+    let grant = VaultGrant {
+        vault: vault.to_owned(),
+        persona: persona.to_owned(),
+    };
+    let target = grant.target();
+    change(root, |held| {
+        held.vaults_mine.retain(|one| *one != grant);
+        held.granted
+            .retain(|made| !(made.what == VAULT && made.target == target));
+    })
 }
 
 // ---- the opt-out count -----------------------------------------------------------------------

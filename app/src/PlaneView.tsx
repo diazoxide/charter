@@ -145,6 +145,7 @@ import {
 import { FreshMark, freshMarkShown, usePlaneUpdated } from "./PlaneUpdated";
 import { Notice, NoticeBand } from "./Notice";
 import { SandboxBlockNotice } from "./SandboxBlockNotice";
+import { VaultRefusedNotice } from "./VaultRefusedNotice";
 import { PersonaGrantsNotice } from "./PersonaGrantsNotice";
 import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { useDismissals } from "./dismissals";
@@ -6171,6 +6172,7 @@ function PaneFrame({
             onRestarted={onRestartedForGrant}
           />
         )}
+        <VaultRefusedNotice plane={plane} session={session} />
         {grantRestart?.trouble !== undefined && (
           <Notice
             cause={`grant-restart:${session}`}

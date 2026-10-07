@@ -263,7 +263,7 @@ fn opens_as_nine(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
                 Err(why) => Answer::No { why },
             }
         }
-        Ask::SessionRecord(_) | Ask::Write(_) | Ask::Git(_) => Answer::No {
+        Ask::SessionRecord(_) | Ask::Write(_) | Ask::Git(_) | Ask::Vaults { .. } => Answer::No {
             why: "not a handoff".to_owned(),
         },
     }

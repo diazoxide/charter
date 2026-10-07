@@ -348,6 +348,89 @@ pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
     0
 }
 
+/// `vault list` as a sandboxed chat reads it (#1430), from the app's answer: each vault's
+/// name, provider and tag, and whether this chat may use it. No status column: that asks the
+/// provider, which a chat's sandbox denies, and the app asks none for a listing.
+pub(crate) fn list_for_a_chat(listing: &super::brokered::Listing, io: &mut dyn Io) {
+    let vaults = &listing.vaults;
+    if vaults.is_empty() {
+        io.say(Say::Info("No vaults configured.".into()));
+        return;
+    }
+    let heads = ["VAULT", "PROVIDER", "PERSONA"];
+    let body: Vec<[String; 3]> = vaults
+        .iter()
+        .map(|v| {
+            [
+                v.name.clone(),
+                v.provider.clone(),
+                v.persona
+                    .as_deref()
+                    .map_or_else(|| "—".to_owned(), crate::personas::one_line),
+            ]
+        })
+        .collect();
+    let widths: Vec<usize> = heads
+        .iter()
+        .enumerate()
+        .map(|(i, h)| crate::tui::column(h, body.iter().map(|row| row[i].as_str()), GAP, None))
+        .collect();
+    let line = |cells: [&str; 3], last: &str| {
+        let mut out = String::new();
+        for (c, w) in cells.iter().zip(&widths) {
+            out.push_str(&crate::tui::pad(c, *w, crate::tui::Align::Left));
+        }
+        out.push_str(last);
+        format!("{}\n", crate::memstore::py_rstrip(&out))
+    };
+    const LAST: &str = "THIS CHAT";
+    io.out(line(heads, LAST).as_bytes());
+    let rules: Vec<String> = widths
+        .iter()
+        .map(|w| "-".repeat(w.saturating_sub(GAP).max(1)))
+        .collect();
+    io.out(line([&rules[0], &rules[1], &rules[2]], &"-".repeat(LAST.len())).as_bytes());
+    for (row, vault) in body.iter().zip(vaults) {
+        let may = if vault.usable {
+            "may use"
+        } else {
+            "not allowed"
+        };
+        io.out(line([&row[0], &row[1], &row[2]], may).as_bytes());
+    }
+    let runs_as = match listing.persona.as_deref().filter(|p| !p.is_empty()) {
+        Some(persona) => format!(
+            "This chat runs as '{}'.",
+            crate::personas::one_line(persona)
+        ),
+        None => "This chat runs as no persona, so it may use no vault.".to_owned(),
+    };
+    io.say(Say::Info(runs_as));
+    if vaults.iter().any(|v| !v.usable) {
+        io.say(Say::Info(
+            if listing.allow_locked {
+                NOT_ALLOWED_ROUTES_LOCKED
+            } else {
+                NOT_ALLOWED_ROUTES
+            }
+            .into(),
+        ));
+    }
+}
+
+/// What `vault list` says under a vault this chat may not use (#1430).
+pub const NOT_ALLOWED_ROUTES: &str = "For a vault marked not allowed: run the command that \
+     needs it, and ask the operator to press Allow in the notice on this chat's tab; or, to \
+     have the vault's persona do the work, dispatch to it (`purlis handoff <workspace> --persona \
+     <name>`). A chat's persona is fixed for its life.";
+
+/// [`NOT_ALLOWED_ROUTES`] where an administrator's policy forbids the Allow: only the dispatch
+/// is named.
+pub const NOT_ALLOWED_ROUTES_LOCKED: &str = "For a vault marked not allowed: policy on this \
+     machine forbids allowing it for this chat's persona. To have the vault's persona do the \
+     work, dispatch to it (`purlis handoff <workspace> --persona <name>`). A chat's persona is fixed \
+     for its life.";
+
 /// The PERSONA cell: the label, marked when it names no persona this plane defines (#1057).
 fn persona_cell(ctx: &Ctx, label: Option<&Value>) -> String {
     let label = match label {
@@ -365,6 +448,20 @@ fn persona_cell(ctx: &Ctx, label: Option<&Value>) -> String {
 
 /// `cmd_vault_list`: VAULT, PROVIDER, PERSONA, SCOPE and a STATUS that never holds a value.
 pub fn list(ctx: &Ctx, io: &mut dyn Io) -> i32 {
+    // A sandboxed chat is denied every provider's own files, so each row's status would read
+    // as a failure there. The app that started the chat answers instead (#1430).
+    if let Some(listing) = super::brokered::listing_from_the_app(ctx) {
+        return match listing {
+            Ok(listing) => {
+                list_for_a_chat(&listing, io);
+                0
+            }
+            Err(why) => {
+                io.say(Say::Err(why));
+                1
+            }
+        };
+    }
     let doc = match registry::load_registry(ctx) {
         Ok(d) => d,
         Err(e) => {

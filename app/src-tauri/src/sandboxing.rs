@@ -560,6 +560,10 @@ pub enum GrantWhat {
     Host,
     /// A folder to write, and everything in it.
     Write,
+    /// A vault a persona's chats may use although the registry does not tag it for the
+    /// persona (#1430). Granted from a refused vault's Notice (`crate::vaultroute`), never from
+    /// a block's Allow.
+    Vault,
 }
 
 impl GrantWhat {
@@ -567,11 +571,12 @@ impl GrantWhat {
         match self {
             Self::Host => "host",
             Self::Write => "write",
+            Self::Vault => sandbox::local::VAULT,
         }
     }
 
     fn of_word(word: &str) -> Option<Self> {
-        [Self::Host, Self::Write]
+        [Self::Host, Self::Write, Self::Vault]
             .into_iter()
             .find(|what| what.word() == word)
     }
@@ -660,6 +665,12 @@ fn allow(
         );
     }
     let what = match what {
+        GrantWhat::Vault => {
+            return Err(
+                "purlis allows a vault from the notice its refusal raises, not from a block's."
+                    .to_owned(),
+            );
+        }
         GrantWhat::Host => What::Host(grant::host(target).map_err(|why| why.to_string())?),
         GrantWhat::Write => {
             let folder = chats.folder_of(session).ok_or_else(|| {
@@ -762,8 +773,10 @@ pub struct SandboxGrant {
     /// What Revoke is sent by.
     pub id: String,
     pub what: GrantWhat,
-    /// The host or the folder.
+    /// The host, the folder, or the vault's name.
     pub target: String,
+    /// For a vault, the persona whose chats may use it.
+    pub persona: Option<String>,
     pub level: GrantLevel,
     /// Who committed it, for one the project carries; null for one you granted, or one the
     /// project's file holds that is not committed yet.
@@ -812,6 +825,7 @@ fn grants_of(root: &std::path::Path, chats: &crate::chats::Chats) -> Vec<Sandbox
         id: format!("{}{SEP}{}{SEP}{target}", level.word(), what.word()),
         what,
         target,
+        persona: None,
         level: level.into(),
         by: None,
         at,
@@ -855,6 +869,27 @@ fn grants_of(root: &std::path::Path, chats: &crate::chats::Chats) -> Vec<Sandbox
             });
         }
     }
+    // The vaults you let a persona's chats use here (#1430): locked out, not gone, where policy
+    // forbids them, so the list says why they no longer open.
+    let vaults_locked = sandbox::policy::Locks::of(root).vault_grants_refused();
+    for grant in sandbox::local::granted_vaults(root) {
+        let recorded = made
+            .iter()
+            .find(|one| one.what == sandbox::local::VAULT && one.target == grant.target());
+        out.push(SandboxGrant {
+            id: format!(
+                "you{SEP}{}{SEP}{}{SEP}{}",
+                sandbox::local::VAULT,
+                grant.vault,
+                grant.persona
+            ),
+            persona: Some(grant.persona),
+            at: recorded.and_then(|one| u32::try_from(one.at).ok()),
+            chat: recorded.and_then(|one| one.chat.clone()),
+            locked: vaults_locked.clone(),
+            ..row(GrantWhat::Vault, grant.vault, Level::You, None)
+        });
+    }
     let locks = sandbox::hosts::Locks::of(root);
     for one in &mut out {
         if one.what == GrantWhat::Host
@@ -881,6 +916,9 @@ fn revoke(
     use sandbox::grant::{Audited, Level, What};
     let gone = || "purlis did not revoke it: that grant is no longer there.".to_owned();
     let parts: Vec<&str> = id.split(SEP).collect();
+    if let ["you", sandbox::local::VAULT, vault, persona] = parts.as_slice() {
+        return revoke_vault(root, vault, persona, audit);
+    }
     let (level, chat, what, target) = match parts.as_slice() {
         ["chat", chat, what, target] => (Level::Chat, Some(*chat), *what, *target),
         [level, what, target] => (
@@ -892,6 +930,8 @@ fn revoke(
         _ => return Err(gone()),
     };
     let grant = match GrantWhat::of_word(what).ok_or_else(gone)? {
+        // A vault's grant is named with its persona, above.
+        GrantWhat::Vault => return Err(gone()),
         GrantWhat::Host => What::Host(sandbox::hosts::Host::parse(target).map_err(|_| gone())?),
         GrantWhat::Write => What::Write(std::path::PathBuf::from(target)),
     };
@@ -935,6 +975,35 @@ fn revoke(
         tracing::warn!("purlis: a revoked grant's record was left behind ({why})");
     }
     Ok(())
+}
+
+/// **Revokes `persona`'s use of `vault`** in the project at `root` (#1430): checked to be
+/// there, audited, then taken off this machine's record. The next brokered run reads it, so a
+/// chat of that persona is refused the vault again with nothing restarted.
+fn revoke_vault(
+    root: &std::path::Path,
+    vault: &str,
+    persona: &str,
+    audit: Audit<'_>,
+) -> Result<(), String> {
+    let grant = sandbox::local::VaultGrant {
+        vault: vault.to_owned(),
+        persona: persona.to_owned(),
+    };
+    if !sandbox::local::granted_vaults(root).contains(&grant) {
+        return Err("purlis did not revoke it: that grant is no longer there.".to_owned());
+    }
+    audit(
+        None,
+        &sandbox::grant::Audited {
+            granted: false,
+            what: sandbox::local::VAULT,
+            target: &grant.target(),
+            level: sandbox::grant::Level::You,
+        },
+    )?;
+    sandbox::local::revoke_vault(root, vault, persona)
+        .map_err(|why| format!("purlis could not revoke vault {vault} for {persona}: {why}"))
 }
 
 /// Every grant in force here, for Settings' Granted list (#1348).
@@ -1144,6 +1213,106 @@ mod tests {
     }
 
     #[test]
+    fn a_vault_you_allowed_a_persona_is_listed_and_revoke_takes_it_out_audited_once() {
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path();
+        let chats = crate::chats::Chats::new();
+        sandbox::local::grant_vault(root, "devops", "steward").expect("granted");
+        sandbox::local::record_made(
+            root,
+            sandbox::local::Made {
+                what: "vault".to_owned(),
+                target: "devops for steward".to_owned(),
+                level: "you".to_owned(),
+                at: 42,
+                chat: Some("steward 1".to_owned()),
+            },
+        )
+        .expect("recorded");
+        let listed = grants_of(root, &chats);
+        assert_eq!(
+            listed,
+            [SandboxGrant {
+                id: "you\u{1f}vault\u{1f}devops\u{1f}steward".to_owned(),
+                what: GrantWhat::Vault,
+                target: "devops".to_owned(),
+                persona: Some("steward".to_owned()),
+                level: GrantLevel::You,
+                by: None,
+                at: Some(42),
+                chat: Some("steward 1".to_owned()),
+                locked: None,
+            }]
+        );
+        // A block's Allow never grants one: only the refused vault's own Notice does.
+        let from_a_block = allow(
+            root,
+            &machine(),
+            &chats,
+            3,
+            (GrantWhat::Vault, "devops", GrantLevel::You),
+            &no_audit(),
+            100,
+        )
+        .expect_err("refused");
+        assert!(
+            from_a_block.contains("notice its refusal raises"),
+            "{from_a_block}"
+        );
+        // Not audited, not revoked.
+        assert!(revoke(root, &chats, &listed[0].id, &no_audit()).is_err());
+        assert_eq!(grants_of(root, &chats).len(), 1);
+
+        let heard = std::sync::Mutex::new(Vec::new());
+        let audit = |number: Option<u32>, audited: &sandbox::grant::Audited<'_>| {
+            heard.lock().unwrap().push((
+                number,
+                audited.kind(),
+                audited.what.to_owned(),
+                audited.target.to_owned(),
+            ));
+            Ok(())
+        };
+        revoke(root, &chats, &listed[0].id, &audit).expect("revoked");
+        assert!(grants_of(root, &chats).is_empty());
+        assert!(sandbox::local::granted_vaults(root).is_empty());
+        assert!(sandbox::local::made(root).is_empty());
+        let again = revoke(root, &chats, &listed[0].id, &audit).expect_err("not there");
+        assert!(again.contains("no longer there"), "{again}");
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [(
+                None,
+                "trust.sandbox.revoke",
+                "vault".to_owned(),
+                "devops for steward".to_owned()
+            )],
+            "one audit, for the one revoke that happened"
+        );
+    }
+
+    #[test]
+    fn a_vault_grant_policy_forbids_is_listed_locked() {
+        use sandbox::policy::{Locks, set_for_this_test};
+        let project = tempfile::tempdir().expect("a project");
+        let root = project.path();
+        sandbox::local::grant_vault(root, "devops", "steward").expect("granted");
+        set_for_this_test(Locks::parse(
+            r#"{"owner": "IT", "sandbox": {"vault-grants": false}}"#,
+            std::path::Path::new("/etc/purlis/policy.json"),
+        ));
+        let listed = grants_of(root, &crate::chats::Chats::new());
+        set_for_this_test(Locks::none());
+        assert_eq!(
+            listed[0].locked.as_deref(),
+            Some(
+                "Policy forbids allowing a persona a vault it is not tagged for. Locked by \
+                 policy, set by IT in /etc/purlis/policy.json."
+            )
+        );
+    }
+
+    #[test]
     fn a_folder_you_were_granted_is_listed_and_revoke_takes_it_out_audited_once() {
         let project = tempfile::tempdir().expect("a project");
         let root = project.path();
@@ -1168,6 +1337,7 @@ mod tests {
                 id: "you\u{1f}write\u{1f}/tmp/tool-cache".to_owned(),
                 what: GrantWhat::Write,
                 target: "/tmp/tool-cache".to_owned(),
+                persona: None,
                 level: GrantLevel::You,
                 by: None,
                 at: Some(42),
