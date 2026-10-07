@@ -134,6 +134,86 @@ fn remove_in(root: &Path, name: &str) -> Result<Vec<String>, String> {
     ran(code, said)
 }
 
+/// A persona's custom image as it crosses to the window: bytes and what they are, never a
+/// path or a URL. The window decodes them onto a canvas, as a file tab's image preview does.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct PersonaImage {
+    /// `image/png`.
+    pub mime: String,
+    pub base64: String,
+}
+
+/// What a persona is drawn with, wherever it appears (#1449): a built-in icon's name, a
+/// colour, and a custom image when its folder holds one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct PersonaMark {
+    pub name: String,
+    /// One of the icons the window ships for a persona, by name, or `null`.
+    pub icon: Option<String>,
+    /// A palette name or `#rrggbb`, as a workspace's colour is, or `null`.
+    pub colour: Option<String>,
+    /// The custom image, or `null`.
+    pub image: Option<PersonaImage>,
+    /// Why something the persona asked for is not drawn, each a sentence its view shows.
+    pub trouble: Vec<String>,
+}
+
+/// Every persona's mark: its `icon:` and `color:`, and the `icon.png` in its folder. A persona with none of them is listed with nothing, and the window draws its
+/// initials.
+#[tauri::command]
+#[specta::specta]
+pub async fn persona_marks(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Vec<PersonaMark>, String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window("reading the personas' icons", move || marks_in(held.root())).await
+}
+
+/// The marks themselves, against a root the registry has already vouched for.
+fn marks_in(root: &Path) -> Result<Vec<PersonaMark>, String> {
+    let personas = purlis_core::workspaces::Plane::open(root)
+        .personas()
+        .map_err(|why| why.to_string())?;
+    Ok(personas
+        .into_iter()
+        .map(|name| {
+            let mark = purlis_core::personamark::mark(root, &name);
+            PersonaMark {
+                name,
+                icon: mark.icon.map(str::to_owned),
+                colour: mark.colour,
+                image: mark.image.map(|image| PersonaImage {
+                    mime: image.media.to_owned(),
+                    base64: image.base64(),
+                }),
+                trouble: mark.trouble,
+            }
+        })
+        .collect())
+}
+
+/// Write a persona's icon and colour into its definition. `null` takes the key out, so the
+/// persona goes back to what it inherits, or to its initials.
+#[tauri::command]
+#[specta::specta]
+pub async fn persona_mark_set(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+    icon: Option<String>,
+    colour: Option<String>,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        let said =
+            purlis_core::personamark::set(held.root(), &name, icon.as_deref(), colour.as_deref());
+        held.wrote(&["personas".to_owned()]);
+        said
+    })
+    .await
+}
+
 /// Open a persona's definition in whatever the operating system opens a `.md` file with.
 ///
 /// The path is found and checked here, from the persona's name: the window names a persona,
@@ -283,5 +363,44 @@ mod tests {
         );
         assert!(definition_of(dir.path(), "nobody").is_err());
         assert!(definition_of(dir.path(), "../charter").is_err());
+    }
+
+    #[test]
+    fn every_persona_is_listed_with_its_mark_and_an_image_crosses_as_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let persona = |name: &str, text: &str| {
+            let at = dir.path().join("personas").join(name);
+            std::fs::create_dir_all(&at).unwrap();
+            std::fs::write(at.join("persona.md"), text).unwrap();
+            at
+        };
+        let devops = persona("devops", "---\nicon: rocket\ncolor: teal\n---\n");
+        std::fs::write(devops.join("icon.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        persona("qa", "---\nrole: QA\n---\n");
+
+        let marks = marks_in(dir.path()).unwrap();
+
+        assert_eq!(
+            marks,
+            vec![
+                PersonaMark {
+                    name: "devops".into(),
+                    icon: Some("rocket".into()),
+                    colour: Some("teal".into()),
+                    image: Some(PersonaImage {
+                        mime: "image/png".into(),
+                        base64: "iVBORw0KGgo=".into(),
+                    }),
+                    trouble: vec![],
+                },
+                PersonaMark {
+                    name: "qa".into(),
+                    icon: None,
+                    colour: None,
+                    image: None,
+                    trouble: vec![],
+                },
+            ]
+        );
     }
 }

@@ -14,6 +14,7 @@ import {
   TriangleAlert,
   UserRound,
 } from "lucide-react";
+import { PersonaMark } from "./PersonaMark";
 import type { PanelEmpty, PanelRow, RowAction } from "./bindings";
 import { EmptyState } from "./EmptyState";
 import { useTabStop } from "./roving";
@@ -61,6 +62,9 @@ import { useTabStop } from "./roving";
  * only be a claim about characters here, and a claim about pixels is the scenario run's.
  */
 export const SHORTEST = 64;
+
+/** What a persona's row runs, up to the persona's name (`actions.ts`). */
+const SHOWS_PERSONA = "persona.show:";
 
 /** How many rows are drawn before the list stops and offers the rest. */
 export const PAGE = 12;
@@ -278,6 +282,10 @@ function Row({
   wrap?: RowMenu;
 }) {
   const Mark = MARKS[row.mark] ?? Circle;
+  // **A persona's row wears that persona's mark** (#1449). Told by the row it runs, which only
+  // purlis's own rows carry (`PanelRow.runs` is never set from a manifest): an extension's row
+  // marked `persona` names nobody this window could look up, and keeps the plain glyph.
+  const persona = row.runs?.startsWith(SHOWS_PERSONA) ? row.runs.slice(SHOWS_PERSONA.length) : null;
   const shortened = shorten(row.text);
   // **A row that runs opens something that holds the whole of it** — a persona's tab, a
   // memory's (SI-9b, ADR 0065 Q4) — so it carries no native tooltip repeating its words over
@@ -285,7 +293,11 @@ function Row({
   const tooltip = row.runs === null && row.text !== shortened ? row.text : undefined;
   const body = (
     <>
-      <Mark className="node-icon" />
+      {persona ? (
+        <PersonaMark persona={persona} className="node-icon" />
+      ) : (
+        <Mark className="node-icon" />
+      )}
       <span className="row-text" title={tooltip}>
         {shortened}
       </span>

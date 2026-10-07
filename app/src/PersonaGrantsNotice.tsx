@@ -65,6 +65,7 @@ export function PersonaGrantsNotice({
     return (
       <Notice
         cause={`persona-grants:${session}`}
+        persona={held.persona}
         at="pane"
         label="Persona's hosts allowed"
         fixes={[{ label: "Restart now", onPress: () => setRestarting(true) }]}
@@ -86,6 +87,7 @@ export function PersonaGrantsNotice({
     return (
       <Notice
         cause={`persona-grants:${session}`}
+        persona={held.persona}
         at="pane"
         label="Persona's hosts held"
         fixes={[{ label: "Keep", onPress: () => setKept(true) }]}
@@ -101,6 +103,7 @@ export function PersonaGrantsNotice({
   return (
     <Notice
       cause={`persona-grants:${session}`}
+      persona={held.persona}
       at="pane"
       label="Persona's hosts held"
       fixes={[
