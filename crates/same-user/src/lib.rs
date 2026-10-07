@@ -34,8 +34,7 @@ use std::path::Path;
 mod ancestry;
 pub use ancestry::{
     MOST_GENERATIONS, NotOurHost, Parents, admit_host, holds_a_socket_at, inside_a_chat, judge,
-    listening_at, lsof_command, lsof_names, ps_command, ps_lines, ps_started, session_of,
-    stat_parent, walk,
+    listening_at, lsof_command, lsof_names, session_of, stat_parent, walk,
 };
 
 /// A user id.
@@ -268,9 +267,7 @@ mod tests {
 
     #[test]
     fn this_process_s_ancestors_start_with_its_parent() {
-        let chain = Parents::now(run)
-            .expect("readable")
-            .chain(std::process::id());
+        let chain = Parents::chain(std::process::id());
         assert_eq!(chain.first(), Some(&std::os::unix::process::parent_id()));
         assert!(!chain.contains(&std::process::id()));
     }

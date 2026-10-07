@@ -238,10 +238,12 @@ impl SessionHost for Sessions {
         // Its program, which every line for the chat must come from or from inside
         // (D-1407-6): its token alone can be read by any process of this user on macOS. Recorded
         // by pid and by when that process started, so a later process given the number speaks
-        // for nothing. A program that cannot be read so has no line read.
+        // for nothing. Read from the kernel in this process (D-1407-8), once: nothing is
+        // started that could fail, so there is nothing to try again. A program that cannot be
+        // read so (it has already gone) has no line read.
         let pid = session.program().process_id();
         if let (Some(reporting), Some(pid)) = (&self.reporting, pid) {
-            match confirmed(pid) {
+            match purlis_core::hookwire::Program::of(pid) {
                 Some(program) => reporting.tokens.bind(id, program),
                 None => tracing::warn!(
                     "purlis: chat {id}'s program (pid {pid}) could not be confirmed as it \
@@ -518,23 +520,6 @@ pub(crate) fn alive(pid: u32) -> bool {
 /// still the sessions that are running.
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The program `pid`, read with when it started, retried a few times with a short backoff:
-/// a process table read once is a read that can fail, and an unconfirmed program leaves its
-/// chat's lines unread until it is restarted (D-1407-6).
-fn confirmed(pid: u32) -> Option<purlis_core::hookwire::Program> {
-    for (attempt, wait) in [0u64, 25, 100, 250].into_iter().enumerate() {
-        std::thread::sleep(std::time::Duration::from_millis(wait));
-        if let Some(program) = purlis_core::hookwire::Program::of(pid) {
-            return Some(program);
-        }
-        tracing::warn!(
-            "purlis: chat program {pid} could not be confirmed (attempt {})",
-            attempt + 1
-        );
-    }
-    None
 }
 
 #[cfg(test)]

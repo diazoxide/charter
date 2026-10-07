@@ -2289,9 +2289,10 @@ beside a purlis one is removed when the record is published (V93i).
   - **Only below the chat's harness** (V82, #1018). A commit is stamped only when the process
     making it descends from the program the app started for the chat, as `chats[].pid` in
     `app/reopen.json` records it. A program that only inherited the chat's environment, such as
-    an editor opened from it, stamps nothing. **A sandboxed chat's commits get no trailers yet,
-    and neither does anything on Windows**: the check cannot reach the harness there, and it
-    fails closed. ADR 0074 lists the limits of that check.
+    an editor opened from it, stamps nothing. **A sandboxed chat's commits get no trailers yet on
+    Linux, and neither does anything on Windows**: the check cannot reach the harness there,
+    and it fails closed. On macOS a sandboxed chat's commits are stamped like any other
+    chat's (D-1407-8b). ADR 0074 lists the limits of that check.
   - **A claim, not proof.** The agent writes its own commit message, so it can type any of these
     lines, change them, or make a commit the hook never sees. Treat them as what the agent run
     says about itself, for reading history. Nothing should take them as a security signal or as

@@ -3,13 +3,13 @@
 //! the check `charterd` makes that a client is not inside a chat ([`inside_a_chat`], FD-27),
 //! which reads the same parents and fails closed where the others answer no.
 //!
-//! **Read from the kernel, never from `PATH`.** Linux answers from `/proc`. Everywhere else on
-//! unix it is a tool by its absolute path with no environment (`/bin/ps`, `/usr/sbin/lsof`):
-//! macOS keeps no `/proc`, and reading another process's parent or its descriptors there
-//! without those tools is `libproc`, which is `unsafe` this workspace forbids. Every doubt
-//! answers no.
+//! **Read from the kernel, in this process.** A process's parent and when it started come from
+//! `/proc` on Linux and from `proc_pidinfo` on macOS, one pid at a time: no program is started
+//! and no table is listed. The macOS call is this workspace's second audited `unsafe` block
+//! (the operator's ruling D-1407-8, 2026-10-07; see [`Parents`] and `AGENTS.md`). Which
+//! sockets a process holds is still a tool by its absolute path with no environment on macOS
+//! (`/usr/sbin/lsof`). Every doubt answers no.
 
-use std::collections::HashMap;
 use std::io;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
@@ -21,77 +21,77 @@ use crate::{NotThisUser, Uid, admit_peer, peer_process_of};
 /// deeper than this, is not one to vouch for.
 pub const MOST_GENERATIONS: usize = 64;
 
-/// Every process's parent.
-#[derive(Debug, Clone)]
-pub enum Parents {
-    /// Linux: `/proc`, asked one pid at a time.
-    Proc,
-    /// Everywhere else: every process's parent and when it started, as `ps` listed them once.
-    Table {
-        parent: HashMap<u32, u32>,
-        started: HashMap<u32, String>,
-    },
-}
-
-/// The command that lists every process, its parent and when it started: `/bin/ps` by its full
-/// path, with no environment but `TZ=UTC0`.
+/// Every process's parent and when it started, as the kernel says now, asked one pid at a time.
 ///
-/// **In UTC, always.** `lstart` is printed in the local time zone, and a start time is only
-/// ever compared with one read earlier: a machine whose zone changes while the app runs
-/// (travel, or the person changing it) would otherwise read every running process as another
-/// one, and refuse every chat's lines.
-pub fn ps_command() -> Command {
-    let mut ps = Command::new("/bin/ps");
-    ps.args(["-A", "-o", "pid=", "-o", "ppid=", "-o", "lstart="])
-        .env_clear()
-        .env("TZ", "UTC0")
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    ps
-}
+/// - **Linux:** `/proc/<pid>/stat`.
+/// - **macOS:** `proc_pidinfo`, in this process (D-1407-8). It was one `/bin/ps` run per
+///   question before: a program started, under the fork lock, to list every process on the
+///   machine for the handful asked about.
+/// - **Any other unix:** nothing is known, so every walk ends where it began and every doubt
+///   answers no.
+///
+/// **A process that has exited is gone, reaped or not.** On macOS neither reading answers for
+/// a zombie (`/bin/ps` listed one, with its start, until its parent reaped it), so a chat's
+/// program reads as gone from the moment it exits and not from the moment the app collects
+/// it: a process left behind in its session is refused from then on, where it was admitted
+/// for that moment before. Linux still answers for a zombie from `/proc`.
+///
+/// **Not one instant.** Each answer is the kernel's as it was asked, and a chain of them is
+/// read over a few microseconds. A number that changed hands in between is told apart where
+/// it matters by [`Parents::started`], which callers that bind to a process compare with.
+#[derive(Debug, Clone, Copy)]
+pub struct Parents;
 
 impl Parents {
-    /// The table now, with `run` running [`ps_command`] where the platform needs it. `run` is the
-    /// caller's way to start a process (purlis-core starts every one under its fork lock).
-    pub fn now(run: impl FnOnce(&mut Command) -> io::Result<Output>) -> io::Result<Parents> {
-        if cfg!(any(target_os = "linux", target_os = "android")) {
-            return Ok(Parents::Proc);
+    /// The parent of `pid`, where it is known: any user's process, since a walk from a
+    /// person's terminal passes through `login`, which is root's.
+    pub fn of(pid: u32) -> Option<u32> {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            proc_parent(pid)
         }
-        let out = run(&mut ps_command())?;
-        if !out.status.success() {
-            return Err(io::Error::other("ps did not list the processes"));
+        #[cfg(target_os = "macos")]
+        {
+            pidinfo::parent(pid)
         }
-        let text = String::from_utf8_lossy(&out.stdout);
-        Ok(Parents::Table {
-            parent: ps_lines(&text),
-            started: ps_started(&text),
-        })
-    }
-
-    /// The parent of `pid`, where it is known.
-    pub fn of(&self, pid: u32) -> Option<u32> {
-        match self {
-            Parents::Proc => proc_parent(pid),
-            Parents::Table { parent, .. } => parent.get(&pid).copied(),
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+        {
+            let _ = pid;
+            None
         }
     }
 
     /// When `pid` started, as the kernel says, where it is known: what tells the process with
-    /// that number now from one that had it before. Only ever compared for equality.
-    pub fn started(&self, pid: u32) -> Option<String> {
-        match self {
-            Parents::Proc => proc_started(pid),
-            Parents::Table { started, .. } => started.get(&pid).cloned(),
+    /// that number now from one that had it before. Only ever compared for equality, and
+    /// exact: clock ticks since boot on Linux, and seconds and microseconds since 1970 on
+    /// macOS (`<seconds>.<microseconds>`), where the kernel records it once as the process is
+    /// made, so no time zone and no rounding moves it.
+    ///
+    /// On macOS only this user's processes answer (the kernel refuses the reading for another
+    /// user's), which is every process a chat's program can be.
+    pub fn started(pid: u32) -> Option<String> {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            proc_started(pid)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            pidinfo::started(pid)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+        {
+            let _ = pid;
+            None
         }
     }
 
     /// `start`'s ancestors, its parent first, up to and without pid 1 (`init`, `launchd`), which
     /// is above everything and so vouches for nothing.
-    pub fn chain(&self, start: u32) -> Vec<u32> {
+    pub fn chain(start: u32) -> Vec<u32> {
         let mut chain = Vec::new();
         let mut at = start;
         for _ in 0..MOST_GENERATIONS {
-            match self.of(at) {
+            match Self::of(at) {
                 Some(up) if up > 1 && up != at && !chain.contains(&up) => {
                     chain.push(up);
                     at = up;
@@ -100,6 +100,95 @@ impl Parents {
             }
         }
         chain
+    }
+}
+
+/// macOS: what the kernel says of one process, through `proc_pidinfo`.
+#[cfg(target_os = "macos")]
+mod pidinfo {
+    use nix::libc;
+
+    /// The larger of the two readings taken: `proc_bsdinfo`, 136 bytes.
+    const MOST: usize = size_of::<libc::proc_bsdinfo>();
+
+    /// The parent of `pid`, from `PROC_PIDT_SHORTBSDINFO`: the one reading of a parent the
+    /// kernel gives for any user's process.
+    pub(super) fn parent(pid: u32) -> Option<u32> {
+        let bytes = read(
+            pid,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            size_of::<libc::proc_bsdshortinfo>(),
+        )?;
+        let named = u32_at(
+            &bytes,
+            std::mem::offset_of!(libc::proc_bsdshortinfo, pbsi_pid),
+        )?;
+        (named == pid).then(|| {
+            u32_at(
+                &bytes,
+                std::mem::offset_of!(libc::proc_bsdshortinfo, pbsi_ppid),
+            )
+        })?
+    }
+
+    /// When `pid` started, from `PROC_PIDTBSDINFO`: seconds and microseconds since 1970,
+    /// written `<seconds>.<microseconds>`. The kernel answers it for this user's processes.
+    pub(super) fn started(pid: u32) -> Option<String> {
+        let bytes = read(pid, libc::PROC_PIDTBSDINFO, MOST)?;
+        let named = u32_at(&bytes, std::mem::offset_of!(libc::proc_bsdinfo, pbi_pid))?;
+        let seconds = u64_at(
+            &bytes,
+            std::mem::offset_of!(libc::proc_bsdinfo, pbi_start_tvsec),
+        )?;
+        let micros = u64_at(
+            &bytes,
+            std::mem::offset_of!(libc::proc_bsdinfo, pbi_start_tvusec),
+        )?;
+        (named == pid).then(|| format!("{seconds}.{micros:06}"))
+    }
+
+    fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
+        Some(u32::from_ne_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+    }
+
+    fn u64_at(bytes: &[u8], at: usize) -> Option<u64> {
+        Some(u64::from_ne_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
+    }
+
+    /// The `flavor` reading of process `pid`, which is exactly `size` bytes, at the front of a
+    /// zeroed buffer; or `None` where the kernel gave anything but the whole of it (the
+    /// process has gone, is another user's and the flavor is refused, or `size` is not what
+    /// this kernel writes).
+    ///
+    /// **The second of this workspace's two audited `unsafe` blocks**, allowed by the operator
+    /// on 2026-10-07 (D-1407-8), and the safe wrapper around it: nothing else calls
+    /// `proc_pidinfo` here, and what it wrote is read back as plain bytes.
+    #[allow(
+        unsafe_code,
+        reason = "the second audited block the operator allowed (D-1407-8, 2026-10-07); see the SAFETY comment"
+    )]
+    fn read(pid: u32, flavor: libc::c_int, size: usize) -> Option<[u8; MOST]> {
+        let pid = libc::c_int::try_from(pid).ok().filter(|pid| *pid > 0)?;
+        let wanted = libc::c_int::try_from(size)
+            .ok()
+            .filter(|_| size > 0 && size <= MOST)?;
+        let mut bytes = [0u8; MOST];
+        // SAFETY: `proc_pidinfo` is one `proc_info` system call that copies at most
+        // `buffersize` bytes out to `buffer` and touches nothing else of this process.
+        // - `buffer` is `bytes`, a live, exclusively borrowed, zero-initialised array on this
+        //   stack frame of `MOST` bytes, and `buffersize` is `wanted`, checked just above to be
+        //   in `1..=MOST`: the kernel cannot write past the array, and the pointer does not
+        //   outlive the call.
+        // - A byte array has no alignment and no invalid values, so whatever the kernel writes,
+        //   or does not write, the array stays a valid `[u8; MOST]`. No struct is ever
+        //   conjured from it: fields are read back with safe, bounds-checked slicing.
+        // - `pid` is only a number to the kernel: a process that has gone, or one this user may
+        //   not read, is an error return (0 or less), never undefined behaviour. `arg` is unused
+        //   by both flavors asked here and is 0.
+        // The return is the bytes written; anything but exactly `wanted` is refused below, so
+        // a short or failed reading is never taken for a process.
+        let got = unsafe { libc::proc_pidinfo(pid, flavor, 0, bytes.as_mut_ptr().cast(), wanted) };
+        (got == wanted).then_some(bytes)
     }
 }
 
@@ -178,6 +267,7 @@ pub fn inside_a_chat(
 }
 
 /// When `pid` started, in clock ticks since boot: the 22nd field of `/proc/<pid>/stat`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn proc_started(pid: u32) -> Option<String> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let (_, after) = stat.rsplit_once(')')?;
@@ -186,6 +276,7 @@ fn proc_started(pid: u32) -> Option<String> {
 }
 
 /// The parent `/proc/<pid>/stat` names.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn proc_parent(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     stat_parent(&stat)
@@ -196,31 +287,6 @@ fn proc_parent(pid: u32) -> Option<u32> {
 pub fn stat_parent(stat: &str) -> Option<u32> {
     let (_, after) = stat.rsplit_once(')')?;
     after.split_whitespace().nth(1)?.parse().ok()
-}
-
-/// When each process started, from `pid ppid <start>` lines as [`ps_command`] prints them: the
-/// rest of the line after the two numbers, as written. A line with no start is skipped.
-pub fn ps_started(text: &str) -> HashMap<u32, String> {
-    text.lines()
-        .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            let pid = words.next()?.parse().ok()?;
-            words.next()?.parse::<u32>().ok()?;
-            let start = words.collect::<Vec<_>>().join(" ");
-            (!start.is_empty()).then_some((pid, start))
-        })
-        .collect()
-}
-
-/// `pid ppid` lines, as [`ps_command`] prints them; a line that does not begin with two numbers
-/// is skipped, and what follows them is not read here.
-pub fn ps_lines(text: &str) -> HashMap<u32, u32> {
-    text.lines()
-        .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            Some((words.next()?.parse().ok()?, words.next()?.parse().ok()?))
-        })
-        .collect()
 }
 
 /// Why the far end of a socket this process connected to is not the host it expects.
@@ -238,8 +304,6 @@ pub enum NotOurHost {
          the one listening there"
     )]
     HoldsNoSocketThere { pid: u32 },
-    #[error("this process's ancestors could not be read: {0}")]
-    NoAncestry(io::Error),
     #[error("which sockets the listener holds could not be read: {0}")]
     NoSocketTable(io::Error),
 }
@@ -261,7 +325,7 @@ pub enum NotOurHost {
 pub fn admit_host(
     socket: &impl AsFd,
     path: &Path,
-    mut run: impl FnMut(&mut Command) -> io::Result<Output>,
+    run: impl FnOnce(&mut Command) -> io::Result<Output>,
 ) -> Result<(), NotOurHost> {
     let (uid, pid) = match peer_process_of(socket) {
         Ok(peer) => peer,
@@ -270,12 +334,11 @@ pub fn admit_host(
         }
     };
     admit_peer(Ok(uid), Uid::effective()).map_err(NotOurHost::NotThisUser)?;
-    let parents = Parents::now(&mut run).map_err(NotOurHost::NoAncestry)?;
-    let ancestors = parents.chain(std::process::id());
+    let ancestors = Parents::chain(std::process::id());
     if !ancestors.contains(&pid) {
         return Err(NotOurHost::NotAnAncestor { pid });
     }
-    let holds = holds_a_socket_at(pid, path, &mut run).map_err(NotOurHost::NoSocketTable)?;
+    let holds = holds_a_socket_at(pid, path, run).map_err(NotOurHost::NoSocketTable)?;
     judge(pid, &ancestors, holds)
 }
 
@@ -511,40 +574,173 @@ mod tests {
         );
     }
 
-    #[test]
-    fn ps_lines_read_each_parent() {
-        assert_eq!(
-            ps_lines("  1     0\n 4242   17\nnot a line\n"),
-            [(1, 0), (4242, 17)].into_iter().collect()
-        );
+    /// Now, in microseconds since 1970: the clock a macOS start time is read against.
+    #[cfg(target_os = "macos")]
+    fn micros_now() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after 1970")
+            .as_micros()
     }
 
-    #[test]
-    fn the_process_table_is_read_in_utc_and_nothing_else_of_the_environment() {
-        let ps = ps_command();
-        let env: Vec<_> = ps.get_envs().collect();
-        assert_eq!(
-            env,
-            [(
-                std::ffi::OsStr::new("TZ"),
-                Some(std::ffi::OsStr::new("UTC0"))
-            )],
-            "a start time must not move with the machine's time zone"
-        );
+    /// A macOS start time, `<seconds>.<microseconds>`, in microseconds since 1970.
+    #[cfg(target_os = "macos")]
+    fn micros_of(started: &str) -> u128 {
+        let (seconds, micros) = started.split_once('.').expect("seconds.microseconds");
+        assert_eq!(micros.len(), 6, "microseconds, zero-padded: {started}");
+        seconds.parse::<u128>().expect("seconds") * 1_000_000
+            + micros.parse::<u128>().expect("microseconds")
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     #[test]
-    fn ps_lines_read_the_start_after_the_parent_and_ignore_it_for_the_parent() {
-        let text = "  1     0 Mon Oct  6 09:00:01 2026\n 4242   17 Tue Oct  7 10:11:12 2026\n";
-        assert_eq!(ps_lines(text), [(1, 0), (4242, 17)].into_iter().collect());
+    fn this_process_and_a_child_it_starts_are_read_as_the_kernel_has_them() {
+        let me = std::process::id();
         assert_eq!(
-            ps_started(text).get(&4242).map(String::as_str),
-            Some("Tue Oct 7 10:11:12 2026")
+            Parents::of(me),
+            Some(std::os::unix::process::parent_id()),
+            "this process's parent"
         );
-        assert!(
-            ps_started("  9 1\n").is_empty(),
-            "no start, nothing to compare"
+        let mine = Parents::started(me).expect("this process's start");
+        assert_eq!(
+            Parents::started(me).as_deref(),
+            Some(mine.as_str()),
+            "a start is read the same every time"
         );
+
+        #[cfg(target_os = "macos")]
+        let before = micros_now();
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .expect("a child");
+        #[cfg(target_os = "macos")]
+        let after = micros_now();
+
+        assert_eq!(Parents::of(child.id()), Some(me), "the child's parent");
+        assert_eq!(Parents::chain(child.id()).first(), Some(&me));
+        let theirs = Parents::started(child.id()).expect("the child's start");
+        // Exact, and inside this test's run: after this process began, and between the two
+        // readings of the clock around the spawn.
+        #[cfg(target_os = "macos")]
+        {
+            let (mine, theirs) = (micros_of(&mine), micros_of(&theirs));
+            assert!(mine < before, "this process began before the test did");
+            assert!(
+                before <= theirs && theirs <= after,
+                "the child started at {theirs}, outside {before}..={after}"
+            );
+        }
+
+        // Killed and not yet waited for: a zombie, which macOS answers nothing about.
+        let _ = child.kill();
+        #[cfg(target_os = "macos")]
+        {
+            let patience = std::time::Instant::now();
+            while Parents::started(child.id()).is_some()
+                && patience.elapsed() < std::time::Duration::from_secs(10)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                Parents::started(child.id()),
+                None,
+                "exited and unreaped reads as gone"
+            );
+            assert_eq!(Parents::of(child.id()), None, "and so has no parent");
+        }
+        let _ = child.wait();
+        assert_eq!(
+            Parents::started(child.id()),
+            None,
+            "gone, so nothing is read"
+        );
+        assert_eq!(Parents::of(child.id()), None, "gone, so no parent");
+    }
+
+    /// A walk from a person's terminal passes through root's processes (`login`, `launchd`):
+    /// their parents are read, though when they started is theirs alone.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn another_user_s_process_has_a_parent_read_and_no_start() {
+        assert_eq!(
+            Parents::started(1),
+            None,
+            "root's, so not this user's to read"
+        );
+        match Parents::of(1) {
+            Some(parent) => assert_eq!(parent, 0, "launchd, under the kernel"),
+            // A suite run inside a sandbox whose profile lets a process read only its own
+            // sandbox's processes (`process-info* (target same-sandbox)`) is refused launchd
+            // by the profile, not by the kernel's own rule: nothing to tell here.
+            None => eprintln!(
+                "skipped: this sandbox does not let the test read launchd's parent, so only \
+                 \"no start for root's process\" was checked"
+            ),
+        }
+        assert_eq!(Parents::of(0), None, "pid 0 names no process to ask about");
+        assert_eq!(Parents::of(u32::MAX), None, "not a pid at all");
+    }
+
+    /// What stamps a commit a chat's agent makes (`purlis_core::process::descends_from`): the
+    /// process making it is below the chat's recorded program, however far.
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[test]
+    fn a_process_two_below_this_one_walks_up_to_it_and_not_to_one_beside_it() {
+        use std::io::BufRead;
+        // This process -> sh -> sh -> sleep, the innermost saying its own pid.
+        let mut below = Command::new("/bin/sh")
+            .args(["-c", "/bin/sh -c 'echo $$; exec /bin/sleep 30' & wait"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("a child");
+        let mut beside = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .expect("another child");
+        let mut said = String::new();
+        std::io::BufReader::new(below.stdout.take().expect("its output"))
+            .read_line(&mut said)
+            .expect("a line");
+        let deepest: u32 = said.trim().parse().expect("a pid");
+
+        let reaches_us = walk(deepest, std::process::id(), Parents::of);
+        let reaches_a_sibling = walk(deepest, beside.id(), Parents::of);
+        let chain = Parents::chain(deepest);
+
+        let _ = Command::new("/bin/kill").arg(deepest.to_string()).status();
+        for child in [&mut below, &mut beside] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert!(reaches_us, "two below this process: {chain:?}");
+        assert_eq!(chain.first(), Some(&below.id()), "its parent first");
+        assert!(!reaches_a_sibling, "a process beside it is not above it");
+    }
+
+    /// A sandboxed chat (D-1407-8b): a seatbelt profile lets a process read only the processes
+    /// of its own sandbox, and the chat's program is the topmost of those. The walk stops ON
+    /// the recorded pid, so nothing above the sandbox is ever asked about.
+    #[test]
+    fn a_walk_reaches_the_recorded_program_without_reading_it_or_anything_above_it() {
+        // 50 -> 40 -> 30 (the chat's program) -> 20 (the app, outside the sandbox) -> 1.
+        let inside_the_sandbox = |pid| match pid {
+            50 => Some(40),
+            40 => Some(30),
+            30 | 20 => panic!("process {pid} was read, and the sandbox would have refused it"),
+            _ => None,
+        };
+        assert!(walk(50, 30, inside_the_sandbox));
+        // The app, above the sandbox, is reached only through a reading the sandbox refuses.
+        let refused_above = |pid| match pid {
+            50 => Some(40),
+            40 => Some(30),
+            _ => None,
+        };
+        assert!(!walk(50, 20, refused_above), "a doubt answers no");
     }
 
     #[test]

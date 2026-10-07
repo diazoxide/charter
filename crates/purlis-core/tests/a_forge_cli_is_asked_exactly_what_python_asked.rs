@@ -11,7 +11,7 @@
 //!
 //! [`purlis_core::forge::find_cli`] searches the process's own `PATH` first, and a test
 //! cannot change its own `PATH`: `set_var` is `unsafe` under Rust 2024 and this workspace
-//! allows one audited `unsafe` block, which is not this. So the parent test below starts this
+//! allows two audited `unsafe` blocks, neither of which is this. So the parent test below starts this
 //! same binary again with `PATH` naming a directory holding a stand-in `gh` and `glab`, and
 //! with a `HOME` the stand-in reads its answers from, and runs every test in [`child`] there.
 //! Outside that child, those tests return at once.
