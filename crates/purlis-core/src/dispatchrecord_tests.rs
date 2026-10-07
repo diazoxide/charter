@@ -1,0 +1,792 @@
+use super::*;
+
+fn project() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    (dir, root)
+}
+
+fn at(time: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(time)
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+}
+
+fn steward() -> ChatRef {
+    ChatRef {
+        chat: 3,
+        id: Some("01K6ASKER0000000000000000A".to_owned()),
+        name: "steward 3".to_owned(),
+        persona: Some("steward".to_owned()),
+    }
+}
+
+fn devops() -> ChatRef {
+    ChatRef {
+        chat: 7,
+        id: Some("01K6W0RKER000000000000000B".to_owned()),
+        name: "check prod".to_owned(),
+        persona: Some("devops".to_owned()),
+    }
+}
+
+/// A handoff from `steward 3` in `alpha` to `devops`, asking for a report.
+fn a_handoff() -> Opening {
+    Opening {
+        mode: Mode::Handoff,
+        asker: Asker {
+            chat: steward(),
+            workspace: Some("alpha".to_owned()),
+            by_person: false,
+            session_record: None,
+        },
+        persona: Some("devops".to_owned()),
+        worker: Worker {
+            chat: devops(),
+            harness: Some("claude".to_owned()),
+            profile: Some("work".to_owned()),
+            session_record: None,
+        },
+        task: Some("check prod".to_owned()),
+        place: Place {
+            workspace: Some("beta".to_owned()),
+            folder: Some("workspaces/beta".to_owned()),
+            worktree: None,
+        },
+        brief: "# Check prod\nIs the rollout healthy?".to_owned(),
+        report_owed: true,
+    }
+}
+
+fn done(text: &str) -> Report {
+    Report {
+        outcome: Outcome::Done,
+        text: text.to_owned(),
+        changed: Changed {
+            files: vec!["deploy/values.yaml".to_owned()],
+            commits: vec!["3a823aab".to_owned()],
+            branch: Some("fix/rollout".to_owned()),
+        },
+    }
+}
+
+#[test]
+fn a_finished_dispatch_s_record_holds_every_field() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    note(&root, &opened.id, Event::NeededYou).unwrap();
+    note(&root, &opened.id, Event::NeededYou).unwrap();
+    note(&root, &opened.id, Event::Message).unwrap();
+
+    let closed = close(
+        &root,
+        &opened.id,
+        Ending {
+            report: Some(done("Healthy: 3 of 3 pods ready.")),
+            usage: Some(Usage {
+                input_tokens: Some(15_234),
+                output_tokens: Some(4_521),
+                cost_usd: Some(0.42),
+            }),
+        },
+        at("2026-10-07T12:04:30Z"),
+    )
+    .unwrap();
+
+    assert!(closed);
+    // Read back from the disk, as the app reads it after a restart.
+    let records = list(&root);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let record = &records[0];
+    assert_eq!(record.id, opened.id);
+    // Who asked: the chat and its persona.
+    assert_eq!(record.asker.chat, steward());
+    assert_eq!(record.asker.workspace.as_deref(), Some("alpha"));
+    assert!(!record.asker.by_person);
+    // Which persona it went to, and the chat that ran as it.
+    assert_eq!(record.persona.as_deref(), Some("devops"));
+    assert_eq!(record.worker.chat, devops());
+    assert_eq!(record.worker.harness.as_deref(), Some("claude"));
+    assert_eq!(record.mode, Mode::Handoff);
+    // Where it worked.
+    assert_eq!(record.place.workspace.as_deref(), Some("beta"));
+    assert_eq!(record.place.folder.as_deref(), Some("workspaces/beta"));
+    assert_eq!(record.task.as_deref(), Some("check prod"));
+    assert_eq!(record.brief, "# Check prod\nIs the rollout healthy?");
+    // The report: outcome, text, what changed.
+    assert_eq!(record.report, Some(done("Healthy: 3 of 3 pods ready.")));
+    assert_eq!(record.started, "2026-10-07T12:00:00+00:00");
+    assert_eq!(record.ended.as_deref(), Some("2026-10-07T12:04:30+00:00"));
+    assert_eq!(record.needed_you, 2);
+    assert_eq!(record.messages, 1);
+    assert_eq!(
+        record.usage,
+        Some(Usage {
+            input_tokens: Some(15_234),
+            output_tokens: Some(4_521),
+            cost_usd: Some(0.42),
+        })
+    );
+}
+
+#[test]
+fn cost_is_absent_and_not_zero_for_a_harness_that_reports_none() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+
+    // A harness that says nothing, and one whose figure is empty: neither is a zero.
+    close(
+        &root,
+        &opened.id,
+        Ending {
+            report: Some(done("ok")),
+            usage: Some(Usage::default()),
+        },
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+
+    let record = read(&root, &opened.id).expect("the record");
+    assert_eq!(record.usage, None);
+    let text = std::fs::read_to_string(dir(&root).join(format!("{}.json", opened.id))).unwrap();
+    assert!(!text.contains("usage"), "{text}");
+    assert!(!text.contains("cost"), "{text}");
+    assert!(!text.contains("tokens"), "{text}");
+}
+
+#[test]
+fn a_harness_that_reports_only_tokens_has_no_cost() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+
+    close(
+        &root,
+        &opened.id,
+        Ending {
+            report: None,
+            usage: Some(Usage {
+                input_tokens: Some(10),
+                output_tokens: None,
+                cost_usd: None,
+            }),
+        },
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+
+    let usage = read(&root, &opened.id).unwrap().usage.expect("its tokens");
+    assert_eq!(usage.input_tokens, Some(10));
+    assert_eq!(usage.cost_usd, None);
+}
+
+#[test]
+fn a_dispatch_ends_once_and_its_first_ending_is_kept() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let first = Ending {
+        report: Some(done("first")),
+        usage: None,
+    };
+    assert!(close(&root, &opened.id, first, at("2026-10-07T12:01:00Z")).unwrap());
+
+    let again = Ending {
+        report: Some(Report {
+            outcome: Outcome::Failed,
+            text: "second".to_owned(),
+            changed: Changed::default(),
+        }),
+        usage: Some(Usage {
+            cost_usd: Some(9.0),
+            ..Usage::default()
+        }),
+    };
+    assert!(!close(&root, &opened.id, again, at("2026-10-07T13:00:00Z")).unwrap());
+    // And it counts nothing more.
+    assert!(!note(&root, &opened.id, Event::NeededYou).unwrap());
+
+    let record = read(&root, &opened.id).unwrap();
+    assert_eq!(record.report, Some(done("first")));
+    assert_eq!(record.ended.as_deref(), Some("2026-10-07T12:01:00+00:00"));
+    assert_eq!(record.usage, None);
+    assert_eq!(record.needed_you, 0);
+}
+
+#[test]
+fn a_running_dispatch_has_no_end_and_no_report() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+
+    let record = read(&root, &opened.id).unwrap();
+
+    assert!(record.running());
+    assert_eq!(record.ended, None);
+    assert_eq!(record.report, None);
+    assert_eq!(
+        running_for(&root, &devops()).map(|found| found.id),
+        Some(opened.id)
+    );
+    assert_eq!(running_for(&root, &steward()), None);
+}
+
+#[test]
+fn records_are_listed_newest_first() {
+    let (_d, root) = project();
+    let first = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let second = open(&root, a_handoff(), at("2026-10-07T12:00:01Z")).unwrap();
+
+    let ids: Vec<String> = list(&root).into_iter().map(|record| record.id).collect();
+
+    assert_eq!(ids, vec![second.id, first.id]);
+}
+
+#[test]
+fn a_name_that_is_not_a_record_s_id_reads_and_writes_nothing() {
+    let (_d, root) = project();
+    open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let outside = root.join("outside.json");
+    std::fs::write(&outside, "{}").unwrap();
+
+    for id in ["../../outside", "", ".", "..", "x/y", "not-a-ulid"] {
+        assert_eq!(read(&root, id), None, "{id}");
+        assert!(!note(&root, id, Event::NeededYou).unwrap(), "{id}");
+        assert!(
+            !close(&root, id, Ending::default(), at("2026-10-07T12:01:00Z")).unwrap(),
+            "{id}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "{}");
+}
+
+#[test]
+fn a_file_that_is_not_a_record_of_this_version_is_skipped_and_left_as_it_is() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let newer = dir(&root).join("01K6NEWER00000000000000000.json");
+    let said = "{\"v\": 2, \"id\": \"01K6NEWER00000000000000000\"}\n";
+    std::fs::write(&newer, said).unwrap();
+    std::fs::write(dir(&root).join("notes.txt"), "mine").unwrap();
+
+    let ids: Vec<String> = list(&root).into_iter().map(|record| record.id).collect();
+
+    assert_eq!(ids, vec![opened.id]);
+    assert_eq!(std::fs::read_to_string(&newer).unwrap(), said);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_record_is_private_to_the_person() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+
+    let mode = std::fs::metadata(dir(&root).join(format!("{}.json", opened.id)))
+        .unwrap()
+        .permissions()
+        .mode();
+
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn a_record_lives_in_the_app_s_state_and_nowhere_git_carries() {
+    let (_d, root) = project();
+    open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+
+    assert_eq!(
+        dir(&root),
+        crate::names::state(&root).join("app").join("dispatches")
+    );
+    // Nothing in the committed dispatch log.
+    assert!(!crate::dispatch::dir(&root).exists());
+}
+
+#[test]
+fn a_chat_that_went_without_reporting_is_settled_as_failed_where_it_owed_a_report() {
+    let (_d, root) = project();
+    let owed = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let not_owed = open(
+        &root,
+        Opening {
+            report_owed: false,
+            worker: Worker {
+                chat: ChatRef {
+                    chat: 8,
+                    id: None,
+                    name: "devops 8".to_owned(),
+                    persona: Some("devops".to_owned()),
+                },
+                ..a_handoff().worker
+            },
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    let still_running = open(
+        &root,
+        Opening {
+            worker: Worker {
+                chat: ChatRef {
+                    chat: 9,
+                    id: None,
+                    name: "devops 9".to_owned(),
+                    persona: Some("devops".to_owned()),
+                },
+                ..a_handoff().worker
+            },
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+
+    let ended = settle(&root, |chat| chat.chat == 9, at("2026-10-08T09:00:00Z"));
+
+    assert_eq!(ended, 2);
+    let owed = read(&root, &owed.id).unwrap();
+    assert_eq!(
+        owed.report,
+        Some(Report {
+            outcome: Outcome::Failed,
+            text: "ended without a report".to_owned(),
+            changed: Changed::default(),
+        })
+    );
+    assert_eq!(owed.ended.as_deref(), Some("2026-10-08T09:00:00+00:00"));
+    let not_owed = read(&root, &not_owed.id).unwrap();
+    assert!(!not_owed.running());
+    assert_eq!(not_owed.report, None);
+    assert!(read(&root, &still_running.id).unwrap().running());
+}
+
+#[test]
+fn opening_a_project_with_no_reopen_record_settles_every_running_dispatch() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+
+    assert_eq!(settle_on_open(&root, at("2026-10-08T09:00:00Z")), 1);
+
+    assert!(!read(&root, &opened.id).unwrap().running());
+}
+
+#[test]
+fn a_reopen_record_that_cannot_be_read_settles_nothing() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let reopen = crate::reopen::path(&root);
+    std::fs::create_dir_all(reopen.parent().unwrap()).unwrap();
+    std::fs::write(&reopen, "{ not json").unwrap();
+
+    assert_eq!(settle_on_open(&root, at("2026-10-08T09:00:00Z")), 0);
+
+    assert!(read(&root, &opened.id).unwrap().running());
+}
+
+#[test]
+fn a_session_record_lists_the_dispatches_its_chat_asked_for() {
+    let (_d, root) = project();
+    let first = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let second = open(&root, a_handoff(), at("2026-10-07T12:10:00Z")).unwrap();
+    let path = "workspaces/alpha/sessions/20261007-130000-rollout.md";
+
+    assert_eq!(session_recorded(&root, &steward(), path), 2);
+    // A dispatch it makes afterwards belongs to its next record.
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let later = open(&root, a_handoff(), at("2026-10-07T14:00:00Z")).unwrap();
+    let next = "workspaces/alpha/sessions/20261007-150000-again.md";
+    assert_eq!(session_recorded(&root, &steward(), next), 1);
+
+    let ids = |path: &str| -> Vec<String> {
+        listed_on(&root, path)
+            .into_iter()
+            .map(|record| record.id)
+            .collect()
+    };
+    // In the order they were made.
+    assert_eq!(ids(path), vec![first.id, second.id]);
+    assert_eq!(ids(next), vec![later.id]);
+    assert_eq!(
+        ids("workspaces/alpha/sessions/another.md"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn the_persona_chat_s_own_session_record_is_named_on_its_dispatch() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    close(
+        &root,
+        &opened.id,
+        Ending::default(),
+        at("2026-10-07T12:30:00Z"),
+    )
+    .unwrap();
+    let path = "workspaces/beta/sessions/20261007-123000-check-prod.md";
+
+    // After the dispatch ended: a record is written as its chat closes.
+    assert_eq!(session_recorded(&root, &devops(), path), 1);
+
+    let record = read(&root, &opened.id).unwrap();
+    assert_eq!(record.worker.session_record.as_deref(), Some(path));
+    assert_eq!(record.asker.session_record, None);
+}
+
+#[test]
+fn a_restarted_chat_is_the_same_chat_by_its_id_whatever_its_number() {
+    let restarted = ChatRef {
+        chat: 12,
+        ..devops()
+    };
+    assert!(same_chat(&devops(), &restarted));
+}
+
+/// A number is dealt again in another launch: a record that names its chat by id is never
+/// another chat's because that chat has the number now, with an id of its own or with none.
+#[test]
+fn a_record_that_names_a_chat_by_id_is_never_matched_by_its_number() {
+    let another = ChatRef {
+        chat: 7,
+        id: Some("01K6AN0THER000000000000000".to_owned()),
+        ..devops()
+    };
+    assert!(!same_chat(&devops(), &another));
+    let numbered = ChatRef {
+        id: None,
+        ..devops()
+    };
+    assert!(!same_chat(&devops(), &numbered));
+    // Only a record with no id has nothing but the number to go by.
+    assert!(same_chat(&numbered, &devops()));
+    assert!(same_chat(&numbered, &another));
+}
+
+/// A reopen record holding one chat: number `number`, ULID `id`.
+fn reopening(root: &Path, number: u32, id: &str) {
+    let record = crate::reopen::Record {
+        chats: vec![crate::reopen::Chat {
+            program: "claude".into(),
+            number: Some(number),
+            identity: crate::reopen::Identity {
+                id: Some(id.to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        dealt: number,
+        ..Default::default()
+    };
+    crate::reopen::write(root, &record).unwrap();
+}
+
+#[test]
+fn a_chat_started_again_under_another_number_is_not_settled_as_failed() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    // Restart gave the persona chat number 12; it is the same chat by its id.
+    reopening(&root, 12, devops().id.as_deref().unwrap());
+
+    assert_eq!(settle_on_open(&root, at("2026-10-08T09:00:00Z")), 0);
+
+    let record = read(&root, &opened.id).unwrap();
+    assert!(record.running());
+    assert_eq!(record.report, None);
+    // And the restarted chat's report still lands on it.
+    let restarted = ChatRef {
+        chat: 12,
+        ..devops()
+    };
+    assert_eq!(
+        running_for(&root, &restarted).map(|found| found.id),
+        Some(opened.id)
+    );
+}
+
+#[test]
+fn a_chat_of_a_later_launch_that_was_dealt_the_same_number_does_not_keep_a_dispatch_running() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    // Another chat altogether is number 7 now.
+    reopening(&root, 7, "01K6AN0THER000000000000000");
+
+    assert_eq!(settle_on_open(&root, at("2026-10-08T09:00:00Z")), 1);
+
+    let record = read(&root, &opened.id).unwrap();
+    assert_eq!(
+        record.report.map(|report| report.text),
+        Some(ENDED_WITHOUT_A_REPORT.to_owned())
+    );
+    // Nor does that chat's session record land on the old dispatch.
+    let namesake = ChatRef {
+        chat: 7,
+        id: Some("01K6AN0THER000000000000000".to_owned()),
+        name: "qa 7".to_owned(),
+        persona: Some("qa".to_owned()),
+    };
+    assert_eq!(session_recorded(&root, &namesake, "sessions/x.md"), 0);
+    assert_eq!(running_for(&root, &namesake), None);
+}
+
+// ----- what is drawn, and what is not -----
+
+/// A stored record with one thing changed, written as anything running as the person could
+/// write it: straight to the file.
+fn planted(root: &Path, change: impl FnOnce(&mut Record)) -> String {
+    let mut record = open(root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    change(&mut record);
+    std::fs::write(
+        dir(root).join(format!("{}.json", record.id)),
+        serde_json::to_string_pretty(&record).unwrap(),
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    record.id
+}
+
+#[test]
+fn a_record_the_app_wrote_is_drawn() {
+    let (_d, root) = project();
+    let opened = open(
+        &root,
+        Opening {
+            brief: "# Check prod\n\tkubectl get pods\nEvery region.".to_owned(),
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    close(
+        &root,
+        &opened.id,
+        Ending {
+            report: Some(done("Healthy.\nNothing to do.")),
+            usage: None,
+        },
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+
+    let drawn = drawn(&root);
+
+    assert_eq!(drawn.refused, 0);
+    assert_eq!(drawn.records.len(), 1);
+}
+
+#[test]
+fn a_record_holding_text_purlis_will_not_draw_is_counted_and_never_shown() {
+    let (_d, root) = project();
+    let good = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let bad = [
+        // Words turned backwards: a task that reads as another.
+        planted(&root, |record| {
+            record.task = Some("check \u{202e}dorp".to_owned());
+        }),
+        // An invisible character: a persona that looks like another.
+        planted(&root, |record| {
+            record.persona = Some("dev\u{200b}ops".to_owned());
+        }),
+        planted(&root, |record| {
+            record.asker.chat.name = "steward\u{2066} 3".to_owned();
+        }),
+        // A control character in a line, and one in prose that is not a line break or a tab.
+        planted(&root, |record| {
+            record.worker.chat.name = "devops\n7".to_owned();
+        }),
+        planted(&root, |record| record.brief = "a brief\u{1b}[2J".to_owned()),
+        planted(&root, |record| {
+            record.report = Some(Report {
+                outcome: Outcome::Done,
+                text: "fine\u{feff}".to_owned(),
+                changed: Changed::default(),
+            });
+        }),
+        planted(&root, |record| {
+            record.place.folder = Some("workspaces/\u{202e}ateb".to_owned());
+        }),
+        // Text past what the store ever writes.
+        planted(&root, |record| {
+            record.brief = "x".repeat(MOST_BRIEF_BYTES * 2)
+        }),
+        planted(&root, |record| {
+            record.task = Some("y".repeat(MOST_NAME_BYTES * 2));
+        }),
+        planted(&root, |record| {
+            record.report = Some(Report {
+                outcome: Outcome::Done,
+                text: "ok".to_owned(),
+                changed: Changed {
+                    files: vec!["f".to_owned(); MOST_LISTED + 1],
+                    ..Changed::default()
+                },
+            });
+        }),
+    ];
+
+    let drawn = drawn(&root);
+
+    assert_eq!(drawn.refused, bad.len());
+    let shown: Vec<&str> = drawn
+        .records
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect();
+    assert_eq!(shown, [good.id.as_str()]);
+    // Refused, never stripped: each is on the disk as it was, for a person to look at.
+    for id in &bad {
+        assert!(read(&root, id).is_some(), "{id}");
+    }
+    // And none is listed on a session record.
+    session_recorded(&root, &steward(), "sessions/x.md");
+    assert_eq!(listed_on(&root, "sessions/x.md").len(), 1);
+}
+
+#[test]
+fn a_brief_or_a_report_longer_than_the_store_keeps_is_cut_and_says_so() {
+    let (_d, root) = project();
+    let long = format!("{}é", "b".repeat(MOST_BRIEF_BYTES * 80));
+    let opened = open(
+        &root,
+        Opening {
+            brief: long,
+            task: Some("t".repeat(MOST_NAME_BYTES * 4)),
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+
+    // The close is never refused for its size.
+    let closed = close(
+        &root,
+        &opened.id,
+        Ending {
+            report: Some(Report {
+                outcome: Outcome::Done,
+                text: "r".repeat(MOST_REPORT_BYTES * 200),
+                changed: Changed {
+                    files: vec!["f".repeat(MOST_PATH_BYTES * 3); MOST_LISTED * 5],
+                    commits: vec!["c".repeat(64); MOST_LISTED * 5],
+                    branch: None,
+                },
+            }),
+            usage: None,
+        },
+        at("2026-10-07T12:01:00Z"),
+    )
+    .unwrap();
+
+    assert!(closed);
+    let size = std::fs::metadata(dir(&root).join(format!("{}.json", opened.id)))
+        .unwrap()
+        .len();
+    assert!(size < crate::reopen::MAX_BYTES, "{size} bytes");
+    // It reads back, whole as it was stored, and it is drawn.
+    let drawn = drawn(&root);
+    assert_eq!(drawn.refused, 0);
+    let record = &drawn.records[0];
+    assert!(
+        record
+            .brief
+            .ends_with(&format!(" [cut at {MOST_BRIEF_BYTES} bytes]")),
+        "{}",
+        &record.brief[record.brief.len() - 60..]
+    );
+    assert!(record.brief.starts_with("bbbb"));
+    let report = record.report.as_ref().unwrap();
+    assert!(
+        report
+            .text
+            .ends_with(&format!(" [cut at {MOST_REPORT_BYTES} bytes]"))
+    );
+    assert_eq!(report.changed.files.len(), MOST_LISTED);
+    assert_eq!(report.changed.commits.len(), MOST_LISTED);
+    assert!(
+        record
+            .task
+            .as_deref()
+            .unwrap()
+            .ends_with(&format!(" [cut at {MOST_NAME_BYTES} bytes]"))
+    );
+    // A text already cut is not cut again by the next write.
+    note(&root, &opened.id, Event::NeededYou).unwrap();
+    assert_eq!(read(&root, &opened.id).unwrap().brief, record.brief);
+}
+
+#[test]
+fn a_text_is_cut_at_a_character_and_one_that_fits_is_left_as_it_is() {
+    assert_eq!(cut("short", 4096), "short");
+    // Two bytes a letter: the cut falls back to the letter's start.
+    let cut_text = cut(&"é".repeat(200), 101);
+    assert!(cut_text.starts_with(&"é".repeat(50)));
+    assert_eq!(cut_text, format!("{} [cut at 101 bytes]", "é".repeat(50)));
+}
+
+/// **A forged line.** The asks a chat sends the app are a closed set of shapes
+/// ([`crate::hookwire::Ask`]), and none has a field for a dispatch's record, its asker, its
+/// outcome, its counts or its cost. So a line forged with them either does not read as an ask
+/// at all, or reads as the ask it would have been without them: nothing of a record crosses
+/// the wire for the app to be misled by.
+#[test]
+fn a_line_forged_with_a_record_s_fields_carries_none_of_them_past_the_wire() {
+    use crate::hookwire::{Ask, OpenChat, RecordAsk, ReportBack};
+
+    let asks = [
+        Ask::Ticket { chat: 7 },
+        Ask::Report(Box::new(ReportBack {
+            chat: 7,
+            summary: "done".to_owned(),
+            ticket: "t".to_owned(),
+            task: None,
+        })),
+        Ask::Open(Box::new(OpenChat {
+            chat: 3,
+            workspace: "alpha".to_owned(),
+            create_vision: None,
+            persona: Some("devops".to_owned()),
+            message: "a brief".to_owned(),
+            ticket: "t".to_owned(),
+            name: None,
+            report: true,
+        })),
+        Ask::SessionRecord(Box::new(RecordAsk {
+            chat: 7,
+            title: "t".to_owned(),
+            body: "b".to_owned(),
+            pieces: Vec::new(),
+            cwd: None,
+        })),
+    ];
+    let forged = serde_json::json!({
+        "id": "01K6FORGED0000000000000000",
+        "record": "01K6FORGED0000000000000000",
+        "dispatch": "01K6FORGED0000000000000000",
+        "asker": {"chat": 99, "name": "someone else"},
+        "by_person": true,
+        "worker": {"chat": 99},
+        "outcome": "failed",
+        "needed_you": 40,
+        "messages": 40,
+        "usage": {"cost_usd": 1000.0, "input_tokens": 1},
+        "cost_usd": 0.0,
+        "ended": "2020-01-01T00:00:00+00:00",
+    });
+    for ask in asks {
+        let mut line = serde_json::to_value(&ask).unwrap();
+        // Into the ask's own object, and beside it.
+        let inner = line
+            .as_object_mut()
+            .and_then(|object| object.values_mut().next())
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("an ask is one key naming an object");
+        for (key, value) in forged.as_object().unwrap() {
+            inner.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+        // Read as the ask it was, every forged key fallen off; or not an ask at all.
+        if let Ok(read) = serde_json::from_value::<Ask>(line) {
+            assert_eq!(read, ask);
+        }
+    }
+}

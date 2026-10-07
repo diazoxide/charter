@@ -4,6 +4,7 @@ import { LoaderCircle } from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import { ExternalLink } from "./ReleaseNotes";
 import { Facts } from "./Views";
+import { NO_PERSONA_SAID } from "./dispatches";
 import { commands, type PlaneId, type SessionRecordView } from "./bindings";
 
 /**
@@ -99,6 +100,21 @@ export function SessionRecordTab({ plane, path }: { plane: PlaneId; path: string
           ],
         }}
       />
+      {record.dispatches.length > 0 && (
+        /* What this chat handed to other chats before it wrote the record (#1452): from this
+           machine's dispatch records, so a record another machine wrote lists none. */
+        <section className="session-dispatches" aria-label="Dispatches this chat made">
+          <h3>Dispatches</h3>
+          <ul>
+            {record.dispatches.map((made, at) => (
+              // By position: the list arrives whole from one read, in the order they were made.
+              <li
+                key={at}
+              >{`${made.persona ?? NO_PERSONA_SAID} · ${made.task} · ${made.outcome}`}</li>
+            ))}
+          </ul>
+        </section>
+      )}
       <article className="session-record release-notes" data-testid="session-record">
         <Markdown skipHtml components={COMPONENTS}>
           {record.body}

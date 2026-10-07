@@ -242,6 +242,9 @@ pub struct Held {
     /// The dispatches waiting on the person, and the dispatch grants made for one chat
     /// (#1437).
     dispatch_grants: crate::dispatchgrants::Store,
+    /// Which chats were waiting on the person at their last report: what counts a dispatch's
+    /// needs-you once per wait (#1452).
+    dispatches: crate::dispatches::Waiting,
     /// This plane, once it is in its `Arc`: what a program's end writes the record through.
     me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
 }
@@ -375,6 +378,11 @@ impl Held {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .apply(&self.root, None);
+    }
+
+    /// The chats waiting on the person, as the dispatch records count them (#1452).
+    pub(crate) fn dispatches(&self) -> &crate::dispatches::Waiting {
+        &self.dispatches
     }
 
     /// The plane's hook channel itself. The app reads a chat's hook state through
@@ -609,6 +617,9 @@ impl Held {
     /// asking. And off and told even when the session had already gone: either way the chat
     /// is gone from the app, and a window left believing otherwise is the defect.
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
+        // Before it is off the board, while its conversation is still known: a dispatch it
+        // was working on ends with it (#1452).
+        crate::dispatches::ended(self, session);
         let gone = self.board().closed(session);
         lock_started(&self.started_on).remove(&session);
         self.typed.forget(session);
@@ -1134,6 +1145,8 @@ impl Planes {
         // so it runs only when no chat of this plane is running in this app — the chats its
         // reopen record will bring back are what it keeps.
         purlis_core::retention::on_open(&root, std::time::SystemTime::now());
+        // And a dispatch whose persona chat that record does not bring back has ended (#1452).
+        purlis_core::dispatchrecord::settle_on_open(&root, chrono::Utc::now());
         let held = Arc::new(self.hold(id.clone(), root));
         let _ = held.me.set(Arc::downgrade(&held));
         // A handoff from one of this plane's chats is answered by this plane, which is the
@@ -1190,6 +1203,9 @@ impl Planes {
                     crate::smartclose::reported(&held, report);
                     // What an Allow queued for this chat's turn to end is sent then (#1430).
                     crate::vaultroute::reported(&held, report.chat);
+                    // A persona chat that has just come to wait on the person: its dispatch
+                    // needed them once more (#1452).
+                    crate::dispatches::needed_you(&held, report.chat);
                 }
             })
         });
@@ -1993,6 +2009,7 @@ impl Planes {
             brokered: purlis_core::brokered::Rate::default(),
             vault_refusals: crate::vaultroute::Refusals::default(),
             dispatch_grants: crate::dispatchgrants::Store::default(),
+            dispatches: crate::dispatches::Waiting::default(),
             me,
         }
     }

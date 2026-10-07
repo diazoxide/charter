@@ -10,6 +10,7 @@ import {
   GitBranch,
   KeyRound,
   LoaderCircle,
+  Send,
   TriangleAlert,
   UserRound,
 } from "lucide-react";
@@ -19,7 +20,14 @@ import { HeadingOffer, PanelSection } from "./PanelSection";
 import { Vaults, type VaultsSaid } from "./Vaults";
 import { Chart, Facts } from "./Views";
 import { commands, type ExtensionView, type PanelView } from "./bindings";
-import { listedMemoryOffers, memoryKeyRun, toKeep, type Catalogued, type Offer } from "./actions";
+import {
+  DISPATCHES_SHOW,
+  listedMemoryOffers,
+  memoryKeyRun,
+  toKeep,
+  type Catalogued,
+  type Offer,
+} from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
@@ -287,6 +295,10 @@ function Contributed({
               place this file says what a panel is about. */}
           {panel.key === PERSONAS && (
             <HeadingOffer offer={offers.get("persona.create")} onPress={onPress} />
+          )}
+          {/* What the project's chats handed to other chats (#1452): the Dispatches tab. */}
+          {panel.key === SESSIONS && (
+            <HeadingOffer offer={offers.get(DISPATCHES_SHOW)} onPress={onPress} mark={Send} />
           )}
           {/* A new memory in the focused workspace's journal (SI-9c, ADR 0065 Q9). */}
           {panel.key === MEMORY && (
