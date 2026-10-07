@@ -694,7 +694,9 @@ pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRe
         persona_hosts,
         resume_holds: purlis_core::sessionresume::resumed_holds(root, persona.as_deref()).is_some(),
         persona_hosts_locked: crate::sandboxing::persona_hosts_locked(root),
-        dispatches: crate::dispatches::made_on(root, path),
+        // With no chat counted as open: the command that answers the window fills these in
+        // from the chats it holds (`dispatches::made_by`).
+        dispatches: crate::dispatches::made_on(root, path, &[]),
     }))
 }
 

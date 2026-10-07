@@ -98,6 +98,7 @@ function dispatch(over: Partial<DispatchRow> & Pick<DispatchRow, "id" | "task">)
     tokens: null,
     brief: "the brief",
     report: null,
+    changed: null,
     open_session: null,
     session_record: null,
     ...over,
@@ -425,6 +426,84 @@ describe("the Dispatches tab", () => {
       }),
     );
     expect(screen.getByText(/asked by planner 2 · No persona$/)).toBeInTheDocument();
+  });
+
+  it("says what a task's report says changed, and how many messages passed", async () => {
+    core({
+      rows: [
+        dispatch({
+          id: "01K6T",
+          task: "drain the queue",
+          mode: "task",
+          outcome: "blocked",
+          messages: 4,
+          report: "Forty are stuck.",
+          changed: "svc: 2 files\nbranch fix/queue, 1 commit",
+        }),
+        dispatch({
+          id: "01K6S",
+          task: "count the retries",
+          mode: "task",
+          messages: 1,
+          report: "3.",
+        }),
+      ],
+    });
+    render(<App />);
+    const table = await opened();
+
+    await userEvent.click(
+      within(table).getByRole("button", { name: "Show the brief and report of drain the queue" }),
+    );
+
+    expect(screen.getByRole("heading", { name: "What it says changed" })).toBeInTheDocument();
+    expect(screen.getByText(/svc: 2 files\s+branch fix\/queue, 1 commit/)).toBeInTheDocument();
+    expect(screen.getByText(/^Task · .* · as steward · 4 messages$/)).toBeInTheDocument();
+    // A report that said nothing of it has no such heading, and one message is one.
+    await userEvent.click(
+      within(table).getByRole("button", {
+        name: "Show the brief and report of count the retries",
+      }),
+    );
+    expect(screen.queryByRole("heading", { name: "What it says changed" })).toBeNull();
+    expect(screen.getByText(/ · as steward · 1 message$/)).toBeInTheDocument();
+  });
+
+  it("does not say running of a dispatch that has not ended and whose chat is not open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { asked } = core({
+        rows: [
+          dispatch({
+            id: "01K6N",
+            task: "check staging",
+            outcome: "not open",
+            ended: null,
+            duration: "",
+          }),
+        ],
+      });
+      render(<App />);
+      const table = await opened();
+
+      const cells = within(screen.getByTestId("dispatch-01K6N")).getAllByRole("cell");
+      expect(cells[4]).toHaveTextContent("not open");
+      expect(cells[5]).toHaveTextContent("");
+      await userEvent.click(
+        within(table).getByRole("button", {
+          name: "Show the brief and report of check staging",
+        }),
+      );
+      expect(screen.getByText(/ · not ended, and its chat is not open · /)).toBeInTheDocument();
+      expect(screen.getByText("Not reported yet.")).toBeInTheDocument();
+      // Nothing is running, so the list is not read again on a timer.
+      const reads = () => asked.filter((one) => one.cmd === "dispatches").length;
+      const before = reads();
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(reads()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says No persona, in those words, of a dispatch that went to none", async () => {

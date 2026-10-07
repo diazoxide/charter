@@ -24,17 +24,20 @@ fn legend(days: i64) -> String {
     format!(
         "• RECENT = memories in the last {days} days · VERIFY = share carrying a verification \
          marker (quality proxy) · DUP = share in a near-dup pair (noise) · DISP = times \
-         work was DISPATCHED to it (committed dispatch log) · ⬡/◇ = memory-blind role \
-         (activity: profile), not judged by volume.\n"
+         work was DISPATCHED to it (committed dispatch log, and this machine's dispatch \
+         records) · ⬡/◇ = memory-blind role (activity: profile), not judged by volume.\n"
     )
 }
 
-/// What `DISP` is read from, and that it stops moving until #1452.
-const SOURCE: &str = "• DISP is read from the committed dispatch log (personas/_dispatch/). Its \
-                      rows for a persona were written when one was sent out as a sub-agent, \
-                      which a persona no longer is, so DISP and ⚑ stop moving until they are \
-                      counted from each dispatch's record, which is not in this version yet \
-                      (#1452).\n";
+/// What `DISP` is read from, and what it cannot see.
+const SOURCE: &str = "• DISP adds the committed dispatch log (personas/_dispatch/), whose rows \
+                      for a persona are from when one was sent out as a sub-agent, and the \
+                      record purlis keeps of each dispatch on this machine. Those records are \
+                      never committed and are kept 30 days, so a dispatch made on another \
+                      machine, or longer ago than that, is not counted here.\n";
+
+const NONE_ANYWHERE: &str = "• No dispatch to a persona is in the committed dispatch log or in \
+                             this machine's dispatch records.\n";
 
 const ONE_DRAFT: &str = "• 1 draft persona(s) — no chat is dispatched to a persona while \
                          `draft: true` is set, so they are not counted above. Finish the \
@@ -99,13 +102,7 @@ fn a_plane_nothing_was_dispatched_on_says_so_and_judges_nobody_as_never_dispatch
     );
     assert_eq!(
         heard.err,
-        [
-            legend(14),
-            "• No dispatch to a persona is in the committed dispatch log.\n".into(),
-            SOURCE.into(),
-            dormant(2),
-        ]
-        .concat()
+        [legend(14), NONE_ANYWHERE.into(), SOURCE.into(), dormant(2),].concat()
     );
 }
 
@@ -133,10 +130,11 @@ fn chats_a_chat_started_are_one_total_because_the_log_names_no_persona_for_them(
         heard.err,
         [
             legend(14),
-            "• 2 chat(s) were started by another chat (a handoff). The log names no persona \
-             for them, so they are in no row above.\n"
+            "• 2 chat(s) were started by another chat (a handoff), by the committed dispatch \
+             log. The log names no persona for them, so a row above counts one only where \
+             this machine still keeps its record.\n"
                 .into(),
-            "• No dispatch to a persona is in the committed dispatch log.\n".into(),
+            NONE_ANYWHERE.into(),
             SOURCE.into(),
             dormant(2),
         ]
@@ -498,4 +496,94 @@ fn an_hour_alone_is_two_digits_as_fromisoformat_requires() {
     assert_eq!(at("2026-03-04T10").as_deref(), Some("2026-03-04 10:00:00"));
     assert_eq!(at("2026-03-04 10").as_deref(), Some("2026-03-04 10:00:00"));
     assert_eq!(at("2026-03-04T1"), None);
+}
+
+// ----- DISP counts the record of each dispatch (#1452) -----
+
+/// A dispatch to `persona`, as the app records one on this machine.
+fn a_recorded_dispatch(plane: &Plane, persona: &str, mode: crate::dispatchrecord::Mode) {
+    use crate::dispatchrecord::{Asker, Opening, Place, Worker};
+    crate::dispatchrecord::open(
+        plane.root(),
+        Opening {
+            mode,
+            asker: Asker::default(),
+            persona: Some(persona.to_owned()),
+            worker: Worker::default(),
+            task: None,
+            place: Place::default(),
+            brief: "a brief".to_owned(),
+            report_owed: false,
+        },
+        chrono::Utc::now(),
+    )
+    .expect("a record");
+}
+
+#[test]
+fn a_dispatch_this_machine_recorded_is_counted_in_its_persona_s_row_beside_the_log_s() {
+    // The daily plane's log holds one row for devops and none for steward, who is `never
+    // dispatched` by the log alone.
+    let plane = Plane::fixture("daily");
+    a_recorded_dispatch(&plane, "steward", crate::dispatchrecord::Mode::Task);
+    a_recorded_dispatch(&plane, "steward", crate::dispatchrecord::Mode::Handoff);
+    a_recorded_dispatch(&plane, "devops", crate::dispatchrecord::Mode::Task);
+
+    let (rc, heard) = run(&plane, None, 14);
+
+    assert_eq!(rc, 0);
+    assert_eq!(
+        heard.out,
+        "PERSONA    MEM  RECENT  VERIFY  DUP  DISP  STATUS\n\
+         _shared      1       0      0%   0%     —  ○ idle\n\
+         devops       1       0      0%   0%     2  ⚑ draft\n\
+         steward      0       —       —    —     2  ✗ dormant\n\n"
+    );
+    assert!(heard.err.contains(SOURCE), "{}", heard.err);
+    assert!(!heard.err.contains("NEVER dispatched"), "{}", heard.err);
+}
+
+#[test]
+fn a_record_alone_is_a_dispatch_where_the_log_holds_none() {
+    let plane = Plane::fixture("minimal");
+    a_recorded_dispatch(&plane, "steward", crate::dispatchrecord::Mode::Task);
+
+    let (_, heard) = run(&plane, None, 14);
+
+    assert_eq!(
+        heard.out,
+        "PERSONA    MEM  RECENT  VERIFY  DUP  DISP  STATUS\n\
+         _shared      0       —       —    —     —  ✗ dormant\n\
+         steward      0       —       —    —     1  ✗ dormant\n\n"
+    );
+    assert_eq!(heard.err, [legend(14), SOURCE.into(), dormant(2)].concat());
+}
+
+#[cfg(unix)]
+#[test]
+fn records_this_process_may_not_read_are_said_as_unread_and_never_as_no_dispatches() {
+    // What a sandboxed chat finds (D-1452-11): the store is there and it is denied.
+    use std::os::unix::fs::PermissionsExt;
+    let plane = Plane::fixture("minimal");
+    a_recorded_dispatch(&plane, "steward", crate::dispatchrecord::Mode::Task);
+    let store = crate::dispatchrecord::dir(plane.root());
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads through any mode: there the refusal cannot be made, and nothing is claimed.
+    let denied = std::fs::read_dir(&store).is_err();
+
+    let (rc, heard) = run(&plane, None, 14);
+
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(rc, 0);
+    if denied {
+        assert_eq!(
+            heard.err,
+            [legend(14), format!("! {RECORDS_UNREAD}\n"), dormant(2),].concat()
+        );
+        assert!(
+            !heard.err.contains("No dispatch to a persona"),
+            "{}",
+            heard.err
+        );
+    }
 }

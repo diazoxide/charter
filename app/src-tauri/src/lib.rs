@@ -813,7 +813,14 @@ fn session_record(
     plane: PlaneId,
     path: String,
 ) -> Result<Option<panels::SessionRecordView>, String> {
-    panels::session_record(planes.held(&plane)?.root(), &path)
+    let held = planes.held(&plane)?;
+    let mut view = panels::session_record(held.root(), &path)?;
+    // A dispatch that has not ended is running only where its chat is open, which the project
+    // this app holds knows and the files do not (#1457).
+    if let Some(view) = view.as_mut() {
+        view.dispatches = dispatches::made_by(&held, &path);
+    }
+    Ok(view)
 }
 
 /// Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,

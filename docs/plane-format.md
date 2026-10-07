@@ -109,7 +109,10 @@ open in it, `purlis_core::retention::on_open` removes, from that plane's own `.c
   unless the chat that asked or the chat that worked is one the reopen record will bring back
   (#1452). The chat is matched by its id, never by its number where the record has an id: a
   number is dealt again in another launch, and a chat that only shares one keeps nothing. It
-  holds a brief and a report, so it is kept as session data is and no longer.
+  holds a brief and a report, so it is kept as session data is and no longer. A write of a
+  record that was cut short leaves its temporary file beside it
+  (`.purlis-generated.<id>.json.<pid>.<tag>.tmp`), holding the same brief; it is collected by
+  the same rule, and no other temporary file is.
 
 It keeps the files of every chat the plane's reopen record (`.charter/app/reopen.json`) will
 bring back, however old: those keyed on the chat's number or on the conversation it resumes.
@@ -3003,7 +3006,9 @@ An unknown key is a warning, as it is in `persona.md`, and a repeated key is an 
 
 - **Format:** JSON Lines, append-only; one object per line.
 - **Status:** stable — committed (so the tally merges across machines), and read by the CLI
-  (`persona stats`, the README roster). **In purlis the two hook rows are no longer written**
+  (`persona stats`, the README roster). `persona stats` adds this machine's dispatch records
+  to its count (`app/dispatches/<id>.json`, #1452); the README roster reads the committed
+  log alone, so it is the same on every machine. **In purlis the two hook rows are no longer written**
   (#1451): the plain `{"agent", "ts"}` row of a returned `Task`/`Agent` call and the
   `resume` row of a `SendMessage` each said which persona was sent out as a sub-agent, which
   a persona never is now. The rows a log already holds are still read and counted. The
@@ -4916,23 +4921,28 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `brief` — the message the persona chat started on, without its stamp; `report_owed`;
   `started` and `ended` — UTC, `YYYY-MM-DDTHH:MM:SS+00:00`, `ended` absent while it runs;
   `report` — absent while it runs and for a dispatch that ended owing none:
-  `{"outcome": "done"|"blocked"|"failed"|"cancelled"|"stopped", "text", "changed": {"files"?,
-  "commits"?, "branch"?}}`, where `cancelled` is a task its asking chat cancelled (#1441),
+  `{"outcome": "done"|"blocked"|"failed"|"cancelled"|"stopped", "text", "changed": {"said"?,
+  "files"?, "commits"?, "branch"?}}`, where `changed.said` is what a task's report says it
+  changed, in the persona chat's own words (`purlis dispatch report --changed`), absent where
+  the report said nothing of it; `files`, `commits` and `branch` are for a dispatch that
+  works in its own worktree and are absent until one does (#1453); `cancelled` is a task its asking chat cancelled (#1441),
   recorded so whatever its chat said of its outcome, and `stopped` is a chat the person
   stopped or closed before it reported (#1443, #1448), with the text `stopped by the
   operator`; neither is recorded as `failed`. A purlis from before the two words does not
   read such a record, and lists the others; `needed_you` — how many times the persona chat came to wait on the person;
-  `messages` — how many messages passed between the two chats after the brief; `usage` —
+  `messages` — how many messages passed between the two chats after the brief: each follow-up,
+  progress note, question and answer purlis took, counted as it is taken; `usage` —
   `{"input_tokens"?, "output_tokens"?, "cost_usd"?}`, what the persona chat's harness said the
   session cost (`sessions/<sid>.spend`). **`usage` is absent for a harness that reports none,
   and each part of it is absent where the harness did not say it: never a zero.** It is the
   one figure in the record that is not the app's own: what the chat's harness reported, from
   a file a chat can alter, shown as reported and never enforced (D-1452-12). Every text is
   held to a cap as it is written, so a record is never written larger than it is read back:
-  a brief to 16 KiB, a report's text to 8 KiB, a name to 512 bytes, a path to 1 KiB, and a
+  a brief to 16 KiB, a report's text and what it says changed to 8 KiB each, a name to 512 bytes, a path to 1 KiB, and a
   report's files and commits to 100 each. A text over its cap is cut at a character and ends
   ` [cut at N bytes]`; a long brief or report never costs the dispatch its record.
-- **Status:** **internal** — written by the app alone, and read by the app alone.
+- **Status:** **internal** — written by the app alone, and read by the app and by
+  `purlis persona stats`, which counts records by persona.
 - **Who writes it:** the app, from its own record of the two chats
   (`purlis_core::dispatchrecord`, called from `app/src-tauri/src/dispatches.rs`): opened where
   the app starts the persona chat, counted where the board puts that chat in the needs-you
@@ -4965,8 +4975,17 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   the same way (`dispatchrecord::settle_on_open`); with a reopen record that cannot be read,
   none is.
 - **Why not the dispatch log:** `personas/_dispatch/` is committed, and a brief and a report
-  can hold whatever the work held. The log keeps its `handoff` row of four fields, for the
-  roster's count, and this record holds the rest on this machine only.
+  can hold whatever the work held. The log keeps its `handoff` row of four fields, and this
+  record holds the rest on this machine only.
+- **Also read by `purlis persona stats`:** its `DISP` column adds, to the committed log's
+  count for a persona, one for every record here that names it, a task or a handoff, running
+  or ended (`dispatchrecord::tally`). It reads the persona's name and nothing else of a
+  record. Run by a sandboxed chat, which is denied the store, it says the records could not
+  be read and that `DISP` is the log's count alone: an unreadable store is never reported as
+  no dispatches.
+- **In the Dispatches tab:** a record that has not ended and whose persona chat this app does
+  not have open (one the reopen record lists that was not brought back) is said to be `not
+  open`, with no duration: it is not running, and runs again when its chat is opened.
 - **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after it was last written, unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`). Deleting one costs its row in the Dispatches tab and nothing else.
 - **Git:** gitignored (under `/.charter/`).
 

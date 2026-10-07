@@ -412,10 +412,13 @@ declares and never uses, or uses and never declared, and how often routing advic
 against the dispatches that followed it — advice only the Python charter gave, read from the
 dispatch log it wrote; `routing:` is retired, and purlis gives none now.
 
-`DISP` counts dispatches, not sub-agent calls, from what the project holds today: the
-committed dispatch log, `personas/_dispatch/`. Its rows for a persona were written when a
-persona was sent out as a sub-agent, which it no longer is, so `DISP` and `never dispatched`
-stop moving until `persona stats` counts from the record the app keeps of each dispatch,
-which is not in this version yet. A chat that another chat started by a handoff is one row
-of that log with no persona in it, so `persona stats` says how many there were and puts them
-in no persona's row.
+`DISP` counts dispatches, not sub-agent calls, from two places. The committed dispatch log,
+`personas/_dispatch/`, holds rows for a persona from when one was sent out as a sub-agent,
+which it no longer is; every machine reads the same ones. And purlis keeps a record of each
+dispatch a chat makes, a task or a handoff, on the machine it was made on: `DISP` adds one
+for every record that names the persona. Those records are never committed and are kept 30
+days, so a dispatch made on another machine, or longer ago than that, is not counted, and
+`persona stats` says so under the table. A sandboxed chat is denied the records: run there,
+the command says it could not read them and that `DISP` is the log's count alone. A chat
+that another chat started by a handoff is also one row of the log with no persona in it, so
+`persona stats` says how many of those there were.

@@ -5,8 +5,8 @@
 //! **only caller of its writers**, and every fact it writes comes from the app's own record of
 //! the two chats: [`opened`] where the app starts a persona chat, [`needed_you`] where the
 //! board puts that chat in the needs-you queue, [`reported`] where the app accepts its report,
-//! [`ended`] where the app closes it, and [`session_recorded`] where the app writes a chat's
-//! session record. Nothing on the hook channel names a record, so no line a chat sends makes
+//! [`message`] where the app takes a message between the two chats, [`ended`] where the app
+//! closes it, and [`session_recorded`] where the app writes a chat's session record. Nothing on the hook channel names a record, so no line a chat sends makes
 //! one, points one at another asker or sets its counts. **A report's own line does carry how
 //! the task ended**, which is the persona chat's to say, and that outcome is written to the
 //! record of the dispatch that chat was started by, and to no other.
@@ -113,9 +113,24 @@ pub(crate) fn note(held: &Held, session: u32, event: Event) {
     }
 }
 
+/// The app took a message between persona chat `task` and the chat that asked for it: a
+/// follow-up, a progress note, a question or an answer. Its dispatch counts one more. Called
+/// only once the message is kept, with the app's own record of which chat is the task: no
+/// line names a record.
+pub(crate) fn message(held: &Held, task: u32) {
+    note(held, task, Event::Message);
+}
+
 /// The app accepted chat `session`'s report: its dispatch ends with it. `outcome` and `text`
-/// are the report's; what it cost is read from the app's record of the chat.
-pub(crate) fn reported(held: &Held, session: u32, outcome: Outcome, text: &str) {
+/// are the report's, and `changed` is what it says changed, where it says; what it cost is
+/// read from the app's record of the chat.
+pub(crate) fn reported(
+    held: &Held,
+    session: u32,
+    outcome: Outcome,
+    text: &str,
+    changed: Option<&str>,
+) {
     let Some(record) = running_for(held, session) else {
         return;
     };
@@ -123,7 +138,10 @@ pub(crate) fn reported(held: &Held, session: u32, outcome: Outcome, text: &str) 
         report: Some(dispatchrecord::Report {
             outcome,
             text: text.to_owned(),
-            changed: dispatchrecord::Changed::default(),
+            changed: dispatchrecord::Changed {
+                said: changed.map(str::to_owned),
+                ..dispatchrecord::Changed::default()
+            },
         }),
         usage: spent(held, session),
     };
@@ -218,14 +236,17 @@ pub(crate) struct DispatchRow {
     pub place: String,
     /// The folder it started in.
     pub folder: Option<String>,
-    /// `running`, `done`, `blocked`, `failed`, or `handed off` for one that ended owing no
-    /// report.
+    /// `running`; `done`, `blocked`, `failed`, `cancelled` or `stopped`, the report's own word;
+    /// `handed off` for one that ended owing no report; or `not open` for one that has not
+    /// ended and whose chat this app does not have open (it was not brought back, and runs
+    /// again when it is).
     pub outcome: String,
     /// When it started, as the record keeps it (UTC, RFC 3339).
     pub started: String,
     /// When it ended, the same way; `null` while it runs.
     pub ended: Option<String>,
-    /// How long it ran, or has run so far, spelled (`4m 30s`).
+    /// How long it ran, or has run so far, spelled (`4m 30s`). Empty for one that is
+    /// [`NOT_OPEN`]: no clock runs on a chat that is not there.
     pub duration: String,
     pub needed_you: u32,
     pub messages: u32,
@@ -237,11 +258,16 @@ pub(crate) struct DispatchRow {
     pub brief: String,
     /// The report's text, where it ended with one.
     pub report: Option<String>,
+    /// What the report says changed, in the persona chat's words, where it said.
+    pub changed: Option<String>,
     /// The persona chat's session, while it is still open: what the row opens.
     pub open_session: Option<u32>,
     /// Else its session record, by its project-relative path, once it wrote one.
     pub session_record: Option<String>,
 }
+
+/// What a row says of a dispatch that has not ended and whose chat is not open.
+pub(crate) const NOT_OPEN: &str = "not open";
 
 /// A chat the app has open, as far as a row needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,7 +290,10 @@ pub(crate) fn row(
         .map(|chat| chat.session);
     let outcome = match (&record.report, record.running()) {
         (Some(report), _) => report.outcome.word(),
-        (None, true) => "running",
+        (None, true) if open_session.is_some() => "running",
+        // Not ended, and its chat is not one this app has open: a chat the reopen record
+        // lists that was not brought back. It is not running, and is not said to be (#1457).
+        (None, true) => NOT_OPEN,
         (None, false) => "handed off",
     };
     let mut place = record
@@ -304,13 +333,21 @@ pub(crate) fn row(
         outcome: outcome.to_owned(),
         started: record.started.clone(),
         ended: record.ended.clone(),
-        duration: lasted(record, now),
+        duration: if outcome == NOT_OPEN {
+            String::new()
+        } else {
+            lasted(record, now)
+        },
         needed_you: record.needed_you,
         messages: record.messages,
         cost: usage.and_then(|usage| usage.cost_usd).map(dollars),
         tokens: usage.and_then(|usage| counted(usage.input_tokens, usage.output_tokens)),
         brief: record.brief.clone(),
         report: record.report.as_ref().map(|report| report.text.clone()),
+        changed: record
+            .report
+            .as_ref()
+            .and_then(|report| report.changed.said.clone()),
         open_session,
         session_record: record.worker.session_record.clone(),
     }
@@ -381,18 +418,22 @@ pub(crate) struct Dispatches {
     pub undrawn: u32,
 }
 
-/// Every dispatch of `held`'s project purlis draws, newest first, and the count of those it
-/// will not.
-pub(crate) fn rows(held: &Held) -> Dispatches {
-    let open: Vec<OpenChat> = held
-        .chats()
+/// The chats `held` has open now, as a row needs them.
+fn open_chats(held: &Held) -> Vec<OpenChat> {
+    held.chats()
         .open_now()
         .into_iter()
         .map(|chat| OpenChat {
             session: chat.session,
             id: held.chats().chat_at(chat.session).and_then(|at| at.id),
         })
-        .collect();
+        .collect()
+}
+
+/// Every dispatch of `held`'s project purlis draws, newest first, and the count of those it
+/// will not.
+pub(crate) fn rows(held: &Held) -> Dispatches {
+    let open = open_chats(held);
     let now = chrono::Utc::now();
     let drawn = dispatchrecord::drawn(held.root());
     Dispatches {
@@ -427,13 +468,15 @@ pub(crate) struct DispatchMade {
     pub outcome: String,
 }
 
-/// The dispatches listed on the session record at `path`, in the order they were made.
-pub(crate) fn made_on(root: &Path, path: &str) -> Vec<DispatchMade> {
+/// The dispatches listed on the session record at `path`, in the order they were made. `open`
+/// is the chats the app has open now ([`open_chats`]), which is what says a dispatch that has
+/// not ended is running.
+pub(crate) fn made_on(root: &Path, path: &str, open: &[OpenChat]) -> Vec<DispatchMade> {
     let now = chrono::Utc::now();
     dispatchrecord::listed_on(root, path)
         .iter()
         .map(|record| {
-            let row = row(record, &[], now);
+            let row = row(record, open, now);
             DispatchMade {
                 persona: row.persona,
                 task: row.task,
@@ -441,6 +484,12 @@ pub(crate) fn made_on(root: &Path, path: &str) -> Vec<DispatchMade> {
             }
         })
         .collect()
+}
+
+/// [`made_on`] for the project `held` holds: what a session record's tab lists, with the
+/// chats open now.
+pub(crate) fn made_by(held: &Held, path: &str) -> Vec<DispatchMade> {
+    made_on(held.root(), path, &open_chats(held))
 }
 
 #[cfg(test)]
@@ -618,6 +667,59 @@ mod tests {
         let row = super::row(&numbered, &namesakes, at("2026-10-07T12:04:30Z"));
         assert_eq!(row.open_session, Some(7));
         assert_eq!(row.asker_key, "#3");
+    }
+
+    /// #1457: a record whose chat the reopen record lists but which was not brought back
+    /// showed "running", with a duration that grew, until the project was next opened.
+    #[test]
+    fn a_dispatch_that_has_not_ended_and_whose_chat_is_not_open_is_not_said_to_be_running() {
+        let row = row(&a_record(), &[], at("2026-10-07T12:04:30Z"));
+
+        assert_eq!(row.outcome, NOT_OPEN);
+        assert_eq!(row.outcome, "not open");
+        assert_eq!(
+            row.duration, "",
+            "no clock runs on a chat that is not there"
+        );
+        assert_eq!(row.ended, None);
+        assert_eq!(row.open_session, None);
+        // One that ended says how, open or not.
+        let ended = Record {
+            ended: Some("2026-10-07T12:01:00+00:00".to_owned()),
+            report: Some(Report {
+                outcome: Outcome::Stopped,
+                text: "stopped by the operator".to_owned(),
+                changed: Changed::default(),
+            }),
+            ..a_record()
+        };
+        let row = super::row(&ended, &[], at("2026-10-09T00:00:00Z"));
+        assert_eq!(
+            (row.outcome.as_str(), row.duration.as_str()),
+            ("stopped", "1m 0s")
+        );
+        assert_eq!(row.changed, None);
+    }
+
+    #[test]
+    fn a_row_says_what_the_report_says_changed_in_the_chat_s_words() {
+        let record = Record {
+            ended: Some("2026-10-07T12:01:00+00:00".to_owned()),
+            report: Some(Report {
+                outcome: Outcome::Cancelled,
+                text: "Stopped half way.".to_owned(),
+                changed: Changed {
+                    said: Some("svc: 2 files".to_owned()),
+                    ..Changed::default()
+                },
+            }),
+            ..a_record()
+        };
+
+        let row = row(&record, &[], at("2026-10-09T00:00:00Z"));
+
+        assert_eq!(row.outcome, "cancelled");
+        assert_eq!(row.changed.as_deref(), Some("svc: 2 files"));
     }
 
     #[test]

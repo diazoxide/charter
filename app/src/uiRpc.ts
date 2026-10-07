@@ -2673,15 +2673,20 @@ export type DispatchRow = {
 	/**  The folder it started in. */
 	folder: string | null,
 	/**
-	 *  `running`, `done`, `blocked`, `failed`, or `handed off` for one that ended owing no
-	 *  report.
+	 *  `running`; `done`, `blocked`, `failed`, `cancelled` or `stopped`, the report's own word;
+	 *  `handed off` for one that ended owing no report; or `not open` for one that has not
+	 *  ended and whose chat this app does not have open (it was not brought back, and runs
+	 *  again when it is).
 	 */
 	outcome: string,
 	/**  When it started, as the record keeps it (UTC, RFC 3339). */
 	started: string,
 	/**  When it ended, the same way; `null` while it runs. */
 	ended: string | null,
-	/**  How long it ran, or has run so far, spelled (`4m 30s`). */
+	/**
+	 *  How long it ran, or has run so far, spelled (`4m 30s`). Empty for one that is
+	 *  [`NOT_OPEN`]: no clock runs on a chat that is not there.
+	 */
 	duration: string,
 	needed_you: number,
 	messages: number,
@@ -2695,6 +2700,8 @@ export type DispatchRow = {
 	brief: string,
 	/**  The report's text, where it ended with one. */
 	report: string | null,
+	/**  What the report says changed, in the persona chat's words, where it said. */
+	changed: string | null,
 	/**  The persona chat's session, while it is still open: what the row opens. */
 	open_session: number | null,
 	/**  Else its session record, by its project-relative path, once it wrote one. */

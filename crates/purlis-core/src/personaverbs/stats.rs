@@ -2,14 +2,23 @@
 //! skill logs. Read-only. A port of `commands_persona.cmd_persona_stats`, `persona.stats`,
 //! `dispatch.advice_tally` / `first_advice` / `routed_since_first_advice` and `skilluse.drift`.
 //!
-//! # What `DISP` counts (#1451)
+//! # What `DISP` counts (#1451, #1452)
 //!
 //! A dispatch: work given to a persona. A persona is never a harness sub-agent now, so no
-//! hook writes a row when a sub-agent returns. `DISP` is counted from what there is: the rows
-//! the committed dispatch log (`personas/_dispatch/`) holds for the persona, which were
-//! written while a persona could still be sent out as a sub-agent, and the log's `handoff`
-//! rows, which name no persona and are counted as one total. Counting from the app's record
-//! of each dispatch is not in this version yet (#1452).
+//! hook writes a row when a sub-agent returns. `DISP` adds two sources:
+//!
+//! - the rows the committed dispatch log (`personas/_dispatch/`) holds for the persona, which
+//!   were written while a persona could still be sent out as a sub-agent. Every machine reads
+//!   the same ones;
+//! - **the record the app keeps of each dispatch** ([`crate::dispatchrecord::tally`]): one for
+//!   every task and handoff a chat of this project was given on this machine. They are this
+//!   machine's, never committed, and kept 30 days, so the count is of what this machine saw
+//!   lately, and the notes under the table say so.
+//!
+//! **A sandboxed chat is denied the records** (D-1452-11). Run there, the command says it
+//! could not read them and that `DISP` is the log's count alone: it never reports the
+//! unreadable store as no dispatches. The log's `handoff` rows name no persona and are said as
+//! one total.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -25,6 +34,20 @@ const MEMORY_BLIND: [&str; 3] = ["orchestrator", "standby", "advisory"];
 
 /// The dispatch log's advice event — `dispatch.ADVICE`.
 const ADVICE: &str = "advice";
+
+/// Where `DISP` comes from, and what it cannot see.
+pub const RECORDS_COUNTED: &str = "DISP adds the committed dispatch log (personas/_dispatch/), \
+    whose rows for a persona are from when one was sent out as a sub-agent, and the record \
+    purlis keeps of each dispatch on this machine. Those records are never committed and are \
+    kept 30 days, so a dispatch made on another machine, or longer ago than that, is not \
+    counted here.";
+
+/// What is said in place of [`RECORDS_COUNTED`] where the records could not be read.
+pub const RECORDS_UNREAD: &str = "DISP is the committed dispatch log's count alone here: \
+    purlis could not read this machine's dispatch records, which a sandboxed chat is denied. \
+    So DISP may be low and a persona marked never dispatched may have been dispatched to. Run \
+    `purlis persona stats` in a terminal, or open the Dispatches tab, for the count with the \
+    records in it.";
 
 /// One persona's (or the shared namespace's) row — `persona.stats`'s dict.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -421,7 +444,12 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
             .cmp(&a.count)
             .then_with(|| a.persona.cmp(&b.persona))
     });
-    let disp: BTreeMap<String, u64> = crate::dispatch::tally(root);
+    // The committed log's count, and this machine's records of each dispatch on top (#1452).
+    let mut disp: BTreeMap<String, u64> = crate::dispatch::tally(root);
+    let recorded = crate::dispatchrecord::tally(root);
+    for (persona, n) in recorded.iter().flatten() {
+        *disp.entry(persona.clone()).or_default() += n;
+    }
     let (mut dormant, mut idle, mut unused, mut drafts) = (0, 0, 0, 0);
     let mut body: Vec<[String; 7]> = Vec::new();
     for r in &rows {
@@ -510,8 +538,8 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
     say(Say::Info(format!(
         "RECENT = memories in the last {recent_days} days · VERIFY = share carrying a \
          verification marker (quality proxy) · DUP = share in a near-dup pair (noise) · DISP = \
-         times work was DISPATCHED to it (committed dispatch log) · ⬡/◇ = memory-blind role \
-         (activity: profile), not judged by volume."
+         times work was DISPATCHED to it (committed dispatch log, and this machine's dispatch \
+         records) · ⬡/◇ = memory-blind role (activity: profile), not judged by volume."
     )));
     let total: u64 = disp.values().sum();
     let log = crate::dispatch::rows(root);
@@ -521,8 +549,9 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
         .count();
     if handoffs > 0 {
         say(Say::Info(format!(
-            "{handoffs} chat(s) were started by another chat (a handoff). The log names no \
-             persona for them, so they are in no row above."
+            "{handoffs} chat(s) were started by another chat (a handoff), by the committed \
+             dispatch log. The log names no persona for them, so a row above counts one only \
+             where this machine still keeps its record."
         )));
     }
     let (fired, first, followed) = advice(&log);
@@ -543,19 +572,21 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
                 .into(),
         ));
     }
-    if total == 0 {
-        say(Say::Info(
-            "No dispatch to a persona is in the committed dispatch log.".into(),
-        ));
+    match &recorded {
+        Ok(_) => {
+            if total == 0 {
+                say(Say::Info(
+                    "No dispatch to a persona is in the committed dispatch log or in this \
+                     machine's dispatch records."
+                        .into(),
+                ));
+            }
+            say(Say::Info(RECORDS_COUNTED.into()));
+        }
+        // Said as trouble, and never as a count: a store this process may not read is not a
+        // store with nothing in it.
+        Err(_) => say(Say::Warn(RECORDS_UNREAD.into())),
     }
-    // The dispatch records as DISP's source: #1452.
-    say(Say::Info(
-        "DISP is read from the committed dispatch log (personas/_dispatch/). Its rows for a \
-         persona were written when one was sent out as a sub-agent, which a persona no longer \
-         is, so DISP and ⚑ stop moving until they are counted from each dispatch's record, \
-         which is not in this version yet (#1452)."
-            .into(),
-    ));
     if unused > 0 {
         say(Say::Warn(format!(
             "{unused} persona(s) NEVER dispatched — they exist, lint green, and are unused. \
