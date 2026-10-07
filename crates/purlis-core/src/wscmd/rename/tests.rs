@@ -135,6 +135,7 @@ fn a_plane() -> Plane {
         report: Owed::Due,
         mode: crate::reopen::Mode::Handoff,
         depth: 0,
+        by_person: false,
     });
     crate::reopen::write(
         &root,

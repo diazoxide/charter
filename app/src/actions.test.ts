@@ -28,6 +28,7 @@ import {
   type Now,
   type Offer,
 } from "./actions";
+import { ASK_LOCKED_ID, askId, askRows } from "./actions";
 import {
   noTabs,
   openTab,
@@ -63,6 +64,7 @@ function doing(): Doing & { calls: string[] } {
     renameTab: note("renameTab"),
     linkWorkItem: note("linkWorkItem"),
     startFresh: note("startFresh"),
+    askPersona: note("askPersona"),
     unlinkWorkItem: async (...args: unknown[]) => {
       note("unlinkWorkItem")(...args);
       return { ok: true };
@@ -2415,5 +2417,81 @@ describe("a branch's file and folder rows (FM-10)", () => {
       "shellInFolder:svc/fix-it:src",
       "startChatHere:svc/fix-it:src",
     ]);
+  });
+});
+
+describe("Ask a persona from a chat's tab", () => {
+  const tabs = openTab(openTab(noTabs(), 7, "3", "steward"), 8, "sh");
+  const [chat, shell] = tabs.order;
+  const notAShell = (session: number) => session === 7;
+  const open = { personas: ["devops", "steward"], locked: null };
+
+  it("offers one row per persona on a chat's tab, naming the chat in its note", () => {
+    const offers = catalogue(now({ tabs, ask: open, askable: notAShell }));
+    const row = by(offers, askId(chat, "devops"));
+
+    expect(row).toMatchObject({
+      title: "Ask devops…",
+      available: true,
+      note: "From chat steward 3. A chat starts as devops, and its report comes back to this one.",
+      does: { verb: "askPersona", tab: chat, persona: "devops" },
+    });
+    expect(askRows(chat, catalogued(offers)).map((offer) => offer.title)).toEqual([
+      "Ask devops…",
+      "Ask steward…",
+    ]);
+  });
+
+  it("has no row on a shell, and none before the core has said who can be asked", () => {
+    const offers = catalogued(catalogue(now({ tabs, ask: open, askable: notAShell })));
+
+    expect(askRows(shell, offers)).toEqual([]);
+    expect(askRows(chat, catalogued(catalogue(now({ tabs, askable: notAShell }))))).toEqual([]);
+  });
+
+  it("opens the dialog through the window's hands, and starts nothing by itself", async () => {
+    const hands = doing();
+    const offers = catalogue(now({ tabs, ask: open, askable: notAShell }));
+
+    await run(offers, askId(chat, "devops"), hands);
+
+    expect(hands.calls).toEqual([`askPersona:${chat},devops`]);
+  });
+
+  it("is absent from every tab where policy locks dispatch, and the palette says why", () => {
+    const locked =
+      "No chat is dispatched to a persona in this project. Locked by policy, set by root in /etc/purlis/policy.toml.";
+    const offers = catalogue(now({ tabs, ask: { personas: [], locked }, askable: notAShell }));
+
+    expect(askRows(chat, catalogued(offers))).toEqual([]);
+    expect(ids(offers).filter((id) => id.startsWith("tab.ask:"))).toEqual([]);
+    expect(by(offers, ASK_LOCKED_ID)).toMatchObject({
+      title: "Ask a persona…",
+      available: false,
+      reason: locked,
+    });
+    // And no such row where nothing is locked: it exists to say why the others have gone.
+    expect(
+      by(catalogue(now({ tabs, ask: open, askable: notAShell })), ASK_LOCKED_ID),
+    ).toBeUndefined();
+  });
+
+  it("takes a pair policy locks off that chat's tab, and its palette row says who locked it", () => {
+    const why =
+      "Policy forbids steward chats dispatching to devops. Locked by policy, set by the platform team in /etc/purlis/policy.json.";
+    const offers = catalogue(
+      now({
+        tabs,
+        ask: { ...open, locked_for: [{ session: 7, persona: "devops", why }] },
+        askable: notAShell,
+      }),
+    );
+
+    expect(askRows(chat, catalogued(offers)).map((offer) => offer.title)).toEqual(["Ask steward…"]);
+    expect(by(offers, askId(chat, "devops"))).toMatchObject({
+      title: "Ask devops…",
+      available: false,
+      reason: why,
+    });
   });
 });

@@ -1019,6 +1019,12 @@ impl Planes {
         self
     }
 
+    /// Tells the window a chat it did not open itself has started: the person's own dispatch
+    /// from a chat's tab (#1438), which the window files as it files a chat's.
+    pub fn arrived(&self, arrived: crate::handoff::Arrived) {
+        (self.arrivals)(arrived);
+    }
+
     /// Tells `changes` whenever a plane this registry holds changes on disk, so the window reads
     /// it again (`crate::planewatch`).
     pub fn telling_changes(mut self, changes: crate::planewatch::Changed) -> Self {

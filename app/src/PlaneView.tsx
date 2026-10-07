@@ -231,6 +231,8 @@ import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
 import { opensAShell } from "./shellKey";
 import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
+import { useAskOffer } from "./askOffer";
+import { AskPersona, AskPersonaOpener, type AskPrefill, type OpenAskPersona } from "./AskPersona";
 import { SandboxOffer } from "./SandboxOffer";
 import { ProjectHostsNotice } from "./ProjectHostsNotice";
 import { ProjectDispatchNotice } from "./ProjectDispatchNotice";
@@ -481,6 +483,14 @@ export const PlaneView = memo(function PlaneView({
   /** The chat tab the Link to work item dialog is asking about, while it is open. */
   const [linkingWork, setLinkingWork] = useState<{
     tab: number;
+    trouble?: string;
+    busy: boolean;
+  }>();
+  /** The chat the Ask {persona} dialog is asking from, and the persona, while it is open. */
+  const [askingPersona, setAskingPersona] = useState<{
+    session: number;
+    persona: string;
+    prefill?: AskPrefill;
     trouble?: string;
     busy: boolean;
   }>();
@@ -3835,6 +3845,52 @@ export const PlaneView = memo(function PlaneView({
     [plane],
   );
 
+  /**
+   * Opens **Ask {persona}** for chat `session`: the one way in, for the catalogue's rows and
+   * for a Notice that names the persona to ask ({@link OpenAskPersona}). Nothing starts here.
+   */
+  const openAskPersona = useCallback<OpenAskPersona>((session, persona, prefill) => {
+    setAskingPersona({ session, persona, prefill, busy: false });
+  }, []);
+  /** Ask {persona}…, from a chat tab's menu or the palette. */
+  const askPersona = useCallback(
+    (id: number, persona: string) => {
+      const session = chatOf(now.current, id);
+      if (session !== undefined) openAskPersona(session, persona);
+    },
+    [openAskPersona],
+  );
+  /**
+   * The dialog's answer: the core starts a chat as that persona under the asking chat
+   * (`ask_persona_chat`) and tells this window of it as it tells of any chat another chat
+   * started, so its tab arrives behind the one being read. A refusal stays in the dialog.
+   */
+  const sendAsk = useCallback(
+    async (name: string, ask: string) => {
+      const asked = askingPersona;
+      if (asked === undefined || asked.busy) return;
+      setAskingPersona({ ...asked, trouble: undefined, busy: true });
+      const said = await commands
+        .askPersonaChat(
+          plane,
+          asked.session,
+          asked.persona,
+          name,
+          ask,
+          STARTING_SIZE.columns,
+          STARTING_SIZE.rows,
+        )
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") {
+        // What was typed stays in the boxes: the dialog is still mounted, and holds it.
+        setAskingPersona({ ...asked, trouble: said.error, busy: false });
+        return;
+      }
+      setAskingPersona(undefined);
+    },
+    [askingPersona, plane],
+  );
+
   /** Ends a chat tab's chat's work link, through `chat_work_unlink`. */
   const unlinkWorkItem = useCallback(
     async (id: number): Promise<Ran> => {
@@ -3890,6 +3946,7 @@ export const PlaneView = memo(function PlaneView({
       linkWorkItem,
       unlinkWorkItem,
       startFresh: askStartFresh,
+      askPersona,
       pinTab,
       pinWorkspace,
       pinProject: windowDoes.pinProject,
@@ -3950,6 +4007,7 @@ export const PlaneView = memo(function PlaneView({
       linkWorkItem,
       unlinkWorkItem,
       askStartFresh,
+      askPersona,
       bringToFront,
       cancelSmartClose,
       close,
@@ -4136,6 +4194,16 @@ export const PlaneView = memo(function PlaneView({
   /** The plane's personas, straight off the plane's own answer — the array, not a copy of it,
    *  so the catalogue is rebuilt when the plane is read again and not per render. */
   const personas = workspaceState.panels?.personas;
+  /** What Ask {persona}… offers on this project's chats, as the core answers. */
+  const askOffer = useAskOffer(
+    plane,
+    personas,
+    settingsChanges + curationsChanges,
+    tabs.order
+      .map((tab) => chatOf(tabs, tab))
+      .filter((chat) => chat !== undefined)
+      .join(","),
+  );
   /** The focused workspace's open todos, the same way: one close and one forget row each. */
   const todos = workspaceState.panels?.todos;
   /** The session records the palette offers rows for: the place in front's (SI-8d). */
@@ -4214,6 +4282,9 @@ export const PlaneView = memo(function PlaneView({
             // offered no work link (ADR 0088 §4).
             linkable: (session) => filedIn(session) !== OUTSIDE,
             planeUpdated: planeUpdates,
+            ask: askOffer,
+            // Not from a shell: it is on no harness profile to start the persona's chat on.
+            askable: (session) => !shells.has(session),
           }),
     [
       clones,
@@ -4251,6 +4322,8 @@ export const PlaneView = memo(function PlaneView({
       workItems,
       filedIn,
       planeUpdates,
+      askOffer,
+      shells,
     ],
   );
 
@@ -4645,7 +4718,12 @@ export const PlaneView = memo(function PlaneView({
   if (!inFront) return null;
 
   return (
-    <Lent chats={chats} references={referenceChats} personas={personaMarks}>
+    <Lent
+      chats={chats}
+      references={referenceChats}
+      personas={personaMarks}
+      askPersona={openAskPersona}
+    >
       {/* The workspaces of this project, as the second of the three strips (ADR 0036). It is
           the axis the tmux frame had and the port lost: a top-level tab there was a
           WORKSPACE and the sessions lived under it, and transposing the app onto projects
@@ -5527,6 +5605,20 @@ export const PlaneView = memo(function PlaneView({
         />
       )}
 
+      {askingPersona && (
+        <AskPersona
+          // A new question is a new dialog: its boxes start from its own prefill.
+          key={`${askingPersona.session}:${askingPersona.persona}`}
+          persona={askingPersona.persona}
+          chat={nameOf(askingPersona.session)}
+          prefill={askingPersona.prefill}
+          trouble={askingPersona.trouble}
+          asking={askingPersona.busy}
+          onAsk={(name, ask) => void sendAsk(name, ask)}
+          onCancel={() => setAskingPersona(undefined)}
+        />
+      )}
+
       {askingAction && (
         <AskFirst
           extension={askingAction.extension}
@@ -5715,19 +5807,22 @@ export const PlaneView = memo(function PlaneView({
 });
 
 /**
- * What a project's window lends everything it draws: its chats' states (`ChatsHere`), and the
- * chats a file can be handed to (`ReferenceChats`, FM-9).
+ * What a project's window lends everything it draws: its chats' states (`ChatsHere`), the
+ * chats a file can be handed to (`ReferenceChats`, FM-9), and the way to open Ask {persona}
+ * for one of its chats (`useAskPersona`), which a Notice on a pane calls.
  */
 function Lent({
   chats,
   references,
   personas,
+  askPersona,
   children,
 }: {
   chats: ComponentProps<typeof ChatsHere.Provider>["value"];
   references: ChatsForReferences;
   /** Every persona's mark here, and how to read them again (#1449). */
   personas: ReturnType<typeof usePersonaMarks>;
+  askPersona: OpenAskPersona;
   children: ReactNode;
 }) {
   return (
@@ -5735,7 +5830,7 @@ function Lent({
       <ReferenceChats.Provider value={references}>
         <PersonaMarks.Provider value={personas.marks}>
           <ReloadPersonaMarks.Provider value={personas.reload}>
-            {children}
+            <AskPersonaOpener value={askPersona}>{children}</AskPersonaOpener>
           </ReloadPersonaMarks.Provider>
         </PersonaMarks.Provider>
       </ReferenceChats.Provider>

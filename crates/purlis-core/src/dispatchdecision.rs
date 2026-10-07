@@ -294,6 +294,46 @@ pub fn asked_by_a_chat(
     grant: Grant,
     limits: Limits,
 ) -> Asked {
+    asked(root, asking, named, default, lineage, grant, limits, false)
+}
+
+/// The decision for a task **the person** asks for from the tab of the chat recorded as
+/// `asking`, naming `named` (#1438): [`asked_by_a_chat`]'s twin, built from the same record
+/// the same way, and asked as [`Asker::Person`]. There is no grant to pass: the person is the
+/// one a grant is asked of. The limits hold for the person too.
+pub fn asked_by_the_person(
+    root: &std::path::Path,
+    asking: &crate::reopen::Chat,
+    named: &str,
+    default: Option<&str>,
+    lineage: &Lineage,
+    limits: Limits,
+) -> Asked {
+    asked(
+        root,
+        asking,
+        Some(named),
+        default,
+        lineage,
+        Grant::Missing,
+        limits,
+        true,
+    )
+}
+
+/// [`asked_by_a_chat`] and [`asked_by_the_person`]: one reading of the asking chat's record,
+/// whoever asks.
+#[allow(clippy::too_many_arguments)]
+fn asked(
+    root: &std::path::Path,
+    asking: &crate::reopen::Chat,
+    named: Option<&str>,
+    default: Option<&str>,
+    lineage: &Lineage,
+    grant: Grant,
+    limits: Limits,
+    by_the_person: bool,
+) -> Asked {
     // The persona it runs as: its own, else the one a new chat adopts by default.
     let runs_as = asking.persona.as_deref().or(default);
     // The persona asked for: the one named, else its own.
@@ -302,16 +342,21 @@ pub fn asked_by_a_chat(
         .filter(|named| !named.is_empty())
         .or(runs_as);
     let chain: Vec<Option<&str>> = lineage.chain.iter().map(Option::as_deref).collect();
+    let asking_chat = AskingChat {
+        persona: runs_as,
+        held: asking.held.is_some(),
+        profile: asking.profile.as_deref(),
+        depth: lineage.depth,
+        chain: &chain,
+        running: lineage.running,
+        lineage: lineage.lineage,
+    };
     let request = Request {
-        asker: Asker::Chat(AskingChat {
-            persona: runs_as,
-            held: asking.held.is_some(),
-            profile: asking.profile.as_deref(),
-            depth: lineage.depth,
-            chain: &chain,
-            running: lineage.running,
-            lineage: lineage.lineage,
-        }),
+        asker: if by_the_person {
+            Asker::Person(asking_chat)
+        } else {
+            Asker::Chat(asking_chat)
+        },
         to: match to_name {
             Some(name) => persona_in(root, name),
             None => Persona::None,
@@ -561,6 +606,7 @@ mod tests {
                 report,
                 mode,
                 depth,
+                by_person: false,
             }),
             ..chat(persona)
         }
@@ -728,6 +774,71 @@ mod tests {
         assert_eq!(
             asked(&steward, Some("ghost"), None).decision,
             Decision::Refused(Refused::NoPersona("ghost".to_owned()))
+        );
+    }
+
+    #[test]
+    fn the_person_s_ask_is_built_from_the_same_record_and_needs_no_grant_or_lifted_hold() {
+        // #1438: from a steward chat's tab the person asks devops, which that chat's own
+        // dispatch needs a grant for.
+        let root = tempfile::tempdir().expect("a project");
+        let dir = root.path().join("personas").join("devops");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("persona.md"),
+            "---\nname: devops\ndescription: d\n---\n# devops\n",
+        )
+        .unwrap();
+        let lineage = Lineage {
+            depth: 1,
+            chain: vec![Some("qa".to_owned())],
+            running: 0,
+            lineage: 2,
+        };
+        let by_the_person = |asking: &Chat, named: &str, limits: Limits| {
+            asked_by_the_person(root.path(), asking, named, None, &lineage, limits)
+        };
+        let steward = chat(Some("steward"));
+        assert_eq!(
+            by_the_person(&steward, " devops ", Limits::default()),
+            Asked {
+                decision: Decision::Start,
+                to: Some("devops".to_owned()),
+                depth: 2,
+            }
+        );
+        // A chat still holding another persona's grants cannot dispatch; the person can,
+        // from its tab: the hold is theirs to lift.
+        let holding = Chat {
+            held: Some(HeldGrants {
+                persona: Some("qa".to_owned()),
+            }),
+            ..chat(Some("steward"))
+        };
+        assert_eq!(
+            by_the_person(&holding, "devops", Limits::default()).decision,
+            Decision::Start
+        );
+        // Every other check holds for the person: the persona, the profile, the limits.
+        assert_eq!(
+            by_the_person(&steward, "ghost", Limits::default()).decision,
+            Decision::Refused(Refused::NoPersona("ghost".to_owned()))
+        );
+        let shell = Chat {
+            profile: None,
+            ..chat(Some("steward"))
+        };
+        assert_eq!(
+            by_the_person(&shell, "devops", Limits::default()).decision,
+            Decision::Refused(Refused::NoProfile)
+        );
+        let off = Limits {
+            running: 0,
+            ..Limits::default()
+        };
+        assert_eq!(
+            by_the_person(&steward, "devops", off).decision,
+            Decision::Refused(Refused::TooManyRunning { limit: 0 })
         );
     }
 

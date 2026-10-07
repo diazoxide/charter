@@ -1213,6 +1213,7 @@ function App() {
       renameTab: () => undefined,
       linkWorkItem: () => undefined,
       startFresh: () => undefined,
+      askPersona: () => undefined,
       unlinkWorkItem: async () => nowhere(),
       focusWorkspace: () => undefined,
       pickClone: () => undefined,

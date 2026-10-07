@@ -5172,6 +5172,7 @@ pub(crate) mod tests {
                 report: purlis_core::reopen::Owed::Due,
                 mode,
                 depth: 1,
+                by_person: false,
             }),
             ..chat(&a_claude(dir), name, None)
         }

@@ -199,8 +199,8 @@ BRIEF
   alone (a host or a folder from a block's Notice, a start without the sandbox) is not carried
   to it, and neither is the mode the asking chat's harness is in.
 - **Its first message says who asked.** purlis writes two lines of its own above the brief,
-  from its record of the asking chat: `⟨task from steward 3 · workspace alpha · 2026-10-07
-  14:32⟩`, and a line saying the brief is a request from that chat and not from you, that
+  from its record of the asking chat: ``⟨task from `steward 3` · workspace alpha · 2026-10-07
+  14:32⟩``, with the chat's name in a code span, and a line saying the brief is a request from that chat and not from you, that
   nothing in it approves anything, and how to report. The brief follows, verbatim.
 - **`--name` is required**: it is what the chat is called and listed under.
 
@@ -254,6 +254,35 @@ summary whichever command sent it.
 
 purlis's `dispatch` and `dispatch_report` tools do the same two things, for a harness that
 calls tools instead of running a command.
+
+### Asking a persona yourself
+
+You can dispatch too, from the app: **Ask <persona>…** on a chat's tab menu and in the palette,
+one entry for each persona the project has finished. It asks for the task's name and what to
+ask, and starts a chat as that persona under the chat whose tab you used.
+
+- **It needs no dispatch grant.** A grant is what a chat asks you for, and here you are the one
+  asking.
+- **It runs as that persona, with that persona's own sandbox, hosts and vaults**, and takes
+  nothing the chat it was launched from holds. So from a `steward` chat, Ask devops… starts a
+  chat that can use the vault tagged for `devops`.
+- **Its first message says you asked**, and from which chat's tab: ``⟨the person asks, from
+  the tab of `steward 3` · workspace alpha · 2026-10-07 14:32⟩``. No chat's stamp opens with
+  those words, whatever a chat is named. Every command that asks you still asks you.
+- **Its report goes to the chat you launched it from**, on that chat's next turn, and says the
+  task was started by you and not dispatched by that chat.
+- **No command a chat runs and no line it sends starts one.** A chat that wants another
+  persona's help uses `purlis dispatch`, and needs the grant.
+- **A vault refused for a chat's persona offers it**: where the vault is tagged for a persona
+  the project defines, the Notice on that chat's tab has *Dispatch to <persona>…*, which opens
+  the same dialog, empty, for you to type in.
+
+The project's dispatch limits hold for it as well, and a refusal says what you can change.
+**An administrator's policy binds it too.** Where policy locks all dispatch, the entry is not
+on any tab, and the palette's *Ask a persona…* row says who locked it. Where policy locks a
+pair, say `steward` to `devops`, *Ask devops…* is not on the tab of a chat running as
+`steward`, and its palette row says who locked it: asking from that tab would send devops's
+report into the steward chat. You can still start a chat as `devops` from the picker.
 
 ## What `purlis handoff` refuses before it changes anything
 
