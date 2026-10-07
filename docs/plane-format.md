@@ -4769,30 +4769,73 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   temp directory, instead. The path is handed to each chat as `$CHARTER_HOOK_SOCKET`.
 - **Git:** gitignored (under `/.charter/`).
 
-### `app/spool/<n>.jsonl`
-- **Format:** JSON lines, one per hook line the host did not take within 250 ms (FD-30, ADR 0068
-  §6): `{"v": 1, "seq": <n>, "key": "<16 hex>", "line": "<the hook's line, as JSON text>",
-  "mac": "<64 hex>"}`. `seq` counts from 1 per key; `key` names the key the line checks under;
-  `mac` is HMAC-SHA256, under that key, of the chat number, `seq` and `key` (each followed by a
-  newline) and then `line`'s bytes. A line holds no token. `<n>` is the chat's number.
-- **Status:** **internal** — appended by `charter hook` and `purlis git-hook` of the same build,
+### `app/spool/<n>/`
+- **Format:** a folder per chat, `<n>` the chat's number, with one file per hook line the host
+  did not take within 250 ms (FD-30, ADR 0068 §6, #983):
+  - `<key>.<seq>.json` is one spooled line: `{"v": 1, "seq": <n>, "key": "<16 hex>", "line":
+    "<the hook's line, as JSON text>", "mac": "<64 hex>"}` and a newline. `seq` counts from 1 per
+    key; `key` names the key the line checks under; `mac` is HMAC-SHA256, under that key, of the
+    chat number, `seq` and `key` (each followed by a newline) and then `line`'s bytes. A line
+    holds no token. The name's `<key>` and `<seq>` are the line's own, `<seq>` in decimal, and
+    the file holds that one line: the drain reads no other. A file with this name is whole and
+    is never written again.
+  - `<key>.<seq>.part` is a number a hook has taken and is still writing its line under, or took
+    and died before it finished. It is never read as a line.
+- **Status:** **internal** — written by `charter hook` and `purlis git-hook` of the same build,
   read by the app.
-- **Tier:** Clone state, transient — emptied by the drain at the next open of the project.
-- **Written by:** `purlis_core::hookwire::spool::append`, under an exclusive lock on the file,
-  `fsync`ed (and a new file's directory too) before the hook answers its harness. That survives
+- **Tier:** Clone state, transient — each line is removed by the drain at the next open of the
+  project.
+- **Written by:** `purlis_core::hookwire::spool::append`, **under no lock**: hooks of one chat
+  that spool at once never wait for each other. A hook takes the next number by making
+  `<key>.<seq>.part` exclusively (the one after the highest number the folder's names hold for
+  its key, and the one after that if another hook took it first), writes its line into it,
+  `fsync`s it, links it as `<key>.<seq>.json`, removes the `.part` name and `fsync`s the folder
+  (and `spool/` too, for a new folder), all before the hook answers its harness. That survives
   a host crash. It is the ordinary `fsync`, so on macOS a power loss can still lose the line.
-  Mode 0600, opened with `O_NOFOLLOW`. **Only in a project's `.charter/app/spool/`** (V63): beside
-  a fallback socket (`charter-<user>-<16 hex>/`) nothing is spooled, and the hook says the line is
-  lost.
+  The folder is mode 0700 and each file 0600, the folder opened with `O_NOFOLLOW` and every
+  file made through it. **A hook gives a line 1 s to be written**, and a folder that already
+  holds 16,384 names, of any kind, takes no more. Past the cap, or on a disk that refuses the
+  write, the hook says the line is lost. Past the second it says the line may be lost: the
+  write is left to finish, and the drain records the line if it did.
+  **Only in a project's `.charter/app/spool/`** (V63): beside a fallback socket
+  (`charter-<user>-<16 hex>/`) nothing is spooled, and the hook says the line is lost.
 - **Read by:** `purlis_core::hookwire::spool::drain`, from `Hooks::drain_spool` in the app,
-  when a project is opened and before any chat starts. Each line is checked: its key must be one
+  when a project is opened and before any chat starts, holding an exclusive lock on the folder
+  that only another drain waits for. Each `.json` file is checked: its key must be one
   `keys.json` holds for this chat, its MAC must be its own, and its line must name this chat. A
-  number missing below the file's own highest one is a gap. Lines removed from the end, or
-  removed and then followed by new ones, are not found. A line that is not UTF-8 or not a spool
-  line is `unreadable`, and the drain carries on past it. Every line the drain handed on is
-  recorded before the file is emptied.
+  number missing below the highest one the folder holds for a key is a gap, whether or not a
+  `.part` file holds it. Lines removed from the end, or removed and then followed by new
+  ones, are not found. A name that is not a plain file of at most 1 MiB, not UTF-8, not one
+  spool line, or not the line its name says, and any name a hook does not give, is
+  `unreadable`, and the drain carries on past it. A `.part` file with no line of its name yet
+  is `unfinished`, said at each drain that sees it. A line the chat's `<n>.jsonl` gave in the
+  same drain (the same key, number and MAC) is `repeated`. Lines under two keys are handed on
+  in the order `keys.json` holds the keys. Every line the drain handed on is recorded before
+  its file is removed. The drain removes the files it read and the names it could not read
+  (a directory among them stays, and is said again), and no other; the chat's folder itself is
+  never removed. A `.part` file last written an hour ago or more, or dated in a time to come,
+  is a dead hook's, and is removed. **A line a hook is still writing while the drain runs is
+  not recorded by it**: it is a gap at that drain if a later line was there, it stays in the
+  folder, and the drain forgets its key as it ends, so the next drain rejects it as `no-key`.
+  Only a drain that stopped before its end leaves the key held, and the next one then hands
+  the line on.
 - **Git:** gitignored (under `/.charter/`). A sandboxed chat is denied reading and writing the
   whole `spool/` directory (ADR 0067 §5's integrity class, V63).
+
+### `app/spool/<n>.jsonl`
+- **Format:** the spool of a build before #983: JSON lines, one per hook line, each the object
+  a `<key>.<seq>.json` file holds now, appended to one file per chat under a lock on it.
+- **Status:** **internal**, **read only** — no build writes it since #983. A hook of the build
+  before still appends to it (ADR 0068 §6's N−1), so the app reads it at every open.
+- **Tier:** Clone state, transient — emptied by the drain at the next open of the project.
+- **Written by:** nothing in this build.
+- **Read by:** `purlis_core::hookwire::spool::drain`, before the chat's folder and with the
+  same checks, under an exclusive lock on the file. A number missing below the file's own
+  highest one is a gap. Every line the drain handed on is recorded before the file is emptied.
+  It is emptied and left, never removed, so a hook holding it open appends to the file the
+  next drain reads.
+- **Git:** gitignored (under `/.charter/`), and denied to a sandboxed chat with the rest of
+  `spool/`.
 
 ### `app/spool/keys.json`
 - **Format:** JSON, `{"v": 1, "keys": [{"id": "<16 hex>", "chat": <n>, "key": "<64 hex>"}]}`:
@@ -5272,7 +5315,7 @@ refuses a `<data>` under a project or inside any git work tree.
 | keyring `purlis/@identity/<16 hex>` (written now), or `charter/@identity/<16 hex>` (still read during the rename window for a record without `base`, #1261), account = the variable's name | Keyring | a vault provider's identity, such as a 1Password service-account token | `secrets::identity` |
 | `<config>/forge-accounts.json` | Machine, device-bound | **decided, not yet written** (ADR 0077). Each forge account: its id (a ULID), kind, host, login, how it was signed in (`device`, `pkce`, `pat` or `import`), the client id of a registration made on a host purlis has none compiled in for, whether it is signed in and the scopes last read; and each repo's or owner's binding to one account. Nothing secret. Device-bound because each entry points into this machine's keyring. Backed up by FR-10 and restored only onto a machine that replaces the old one (ADR 0069 §5), with every account signed out, since no token is backed up | the process holding the human scope: the window, then `purlisd` on `local-ui` (FW-3a, FW-3b) |
 | keyring `charter/@forge/<host>/<id>`, `<id>` = the forge account's id | Keyring | **decided, not yet written** (ADR 0070, ADR 0077). A forge account's token: the access token, and the refresh token and expiry where the flow gives them. The human's; only a `local-ui` caller reads or refreshes it, and a chat's sandbox denies it. The `@` keeps it apart from any vault's items | FW-3a, FW-3b |
-| `<data>/events/<device>/events.jsonl` | Machine, device-bound | the host's event log (FD-9, ADR 0066, ADR 0068): one JSON line per event in ADR 0066's envelope (`v`, `device_id`, `seq`, `ulid`, `chat`, `run`, `parent_run`, `kind`, `body`), `seq` from 1 and never reused, one writer per device holding a lock on `events.lock` beside it. This file is the segment being written; at 16 MiB it is sealed as `events.<first seq>.jsonl` and a new one begun. A line a crash tore is cut off when the log is next opened, and a file with lines but no readable `seq` is refused rather than counted from 1 again. Kinds written today: `run.started` (body `cause`: `start`, `clear`, `reopen` for a chat a relaunch put back in its conversation, `fresh` for one started again without it, or `child` for a sub-agent's run, whose `parent_run` is the run that was current; `wake` and `switch` are named and not yet written), `hook.<word>` for every state hook (`sessionstart` adds `started`), `hook.<word>` for every tool hook purlis answers, `hook.commit_refused` for each commit purlis's git hook refused (no text, only the chat), `trust.sandbox.grant` and `trust.sandbox.revoke` (#1342, ADR 0067 as amended 2026-10-06) for each sandbox grant a person made or took back — `actor_kind` `human`, `actor` `operator`, `scope` `local-ui`, the `level` (`chat`, `you`, `project`), `what` (`host` or `write`) and the `target` host or folder — under the chat it came from, or no chat for a revoke from Settings, made durable before the grant takes effect, `trust.sandbox.off` and `trust.sandbox.on` (ADR 0067 §7, ADR 0075 §4) under the run a start just began and before its program runs — `off` for a chat in a sandboxed project that starts without the sandbox (`actor_kind` `human`, `actor` `operator`, `scope` `local-ui` for a person's opt-out from the picker, or from a sandbox block's Notice that purlis grants nothing for, "Start without the sandbox for this chat", whose `reason` says so (#1342); `actor_kind` `host`, `actor` `purlis (no backend on this OS)` and `os` for a system with no backend, ruling V78 b), with `harness`, `persona`, the `reason` typed (one line, at most 200 characters, or null) and the classes `lifted`; `on` (`actor_kind` `host`, `actor` `purlis`, `harness`, `persona`, `restored`) for a chat whose last run was unsandboxed starting sandboxed — and `hook.unknown` (with the `word`, shortened) for a tool hook word it does not. A tool event has `tool`, `call`, `args` (the HMAC of the arguments' SHA-256, never the arguments), `decision` (`allow`, `ask`, `deny` or `none`), `rule` for a denial (`guard-crashed`, `guard-unanswered` and `unknown-hook` among them), `hook_ms`, and `tool_ms` on whichever of a call's pre and post hooks is heard second, within the hour, by the hooks' own clocks. Lines are written in the order their hooks connected, best effort: ordered unless recording a line takes longer than 50 ms. Chat and run ids are ULIDs. A chat's id is the one `app/reopen.json` keeps for it, so it is the same across a relaunch, and the host writes a chat's `run.started` as it starts the chat, before its program can send a line; a chat the host was never told of is given ids at its first line. Each event is `fsync`ed (the operating system's ordinary `fsync`; on macOS not `F_FULLFSYNC`) before the host tells the hook its line is taken, and the hook answers its harness only after that or after spooling the line (FD-30, `app/spool/`). What a drain of the hook spool finds is recorded at the project's open: each line that checked as it would have been live, with `spooled` its number, under the chat and run the reopen record names (with no chat or run, and `chat_number`, for a chat it does not), `hook.spool.gap` (`from`, `to`), `hook.spool.rejected` (`seq`, `why`: `unreadable`, `no-key`, `another-chats-key`, `mac`, `not-this-chats` or `repeated`) and `hook.spool.drained` (`from`, `to`), each with `chat_number`. A line the host took after the hook stopped waiting and that was spooled too is recorded twice. Never committed and never sent. The audit (ADR 0075) and OTel logs (ADR 0083) are written from it. Retention (FD-24): every event of the last 30 days is kept, and more; a sealed segment is deleted, when the log is opened or a segment sealed, once its newest event is older than that, and the segment being written and the newest sealed one never are. A client reads it with `subscribe(since)` from the last `seq` it holds and gets every later event in order and once, across segments and across a host killed and started again; a cursor older than what is kept, or one that falls in a segment no longer kept, gets a `missed` marker and carries on from the next event kept. Backed up by FR-10 (ADR 0069 row 63) | `purlis_core::eventlog::Recorder`, held by the app, its only writer; the app's doctor has an `event log` row |
+| `<data>/events/<device>/events.jsonl` | Machine, device-bound | the host's event log (FD-9, ADR 0066, ADR 0068): one JSON line per event in ADR 0066's envelope (`v`, `device_id`, `seq`, `ulid`, `chat`, `run`, `parent_run`, `kind`, `body`), `seq` from 1 and never reused, one writer per device holding a lock on `events.lock` beside it. This file is the segment being written; at 16 MiB it is sealed as `events.<first seq>.jsonl` and a new one begun. A line a crash tore is cut off when the log is next opened, and a file with lines but no readable `seq` is refused rather than counted from 1 again. Kinds written today: `run.started` (body `cause`: `start`, `clear`, `reopen` for a chat a relaunch put back in its conversation, `fresh` for one started again without it, or `child` for a sub-agent's run, whose `parent_run` is the run that was current; `wake` and `switch` are named and not yet written), `hook.<word>` for every state hook (`sessionstart` adds `started`), `hook.<word>` for every tool hook purlis answers, `hook.commit_refused` for each commit purlis's git hook refused (no text, only the chat), `trust.sandbox.grant` and `trust.sandbox.revoke` (#1342, ADR 0067 as amended 2026-10-06) for each sandbox grant a person made or took back — `actor_kind` `human`, `actor` `operator`, `scope` `local-ui`, the `level` (`chat`, `you`, `project`), `what` (`host` or `write`) and the `target` host or folder — under the chat it came from, or no chat for a revoke from Settings, made durable before the grant takes effect, `trust.sandbox.off` and `trust.sandbox.on` (ADR 0067 §7, ADR 0075 §4) under the run a start just began and before its program runs — `off` for a chat in a sandboxed project that starts without the sandbox (`actor_kind` `human`, `actor` `operator`, `scope` `local-ui` for a person's opt-out from the picker, or from a sandbox block's Notice that purlis grants nothing for, "Start without the sandbox for this chat", whose `reason` says so (#1342); `actor_kind` `host`, `actor` `purlis (no backend on this OS)` and `os` for a system with no backend, ruling V78 b), with `harness`, `persona`, the `reason` typed (one line, at most 200 characters, or null) and the classes `lifted`; `on` (`actor_kind` `host`, `actor` `purlis`, `harness`, `persona`, `restored`) for a chat whose last run was unsandboxed starting sandboxed — and `hook.unknown` (with the `word`, shortened) for a tool hook word it does not. A tool event has `tool`, `call`, `args` (the HMAC of the arguments' SHA-256, never the arguments), `decision` (`allow`, `ask`, `deny` or `none`), `rule` for a denial (`guard-crashed`, `guard-unanswered` and `unknown-hook` among them), `hook_ms`, and `tool_ms` on whichever of a call's pre and post hooks is heard second, within the hour, by the hooks' own clocks. Lines are written in the order their hooks connected, best effort: ordered unless recording a line takes longer than 50 ms. Chat and run ids are ULIDs. A chat's id is the one `app/reopen.json` keeps for it, so it is the same across a relaunch, and the host writes a chat's `run.started` as it starts the chat, before its program can send a line; a chat the host was never told of is given ids at its first line. Each event is `fsync`ed (the operating system's ordinary `fsync`; on macOS not `F_FULLFSYNC`) before the host tells the hook its line is taken, and the hook answers its harness only after that or after spooling the line (FD-30, `app/spool/`). What a drain of the hook spool finds is recorded at the project's open: each line that checked as it would have been live, with `spooled` its number, under the chat and run the reopen record names (with no chat or run, and `chat_number`, for a chat it does not), `hook.spool.gap` (`from`, `to`), `hook.spool.rejected` (`seq`, `why`: `unreadable`, `no-key`, `another-chats-key`, `mac`, `not-this-chats`, `repeated` or `unfinished`) and `hook.spool.drained` (`from`, `to`), each with `chat_number`. A line the host took after the hook stopped waiting and that was spooled too is recorded twice. Never committed and never sent. The audit (ADR 0075) and OTel logs (ADR 0083) are written from it. Retention (FD-24): every event of the last 30 days is kept, and more; a sealed segment is deleted, when the log is opened or a segment sealed, once its newest event is older than that, and the segment being written and the newest sealed one never are. A client reads it with `subscribe(since)` from the last `seq` it holds and gets every later event in order and once, across segments and across a host killed and started again; a cursor older than what is kept, or one that falls in a segment no longer kept, gets a `missed` marker and carries on from the next event kept. Backed up by FR-10 (ADR 0069 row 63) | `purlis_core::eventlog::Recorder`, held by the app, its only writer; the app's doctor has an `event log` row |
 | `<data>/events/<device>/events.<first seq>.jsonl` | Machine, device-bound | a sealed segment of the event log above: the same lines, from the `seq` its name gives (20 digits, so names sort as numbers), `fsync`ed before it is renamed, and the directory after the rename, never written again (while the next segment cannot be made, appends fail rather than go into this one), deleted by the event log's retention. Backed up by FR-10 with the log | `purlis_core::eventlog::Log`, which seals and deletes them; `eventlog::read` and `eventlog::subscribe` read them |
 | `<data>/events/<device>/events.lock` | Machine, device-bound, rebuildable | empty; the event log's one writer holds a lock on it for as long as it writes, so a second host is refused (ADR 0068). A file of its own so the lock outlives each sealed segment | `purlis_core::eventlog::Log` |
 | `<data>/events/<device>/args.key` | Machine, device-bound | 32 random bytes, `0600`, that key the event log's args digests, so a digest of `ls -la` cannot be matched by anyone who lacks the key and stays comparable from one launch to the next. Anything running as the same OS user can read it, and so can whoever holds a backup that carries it; the key protects the digests from everyone else. The hook sends the host the arguments' *unkeyed* SHA-256 on the chat's hook channel, which only the same user can reach. Backed up with the log, which it is useless without (AU-19 may move it into the keyring) | `eventlog::ArgsKey`, made on first use |

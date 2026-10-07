@@ -1529,12 +1529,24 @@ fn deliver(
     };
     spool::append(&spool::dir_for(path), chat, token, line)
         .map(Delivered::Spooled)
-        .map_err(|spooled| {
-            io::Error::new(
-                spooled.kind(),
-                format!("{why}, and it could not be spooled ({spooled}), so it is lost"),
-            )
-        })
+        .map_err(|spooled| not_spooled(&why, spooled))
+}
+
+/// What a hook says of a line the host did not take (`why`) and its spool did not keep
+/// (`spooled`). A spool the hook stopped waiting for ([`io::ErrorKind::TimedOut`]) may still
+/// finish the write, and the next open of the project then records the line, so that one is
+/// said to be perhaps lost; every other is lost.
+#[cfg(unix)]
+fn not_spooled(why: &io::Error, spooled: io::Error) -> io::Error {
+    let so = if spooled.kind() == io::ErrorKind::TimedOut {
+        "so it may be lost"
+    } else {
+        "so it is lost"
+    };
+    io::Error::new(
+        spooled.kind(),
+        format!("{why}, and it could not be spooled ({spooled}), {so}"),
+    )
 }
 
 /// `act`, or an error once `deadline` has passed without it finishing.
@@ -5093,7 +5105,7 @@ mod tests {
         let refused = deliver_report(&path, Some(&token), &report).expect_err("refused");
         assert_eq!(refused.to_string(), OUTSIDE_THE_CHAT);
         assert!(
-            !spool::dir_for(&path).join("7.jsonl").exists(),
+            !spool::dir_for(&path).join("7").exists(),
             "nothing spooled as if the app were away"
         );
         let mut asking = Asking::on(&path, Some(token.clone())).expect("connects");

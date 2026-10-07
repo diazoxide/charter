@@ -382,6 +382,7 @@ fn a_chat_never_reads_or_writes_any_chats_hook_spool_or_its_keys() {
         let spool =
             crate::hookwire::spool::dir_for(&plane.path().join(state).join("app/hooks.sock"));
         for file in [
+            spool.join("6").join("0123456789abcdef.1.json"),
             spool.join("6.jsonl"),
             spool.join(crate::hookwire::spool::KEYS),
         ] {
