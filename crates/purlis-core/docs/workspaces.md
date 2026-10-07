@@ -426,6 +426,6 @@ proposed.
 ## See also
 
 - [control-plane.md](control-plane.md) — `charter.toml`, and the plane's view of a workspace
-- [handoff.md](handoff.md) — opening a chat in another workspace on a brief you approved, and
-  why the consent is your harness's own prompt
+- [handoff.md](handoff.md) — opening a chat in another workspace on a brief, and why its
+  consent is the dispatch grant
 - [personas.md](personas.md) — the other memory base

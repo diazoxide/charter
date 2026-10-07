@@ -221,90 +221,65 @@ pub(super) fn reinit_reaches(root: &Path, here: &Path) -> bool {
     matches!(below.components().count(), 1 | 2)
 }
 
-/// `handoff gate`: does a handoff wait for the operator's yes here? The consent is the
-/// harness's own ask rule for the handoff command, which `charter init` writes and
-/// `charter guard handoff` puts back. A missing rule is a warning carrying that command,
-/// never a repair: removing it is the operator's choice.
+/// `handoff gate`: what consents to a handoff here (#1444). A handoff is a dispatch, and its
+/// consent is purlis's own dispatch grant, so no rule of a harness is needed and a project
+/// without one is as it should be. The row warns while the ask rule an older `purlis init`
+/// wrote is still in the project's files: each harness that reads it asks again before every
+/// handoff, beside the grant. It offers the `handoff-rule` fix, which removes exactly that rule.
+/// A rule about a handoff that a person wrote is theirs, and is named, never warned about.
 pub(super) fn handoff_gate(d: &Doctor) -> Row {
     const NAME: &str = "handoff gate";
     if !d.has_plane {
         return Row::ok(NAME, "no control plane found");
     }
-    let here = canonical(&d.cwd);
-    let rule = format!("Bash({})", guardcmd::HANDOFF_PATTERN);
-    let unreadable = |why: String| {
-        Row::not_checked(
-            NAME,
-            format!(
-                "{} — purlis cannot tell whether a handoff asks first",
-                super::one_line(&why, 1024)
-            ),
+    let found = match settings::retire_handoff_rule(&d.root, true) {
+        Ok(found) => found,
+        Err(why) => {
+            return Row::not_checked(
+                NAME,
+                format!(
+                    "{} — purlis cannot tell whether the retired handoff rule is there",
+                    super::one_line(&why, 1024)
+                ),
+            );
+        }
+    };
+    let listed = |files: &[(&'static str, Vec<String>)]| {
+        files
+            .iter()
+            .map(|(file, rules)| format!("{file} ({})", rules.join(", ")))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let yours = if found.left.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n        \u{21b3} your own rule(s) stay, and your harness decides by them: {}",
+            super::one_line(&listed(&found.left), 1024)
         )
     };
-
-    // Claude Code: the session directory's shared file, then its local one.
-    let mut claude = false;
-    for rel in [settings::SETTINGS, ".claude/settings.local.json"] {
-        match found(settings::ensure_rule(&here.join(rel), "ask", &rule, true)) {
-            Found::Present => claude = true,
-            Found::Missing => {}
-            Found::Unreadable(why) => return unreadable(why),
-        }
-    }
-    // opencode: the plane's `opencode.json`.
-    let opencode = match found(settings::ensure_opencode_rule(
-        &d.root,
-        guardcmd::HANDOFF_PATTERN,
-        "ask",
-        true,
-    )) {
-        Found::Present => true,
-        Found::Missing => false,
-        Found::Unreadable(why) => return unreadable(why),
-    };
-    let (mut asking, mut missing): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
-    for (harness, has) in [("claude-code", claude), ("opencode", opencode)] {
-        if has {
-            asking.push(harness);
-        } else {
-            missing.push(harness);
-        }
-    }
-    if missing.is_empty() {
+    if found.removed.is_empty() {
         return Row::ok(
             NAME,
             format!(
-                "asks first under {}\n        \u{21b3} codex: no command-pattern permissions — \
-                 purlis's own hook still refuses a handoff from a sub-agent or an unattended run",
-                asking.join(", ")
+                "consent is the dispatch grant, which purlis asks you for; no harness rule is \
+                 needed{yours}"
             ),
         );
     }
-    let plane_has = guardcmd::rules(&d.root.join(settings::SETTINGS), "ask").contains(&rule);
-    let how = if here == d.root {
-        "`purlis guard handoff` adds it"
-    } else if reinit_reaches(&d.root, &here) && plane_has && missing == ["claude-code"] {
-        // Telling the operator to add a rule they already have cannot be acted on.
-        "The plane has the rule; `purlis workspace reinit --all` carries it into the settings \
-         a chat started here reads"
-    } else if reinit_reaches(&d.root, &here) {
-        "`purlis guard handoff` at the plane root adds it, and `purlis workspace reinit --all` \
-         carries it into the settings a chat started here reads"
-    } else {
-        "No purlis command writes the settings a chat started in this directory reads; start \
-         the chat at the plane root or in a workspace, where the rule is in force"
-    };
     Row::warn(
         NAME,
         format!(
-            "no ask rule for `charter handoff` under {}",
-            missing.join(", ")
+            "the retired ask rule for a handoff is still in {}{yours}",
+            super::one_line(&listed(&found.removed), 1024)
         ),
-        format!(
-            "A handoff's brief becomes a new chat's first message and runs with your authority; \
-             this rule is the prompt that asks you first, and on Claude Code it asks under \
-             bypassPermissions too. {how}. Removing it is your choice — this row says so, and \
-             purlis does not put it back."
-        ),
+        "A handoff is a dispatch now: you are asked once for a pair of personas, on every \
+         harness, and a chat handing off to its own persona asks nothing. While this rule is \
+         here your harness asks again before every handoff. `purlis doctor --fix handoff-rule` \
+         removes exactly the rule `purlis init` wrote and commits nothing. A teammate on an \
+         older purlis is still asked by this rule and by nothing else, so remove it once they \
+         have updated.",
     )
+    .fixed_by(super::fix::FixId::HandoffRule)
 }

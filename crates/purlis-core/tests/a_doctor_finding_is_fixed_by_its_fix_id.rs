@@ -232,7 +232,8 @@ fn a_fix_id_is_spelled_one_way_and_read_back_the_same() {
             "git-identity",
             "rename-plane",
             "persona-agents",
-            "workspace-reinit"
+            "workspace-reinit",
+            "handoff-rule"
         ]
     );
     for id in FixId::ALL {
@@ -270,6 +271,9 @@ fn every_fix_but_discover_is_applied_by_bare_fix() {
     assert!(FixId::RenamePlane.by_name_only());
     // rename-local moves this machine's folders, not the project's (D-RN5-5).
     assert!(FixId::RenameLocal.by_name_only());
+    // handoff-rule takes a rule out of committed files every teammate pulls, while a purlis
+    // older than #1444 still relies on that rule to ask.
+    assert!(FixId::HandoffRule.by_name_only());
 }
 
 // ---- local-ignore -------------------------------------------------------------------------

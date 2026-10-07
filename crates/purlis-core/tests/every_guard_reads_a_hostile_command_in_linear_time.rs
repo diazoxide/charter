@@ -149,7 +149,7 @@ fn families(root: &Path) -> Vec<Family<'_>> {
         (
             "the handoff guard",
             Box::new(move |c| {
-                let _ = handoffguard::handoff_refusal_in(c, caller, root, &[root]);
+                let _ = handoffguard::handoff_refusal(c, caller);
             }),
         ),
         (

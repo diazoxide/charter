@@ -149,7 +149,8 @@ commit and nothing else: `charter.toml` becomes `purlis.toml` and requires the `
 feature, so a build without it opens the project read-only; `.charter-scan-allow.toml`, the
 managed blocks' markers, a committed `workspace.json`'s digest key, `.claude/settings.json`'s
 harness variable, and personas' `charter:` skill references follow. Each `charter …` ask or
-deny rule gets a `purlis …` twin and is kept. Hook commands keep `charter`, which runs on every
+deny rule gets a `purlis …` twin and is kept. The one it gives no twin is the retired ask
+for `charter handoff *`, which `purlis doctor --fix handoff-rule` removes. Hook commands keep `charter`, which runs on every
 build. It refuses, writing nothing, when run from inside a chat (run it from a terminal or the
 app), on a project with uncommitted changes, outside git, with a file under both names, or one this
 purlis may not write. A step that fails puts every file back.
@@ -166,6 +167,17 @@ the harness kept for a sub-agent. It makes no commit, `git restore -- .claude/ag
 takes it back before the next save, and a second run changes nothing more. It is offered by
 the `personas` row when a generated file is still there. See `purlis docs show personas`,
 *After updating*.
+
+**`handoff-rule` runs only by name**, as `purlis doctor --fix handoff-rule` or the
+`handoff gate` row's Fix button. It is the one fix that takes a line out, and the line is one
+`purlis init` wrote: the ask rule for a handoff, `Bash(purlis handoff *)` and
+`Bash(charter handoff *)` under `permissions.ask` in `.claude/settings.json`, and the same two
+globs as `"ask"` in `opencode.json`. A handoff is a dispatch now, and its consent is the
+dispatch grant, so the rule only makes your harness ask a second time. The fix removes exactly
+that rule, names every other rule about a handoff it left because a person wrote it, and
+commits nothing. It reads both files before it writes either. It waits to be asked because the
+files are ones every teammate pulls, and a teammate on an older purlis is still asked by that
+rule and by nothing else.
 
 **`discover` runs only by name**, as `purlis doctor --fix discover` or the inventory row's
 Fix button, because it goes over the network. It is offered when the inventory is empty and
@@ -217,7 +229,12 @@ ask and deny rules: a program a rule names, run under another spelling the rule 
 string a shell runs), is refused and told to spell it as the rule does. A rule on the command
 line itself holds under both its names. A rule whose program is a wildcard
 (`'*kubectl delete*'`) is left to the harness alone.
-`purlis guard handoff` puts back the handoff consent rule that `purlis init` writes.
+`purlis guard handoff` is retired and writes nothing: a handoff's consent is the dispatch
+grant, and `purlis init` writes no rule for one. To have your harness ask as well, write a
+rule of your own with `purlis guard ask 'purlis handoff*'`, which purlis holds under every
+spelling of the command. The glob `init` used to write, `purlis handoff *` with the space, is
+read as the retired rule: as an `ask` it covers the plain spelling only, and the doctor
+offers to remove it. A `deny` on either glob is yours and is held under every spelling.
 `purlis guard` on its own lists the rules, grouped by the file each one is in.
 `purlis doctor`'s `handoff gate` row says whether that rule is in force where you are.
 

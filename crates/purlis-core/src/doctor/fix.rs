@@ -22,7 +22,9 @@
 //! # No fix removes or replaces your content
 //!
 //! Each id's doc below says exactly what it writes. A fix adds what is missing, or rewrites or
-//! removes a file charter generates and owns; it never deletes a line or a file you wrote.
+//! removes a file charter generates and owns; it never deletes a line or a file you wrote. The one fix
+//! that takes a line out, `handoff-rule`, takes out a line `purlis init` wrote, by its exact
+//! text, and names every line near it that it left because a person wrote it.
 
 use std::path::Path;
 
@@ -91,7 +93,8 @@ pub enum FixId {
     /// `.gitignore`, the personas block in `README.md`, each generated agent), a committed
     /// `workspace.json`'s digest key, `.claude/settings.json`'s `CHARTER_HARNESS`, and personas'
     /// `charter:` skill references. Each `charter …` ask or deny rule gets its `purlis …` twin
-    /// and is kept; hook commands keep `charter` for the window (D-RN7-11). It changes nothing
+    /// and is kept, but for the retired handoff ask, which is kept and given none (#1444);
+    /// hook commands keep `charter` for the window (D-RN7-11). It changes nothing
     /// else and removes none of your content. Applied only by name ([`FixId::by_name_only`]):
     /// it is a commit every teammate pulls. It refuses, writing nothing, from inside a chat, on
     /// a project with uncommitted changes, outside git, or with a file under both names
@@ -119,11 +122,24 @@ pub enum FixId {
     /// [`FixId::Reinit`], which is the project root's baseline and never looks inside a
     /// workspace. Offered by the Alerts drawer's `reinit` row; no doctor row offers it yet.
     WorkspaceReinit,
+    /// **`handoff-rule`** (#1444): removes the ask rule `purlis init` wrote for a handoff,
+    /// now that a handoff is a dispatch and its consent is the dispatch grant. Exactly
+    /// `Bash(charter handoff *)` and `Bash(purlis handoff *)` under `permissions.ask` in the
+    /// project's `.claude/settings.json`, and `"charter handoff *": "ask"` and
+    /// `"purlis handoff *": "ask"` under `permission.bash` in `opencode.json`. It removes
+    /// nothing else. A rule about a handoff that is not that exact one (a `deny`, an `allow`,
+    /// another spelling, anything in `.claude/settings.local.json`) is a person's: it is left,
+    /// and named in what the fix says. Both files are read before either is written, so one
+    /// it cannot read stops the whole fix. It commits nothing. Offered by the `handoff gate`
+    /// row while the rule is there. Applied only by name ([`FixId::by_name_only`]): the files
+    /// are committed ones every teammate pulls, and a purlis older than this one has no
+    /// dispatch grant, so the rule is still what asks there.
+    HandoffRule,
 }
 
 impl FixId {
     /// Every fix, in the order `charter doctor --fix` applies them.
-    pub const ALL: [FixId; 10] = [
+    pub const ALL: [FixId; 11] = [
         FixId::RenameLocal,
         FixId::PluginInstall,
         FixId::Reinit,
@@ -134,6 +150,7 @@ impl FixId {
         FixId::RenamePlane,
         FixId::PersonaAgents,
         FixId::WorkspaceReinit,
+        FixId::HandoffRule,
     ];
 
     /// The id, as `charter doctor --fix <id>`, `--json` and the window spell it.
@@ -149,6 +166,7 @@ impl FixId {
             Self::RenamePlane => "rename-plane",
             Self::PersonaAgents => "persona-agents",
             Self::WorkspaceReinit => "workspace-reinit",
+            Self::HandoffRule => "handoff-rule",
         }
     }
 
@@ -159,10 +177,16 @@ impl FixId {
     /// teammate pulls, so it is never automatic (V93g). `rename-local` moves this machine's
     /// folders, not the project's, so it waits to be asked too (D-RN5-5). `persona-agents`
     /// removes and rewrites committed files, so it is the operator's to ask for (#1451).
+    /// `handoff-rule` takes a rule out of committed files every teammate pulls, and a purlis
+    /// older than this one still relies on that rule to ask, so it waits as well (#1444).
     pub const fn by_name_only(self) -> bool {
         matches!(
             self,
-            Self::Discover | Self::RenamePlane | Self::RenameLocal | Self::PersonaAgents
+            Self::Discover
+                | Self::RenamePlane
+                | Self::RenameLocal
+                | Self::PersonaAgents
+                | Self::HandoffRule
         )
     }
 
@@ -269,6 +293,7 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
         FixId::RenamePlane => rename_plane::apply(root),
         FixId::PersonaAgents => persona_agents::apply(root),
         FixId::WorkspaceReinit => workspace_reinit(root),
+        FixId::HandoffRule => handoff_rule(root),
         FixId::PluginInstall | FixId::RenameLocal => unreachable!("answered above"),
     }
 }
@@ -460,6 +485,60 @@ fn workspace_reinit(root: &Path) -> Fixed {
         said,
         complete: code == 0,
     }
+}
+
+/// `handoff-rule`: the ask rule `purlis init` wrote for a handoff, removed, and what was
+/// left because a person wrote it ([`crate::scaffold::settings::retire_handoff_rule`]).
+fn handoff_rule(root: &Path) -> Fixed {
+    let found = match crate::scaffold::settings::retire_handoff_rule(root, false) {
+        Ok(found) => found,
+        Err(why) => return Fixed::Refused(why),
+    };
+    Fixed::Ran {
+        said: handoff_rule_said(&found),
+        complete: true,
+    }
+}
+
+/// What the `handoff-rule` fix says of what it found: each rule it removed and from which
+/// file, each rule it left and why, and what is still the person's to do.
+pub(crate) fn handoff_rule_said(found: &crate::scaffold::settings::RetiredIn) -> Vec<String> {
+    let mut said: Vec<String> = Vec::new();
+    for (file, rules) in &found.removed {
+        said.push(format!(
+            "✓ {file}: removed {} — the ask rule `purlis init` wrote for a handoff.",
+            rules.join(", ")
+        ));
+    }
+    if found.removed.is_empty() {
+        said.push(
+            "✓ no handoff ask rule that `purlis init` wrote is in this project — nothing to \
+             do."
+            .to_owned(),
+        );
+    }
+    for (file, rules) in &found.left {
+        said.push(format!(
+            "• {file}: left {} — not the rule `purlis init` wrote, so it is yours and it \
+             stays. Your harness still decides a handoff by it.",
+            rules.join(", ")
+        ));
+    }
+    if !found.removed.is_empty() {
+        said.push(
+            "• Consent to a handoff is the dispatch grant now: you are asked once for a \
+             pair of personas, and a chat handing off to its own persona asks nothing."
+                .to_owned(),
+        );
+        said.push(
+            "• Nothing was committed. A workspace's generated settings drop the rule when \
+             a chat next starts there, or now with `purlis workspace reinit --all`. A \
+             teammate on an older purlis is still asked by this rule and by nothing else, \
+             so commit the change once they have updated."
+                .to_owned(),
+        );
+    }
+    said
 }
 
 /// The refusal of a fix that [takes input](FixId::takes_input), asked for by its id alone.

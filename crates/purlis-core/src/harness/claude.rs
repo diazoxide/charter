@@ -278,7 +278,8 @@ fn settings(
     // D-T59-prealllow, amending ADR 0064): the harness's prompt is not what consents to a
     // dispatch. purlis's own dispatch grant is, asked of the person by the app, the same on
     // every harness (spec #1434, decision 4), so the harness asking as well would ask twice
-    // for one thing and, for a chat's own persona, ask where nothing is at stake.
+    // for one thing and, for a chat's own persona, ask where nothing is at stake. **A handoff
+    // is a dispatch in handoff mode** (#1444), so its command is allowed on the same terms.
     let mut allow = vec![
         SMART_CLOSE_ALLOW.to_owned(),
         format!(
@@ -290,6 +291,7 @@ fn settings(
     allow.extend(DISPATCH_ALLOW.iter().map(|rule| (*rule).to_owned()));
     // And what a chat asks after a task it dispatched, each by its own name (D-T59-j8).
     allow.extend(DISPATCH_TASK_ALLOW.iter().map(|rule| (*rule).to_owned()));
+    allow.extend(HANDOFF_ALLOW.iter().map(|rule| (*rule).to_owned()));
     allow.extend(
         crate::chattools::DISPATCH_TOOLS
             .iter()
@@ -464,6 +466,29 @@ pub const DISPATCH_TASK_ALLOW: [&str; 8] = [
     "Bash(purlis dispatch note *)",
     "Bash(purlis dispatch ask *)",
     "Bash(purlis dispatch answer *)",
+];
+
+/// The permission rules a Claude Code chat the app starts carries for a handoff (#1444, on
+/// V98b's terms): the handoff, by each flag its line can start with, and its report back
+/// (`purlis handoff report …`). A handoff is a dispatch in handoff mode, and **consent is the
+/// dispatch grant**: none for the chat's own persona, and for another the app asks the person
+/// once, with the brief in front of them, and starts nothing until they allow it. This only
+/// stops the harness asking beside that.
+///
+/// **Each spelling by name, and no bare trailing wildcard**, for [`DISPATCH_ALLOW`]'s reason
+/// (D-T59-18): `purlis handoff *` would also allow whatever the command grows later. So the
+/// spelling the handoff skill writes puts a flag first,
+/// `purlis handoff --name "<task>" <workspace>`, and a line that starts with the workspace is
+/// the harness's own to ask about, as any command it has no rule for is. A project that still
+/// carries the `ask` rule an older `init` wrote keeps being asked until the `handoff-rule` fix
+/// removes it, and an operator's own `ask` or `deny` still wins.
+pub const HANDOFF_ALLOW: [&str; 6] = [
+    "Bash(purlis handoff --name *)",
+    "Bash(purlis handoff --report *)",
+    "Bash(purlis handoff --persona *)",
+    "Bash(purlis handoff --create *)",
+    "Bash(purlis handoff --vision *)",
+    "Bash(purlis handoff report *)",
 ];
 
 /// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.

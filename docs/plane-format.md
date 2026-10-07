@@ -3861,7 +3861,7 @@ same bound.
 |---|---|---|---|---|
 | `hooks.PreToolUse[]` | `{"matcher": "Bash", "hooks": [{"type": "command", "command": "charter hook pretooluse", "timeout": 10}]}` | append once; skipped if the plugin declares it | stable | `charter/commands.py:1186` |
 | `env.CHARTER_HARNESS` | `"claude-code"` | set IF ABSENT; an `env` that is not an object is left alone | stable | `charter/commands.py:2279` |
-| `permissions.ask[]` | e.g. `"Bash(purlis handoff *)"` | append IF ABSENT; wrong-typed block ⇒ `malformed`, no write | stable | `charter/commands.py:1727`-`1737` |
+| `permissions.ask[]` | e.g. `"Bash(purlis report *--yes*)"` | append IF ABSENT; wrong-typed block ⇒ `malformed`, no write | stable | `charter/commands.py:1727`-`1737` |
 | `permissions.allow[]` | e.g. `"Bash(gh pr view *)"` | same | stable | `charter/commands.py:1832` |
 | `enabledPlugins."charter@charter"` | `true` | written by `claude plugin install`, mirrored by purlis into workspaces | stable | `charter/harness/claude_code.py:53` |
 
@@ -3871,12 +3871,16 @@ same bound.
 (`charter/commands.py:1354`) is written verbatim; an `mcp__…` pattern with a wildcard or
 arguments raises `UnexpressibleRule` and nothing is written.
 
-**Default ask rules** (charter-app): `init` writes three, `Bash(charter handoff *)`,
-`Bash(purlis report *--yes*)` and `Bash(purlis *todo*promote*)`. The second is new in
-purlis (ADR 0059, amended 2026-09-26), the third with `purlis ws todo promote` (V42,
+**Default ask rules** (charter-app): `init` writes two, `Bash(purlis report *--yes*)` and
+`Bash(purlis *todo*promote*)`, each under both names the command line has. The first is new in
+purlis (ADR 0059, amended 2026-09-26), the second with `purlis ws todo promote` (V42,
 ADR 0088 §5): `purlis`, then `todo`, then `promote`, with anything between, so it holds for
-`ws` and `workspace` and for a `-w` or `--repo` on either side of the verb. `reinit` adds the
-second and third to a plane that predates them. `opencode.json` gets the same globs, each
+`ws` and `workspace` and for a `-w` or `--repo` on either side of the verb. `reinit` adds
+both to a plane that predates them. **Until #1444 `init` wrote a third, `Bash(charter handoff *)`.**
+A handoff is a dispatch now and its consent is the dispatch grant, so `init` writes no rule for
+one, `reinit` gives a plane that still carries it no `purlis` twin, and
+`purlis doctor --fix handoff-rule` removes exactly that rule (`permissions.ask` here,
+`permission.bash` in `opencode.json`), leaving and naming any other rule about a handoff. `opencode.json` gets the same globs, each
 placed so that no allow or ask that matches the same command comes after it (opencode's last
 match wins). A **project template** (FR-17) adds its stack's guard defaults the same way,
 through `purlis guard ask`'s writer (every harness with command permissions or none, then
@@ -3886,7 +3890,8 @@ the commands that publish or deploy, such as `Bash(cargo publish *)` for Rust or
 `crates/purlis-core/templates/<stack>/template.toml`, and a monorepo's is its own and every
 stack's.
 
-Measured after `init` + `guard ask 'terraform apply *'`:
+Measured after `init` + `guard ask 'terraform apply *'`, before #1444, when `init` still wrote
+the handoff rule:
 
 ```json
 { "env": {"PURLIS_HARNESS": "claude-code"},
@@ -3947,7 +3952,7 @@ Measured after `init` + `guard ask 'terraform apply *'`:
   Python changes it, unless a later non-deny entry matches it; then it is moved by the same
   rule, so that broader allow cannot outrank it. A `deny` is appended. Claude Code weighs `deny` before `ask` and `allow` whatever the order, so its
   writer only says an exact deny and adds nothing beside it.
-- Fixture: `{"permission": {"bash": {"purlis handoff *": "ask", "terraform apply *": "ask"}}}`.
+- Fixture (from before #1444, when `init` wrote the handoff rule): `{"permission": {"bash": {"purlis handoff *": "ask", "terraform apply *": "ask"}}}`.
 
 ### `<plane>/.gitignore` (the lines purlis owns)
 

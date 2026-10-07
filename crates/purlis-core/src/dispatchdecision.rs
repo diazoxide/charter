@@ -289,6 +289,11 @@ pub struct Moment<'a> {
     pub profile: Option<&'a crate::personaprofile::Refused>,
     /// Whether the chat asks, or the person does from its tab.
     pub by: By,
+    /// Why the dispatch is made: a task, or a handoff (#1444). One decision answers both.
+    pub mode: Mode,
+    /// Which of the asking chat's own count as running: its handoffs too, for a chat nobody
+    /// is at (D-1444-13).
+    pub counted: Counted,
 }
 
 /// What a chat's dispatch comes to: the decision, and the facts the app starts the persona
@@ -332,7 +337,14 @@ pub fn asked_by_a_chat(
         pair.asking.as_deref(),
         pair.to.as_deref(),
     );
-    let lineage = lineage_of(number, moment.open, moment.default, moment.working, &pair);
+    let lineage = lineage_counting(
+        number,
+        moment.open,
+        moment.default,
+        moment.working,
+        &pair,
+        moment.counted,
+    );
     let locks = crate::sandbox::policy::Locks::of(root);
     let grant = match pair.to.as_deref() {
         Some(to) => crate::dispatchgrant::covers(pair.asking.as_deref(), to, moment.grants, &locks),
@@ -358,7 +370,7 @@ pub fn asked_by_a_chat(
             Some(name) => persona_in(root, name),
             None => Persona::None,
         },
-        mode: Mode::Task,
+        mode: moment.mode,
         grant: &grant,
         profile: moment.profile,
         limits: &limits,
@@ -497,6 +509,30 @@ pub fn lineage_of(
     working: &dyn Fn(u32) -> bool,
     pair: &Pair,
 ) -> Lineage {
+    lineage_counting(asking, open, default, working, pair, Counted::Tasks)
+}
+
+/// Which of the chats an asking chat opened count toward its running-per-chat limit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Counted {
+    /// Its tasks: the work it waits on. A handoff's work is not the asking chat's to wait on.
+    #[default]
+    Tasks,
+    /// Its handoffs as well, **for a chat nobody is at** (D-1444-13): nobody watches what it
+    /// opens, so each chat it opened that still works is held to the one limit, whichever
+    /// mode opened it.
+    HandoffsToo,
+}
+
+/// [`lineage_of`], with `which` saying which of the asking chat's own count as running.
+pub fn lineage_counting(
+    asking: u32,
+    open: &[(u32, &crate::reopen::Chat)],
+    default: Option<&str>,
+    working: &dyn Fn(u32) -> bool,
+    pair: &Pair,
+    which: Counted,
+) -> Lineage {
     let record = |number: u32| record(number, open);
     let asker_of = |number: u32| record(number)?.from.as_ref().map(|from| from.chat);
     let persona =
@@ -561,9 +597,19 @@ pub fn lineage_of(
             .filter(|from| from.mode == Mode::Task && owes_work(number))
             .map(|from| from.chat)
     };
+    // What the asking chat opened that still works: its tasks, and where `which` says so
+    // its handoffs too.
+    let opened_by = |number: u32, chat: &crate::reopen::Chat| {
+        chat.from
+            .as_ref()
+            .filter(|from| {
+                (from.mode == Mode::Task || which == Counted::HandoffsToo) && owes_work(number)
+            })
+            .map(|from| from.chat)
+    };
     let running = open
         .iter()
-        .filter(|(number, chat)| *number != asking && task_of(*number, chat) == Some(asking))
+        .filter(|(number, chat)| *number != asking && opened_by(*number, chat) == Some(asking))
         .count();
     // Across the project: the chats running as the target persona, and the tasks the chats
     // running as the asking persona still wait on, this chat's own among them.
@@ -820,6 +866,57 @@ mod tests {
         assert_eq!(seen(6, &open).lineage, 1);
     }
 
+    /// D-1444-13: a chat nobody is at is held to its running-per-chat limit by its handoffs
+    /// as by its tasks, since nothing else bounds how many it opens. A chat a person is at is
+    /// not: a handoff's work is not that chat's to wait on.
+    #[test]
+    fn for_a_chat_nobody_is_at_a_handoff_it_opened_counts_as_running_as_a_task_does() {
+        // 1 (steward) ── 2 (devops, task, working)
+        //             ├─ 3 (steward, task, reported)
+        //             ├─ 5 (qa, handoff, working)
+        //             └─ 7 (qa, handoff, its program ended)
+        let one = chat(Some("steward"));
+        let two = dispatched(1, 1, Mode::Task, Owed::Due, Some("devops"));
+        let three = dispatched(1, 1, Mode::Task, Owed::Sent, Some("steward"));
+        let five = dispatched(1, 1, Mode::Handoff, Owed::Nothing, Some("qa"));
+        let seven = dispatched(1, 1, Mode::Handoff, Owed::Nothing, Some("qa"));
+        let open = [(1, &one), (2, &two), (3, &three), (5, &five), (7, &seven)];
+        let own = pair(Some("steward"), Some("steward"));
+        let working = |number: u32| number != 7;
+
+        let attended = lineage_counting(1, &open, None, &working, &own, Counted::Tasks);
+        assert_eq!(attended.running, 1, "the task alone");
+        assert_eq!(attended, lineage_of(1, &open, None, &working, &own));
+
+        let unattended = lineage_counting(1, &open, None, &working, &own, Counted::HandoffsToo);
+        assert_eq!(
+            unattended.running, 2,
+            "the task, and the handoff still working"
+        );
+        // Nothing else it reads moves.
+        assert_eq!(
+            Lineage {
+                running: attended.running,
+                ..unattended.clone()
+            },
+            attended
+        );
+        // And it is refused at the limit, in the limit's own sentence.
+        let mut limits = defaults(Some("steward"), Some("steward"));
+        limits.running = 2;
+        assert!(matches!(
+            crate::dispatchlimits::decide(&limits, &unattended).refused(),
+            Some(crate::dispatchlimits::Refused::TooManyRunning {
+                limit: 2,
+                running: 2
+            })
+        ));
+        assert_eq!(
+            crate::dispatchlimits::decide(&limits, &attended).refused(),
+            None
+        );
+    }
+
     #[test]
     fn the_two_counts_a_persona_has_are_read_across_every_chat_of_the_project() {
         // Two lineages. 1 and 6 both run as steward; 2 and 7 are the tasks they wait on, and 3
@@ -1001,6 +1098,8 @@ mod tests {
                 grants,
                 profile: None,
                 by,
+                mode: Mode::Task,
+                counted: Counted::Tasks,
             },
         )
     }
@@ -1020,6 +1119,8 @@ mod tests {
                 grants: &InForce::default(),
                 profile: None,
                 by: By::Chat,
+                mode: Mode::Task,
+                counted: Counted::Tasks,
             },
         )
     }
@@ -1488,6 +1589,99 @@ mod tests {
             Decision::Refused(why) => why,
             other => panic!("refused, not {other:?}"),
         }
+    }
+
+    /// A handoff is a dispatch (#1444): the same askers, the same persona rules, the same
+    /// limits and the same grant, whichever mode the request names.
+    #[test]
+    fn a_handoff_is_decided_as_a_task_is_at_every_step() {
+        let devops = Persona::Defined("devops");
+        let deep = Lineage {
+            depth: 3,
+            ..alone()
+        };
+        let locked = Covers::Locked("An administrator's policy locks it.".to_owned());
+        let cases: [(Asker<'_>, Persona<'_>, &Covers, &Lineage); 8] = [
+            // Its own persona: no grant, no prompt.
+            (
+                Asker::Chat(steward()),
+                Persona::Defined("steward"),
+                &Covers::Covered,
+                &alone(),
+            ),
+            // Another persona: the grant, and with one it starts.
+            (
+                Asker::Chat(steward()),
+                devops,
+                &Covers::NeedsGrant,
+                &alone(),
+            ),
+            (Asker::Chat(steward()), devops, &Covers::Covered, &alone()),
+            // A helper sub-agent, a draft, a lock, the depth: refused, as a task is.
+            (Asker::Helper, devops, &Covers::Covered, &alone()),
+            (
+                Asker::Chat(steward()),
+                Persona::Draft("intern"),
+                &Covers::Covered,
+                &alone(),
+            ),
+            (Asker::Chat(steward()), devops, &locked, &alone()),
+            (Asker::Chat(steward()), devops, &Covers::Covered, &deep),
+            // The person, from the chat's tab: no grant.
+            (
+                Asker::Person(steward()),
+                devops,
+                &Covers::NeedsGrant,
+                &alone(),
+            ),
+        ];
+        for (asker, to, grant, lineage) in cases {
+            let asking = match asker {
+                Asker::Chat(chat) | Asker::Person(chat) => chat.persona,
+                Asker::Helper => None,
+            };
+            let limits = defaults(asking, to.name());
+            let as_a = |mode| {
+                decide(&Request {
+                    asker,
+                    to,
+                    mode,
+                    grant,
+                    profile: None,
+                    limits: &limits,
+                    lineage,
+                })
+            };
+            assert_eq!(
+                as_a(Mode::Handoff),
+                decided(asker, to, grant, lineage),
+                "{asker:?} to {to:?} under {grant:?}"
+            );
+        }
+        // And said out, for the two the ticket names: none for the same persona, the grant
+        // for another.
+        let handoff = |to, grant: &Covers| {
+            decide(&Request {
+                asker: Asker::Chat(steward()),
+                to,
+                mode: Mode::Handoff,
+                grant,
+                profile: None,
+                limits: &defaults(Some("steward"), to.name()),
+                lineage: &alone(),
+            })
+        };
+        assert_eq!(
+            handoff(Persona::Defined("steward"), &Covers::Covered),
+            Decision::Start
+        );
+        assert_eq!(
+            handoff(devops, &Covers::NeedsGrant),
+            Decision::NeedsGrant {
+                from: Some("steward".to_owned()),
+                to: "devops".to_owned(),
+            }
+        );
     }
 
     #[test]

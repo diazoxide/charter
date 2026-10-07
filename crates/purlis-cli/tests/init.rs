@@ -232,19 +232,20 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
         front_door,
         Node::File(text.replacen("\nrouting: advise\n", "\n", 1).into_bytes()),
     );
-    // And the ask rule for filing a report, which the Python charter never had (#363, ADR
-    // 0059 amended 2026-09-26): appended after the handoff rule in both harnesses' files.
+    // And the ask rules for filing a report and promoting a todo, which the Python charter
+    // never had (#363, ADR 0059 amended 2026-09-26), where it wrote the handoff rule: a
+    // handoff is a dispatch now and `init` writes no rule for one (#1444).
     for (rel, from, to) in [
         (
             ".claude/settings.json",
             r#""Bash(charter handoff *)"]"#,
-            r#""Bash(charter handoff *)","Bash(charter report *--yes*)","Bash(charter *todo*promote*)","Bash(purlis handoff *)","Bash(purlis report *--yes*)","Bash(purlis *todo*promote*)"]"#,
+            r#""Bash(charter report *--yes*)","Bash(charter *todo*promote*)","Bash(purlis report *--yes*)","Bash(purlis *todo*promote*)"]"#,
         ),
         (
             "opencode.json",
             "\"charter handoff *\": \"ask\"\n",
-            "\"charter handoff *\": \"ask\",\n      \"charter report *--yes*\": \"ask\",\n      \
-             \"charter *todo*promote*\": \"ask\",\n      \"purlis handoff *\": \"ask\",\n      \
+            "\"charter report *--yes*\": \"ask\",\n      \
+             \"charter *todo*promote*\": \"ask\",\n      \
              \"purlis report *--yes*\": \"ask\",\n      \"purlis *todo*promote*\": \"ask\"\n",
         ),
     ] {
@@ -599,7 +600,7 @@ fn a_settings_file_claude_code_cannot_read_is_left_byte_for_byte() {
         std::fs::read_to_string(scene.plane.join(".claude/settings.json")).unwrap(),
         body
     );
-    // All or nothing: the handoff rule is not left in force under opencode alone.
+    // All or nothing: no ask rule is left in force under opencode alone.
     assert!(!scene.plane.join("opencode.json").exists());
 }
 

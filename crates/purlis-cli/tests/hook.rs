@@ -777,9 +777,11 @@ fn a_project_marked_only_by_purlis_toml_opens_the_gated_arms_as_charter_toml_doe
 }
 
 #[test]
-fn the_two_payload_fields_no_command_can_see_are_read() {
-    // A7's whole reason for being the hook's and not the command's. Neither `agent_id` nor
-    // `permission_mode` is anything `charter handoff` could ask about once it is running.
+fn the_payload_field_no_command_can_see_is_read_and_the_prompts_mode_is_the_apps() {
+    // A7's whole reason for being the hook's and not the command's: `agent_id` is nothing
+    // `charter handoff` could ask about once it is running. `permission_mode` is no longer
+    // A7's (#1444): whether anybody answers a chat's prompts is the app's own mark on that
+    // chat, weighed where it decides the handoff.
     let plane = a_plane();
     let canonical = "charter handoff beta <<'BRIEF'\nship it\nBRIEF";
     let with = |field: &str, value: &str| {
@@ -799,8 +801,17 @@ fn the_two_payload_fields_no_command_can_see_are_read() {
         &with("permission_mode", "bypassPermissions"),
         &[],
     );
+    assert_eq!(
+        out, "",
+        "an unattended run's handoff is the app's to decide"
+    );
+    // And a sub-agent is refused there too, whatever its harness says of its prompts.
+    let mut both: serde_json::Value =
+        serde_json::from_str(&with("agent_id", "sub-1")).expect("the payload");
+    both["permission_mode"] = serde_json::Value::String("bypassPermissions".to_owned());
+    let (_, out, _) = guard(plane.path(), &both.to_string(), &[]);
     assert!(
-        decision(&out).is_some_and(|d| d.contains("in an unattended run")),
+        decision(&out).is_some_and(|d| d.contains("from inside a sub-agent")),
         "{out:?}"
     );
     // ...and on a harness nobody measured, an `agent_id` means nothing at all.
@@ -810,6 +821,37 @@ fn the_two_payload_fields_no_command_can_see_are_read() {
         &[("CHARTER_HARNESS", "opencode")],
     );
     assert_eq!(out, "", "an unmeasured harness is not read as a sub-agent");
+}
+
+/// D-1444-14: a Claude Code chat is handed an allow for a dispatch and a handoff, and that
+/// allow is for the dispatch alone. Where one shares its call with another command, the hook
+/// answers `ask` for the call and names the other command; alone, it says nothing.
+#[test]
+fn a_dispatch_or_a_handoff_with_a_rider_is_asked_about_and_one_alone_is_not() {
+    let plane = a_plane();
+    for own in [
+        "purlis dispatch --name \"check the queue\" <<'BRIEF'\nlook\nBRIEF",
+        "purlis handoff --name \"ship it\" beta <<'BRIEF'\nlook\nBRIEF",
+    ] {
+        let (code, out, err) = guard(plane.path(), &bash(own), &[]);
+        assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""), "{own:?}");
+        for cmd in [
+            format!("{own}\ntouch /tmp/zz"),
+            format!("touch /tmp/zz && {own}"),
+        ] {
+            let (code, out, _) = guard(plane.path(), &bash(&cmd), &[]);
+            assert_eq!(code, 0, "{cmd:?}");
+            assert!(
+                out.contains(r#""permissionDecision": "ask""#),
+                "{cmd:?}: {out}"
+            );
+            assert!(out.contains("(`touch /tmp/zz`)"), "{cmd:?}: {out}");
+            assert_eq!(decision(&out), None, "an ask is not a denial: {out}");
+            // On a harness that is handed no such allow, the hook has nothing to stand behind.
+            let (_, out, _) = guard(plane.path(), &bash(&cmd), &[("CHARTER_HARNESS", "codex")]);
+            assert_eq!(out, "", "{cmd:?}");
+        }
+    }
 }
 
 #[test]

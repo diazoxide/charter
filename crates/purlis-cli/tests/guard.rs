@@ -66,52 +66,74 @@ fn gate(plane: &Plane) -> serde_json::Value {
         .expect("a handoff gate row")
 }
 
+/// A handoff is a dispatch (#1444): `init` writes no harness rule for one, the doctor's row
+/// is fine without it, and `guard handoff` writes nothing and says what consents now.
 #[test]
-fn a_plane_that_lost_its_handoff_rule_gets_it_back_and_nothing_else_moves() {
+fn a_new_plane_has_no_handoff_rule_and_guard_handoff_writes_none() {
     let plane = Plane::init();
-    let rule = serde_json::json!("Bash(charter handoff *)");
-    let mut settings = plane.settings();
+    let before = std::fs::read(plane.root.join(".claude/settings.json")).unwrap();
+    let asks = plane.settings()["permissions"]["ask"].to_string();
     assert!(
-        settings["permissions"]["ask"]
-            .as_array()
-            .unwrap()
-            .contains(&rule),
-        "init writes the rule: {settings}"
+        !asks.contains("handoff"),
+        "init wrote a handoff rule: {asks}"
     );
-    assert_eq!(gate(&plane)["status"], "ok");
+    assert_eq!(gate(&plane)["status"], "ok", "{}", gate(&plane));
 
-    // The operator's other keys, and the rule removed.
-    settings["permissions"]["ask"] = serde_json::json!([]);
+    let out = plane.charter(&["guard", "handoff"]);
+    assert_eq!(out.status.code(), Some(2), "{}", said(&out));
+    let told = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        told.contains("is retired, and nothing was written"),
+        "{told}"
+    );
+    assert!(
+        told.contains("purlis guard ask 'purlis handoff*'"),
+        "{told}"
+    );
+    assert_eq!(
+        std::fs::read(plane.root.join(".claude/settings.json")).unwrap(),
+        before
+    );
+}
+
+/// The rule an older `init` wrote: the doctor warns while it is there, and `doctor --fix
+/// handoff-rule` removes that rule and no other key of the operator's.
+#[test]
+fn the_handoff_rule_an_older_init_wrote_is_removed_by_its_fix_and_nothing_else_moves() {
+    let plane = Plane::init();
+    let mut settings = plane.settings();
+    let asks = settings["permissions"]["ask"].as_array().unwrap().clone();
+    let mut older = vec![
+        serde_json::json!("Bash(charter handoff *)"),
+        serde_json::json!("Bash(purlis handoff *)"),
+    ];
+    older.extend(asks.clone());
+    settings["permissions"]["ask"] = serde_json::json!(older);
     settings["theme"] = serde_json::json!("dark");
     std::fs::write(
         plane.root.join(".claude/settings.json"),
         serde_json::to_string_pretty(&settings).unwrap(),
     )
     .unwrap();
-    let lost = gate(&plane);
-    assert_eq!(lost["status"], "warn", "{lost}");
-    assert!(
-        lost["hint"]
-            .as_str()
-            .unwrap()
-            .contains("`purlis guard handoff`"),
-        "{lost}"
-    );
+    let there = gate(&plane);
+    assert_eq!(there["status"], "warn", "{there}");
+    assert_eq!(there["fix"], "handoff-rule", "{there}");
 
-    let out = plane.charter(&["guard", "handoff"]);
-    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    // Bare `--fix` leaves it: the file is one every teammate pulls.
+    plane.charter(&["doctor", "--fix"]);
+    assert_eq!(gate(&plane)["status"], "warn");
+
+    let out = plane.charter(&["doctor", "--fix", "handoff-rule"]);
+    let told = said(&out);
+    assert!(
+        told.contains("removed Bash(charter handoff *), Bash(purlis handoff *)"),
+        "{told}"
+    );
     let after = plane.settings();
-    assert_eq!(after["permissions"]["ask"], serde_json::json!([rule]));
+    assert_eq!(after["permissions"]["ask"], serde_json::json!(asks));
     assert_eq!(after["theme"], "dark");
     assert_eq!(after["env"], settings["env"]);
     assert_eq!(gate(&plane)["status"], "ok");
-
-    let listed = plane.charter(&["guard"]);
-    assert!(
-        String::from_utf8_lossy(&listed.stdout).contains("ask   Bash(charter handoff *)"),
-        "{}",
-        said(&listed)
-    );
 }
 
 #[test]

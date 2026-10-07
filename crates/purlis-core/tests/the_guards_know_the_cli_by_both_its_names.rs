@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use purlis_core::handoffguard::{self, Caller, REASON_SPELLING};
+use purlis_core::handoffguard::{self, Caller};
 use purlis_core::scaffold::settings::CONSENT_PATTERNS;
 use purlis_core::{consentspelling, floorguard, leakguard, personagate, proseguard};
 
@@ -137,24 +137,68 @@ fn a_handoff_through_purlis_is_a_handoff() {
     assert!(handoffguard::is_handoff("python3 -m purlis handoff beta"));
 }
 
-/// The ask rule the host prompts on is spelt `charter handoff` until the hooks written into a
-/// project move to the new name (RN-7). Until then a `purlis handoff` is one that rule does not
-/// match, so it is refused for its spelling — never let through without the operator's prompt.
+/// No rule of the host's consents to a handoff (#1444): it is a dispatch, and its consent is
+/// purlis's own dispatch grant. So the `purlis` spelling is read as the handoff it is, in a
+/// project that carries no rule for it, and is the app's to decide.
 #[test]
-fn a_handoff_through_purlis_is_refused_until_the_hosts_rule_names_it() {
+fn a_handoff_through_purlis_is_read_as_one_and_waits_on_no_rule_of_the_hosts() {
     purlis_core::unsteered!();
-    let canonical = "charter handoff beta <<'BRIEF'\nship it\nBRIEF";
-    assert_eq!(handoffguard::handoff_refusal(canonical, attended()), None);
     for cmd in [
+        "charter handoff beta <<'BRIEF'\nship it\nBRIEF",
         "purlis handoff beta <<'BRIEF'\nship it\nBRIEF",
         "$'purlis' handoff beta <<'BRIEF'\nship it\nBRIEF",
         "pur''lis handoff beta <<'BRIEF'\nship it\nBRIEF",
+        "/usr/local/bin/purlis handoff beta <<'BRIEF'\nship it\nBRIEF",
     ] {
         assert_eq!(
-            handoffguard::handoff_refusal(cmd, attended()).map(|(why, _)| why),
-            Some(REASON_SPELLING),
+            handoffguard::handoff_refusal(cmd, attended()),
+            None,
             "{cmd}"
         );
+        assert_eq!(no_rules(cmd), None, "{cmd}");
+    }
+    // A helper sub-agent's is refused under either name, as it was.
+    let helper = Caller {
+        agent_id: Some("sub-1"),
+        ..attended()
+    };
+    for name in ["charter", "purlis"] {
+        let cmd = format!("{name} handoff beta <<'BRIEF'\nship it\nBRIEF");
+        assert_eq!(
+            handoffguard::handoff_refusal(&cmd, helper).map(|(why, _)| why),
+            Some(handoffguard::REASON_SUBAGENT),
+            "{cmd}"
+        );
+    }
+}
+
+/// Where a handoff sits is still read: inside a substitution, a string or a heredoc a shell
+/// runs, purlis cannot read its brief or tell whose it is, under either name.
+#[test]
+fn a_handoff_where_purlis_cannot_read_it_is_refused_under_either_name() {
+    purlis_core::unsteered!();
+    for name in ["charter", "purlis"] {
+        for cmd in [
+            format!("echo \"$({name} handoff beta)\""),
+            format!("x=`{name} handoff beta`"),
+        ] {
+            let why = no_rules(&cmd).unwrap_or_else(|| panic!("{cmd} was let through"));
+            assert_eq!(
+                why,
+                handoffguard::handoff_placed("inside a command substitution"),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            format!("sh -c '{name} handoff beta'"),
+            format!("bash <<'EOF'\n{name} handoff beta\nEOF"),
+        ] {
+            assert_eq!(
+                handoffguard::handoff_refusal(&cmd, attended()).map(|(why, _)| why),
+                Some(handoffguard::REASON_SHELL_STRING),
+                "{cmd}"
+            );
+        }
     }
 }
 
@@ -173,7 +217,7 @@ fn a_brief_handed_to_purlis_is_data_as_one_handed_to_charter_is() {
 }
 
 /// The host asks the operator before the commands its consent rules name — a report filed with
-/// `--yes`, a todo promoted to a forge, a handoff — and those rules are spelt `charter …` until
+/// `--yes`, a todo promoted to a forge — and those rules are spelt `charter …` until
 /// the project is renamed (RN-7). The same command spelt `purlis …` matches none of them, so the
 /// guard refuses it and says which spelling to use.
 #[test]
@@ -190,7 +234,6 @@ fn a_consent_gated_command_spelt_purlis_is_refused_until_the_rules_name_it() {
         "purlis -w alpha ws todo promote 1",
         "cd /tmp && purlis ws todo promote 1",
         "echo \"$(purlis report bug --yes x)\"",
-        "purlis handoff beta",
     ] {
         let why = no_rules(cmd).unwrap_or_else(|| panic!("{cmd} was let through"));
         assert!(why.contains("`charter"), "{cmd}: {why}");
@@ -205,6 +248,7 @@ fn the_same_commands_spelt_charter_are_left_to_the_hosts_rule() {
         "charter ws todo promote 1",
         "charter handoff beta",
         // Not gated by any rule, under either name.
+        "purlis handoff beta",
         "purlis report bug",
         "purlis ws todo list",
         "purlis status",
@@ -219,7 +263,7 @@ fn the_same_commands_spelt_charter_are_left_to_the_hosts_rule() {
 #[test]
 fn every_consent_rule_the_project_carries_is_refused_under_the_new_name() {
     purlis_core::unsteered!();
-    assert_eq!(CONSENT_PATTERNS.len(), 3);
+    assert_eq!(CONSENT_PATTERNS.len(), 2);
     for pattern in CONSENT_PATTERNS {
         let spelt = pattern
             .strip_prefix("charter ")

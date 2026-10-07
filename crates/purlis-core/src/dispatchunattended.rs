@@ -6,7 +6,8 @@
 //!
 //! The harness's own word for it: a hook payload whose `permission_mode` is
 //! [`crate::floorguard::UNATTENDED_MODE`], which is what [`crate::floorguard::unattended`]
-//! reads for the release floor and the handoff guard. purlis keeps no other mark: it starts no
+//! reads for the release floor. (The handoff guard read it too, until a handoff became a
+//! dispatch and the app's own mark took its place, #1444.) purlis keeps no other mark: it starts no
 //! chat that way itself, and a profile's command or a switch in the pane is the person's. The
 //! app keeps what a chat's harness reported as a [`Mark`], which only ever goes one way.
 //!
@@ -269,6 +270,14 @@ pub fn bypass_in(command: &[String]) -> Option<&str> {
         (BYPASS_FLAGS.contains(&word.as_str()) || off).then_some(word.as_str())
     })
 }
+
+/// **What an unattended chat is told where its handoff would make a workspace** (D-1444-13):
+/// nobody is there to see one made, so a chat nobody is at hands off into a workspace that
+/// exists, and `--create` is refused. A chat a person is at is not held to this.
+pub const NO_WORKSPACE_IS_MADE: &str = "this chat runs with its harness's permission prompts \
+     off, so nobody is here to see a workspace made: a handoff from it goes into a workspace \
+     that exists, and --create is refused. Hand off into an existing workspace, or make the \
+     workspace from a chat someone is at.";
 
 /// Who named the profile a dispatch would start its chat on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

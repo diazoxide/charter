@@ -1,12 +1,19 @@
 //! The app's half of `charter handoff`: opening, in a window the operator is looking at, the
 //! chat a chat of its own handed work to (charter-app#204).
 //!
-//! `charter handoff` does every check in front of the open. The operator's consent is the
-//! harness's permission prompt in front of that exact command, and nothing here asks again:
-//! the operator already answered with the brief on screen. The command then asks the app over
-//! the hook socket, in two lines on one connection: a ticket, and the open that spends it.
-//! `purlis_core::hookwire::OpenChat` argues what that ticket is worth and what it is not,
-//! and it is not repeated here.
+//! `charter handoff` does every check of the request in front of the open, and then asks the
+//! app over the hook socket, in two lines on one connection: a ticket, and the open that
+//! spends it. `purlis_core::hookwire::OpenChat` argues what that ticket is worth and what it
+//! is not, and it is not repeated here.
+//!
+//! **A handoff is a dispatch in handoff mode, and this app decides it** (#1444, spec #1434
+//! decisions 4 and 5). The harness's permission prompt consents to nothing. What does is the
+//! dispatch grant: a handoff to the asking chat's own persona needs none, and one to another
+//! persona is held with its brief until the person allows the pair on the asking chat's tab,
+//! or is refused plainly for a chat nobody is at. Its limits, its depth, a policy's locks and
+//! its profile are a task's, because one function decides both ([`dispatch_it`]). Nobody
+//! approves the brief: it is the new chat's first message, it is in the dispatch's record,
+//! and the Notice for a first grant shows it in full.
 //!
 //! What this module adds is **the questions only the app can answer**, and the one control
 //! that module's argument rests on, which is visibility:
@@ -38,13 +45,12 @@
 //!
 //! A **task** is the other mode of the same act (ADR 0090, #1434): one chat starting another,
 //! which runs as a persona and owes the chat that asked one report. It is answered here, on the
-//! same road: the ticket, the stamped first message, the chat's start, the lineage on its
-//! record and the report. What differs is where the facts come from. A handoff's request
-//! carries a stamp and a workspace, which this module checks; a dispatch's carries the chat's
-//! number, a persona's name, a task's name and a brief, and **everything else is this app's own
-//! record of the asking chat** ([`dispatch_it`]): who it is, where it works, what it runs as,
-//! and whether it may. `purlis_core::dispatchdecision::decide` answers that last question, for
-//! every caller.
+//! same road: the ticket, the stamped first message, the decision, the chat's start, the
+//! lineage on its record and the report. What differs is what the request carries. A handoff's
+//! carries a stamp and the workspace the work moves to, which this module checks ([`moving`]);
+//! a task's carries a task's name. For both, **everything else is this app's own record of the
+//! asking chat** ([`dispatch_it`]): who it is, where it works, what it runs as, and whether it
+//! may. `purlis_core::dispatchdecision::decide` answers that last question, for every caller.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -140,16 +146,16 @@ pub fn answer(
             if let Err(why) = tickets.spend(open.chat, connection, &open.ticket, now) {
                 return no(why);
             }
-            match open_it(held, plane, &open, STARTING) {
-                Ok((it, row, note)) => {
+            // Decided as every dispatch is (#1444): started, held for the person, or refused.
+            match dispatch_it(held, plane, &Wanted::moved(&open), STARTING) {
+                Ok(Dispatched::Started(it, note, row)) => {
                     let chat = it.session;
-                    arrived(it);
-                    Answer::Opened {
-                        chat,
-                        row: Some(row),
-                        note,
-                    }
+                    arrived(*it);
+                    Answer::Opened { chat, row, note }
                 }
+                Ok(Dispatched::Held {
+                    from, to, waiting, ..
+                }) => Answer::NeedsGrant { from, to, waiting },
                 Err(why) => no(why),
             }
         }
@@ -166,7 +172,7 @@ pub fn answer(
                 return no(why);
             }
             match dispatch_it(held, plane, &Wanted::of(&dispatch), STARTING) {
-                Ok(Dispatched::Started(it, note)) => {
+                Ok(Dispatched::Started(it, note, _)) => {
                     let answer = Answer::Dispatched {
                         chat: it.session,
                         name: it.label.clone().unwrap_or_else(|| it.name.clone()),
@@ -950,20 +956,6 @@ fn is_open(held: &Held, chat: u32) -> bool {
         .any(|open| open.session == chat)
 }
 
-/// **What a chat handed off to `target` holds** (#1362, D-1362-5): the grants the asking chat
-/// `asking` itself runs with (`start::runs_with`, from the app's own record of it, its own hold
-/// included), unless `target`'s hosts are all among them. So a chat that holds another
-/// persona's grants hands off holding them still, and a chain of handoffs never climbs.
-fn holds_after_handoff(
-    policy: Option<&purlis_core::sandbox::Policy>,
-    asking: &Chat,
-    root: &std::path::Path,
-    target: Option<&str>,
-) -> Option<purlis_core::reopen::HeldGrants> {
-    let trusted = purlis_core::start::runs_with(asking, root);
-    purlis_core::sandbox::persona::held_unless_within(policy, trusted.as_deref(), target)
-}
-
 /// The size a handed-off chat starts at, the same one a relaunch uses: it has no pane yet to
 /// ask, and the pane it lands in tells it the real one when it is first shown.
 const STARTING: Size = Size {
@@ -971,46 +963,31 @@ const STARTING: Size = Size {
     rows: 24,
 };
 
-/// Opens the chat `open` describes, or says why not in a sentence the asker prints.
-///
-/// The order is `charter/commands_handoff.py`'s after its frame check: every question first,
-/// then the workspace (when this call creates it), then the chat. A refusal that comes after
-/// the workspace was created says so, the way Python's `NOTHING_ELSE` does, because a
-/// handoff that half-happened and says nothing about the half is worse than one that failed.
-fn open_it(
-    held: &Held,
-    plane: &PlaneId,
-    open: &OpenChat,
-    size: Size,
-) -> Result<(Arrived, Row, Option<String>), String> {
-    use purlis_core::{handoff, start, wscmd};
+/// What a handoff's request says, read and held to its rules before anything is decided.
+struct Moving {
+    /// The folder the new chat stands in: the workspace's, which exists or is about to.
+    dir: std::path::PathBuf,
+    /// Where the stamp says the handoff left from, which the new chat's record keeps.
+    left_from: Place,
+}
 
-    let root = held.root();
-    let from = open.chat;
-    // A chat the person is stopping, or one below it, starts no chat (#1448). First, so a
-    // refused handoff has made no workspace.
-    if crate::stopping::refuses_a_start(held, from) {
-        return Err(crate::stopping::STARTS_NOTHING.to_owned());
-    }
-    let asking = held
-        .chats()
-        .open_now()
-        .into_iter()
-        .find(|chat| chat.session == from)
-        .ok_or_else(|| format!("chat {from} is not one this app has open"))?;
-    let Some(stamp) = handoff::stamped(&open.message).filter(|read| read.chat == from.to_string())
+/// What the handoff `moved` asks of the project at `root`, for the chat `from`, or why it
+/// cannot be opened in a sentence the asker prints.
+///
+/// The order is `charter/commands_handoff.py`'s after its frame check, and every question
+/// here is asked before anything is decided or written: the stamp, the place it left from,
+/// the workspace it names. **Nothing is created here**: a handoff that waits on the person
+/// creates its workspace when they allow it, and never before ([`dispatch_it`]).
+fn moving(root: &std::path::Path, from: u32, moved: &Moved) -> Result<Moving, String> {
+    use purlis_core::{handoff, wscmd};
+
+    let Some(stamp) = handoff::stamped(&moved.message).filter(|read| read.chat == from.to_string())
     else {
         return Err(format!(
             "the first message does not open with the stamp of a handoff from chat {from}, \
              and a chat the app opens on request always says where it came from"
         ));
     };
-    // The parent as the operator sees it, which is what the new chat and its tab are told —
-    // never its number (charter-app#258). A copy, so the note still reads once it is closed.
-    let parent = held
-        .chats()
-        .shown_name(from)
-        .ok_or_else(|| format!("chat {from} is not one this app has open"))?;
     // A workspace's name, or the plane root (SI-1b): a chat at the root is in no workspace,
     // and its stamp says so rather than naming the one the ladder would have picked.
     let Some(left_from) = stamp.place() else {
@@ -1019,161 +996,42 @@ fn open_it(
             purlis_core::shown::short(stamp.workspace)
         ));
     };
-    // The command held the name to this rule already; held again because the request is what
-    // arrived here, and a name is drawn on a tab.
-    let label = match open.name.as_deref() {
-        Some(raw) => purlis_core::reopen::label(raw)?,
-        None => None,
-    };
-    // `persona=args.persona or ""` in Python, which is the frame's own default: a handed-off
-    // chat does not inherit the asking chat's persona, it gets the one the operator named or
-    // the plane's.
-    let persona = open
-        .persona
-        .clone()
-        .or_else(|| start::persona_for_a_new_chat(root));
-    // **The profile is the persona's own, else the asking chat's** (#1445): the first from the
-    // persona's definition, held to what the project offers; the second from this app's record
-    // of the asking chat, never from the request. The request names none today.
-    let on = profile_for(root, asking.profile.as_deref(), persona.as_deref(), None);
-    let chosen = on.chosen.as_ref().map_err(|refused| refused.say())?;
-    // A handoff starts no chat on a profile that asks nobody either, as a task does not.
-    if let Some(refused) = asks_nobody(&on, chosen, persona.as_deref()) {
-        return Err(refused);
-    }
-    let profile = chosen.profile.clone();
-    // Where the persona's own profile is not offered on this machine, the chat runs on the
-    // asking chat's and is told so under its stamp; the asking chat is told in the answer
-    // (D-1445-8).
-    let note = chosen.note();
-    let message = handoff::delivered_noting(&open.message, &parent, open.report, note.as_deref())
-        .expect("the stamp was read a moment ago");
-    // The command asked this already; asked again because these bytes are about to become a
-    // harness's argv, and the bound and the NUL are facts about argv.
-    if let Some(bad) = handoff::bad_message(&message) {
-        return Err(bad.say());
-    }
-    let ws = open.workspace.as_str();
+    let ws = moved.workspace.as_str();
     let dir = wscmd::workspace_dir(root, ws).ok_or_else(|| {
         format!(
             "'{}' cannot name a workspace",
             purlis_core::shown::short(ws)
         )
     })?;
-    let created = match open.create_vision.as_deref() {
-        Some(vision) => {
-            if wscmd::workspace_dir_exists(root, ws) {
-                return Err(format!("workspace '{ws}' already exists"));
-            }
-            wscmd::ensure::ensure(root, ws, chrono::Utc::now(), &wscmd::ensure::author())?;
-            // `create`'s own two calls, in its order: the vision is written into the
-            // workspace `ensure` just scaffolded.
-            let plane_on_disk = purlis_core::workspaces::Plane::open(root);
-            if let Ok(workspace) = plane_on_disk.workspace(ws) {
-                let _ = workspace.set_vision(vision);
-            }
-            true
+    match moved.create_vision {
+        Some(_) if wscmd::workspace_dir_exists(root, ws) => {
+            return Err(format!("workspace '{ws}' already exists"));
         }
-        None => {
-            if !dir.is_dir() {
-                return Err(format!(
-                    "workspace '{ws}' has no directory to open a chat in"
-                ));
-            }
-            false
+        None if !dir.is_dir() => {
+            return Err(format!(
+                "workspace '{ws}' has no directory to open a chat in"
+            ));
         }
-    };
-    let stays = |why: String| {
-        if created {
-            format!("{why} The workspace '{ws}' was created and stays; no chat was opened.")
-        } else {
-            why
-        }
-    };
-    // **A handoff never widens what the asking chat reaches** (#1362, D-1362-5): where the
-    // persona it hands to has hosts the asking chat does not run with, the new chat holds the
-    // asking chat's grants — read from this app's record of that chat, never from the
-    // request — until the person allows its own on its tab.
-    let asking_chat = held
-        .chats()
-        .recorded_chat(from)
-        .ok_or_else(|| format!("chat {from} is not one this app has open"))?;
-    // Into the workspace the asking chat is in, or another: the dispatch row's one fact about
-    // where the work went, from this app's record of that chat and never from the stamp, which
-    // the chat wrote (#1421, D-1421-11).
-    let placement = match asking_chat
-        .cwd
-        .as_deref()
-        .and_then(|cwd| workspace_of(root, cwd))
-    {
-        Some(asking_ws) if asking_ws == ws => purlis_core::dispatch::Placement::Here,
-        _ => purlis_core::dispatch::Placement::Elsewhere,
-    };
-    let held_grants = holds_after_handoff(
-        purlis_core::sandbox::Plane::read(root)
-            .in_force(&purlis_core::sandbox::policy::Locks::of(root))
-            .as_ref(),
-        &asking_chat,
-        root,
-        persona.as_deref(),
-    );
-    let handed_from = HandedFrom {
-        chat: from,
-        name: parent,
-        workspace: left_from,
-        report: if open.report {
-            Owed::Due
-        } else {
-            Owed::Nothing
-        },
-        // The work moved, so the chat opens as a tab.
-        mode: Mode::Handoff,
-        // One below the chat that asks, as a task is: a handoff is a dispatch too, and a chain
-        // is as deep as its dispatches whichever kind each was.
-        depth: (asking_chat.from.as_ref().map_or(0, |from| from.depth) + 1)
-            .min(dispatchdecision::DEEPEST),
-        // The lineage it joins: the asking chat's, by the chat the person started.
-        root: held
-            .chats()
-            .deciding_over(|open, _| dispatchdecision::root_of(from, open)),
-        by_person: false,
-    };
-    let arrived = start_on(
-        held,
-        plane,
-        |name| {
-            Ok(start::Start {
-                profile: Some(profile.clone()),
-                persona: persona.clone(),
-                name,
-                cwd: Some(dir),
-                resume: None,
-                // The picker's footer box is one operator choice for one chat, and nobody made it
-                // for this one.
-                show_footer: false,
-                resuming: None,
-                without_sandbox: None,
-                held: held_grants.clone(),
-                grants: Default::default(),
-            })
-        },
-        &Opening {
-            message: &message,
-            brief: handoff::stamped(&open.message).map_or(open.message.as_str(), |read| read.brief),
-            label,
-            from: handed_from,
-            workspace: Some(ws.to_owned()),
-            number: None,
-            by_person: false,
-        },
-        // From the read the profile was chosen from: git is asked once, and the profile that
-        // was judged is the one that runs.
-        (&on.declared, &on.launch),
-        size,
-    )
-    .map_err(stays)?;
-    let row = handoff_row(root, held.config(), placement, created);
-    Ok((arrived, row, note))
+        _ => {}
+    }
+    Ok(Moving { dir, left_from })
+}
+
+/// Creates the workspace a handoff with `--create` names, with its vision: `create`'s own two
+/// calls, in its order. Only once the handoff is allowed to start.
+fn create_it(root: &std::path::Path, ws: &str, vision: &str) -> Result<(), String> {
+    use purlis_core::wscmd;
+
+    if wscmd::workspace_dir_exists(root, ws) {
+        return Err(format!("workspace '{ws}' already exists"));
+    }
+    wscmd::ensure::ensure(root, ws, chrono::Utc::now(), &wscmd::ensure::author())?;
+    // The vision is written into the workspace `ensure` just scaffolded.
+    let plane_on_disk = purlis_core::workspaces::Plane::open(root);
+    if let Ok(workspace) = plane_on_disk.workspace(ws) {
+        let _ = workspace.set_vision(vision);
+    }
+    Ok(())
 }
 
 /// What a chat is opened on and filed as, whichever mode opened it.
@@ -1291,8 +1149,9 @@ fn start_on(
 /// What became of a dispatch the app was asked for.
 enum Dispatched {
     /// The persona chat is running, with what the asking chat is told about how it was
-    /// started ([`Answer::Dispatched`]'s `note`). Boxed: it is the whole arrival.
-    Started(Box<Arrived>, Option<String>),
+    /// started ([`Answer::Dispatched`]'s `note`), and for a handoff what became of its row in
+    /// the project's dispatch log ([`handoff_row`]). Boxed: it is the whole arrival.
+    Started(Box<Arrived>, Option<String>, Option<Row>),
     /// Nothing has started yet: the person is being asked for a dispatch grant for this pair,
     /// on the asking chat's tab, and the dispatch is held for their answer
     /// ([`Answer::NeedsGrant`]).
@@ -1305,22 +1164,41 @@ enum Dispatched {
     },
 }
 
-/// A task the app is asked to dispatch: what [`DispatchAsk`] says, and who says it.
+/// What a handoff's request says beyond a task's ([`OpenChat`]): where the work moves to, and
+/// the message the command stamped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Moved {
+    /// The workspace the work moves to, where the new chat stands for life.
+    pub workspace: String,
+    /// The vision of that workspace, where this handoff creates it (`--create --vision`).
+    pub create_vision: Option<String>,
+    /// Whether the new chat owes the asking chat a report (`--report`).
+    pub report: bool,
+    /// The whole first message as the command stamped it: the stamp line, a blank line, the
+    /// brief. The app checks the stamp and writes the asking chat's shown name into it.
+    pub message: String,
+}
+
+/// A dispatch the app is asked for, a task ([`DispatchAsk`]) or a handoff ([`OpenChat`]): what
+/// the request says, and who says it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wanted {
     /// The asking chat: the chat whose token the line carried, or whose tab the person is at.
     pub chat: u32,
     /// The persona named, or none for the asking chat's own.
     pub to: Option<String>,
-    /// The task's name.
+    /// The task's name. A handoff may give none, which is the empty string here.
     pub name: String,
-    /// The brief, as it was written.
+    /// The brief, as it was written: what the Notice for a first grant shows in full, and
+    /// what the dispatch's record keeps.
     pub brief: String,
     /// The profile asked for, or none.
     pub profile: Option<String>,
     /// Whether the chat asks, or the person does from its tab (#1438). The limits hold either
     /// way; only a chat's ask needs a grant.
     pub by: dispatchdecision::By,
+    /// What a handoff adds, or none for a task: the mode is which of the two this is.
+    pub moved: Option<Moved>,
 }
 
 impl Wanted {
@@ -1333,6 +1211,49 @@ impl Wanted {
             brief: ask.brief.clone(),
             profile: ask.profile.clone(),
             by: dispatchdecision::By::Chat,
+            moved: None,
+        }
+    }
+
+    /// What a chat's handoff wants (#1444): the same dispatch, in handoff mode. The persona is
+    /// the one it names, or the asking chat's own, as for a task. The brief is read off the
+    /// stamped message; one that is not stamped is refused where it is read ([`moving`]).
+    fn moved(open: &OpenChat) -> Self {
+        Self {
+            chat: open.chat,
+            to: open.persona.clone(),
+            name: open.name.clone().unwrap_or_default(),
+            brief: purlis_core::handoff::stamped(&open.message)
+                .map_or(open.message.as_str(), |read| read.brief)
+                .to_owned(),
+            profile: None,
+            by: dispatchdecision::By::Chat,
+            moved: Some(Moved {
+                workspace: open.workspace.clone(),
+                create_vision: open.create_vision.clone(),
+                report: open.report,
+                message: open.message.clone(),
+            }),
+        }
+    }
+
+    /// Which mode this dispatch is.
+    fn mode(&self) -> Mode {
+        match self.moved {
+            Some(_) => Mode::Handoff,
+            None => Mode::Task,
+        }
+    }
+
+    /// What this dispatch is called where purlis names it to its asking chat: the task's
+    /// name, or for a handoff that gave none, where the work moved to. `None` for a name
+    /// purlis would not draw.
+    fn shown(&self) -> Option<String> {
+        match &self.moved {
+            Some(moved) if self.name.trim().is_empty() => {
+                Some(format!("handoff to {}", moved.workspace))
+            }
+            _ => dispatchdecision::task_name(&self.name).ok(),
         }
     }
 }
@@ -1355,12 +1276,12 @@ impl HeldDispatches {
 
     /// Keeps `wanted` as held dispatch `pending`, unless one is kept under that number
     /// already: the store answers a second ask across the same pair with the first's number,
-    /// and the person saw the first's brief. Answers the name of the task already kept, where
-    /// there was one.
+    /// and the person saw the first's brief. Answers what the dispatch already kept is called
+    /// ([`Wanted::shown`]), where there was one.
     fn keep(&self, pending: u32, wanted: &Wanted) -> Option<String> {
         let mut held = self.lock();
         if let Some(first) = held.get(&pending) {
-            return Some(first.name.clone());
+            return Some(first.shown().unwrap_or_else(|| first.name.clone()));
         }
         held.insert(pending, wanted.clone());
         None
@@ -1460,15 +1381,15 @@ fn attendance(
     mark.attendance()
 }
 
-/// Dispatches the task `wanted` describes, or says why not in a sentence the asking chat
-/// reads (#1436).
+/// Dispatches what `wanted` describes, a task or a handoff, or says why not in a sentence the
+/// asking chat reads (#1436, #1444).
 ///
 /// **The asker is this app's record of the chat whose token the line carried, never the
 /// request.** Its persona, its profile, its folder, the name the new chat is told it came
 /// from, where it stands in its lineage, whether anybody answers its prompts: each is read
 /// here. The request says which persona, what the task is called, which of the project's
-/// profiles and the brief, and nothing else it says is read ([`DispatchAsk`] has nowhere to
-/// say it).
+/// profiles and the brief; a handoff's says the workspace the work moves to as well
+/// ([`Moved`]). Nothing else it says is read.
 ///
 /// **This is where the parts meet**, in the decision's order
 /// ([`dispatchdecision::asked_by_a_chat`]): the persona; this machine's policy; the profile
@@ -1482,6 +1403,13 @@ fn attendance(
 /// its own persona's grants and nothing of the asking chat's; not covered, and a chat a person
 /// is at has the dispatch held and a Notice raised on its tab, while a chat nobody is at is
 /// refused. The person dispatching from a tab needs none.
+///
+/// **A handoff is the same dispatch** (#1444): one decision, one grant, one start. What it
+/// adds is where the chat stands (the workspace it names, created here when the handoff says
+/// so and only once it may start), whether a report is owed, and its row in the project's
+/// dispatch log. It holds none of the asking chat's grants: the hold a handoff used to carry
+/// (D-1362-5) is retired with the prompt it stood beside, and a chat that still holds
+/// another's is refused a handoff as it is refused a task.
 ///
 /// **Decided and reserved under one lock** ([`crate::chats::Chats::deciding`]), so asks in
 /// flight on other threads cannot each be let past a limit the other is about to fill. The
@@ -1501,12 +1429,22 @@ fn dispatch_it(
     let from = wanted.chat;
     let not_open = || format!("chat {from} is not one this app has open");
     let asking = held.chats().recorded_chat(from).ok_or_else(not_open)?;
+    // What a handoff's request says, held to its rules before anything else is asked.
+    let moving = wanted
+        .moved
+        .as_ref()
+        .map(|moved| moving(root, from, moved))
+        .transpose()?;
     // The asking chat as the person sees it, which is what the new chat is told (never its
     // number), and a copy, so the note still reads once that chat is closed.
     let asker = held.chats().shown_name(from).ok_or_else(not_open)?;
-    // Held to a task's own rule. The command asked already; asked again because the request
-    // is what arrived here, and this name is drawn in a tree and on purlis's own lines.
-    let label = dispatchdecision::task_name(&wanted.name)?;
+    // Held to its own rule. The command asked already; asked again because the request is
+    // what arrived here, and this name is drawn in a tree and on purlis's own lines. A task
+    // needs one; a handoff may go without, and its chat is then called by its number.
+    let label = match &wanted.moved {
+        None => Some(dispatchdecision::task_name(&wanted.name)?),
+        Some(_) => purlis_core::reopen::label(&wanted.name)?,
+    };
     // Where the asking chat works, from this app's record of it: what the stamp says, and
     // where the report goes when that chat is gone.
     let workspace = asking
@@ -1529,14 +1467,20 @@ fn dispatch_it(
     // Where the persona's own profile is not offered on this machine, the chat runs on the
     // asking chat's: it is told so under its stamp, and the asking chat in the answer.
     let note = on.chosen.as_ref().ok().and_then(|chosen| chosen.note());
-    // Who asked is the one thing the first message says differently on the two roads: a
-    // chat's brief is a request from that chat, and the person's is what they typed (#1438).
+    // Who asked is the one thing the first message says differently on the roads: a chat's
+    // brief is a request from that chat, and the person's is what they typed (#1438). A
+    // handoff's is the command's own stamp, with the asking chat named the way the person
+    // sees it.
     let when = chrono::Local::now().naive_local();
-    let message = match wanted.by {
-        By::Chat => {
+    let message = match (&wanted.moved, wanted.by) {
+        (Some(moved), _) => {
+            handoff::delivered_noting(&moved.message, &asker, moved.report, note.as_deref())
+                .expect("the stamp was read a moment ago")
+        }
+        (None, By::Chat) => {
             handoff::task_message_noting(&asker, &place, when, &wanted.brief, note.as_deref())
         }
-        By::Person => handoff::person_task_message_noting(
+        (None, By::Person) => handoff::person_task_message_noting(
             &asker,
             &place,
             when,
@@ -1550,6 +1494,16 @@ fn dispatch_it(
         return Err(bad.say());
     }
     let attended = attendance(held, from, &asking, &on.launch.0);
+    // **A chat nobody is at makes no workspace** (D-1444-13): its handoff goes into one that
+    // exists. Said before anything is decided, and nothing is created.
+    if matches!(attended, Attendance::Unattended)
+        && wanted
+            .moved
+            .as_ref()
+            .is_some_and(|moved| moved.create_vision.is_some())
+    {
+        return Err(dispatchunattended::NO_WORKSPACE_IS_MADE.to_owned());
+    }
     let asking_as = crate::dispatchgrants::asking_from(&asking, from, asker.clone(), root);
 
     // **Decided, and its slot reserved, under one lock.** Asks arrive a thread each, and a
@@ -1584,6 +1538,13 @@ fn dispatch_it(
                     grants: &grants,
                     profile: on.chosen.as_ref().err(),
                     by: wanted.by,
+                    mode: wanted.mode(),
+                    // For a chat nobody is at, a handoff counts toward its running-per-chat
+                    // limit as a task does (D-1444-13): nothing else bounds what it opens.
+                    counted: match attended {
+                        Attendance::Attended => dispatchdecision::Counted::Tasks,
+                        Attendance::Unattended => dispatchdecision::Counted::HandoffsToo,
+                    },
                 },
             )
         });
@@ -1636,9 +1597,16 @@ fn dispatch_it(
         let its_lineage = HandedFrom {
             chat: from,
             name: asker,
-            workspace: place,
-            report: Owed::Due,
-            mode: Mode::Task,
+            // A task is filed where the asking chat works, by this app's record of it. A
+            // handoff says where it left from in its stamp, which was read and held above.
+            workspace: moving
+                .as_ref()
+                .map_or(place, |moving| moving.left_from.clone()),
+            report: match &wanted.moved {
+                Some(moved) if !moved.report => Owed::Nothing,
+                _ => Owed::Due,
+            },
+            mode: wanted.mode(),
             depth: asked.depth,
             root: asked.root,
             by_person: wanted.by == By::Person,
@@ -1664,6 +1632,19 @@ fn dispatch_it(
             slot,
         )
     };
+    // **Now, and only now, a handoff's workspace is made** where the handoff says to make it:
+    // it may start, so a handoff that was refused or waits on the person has created nothing.
+    let created = match &wanted.moved {
+        Some(Moved {
+            workspace: ws,
+            create_vision: Some(vision),
+            ..
+        }) => {
+            create_it(root, ws, vision)?;
+            true
+        }
+        _ => false,
+    };
     // The slot is let go when this returns: the chat is open by then and counts for itself,
     // or its start was refused and nothing does.
     // What the chat starts on, for the one function every persona chat's start goes through.
@@ -1672,7 +1653,12 @@ fn dispatch_it(
         held,
         plane,
         |name| {
-            let start = dispatchdecision::start_for(&asking, its, profile, name);
+            let mut start = dispatchdecision::start_for(&asking, its, profile, name);
+            // A handoff's chat stands in the workspace the work moved to, not beside the
+            // asking chat.
+            if let Some(moving) = &moving {
+                start.cwd = Some(moving.dir.clone());
+            }
             match to.as_deref() {
                 // **The joined start** (#1446): whatever the start held of the asking chat's
                 // is dropped here, and a profile that asks nobody is refused here too.
@@ -1691,17 +1677,40 @@ fn dispatch_it(
         &Opening {
             message: &message,
             brief: &wanted.brief,
-            label: Some(label),
+            label,
             from: lineage_of_it,
-            workspace,
+            workspace: match &wanted.moved {
+                Some(moved) => Some(moved.workspace.clone()),
+                None => workspace.clone(),
+            },
             number: Some(number),
             by_person: wanted.by == By::Person,
         },
         (&on.declared, &on.launch),
         size,
-    )?;
+    )
+    .map_err(|why| match &wanted.moved {
+        // A handoff that half-happened says so, the way Python's `NOTHING_ELSE` does.
+        Some(moved) if created => format!(
+            "{why} The workspace '{}' was created and stays; no chat was opened.",
+            moved.workspace
+        ),
+        _ => why,
+    })?;
     debug_assert_eq!(arrived.persona, to);
-    Ok(Dispatched::Started(Box::new(arrived), note))
+    // A handoff's row in the project's dispatch log, written here by the app that opened the
+    // chat (#1421). Into the workspace the asking chat is in, or another: from this app's
+    // record of that chat and never from the stamp, which the chat wrote (D-1421-11).
+    let row = wanted.moved.as_ref().map(|moved| {
+        let placement = match workspace.as_deref() {
+            Some(asking_ws) if asking_ws == moved.workspace => {
+                purlis_core::dispatch::Placement::Here
+            }
+            _ => purlis_core::dispatch::Placement::Elsewhere,
+        };
+        handoff_row(root, held.config(), placement, created)
+    });
+    Ok(Dispatched::Started(Box::new(arrived), note, row))
 }
 
 /// **The person answered a dispatch that waited on them** (#1437): the grants store hands
@@ -1740,7 +1749,7 @@ pub fn answered(
         (Answered::KeptBlocked, pair)
     } else {
         match dispatch_it(held, plane, &wanted, STARTING) {
-            Ok(Dispatched::Started(it, note)) => {
+            Ok(Dispatched::Started(it, note, _)) => {
                 let detail = match (&it.persona, note) {
                     (Some(persona), Some(note)) => format!("running as {persona}; {note}"),
                     (Some(persona), None) => format!("running as {persona}"),
@@ -1805,7 +1814,7 @@ fn tell_the_asker(
     let Some(asking) = held.chats().recorded_chat(wanted.chat) else {
         return;
     };
-    let Ok(task) = dispatchdecision::task_name(&wanted.name) else {
+    let Some(task) = wanted.shown() else {
         return;
     };
     let place = asking
@@ -2122,9 +2131,11 @@ pub fn ask_persona(
         // The persona's own profile, else that chat's: the person's ask names none.
         profile: None,
         by: dispatchdecision::By::Person,
+        // The person asks for a task; a handoff is a chat's own to make.
+        moved: None,
     };
     match dispatch_it(held, plane, &wanted, size)? {
-        Dispatched::Started(arrived, _) => Ok(*arrived),
+        Dispatched::Started(arrived, _, _) => Ok(*arrived),
         // The decision never asks the person for a grant of their own dispatch.
         Dispatched::Held { .. } => {
             Err("purlis did not start the chat: it asked for a grant you do not need.".to_owned())
@@ -2731,15 +2742,32 @@ mod tests {
         let message =
             purlis_core::handoff::delivered_noting(&stamped(1), "claude 1", false, Some(&note))
                 .expect("a stamped message");
-        let mut lines = message.lines();
-        assert!(
-            lines
-                .next()
-                .unwrap()
-                .starts_with("⟨handoff from claude 1 · ")
+        // Each line under the stamp is found by what it is, in the order `delivered_noting`
+        // fixes: the stamp, what the brief is, (the report line, not asked for here), the note.
+        let (head, brief) = message
+            .split_once("\n\n")
+            .expect("a blank line before the brief");
+        let lines: Vec<&str> = head.lines().collect();
+        let at = |wanted: &str| lines.iter().position(|line| *line == wanted);
+        assert!(lines[0].starts_with("⟨handoff from claude 1 · "), "{head}");
+        let request = at(purlis_core::handoff::HANDOFF_NOTE).expect("what the brief is");
+        let fallback = at(&format!("⟨{note}⟩")).expect("the profile note");
+        assert_eq!((request, fallback), (1, 2), "{head}");
+        assert_eq!(at(purlis_core::handoff::REPORT_ASK), None, "{head}");
+        assert_eq!(brief, "# Ship it\nnow", "{message:?}");
+        // With a report asked for, its line stands between the two.
+        let asked =
+            purlis_core::handoff::delivered_noting(&stamped(1), "claude 1", true, Some(&note))
+                .expect("a stamped message");
+        let lines: Vec<&str> = asked.split_once("\n\n").unwrap().0.lines().collect();
+        assert_eq!(
+            lines[1..],
+            [
+                purlis_core::handoff::HANDOFF_NOTE,
+                purlis_core::handoff::REPORT_ASK,
+                format!("⟨{note}⟩").as_str()
+            ]
         );
-        assert_eq!(lines.next(), Some(format!("⟨{note}⟩").as_str()));
-        assert!(message.ends_with("\n\n# Ship it\nnow"), "{message:?}");
         // No profile to fall back to: nothing is started.
         let refused = profile_of(&plane.root, None, Some("rogue"))
             .map(|on| on.chosen)
@@ -2773,7 +2801,9 @@ mod tests {
         let planes = planes();
         let id = planes.open(&plane.root);
         let held = planes.held(&id).expect("held");
-        let asking = a_chat_on_work(&held, &plane.root);
+        // The asking chat runs as `ops` itself: a handoff to its own persona needs no
+        // grant (#1444), and this test is about the profile the new chat starts on.
+        let asking = a_chat_as(&held, &plane.root, Some("ops"), &plane.root);
         let tickets = Tickets::default();
 
         let (chat, arrived) =
@@ -2794,10 +2824,19 @@ mod tests {
         );
         let argv = plane.codex_run();
         let first = argv.last().cloned().unwrap_or_default();
+        // The asking chat is named the way the person sees it, whatever that name is: never by
+        // its number.
+        let (stamp_line, rest) = first.split_once('\n').unwrap_or_default();
         assert!(
-            first.starts_with("⟨handoff from claude 1 · workspace default · 2026-05-04 11:32⟩\n")
-                && first.ends_with("\n\n# Ship it\nnow"),
+            stamp_line.starts_with("⟨handoff from ")
+                && stamp_line.ends_with(" · workspace default · 2026-05-04 11:32⟩")
+                && !stamp_line.contains(&format!("chat {asking}"))
+                && rest.ends_with("\n\n# Ship it\nnow"),
             "the stamp and the brief were not Codex's first message: {argv:?}"
+        );
+        assert!(
+            rest.starts_with(purlis_core::handoff::HANDOFF_NOTE),
+            "it is told what its brief is, right under the stamp: {first:?}"
         );
         assert!(
             first.contains(purlis_core::handoff::REPORT_ASK),
@@ -2827,7 +2866,9 @@ mod tests {
         let planes = planes();
         let id = planes.open(&plane.root);
         let held = planes.held(&id).expect("held");
-        let asking = a_chat_on_work(&held, &plane.root);
+        // The asking chat runs as `ops` itself: a handoff to its own persona needs no
+        // grant (#1444), and this test is about the profile the new chat starts on.
+        let asking = a_chat_as(&held, &plane.root, Some("ops"), &plane.root);
         let tickets = Tickets::default();
         let ticket = ticket(&held, &id, &tickets, asking);
         let open = Ask::Open(Box::new(OpenChat {
@@ -2878,7 +2919,9 @@ mod tests {
         let planes = planes();
         let id = planes.open(&plane.root);
         let held = planes.held(&id).expect("held");
-        let asking = a_chat_on_work(&held, &plane.root);
+        // The asking chat runs as `ops` itself: a handoff to its own persona needs no
+        // grant (#1444), and this test is about the profile the new chat starts on.
+        let asking = a_chat_as(&held, &plane.root, Some("ops"), &plane.root);
         let tickets = Tickets::default();
 
         let refused =
@@ -2975,36 +3018,436 @@ mod tests {
                             [sandbox.personas.devops]\nhosts = [\"10.100.39.145:6443\"]\n\
                             [sandbox.personas.qa]\nhosts = []\n";
 
-    /// #1362, D-1362-5: a chat that holds another persona's grants hands off holding them, so a
-    /// chain of handoffs (qa → devops → devops) never climbs past the first chat's grants; a chat
-    /// that holds its own hands off widening nothing it already reaches.
-    #[test]
-    fn a_held_chat_s_own_handoff_stays_held() {
-        let policy = purlis_core::sandbox::Plane::of(Some(PERSONAS))
-            .said()
-            .policy;
-        let root = tempfile::tempdir().expect("a project");
-        let qa = Chat {
-            persona: Some("qa".to_owned()),
-            ..Default::default()
-        };
-        let b_holds = holds_after_handoff(policy.as_ref(), &qa, root.path(), Some("devops"))
-            .expect("qa to devops is held");
-        assert_eq!(b_holds.persona.as_deref(), Some("qa"));
-        let b = Chat {
-            persona: Some("devops".to_owned()),
-            held: Some(b_holds),
-            ..Default::default()
-        };
-        let c_holds = holds_after_handoff(policy.as_ref(), &b, root.path(), Some("devops"))
-            .expect("B's own handoff to devops stays held");
-        assert_eq!(c_holds.persona.as_deref(), Some("qa"));
-        // B once allowed hands off to devops holding its own.
-        let allowed = Chat { held: None, ..b };
-        assert_eq!(
-            holds_after_handoff(policy.as_ref(), &allowed, root.path(), Some("devops")),
-            None
+    // ----- a handoff is a dispatch: consent is the grant (#1444) -----
+
+    /// A handoff from `asking` naming `persona` (or none) and `name`, into `workspace`, with
+    /// `create_vision` where it creates it: what the app answered, and what it told the window.
+    fn a_handoff(
+        held: &Held,
+        id: &PlaneId,
+        asking: u32,
+        persona: Option<&str>,
+        name: Option<&str>,
+        (workspace, create_vision): (&str, Option<&str>),
+    ) -> (Answer, Option<Arrived>) {
+        let tickets = Tickets::default();
+        let ticket = ticket(held, id, &tickets, asking);
+        let told = Mutex::new(None);
+        let said = answer(
+            held,
+            id,
+            &tickets,
+            1,
+            Ask::Open(Box::new(OpenChat {
+                chat: asking,
+                workspace: workspace.to_owned(),
+                create_vision: create_vision.map(str::to_owned),
+                persona: persona.map(str::to_owned),
+                message: stamped(asking),
+                ticket,
+                name: name.map(str::to_owned),
+                report: false,
+            })),
+            &|arrived| *told.lock().unwrap() = Some(arrived),
         );
+        (said, told.into_inner().unwrap())
+    }
+
+    const INTO_ALPHA: (&str, Option<&str>) = ("alpha", None);
+
+    #[test]
+    fn a_handoff_to_the_asking_chats_own_persona_starts_with_no_grant_and_asks_nobody() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("devops"), &plane.root);
+
+        // Naming none is naming its own, as for a task; naming it says the same.
+        for persona in [None, Some("devops")] {
+            let (said, told) = a_handoff(&held, &id, asking, persona, None, INTO_ALPHA);
+            let Answer::Opened { chat, .. } = said else {
+                panic!("opened, not {said:?}")
+            };
+            assert_eq!(
+                told.expect("the window is told").persona.as_deref(),
+                Some("devops")
+            );
+            let child = held.chats().recorded_chat(chat).expect("recorded");
+            assert_eq!(child.persona.as_deref(), Some("devops"), "{persona:?}");
+            assert_eq!(child.held, None, "it holds its own persona's grants");
+            let from = held.chats().handed_from(chat).expect("its lineage");
+            assert_eq!(
+                (from.chat, from.depth, from.mode, from.report),
+                (asking, 1, Mode::Handoff, Owed::Nothing)
+            );
+        }
+        assert!(
+            held.dispatch_grants().waiting(asking).is_empty(),
+            "nothing is asked of the person"
+        );
+    }
+
+    #[test]
+    fn a_handoff_to_another_persona_needs_the_grant_and_starts_nothing_until_it_is_allowed() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+
+        // Into a workspace this handoff would create: held, so not created either.
+        let (said, told) = a_handoff(
+            &held,
+            &id,
+            asking,
+            Some("devops"),
+            None,
+            ("beta", Some("the cluster work")),
+        );
+
+        assert_eq!(
+            said,
+            Answer::NeedsGrant {
+                from: Some("steward".to_owned()),
+                to: "devops".to_owned(),
+                waiting: None,
+            }
+        );
+        assert_eq!(told, None, "nothing was started, so nothing is told");
+        assert_eq!(held.chats().open_now().len(), before);
+        assert!(
+            !plane.root.join("workspaces/beta").exists(),
+            "a handoff that waits on the person has created nothing"
+        );
+        // The person is asked once, on the asking chat's tab, with the brief in front of them:
+        // the brief alone, never the stamp the command wrote around it.
+        let waiting = held.dispatch_grants().waiting(asking);
+        assert_eq!(waiting.len(), 1, "{waiting:?}");
+        assert_eq!(waiting[0].target, "devops");
+        assert!(waiting[0].brief.text.contains("Ship it"), "{waiting:?}");
+        assert!(
+            !waiting[0].brief.text.contains("handoff from"),
+            "{waiting:?}"
+        );
+        // A second handoff across the pair is not queued beside it, and is told which waits.
+        let (second, _) = a_handoff(
+            &held,
+            &id,
+            asking,
+            Some("devops"),
+            Some("again"),
+            INTO_ALPHA,
+        );
+        assert_eq!(
+            second,
+            Answer::NeedsGrant {
+                from: Some("steward".to_owned()),
+                to: "devops".to_owned(),
+                waiting: Some("handoff to beta".to_owned()),
+            }
+        );
+
+        on_the_ground(&held, |ground| {
+            held.dispatch_grants().allow(
+                ground,
+                waiting[0].id,
+                purlis_core::sandbox::grant::Level::You,
+            )
+        })
+        .expect("allowed");
+
+        // The handoff that was held starts: one chat, as devops, in the workspace it names,
+        // which is created now, on the brief the person read.
+        assert_eq!(
+            eventually(|| (held.chats().open_now().len() == before + 1).then_some(())),
+            Some(()),
+            "one chat, and only one"
+        );
+        assert!(plane.root.join("workspaces/beta").is_dir());
+        let message = first_message_of(&plane);
+        assert!(message.ends_with("\n\n# Ship it\nnow"), "{message:?}");
+        let child = held
+            .chats()
+            .open_now()
+            .into_iter()
+            .find(|chat| chat.session != asking)
+            .expect("the handed-off chat");
+        let recorded = held.chats().recorded_chat(child.session).expect("recorded");
+        assert_eq!(recorded.persona.as_deref(), Some("devops"));
+        assert_eq!(
+            recorded.held, None,
+            "its own persona's grants, not the asking chat's"
+        );
+        assert_eq!(
+            held.chats()
+                .handed_from(child.session)
+                .map(|from| from.mode),
+            Some(Mode::Handoff)
+        );
+        // And the asking chat is told on its next turn, as it is told of a held task.
+        let told = eventually(|| {
+            let told = told_on_its_next_turn(&held, asking);
+            (!told.is_empty()).then_some(told)
+        })
+        .expect("the asking chat is told");
+        assert_eq!(told[0].from, "handoff to beta");
+        assert_eq!(
+            told[0].answered,
+            Some(purlis_core::handback::Answered::Started)
+        );
+        // The next handoff across the pair starts without asking.
+        let (again, _) = a_handoff(&held, &id, asking, Some("devops"), None, INTO_ALPHA);
+        assert!(matches!(again, Answer::Opened { .. }), "{again:?}");
+    }
+
+    #[test]
+    fn a_handoff_from_a_chat_nobody_is_at_is_refused_plainly_and_nothing_is_held() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+        // Its harness reported its permission prompts off, on a report the board took.
+        held.unattended().heard(asking, true);
+
+        let (said, told) = a_handoff(&held, &id, asking, Some("devops"), None, INTO_ALPHA);
+
+        // This project has no sandbox, so the chat has neither prompts nor a sandbox: it hands
+        // off to no other persona, whatever the grants say. The sentence is a dispatch's.
+        assert_eq!(
+            said,
+            Answer::No {
+                why: purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned())
+                    .say()
+            }
+        );
+        assert_eq!(told, None);
+        assert_eq!(held.chats().open_now().len(), before);
+        assert!(
+            held.dispatch_grants().waiting(asking).is_empty(),
+            "nothing is held, so nothing can be allowed later"
+        );
+        // Its own persona needs no grant, attended or not.
+        let (own, _) = a_handoff(&held, &id, asking, None, None, INTO_ALPHA);
+        assert!(matches!(own, Answer::Opened { .. }), "{own:?}");
+        // But it makes no workspace (D-1444-13): a chat nobody is at hands off into one that
+        // exists, to its own persona included, and nothing is created for it.
+        let (creating, told) = a_handoff(
+            &held,
+            &id,
+            asking,
+            None,
+            None,
+            ("gamma", Some("somewhere new")),
+        );
+        assert_eq!(
+            creating,
+            Answer::No {
+                why: purlis_core::dispatchunattended::NO_WORKSPACE_IS_MADE.to_owned()
+            }
+        );
+        assert_eq!(told, None);
+        assert!(!plane.root.join("workspaces/gamma").exists());
+    }
+
+    /// D-1444-13: for a chat nobody is at, each handoff it opened that still works counts
+    /// toward its running-per-chat limit, as a task does. For a chat a person is at it does
+    /// not: a handoff's work is not that chat's to wait on.
+    #[test]
+    fn a_handoff_counts_toward_the_running_limit_of_a_chat_nobody_is_at_and_of_no_other() {
+        let plane = a_plane_with_personas();
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n[dispatch]\nrunning-per-chat = 1\n",
+        )
+        .expect("the manifest");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+
+        // A person is at it: two handoffs, and the limit of one running task is not met.
+        for _ in 0..2 {
+            let (said, _) = a_handoff(&held, &id, asking, None, None, INTO_ALPHA);
+            assert!(matches!(said, Answer::Opened { .. }), "{said:?}");
+        }
+        // Nobody is at it: the two it opened are two running, and one may.
+        held.unattended().heard(asking, true);
+        let (said, told) = a_handoff(&held, &id, asking, None, None, INTO_ALPHA);
+        assert_eq!(
+            said,
+            Answer::No {
+                why: purlis_core::dispatchdecision::Refused::Limit(
+                    purlis_core::dispatchlimits::Refused::TooManyRunning {
+                        limit: 1,
+                        running: 2
+                    }
+                )
+                .say()
+            }
+        );
+        assert_eq!(told, None);
+    }
+
+    /// Codex has no permission prompt for a command, and reports its prompts off for nearly
+    /// every run, which purlis's hook used to refuse every handoff for. Its handoff is decided
+    /// here like any other: to its own persona it opens, on the persona's own profile.
+    #[test]
+    fn a_codex_chat_hands_off_to_its_own_persona_though_its_harness_reports_its_prompts_off() {
+        let plane = Plane::new().with_a_codex_persona();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let start = purlis_core::start::Start {
+            profile: Some("cx".to_owned()),
+            persona: Some("ops".to_owned()),
+            name: "1".to_owned(),
+            cwd: Some(plane.root.clone()),
+            ..Default::default()
+        };
+        let ready = purlis_core::start::ready(&start, &plane.root).expect("the Codex chat starts");
+        assert_eq!(ready.harness, Some(purlis_core::harness::Harness::Codex));
+        let chat = Chat {
+            program: ready.program.clone(),
+            cwd: ready.cwd.clone(),
+            name: "1".to_owned(),
+            resume: ready.session.clone(),
+            profile: Some("cx".to_owned()),
+            persona: Some("ops".to_owned()),
+            ..Default::default()
+        };
+        let asking = held
+            .chats()
+            .start_ready(&chat, &ready, STARTING)
+            .expect("it runs");
+        // What Codex's hook payload says of its permission mode, as the board took it.
+        held.unattended().heard(asking, true);
+
+        let (said, told) = a_handoff(&held, &id, asking, None, Some("ship it"), INTO_ALPHA);
+
+        let Answer::Opened { chat, .. } = said else {
+            panic!("opened, not {said:?}")
+        };
+        let told = told.expect("the window is told");
+        assert_eq!(told.harness.as_deref(), Some("codex"));
+        assert_eq!(told.persona.as_deref(), Some("ops"));
+        assert_eq!(told.workspace.as_deref(), Some("alpha"));
+        assert!(
+            held.dispatch_grants().waiting(asking).is_empty(),
+            "nothing is asked of the person"
+        );
+        let from = held.chats().handed_from(chat).expect("its lineage");
+        assert_eq!((from.chat, from.mode), (asking, Mode::Handoff));
+    }
+
+    #[test]
+    fn a_handoff_is_held_to_the_projects_limits_and_its_depth_as_a_task_is() {
+        let plane = a_plane_with_personas();
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            "[persona]\ndefault = \"steward\"\n[dispatch]\ndepth = 1\n\
+             [dispatch.personas.steward]\nmay-run-at-once = 3\n",
+        )
+        .expect("the manifest");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+
+        // One hop is within a depth of one.
+        let (first, _) = a_handoff(&held, &id, asking, None, None, INTO_ALPHA);
+        let Answer::Opened { chat: below, .. } = first else {
+            panic!("opened, not {first:?}")
+        };
+        // The chat it opened is one deep, and may hand off no deeper: a chain is as deep as
+        // its dispatches, whichever kind each was.
+        let (deeper, told) = a_handoff(&held, &id, below, None, None, INTO_ALPHA);
+        let Answer::No { why } = &deeper else {
+            panic!("refused, not {deeper:?}")
+        };
+        assert_eq!(
+            *why,
+            purlis_core::dispatchdecision::Refused::Limit(
+                purlis_core::dispatchlimits::Refused::TooDeep { limit: 1, depth: 1 }
+            )
+            .say()
+        );
+        assert_eq!(told, None);
+        // And the count of chats running as a persona holds a handoff too: three may, the
+        // asking chat and the first handoff are two, so one more starts and the next does not.
+        let (third, _) = a_handoff(&held, &id, asking, None, None, INTO_ALPHA);
+        assert!(matches!(third, Answer::Opened { .. }), "{third:?}");
+        let (fourth, _) = a_handoff(&held, &id, asking, None, None, INTO_ALPHA);
+        assert!(
+            matches!(&fourth, Answer::No { why } if why.contains("may run as it at once")),
+            "{fourth:?}"
+        );
+    }
+
+    #[test]
+    fn a_handoff_naming_no_such_persona_or_a_draft_is_refused_and_opens_nothing() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &plane.root);
+        let before = held.chats().open_now().len();
+
+        for (persona, refused) in [
+            (
+                "ghost",
+                purlis_core::dispatchdecision::Refused::NoPersona("ghost".to_owned()),
+            ),
+            (
+                "intern",
+                purlis_core::dispatchdecision::Refused::Draft("intern".to_owned()),
+            ),
+        ] {
+            let (said, told) = a_handoff(&held, &id, asking, Some(persona), None, INTO_ALPHA);
+            assert_eq!(said, Answer::No { why: refused.say() }, "{persona}");
+            assert_eq!(told, None);
+        }
+        assert_eq!(held.chats().open_now().len(), before);
+    }
+
+    /// #1362, as it stands since #1444: a handoff no longer carries the asking chat's grants
+    /// forward, so a chat that still holds another persona's has none of its own to hand off
+    /// with. It is refused, as it is refused a task, until the person allows it its own.
+    #[test]
+    fn a_chat_holding_another_personas_grants_is_refused_a_handoff_and_opens_nothing() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let holding = Chat {
+            program: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 5".to_owned()],
+            name: "sh".to_owned(),
+            profile: Some("work".to_owned()),
+            persona: Some("devops".to_owned()),
+            held: Some(purlis_core::reopen::HeldGrants {
+                persona: Some("steward".to_owned()),
+            }),
+            ..Default::default()
+        };
+        let asking = held.chats().start(&holding, STARTING).expect("it runs");
+        let before = held.chats().open_now().len();
+
+        for persona in [None, Some("devops"), Some("steward")] {
+            let (said, told) = a_handoff(&held, &id, asking, persona, None, INTO_ALPHA);
+            assert_eq!(
+                said,
+                Answer::No {
+                    why: purlis_core::dispatchdecision::Refused::Held.say()
+                },
+                "{persona:?}"
+            );
+            assert_eq!(told, None);
+        }
+        assert_eq!(held.chats().open_now().len(), before);
     }
 
     /// #1362: Allow clears a chat's hold, and the record written says so, so a relaunch starts
@@ -3161,9 +3604,15 @@ mod tests {
         // The harness is handed the stamped brief as its last argument, which is Claude
         // Code's positional first message. The program runs on its own, so it is waited for.
         let told = first_message_of(&plane);
+        // The stamp with its parent's name, purlis's own line saying what the brief is, a blank
+        // line, then the brief verbatim.
         assert_eq!(
             told,
-            "⟨handoff from claude 1 · workspace default · 2026-05-04 11:32⟩\n\n# Ship it\nnow",
+            format!(
+                "⟨handoff from claude 1 · workspace default · 2026-05-04 11:32⟩\n{}\n\n\
+                 # Ship it\nnow",
+                purlis_core::handoff::HANDOFF_NOTE
+            ),
             "the brief was not the chat's first message, stamped with its parent's name: {told:?}"
         );
         assert!(
@@ -4948,6 +5397,7 @@ mod tests {
             brief: "# Check the queue\nSay how many are stuck.\n".to_owned(),
             profile: None,
             by: purlis_core::dispatchdecision::By::Chat,
+            moved: None,
         };
 
         let answers: Vec<Result<bool, String>> = std::thread::scope(|scope| {
