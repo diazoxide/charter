@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   commands,
   type DispatchLimit,
   type DispatchLimits,
   type DispatchRow,
   type PlaneId,
+  type SettingsEdit,
   type SettingsStep,
   type SettingsValue,
   type SettingsWhich,
@@ -167,29 +168,38 @@ function useDispatchLimits(plane: PlaneId) {
   );
   useEffect(() => void reread(), [reread]);
 
-  /** Sets the key at `path` of `which` to `value`, or takes it out, through the core. */
+  /** What puts the last change back: the one Undo on offer, until the next change or its use. */
+  const [back, setBack] = useState<{ which: SettingsWhich; edits: SettingsEdit[] }>();
+
+  /**
+   * Makes `edits` to `which` through the core. `undoes` is what would put them back, kept as the
+   * one Undo once the core has written them; none where there is nothing to put back.
+   */
   const write = useCallback(
-    (which: SettingsWhich, path: SettingsStep[], value: SettingsValue | null) => {
+    (which: SettingsWhich, edits: SettingsEdit[], undoes: SettingsEdit[]) => {
       if (page === undefined) return;
       setSaid([]);
       void commands
         .saveProjectSettings(plane, which, which === "shared" ? page.base : page.local_base, {
           kind: "edits",
-          edits: [{ path, value }],
+          edits,
         })
         .then((done) => {
           if (done.status === "error") setSaid([done.error]);
           else if (done.data.kind === "refused") setSaid(done.data.reasons);
           if (done.status === "error" || done.data.kind === "refused")
             setRefusals((was) => was + 1);
+          else setBack(undoes.length > 0 ? { which, edits: undoes } : undefined);
           return reread();
         })
         .catch((err: unknown) => setSaid([`purlis could not save the limit: ${String(err)}`]));
     },
     [plane, page, reread],
   );
+  /** Puts the last change back, through the same write: it leaves no Undo of its own. */
+  const undo = back === undefined ? undefined : () => write(back.which, back.edits, []);
 
-  return { page, read, said, refusals, write, dismiss: () => setSaid([]) };
+  return { page, read, said, refusals, write, undo, dismiss: () => setSaid([]) };
 }
 
 /** What a workspace or a persona an override may be for is listed as. */
@@ -223,212 +233,253 @@ function useOffers(plane: PlaneId, wanted: boolean): Offer[] {
  * A box is written when it is left or on Enter. An emptied box takes the key out, so the level
  * beneath is in force. What is typed is sent as it is: the core says why it takes none of it.
  */
-export function DispatchLimitsTable({
-  plane,
-  scope,
-  ids,
-}: {
-  plane: PlaneId;
-  scope?: DispatchScope;
-  ids?: RowIds;
-}) {
-  const { page, read, said, refusals, write, dismiss } = useDispatchLimits(plane);
+function useDispatchTable(
+  plane: PlaneId,
+  scope?: DispatchScope,
+): { control: (ids?: RowIds) => ReactNode; undo?: () => void } {
+  const { page, read, said, refusals, write, undo, dismiss } = useDispatchLimits(plane);
   /** Overrides added here and not written yet: a row to fill in. */
   const [drafts, setDrafts] = useState<readonly Offer[]>([]);
   const [picked, setPicked] = useState("");
   const held = scope !== undefined;
   const offers = useOffers(plane, !held);
 
-  const trouble = said.length > 0 && (
-    <Notice
-      cause={`dispatch-limits:${said.join("|")}`}
-      at="pane"
-      tone="trouble"
-      onDismiss={dismiss}
-    >
-      {said.map((one) => (
-        <span key={one}>{one} </span>
-      ))}
-    </Notice>
-  );
-  if (page === undefined)
+  const control = (ids?: RowIds) => {
+    const trouble = said.length > 0 && (
+      <Notice
+        cause={`dispatch-limits:${said.join("|")}`}
+        at="pane"
+        tone="trouble"
+        onDismiss={dismiss}
+      >
+        {said.map((one) => (
+          <span key={one}>{one} </span>
+        ))}
+      </Notice>
+    );
+    if (page === undefined)
+      return (
+        <div id={ids?.id} aria-labelledby={ids?.labelledBy}>
+          {!read && <p>Reading the dispatch limits…</p>}
+          {trouble}
+        </div>
+      );
+
+    const committed: Drawn[] = page.rows.map((row) => ({
+      which: "shared",
+      scope: row.scope as Drawn["scope"],
+      name: row.name,
+      row,
+      written: true,
+    }));
+    const has = (one: Offer) =>
+      committed.some((row) => row.scope === one.kind && row.name === one.name);
+    const drafted: Drawn[] = drafts
+      .filter((one) => !has(one))
+      .map((one) => ({
+        which: "shared",
+        scope: one.kind,
+        name: one.name,
+        row: undefined,
+        written: false,
+      }));
+    // Yours, on this machine: read and drawn even while git would carry the file, since a limit
+    // of yours can only lower one.
+    const mine: Drawn[] = page.mine.map((row) => ({
+      which: "local",
+      scope: row.scope as Drawn["scope"],
+      name: row.name,
+      row,
+      written: true,
+    }));
+    const own = held
+      ? (committed.find((row) => row.scope === scope.kind && row.name === scope.name) ?? {
+          which: "shared" as const,
+          scope: scope.kind,
+          name: scope.name,
+          row: undefined,
+          written: false,
+        })
+      : undefined;
+    const rows = own !== undefined ? [own] : [...committed, ...drafted, ...mine];
+    // A persona's two own limits are drawn where a persona's row may be.
+    const columns = page.limits
+      .map((limit, at) => ({ limit, at }))
+      .filter(({ limit }) => !limit.persona_only || !held || scope.kind === "persona");
+    const unwritten = beneathUnwritten(page);
+    const open = offers.filter(
+      (one) => !has(one) && !drafted.some((row) => row.scope === one.kind && row.name === one.name),
+    );
+    const offerId = (one: Offer) => `${one.kind}\u0000${one.name}`;
+    const chosen = open.find((one) => offerId(one) === picked) ?? open[0];
+    const ignored = mine.flatMap((one) => one.row?.ignored ?? []);
+
+    /** What `value` is as a key of a settings file; none where the row does not set it. */
+    const whole = (value: number | null | undefined): SettingsValue | null =>
+      value === null || value === undefined ? null : { kind: "integer", value };
+    const remove = (one: Drawn) => {
+      if (one.written)
+        write(
+          one.which,
+          [{ path: pathOf(one), value: null }],
+          // Undo writes back each limit the row set: its table comes back with them.
+          page.limits.flatMap((limit, at) => {
+            const value = whole(one.row?.values[at]);
+            return value === null ? [] : [{ path: pathOf(one, limit.word), value }];
+          }),
+        );
+      setDrafts((was) => was.filter((it) => !(it.kind === one.scope && it.name === one.name)));
+    };
+
     return (
-      <div id={ids?.id} aria-labelledby={ids?.labelledBy}>
-        {!read && <p>Reading the dispatch limits…</p>}
+      <div id={ids?.id} className="dispatch-limits" aria-labelledby={ids?.labelledBy}>
+        <table aria-label="Dispatch limits" aria-describedby={ids?.describedBy}>
+          <thead>
+            <tr>
+              <th scope="col">Level</th>
+              {columns.map(({ limit }) => (
+                <th key={limit.word} scope="col" title={limit.help}>
+                  {limit.label}
+                </th>
+              ))}
+              <th scope="col" aria-label="" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((one) => {
+              const whose = named(one, held);
+              const removable = one.scope !== "project" && (one.row !== undefined || !held);
+              return (
+                <tr key={idOf(one)}>
+                  <th scope="row">{heading(one, held)}</th>
+                  {columns.map(({ limit, at }) => (
+                    <td key={limit.word}>
+                      {limit.persona_only && one.scope !== "persona" ? null : (
+                        <Cell
+                          // A refused write draws the box again from what is on disk.
+                          key={refusals}
+                          limit={limit}
+                          value={one.row?.values[at] ?? null}
+                          beneath={one.row !== undefined ? one.row.beneath[at] : unwritten[at]}
+                          label={`${limit.label} for ${whose}`}
+                          onWrite={(typed) =>
+                            write(
+                              one.which,
+                              [
+                                {
+                                  path: pathOf(one, limit.word),
+                                  value:
+                                    typed === ""
+                                      ? null
+                                      : /^\d+$/.test(typed)
+                                        ? { kind: "integer", value: Number(typed) }
+                                        : { kind: "text", value: typed },
+                                },
+                              ],
+                              // Undo puts back what the box held: its number, or nothing.
+                              [
+                                {
+                                  path: pathOf(one, limit.word),
+                                  value: whole(one.row?.values[at]),
+                                },
+                              ],
+                            )
+                          }
+                        />
+                      )}
+                    </td>
+                  ))}
+                  <td>
+                    {removable && (
+                      <button
+                        type="button"
+                        tabIndex={0}
+                        aria-label={`Remove the override for ${whose}`}
+                        onClick={() => remove(one)}
+                      >
+                        Remove override
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="granted-note">
+          {held
+            ? scope.kind === "persona"
+              ? `Kept in ${page.file}, which your team sees, and never in the persona's own file. An empty box takes the value shown in it, from the workspace or the project.`
+              : `Kept in ${page.file}, which your team sees. An empty box takes the project's value, shown in it.`
+            : `Kept in ${page.file}, which your team sees. The most specific row wins: a persona's over a workspace's over the project's. An empty box takes the value shown in it. A 0 switches dispatch off for that row, and a more specific row may set it back; 0 messages per minute stops messages only.`}
+        </p>
+        {!held && (
+          <p className="granted-note">
+            Me on this machine is kept in {page.local_file}, on this machine only, and can only
+            lower a limit.
+          </p>
+        )}
+        {!held && page.local_left_out !== null && (
+          <p className="granted-note">
+            {page.local_left_out} Your dispatch limits in it still apply, because they can only
+            lower one.
+          </p>
+        )}
+        {ignored.map((one) => (
+          <p key={one} className="granted-note">
+            {one}
+          </p>
+        ))}
+        {!held && (
+          <div className="ui-setting-status">
+            <select
+              aria-label="Override for"
+              value={chosen === undefined ? "" : offerId(chosen)}
+              disabled={open.length === 0}
+              onChange={(event) => setPicked(event.target.value)}
+            >
+              {open.map((one) => (
+                <option key={offerId(one)} value={offerId(one)}>
+                  {one.kind === "workspace" ? `Workspace ${one.name}` : `Persona ${one.name}`}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              tabIndex={0}
+              disabled={chosen === undefined}
+              onClick={() => {
+                if (chosen === undefined) return;
+                setDrafts((was) => [...was, chosen]);
+                setPicked("");
+              }}
+            >
+              Add an override
+            </button>
+          </div>
+        )}
         {trouble}
       </div>
     );
-
-  const committed: Drawn[] = page.rows.map((row) => ({
-    which: "shared",
-    scope: row.scope as Drawn["scope"],
-    name: row.name,
-    row,
-    written: true,
-  }));
-  const has = (one: Offer) =>
-    committed.some((row) => row.scope === one.kind && row.name === one.name);
-  const drafted: Drawn[] = drafts
-    .filter((one) => !has(one))
-    .map((one) => ({
-      which: "shared",
-      scope: one.kind,
-      name: one.name,
-      row: undefined,
-      written: false,
-    }));
-  // Yours, on this machine: never while git would carry the file, which is then not read.
-  const mine: Drawn[] =
-    page.local_left_out !== null
-      ? []
-      : page.mine.map((row) => ({
-          which: "local",
-          scope: row.scope as Drawn["scope"],
-          name: row.name,
-          row,
-          written: true,
-        }));
-  const own = held
-    ? (committed.find((row) => row.scope === scope.kind && row.name === scope.name) ?? {
-        which: "shared" as const,
-        scope: scope.kind,
-        name: scope.name,
-        row: undefined,
-        written: false,
-      })
-    : undefined;
-  const rows = own !== undefined ? [own] : [...committed, ...drafted, ...mine];
-  // A persona's two own limits are drawn where a persona's row may be.
-  const columns = page.limits
-    .map((limit, at) => ({ limit, at }))
-    .filter(({ limit }) => !limit.persona_only || !held || scope.kind === "persona");
-  const unwritten = beneathUnwritten(page);
-  const open = offers.filter(
-    (one) => !has(one) && !drafted.some((row) => row.scope === one.kind && row.name === one.name),
-  );
-  const offerId = (one: Offer) => `${one.kind}\u0000${one.name}`;
-  const chosen = open.find((one) => offerId(one) === picked) ?? open[0];
-  const ignored = mine.flatMap((one) => one.row?.ignored ?? []);
-
-  const remove = (one: Drawn) => {
-    if (one.written) write(one.which, pathOf(one), null);
-    setDrafts((was) => was.filter((it) => !(it.kind === one.scope && it.name === one.name)));
   };
+  return { control, undo };
+}
 
+/**
+ * The table on a page that is no settings row (the persona view): the same control, with the
+ * last change's Undo under it, where a settings row draws its own.
+ */
+export function DispatchLimitsTable({ plane, scope }: { plane: PlaneId; scope?: DispatchScope }) {
+  const { control, undo } = useDispatchTable(plane, scope);
   return (
-    <div id={ids?.id} className="dispatch-limits" aria-labelledby={ids?.labelledBy}>
-      <table aria-label="Dispatch limits" aria-describedby={ids?.describedBy}>
-        <thead>
-          <tr>
-            <th scope="col">Level</th>
-            {columns.map(({ limit }) => (
-              <th key={limit.word} scope="col" title={limit.help}>
-                {limit.label}
-              </th>
-            ))}
-            <th scope="col" aria-label="" />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((one) => {
-            const whose = named(one, held);
-            const removable = one.scope !== "project" && (one.row !== undefined || !held);
-            return (
-              <tr key={idOf(one)}>
-                <th scope="row">{heading(one, held)}</th>
-                {columns.map(({ limit, at }) => (
-                  <td key={limit.word}>
-                    {limit.persona_only && one.scope !== "persona" ? null : (
-                      <Cell
-                        // A refused write draws the box again from what is on disk.
-                        key={refusals}
-                        limit={limit}
-                        value={one.row?.values[at] ?? null}
-                        beneath={one.row !== undefined ? one.row.beneath[at] : unwritten[at]}
-                        label={`${limit.label} for ${whose}`}
-                        onWrite={(typed) =>
-                          write(
-                            one.which,
-                            pathOf(one, limit.word),
-                            typed === ""
-                              ? null
-                              : /^\d+$/.test(typed)
-                                ? { kind: "integer", value: Number(typed) }
-                                : { kind: "text", value: typed },
-                          )
-                        }
-                      />
-                    )}
-                  </td>
-                ))}
-                <td>
-                  {removable && (
-                    <button
-                      type="button"
-                      tabIndex={0}
-                      aria-label={`Remove the override for ${whose}`}
-                      onClick={() => remove(one)}
-                    >
-                      Remove override
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <p className="granted-note">
-        {held
-          ? scope.kind === "persona"
-            ? `Kept in ${page.file}, which your team sees, and never in the persona's own file. An empty box takes the value shown in it, from the workspace or the project.`
-            : `Kept in ${page.file}, which your team sees. An empty box takes the project's value, shown in it.`
-          : `Kept in ${page.file}, which your team sees. The most specific row wins: a persona's over a workspace's over the project's. An empty box takes the value shown in it, and 0 switches dispatch off for that row.`}
-      </p>
-      {!held && page.local_left_out === null && (
-        <p className="granted-note">
-          Me on this machine is kept in {page.local_file}, on this machine only, and can only lower
-          a limit.
-        </p>
+    <>
+      {control()}
+      {undo && (
+        <button type="button" className="ui-setting-reset" tabIndex={0} onClick={undo}>
+          Undo
+        </button>
       )}
-      {!held && page.local_left_out !== null && (
-        <p className="granted-note">{page.local_left_out}</p>
-      )}
-      {ignored.map((one) => (
-        <p key={one} className="granted-note">
-          {one}
-        </p>
-      ))}
-      {!held && (
-        <div className="ui-setting-status">
-          <select
-            aria-label="Override for"
-            value={chosen === undefined ? "" : offerId(chosen)}
-            disabled={open.length === 0}
-            onChange={(event) => setPicked(event.target.value)}
-          >
-            {open.map((one) => (
-              <option key={offerId(one)} value={offerId(one)}>
-                {one.kind === "workspace" ? `Workspace ${one.name}` : `Persona ${one.name}`}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            tabIndex={0}
-            disabled={chosen === undefined}
-            onClick={() => {
-              if (chosen === undefined) return;
-              setDrafts((was) => [...was, chosen]);
-              setPicked("");
-            }}
-          >
-            Add an override
-          </button>
-        </div>
-      )}
-      {trouble}
-    </div>
+    </>
   );
 }
 
@@ -443,6 +494,14 @@ function PolicyLocks({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
         {read && page === undefined ? said.join(" ") : "Reading the policy…"}
       </p>
     );
+  // A policy file that was refused sets no limit to anything: it is said once, as refused, with
+  // why. The pairs' lines say the same of who may dispatch to whom.
+  if (page.policy_refused)
+    return (
+      <ul id={ids.id} className="sandbox-reasons" aria-label="Policy locks">
+        <li>Dispatch is off on this machine. {page.locked_by}</li>
+      </ul>
+    );
   const capped =
     page.locked_by === null ? [] : page.limits.filter((limit) => limit.ceiling !== null);
   if (capped.length === 0 && pairs.length === 0)
@@ -455,9 +514,11 @@ function PolicyLocks({ plane, ids }: { plane: PlaneId; ids: RowIds }) {
     <ul id={ids.id} className="sandbox-reasons" aria-label="Policy locks">
       {capped.map((limit) => (
         <li key={limit.word}>
-          {limit.ceiling === 0
-            ? `${limit.label} is 0, so dispatch is off on this machine.`
-            : `${limit.label} is at most ${limit.ceiling}, whatever is set here.`}{" "}
+          {limit.ceiling !== 0
+            ? `${limit.label} is at most ${limit.ceiling}, whatever is set here.`
+            : limit.word === "messages-per-minute"
+              ? `${limit.label} is 0, so no chat sends another a message on this machine.`
+              : `${limit.label} is 0, so dispatch is off on this machine.`}{" "}
           {page.locked_by}
         </li>
       ))}
@@ -498,10 +559,8 @@ export function dispatchGroup(plane: PlaneId, file = "the project's settings fil
         label: "Limits",
         help: "A dispatch past a limit is refused, and the chat is told which limit.",
         useControl: function useLimits() {
-          return {
-            grouped: true,
-            control: (ids) => <DispatchLimitsTable plane={plane} ids={ids} />,
-          };
+          // The row draws the last change's Undo, as it does for every setting.
+          return { grouped: true, ...useDispatchTable(plane) };
         },
       },
       dispatchGrantsSetting(plane, file),
@@ -531,13 +590,7 @@ export function workspaceDispatchGroup(plane: PlaneId, workspace: string): Setti
         useControl: function useWorkspaceLimits() {
           return {
             grouped: true,
-            control: (ids) => (
-              <DispatchLimitsTable
-                plane={plane}
-                scope={{ kind: "workspace", name: workspace }}
-                ids={ids}
-              />
-            ),
+            ...useDispatchTable(plane, { kind: "workspace", name: workspace }),
           };
         },
       },
