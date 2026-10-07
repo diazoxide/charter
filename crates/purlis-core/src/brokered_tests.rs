@@ -204,6 +204,9 @@ fn a_brokered_write_that_would_change_the_sandbox_is_refused() {
             "schema = 1\n\n[sandbox]\nmode = \"off\"\n",
             "[sandbox]\nhosts = [\"evil.example\"]\n",
             "[chat_env]\nPATH = \"/tmp\"\n",
+            // A chat never raises its own dispatch limits (#1439).
+            "[dispatch]\ndepth = 8\n",
+            "[dispatch.personas.devops]\nmay-run-at-once = 99\n",
             "not toml [",
         ] {
             let why = guard(&root, &manifest, Some(after)).expect_err(after);

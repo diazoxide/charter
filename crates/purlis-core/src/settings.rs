@@ -342,6 +342,9 @@ fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
     ));
     // And `[sandbox]` (ADR 0067), which only the Shared file may hold, and only as `on`.
     out.extend(crate::sandbox::refusals(text, which.file()));
+    // And `[dispatch]` (#1439), the limits: the project's in Shared, and yours, which only
+    // lower, in Local. A depth above its ceiling is refused here.
+    out.extend(crate::dispatchlimits::refusals(text, which.file()));
     // And so may `[plane]` and `[repos]` (charter-app#292), read by `planesave` in both.
     out.extend(crate::planesave::refusals(
         text,

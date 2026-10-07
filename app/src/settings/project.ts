@@ -46,6 +46,7 @@ import {
 import type { Collection, FileSetting, SettingsFileId, SettingsGroup } from "./groups";
 import { settled } from "../PlaneEdits";
 import { GRANTED, grantedGroup } from "./GrantedList";
+import { dispatchGroup } from "./dispatch";
 import { onAMac } from "../tabKeys";
 import {
   SANDBOX_MODE,
@@ -58,7 +59,7 @@ import {
 
 /**
  * **The Project level** (SE-17, #1167; V89b, V89e, V89h): a project's settings in the Settings
- * tab, grouped as General · Saving · Harness & profiles · Sandbox · Forges · Extensions ·
+ * tab, grouped as General · Saving · Harness & profiles · Sandbox · Dispatch · Forges · Extensions ·
  * Appearance · Plugins. "Saving" is the old page's Plane and Repos together.
  *
  * **The groups are data**, declared once in {@link projectGroups} with their stable ids, and
@@ -576,6 +577,9 @@ function declaredGroups(read: ProjectRead): SettingsGroup[] {
           ),
         ]
       : []),
+    // Dispatch (#1439): the limits, the grants' place and the policy's locks. It reads the core
+    // on its own, as the Granted list does.
+    ...(read.plane !== undefined ? [dispatchGroup(read.plane)] : []),
     {
       id: "project.forges",
       label: "Forges",
