@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { DispatchLimits, DispatchRow } from "../bindings";
-import { DISPATCH, dispatchGroup } from "./dispatch";
+import { DISPATCH, DispatchLimitsTable, dispatchGroup, workspaceDispatchGroup } from "./dispatch";
 import type { LiveSetting } from "./groups";
 
 /**
@@ -380,5 +380,125 @@ describe("Settings › Project › Dispatch", () => {
       await screen.findByText("purlis.toml is not UTF-8 text, so purlis cannot show it"),
     ).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+});
+
+describe("a workspace's settings", () => {
+  function Workspace() {
+    const group = workspaceDispatchGroup(PLANE, "alpha");
+    expect(group.id).toBe("workspace.dispatch");
+    const { control } = (group.settings[0] as LiveSetting).useControl();
+    return <>{control({ id: "w", labelledBy: "w-label" })}</>;
+  }
+
+  it("edit this workspace's own limits, over the project's", async () => {
+    const { saves } = core(
+      page({
+        rows: [
+          row("project", "", [4, null, null, null, null, null]),
+          row("workspace", "alpha", [null, 9, null, null, null, null], [4, 16, 3, 10, null, null]),
+          row("workspace", "beta", [1, null, null, null, null, null]),
+        ],
+      }),
+    );
+    render(<Workspace />);
+
+    const table = await screen.findByRole("table", { name: "Dispatch limits" });
+    // This workspace's row and no other.
+    expect(
+      within(table)
+        .getAllByRole("rowheader")
+        .map((one) => one.textContent),
+    ).toEqual(["This workspace"]);
+    expect(screen.getByLabelText("Live per lineage for this workspace")).toHaveValue("9");
+    // The project's 4 is in force until this workspace sets its own.
+    expect(screen.getByLabelText("Running per chat for this workspace")).toHaveAttribute(
+      "placeholder",
+      "4",
+    );
+    // A persona's limits are not a workspace's.
+    expect(screen.queryByLabelText("May dispatch for this workspace")).not.toBeInTheDocument();
+
+    typeInto(screen.getByLabelText("Running per chat for this workspace"), "12");
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      which: "shared",
+      change: edit(["dispatch", "workspaces", "alpha", "running-per-chat"], {
+        kind: "integer",
+        value: 12,
+      }),
+    });
+  });
+
+  it("add the override by typing its first limit, and remove it again", async () => {
+    const withRow = page({
+      rows: [row("project", ""), row("workspace", "alpha", [null, null, 2, null, null, null])],
+    });
+    const { saves } = core(
+      page({ rows: [row("project", "", [null, null, 5, null, null, null])] }),
+      () => ({
+        now: withRow,
+      }),
+    );
+    render(<Workspace />);
+
+    // No override yet: the row is there to fill in, on the project's values.
+    const depth = await screen.findByLabelText("Depth for this workspace");
+    expect(depth).toHaveAttribute("placeholder", "5");
+    expect(screen.queryByRole("button", { name: /Remove/ })).not.toBeInTheDocument();
+    typeInto(depth, "2");
+    await waitFor(() => expect(saves).toHaveLength(1));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Remove the override for this workspace" }),
+    );
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].change).toEqual(edit(["dispatch", "workspaces", "alpha"], null));
+  });
+});
+
+describe("the persona view", () => {
+  it("edits this persona's own limits, its two own among them, in the project file", async () => {
+    const { saves } = core(
+      page({
+        rows: [row("project", ""), row("persona", "devops", [null, null, 1, null, null, 2])],
+      }),
+    );
+    render(<DispatchLimitsTable plane={PLANE} scope={{ kind: "persona", name: "devops" }} />);
+
+    const table = await screen.findByRole("table", { name: "Dispatch limits" });
+    expect(
+      within(table)
+        .getAllByRole("rowheader")
+        .map((one) => one.textContent),
+    ).toEqual(["This persona"]);
+    expect(screen.getByLabelText("May run at once for this persona")).toHaveValue("2");
+    // Kept in the project's file, never the persona's own, and it says so.
+    expect(
+      screen.getByText(
+        /Kept in purlis\.toml, which your team sees, and never in the persona's own file/,
+      ),
+    ).toBeInTheDocument();
+
+    typeInto(screen.getByLabelText("May dispatch for this persona"), "3");
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      which: "shared",
+      change: edit(["dispatch", "personas", "devops", "may-dispatch"], {
+        kind: "integer",
+        value: 3,
+      }),
+    });
+  });
+
+  it("draws nothing where the core says nothing of the limits", async () => {
+    mockIPC(() => undefined);
+    const { container } = render(
+      <DispatchLimitsTable plane={PLANE} scope={{ kind: "persona", name: "devops" }} />,
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Reading the dispatch limits…")).not.toBeInTheDocument(),
+    );
+    expect(container.querySelector("table")).toBeNull();
   });
 });

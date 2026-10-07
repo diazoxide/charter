@@ -343,7 +343,14 @@ describe("the Workspace level", () => {
     await at();
 
     await waitFor(() =>
-      expect(groups()).toEqual(["Live", "Repos", "Extensions", "Appearance", "Plugins"]),
+      expect(groups()).toEqual([
+        "Live",
+        "Repos",
+        "Dispatch",
+        "Extensions",
+        "Appearance",
+        "Plugins",
+      ]),
     );
     expect(asked("workspace_settings")).toContainEqual({ plane: PLANE, workspace: "alpha" });
     expect(asked("project_extensions")).toContainEqual({ plane: PLANE, workspace: "alpha" });
@@ -353,7 +360,7 @@ describe("the Workspace level", () => {
     core(ALPHA, undefined, NO_THEME, null, { extensions: [], harnesses: [] });
     await at();
 
-    await waitFor(() => expect(groups()).toEqual(["Live", "Repos", "Appearance"]));
+    await waitFor(() => expect(groups()).toEqual(["Live", "Repos", "Dispatch", "Appearance"]));
   });
 
   it("says where it sits between the project's two files, and that no secret goes in it", async () => {
@@ -397,6 +404,7 @@ describe("every workspace setting there is, at the Workspace level", () => {
   it.each([
     ["Live", ["Published with the project"]],
     ["Repos", ["Cloned here", "Not cloned here"]],
+    ["Dispatch", ["Limits"]],
     ["Extensions", ["Persona statistics: enabled", "Solarized: enabled"]],
     ["Appearance", ["Theme", "Colour", "Icons"]],
     [
