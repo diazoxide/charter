@@ -193,6 +193,7 @@ function core(marks: Mark[], chats = [chat(1, "devops"), chat(2, null)]) {
         refused: [],
         personas: ["devops", "qa"],
         persona: "devops",
+        persona_profiles: {},
         ignore_fix: null,
         declares_none: true,
       };
