@@ -161,7 +161,9 @@ CI builds the app but never bundles it, so nothing in a PR is installable. The `
 workflow does, three ways: a `v*` tag publishes to the **stable** channel, a green `main`
 publishes to the **dev** channel, and **release → Run workflow** on any branch builds a macOS
 `.app`/`.dmg` and a Linux `.deb`/AppImage as run artifacts, published nowhere. The job summary
-prints what to type to install each one.
+prints what to type to install each one. A build started by hand uses the stable build's
+`release` profile unless you pick `dev-release`, the lighter profile the dev channel is built
+with ([ADR 0092](docs/adr/0092-the-channels-differ-in-optimisation-profile-and-bundle-set-and-in-nothing-else.md)).
 
 The app updates itself from those channels, and `purlis update --channel dev|stable` picks
 one. Published builds are updater-signed (minisign) and Developer ID signed, **not notarized**,

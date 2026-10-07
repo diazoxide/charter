@@ -4,10 +4,10 @@ name: release
 #
 # `ci.yml`'s `app` job proves the app COMPILES on both platforms; it builds `--debug
 # --no-bundle`, so it produces nothing anyone can run. This workflow is the only place that
-# uses the release profile, the only place Tauri's bundler runs, and the only place anything is
+# uses the release profiles, the only place Tauri's bundler runs, and the only place anything is
 # signed or published (ADR 0042).
 #
-# Three ways in, and what each one makes:
+# Four ways in, and what each one makes:
 #
 #   a `v*` tag             -> the STABLE channel: a GitHub Release for that tag, `latest.json`
 #                             beside its bundles. Only the operator pushes a `v*` tag.
@@ -17,6 +17,16 @@ name: release
 #                             NOWHERE. The operator asking for something to try. It runs
 #                             outside the `release` environment, so it holds no signing key
 #                             and its bundles are unsigned for the updater.
+#   the nightly schedule   -> the PROFILE GUARD: `main`, built the way a stable build is, on
+#                             that same keyless path. Published nowhere. A red night keeps one
+#                             issue open (see the `profile-guard` job).
+#
+# **The two channels differ in optimisation profile and bundle set, and in nothing else**
+# (ADR 0092). A stable build uses Cargo's `release` profile and makes every bundle. A dev
+# channel build uses `dev-release` (the same profile with thin LTO over sixteen codegen units)
+# and makes no `.dmg`, which takes its macOS job from about 34 minutes to about 17. Signing,
+# the no-cache rule and one runner per platform are the same on both. `plan` decides all of it
+# once, in its `profile`, `dmg` and `appimage_required` outputs.
 #
 # **Nothing here creates, moves or deletes a tag.** The stable release is created with
 # `--verify-tag`, which refuses unless the tag the operator pushed is already on the remote;
@@ -51,8 +61,23 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      # A build started by hand is a stable-profile build unless it asks otherwise. The other
+      # choice is how to time the dev channel's profile, or try a branch sooner, without
+      # publishing anything.
+      profile:
+        description: "Cargo profile: release (what a stable build uses) or dev-release (what a dev channel build uses)"
+        type: choice
+        options: [release, dev-release]
+        default: release
   push:
     tags: ["v*"]
+  # The profile guard. Since the dev channel stopped using `release`, nothing built the stable
+  # profile between one tag and the next; this does, every night, so a break in it is found
+  # on a night and not on the operator's tag. After the nightly `ci` (02:41) and clear of the
+  # other nightlies.
+  schedule:
+    - cron: "53 4 * * *"
   workflow_run:
     workflows: [ci]
     types: [completed]
@@ -62,7 +87,8 @@ concurrency:
   # No `cancel-in-progress`: a cancelled publish can leave the dev release holding half of one
   # build's assets. Two dev builds queue instead, and the later one's assets win.
   # A run started by the nightly ci publishes nothing; it must not displace a pending dev publish.
-  group: release-${{ github.event.workflow_run.event == 'schedule' && 'nightly' || github.event.workflow_run.head_branch || github.ref }}
+  # The profile guard has a group of its own for the same reason.
+  group: release-${{ github.event_name == 'schedule' && 'profile-guard' || github.event.workflow_run.event == 'schedule' && 'nightly' || github.event.workflow_run.head_branch || github.ref }}
 
 permissions:
   contents: read
@@ -92,10 +118,12 @@ jobs:
     # and `v*` tags, so a job on any other ref gets no secret at all. `plan` only asks whether
     # they are SET, but it has to ask inside the environment to get a true answer. An
     # on-demand `workflow_dispatch` build publishes nowhere, so it takes no environment and no
-    # key, whatever branch it builds, and comes out unsigned (see `This build's config`).
+    # key, whatever branch it builds, and comes out unsigned (see `This build's config`). So
+    # does the nightly profile guard. The two events that publish are NAMED, so an event added
+    # to `on:` later holds no key until this line says it does.
     # `x && 'release' || ''` and never `x && '' || 'release'`: an empty string is falsy, so
     # the second form is `release` every time.
-    environment: ${{ github.event_name != 'workflow_dispatch' && 'release' || '' }}
+    environment: ${{ (github.event_name == 'push' || github.event_name == 'workflow_run') && 'release' || '' }}
     outputs:
       channel: ${{ steps.plan.outputs.channel }}
       publish: ${{ steps.plan.outputs.publish }}
@@ -105,6 +133,9 @@ jobs:
       signed: ${{ steps.plan.outputs.signed }}
       skip: ${{ steps.plan.outputs.skip }}
       macos_signing: ${{ steps.plan.outputs.macos_signing }}
+      profile: ${{ steps.plan.outputs.profile }}
+      dmg: ${{ steps.plan.outputs.dmg }}
+      appimage_required: ${{ steps.plan.outputs.appimage_required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,6 +147,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ASKED_PROFILE: ${{ inputs.profile }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
           # Passed as three booleans and counted in the shell below, rather than and-ed here,
           # so a HALF-configured certificate is a case of its own instead of reading the same
@@ -142,17 +174,36 @@ jobs:
                 echo "::error::the tag $tag says $version and Cargo.toml says $base — bump the workspace version, merge it, then tag"
                 exit 1
               fi
-              channel=stable; publish=true ;;
+              channel=stable; publish=true
+              # The stable build: Cargo's `release` profile and every bundle (ADR 0092).
+              profile=release; dmg=true; appimage_required=true ;;
             workflow_run)
               # `main` holds the version that will be released NEXT (bumped right after each
               # release), so a dev build is a prerelease OF it: newer than every stable
               # release before it, older than the stable release it becomes. The run number
               # only ever grows, so each dev build is newer than the last.
               tag=""; version="$base-dev.$GITHUB_RUN_NUMBER"
-              channel=dev; publish=true ;;
+              channel=dev; publish=true
+              # The dev channel build: the lighter profile, and no `.dmg` (ADR 0092). The
+              # updater never reads a `.dmg`, and the `.app.zip` beside it is the same app.
+              profile=dev-release; dmg=false; appimage_required=true ;;
+            schedule)
+              # The profile guard: `main`, built the way a stable build is, and published
+              # nowhere. The AppImage is required as it is for a stable publish, so the night
+              # its bundler breaks is a red night.
+              tag=""; version="$base-dev.$GITHUB_RUN_NUMBER"
+              channel=dev; publish=false
+              profile=release; dmg=true; appimage_required=true ;;
             *)
               tag=""; version="$base-dev.$GITHUB_RUN_NUMBER"
-              channel=dev; publish=false ;;
+              channel=dev; publish=false
+              # A build started by hand: the profile it asked for, every bundle, and an extra
+              # bundle that fails costs it nothing but that bundle.
+              profile="${ASKED_PROFILE:-release}"; dmg=true; appimage_required=false
+              case "$profile" in
+                release | dev-release) ;;
+                *) echo "::error::'$profile' is not a profile this workflow builds: release or dev-release"; exit 1 ;;
+              esac ;;
           esac
           skip=false
           # Before the operator has generated the updater key, every merge to `main` would
@@ -182,8 +233,9 @@ jobs:
             echo "channel=$channel"; echo "publish=$publish"; echo "version=$version"
             echo "sha=$SHA"; echo "tag=$tag"; echo "signed=$HAS_UPDATER_KEY"; echo "skip=$skip"
             echo "macos_signing=$macos_signing"
+            echo "profile=$profile"; echo "dmg=$dmg"; echo "appimage_required=$appimage_required"
           } >> "$GITHUB_OUTPUT"
-          echo "channel=$channel publish=$publish version=$version sha=$SHA updater-key=$HAS_UPDATER_KEY macos-signing=$macos_signing"
+          echo "channel=$channel publish=$publish version=$version sha=$SHA updater-key=$HAS_UPDATER_KEY macos-signing=$macos_signing profile=$profile dmg=$dmg appimage-required=$appimage_required"
 
       # A stable release says what it brought, and says it from CHANGELOG.md: the section is
       # the GitHub release's body and `latest.json`'s notes, and About Charter in the build
@@ -282,7 +334,8 @@ jobs:
             name: macOS (.app, .dmg)
             # `app` is the bundle itself and always has to work; the updater's `.app.tar.gz`
             # is made from it. `dmg` is a nicety whose bundler drives Finder through
-            # AppleScript on a machine with nobody logged in, so it is allowed to fail.
+            # AppleScript on a machine with nobody logged in, so it is allowed to fail. A dev
+            # channel build does not make it at all (`plan`'s `dmg`, ADR 0092).
             bundles: app
             extra_bundles: dmg
             extra_required: false
@@ -290,7 +343,8 @@ jobs:
             name: Linux (.deb, AppImage)
             # `deb` is plain `ar` + `tar` and is reliable. `appimage` downloads linuxdeploy at
             # build time, so it is the one that breaks when something upstream moves — but it
-            # is also the only Linux bundle the updater can replace, so a publish needs it.
+            # is also the only Linux bundle the updater can replace, so a publish needs it, and
+            # then one `tauri build` makes both (`plan`'s `appimage_required`).
             bundles: deb
             extra_bundles: appimage
             extra_required: true
@@ -298,6 +352,10 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       PUBLISH: ${{ needs.plan.outputs.publish }}
+      # The Cargo profile every binary of this build is compiled with, and so the directory
+      # under `target/` they and the bundles land in: `release` for a stable build, `dev-release`
+      # for a dev channel build (ADR 0092).
+      PROFILE: ${{ needs.plan.outputs.profile }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -382,17 +440,25 @@ jobs:
       # `purlis` is the command line; `charter` is its alias for the rename's window, a small
       # program that runs the `purlis` beside it (RN-3). Both ship, each as a file of its own.
       - name: The purlis binary the app's hooks run, its charter alias, and the built-in extensions
-        run: cargo auditable build --release --locked -p purlis-cli -p persona-statistics
+        run: cargo auditable build --profile "$PROFILE" --locked -p purlis-cli -p persona-statistics
 
       - name: Stage them where Tauri's bundler picks them up
         run: |
           set -euo pipefail
           mkdir -p app/src-tauri/binaries
           for name in purlis charter; do
-            cp "target/release/$name" "app/src-tauri/binaries/$name-${{ steps.names.outputs.triple }}"
+            cp "target/$PROFILE/$name" "app/src-tauri/binaries/$name-${{ steps.names.outputs.triple }}"
           done
           rm -rf app/src-tauri/extensions
-          target/release/persona-statistics assemble app/src-tauri/extensions/persona-statistics
+          "target/$PROFILE/persona-statistics" assemble app/src-tauri/extensions/persona-statistics
+          # The binary says which profile built it, and it has to be the one this run asked
+          # for: the summary below names `$PROFILE`, and this is what makes that true.
+          line=$("target/$PROFILE/purlis" --version)
+          echo "$line"
+          case "$line" in
+            *"($PROFILE profile)") ;;
+            *) echo "::error::this run asked for the $PROFILE profile and the binary says: $line"; exit 1 ;;
+          esac
 
       # `tauri.release.conf.json` adds only `bundle.externalBin`; this run adds the version it
       # announces. The bundle's version is what the installed app compares a manifest against,
@@ -466,24 +532,39 @@ jobs:
             echo "APPLE_SIGNING_IDENTITY: '-' (ad-hoc; no Developer ID configured)"
           fi
 
-      # No `--debug`, so this is the release profile. No `--features e2e`: that feature puts a
-      # WebDriver server inside the app and belongs in no build anyone is given.
+      # No `--debug`, and the profile is named: `-- --profile` hands it to Cargo, and Tauri
+      # reads the same words to find the binary under `target/<profile>/` and put the bundles
+      # in `target/<profile>/bundle/`. No `--features e2e`: that feature puts a WebDriver server
+      # inside the app and belongs in no build anyone is given.
+      #
+      # **When the extra bundle is required, this one run makes it too** (ADR 0092). A second
+      # `tauri build` rebuilds the front end, and the app binary with it, so the two-step
+      # shape below cost a second link of the whole app for a bundle that was not optional
+      # anyway. Today that is the AppImage, on a publish and on the profile guard.
       - name: Build the app
         working-directory: app
+        env:
+          BUNDLES: ${{ (matrix.extra_required && needs.plan.outputs.appimage_required == 'true') && format('{0},{1}', matrix.bundles, matrix.extra_bundles) || matrix.bundles }}
         # `--runner`: Tauri runs `<runner> build …` in place of `cargo build …`, so the app
         # binary is linked through `cargo auditable` too (tools/auditable-cargo says why a
         # wrapper). An absolute path, so it resolves the same wherever Tauri starts it.
-        run: npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{ matrix.bundles }} --runner "$GITHUB_WORKSPACE/tools/auditable-cargo"
+        run: npx tauri build --config src-tauri/tauri.build.conf.json --bundles "$BUNDLES" --runner "$GITHUB_WORKSPACE/tools/auditable-cargo" -- --profile "$PROFILE"
 
+      # The extra bundle as a step of its own, which is allowed to fail: a build that lost
+      # its `.dmg`, or a try-a-branch build that lost its AppImage, still has the bundle the
+      # step above made. Skipped when that step already made it, and for the `.dmg` of a dev
+      # channel build, which has none.
+      #
       # Both targets, not just the extra one: Tauri DELETES a bundle it had to build only as
       # an intermediate. Asking for `dmg` alone builds `purlis.app`, wraps it, then prints
       # "Cleaning .../bundle/macos/purlis.app" and removes it — which is how the first run of
       # this workflow lost the .app it had already built. Naming both keeps both.
       - name: Build the extra bundle
         id: extra
-        continue-on-error: ${{ !(matrix.extra_required && needs.plan.outputs.publish == 'true') }}
+        if: ${{ !(matrix.extra_required && needs.plan.outputs.appimage_required == 'true') && !(matrix.extra_bundles == 'dmg' && needs.plan.outputs.dmg != 'true') }}
+        continue-on-error: true
         working-directory: app
-        run: npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{ matrix.bundles }},${{ matrix.extra_bundles }} --runner "$GITHUB_WORKSPACE/tools/auditable-cargo"
+        run: npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{ matrix.bundles }},${{ matrix.extra_bundles }} --runner "$GITHUB_WORKSPACE/tools/auditable-cargo" -- --profile "$PROFILE"
 
       # Fixed names, so the dev release's assets are REPLACED build after build rather than
       # accumulating one per version, and so a manifest's url never has to guess a bundler's
@@ -494,24 +575,30 @@ jobs:
       # back, permissions and all.
       - name: Collect what was built (macOS)
         if: runner.os == 'macOS'
+        env:
+          DMG: ${{ needs.plan.outputs.dmg }}
         run: |
           set -euo pipefail
           mkdir -p dist
           slug=${{ steps.names.outputs.slug }}; up=${{ steps.names.outputs.updater }}
           ditto -c -k --sequesterRsrc --keepParent \
-            target/release/bundle/macos/purlis.app "dist/purlis-$slug.app.zip"
-          for dmg in target/release/bundle/dmg/*.dmg; do
+            "target/$PROFILE/bundle/macos/purlis.app" "dist/purlis-$slug.app.zip"
+          for dmg in "target/$PROFILE"/bundle/dmg/*.dmg; do
             [ -e "$dmg" ] && cp "$dmg" "dist/purlis-$slug.dmg"
           done
-          [ -e "dist/purlis-$slug.dmg" ] || echo "no .dmg — its bundler failed, see the step above"
+          if [ "$DMG" != "true" ]; then
+            echo "no .dmg — a dev channel build makes none (ADR 0092)"
+          elif [ ! -e "dist/purlis-$slug.dmg" ]; then
+            echo "no .dmg — its bundler failed, see the step above"
+          fi
           # The updater's own artifact and the signature over it. The name inside the
           # signature's trusted comment is the bundler's; minisign does not check it, and the
           # version beside it is what `release-manifest` does check.
-          if [ -e target/release/bundle/macos/purlis.app.tar.gz ]; then
-            cp target/release/bundle/macos/purlis.app.tar.gz "dist/purlis-$up.app.tar.gz"
+          if [ -e "target/$PROFILE/bundle/macos/purlis.app.tar.gz" ]; then
+            cp "target/$PROFILE/bundle/macos/purlis.app.tar.gz" "dist/purlis-$up.app.tar.gz"
           fi
-          if [ -e target/release/bundle/macos/purlis.app.tar.gz.sig ]; then
-            cp target/release/bundle/macos/purlis.app.tar.gz.sig "dist/purlis-$up.app.tar.gz.sig"
+          if [ -e "target/$PROFILE/bundle/macos/purlis.app.tar.gz.sig" ]; then
+            cp "target/$PROFILE/bundle/macos/purlis.app.tar.gz.sig" "dist/purlis-$up.app.tar.gz.sig"
           fi
           ls -l dist
 
@@ -521,10 +608,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           slug=${{ steps.names.outputs.slug }}; up=${{ steps.names.outputs.updater }}
-          for deb in target/release/bundle/deb/*.deb; do cp "$deb" "dist/purlis-$slug.deb"; done
+          for deb in "target/$PROFILE"/bundle/deb/*.deb; do cp "$deb" "dist/purlis-$slug.deb"; done
           # The AppImage is both what a person runs and what the updater replaces: Tauri signs
           # it directly, so the same file carries the `.sig`.
-          for img in target/release/bundle/appimage/*.AppImage; do
+          for img in "target/$PROFILE"/bundle/appimage/*.AppImage; do
             [ -e "$img" ] || continue
             cp "$img" "dist/purlis-$up.AppImage"
             [ -e "$img.sig" ] && cp "$img.sig" "dist/purlis-$up.AppImage.sig"
@@ -563,7 +650,7 @@ jobs:
           MACOS_SIGNING: ${{ needs.plan.outputs.macos_signing }}
         run: |
           set -euo pipefail
-          bundle=target/release/bundle/macos/purlis.app
+          bundle=target/$PROFILE/bundle/macos/purlis.app
           echo "this run asked for: $MACOS_SIGNING"
           codesign --verify --deep --strict --verbose=2 "$bundle"
           for path in "$bundle" "$bundle/Contents/MacOS/purlis" "$bundle/Contents/MacOS/charter"; do
@@ -603,7 +690,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
-            bundle=target/release/bundle/macos/purlis.app
+            bundle=target/$PROFILE/bundle/macos/purlis.app
             exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$bundle/Contents/Info.plist")
             echo "### $bundle/Contents/MacOS (CFBundleExecutable is '$exe')"
             ls -l "$bundle/Contents/MacOS"
@@ -614,7 +701,7 @@ jobs:
           else
             echo "### what the .deb ships"
             dpkg -c dist/*.deb | grep -E 'usr/bin/|\.desktop' || true
-            echo; echo "ldd of the app:"; ldd target/release/charter-app || true
+            echo; echo "ldd of the app:"; ldd "target/$PROFILE/charter-app" || true
           fi
 
       # The plugin every Claude Code chat loads (`purlis_core::plugin`), and the shim every
@@ -625,7 +712,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
-            plugin=target/release/bundle/macos/purlis.app/Contents/Resources/plugin
+            plugin=target/$PROFILE/bundle/macos/purlis.app/Contents/Resources/plugin
             ls -R "$plugin"
             test -f "$plugin/.claude-plugin/plugin.json"
             test -f "$plugin/hooks/hooks.json"
@@ -651,14 +738,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
-            ext=target/release/bundle/macos/purlis.app/Contents/Resources/extensions/persona-statistics
+            ext=target/$PROFILE/bundle/macos/purlis.app/Contents/Resources/extensions/persona-statistics
             ls -lR "$ext"
             test -f "$ext/charter-extension.json"
             test -x "$ext/bin/persona-statistics"
             # The updater's archive, when this run made one: the bytes the minisign signature is
             # over. Listed once into a variable, then searched (see the plugin check's note on
             # SIGPIPE). The `.app.zip` is `ditto` of the same `.app`, and the `.dmg` wraps it.
-            archive=target/release/bundle/macos/purlis.app.tar.gz
+            archive=target/$PROFILE/bundle/macos/purlis.app.tar.gz
             if [ -e "$archive" ]; then
               listing=$(tar -tzvf "$archive")
               grep -qE '^-rwx.*extensions/persona-statistics/bin/persona-statistics$' <<<"$listing" \
@@ -703,9 +790,9 @@ jobs:
             echo "## ${{ matrix.name }} — charter $VERSION"
             echo
             if [ "$PUBLISH" = "true" ]; then
-              echo "Built from \`${{ needs.plan.outputs.sha }}\`, **release profile, published to the \`$CHANNEL\` channel**."
+              echo "Built from \`${{ needs.plan.outputs.sha }}\`, **\`$PROFILE\` profile, published to the \`$CHANNEL\` channel**."
             else
-              echo "Built from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA}\`, release profile, **published nowhere** — download it from this run's **Artifacts** section (\`$ARTIFACT.zip\`)."
+              echo "Built from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA}\`, \`$PROFILE\` profile, **published nowhere** — download it from this run's **Artifacts** section (\`$ARTIFACT.zip\`)."
             fi
             echo
           } >> "$GITHUB_STEP_SUMMARY"
@@ -821,7 +908,7 @@ jobs:
             [ "$n" -ge 3 ] || { echo "FAIL: only $n binaries in usr/bin — a sidecar IS the app"; exit 1; }
             exit 0
           fi
-          bundle=target/release/bundle/macos/purlis.app
+          bundle=target/$PROFILE/bundle/macos/purlis.app
           dir=$bundle/Contents/MacOS
           exe=$dir/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$bundle/Contents/Info.plist")
           test -x "$exe" || { echo "FAIL: CFBundleExecutable names a file that is not there: $exe"; exit 1; }
@@ -1143,6 +1230,17 @@ jobs:
           # `tools/replace-release-assets.sh` says how. `dev.json` and its weekly twin last, on
           # their own, so no machine reads a manifest naming an asset that is not uploaded yet.
           tools/replace-release-assets.sh dev "${assets[@]}"
+          # A dev channel build makes no `.dmg` (ADR 0092), and replacing assets by name
+          # leaves alone a name this build did not make. So the `.dmg` a publish before that
+          # ruling left would sit beside every later build, naming an older one. Removed by
+          # id from a listing made now; a 404 means it is already gone.
+          for id in $(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/tags/dev" \
+            --jq '.assets[] | select(.name | endswith(".dmg")) | .id'); do
+            if ! out=$(gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$id" 2>&1); then
+              grep -q 'HTTP 404' <<<"$out" || { echo "$out" >&2; exit 1; }
+            fi
+            echo "removed the .dmg an earlier dev publish left (asset $id)"
+          done
           tools/replace-release-assets.sh dev dev.json dev-weekly.json
           gh release edit dev --repo "$GITHUB_REPOSITORY" \
             --notes "The rolling dev channel. Now: charter $VERSION, built from $SHA. Not a release — see the stable releases for those."
@@ -1150,3 +1248,75 @@ jobs:
             echo "## dev channel now serves charter $VERSION"
             echo "Built from \`$SHA\`. Machines on the dev channel find it at their next check."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # **The profile guard's voice** (ADR 0092). A scheduled run's red X is on a page nobody opens;
+  # an issue is in the repo. One issue, found by its exact title among every open issue and
+  # rewritten each red night, never a second one and never a comment, and closed by the first
+  # night that builds clean (as `forge-live.yml` and `mutants.yml` do).
+  #
+  # The guard itself is the three jobs above, started by the schedule: `main`, with Cargo's
+  # `release` profile and the bundles a stable build must make, outside the `release`
+  # environment, so with no signing key, and published nowhere. This job only reads how they
+  # ended. It holds `issues: write` and nothing else: no checkout, no cache, no key.
+  profile-guard:
+    name: profile guard — say so where someone will see it
+    needs: [plan, build, sbom]
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the profile guard's issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          PLAN: ${{ needs.plan.result }}
+          BUILD: ${{ needs.build.result }}
+          SBOM: ${{ needs.sbom.result }}
+        run: |
+          set -euo pipefail
+          TITLE='the stable profile does not build on main'
+          # Every open issue, every page of them: a listing capped at the newest 200 once lost
+          # a nightly's own issue (`mutants.yml`).
+          gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" \
+            --jq '.[] | select(.pull_request | not) | "\(.number) \(.title)"' > "$RUNNER_TEMP/issues.txt"
+          EXISTING="$(awk -v t="$TITLE" \
+            '{n=$1; $1=""; sub(/^ /,""); if ($0 == t) {print n; exit}}' "$RUNNER_TEMP/issues.txt")"
+          echo "plan=$PLAN build=$BUILD sbom=$SBOM issue=${EXISTING:-none}"
+          red=false; clean=true
+          for result in "$PLAN" "$BUILD" "$SBOM"; do
+            [ "$result" = failure ] && red=true
+            [ "$result" = success ] || clean=false
+          done
+          if [ "$clean" = true ]; then
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" --comment "The stable profile builds on main again: $RUN_URL"
+            fi
+            exit 0
+          fi
+          if [ "$red" != true ]; then
+            # Cancelled or skipped: nothing was learned, so the issue is left as it is.
+            echo "### The profile guard did not finish (plan: $PLAN, build: $BUILD, sbom: $SBOM); its issue is left as it is" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          BODY_FILE="$RUNNER_TEMP/body.md"
+          {
+            echo "Last run: $RUN_URL (main at \`$SHA\`; plan: $PLAN, build: $BUILD, sbom: $SBOM)"
+            echo
+            echo "The nightly **profile guard** built \`main\` the way a stable build is built —"
+            echo "Cargo's \`release\` profile, every bundle, the AppImage required — and it failed."
+            echo "The dev channel builds with \`dev-release\`, so a green dev publish does not"
+            echo "show that the stable profile still builds (ADR 0092). Until this is fixed, a"
+            echo "\`v*\` tag would fail the same way."
+            echo
+            echo "The run's log names the step. To try a fix without publishing anything, start"
+            echo "the \`release\` workflow by hand on the branch, with the \`release\` profile."
+            echo "This issue is rewritten each red night and shut by the first clean one."
+          } > "$BODY_FILE"
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --body-file "$BODY_FILE"
+          else
+            gh issue create --title "$TITLE" --body-file "$BODY_FILE"
+          fi

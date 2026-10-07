@@ -42,6 +42,29 @@ fn main() {
         "FILES",
         "Every project template's files, as `(<template>/<path>, text)`, sorted by path.",
     );
+    println!("cargo:rustc-env=PURLIS_BUILD_PROFILE={}", profile());
+}
+
+/// The Cargo profile this build is made with, by the name Cargo files it under: `release`,
+/// `dev-release`, and `debug` for `dev` and `test` (ADR 0092, #1429).
+///
+/// Cargo hands a build script `PROFILE`, but that is only ever `debug` or `release`: a custom
+/// profile reports the one it inherits from, so a `dev-release` build would call itself
+/// `release`, which is the one thing the version line exists to tell apart. The directory is
+/// the name. `OUT_DIR` is `<target>[/<triple>]/<profile>/build/<crate>-<hash>/out`, and when
+/// it is not that shape the answer falls back to `PROFILE` rather than to a guess.
+fn profile() -> String {
+    let out = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR");
+    let mut above = Path::new(&out).ancestors().skip(2);
+    let build = above.next().and_then(Path::file_name);
+    let named = above.next().and_then(Path::file_name);
+    match (
+        build.and_then(|b| b.to_str()),
+        named.and_then(|n| n.to_str()),
+    ) {
+        (Some("build"), Some(name)) if !name.is_empty() => name.to_owned(),
+        _ => std::env::var("PROFILE").expect("cargo sets PROFILE"),
+    }
 }
 
 /// Every file under `<crate>/<dir>`, at any depth, as a `&[(&str, &str)]` named `konst` keyed

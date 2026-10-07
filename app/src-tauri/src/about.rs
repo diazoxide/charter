@@ -67,6 +67,9 @@ pub struct About {
     pub version: String,
     /// Whether that version is released, a dev build, or not in the changelog.
     pub build: Build,
+    /// The Cargo profile this build was made with: `release` for a stable build, `dev-release`
+    /// for a dev channel build, `debug` for a local one (ADR 0092).
+    pub profile: String,
     /// The section shown: the version's own for a release, `[Unreleased]` otherwise. `None`
     /// only when there is no such section to show.
     pub notes: Option<Notes>,
@@ -85,6 +88,7 @@ pub fn about_charter(app: tauri::AppHandle) -> About {
 
 /// What a build of `version` says about itself, out of `changelog`.
 fn about(version: &str, changelog: &str) -> About {
+    let profile = purlis_core::adopt::build_profile().to_owned();
     let notes = |heading: &str| {
         changelog::section(changelog, heading)
             .ok()
@@ -98,6 +102,7 @@ fn about(version: &str, changelog: &str) -> About {
         return About {
             version: version.to_owned(),
             build: Build::Dev { of: of.to_owned() },
+            profile,
             notes: notes(changelog::UNRELEASED),
         };
     }
@@ -105,11 +110,13 @@ fn about(version: &str, changelog: &str) -> About {
         Some(own) => About {
             version: version.to_owned(),
             build: Build::Release,
+            profile,
             notes: Some(own),
         },
         None => About {
             version: version.to_owned(),
             build: Build::Unlisted,
+            profile,
             notes: notes(changelog::UNRELEASED),
         },
     }
@@ -181,6 +188,24 @@ mod tests {
 
         assert_eq!(about.build, Build::Unlisted);
         assert_eq!(about.notes.unwrap().version, "Unreleased");
+    }
+
+    #[test]
+    fn every_kind_of_build_names_the_profile_it_was_built_with() {
+        // Cargo files this test binary under its profile's name (`target/<profile>/deps/…`),
+        // which is what About has to say without being told: `dev-release` for a dev channel
+        // build, `release` for a stable one (ADR 0092), `debug` here.
+        let exe = std::env::current_exe().expect("this test's own path");
+        let profile = exe
+            .parent()
+            .and_then(std::path::Path::parent)
+            .and_then(std::path::Path::file_name)
+            .and_then(|name| name.to_str())
+            .expect("the test binary is in its profile's directory");
+
+        for version in ["0.1.0", "0.2.0-dev.42", "0.3.0"] {
+            assert_eq!(about(version, LOG).profile, profile, "{version}");
+        }
     }
 
     #[test]

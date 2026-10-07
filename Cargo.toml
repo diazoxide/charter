@@ -68,3 +68,12 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# What a dev channel build is compiled with (ADR 0092, #1429). `release` with a lighter link:
+# thin LTO across sixteen codegen units instead of one fat pass over one unit. `opt-level`,
+# `panic` and `strip` are `release`'s, by inheritance, and nothing else may be set here. A stable
+# build, a build started by hand and the nightly profile guard all use `release` itself.
+[profile.dev-release]
+inherits = "release"
+lto = "thin"
+codegen-units = 16

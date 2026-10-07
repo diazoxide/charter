@@ -111,6 +111,7 @@ describe("About Charter", () => {
   const ABOUT: About = {
     version: "0.1.0",
     build: { kind: "release" },
+    profile: "release",
     notes: {
       version: "0.1.0",
       date: "2026-09-23",
@@ -152,6 +153,7 @@ describe("About Charter", () => {
     expect(within(dialog).getByRole("heading", { name: "About purlis" })).toBeVisible();
     expect(await within(dialog).findByTestId("about-version")).toHaveTextContent("0.1.0");
     expect(dialog).toHaveTextContent("This is purlis 0.1.0, released 2026-09-23.");
+    expect(dialog).toHaveTextContent("Built with the release profile.");
     expect(within(dialog).getByRole("heading", { name: "What 0.1.0 brought" })).toBeVisible();
     expect(within(dialog).getByRole("heading", { name: "Added" })).toBeVisible();
     expect(within(dialog).getByText("Tabs").tagName).toBe("STRONG");
@@ -162,6 +164,7 @@ describe("About Charter", () => {
     core({
       version: "0.2.0-dev.42",
       build: { kind: "dev", of: "0.2.0" },
+      profile: "dev-release",
       notes: { version: "Unreleased", date: null, markdown: "- Coming next." },
     });
     render(<TitleBar />);
@@ -171,12 +174,16 @@ describe("About Charter", () => {
 
     expect(await within(dialog).findByTestId("about-version")).toHaveTextContent("0.2.0-dev.42");
     expect(dialog).toHaveTextContent("a dev build of 0.2.0");
+    // The profile is the build's own word for itself, never inferred from the version: a dev
+    // channel build is `dev-release`, and a hand-started build of the same version may not be.
+    expect(within(dialog).getByTestId("about-profile")).toHaveTextContent("dev-release");
+    expect(dialog).toHaveTextContent("Built with the dev-release profile.");
     expect(within(dialog).getByRole("heading", { name: "Not released yet" })).toBeVisible();
     expect(within(dialog).getByRole("listitem")).toHaveTextContent("Coming next.");
   });
 
   it("says plainly when the changelog has no section for this version", async () => {
-    core({ version: "0.3.0", build: { kind: "unlisted" }, notes: null });
+    core({ version: "0.3.0", build: { kind: "unlisted" }, profile: "debug", notes: null });
     render(<TitleBar />);
 
     await userEvent.click(screen.getByTestId("title-about"));
@@ -191,6 +198,7 @@ describe("About Charter", () => {
     core({
       version: "0.2.0-dev.1",
       build: { kind: "dev", of: "0.2.0" },
+      profile: "dev-release",
       notes: { version: "Unreleased", date: null, markdown: "" },
     });
     render(<TitleBar />);
