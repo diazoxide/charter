@@ -608,7 +608,15 @@ impl Held {
         // Closed by the operator's Close, or by its own record: either way nothing is owed.
         self.closing.forget(session);
         self.brokered.forget(session);
+        // Its id, read before it goes: its dispatch grant for "this chat" ends where its
+        // sandbox grants do, when no session of the chat is left open (#1437, D-1348-1).
+        let id = self
+            .chats
+            .recorded_chat(session)
+            .and_then(|chat| chat.identity.id);
         let closed = self.chats.close(session);
+        let ended = id.filter(|id| !self.chats.id_is_open(id));
+        self.dispatch_grants.chat_closed(session, ended.as_deref());
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
         purlis_core::handback::orphan(&self.root, session);

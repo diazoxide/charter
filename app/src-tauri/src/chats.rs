@@ -885,6 +885,14 @@ impl Chats {
         lock(&self.owed).entry(session).or_default().push(told);
     }
 
+    /// Whether a session of the chat whose id is `id` is open: what its grants last as long
+    /// as (D-1348-1).
+    pub fn id_is_open(&self, id: &str) -> bool {
+        lock(&self.open)
+            .values()
+            .any(|one| one.chat.identity.id.as_deref() == Some(id))
+    }
+
     /// The folder chat `session` was started in: what a write grant for it is judged against.
     pub fn folder_of(&self, session: u32) -> Option<std::path::PathBuf> {
         lock(&self.open).get(&session)?.chat.cwd.clone()

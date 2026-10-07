@@ -3,6 +3,9 @@ import { commands, type DispatchPending, type GrantLevel, type PlaneId } from ".
 import { listen } from "./here";
 import { Notice, type NoticeAction } from "./Notice";
 
+/** About how many lines the brief's box shows before it scrolls. */
+const SHOWN_LINES = 12;
+
 /** What each level's Allow says, in the order they read. */
 const ALLOWS: readonly (readonly [GrantLevel, string])[] = [
   ["chat", "Allow for this chat"],
@@ -106,6 +109,12 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
       <section aria-label="Brief from the chat">
         <pre className="block-report-draft">{first.brief}</pre>
       </section>
+      {first.brief_lines > SHOWN_LINES && (
+        <p>
+          The brief is {first.brief_lines} lines. Scroll its box to read all of it before you
+          answer.
+        </p>
+      )}
       {first.brief_cut && <p>The brief is longer than purlis shows here. The rest is not shown.</p>}
     </div>
   );

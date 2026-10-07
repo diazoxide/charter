@@ -9,9 +9,10 @@
 //! denied writing, and a brokered write refuses any change under `[dispatch]`
 //! ([`crate::brokered::guard`]).
 //!
-//! **Your own change is no news to you**: a grant or revoke made here is recorded as seen on
-//! this machine when nothing else was waiting to be told, so the one-time Notice is a
-//! teammate's ([`crate::dispatchgrant::changed`]).
+//! **Your own change is no news to you, and is in force at once**: a pair granted here is
+//! acknowledged on this machine as it is written, and one revoked here is taken off what was
+//! acknowledged, so the one-time Notice is a teammate's ([`crate::dispatchgrant::changed`]).
+//! A teammate's pair covers nothing here until it is allowed here (D-1437-R1).
 
 use std::path::Path;
 
@@ -115,9 +116,8 @@ pub fn without(text: &str, pair: &Pair) -> Result<String, String> {
     Ok(doc.to_string())
 }
 
-/// Writes `how`'s edit of the project file at `root`, as it is on disk now, and records the
-/// change as seen on this machine unless another was still waiting to be told.
-fn write(root: &Path, how: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
+/// The project file at `root` as it is on disk, or why there is none to edit.
+fn on_disk(root: &Path) -> Result<String, String> {
     let (there, text) = super::on_disk(root, Which::Shared)?;
     if !there {
         return Err(format!(
@@ -125,29 +125,49 @@ fn write(root: &Path, how: impl FnOnce(&str) -> Result<String, String>) -> Resul
             Which::Shared.file()
         ));
     }
+    Ok(text)
+}
+
+/// **Whether [`grant`] of `pair` would be written**, asked before the grant is audited: the
+/// file is there and is one a form can edit. Nothing is written.
+pub fn can_grant(root: &Path, pair: &Pair) -> Result<(), String> {
+    with(&on_disk(root)?, pair).map(|_| ())
+}
+
+/// Writes `how`'s edit of the project file at `root`, as it is on disk now. A text the edit
+/// leaves as it is is not written.
+fn write(root: &Path, how: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
+    let text = on_disk(root)?;
     let after = how(&text)?;
     if after == text {
         return Ok(());
     }
-    let pending = crate::dispatchgrant::changed(root).is_some();
-    super::save(root, Which::Shared, Some(&text), &after).map_err(|why| why.join(" "))?;
-    if !pending && let Some(change) = crate::dispatchgrant::changed(root) {
-        // Best effort: a record that cannot be written leaves the Notice to say it once more.
-        let _ = crate::dispatchgrant::acknowledge(root, &change.now);
-    }
-    Ok(())
+    super::save(root, Which::Shared, Some(&text), &after).map_err(|why| why.join(" "))
 }
 
 /// **Grants `pair` for everyone in the project at `root`**: the grant Notice's Allow at the
-/// project level. Answers why not, in a sentence, and then nothing was written.
+/// project level. Answers why not, in a sentence, and then nothing was written. Where the file
+/// holds the pair already (a teammate's, not yet allowed here) nothing is written. Either way
+/// the pair is acknowledged on this machine, so it is in force here and is no news here.
 pub fn grant(root: &Path, pair: &Pair) -> Result<(), String> {
-    write(root, |text| with(text, pair))
+    write(root, |text| with(text, pair))?;
+    crate::dispatchgrant::acknowledge_pair(root, pair).map_err(|why| {
+        format!(
+            "The grant is in {}, and purlis could not record it as allowed on this machine \
+             ({}), so it covers nothing here yet. Allow it again.",
+            Which::Shared.file(),
+            crate::shown::short(&why.to_string())
+        )
+    })
 }
 
 /// **Revokes the project's grant of `pair`**: Settings' Revoke, a change to the committed file
-/// which teammates follow like any other.
+/// which teammates follow like any other, and no news on this machine.
 pub fn revoke(root: &Path, pair: &Pair) -> Result<(), String> {
-    write(root, |text| without(text, pair))
+    write(root, |text| without(text, pair))?;
+    // Best effort: a pair left acknowledged covers nothing once the file lacks it.
+    let _ = crate::dispatchgrant::forget_pair(root, pair);
+    Ok(())
 }
 
 #[cfg(test)]

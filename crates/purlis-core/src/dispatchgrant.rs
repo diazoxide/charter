@@ -33,6 +33,16 @@
 //! brokered write refuses any change under `[dispatch]` ([`crate::brokered::guard`]);
 //! `app/sandbox.json` is the integrity class's.
 //!
+//! **The two file-backed levels are held by the sandbox and by nothing else** (D-1437-R2). A
+//! chat in a project with the sandbox off, or one a person started without it, runs as the
+//! person and can write either file: there a grant is not protected from a chat, and nothing
+//! here claims it is.
+//!
+//! **A pulled grant waits for this machine's yes** (D-1437-R1): a committed pair is in force
+//! here only once someone here allowed it ([`InForce::read`], [`acknowledge_pair`]), on the
+//! project's one-time Notice or on a chat's tab. One made in this window is acknowledged as it
+//! is written. So a chat nobody is at never dispatches under a pair nobody here has seen.
+//!
 //! # Policy
 //!
 //! An administrator's policy can lock all dispatch, or a pair
@@ -122,11 +132,19 @@ pub struct InForce {
 
 impl InForce {
     /// The grants in force in the project at `root` for a chat the app holds `chat` for.
+    ///
+    /// **A committed pair is in force only once this machine acknowledged it** (D-1437-R1): one
+    /// a pull brought in covers nothing here until a person allows it on the one-time Notice,
+    /// or on a chat's tab. A grant made in this window is acknowledged as it is written.
     pub fn read(root: &Path, chat: Vec<ChatPair>) -> Self {
+        let seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
         Self {
             chat,
             you: yours(root),
-            project: committed_at(root),
+            project: committed_at(root)
+                .into_iter()
+                .filter(|pair| seen.contains(&pair.to_string()))
+                .collect(),
         }
     }
 
@@ -169,8 +187,9 @@ pub enum Covers {
 
 /// **Whether a chat running as `asking` may dispatch to `target`** under `grants` and `policy`.
 ///
-/// In order: a policy that locks all dispatch, which holds a chat's own persona too; the same
-/// persona, which needs no grant; a policy lock on the pair; then a grant at any level.
+/// In order: a policy that locks all dispatch, which holds a chat's own persona too; a policy
+/// lock on the pair, a persona's own included where the policy names it twice; the same
+/// persona, which needs no grant; then a grant at any level.
 /// `asking` is `None` for a chat on no persona, which only a grant for that chat covers.
 pub fn covers(asking: Option<&str>, target: &str, grants: &InForce, policy: &Locks) -> Covers {
     if policy.forbids_dispatch() {
@@ -180,11 +199,13 @@ pub fn covers(asking: Option<&str>, target: &str, grants: &InForce, policy: &Loc
                 .unwrap_or_else(|| policy.locked_by()),
         );
     }
-    if asking == Some(target) {
-        return Covers::Covered;
-    }
+    // Before the same-persona answer: a pair that names one persona twice locks that
+    // persona's dispatch to itself.
     if let Some(why) = policy.dispatch_refused(asking, target) {
         return Covers::Locked(why);
+    }
+    if asking == Some(target) {
+        return Covers::Covered;
     }
     match grants.level_of(asking, target) {
         Some(_) => Covers::Covered,
@@ -303,10 +324,46 @@ pub fn changed(root: &Path) -> Option<Change> {
     change_between(&seen, &committed_at(root))
 }
 
-/// Records that the person was told of `shown`, the project's grants as the Notice showed
-/// them: a change after it was shown is told again ([`changed`]).
+/// Records that the person allowed `shown`, the project's grants as the Notice showed them:
+/// each of them the file holds is in force here from now on ([`InForce::read`]), and a change
+/// after it was shown is told again ([`changed`]).
 pub fn acknowledge(root: &Path, shown: &[String]) -> std::io::Result<()> {
     crate::sandbox::local::acknowledge_dispatch(root, shown)
+}
+
+/// The project's pairs this machine has not acknowledged: in the file, in force for no chat
+/// here yet.
+pub fn unacknowledged(root: &Path) -> Vec<Pair> {
+    let seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
+    committed_at(root)
+        .into_iter()
+        .filter(|pair| !seen.contains(&pair.to_string()))
+        .collect()
+}
+
+/// Records that the person allowed the project's `pair` on this machine, beside what was
+/// acknowledged before.
+pub fn acknowledge_pair(root: &Path, pair: &Pair) -> std::io::Result<()> {
+    let mut seen = crate::sandbox::local::dispatch_seen(root).unwrap_or_default();
+    let said = pair.to_string();
+    if seen.contains(&said) {
+        return Ok(());
+    }
+    seen.push(said);
+    crate::sandbox::local::acknowledge_dispatch(root, &seen)
+}
+
+/// Takes `pair` off what this machine acknowledged: a revoke made here is no news here.
+pub fn forget_pair(root: &Path, pair: &Pair) -> std::io::Result<()> {
+    let Some(mut seen) = crate::sandbox::local::dispatch_seen(root) else {
+        return Ok(());
+    };
+    let said = pair.to_string();
+    if !seen.contains(&said) {
+        return Ok(());
+    }
+    seen.retain(|one| *one != said);
+    crate::sandbox::local::acknowledge_dispatch(root, &seen)
 }
 
 /// **A dispatch grant or revoke, as the audit records it** (`trust.dispatch.grant`,
@@ -381,11 +438,14 @@ pub const MOST_BRIEF_BYTES: usize = crate::handoff::FIRST_MESSAGE_MAX_BYTES;
 /// A brief as the grant Notice shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShownBrief {
-    /// The text, inert: lines and tabs kept, every other control or direction-changing
-    /// character written out as its escape.
+    /// The text, inert: lines and tabs kept, every other character with no glyph written out
+    /// as its escape, and a backslash doubled so the text cannot spell an escape itself.
     pub text: String,
     /// Whether the brief was longer than [`MOST_BRIEF_BYTES`] and is cut there.
     pub cut: bool,
+    /// How many lines `text` is, blank ones counted: the Notice says it, so a brief whose ask
+    /// sits below what its box shows is not read as its first lines alone.
+    pub lines: u32,
 }
 
 /// **`brief` as the Notice shows it**: untrusted text from a chat, so nothing in it can move
@@ -397,31 +457,21 @@ pub fn shown_brief(brief: &str) -> ShownBrief {
     }
     let mut text = String::with_capacity(end);
     for ch in brief[..end].replace("\r\n", "\n").chars() {
-        if ch == '\n' || ch == '\t' {
-            text.push(ch);
-        } else if ch.is_control() || changes_direction(ch) {
-            text.push_str(&crate::shown::escape_char(ch));
-        } else {
-            text.push(ch);
+        match ch {
+            '\n' | '\t' => text.push(ch),
+            '\\' => text.push_str("\\\\"),
+            // The house's one table of what draws as nothing ([`crate::shown`]), never a list
+            // of ranges kept here.
+            _ if crate::shown::invisible(ch) => text.push_str(&crate::shown::escape_char(ch)),
+            _ => text.push(ch),
         }
     }
+    let lines = u32::try_from(text.lines().count()).unwrap_or(u32::MAX);
     ShownBrief {
         text,
         cut: end < brief.len(),
+        lines,
     }
-}
-
-/// Whether `ch` changes the direction text is drawn in, or is drawn as nothing: the marks,
-/// embeddings, overrides and isolates, and the zero-width characters.
-fn changes_direction(ch: char) -> bool {
-    matches!(
-        ch,
-        '\u{061c}'
-            | '\u{200b}'..='\u{200f}'
-            | '\u{202a}'..='\u{202e}'
-            | '\u{2060}'..='\u{2069}'
-            | '\u{feff}'
-    )
 }
 
 #[cfg(test)]

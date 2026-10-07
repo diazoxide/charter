@@ -40,7 +40,9 @@ export function dispatchGrantSaid(one: DispatchGrant): string {
         : `committed by ${one.by}`;
   const from = one.chat === null ? "" : `, from ${one.chat}`;
   const at = when(one.at);
-  return `${allows} · ${LEVELS[one.level]} · ${by}${at === "" ? "" : `, ${at}`}${from}`;
+  // The project's, and nobody at this machine has allowed it yet: it covers nothing here.
+  const waiting = one.waiting ? " · not allowed on this machine yet" : "";
+  return `${allows} · ${LEVELS[one.level]} · ${by}${at === "" ? "" : `, ${at}`}${from}${waiting}`;
 }
 
 /**

@@ -119,10 +119,15 @@ fn a_teammate_s_change_is_told_once_and_your_own_after_it_does_not_hide_it() {
     let told = crate::dispatchgrant::changed(dir.path()).expect("a change");
     assert_eq!(told.added, ["qa -> devops"]);
     assert_eq!(told.removed, Vec::<String>::new());
-    // A grant of your own while that one waits is told with it, not recorded as seen.
+    // A grant of your own while that one waits is yours, seen as it is written; the
+    // teammate's still waits, in force for no chat here until you allow it.
     grant(dir.path(), &pair("steward", "devops")).expect("granted");
     let both = crate::dispatchgrant::changed(dir.path()).expect("still a change");
-    assert_eq!(both.added, ["qa -> devops", "steward -> devops"]);
+    assert_eq!(both.added, ["qa -> devops"]);
+    assert_eq!(
+        crate::dispatchgrant::InForce::read(dir.path(), Vec::new()).project,
+        [pair("steward", "devops")]
+    );
     // Read once, it is not told again.
     crate::dispatchgrant::acknowledge(dir.path(), &both.now).expect("kept");
     assert_eq!(crate::dispatchgrant::changed(dir.path()), None);
@@ -158,4 +163,50 @@ fn a_project_with_no_committed_file_keeps_no_grant_for_everyone() {
         why.ends_with("is not there, so nothing was changed."),
         "{why}"
     );
+}
+
+#[test]
+fn a_pair_the_file_already_holds_is_yours_once_you_allow_it_and_the_file_is_not_rewritten() {
+    // D-1437-R1: a teammate's pair asks on a chat's tab; Allow for everyone writes nothing new
+    // and puts it in force here.
+    let text = format!("{PROJECT}\n[dispatch.grants]\nsteward = [\"devops\"]\n");
+    let dir = project(&text);
+    assert_eq!(
+        crate::dispatchgrant::InForce::read(dir.path(), Vec::new()).project,
+        []
+    );
+    grant(dir.path(), &pair("steward", "devops")).expect("granted");
+    assert_eq!(
+        fs::read_to_string(crate::names::manifest(dir.path())).expect("read"),
+        text
+    );
+    assert_eq!(
+        crate::dispatchgrant::InForce::read(dir.path(), Vec::new()).project,
+        [pair("steward", "devops")]
+    );
+}
+
+#[test]
+fn whether_a_grant_can_be_written_is_known_before_anything_is_recorded() {
+    // The audit comes before the write, so a write that would be refused is found first.
+    let dir = project("[dispatch]\ngrants = [\"steward\"]\n");
+    let why = can_grant(dir.path(), &pair("steward", "devops")).expect_err("refused");
+    assert!(
+        why.contains("is not written in a form purlis edits"),
+        "{why}"
+    );
+    let none = tempfile::tempdir().expect("a folder");
+    let why = can_grant(none.path(), &pair("steward", "devops")).expect_err("refused");
+    assert!(
+        why.ends_with("is not there, so nothing was changed."),
+        "{why}"
+    );
+    assert_eq!(
+        can_grant(project(PROJECT).path(), &pair("steward", "devops")),
+        Ok(())
+    );
+    // Asking changes nothing.
+    let dir = project(PROJECT);
+    can_grant(dir.path(), &pair("steward", "devops")).expect("it can");
+    assert_eq!(committed_at(dir.path()), []);
 }

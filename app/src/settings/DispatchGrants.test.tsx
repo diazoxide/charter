@@ -23,6 +23,7 @@ const CHAT: DispatchGrant = {
   at: 1_790_000_000,
   chat: "steward 3",
   locked: null,
+  waiting: false,
 };
 const MINE: DispatchGrant = {
   id: "you\u001fsteward\u001fdevops",
@@ -33,6 +34,7 @@ const MINE: DispatchGrant = {
   at: null,
   chat: null,
   locked: null,
+  waiting: false,
 };
 const PROJECT: DispatchGrant = {
   id: "project\u001fqa\u001fdevops",
@@ -43,6 +45,7 @@ const PROJECT: DispatchGrant = {
   at: 1_790_000_000,
   chat: null,
   locked: null,
+  waiting: false,
 };
 
 const state = (over: Partial<DispatchGrants> = {}): DispatchGrants => ({
@@ -110,6 +113,13 @@ describe("the dispatch grants list", () => {
     expect(dispatchGrantSaid({ ...CHAT, asking: null, at: null })).toBe(
       "This chat may dispatch to qa · One chat · granted by you, from steward 3",
     );
+  });
+
+  it("says a project grant nobody here has allowed yet covers nothing on this machine", () => {
+    expect(dispatchGrantSaid({ ...PROJECT, at: null, waiting: true })).toContain(
+      "committed by Dana · not allowed on this machine yet",
+    );
+    expect(dispatchGrantSaid(PROJECT)).not.toContain("not allowed on this machine yet");
   });
 
   it("draws a grant policy locks as locked, with who locked it and no Revoke", async () => {
