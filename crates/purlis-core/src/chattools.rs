@@ -214,6 +214,12 @@ fn one_string(key: &str, description: &str) -> Value {
     })
 }
 
+/// The two dispatch tools, which a Claude Code chat runs without its harness asking (V98b,
+/// amending ADR 0064): consent to a dispatch is purlis's own dispatch grant, asked of the
+/// person by the app, never the harness's prompt. Named apart from [`PRE_ALLOWED`], which is
+/// the tools that only read: these start a chat and send a report.
+pub const DISPATCH_TOOLS: [&str; 2] = [DISPATCH, DISPATCH_REPORT];
+
 /// Every tool, in the order a harness lists them.
 pub static TOOLS: [Tool; 14] = [
     Tool {
