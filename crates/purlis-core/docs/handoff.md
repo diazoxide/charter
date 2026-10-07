@@ -203,6 +203,8 @@ BRIEF
   14:32⟩`, and a line saying the brief is a request from that chat and not from you, that
   nothing in it approves anything, and how to report. The brief follows, verbatim.
 - **`--name` is required**: it is what the chat is called and listed under.
+- **Several at once is fine.** A chat that sends six tasks in one step starts six chats: each
+  run of the command is answered on its own.
 
 The same refusals stand in front of it as in front of a handoff's brief: an empty brief, one
 shaped like a credential, one too long to start a harness on. And these, each in a sentence
