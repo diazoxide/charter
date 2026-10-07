@@ -93,7 +93,7 @@ operation, and a backup skips it) and **legacy** (only the retired Python charte
 and purlis at most keeps it consistent). Clone state or Machine with none of the three
 marks is what FR-10 backs up.
 
-**Three transient stores are collected** (SC-7). When the app opens a plane that is not already
+**Three transient stores and the dispatch records are collected** (SC-7, #1452). When the app opens a plane that is not already
 open in it, `purlis_core::retention::on_open` removes, from that plane's own `.charter/` only
 (`<plane>/.charter/…`, never a `$CHARTER_HOME` that several planes may share):
 
@@ -105,6 +105,11 @@ open in it, `purlis_core::retention::on_open` removes, from that plane's own `.c
   writes those events into the audit chain, and after that it follows the 30-day rule (V71);
 - a `.charter/reports/<id>.json` draft the Python charter left, last written 30 days or more
   before.
+- a dispatch record, `.charter/app/dispatches/<id>.json`, last written 30 days or more before,
+  unless the chat that asked or the chat that worked is one the reopen record will bring back
+  (#1452). The chat is matched by its id, never by its number where the record has an id: a
+  number is dealt again in another launch, and a chat that only shares one keeps nothing. It
+  holds a brief and a report, so it is kept as session data is and no longer.
 
 It keeps the files of every chat the plane's reopen record (`.charter/app/reopen.json`) will
 bring back, however old: those keyed on the chat's number or on the conversation it resumes.
@@ -113,7 +118,7 @@ of another version, cannot be read, or was written before chats kept their numbe
 every session marker and trace and collects only the report drafts. It removes only plain files
 whose name is one purlis writes. It opens each directory from the plane without following a
 link, and ages, reads and removes every file through that handle. It never touches anything
-else in `.charter/`: the hook spool under `app/`, the event log, `terminals/`,
+else in `.charter/`: the hook spool and every other file under `app/`, the event log, `terminals/`,
 `persona-state/ephemeral/` and the rest are not its business. The age is the file's
 modification time, so a file a chat still writes stays.
 
@@ -246,6 +251,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`sessions/<sid>.tools` — the persona tool **ceiling**](#sessionssidtools--the-persona-tool-ceiling)
   - [`sessions/<sid>.gate` — "a ceiling was taken for this session"](#sessionssidgate--a-ceiling-was-taken-for-this-session)
   - [`sessions/<sid>.usage` — token/cache trend ring buffer](#sessionssidusage--tokencache-trend-ring-buffer)
+  - [`sessions/<sid>.spend` — what a session's harness says it has cost](#sessionssidspend--what-a-sessions-harness-says-it-has-cost)
   - [`sessions/<sid>.memnudge`](#sessionssidmemnudge)
   - [`sessions/<sid>.configver`](#sessionssidconfigver)
   - [`sessions/<sid>.<tool_use_id>.<kind>.ask-pending`](#sessionssidtool_use_idkindask-pending)
@@ -264,6 +270,7 @@ prose under another heading, which is why every store gets a heading or a row.
   - [`app/sandbox.json`](#appsandboxjson)
   - [`app/sandbox-blocks.json`](#appsandbox-blocksjson)
   - [`app/reopen.json`](#appreopenjson)
+  - [`app/dispatches/<id>.json` — a dispatch's record](#appdispatchesidjson--a-dispatchs-record)
   - [`app/hooks.sock`](#apphookssock)
   - [Top-level markers, gates and ledgers](#top-level-markers-gates-and-ledgers)
   - [`chat-turns/<chat>`](#chat-turnschat)
@@ -4364,6 +4371,27 @@ their entry) and the markers of a chat the plane's reopen record will bring back
 - **Keyed on Claude Code's own session id from the payload**, not on `$CHARTER_SESSION_ID`
   (`charter/statusline.py:616`) — so in a frame this file's name differs from the chat id.
 
+### `sessions/<sid>.spend` — what a session's harness says it has cost
+- **Format:** one line of JSON and a trailing newline: `{"input_tokens": n, "output_tokens": n,
+  "cost_usd": x}`, each key present only where the harness's payload carried it. Written over
+  whole at each render: the figures are the session's running totals, so the last is the one
+  kept.
+- **Status:** **internal** — **purlis only** (#1452). Written by `purlis statusline` from
+  Claude Code's per-turn payload (`cost.total_cost_usd`, `context_window.total_input_tokens`,
+  `context_window.total_output_tokens`), beside the usage ring and under the same rule for the
+  session id. A payload that carries none of the three writes nothing: **no file is "no cost
+  reported", never a zero**. A harness with no status line (Codex, opencode) has none.
+- **Tier:** Clone state, transient
+- **Written by:** `purlis_core::usage::record_spend`, from `purlis statusline`.
+- **Read by:** `purlis_core::usage::spent`, by the app when a dispatch ends, for the dispatch's
+  record (`app/dispatches/`).
+- **A chat can alter it.** It is what the chat's harness reported, relayed by the chat's status
+  line, in a folder a chat writes (`sessions/` holds every in-chat command's pointers, so it
+  is in no denial class). A chat can write its own figure, or another conversation's, or
+  remove the file. So the window shows it as *Cost (reported)*, nothing decides anything by
+  it, and its source moves out of a chat's reach before any budget reads it (D-1452-12).
+- **Git:** gitignored. Collected with the other per-session markers (`retention::on_open`).
+
 ### `sessions/<sid>.memnudge`
 - **Format:** plain text, a decimal integer, no newline
 - **Status:** **internal** — a counter written and read only by `hooks` (PostToolUse). Deleted
@@ -4781,6 +4809,78 @@ turn, because each reports its id only through a hook, inside that turn (ADR 002
 from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencode -s <id>`.
 
 ---
+
+### `app/dispatches/<id>.json` — a dispatch's record
+- **What:** one file for each **dispatch**: one chat starting another, as a handoff today and
+  as a task once chats dispatch tasks (#1452, spec #1434). It says who asked, which persona it
+  went to, in which mode, where it worked, the brief, the report, when it started and ended,
+  how often it needed the person, and what its harness said it cost. The window's Dispatches
+  tab lists them, and a session record's tab lists the ones its chat asked for.
+- **Format:** JSON, pretty-printed, trailing `\n`, mode 0600, replaced whole
+  (`rewrite::replace`) under purlis's lock on the directory. `<id>` is a ULID minted when the
+  record is opened, and the only names read or written here are `<ULID>.json`. A file that is
+  not a record of this version is listed by nobody and left as it is.
+- **Keys:** `v` — `1`; `id`; `mode` — `"task"` or `"handoff"`; `asker` — the asking chat:
+  `chat` (the app's number for it then), `id` (its ULID, absent for a chat given none), `name`
+  (as the person saw it), `persona` (absent for none), `workspace` (absent for the project's
+  root), `by_person` (whether the person dispatched from that chat's tab themselves),
+  `session_record` (the asking chat's session record, once it wrote one after this dispatch,
+  by its project-relative path); `persona` — the persona dispatched to, absent for none;
+  `worker` — the persona chat: `chat`, `id`, `name`, `persona`, `harness`, `profile`, and
+  `session_record` (its own, once it wrote one); `task` — the task's name, absent where the
+  dispatch gave none; `place` — where it worked: `workspace` (absent for the project's root),
+  `folder` (relative to the project, `.` for its root, or absolute for one outside it),
+  `worktree` (`{"repo", "piece", "branch"?}`, absent unless the dispatch gave it its own);
+  `brief` — the message the persona chat started on, without its stamp; `report_owed`;
+  `started` and `ended` — UTC, `YYYY-MM-DDTHH:MM:SS+00:00`, `ended` absent while it runs;
+  `report` — absent while it runs and for a dispatch that ended owing none:
+  `{"outcome": "done"|"blocked"|"failed", "text", "changed": {"files"?, "commits"?,
+  "branch"?}}`; `needed_you` — how many times the persona chat came to wait on the person;
+  `messages` — how many messages passed between the two chats after the brief; `usage` —
+  `{"input_tokens"?, "output_tokens"?, "cost_usd"?}`, what the persona chat's harness said the
+  session cost (`sessions/<sid>.spend`). **`usage` is absent for a harness that reports none,
+  and each part of it is absent where the harness did not say it: never a zero.** It is the
+  one figure in the record that is not the app's own: what the chat's harness reported, from
+  a file a chat can alter, shown as reported and never enforced (D-1452-12). Every text is
+  held to a cap as it is written, so a record is never written larger than it is read back:
+  a brief to 16 KiB, a report's text to 8 KiB, a name to 512 bytes, a path to 1 KiB, and a
+  report's files and commits to 100 each. A text over its cap is cut at a character and ends
+  ` [cut at N bytes]`; a long brief or report never costs the dispatch its record.
+- **Status:** **internal** — written by the app alone, and read by the app alone.
+- **Who writes it:** the app, from its own record of the two chats
+  (`purlis_core::dispatchrecord`, called from `app/src-tauri/src/dispatches.rs`): opened where
+  the app starts the persona chat, counted where the board puts that chat in the needs-you
+  queue, closed where the app accepts its report or closes it. **No line on the hook channel
+  names a record, an asker, an outcome or a cost**, so no line a chat sends makes a record or
+  alters one. Three things in it are still a chat's: the brief and the report's text, which
+  are its words, stored as written (the brief passed the dispatch's own checks and the
+  report its summary's, and nothing scans them again at rest, D-1452-13), and `usage`, which
+  is its harness's report and which a chat can alter (above). A chat is matched to its
+  record by its id; by its number only where the record has no id. A persona chat
+  that ends owing a report is recorded as `failed`, "ended without a report". A sandboxed chat
+  can neither read nor write the store: `app/dispatches/` is denied for both in every
+  harness's compiled sandbox, under each spelling of the state folder, as the hook spool is
+  (ADR 0067 §5 class 2, amended 2026-10-07). A brief or a report written for one persona is
+  not readable by a chat running as another. A chat gets its own dispatch's report on the
+  delivery path and its own list from the app's answer, never from the file.
+- **Where the sandbox does not hold it:** in a project with no sandbox, and for a chat started
+  without it, nothing but the file's mode (0600) protects the store. Every such chat can read
+  every brief and report and can write, alter or remove a record; the mode keeps out other
+  users of the machine only. A chat already running when a build with the denial arrives
+  keeps the sandbox it started with until it is restarted.
+- **Read back with a check:** what the window draws is only a record that reads as one the
+  app would have written (`dispatchrecord::sound`): every text within its cap and none
+  holding a control character, an invisible one or one that turns the words around it (a
+  brief and a report may hold line breaks and tabs). A record that does not pass is counted
+  in the Dispatches tab as one purlis will not draw, and is never tidied and shown. When the project is
+  opened, a running record whose persona chat the reopen record does not bring back is ended
+  the same way (`dispatchrecord::settle_on_open`); with a reopen record that cannot be read,
+  none is.
+- **Why not the dispatch log:** `personas/_dispatch/` is committed, and a brief and a report
+  can hold whatever the work held. The log keeps its `handoff` row of four fields, for the
+  roster's count, and this record holds the rest on this machine only.
+- **Tier:** Clone state — session data, not readable by a sandboxed chat: collected 30 days after it was last written, unless the chat that asked or the chat that worked is one the reopen record brings back (`retention::on_open`). Deleting one costs its row in the Dispatches tab and nothing else.
+- **Git:** gitignored (under `/.charter/`).
 
 ### `app/hooks.sock`
 - **Format:** a unix socket, not a file. Each chat's hooks write one JSON line to it with the

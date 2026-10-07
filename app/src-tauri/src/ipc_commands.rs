@@ -129,6 +129,7 @@ macro_rules! app_commands {
                 workspace_panels,
                 plane_root_panels,
                 session_record,
+                dispatches::dispatches,
                 resume_session,
                 autosave::plane_fetch,
                 saving::plane_saving,

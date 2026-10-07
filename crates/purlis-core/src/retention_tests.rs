@@ -234,7 +234,8 @@ fn a_reopen_record_that_cannot_be_read_leaves_every_session_file_alone() {
         Swept {
             sessions: 0,
             traces: 0,
-            reports: 1
+            reports: 1,
+            dispatches: 0,
         }
     );
     assert!(sessions.join("3.workspace").exists());
@@ -380,4 +381,201 @@ fn every_event_a_secret_hand_out_is_traced_under_is_one_the_sweep_keeps() {
             "{event} is traced but the sweep would collect it"
         );
     }
+}
+
+// ----- dispatch records (#1452) -----
+
+/// A chat as a dispatch record names it: its number, and its ULID where it has one.
+type Named = (u32, Option<&'static str>);
+
+/// A dispatch record from chat `asker` to chat `worker`, last written `age` ago; its path.
+fn a_dispatch_record(root: &Path, asker: Named, worker: Named, age: Duration) -> PathBuf {
+    use crate::dispatchrecord::{Asker, ChatRef, Mode, Opening, Place, Worker};
+    let chat = |(chat, id): Named| ChatRef {
+        chat,
+        id: id.map(str::to_owned),
+        name: format!("chat {chat}"),
+        persona: None,
+    };
+    let record = crate::dispatchrecord::open(
+        root,
+        Opening {
+            mode: Mode::Handoff,
+            asker: Asker {
+                chat: chat(asker),
+                ..Asker::default()
+            },
+            persona: None,
+            worker: Worker {
+                chat: chat(worker),
+                ..Worker::default()
+            },
+            task: None,
+            place: Place::default(),
+            brief: "a brief".into(),
+            report_owed: false,
+        },
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let path = crate::dispatchrecord::dir(root).join(format!("{}.json", record.id));
+    let file = std::fs::File::options().write(true).open(&path).unwrap();
+    file.set_modified(SystemTime::now() - age).unwrap();
+    path
+}
+
+/// A chat the reopen record brings back.
+fn live(number: u32, id: Option<&str>) -> crate::dispatchrecord::Live {
+    crate::dispatchrecord::Live {
+        id: id.map(str::to_owned),
+        number: Some(number),
+    }
+}
+
+const SEPTEMBERS_ASKER: &str = "01K4SEPTEMBERASKER00000000";
+const SEPTEMBERS_WORKER: &str = "01K4SEPTEMBERW0RKER0000000";
+const OCTOBERS_CHAT: &str = "01K60CT0BERCHAT00000000000";
+
+#[test]
+fn a_dispatch_record_untouched_for_thirty_days_is_collected_and_a_younger_one_is_kept() {
+    let (_d, root) = plane();
+    let old = a_dispatch_record(&root, (1, None), (2, None), OLD);
+    let young = a_dispatch_record(&root, (1, None), (2, None), YOUNG);
+    // Not a record's name: never this sweep's.
+    let other = crate::dispatchrecord::dir(&root).join("notes.json");
+    aged(&other, OLD);
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert_eq!(swept.dispatches, 1);
+    assert!(!old.exists());
+    assert!(young.exists());
+    assert!(other.exists());
+}
+
+#[test]
+fn a_dispatch_record_is_kept_while_the_chat_that_asked_or_the_chat_that_worked_comes_back() {
+    let (_d, root) = plane();
+    let asked_by_live = a_dispatch_record(
+        &root,
+        (3, Some(OCTOBERS_CHAT)),
+        (40, Some(SEPTEMBERS_WORKER)),
+        OLD,
+    );
+    let worked_by_live = a_dispatch_record(
+        &root,
+        (41, Some(SEPTEMBERS_ASKER)),
+        (3, Some(OCTOBERS_CHAT)),
+        OLD,
+    );
+    let neither = a_dispatch_record(
+        &root,
+        (30, Some(SEPTEMBERS_ASKER)),
+        (13, Some(SEPTEMBERS_WORKER)),
+        OLD,
+    );
+
+    // The chat comes back under another number: it was started again in between.
+    let swept = sweep_keeping(
+        &root,
+        SystemTime::now(),
+        &[],
+        &[live(12, Some(OCTOBERS_CHAT))],
+    );
+
+    assert_eq!(swept.dispatches, 1);
+    assert!(asked_by_live.exists());
+    assert!(worked_by_live.exists());
+    assert!(!neither.exists());
+}
+
+/// A chat's number is dealt again in another launch. September's handoff from chat 2 to chat 3
+/// is not October's chats 2 and 3, and their coming back keeps nothing of it.
+#[test]
+fn a_chat_that_only_shares_a_number_with_one_long_closed_keeps_none_of_its_records() {
+    let (_d, root) = plane();
+    let septembers = a_dispatch_record(
+        &root,
+        (2, Some(SEPTEMBERS_ASKER)),
+        (3, Some(SEPTEMBERS_WORKER)),
+        OLD,
+    );
+
+    let swept = sweep_keeping(
+        &root,
+        SystemTime::now(),
+        &["2".into(), "3".into()],
+        &[live(2, Some(OCTOBERS_CHAT)), live(3, None)],
+    );
+
+    assert_eq!(swept.dispatches, 1);
+    assert!(!septembers.exists());
+}
+
+/// Only a record that names its chats by nothing but a number is kept by one.
+#[test]
+fn a_dispatch_record_with_no_chat_id_is_kept_by_its_chat_s_number() {
+    let (_d, root) = plane();
+    let numbered = a_dispatch_record(&root, (3, None), (40, None), OLD);
+    // Chat 30 is not chat 3.
+    let another = a_dispatch_record(&root, (30, None), (13, None), OLD);
+
+    let swept = sweep_keeping(
+        &root,
+        SystemTime::now(),
+        &[],
+        &[live(3, Some(OCTOBERS_CHAT))],
+    );
+
+    assert_eq!(swept.dispatches, 1);
+    assert!(numbered.exists());
+    assert!(!another.exists());
+}
+
+#[test]
+fn opening_a_project_keeps_the_dispatch_records_of_the_chats_it_brings_back_by_their_ids() {
+    let (_d, root) = plane();
+    let record = crate::reopen::Record {
+        chats: vec![crate::reopen::Chat {
+            program: "claude".into(),
+            number: Some(3),
+            identity: crate::reopen::Identity {
+                id: Some(OCTOBERS_CHAT.to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        dealt: 3,
+        ..Default::default()
+    };
+    crate::reopen::write(&root, &record).unwrap();
+    let its_own = a_dispatch_record(
+        &root,
+        (9, Some(SEPTEMBERS_ASKER)),
+        (7, Some(OCTOBERS_CHAT)),
+        OLD,
+    );
+    let a_namesakes = a_dispatch_record(
+        &root,
+        (9, Some(SEPTEMBERS_ASKER)),
+        (3, Some(SEPTEMBERS_WORKER)),
+        OLD,
+    );
+
+    let swept = on_open(&root, SystemTime::now());
+
+    assert_eq!(swept.dispatches, 1);
+    assert!(its_own.exists());
+    assert!(!a_namesakes.exists());
+}
+
+#[test]
+fn a_reopen_record_that_cannot_be_read_leaves_every_dispatch_record_alone() {
+    let (_d, root) = plane();
+    let old = a_dispatch_record(&root, (1, None), (2, None), OLD);
+    a_record_saying(&root, "{ not json");
+
+    assert_eq!(on_open(&root, SystemTime::now()).dispatches, 0);
+
+    assert!(old.exists());
 }

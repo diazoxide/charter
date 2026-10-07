@@ -1309,6 +1309,8 @@ describe("carrying out a row", () => {
         `newMemory:${JSON.stringify({ kind: "persona", name: "steward" })}`,
         `newMemory:${JSON.stringify({ kind: "shared" })}`,
         "openView:charter/shared-memory/,Shared memory",
+        // #1452: the project's dispatches, in a tab of their own.
+        "openView:charter/dispatches/,Dispatches",
         "openView:charter/todo/alpha/20260302-091400-review,Review the plan",
         "pickVault",
         "createVault",
@@ -1884,8 +1886,9 @@ describe("the palette at fifty chats", () => {
     // personas' stores and of the shared store.
     // 593 since SE-23: Your settings…, one row.
     // 601 since #1445: Set <persona>'s profile…, one row per persona.
+    // 602 since #1452: Open dispatches, one row.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(601);
+    expect(offers).toHaveLength(602);
   });
 
   /**

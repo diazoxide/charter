@@ -394,6 +394,105 @@ fn a_chat_never_reads_or_writes_any_chats_hook_spool_or_its_keys() {
     }
 }
 
+/// #1452, D-1452-11: the dispatch records hold briefs and reports, and a chat running as one
+/// persona reads none written for another. Denied for reading and writing, under both names of
+/// the state folder, in what every harness is compiled.
+#[test]
+fn every_harness_denies_a_chat_reading_or_writing_the_dispatch_records() {
+    let (plane, denied) = denied_with(None, Os::MacOs);
+    let stores: Vec<std::path::PathBuf> = [".charter", ".purlis"]
+        .iter()
+        .map(|state| plane.path().join(state).join("app").join("dispatches"))
+        .collect();
+    let held = paths(&denied, Class::Integrity, Access::ReadWrite);
+    for store in &stores {
+        assert!(held.contains(store), "{} not in {held:?}", store.display());
+    }
+
+    // Claude Code: its own sandbox's read and write denials, and its file tools'.
+    let settings = claude::settings(&compiled(denied.clone(), Os::MacOs)).expect("compiles");
+    let listed = |key: &str| -> Vec<String> {
+        settings.sandbox["filesystem"][key]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(|path| path.as_str().map(str::to_owned))
+            .collect()
+    };
+    for store in &stores {
+        // As the kernel names it, which is what the compiler hands the harness.
+        let named = super::real(store).display().to_string();
+        assert!(listed("denyRead").contains(&named), "{named}");
+        assert!(listed("denyWrite").contains(&named), "{named}");
+        assert!(
+            settings.deny.contains(&format!("Read(/{named}/**)")),
+            "{named}: {:?}",
+            settings.deny
+        );
+    }
+
+    // Codex and opencode: purlis's own wrap, whose profile denies both.
+    let codex = codex::wrap(&compiled(denied.clone(), Os::MacOs)).expect("compiles");
+    for store in &stores {
+        assert!(
+            codex
+                .denied
+                .iter()
+                .any(|it| it.path == *store && it.access == Access::ReadWrite),
+            "{}: {:?}",
+            store.display(),
+            codex.denied
+        );
+    }
+    let cwd = plane.path().join("workspaces/alpha");
+    let profile = seatbelt::profile(
+        &denied.paths,
+        &seatbelt::Own::default(),
+        &cwd,
+        std::path::Path::new("/private/tmp/chat"),
+        4040,
+        None,
+    )
+    .expect("a profile");
+    for store in &stores {
+        for named in both_firmlink_names(super::real(store)) {
+            let rule = format!(
+                "(deny file-read* file-write* (subpath \"{}\"))",
+                named.display()
+            );
+            assert!(profile.contains(&rule), "{rule} missing:\n{profile}");
+        }
+    }
+}
+
+/// The same, in a wrapped opencode chat's own compiled form.
+#[test]
+fn an_opencode_chat_is_handed_the_dispatch_records_denied_for_reading() {
+    let plane = tempfile::tempdir().expect("a plane");
+    let applied = applied_for(
+        Harness::Opencode,
+        &policy_of(&[], false),
+        &Plane::of(None),
+        plane.path(),
+        &machine(Os::MacOs),
+    )
+    .expect("compiles");
+    let Form::Opencode(wrap) = applied.form() else {
+        panic!("compiled for opencode");
+    };
+    for state in [".charter", ".purlis"] {
+        let store = plane.path().join(state).join("app").join("dispatches");
+        assert!(
+            wrap.denied
+                .iter()
+                .any(|it| it.path == store && it.access == Access::ReadWrite),
+            "{}: {:?}",
+            store.display(),
+            wrap.denied
+        );
+    }
+}
+
 #[test]
 fn a_chat_never_writes_the_approvals_a_person_gave() {
     let (_plane, denied) = denied_with(None, Os::Linux);
