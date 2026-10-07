@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { SandboxGrant } from "../bindings";
 import { grantedGroup, grantSaid } from "./GrantedList";
 import type { LiveSetting } from "./groups";
+import { useSandboxCommands } from "../sandboxAsked";
 
 /**
  * **Settings › Sandbox › Granted** (#1348): every grant at every level, who granted it and when,
@@ -93,9 +94,14 @@ describe("the Granted list", () => {
     );
     expect(within(rows[2]).queryByRole("button")).toBeNull();
 
+    // What reads the chats left on an older sandbox hears that a sandbox command returned
+    // (#1428): the revoked folder is kept where no watcher reports a write.
+    const heard = renderHook(() => useSandboxCommands());
+    const before = heard.result.current;
     await userEvent.click(screen.getByRole("button", { name: "Revoke writing /opt/cache" }));
     await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
     expect(asked).toEqual([{ plane: PLANE, id: MINE.id }]);
+    await waitFor(() => expect(heard.result.current).toBeGreaterThan(before));
   });
 
   it("says when nothing is granted", async () => {

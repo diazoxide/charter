@@ -4,10 +4,13 @@ import {
   curateRows,
   curateSubjectOf,
   menuRows,
+  noteOf,
+  titleOf,
   type Catalogued,
   type MenuOn,
   type Offer,
 } from "./actions";
+import { stateOf, useChatsHere, useChatsSelect } from "./chatState";
 
 /**
  * The window's context menus: right-click on a thing, and charter offers what it can do to it.
@@ -207,23 +210,30 @@ function Row({
    *  parent already said the rest. Its accessible name too. */
   words?: string;
 }) {
-  const note = offer.available ? offer.note : undefined;
   const noted = useId();
+  // A row about a chat that is mid-turn says so, and one about a chat that reports no state
+  // says that, both read as the menu is drawn (`Offer.midTurn`, `Offer.noState`).
+  const about = offer.midTurn?.session ?? offer.noState?.session;
+  const state = useChatsSelect(useChatsHere(), (states) =>
+    about === undefined ? undefined : stateOf(states, about),
+  );
+  const said = words ?? titleOf(offer, state === "running");
+  const note = offer.available ? noteOf(offer, state === "unknown") : undefined;
   return (
     <ContextMenu.Item
       className={dangerous ? "menu-row ends-it" : "menu-row"}
       disabled={!offer.available}
-      title={offer.reason || offer.note || undefined}
+      title={offer.reason || noteOf(offer, state === "unknown") || undefined}
       // **The row's NAME is the catalogue's title and nothing else**, and the note is its
       // description. Left to the content, an accessible name would be the title with the
       // consequence run onto the end of it — "End chat 3 steward Ends the program it runs." —
       // so every row would announce as a paragraph and no surface could ask for one by name.
       // The note is still read, as a description, which is where a consequence belongs.
-      aria-label={words ?? offer.title}
+      aria-label={said}
       aria-describedby={note ? noted : undefined}
       onSelect={() => onPress(offer)}
     >
-      <span className="menu-title">{words ?? offer.title}</span>
+      <span className="menu-title">{said}</span>
       {/* What the row costs, under its words. Only where the catalogue wrote one, and never
           for a row that cannot run — then the tooltip and the grey say what is true instead. */}
       {note && (

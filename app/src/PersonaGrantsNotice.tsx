@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { commands, type GrantsHeld, type PlaneId } from "./bindings";
 import { Notice } from "./Notice";
 
@@ -9,9 +9,11 @@ import { Notice } from "./Notice";
  * grants until the person allows its own here: no chat widens what it reaches on its own say.
  *
  * **Allow** records it (`allow_persona_grants`). A chat's sandbox is compiled as it starts, so
- * the persona's hosts reach it from its next start; **Restart now** starts it again resuming its
- * conversation (`restart_chat`), once its turn has ended, so a turn is never cut off. **Keep**
- * puts the Notice away and changes nothing: it is shown again when the tab opens again.
+ * the persona's hosts reach it from its next start; **Restart now** asks for the chat's restart
+ * on its conversation (`onRestart`), which the window makes once its turn has ended, so a turn
+ * is never cut off. Whether one is owed is the window's to say (`owed`), not this Notice's to
+ * remember: after a restart that was refused nothing is owed, and Restart now asks again.
+ * **Keep** puts the Notice away and changes nothing: it is shown again when the tab opens again.
  *
  * **Where an administrator's policy forbids a persona's own hosts** (#1343), allowing them would
  * reach nothing: the Notice says so, naming the policy and who set it, and offers no Allow.
@@ -20,19 +22,21 @@ export function PersonaGrantsNotice({
   plane,
   session,
   running,
+  owed,
   onRestart,
 }: {
   plane: PlaneId;
   session: number;
-  /** Whether the chat is mid-turn: a restart waits for the turn to end. */
+  /** Whether the chat is mid-turn: the Notice then says its restart waits for the turn to end. */
   running: boolean;
-  /** Starts the chat again, resuming its conversation, in its pane. */
+  /** Whether the window owes this chat a restart now: one asked for and not yet made. */
+  owed: boolean;
+  /** Asks for the chat's restart on its conversation. The window waits for its turn to end. */
   onRestart: () => void;
 }) {
   const [held, setHeld] = useState<GrantsHeld>();
   const [allowed, setAllowed] = useState(false);
   const [kept, setKept] = useState(false);
-  const [restarting, setRestarting] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -48,16 +52,6 @@ export function PersonaGrantsNotice({
     };
   }, [plane, session]);
 
-  // The restart the person asked for, once the chat's turn has ended: asked once. The pane
-  // then shows the new run, whose hold is gone.
-  const fired = useRef(false);
-  useEffect(() => {
-    if (restarting && !running && !fired.current) {
-      fired.current = true;
-      onRestart();
-    }
-  }, [restarting, running, onRestart]);
-
   if (held === undefined || kept) return null;
   const persona = held.persona ?? "its persona";
 
@@ -68,10 +62,12 @@ export function PersonaGrantsNotice({
         persona={held.persona}
         at="pane"
         label="Persona's hosts allowed"
-        fixes={[{ label: "Restart now", onPress: () => setRestarting(true) }]}
+        // Asking twice asks for one restart: the window holds it from the first press, and
+        // the pane then shows the new run, whose hold is gone.
+        fixes={[{ label: "Restart now", onPress: onRestart }]}
       >
         Allowed. This chat reaches {persona}'s hosts from its next start.
-        {restarting && " It restarts, resuming its conversation, when this turn ends."}
+        {owed && running && " It restarts, resuming its conversation, when this turn ends."}
       </Notice>
     );
 

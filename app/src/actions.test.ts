@@ -27,6 +27,10 @@ import {
   type Doing,
   type Now,
   type Offer,
+  RESTART_NOTE,
+  noteOf,
+  restartNoteNoState,
+  titleOf,
 } from "./actions";
 import {
   noTabs,
@@ -63,6 +67,7 @@ function doing(): Doing & { calls: string[] } {
     renameTab: note("renameTab"),
     linkWorkItem: note("linkWorkItem"),
     startFresh: note("startFresh"),
+    restartChat: note("restartChat"),
     unlinkWorkItem: async (...args: unknown[]) => {
       note("unlinkWorkItem")(...args);
       return { ok: true };
@@ -1927,18 +1932,18 @@ describe("the palette at fifty chats", () => {
       return offers.lookups;
     }
 
-    it("asks for eight rows per tab and never walks the list", () => {
+    it("asks for nine rows per tab and never walks the list", () => {
       const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
 
-      // 50 tabs × the eight ids a chat menu lists (the two work link rows are V60's, Start
-      // fresh is NO-3's).
+      // 50 tabs × the nine ids a chat menu lists (the two work link rows are V60's, Start
+      // fresh is NO-3's, Restart chat is #1428's).
       // **Not fifty scans of 291 rows**, which is
       // what this cost before the lookup was built once for the window — and the number that
       // does not move when the catalogue grows again.
-      expect(strip(offers)).toBe(400);
+      expect(strip(offers)).toBe(450);
     });
 
-    it("is the same 400 whether the catalogue carries the pieces or not", () => {
+    it("is the same 450 whether the catalogue carries the pieces or not", () => {
       // The property, not the timing: the cost of a menu is flat in the length of the list it
       // reads. A scan is not, which is why #174's hundred rows needed this first.
       const small = new Counting(
@@ -1947,7 +1952,7 @@ describe("the palette at fifty chats", () => {
         ),
       );
 
-      expect(strip(small)).toBe(400);
+      expect(strip(small)).toBe(450);
     });
   });
 });
@@ -2414,6 +2419,70 @@ describe("a branch's file and folder rows (FM-10)", () => {
       "revealPath:svc/fix-it:src",
       "shellInFolder:svc/fix-it:src",
       "startChatHere:svc/fix-it:src",
+    ]);
+  });
+});
+
+describe("Restart chat on a chat's tab (#1428)", () => {
+  const tabs = openTab(noTabs(), 7, "one");
+  const tab = tabs.order[0];
+  const row = (over: Partial<Now>) =>
+    catalogued(catalogue(now({ tabs, ...over }))).get(`tab.restart:${tab}`);
+
+  it("restarts the tab's chat, and says what it keeps and what it changes", async () => {
+    const offers = catalogue(now({ tabs, restartable: () => true }));
+    const offer = catalogued(offers).get(`tab.restart:${tab}`);
+
+    expect(offer).toMatchObject({
+      title: "Restart chat one",
+      available: true,
+      note: RESTART_NOTE,
+    });
+    const hands = doing();
+    await run(offers, `tab.restart:${tab}`, hands);
+    expect(hands.calls).toEqual([`restartChat:${tab}`]);
+  });
+
+  it("says a chat mid-turn restarts when the turn ends, read as the row is drawn", () => {
+    const offer = row({ restartable: () => true });
+
+    expect(offer?.midTurn).toEqual({
+      session: 7,
+      title: "Restart chat one when this turn ends",
+    });
+    expect(offer && titleOf(offer, true)).toBe("Restart chat one when this turn ends");
+    expect(offer && titleOf(offer, false)).toBe("Restart chat one");
+  });
+
+  it("says the wait in its note too, so the palette and the menu agree", () => {
+    // The palette shows a row's plain title (D-1428-7) and its note.
+    expect(RESTART_NOTE).toBe(
+      "It keeps its conversation and starts on this project's settings as they are now. Mid-turn, it restarts when the turn ends.",
+    );
+  });
+
+  it("says a chat that reports no state restarts at once, and promises no wait for it", () => {
+    const offer = row({ restartable: () => true });
+
+    expect(offer?.noState).toEqual({ session: 7, note: restartNoteNoState("one") });
+    expect(offer && noteOf(offer, false)).toBe(RESTART_NOTE);
+    const unknown = offer && noteOf(offer, true);
+    expect(unknown).toBe(
+      "one reports no state, so purlis cannot tell whether it is mid-turn, and restarts it at once. It keeps its conversation and starts on this project's settings as they are now.",
+    );
+    expect(unknown).not.toMatch(/when the turn ends/);
+  });
+
+  it("has no row for a chat that cannot be restarted, a shell among them", () => {
+    expect(row({ restartable: () => false })).toBeUndefined();
+    expect(row({})).toBeUndefined();
+  });
+
+  it("is below the line in the tab's menu, above Start fresh and End chat", () => {
+    expect(menuOn({ on: "chat", tab }).below).toEqual([
+      `tab.restart:${tab}`,
+      `tab.fresh:${tab}`,
+      `tab.close:${tab}`,
     ]);
   });
 });

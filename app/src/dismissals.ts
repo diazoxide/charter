@@ -38,7 +38,9 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 /**
  * **The families of cause a dismissal is kept for**, each read from the core by a source that
  * settles it: a dormant pin (`plane_pins`' `missing`), what a relaunch did to a chat
- * (`opened_chats`), and a doctor finding that stands as a Notice (`plane_doctor`, #1250). A family is the cause up to its first `:`.
+ * (`opened_chats`), a doctor finding that stands as a Notice (`plane_doctor`, #1250), and a
+ * sandbox change that left chats behind (`chats_on_older_sandbox`, #1428). A family is the cause
+ * up to its first `:`.
  */
 export const KEPT: ReadonlySet<string> = new Set([
   "pin-dormant",
@@ -46,6 +48,7 @@ export const KEPT: ReadonlySet<string> = new Set([
   "chat-guessed",
   "chat-fresh",
   "doctor-finding",
+  "sandbox-changed",
 ]);
 
 /** The most causes kept per project. A bound on what a hand-edited file can make the window

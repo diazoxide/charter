@@ -399,6 +399,17 @@ describe("Settings › Project › Sandbox", () => {
     );
   });
 
+  it("says a change applies to a chat from its next start, and how to restart one", async () => {
+    core();
+    const page = await atSandbox();
+
+    await waitFor(() =>
+      expect(page).toHaveTextContent(
+        "A change here applies to a chat from its next start. A chat that is running keeps the sandbox it started with until you restart it, with Restart chat on its tab's menu.",
+      ),
+    );
+  });
+
   it("says a chat can read what you can, so no login of yours reads as hidden", async () => {
     core();
     const page = await atSandbox();

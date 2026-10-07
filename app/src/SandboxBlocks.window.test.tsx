@@ -125,9 +125,9 @@ function core(restart: { error?: string } = {}) {
         return {
           said: "Allowed for this chat. The chat restarts on the same conversation once its turn ends, and is told to retry.",
         };
-      if (cmd === "restart_chat_for_grant") {
+      if (cmd === "restart_chat") {
         if (restart.error !== undefined) throw new Error(restart.error);
-        return { chat: { ...CHAT, session: 9, resumed: "c1" }, not_yet: null };
+        return { chat: { ...CHAT, session: 9, resumed: "c1" }, notices: [], not_yet: null };
       }
       if (cmd === "restart_chat_without_sandbox") return { ...CHAT, session: 11, resumed: "c1" };
       if (cmd === "owed_restarts") return [];
@@ -260,9 +260,7 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     );
     // Its turn has ended, so it restarts at once, in its own pane.
     await waitFor(() =>
-      expect(asked("restart_chat_for_grant")).toEqual([
-        { plane: PLANE, session: 4, columns: 80, rows: 24 },
-      ]),
+      expect(asked("restart_chat")).toEqual([{ plane: PLANE, session: 4, columns: 80, rows: 24 }]),
     );
     expect(await screen.findByText("session 9")).toBeInTheDocument();
   });
@@ -274,7 +272,7 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     await userEvent.click(within(notice).getByRole("button", { name: "Keep blocked" }));
     await waitFor(() => expect(screen.queryByRole("status", { name: "Sandbox block" })).toBeNull());
     expect(asked("allow_sandbox_block")).toEqual([]);
-    expect(asked("restart_chat_for_grant")).toEqual([]);
+    expect(asked("restart_chat")).toEqual([]);
   });
 
   it("offers Always for every chat here on this machine, or everyone in the project", async () => {
@@ -375,10 +373,10 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(asked("restart_chat_for_grant")).toEqual([]);
+    expect(asked("restart_chat")).toEqual([]);
 
     await act(() => emit("chat-moved", WAITING));
-    await waitFor(() => expect(asked("restart_chat_for_grant")).toHaveLength(1));
+    await waitFor(() => expect(asked("restart_chat")).toHaveLength(1));
     expect(await screen.findByText("session 9")).toBeInTheDocument();
   });
 });
@@ -468,19 +466,19 @@ describe("a restart a chat is owed for a grant (#1342)", () => {
     await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
     const restart = await screen.findByRole("status", { name: "Restart" });
     expect(restart).toHaveTextContent("restart it when you are ready");
-    expect(asked("restart_chat_for_grant")).toEqual([]);
+    expect(asked("restart_chat")).toEqual([]);
     await userEvent.click(within(restart).getByRole("button", { name: "Restart now" }));
     expect(await screen.findByText("session 9")).toBeInTheDocument();
   });
 
   it("says a failed restart on the chat's pane, with Restart now", async () => {
-    await aChat({ error: "purlis did not restart chat 4: it has no conversation to resume yet." });
+    await aChat({ error: "purlis did not restart chat 4: it has no conversation to resume." });
     await act(() => emit("chat-moved", WAITING));
     await act(() => emit("chat-sandbox-blocked", HOST));
     const notice = await screen.findByRole("status", { name: "Sandbox block" });
     await userEvent.click(within(notice).getByRole("button", { name: "Allow for this chat" }));
     const trouble = await screen.findByRole("status", { name: "Restart" });
-    await waitFor(() => expect(trouble).toHaveTextContent("no conversation to resume yet"));
+    await waitFor(() => expect(trouble).toHaveTextContent("no conversation to resume"));
     expect(within(trouble).getByRole("button", { name: "Restart now" })).toBeInTheDocument();
   });
 });

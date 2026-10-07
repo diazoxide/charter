@@ -484,6 +484,21 @@ fn a_chats_own_grants_reach_its_compiled_sandbox_and_no_other_start() {
     let granted = compiled_with(&project, Os::MacOs, &chat);
     assert!(granted.hosts.contains(&"api.example.com".to_owned()));
     assert_eq!(granted.writable, std::slice::from_ref(&cache));
+    // Recorded with what the chat is held to, so a start compiled later can be told from this
+    // one by the folders it may write (#1428).
+    let applied = crate::sandbox::applied_of(
+        crate::harness::Harness::ClaudeCode,
+        crate::sandbox::compiler(crate::harness::Harness::ClaudeCode).expect("a compiler"),
+        &granted,
+        &project.root,
+        &Machine {
+            env: crate::secrets::Env::of(&[]),
+            home: Some(project.home.clone()),
+            os: Os::MacOs,
+        },
+    )
+    .expect("compiles");
+    assert_eq!(applied.confines().writable, std::slice::from_ref(&cache));
 
     // Another chat of the same project, started with no grant of its own: none of it.
     let other = compiled_with(&project, Os::MacOs, &Grants::default());
