@@ -310,6 +310,16 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
             purlis_core::personas::one_line(&to),
             outcome.word()
         )),
+        // The person started this task from that chat's tab, and that chat is gone: the
+        // report is the person's, and stays with this chat for them (D-1443-9).
+        Ok(Answer::Reported {
+            to,
+            kept_for: Some(kept),
+        }) if kept == purlis_core::handback::FOR_THE_PERSON => Ok(format!(
+            "{REPORT_SAYS} '{}' has closed, and the person started this task from its tab, so \
+             the report is theirs: this chat is marked as needing them, and they read it here.",
+            purlis_core::personas::one_line(&to),
+        )),
         Ok(Answer::Reported {
             to,
             kept_for: Some(kept),

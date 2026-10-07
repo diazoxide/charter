@@ -689,6 +689,8 @@ impl StandIn {
                 // The app's own record of the session record it wrote for the chat.
                 record: Some("workspaces/alpha/sessions/20261007-143900-queue.md".to_owned()),
                 by_person: false,
+                unreported: false,
+                stopped: false,
             }),
         };
         let asker_open = self.record(from.chat).is_some();

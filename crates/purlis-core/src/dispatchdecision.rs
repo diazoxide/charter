@@ -520,9 +520,13 @@ pub fn lineage_of(
     let owes_work = |number: u32| {
         working(number)
             && record(number).is_some_and(|chat| {
-                chat.from
-                    .as_ref()
-                    .is_none_or(|from| from.report != crate::reopen::Owed::Sent)
+                chat.from.as_ref().is_none_or(|from| {
+                    // Reported, by itself or by the app in its place (#1443).
+                    !matches!(
+                        from.report,
+                        crate::reopen::Owed::Sent | crate::reopen::Owed::Failed
+                    )
+                })
             })
     };
     // The tasks it dispatched that still owe it work. A handoff's work is not this chat's to
@@ -549,6 +553,56 @@ pub fn lineage_of(
         chain,
         running: u32::try_from(running).unwrap_or(u32::MAX),
         lineage: u32::try_from(lineage.len()).unwrap_or(u32::MAX),
+    }
+}
+
+/// Where a persona chat stands, as its asking chat sees it (#1443): what a chat's own list of
+/// the tasks it dispatched says of each, and what the window marks a task with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    /// At work, and its report is still to come.
+    Running,
+    /// Stopped on something only the person can answer, in its own tab: a permission prompt,
+    /// a question, a Notice. Its asking chat cannot answer for the person, and is told to wait.
+    WaitingOnOperator,
+    /// It sent its report. It stays open, to be read or typed in, until it is closed.
+    Reported,
+    /// Its program ended before it reported, and the asking chat was told `failed`.
+    Ended,
+}
+
+impl Standing {
+    /// The words a chat's list of its dispatches says.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::WaitingOnOperator => "waiting on the operator",
+            Self::Reported => "reported",
+            Self::Ended => "ended without a report",
+        }
+    }
+
+    /// Whether its asking chat still has it in flight: what closing that chat asks about.
+    pub fn in_flight(self) -> bool {
+        matches!(self, Self::Running | Self::WaitingOnOperator)
+    }
+}
+
+/// Where a persona chat stands, from the app's own record of it: what it `owes` its asking
+/// chat, whether its program has `ended`, and whether it `waits` on the person. Nothing the
+/// persona chat says is read.
+///
+/// A report settles it whatever came after: a chat that reported and then stopped on a prompt
+/// has reported. One that has not, and whose program is gone, has ended, before the app's own
+/// `failed` report is even written.
+pub fn standing(owes: crate::reopen::Owed, ended: bool, waits: bool) -> Standing {
+    use crate::reopen::Owed;
+    match owes {
+        Owed::Sent => Standing::Reported,
+        Owed::Failed => Standing::Ended,
+        Owed::Due | Owed::Nothing if ended => Standing::Ended,
+        Owed::Due | Owed::Nothing if waits => Standing::WaitingOnOperator,
+        Owed::Due | Owed::Nothing => Standing::Running,
     }
 }
 
@@ -1413,6 +1467,41 @@ mod tests {
             assert!(!said.contains('\n'), "{said}");
             assert!(said.matches(". ").count() >= 1, "two sentences: {said}");
         }
+    }
+
+    #[test]
+    fn a_persona_chat_at_a_permission_prompt_stands_waiting_on_the_operator() {
+        // #1443: what its asking chat's list says of it.
+        assert_eq!(
+            standing(Owed::Due, false, true),
+            Standing::WaitingOnOperator
+        );
+        assert_eq!(
+            Standing::WaitingOnOperator.word(),
+            "waiting on the operator"
+        );
+        assert_eq!(standing(Owed::Due, false, false), Standing::Running);
+        assert_eq!(Standing::Running.word(), "running");
+    }
+
+    #[test]
+    fn a_report_settles_where_a_persona_chat_stands_whatever_it_does_afterwards() {
+        for (ended, waits) in [(false, false), (false, true), (true, false), (true, true)] {
+            assert_eq!(standing(Owed::Sent, ended, waits), Standing::Reported);
+            assert_eq!(standing(Owed::Failed, ended, waits), Standing::Ended);
+        }
+        assert_eq!(Standing::Reported.word(), "reported");
+        // A program that is gone is not waiting on anybody.
+        assert_eq!(standing(Owed::Due, true, true), Standing::Ended);
+        assert_eq!(Standing::Ended.word(), "ended without a report");
+    }
+
+    #[test]
+    fn only_a_chat_still_to_report_is_in_flight() {
+        assert!(Standing::Running.in_flight());
+        assert!(Standing::WaitingOnOperator.in_flight());
+        assert!(!Standing::Reported.in_flight());
+        assert!(!Standing::Ended.in_flight());
     }
 
     #[test]

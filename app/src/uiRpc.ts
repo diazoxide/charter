@@ -620,6 +620,20 @@ export const commands = {
 	 */
 	askPersonaChat: (plane: PlaneId, session: number, persona: string, name: string, ask: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("ask_persona_chat", { plane, session, persona, name, ask, columns, rows })),
 	/**
+	 *  What closing chat `session` would do with the chats below it: its persona chats, each with
+	 *  where it stands and whether it closes too, and every chat below it that is at work.
+	 */
+	personaChatsOf: (plane: PlaneId, session: number) => typedError<ClosingChat, string>(__TAURI_INVOKE("persona_chats_of", { plane, session })),
+	/**
+	 *  **Stop them**, your answer to what closing chat `session` asks: every chat at work below
+	 *  it is ended, deepest first, and then it is closed (`then: close`), in one step, so it
+	 *  cannot start another in between. For a Smart close (`then: smart_close`) the chats below
+	 *  are ended now, and any it starts while it writes its record are ended as it closes.
+	 *  Answers every chat this closed. A stopped task's asking chat is told it was stopped by
+	 *  the operator.
+	 */
+	closeChatStopping: (plane: PlaneId, session: number, then: ThenClose) => typedError<number[], string>(__TAURI_INVOKE("close_chat_stopping", { plane, session, then })),
+	/**
 	 *  Every chat this plane has open that is running on instructions the plane has changed since
 	 *  it started (charter#369): its tab is marked, and the mark names the files. The window asks
 	 *  again whenever the plane changes on disk.
@@ -2331,6 +2345,21 @@ export type ChosenInstruction = {
 	text: string,
 };
 
+/**
+ *  What closing chat `session` would do with the chats below it: what the close dialog says
+ *  before it is answered.
+ */
+export type ClosingChat = {
+	/**  The persona chats it dispatched as tasks, each with where it stands. */
+	tasks: PersonaChat[],
+	/**
+	 *  Every chat below it that is at work, by name, deepest first: its tasks that have not
+	 *  reported, the chats it handed work to that are mid-turn, and the same below those. With
+	 *  any, the close asks once: keep them running, or stop them.
+	 */
+	running: string[],
+};
+
 /**  What a palette command does. */
 export type CommandDoes = 
 /**  Opens one of its views, as the view's own button does. */
@@ -3200,6 +3229,16 @@ export type HandedFromNote = {
 	 *  opens it from the Chats section (`open_chat_tab`).
 	 */
 	tab: boolean,
+	/**
+	 *  Whether, as a task, it has sent its one report: it stays open, marked reported,
+	 *  until it is closed.
+	 */
+	reported: boolean,
+	/**
+	 *  Whether, as a task, it ended without a report, and purlis told the chat that asked
+	 *  that it failed.
+	 */
+	unreported: boolean,
 };
 
 /**
@@ -4043,6 +4082,43 @@ export type Percent = {
 	value: number,
 	tone: GaugeTone,
 };
+
+/**  One persona chat a chat dispatched as a task, as that chat sees it. */
+export type PersonaChat = {
+	session: number,
+	/**  The name the person sees it under: its task's name. */
+	name: string,
+	/**  The persona it runs as. */
+	persona: string | null,
+	state: PersonaChatState,
+	/**
+	 *  [`PersonaChatState`] in the words a chat's list of its dispatches says: `running`,
+	 *  `waiting on the operator`, `reported`, `ended without a report`.
+	 */
+	said: string,
+	/**
+	 *  Whether closing the chat that asked for it closes it too: it has reported, it is not
+	 *  at work, and its session record is written or can be asked for ([`close_reported`]).
+	 */
+	closes_with_its_asker: boolean,
+};
+
+/**
+ *  Where a persona chat stands (`purlis_core::dispatchdecision::Standing`), as the window and
+ *  a chat's own list of its dispatches are told it.
+ */
+export type PersonaChatState = 
+/**  At work, and its report is still to come. */
+"running" | 
+/**
+ *  Stopped on something only you can answer, in its own tab: a permission prompt or a
+ *  question.
+ */
+"waiting_on_operator" | 
+/**  It sent its report, and stays open until it is closed. */
+"reported" | 
+/**  Its program ended before it reported, and the chat that asked was told it failed. */
+"ended";
 
 /**  The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`). */
 export type PersonaHosts = {
@@ -5460,6 +5536,13 @@ export type ThemeOption = {
 	/**  What the select shows. */
 	label: string,
 };
+
+/**  What a close that stops the chats below does next with the chat itself. */
+export type ThenClose = 
+/**  Close it now. */
+"close" | 
+/**  Smart close it: it is asked for its session record, and closes when that is saved. */
+"smart_close";
 
 /**  Everything This machine lists. */
 export type ThisMachine = {

@@ -384,6 +384,9 @@ pub struct Chats {
     /// record each will have: decided, not yet open, and counted as if they were. Each is
     /// taken out when its start ends, whichever way ([`Reserved`]). **In memory only.**
     reserved: Mutex<HashMap<u32, Chat>>,
+    /// The chats whose close stops every chat at work below them (#1443): the person's "Stop
+    /// them", given as a Smart close began, kept for the close that ends it. **In memory only.**
+    stops_below: Mutex<std::collections::HashSet<u32>>,
     /// What each chat is owed once its turn ends (#1342): a restart on its conversation, with
     /// each sentence it is to be told, in order, as its first message. Queued, so a second
     /// grant before the restart adds to the first rather than replacing it.
@@ -475,6 +478,7 @@ impl Chats {
             records: Mutex::new(HashMap::new()),
             deciding: Mutex::new(()),
             reserved: Mutex::new(HashMap::new()),
+            stops_below: Mutex::new(std::collections::HashSet::new()),
             owed: Mutex::new(HashMap::new()),
             restarting: Mutex::new(std::collections::HashSet::new()),
             told: Mutex::new(HashMap::new()),
@@ -1671,6 +1675,81 @@ impl Chats {
         known.iter().find(|one| one.chat == session)?;
         let mut told = lock(&self.told);
         purlis_core::awareness::answer(&known, session, tell, told.entry(session).or_default())
+    }
+
+    /// The report chat `session` still owes as a task, where it owes one (#1443): its lineage
+    /// record, for the app to report in its place. `None` for any other chat, and for one
+    /// that has reported or been reported for. A read: what it owed is marked answered by
+    /// [`Self::owes`] once the report is kept, under the caller's hold of [`Self::deciding`].
+    pub fn owed_task_report(&self, session: u32) -> Option<purlis_core::reopen::HandedFrom> {
+        use purlis_core::reopen::{Mode, Owed};
+
+        let open = lock(&self.open);
+        let from = open.get(&session)?.chat.from.as_ref()?;
+        (from.mode == Mode::Task && from.report == Owed::Due).then(|| from.clone())
+    }
+
+    /// Every chat chat `asker` started that is still open, as a task or by a handoff, by
+    /// number, lowest first, each with its lineage record: what is below `asker`.
+    pub fn started_by(&self, asker: u32) -> Vec<(u32, purlis_core::reopen::HandedFrom)> {
+        let mut started: Vec<_> = lock(&self.open)
+            .iter()
+            .filter_map(|(number, one)| {
+                let from = one.chat.from.as_ref()?;
+                (from.chat == asker && *number != asker).then(|| (*number, from.clone()))
+            })
+            .collect();
+        started.sort_by_key(|(number, _)| *number);
+        started
+    }
+
+    /// The deciding lock, where nobody holds it now ([`Self::deciding`]).
+    pub fn try_deciding(&self) -> Option<MutexGuard<'_, ()>> {
+        match self.deciding.try_lock() {
+            Ok(held) => Some(held),
+            Err(std::sync::TryLockError::Poisoned(held)) => Some(held.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
+    }
+
+    /// Remembers, or forgets, that chat `session`'s close stops every chat at work below it:
+    /// the person's answer, given as its Smart close began, for the close that ends it.
+    pub fn stop_below_on_close(&self, session: u32, stop: bool) {
+        let mut stopping = lock(&self.stops_below);
+        if stop {
+            stopping.insert(session);
+        } else {
+            stopping.remove(&session);
+        }
+    }
+
+    /// Whether chat `session`'s close stops the chats below it, taken: asked once, as it closes.
+    pub fn takes_stop_below(&self, session: u32) -> bool {
+        lock(&self.stops_below).remove(&session)
+    }
+
+    /// The persona chats chat `asker` has open as tasks, by number, lowest first, each with
+    /// its lineage record (#1443): what that chat's list of its dispatches is made from, and
+    /// what closing it asks about.
+    pub fn tasks_of(&self, asker: u32) -> Vec<(u32, purlis_core::reopen::HandedFrom)> {
+        let mut tasks: Vec<_> = lock(&self.open)
+            .iter()
+            .filter_map(|(number, one)| {
+                let from = one.chat.from.as_ref()?;
+                (from.chat == asker
+                    && *number != asker
+                    && from.mode == purlis_core::reopen::Mode::Task)
+                    .then(|| (*number, from.clone()))
+            })
+            .collect();
+        tasks.sort_by_key(|(number, _)| *number);
+        tasks
+    }
+
+    /// Whether the app is quitting or letting go of the project: the chats' programs are
+    /// being ended by the app, and every chat is kept for the next launch.
+    pub fn ending(&self) -> bool {
+        self.ending.load(Ordering::SeqCst)
     }
 
     /// Chat `session`'s own record, as the app keeps it while it is open: what a handoff from it
