@@ -233,7 +233,7 @@ fn refused(
 }
 
 /// Lays `template` into the project at `root`: its personas, each with the `memory/` and
-/// `refs/` every persona has and its sub-agent; the starter of `workspace`, when one is named
+/// `refs/` every persona has (and no sub-agent: a persona runs as its own chat, #1451); the starter of `workspace`, when one is named
 /// ([`seed_workspace`]); and its ask rules in every harness that holds command permissions
 /// (Claude Code and opencode). Codex's command rules live in `CODEX_HOME` or a trusted project's `.codex/rules`, which charter does not write, so charter's own guard applies there.
 ///
@@ -244,10 +244,9 @@ fn refused(
 /// Nothing is written through a link.
 ///
 /// **Whole, or not at all.** Every harness file is asked first ([`check`]). Then the personas
-/// and their sub-agents are laid out, the ask rules written, and the workspace's starter given
-/// last. When a step fails, everything this call wrote is taken back — the persona directories
-/// it made, the sub-agents that were not there before it, and the harness files and
-/// `workspace.md` byte for byte as they were — and the reason is the answer. A file charter
+/// are laid out, the ask rules written, and the workspace's starter given last. When a step
+/// fails, everything this call wrote is taken back — the persona directories it made, and the
+/// harness files and `workspace.md` byte for byte as they were — and the reason is the answer. A file charter
 /// cannot read to keep stops it before anything is laid out, since it could not be put back.
 /// Only when it all landed is every workspace layer rewritten to carry the rules.
 pub fn apply(
@@ -325,15 +324,10 @@ pub(crate) fn apply_checked(
 struct Made {
     /// Persona directories it created: everything in them is its own.
     personas: Vec<std::path::PathBuf>,
-    /// Sub-agents it generated.
-    agents: Vec<std::path::PathBuf>,
 }
 
 impl Made {
     fn take_back(&self, root: &std::path::Path) {
-        for agent in &self.agents {
-            let _ = std::fs::remove_file(agent);
-        }
         for dir in &self.personas {
             // Only a real directory under the project: never through a link that appeared
             // since.
@@ -379,28 +373,12 @@ fn lay(
             applied.written.push(rel.clone());
         }
     }
-    let state = crate::personaverbs::state_dir(root);
     for persona in personas {
         for kept in ["memory/.gitkeep", "refs/.gitkeep"] {
             let rel = format!("personas/{persona}/{kept}");
             if create(root, &rel, "")? {
                 applied.written.push(rel);
             }
-        }
-        // Its sub-agent, as `charter persona create` writes one, so a chat can hand work to it
-        // from the start. A hand-written agent at the name is left alone, as it is there.
-        let rel = format!(".claude/agents/{persona}.md");
-        // Only an agent this call brings into being is its to take back: one that was there
-        // (an earlier persona's, refreshed now) stays.
-        let new = std::fs::symlink_metadata(root.join(&rel)).is_err();
-        let mut quiet = |_: crate::repocmd::Say| {};
-        if crate::personaverbs::agents::write_agent(root, &state, persona, &mut quiet)
-            == crate::personaverbs::agents::Outcome::Written
-        {
-            if new {
-                made.agents.push(root.join(&rel));
-            }
-            applied.written.push(rel);
         }
     }
     for pattern in &template.ask {

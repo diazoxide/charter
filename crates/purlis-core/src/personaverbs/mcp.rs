@@ -1,6 +1,11 @@
-//! A persona's MCP servers: what its `mcp.json` declares, how a declared server is carried
+//! A persona's MCP servers: what its `mcp.json` declares, how a declared server was carried
 //! into its generated sub-agent, and the consent that decides whether that server is handed
 //! the persona's vault — `persona.mcp_*` and `charter/mcpseen.py`.
+//!
+//! **Nothing starts these servers now** (#1451). The generated sub-agent declared them, and it
+//! is retired: `persona lint` and `persona use` say so. What is declared is still read, and
+//! the approvals record and its consent line are kept as they were, for the work that gives a
+//! persona chat its persona's servers, which is not in this version yet (#1460).
 //!
 //! # The consent line IS the approval
 //!
@@ -8,9 +13,8 @@
 //! <vault> …` only when this machine approved it, and what was approved is the SHA-256 of
 //! the line [`describe`] prints for it. So the line must be the same bytes Python prints, or
 //! every approval recorded by either charter lapses under the other: the escape, the
-//! quoting, the key order and the ceiling are all Python's, and the recorded scenario
-//! `persona-sync-agents-wraps-an-approved-server-in-its-vault` holds a fingerprint Python
-//! wrote.
+//! quoting, the key order and the ceiling are all Python's, and `mcp_tests.rs` holds the
+//! fingerprints Python wrote.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

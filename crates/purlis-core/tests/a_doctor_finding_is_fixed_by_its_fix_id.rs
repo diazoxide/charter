@@ -231,6 +231,7 @@ fn a_fix_id_is_spelled_one_way_and_read_back_the_same() {
             "discover",
             "git-identity",
             "rename-plane",
+            "persona-agents",
             "workspace-reinit"
         ]
     );

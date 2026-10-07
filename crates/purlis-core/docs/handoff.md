@@ -13,8 +13,9 @@ taking your screen, already working on a brief you read and approved.
 
 ## Three places a request can run, and the two questions that pick one
 
-1. **A sub-agent** — your harness's own. purlis never gates, rewrites or converts an Agent
-   call; nothing on this page touches one.
+1. **A sub-agent** — your harness's own helper. purlis leaves an Agent call alone with one
+   exception: a call named for a persona is refused, because a persona runs as its own chat
+   (`purlis docs show personas`). Nothing on this page touches a helper.
 2. **A new chat in this workspace.**
 3. **A new chat in another workspace**, existing or new.
 

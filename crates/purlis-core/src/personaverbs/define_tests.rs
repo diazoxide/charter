@@ -20,7 +20,7 @@ fn ask<'a>(name: &'a str, delegate_when: Option<&'a str>) -> Create<'a> {
 
 fn create_on(plane: &Plane, ask: &Create) -> (u8, Heard) {
     let mut heard = Heard::default();
-    let rc = create(plane.root(), &plane.state(), ask, None, &mut heard.sink());
+    let rc = create(plane.root(), ask, None, &mut heard.sink());
     (rc, heard)
 }
 
@@ -75,16 +75,15 @@ fn create_writes_a_draft_with_its_routing_line_and_its_memory_and_says_how_to_fi
     assert!(plane.path("personas/qa/memory/MEMORY.md").exists());
     assert!(plane.path("personas/qa/refs/README.md").exists());
     assert!(
-        !plane.path(".claude/agents/qa.md").exists(),
-        "a draft has no sub-agent"
+        !plane.path(".claude").exists(),
+        "no sub-agent is generated for a persona (#1451)"
     );
     assert_eq!(
         heard.err,
         "✓ Created persona 'qa' → personas/qa/ (persona.md + memory/ + refs/; edit the charter, \
          then commit — personas are shared).\n\
-         •   marked `draft: true` — no sub-agent yet, so 'qa' cannot be dispatched.\n  Write \
-         what it owns and how it works in personas/qa/persona.md, drop the `draft: true` \
-         line,\n  then: purlis persona sync-agents\n\
+         •   marked `draft: true` — no chat is dispatched to 'qa' yet.\n  Write what it owns \
+         and how it works in personas/qa/persona.md, then drop the `draft: true` line.\n\
          • Set up its vault locally when ready: purlis vault add qa --persona qa\n"
     );
 }
@@ -209,7 +208,6 @@ fn create_with_use_inside_a_chat_is_refused_before_anything_is_made() {
     let mut heard = Heard::default();
     let rc = create(
         plane.root(),
-        &plane.state(),
         &Create {
             select: Some(Selecting {
                 ids: &ids,
@@ -246,7 +244,6 @@ fn create_says_which_leftover_selections_it_revives_and_use_selects_it() {
     let mut heard = Heard::default();
     let rc = create(
         plane.root(),
-        &plane.state(),
         &Create {
             select: Some(Selecting {
                 ids: &ids,
@@ -283,6 +280,40 @@ fn create_says_which_leftover_selections_it_revives_and_use_selects_it() {
         heard.err
     );
     assert_eq!(plane.read(".charter/sessions/s-9.persona"), "qa\n");
+}
+
+#[test]
+fn show_says_a_persona_s_one_line_description_and_agent_description_answers_first() {
+    // #1451: `description` and `agent-description` fed the generated sub-agent's description.
+    // They are the persona's own line now, and a child's answers instead of its parent's.
+    let plane = Plane::fixture("daily");
+    plane.write(
+        "personas/base/persona.md",
+        "---\nname: base\nrole: Base\nvault: none\ndescription: Keeps the lights on\n---\n\n# B\n",
+    );
+    plane.write(
+        "personas/kid/persona.md",
+        "---\nname: kid\nextends: base\nrole: Kid\nagent-description: Runs the night shift\n---\n",
+    );
+    let (_, heard) = show_on(&plane, "base");
+    assert!(
+        heard
+            .out
+            .starts_with("base — Base\nabout:   Keeps the lights on\nfile:"),
+        "{}",
+        heard.out
+    );
+    let (_, heard) = show_on(&plane, "kid");
+    assert!(
+        heard
+            .out
+            .starts_with("kid — Kid\nabout:   Runs the night shift\ninherits: kid → base"),
+        "{}",
+        heard.out
+    );
+    // A persona that says nothing of itself has no such line.
+    let (_, heard) = show_on(&plane, "steward");
+    assert!(!heard.out.contains("about:"), "{}", heard.out);
 }
 
 #[test]
@@ -368,7 +399,7 @@ fn remove_takes_its_generated_agent_and_the_plane_wide_selection_with_it() {
     let plane = Plane::fixture("daily");
     plane.write(
         ".claude/agents/steward.md",
-        &format!("---\n---\n{}\n", crate::personaverbs::agents::MARKER),
+        &crate::personaverbs::tests_plane::generated_agent("steward"),
     );
     plane.write(".charter/active-persona", "steward\n");
     let selection = ActivePersona {

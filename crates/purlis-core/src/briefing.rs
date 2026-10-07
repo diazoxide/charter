@@ -12,7 +12,8 @@
 //!    **plane-root chat** (`$CHARTER_PLANE_ROOT_SESSION`, SI-1) is never asked: it is told it
 //!    is at the root instead, and blocks 4 and 5 become the plane's workspaces as ones it may
 //!    manage, because it is in none of them.
-//! 2. **The persona** — who this session is (its `role:` and `delegate-when:`, quoted as a
+//! 2. **The persona** — who this session is (its `role:`, `delegate-when:` and one-line
+//!    description, `agent-description:` or `description:`, quoted as a
 //!    description rather than an instruction) and a bounded digest of its memory. Or, when the
 //!    selection names a persona that does not exist, a sentence saying so.
 //! 3. **Unshared memory** — memory or refs sitting uncommitted, on a plane whose `share` says
@@ -154,6 +155,9 @@ pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
             None => {}
         }
     }
+    // What the retired persona sub-agent left to say (#1451): the servers this chat's persona
+    // declares and the chat was not started with, and generated files still in the project.
+    parts.extend(retired_notes(ask, selected.name.as_deref()));
     if let Some(unshared) = uncommitted_memory_nudge(ask.root) {
         parts.push(unshared);
     }
@@ -485,6 +489,57 @@ fn resuming_note(root: &Path, env: &dyn Fn(&str) -> Option<String>) -> Option<St
 
 // ---- 2. the persona -----------------------------------------------------------------------
 
+/// What a chat is told now that a persona is no longer a harness sub-agent (#1451), one block
+/// each, purlis's own words:
+///
+/// - the MCP servers the chat's persona declares that it was **not** started with, and why
+///   ([`crate::personaverbs::chatstart::told`]): withheld until a person approves them, or on
+///   a harness purlis cannot hand servers to. The harness is the one the app started the chat
+///   on ([`crate::hookwire::HARNESS_ENV`]);
+/// - the sub-agent files purlis generated that are still in the project, which the harness may
+///   still list as agent types and a call to which is refused.
+fn retired_notes(ask: &Ask, persona: Option<&str>) -> Vec<String> {
+    let mut notes = Vec::new();
+    if let Some(name) = persona.filter(|name| exists(ask.root, name)) {
+        // The variable carries the registry's name for the harness (`claude-code`), which for
+        // the other two is also their kind.
+        let harness =
+            (ask.env)(crate::hookwire::HARNESS_ENV).and_then(|word| match word.as_str() {
+                "claude-code" => Some(crate::harness::Harness::ClaudeCode),
+                kind => crate::harness::Harness::of_kind(kind),
+            });
+        let state = crate::personaverbs::state_dir(ask.root);
+        notes.extend(
+            crate::personaverbs::chatstart::told(ask.root, &state, name, harness)
+                .into_iter()
+                .map(|line| format!("⬡ {line}")),
+        );
+    }
+    let left = crate::personaverbs::retired::generated(ask.root);
+    if !left.is_empty() {
+        let names = left
+            .iter()
+            .filter_map(|file| std::path::Path::new(file).file_stem())
+            .map(|stem| {
+                format!(
+                    "`{}`",
+                    one_line(&stem.to_string_lossy(), COMMITTED_LINE_CAP)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        notes.push(format!(
+            "⬡ This project still holds {} sub-agent file(s) purlis generated for a persona \
+             ({names}). Your harness may offer each as an agent type, and a call to one is \
+             refused: a persona runs as its own chat. Give a persona work with `purlis \
+             dispatch --to <persona>`. The operator removes the files with `purlis doctor \
+             --fix persona-agents`.",
+            left.len()
+        ));
+    }
+    notes
+}
+
 /// `_stale_persona_note`: the selection names a persona this plane does not have (#1045).
 fn stale_persona_note(name: &str, source: &str) -> String {
     let shown = one_line(name, COMMITTED_LINE_CAP);
@@ -534,6 +589,14 @@ fn who(name: &str, selected: &active::ActivePersona, resolved: &personagrant::Re
     );
     if !when.is_empty() {
         block.push_str(&format!("\n> delegate-when: {when}"));
+    }
+    // What the persona says of itself in a line (#1451): it was the description of the
+    // sub-agent purlis generated, and is quoted here now that the persona is the chat.
+    if let Some(said) = crate::personaverbs::retired::description(&resolved.meta) {
+        block.push_str(&format!(
+            "\n> description: {}",
+            one_line(&said, COMMITTED_LINE_CAP)
+        ));
     }
     block
 }

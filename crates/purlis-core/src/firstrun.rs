@@ -160,8 +160,8 @@ pub fn take_in(root: &Path, repo: &Path) -> Result<TakenIn, String> {
 /// **The template is in the project whole, or not at all.** It is resolved, and every harness
 /// file it writes a rule into is asked whether it can take one, before the repo is copied, so
 /// a template charter does not ship, or a file it cannot extend, stops the open with nothing
-/// copied and nothing written. Then the repo is copied, and the template is laid out: personas
-/// and sub-agents, then the ask rules, then the workspace's starter last. A failure at any of
+/// copied and nothing written. Then the repo is copied, and the template is laid out: personas,
+/// then the ask rules, then the workspace's starter last. A failure at any of
 /// those takes back everything the template wrote, harness files and `workspace.md` byte for
 /// byte ([`crate::template::apply`]), and says why; the workspace is left as a repo opened with
 /// no template. Laying a template out is additive, so a second repo opened into the same

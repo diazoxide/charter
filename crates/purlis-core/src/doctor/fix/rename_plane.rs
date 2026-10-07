@@ -309,7 +309,7 @@ fn rename(root: &Path, tracked: &[String], work: &mut Work) -> Result<(), String
             workspace_key(root, path, work)?;
         } else if is_agent(path) {
             let text = read(root, path)?;
-            if crate::personaverbs::agents::carries_marker(&text) {
+            if crate::personaverbs::retired::carries_marker(&text) {
                 let renamed = skill_refs(&swap(&text, &[SYNC_AGENTS_MARKER]));
                 write_if_changed(root, path, &text, &renamed, "the agent marker", work)?;
             }

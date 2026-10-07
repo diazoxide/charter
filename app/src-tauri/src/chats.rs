@@ -799,6 +799,9 @@ impl Chats {
     ///
     /// `sandbox` is the sandbox the core compiled for this chat (ADR 0067), or none.
     ///
+    /// `persona` is the persona the chat runs as, which a harness that can is handed the MCP
+    /// servers and the denied tools of (#1451, `purlis_core::personaverbs::chatstart`).
+    ///
     /// **Fail closed.** A sandbox compiled for another harness, or one the harness is not armed
     /// to carry here (the app shipped without its plugin or its binary), refuses the chat rather
     /// than starting it without the sandbox.
@@ -808,6 +811,7 @@ impl Chats {
         cwd: Option<&std::path::Path>,
         plugins: &purlis_core::harness_plugin::Chosen,
         sandbox: Option<&purlis_core::sandbox::Applied>,
+        persona: Option<&str>,
     ) -> Result<Armed, String> {
         let not_carried = "this project runs every chat sandboxed, and this app cannot hand the \
                            sandbox to this chat's harness, so nothing was started";
@@ -825,6 +829,10 @@ impl Chats {
         let kit = purlis_core::harness::Kit {
             binary,
             plugin: self.shipped.plugin.as_deref(),
+            persona: persona.map(|persona| purlis_core::harness::As {
+                root: &self.project,
+                persona,
+            }),
         };
         match harness.state_hooks(kit, cwd, plugins, sandbox) {
             StateHooks::ThisSessionOnly { args, env, .. } => Ok((args, env)),
@@ -1669,7 +1677,21 @@ impl Chats {
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
         // `purlis_core::start::Ready::command_line` is the one place that order is decided.
-        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins, sandbox)?;
+        // The persona it runs as is the one its environment names, which the core's start put
+        // there (`purlis_core::start::ready`) and every hook in the chat resolves; a chat that
+        // names none runs as the project's default.
+        let runs_as = env
+            .iter()
+            .find(|(name, _)| name == purlis_core::active::PERSONA_ENV)
+            .map(|(_, persona)| persona.clone())
+            .or_else(|| purlis_core::start::persona_for_a_new_chat(&self.project));
+        let (hooks, armed) = self.state_hooks(
+            harness,
+            chat.cwd.as_deref(),
+            plugins,
+            sandbox,
+            runs_as.as_deref(),
+        )?;
         // What a wrapped chat needs running beside it, started before it and kept for as long
         // as it is open: charter's egress proxy and its own temp directory (ADR 0067 §2).
         let confinement = match sandbox {

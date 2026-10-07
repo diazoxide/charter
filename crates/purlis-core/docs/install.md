@@ -154,6 +154,19 @@ build. It refuses, writing nothing, when run from inside a chat (run it from a t
 app), on a project with uncommitted changes, outside git, with a file under both names, or one this
 purlis may not write. A step that fails puts every file back.
 
+**`persona-agents` runs only by name**, as `purlis doctor --fix persona-agents`, because it
+changes committed files. It takes out the persona sub-agents purlis used to generate, now that
+a persona runs as its own chat: it removes each file under `.claude/agents/` that purlis
+generated, told by its marker where the generator wrote it, where git tracks the file and it
+has no uncommitted change, and leaves and names every other file there. In each persona's own
+definition it rewrites `model:` to `profile:` where that is a profile the project carries and
+its chats already start on, and `color: cyan` or `magenta` to purlis's name for the colour. It
+reports the keys nothing reads now with what widened, and any `.claude/agent-memory/` folder
+the harness kept for a sub-agent. It makes no commit, `git restore -- .claude/agents personas`
+takes it back before the next save, and a second run changes nothing more. It is offered by
+the `personas` row when a generated file is still there. See `purlis docs show personas`,
+*After updating*.
+
 **`discover` runs only by name**, as `purlis doctor --fix discover` or the inventory row's
 Fix button, because it goes over the network. It is offered when the inventory is empty and
 `charter.toml` declares a forge. It runs `purlis discover`, which asks that forge, adds the

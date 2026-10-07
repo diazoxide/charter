@@ -40,9 +40,9 @@ project dialog follow the same rule, and ask with two buttons. Running `init` ag
 project that has its `charter.toml` asks nothing.
 
 A purlis the Python generated also declares `routing: advise`. That key is retired: it is
-read without error and does nothing, and `purlis doctor` says so. Personas are offered to
-the harness as sub-agents, which is where a request is routed. See `purlis docs show
-personas`.
+read without error and does nothing, and `purlis doctor` says so. A persona is a role a chat
+runs as, and work for another persona goes to a chat of its own, by dispatch. See `purlis
+docs show personas`.
 
 ## Every key, in full
 

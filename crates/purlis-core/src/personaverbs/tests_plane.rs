@@ -12,7 +12,22 @@ use std::path::{Path, PathBuf};
 
 use crate::repocmd::Say;
 
-/// `personas/ops/persona.md` of the `persona-sync-agents-…` and `persona-use-…` scenarios.
+/// A sub-agent file as `persona sync-agents` wrote one for `name`, before it was retired
+/// (#1451): the frontmatter, the marker line, and the sentence that names the persona.
+pub fn generated_agent(name: &str) -> String {
+    let marker = crate::names::SYNC_AGENTS_MARKER
+        .spellings()
+        .last()
+        .expect("a spelling");
+    format!(
+        "---\nname: {name}\ndescription: \"The {name} persona.\"\n---\n<!-- {marker} from \
+         personas/{name}/persona.md — edit the persona, not this file. -->\n\nThis sub-agent \
+         acts as the **{name}** persona — Role — in an\nisolated context. Adopt the charter \
+         below as your role.\n\n# {name}\n"
+    )
+}
+
+/// `personas/ops/persona.md` of the `persona-use-…` and `persona-stats-…` scenarios.
 pub const OPS: &str = "---\nname: ops\nrole: Operations Engineer\nvault: ops\ntools: kubectl, gh\n\
 agent-tools: Read, Bash\nuses: devops, steward\nskills: superpowers:tdd, deploy\n\
 dispatch-isolation: worktree\ndisallowed-tools: WebFetch\nmodel: sonnet\ncolor: blue\n\
@@ -59,8 +74,8 @@ pub const VAULTS: &str = r#"{
 }
 "#;
 
-/// The two fingerprints the Python charter recorded for `ops/grafana` and `ops/gsc`
-/// (`persona-sync-agents-approve-mcp-yes-records-each-server`), in the order it wrote them.
+/// The two fingerprints the Python charter recorded for `ops/grafana` and `ops/gsc` when it
+/// approved them, in the order it wrote them.
 pub const OPS_APPROVED: [&str; 2] = [
     "6c0e43fb8762aaf6beb63444e07c956bebf55d8d2a7e40b1f9a9f967c8a1658a",
     "872898db1e4a8c92491cfa50d4ac4a71b375a75630adf0bd995b06de5a362e76",
@@ -68,50 +83,6 @@ pub const OPS_APPROVED: [&str; 2] = [
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/planes")
-}
-
-/// One recorded scenario's row, by name — what the Python charter was run with and answered.
-pub fn recorded(name: &str) -> serde_json::Value {
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/recorded/behaviour.jsonl");
-    let text = std::fs::read_to_string(path).unwrap();
-    let needle = format!("\"name\":\"{name}\"");
-    let line = text
-        .lines()
-        .find(|line| line.contains(&needle))
-        .unwrap_or_else(|| panic!("no recorded scenario named {name}"));
-    serde_json::from_str(line).unwrap()
-}
-
-/// A recorded file entry's text: inline, or — for a file the recording stored by content, as a
-/// re-recording does for anything over 2 KiB — from the blob store beside the scenarios.
-pub fn recorded_text(file: &serde_json::Value) -> String {
-    if let Some(text) = file["text"].as_str() {
-        return text.to_owned();
-    }
-    let sha = file["blob"]
-        .as_str()
-        .expect("a file entry is text or a blob");
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/recorded/behaviour-blobs.jsonl.gz");
-    let mut text = String::new();
-    std::io::Read::read_to_string(
-        &mut flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap()),
-        &mut text,
-    )
-    .unwrap();
-    text.lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .find(|row| row["sha256"] == sha)
-        .and_then(|row| row["text"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| panic!("no text blob {sha}"))
-}
-
-/// The text a recorded row expects on `stream` (`stdout` or `stderr`), compared exactly.
-pub fn expected(row: &serde_json::Value, stream: &str) -> String {
-    assert_eq!(row["expect"][stream]["rule"], "exact", "{}", row["name"]);
-    assert_eq!(row["expect"][stream]["masks"], serde_json::json!([]));
-    row["expect"][stream]["text"].as_str().unwrap().to_string()
 }
 
 fn copy_tree(from: &Path, to: &Path) {
@@ -169,41 +140,6 @@ impl Plane {
             .unwrap();
         }
         plane.write(".charter/vaults.json", VAULTS);
-        plane
-    }
-
-    /// The plane a recorded row starts from: its fixture plane with the row's `start` applied.
-    /// Every path the row sets must be inside the plane.
-    pub fn replay(row: &serde_json::Value) -> Self {
-        let plane = Self::fixture(row["plane"].as_str().unwrap());
-        for (path, file) in row["start"]["set"].as_object().unwrap() {
-            let rel = path
-                .strip_prefix("plane/")
-                .unwrap_or_else(|| panic!("{path} is outside the plane"));
-            match file["kind"].as_str() {
-                Some("dir") => std::fs::create_dir_all(plane.path(rel)).unwrap(),
-                Some("file") => {
-                    plane.write(rel, file["text"].as_str().expect("a text file"));
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let mode = file["mode"].as_u64().unwrap() as u32;
-                        std::fs::set_permissions(
-                            plane.path(rel),
-                            std::fs::Permissions::from_mode(mode),
-                        )
-                        .unwrap();
-                    }
-                }
-                other => panic!("{path}: a start entry of kind {other:?}"),
-            }
-        }
-        for path in row["start"]["remove"].as_array().unwrap() {
-            let rel = path.as_str().unwrap().strip_prefix("plane/").unwrap();
-            std::fs::remove_dir_all(plane.path(rel))
-                .or_else(|_| std::fs::remove_file(plane.path(rel)))
-                .unwrap();
-        }
         plane
     }
 

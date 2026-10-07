@@ -342,6 +342,7 @@ mod tests {
         Kit {
             binary: std::path::Path::new("/bin/charter"),
             plugin: Some(std::path::Path::new("/app/plugin")),
+            persona: None,
         }
     }
 

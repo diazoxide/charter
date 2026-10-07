@@ -29,8 +29,11 @@
 //! - **The ask marks** (`_ask_mark_set`, `_ask_approved`): they exist only to write the
 //!   `…-approved` trace row when an asked tool call goes through.
 //! - **The routing ask on `pretooluse-edit`** (`_route_mark_take`): it answered a mark the
-//!   persona roster set under `routing: require`, and `routing:` is retired (charter#369) —
-//!   personas are offered to the harness as sub-agents, which is where routing happens now.
+//!   persona roster set under `routing: require`, and `routing:` is retired (charter#369).
+//!   Work for another persona goes to a chat of its own, by dispatch (#1434).
+//! - **The dispatch log's hook rows** (`posttooluse_dispatch`, `posttooluse_message`) and the
+//!   in-flight ask of `pretooluse_dispatch`: each was about a persona sent out as a sub-agent,
+//!   which a persona never is now (#1451). `pretooluse_dispatch` refuses that call instead.
 //! - **The turn markers** (`_turn_begin`, `_turn_bump`, `_turn_end`) and `notify.plane_changed`:
 //!   the tmux frame's spinner and repaint. The app has its own (`hookwire`).
 //! - **`_record_reported_session`**: opencode's session report inside a tmux frame.
@@ -45,7 +48,7 @@ use std::sync::OnceLock;
 
 use crate::hookstate::State;
 use crate::toolgate::Verdict;
-use crate::{dispatch, inflight, leakguard, personagate, personagrant, pieces, pypath};
+use crate::{dispatch, leakguard, personagate, pieces, pypath};
 
 /// What a handler decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,10 +124,6 @@ impl Hook<'_> {
         State::of(self.root)
     }
 
-    fn unattended(&self) -> bool {
-        self.text("permission_mode") == crate::briefing::UNATTENDED_MODE
-    }
-
     /// The active persona, by the ladder — `persona.resolve_active()`.
     pub fn persona(&self) -> Option<String> {
         let named = (self.env)(crate::active::PERSONA_ENV);
@@ -195,10 +194,6 @@ impl Hook<'_> {
             self.now,
         );
     }
-
-    fn unix_now(&self) -> f64 {
-        self.now.timestamp() as f64 + f64::from(self.now.timestamp_subsec_nanos()) / 1e9
-    }
 }
 
 /// Where each file tool carries its path — `_PATH_KEYS`. Both spellings, because the key is
@@ -258,32 +253,6 @@ fn say(event: &str, fields: &[(&str, String)]) -> Answer {
         ", ",
         ": ",
     ))
-}
-
-/// `_ask`: ask the operator — or, in an unattended run with nobody to ask, say it and allow.
-fn ask(hook: &Hook, reason: &str) -> Answer {
-    if hook.unattended() {
-        return say(
-            "PreToolUse",
-            &[
-                ("permissionDecision", "allow".into()),
-                (
-                    "permissionDecisionReason",
-                    format!("purlis nudge (unattended, not blocking): {reason}"),
-                ),
-            ],
-        );
-    }
-    say(
-        "PreToolUse",
-        &[
-            ("permissionDecision", "ask".into()),
-            (
-                "permissionDecisionReason",
-                format!("purlis nudge: {reason}"),
-            ),
-        ],
-    )
 }
 
 // ---- PreToolUse ---------------------------------------------------------------------------
@@ -374,9 +343,16 @@ pub fn pretooluse_edit(hook: &Hook) -> Answer {
     Answer::Nothing
 }
 
-/// `pretooluse_dispatch`: record the dispatch as in flight, and ask first when a persona that
-/// writes code is sent out while another agent is still running in the same working tree. And
-/// refuse purlis's own `dispatch` tools to a sub-agent ([`crate::dispatchguard`]).
+/// `pretooluse_dispatch`: refuse a sub-agent call whose type is a persona, and name the
+/// dispatch route (#1451). A persona runs as its own chat, with its own vault and hosts; a
+/// sub-agent runs inside this chat's process and has this chat's.
+///
+/// A call with no type, or a type that is no persona here (a harness's own helper, a
+/// hand-written agent), is not this hook's to judge: it runs, as this chat's persona. The name
+/// is asked of the plane's personas as they are now, drafts included, and a hand-written agent
+/// that shares a persona's name is refused with it: the name is the persona's.
+///
+/// And refuse purlis's own `dispatch` tools to a sub-agent ([`crate::dispatchguard`]).
 pub fn pretooluse_dispatch(hook: &Hook) -> Answer {
     if !hook.in_plane {
         return Answer::Nothing;
@@ -401,38 +377,15 @@ pub fn pretooluse_dispatch(hook: &Hook) -> Answer {
     if agent.is_empty() {
         return Answer::Nothing;
     }
-    let state = hook.state();
-    let others = inflight::still_running(&state, hook.unix_now());
-    let _ = inflight::start(&state, agent, hook.unix_now());
-    if others.is_empty() {
-        return Answer::Nothing;
-    }
-    let isolation = crate::personas::load(hook.root, agent)
-        .and_then(|pairs| {
-            pairs
-                .iter()
-                .rev()
-                .find(|(k, _)| k == "dispatch-isolation")
-                .map(|(_, v)| crate::memstore::py_strip(v).to_string())
-        })
-        .unwrap_or_default();
-    if isolation != "worktree" {
-        return Answer::Nothing;
-    }
-    let peers = others
+    if crate::personaverbs::names(hook.root)
         .iter()
-        .map(|o| format!("`{o}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let verb = if others.len() == 1 { "is" } else { "are" };
-    ask(
-        hook,
-        &format!(
-            "`{agent}` writes code and {peers} {verb} already running. They share one working \
-             tree, so parallel edits interleave silently. Dispatch this one with `isolation: \
-             worktree`, or let the other finish first."
-        ),
-    )
+        .any(|persona| persona == agent)
+    {
+        // A draft runs no chat, so its refusal does not name the dispatch route (F4).
+        let draft = crate::personaverbs::is_draft(hook.root, agent);
+        return deny(crate::personaverbs::retired::subagent_refusal(agent, draft));
+    }
+    Answer::Nothing
 }
 
 /// The persona tool gate at the end of the Bash guard: `allow` when the active persona
@@ -779,103 +732,18 @@ pub fn posttooluse_skill(hook: &Hook) -> Answer {
     Answer::Nothing
 }
 
-/// Where a sub-agent's id is remembered against the persona it was dispatched as —
-/// `_agent_map_file`.
-fn agent_map_file(hook: &Hook) -> PathBuf {
-    hook.state().dir().join("agent-personas.json")
-}
-
-/// `_AGENT_MAP_MAX`: a lookup for live agents, not a history.
-const AGENT_MAP_MAX: usize = 200;
-
-fn agent_id() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)\bagentId:[\s\x{1C}-\x{1F}]*([0-9a-f]{6,})").expect("compiles")
-    })
-}
-
-/// `_agent_map_remember`.
-fn agent_map_remember(hook: &Hook, agent_id: &str, persona: &str) {
-    let file = agent_map_file(hook);
-    let mut data = hook
-        .state()
-        .read_text(&file)
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| match v {
-            Value::Object(map) => Some(map),
-            _ => None,
-        })
-        .unwrap_or_default();
-    data.insert(agent_id.to_string(), Value::String(persona.to_string()));
-    // The oldest first, as many as are over the bound — none at or under it.
-    let drop = data.len().saturating_sub(AGENT_MAP_MAX);
-    data = data.into_iter().skip(drop).collect();
-    let text = crate::pyjson::dumps_sorted(&Value::Object(data));
-    let _ = hook.state().write(&file, text.as_bytes());
-}
-
-/// `_agent_map_lookup`.
-fn agent_map_lookup(hook: &Hook, target: &str) -> Option<String> {
-    let text = hook.state().read_text(&agent_map_file(hook))?;
-    let data: Value = serde_json::from_str(&text).ok()?;
-    let found = data.get(target)?;
-    truthy(Some(found)).then(|| crate::pyrepr::str_json(found))
-}
-
-/// `posttooluse_dispatch`: log the dispatch, remember the sub-agent's id against its persona
-/// so a later `SendMessage` to it can be attributed, and take its in-flight record down.
-pub fn posttooluse_dispatch(hook: &Hook) -> Answer {
-    if !hook.in_plane {
-        return Answer::Nothing;
-    }
-    if !matches!(hook.tool_name(), "Task" | "Agent") {
-        return Answer::Nothing;
-    }
-    let agent = hook.input_text("subagent_type");
-    if agent.is_empty() {
-        return Answer::Nothing;
-    }
-    let logged = dispatch::record(hook.root, agent, hook.now, &hook.log_name());
-    let response = hook
-        .payload
-        .get("tool_response")
-        .filter(|v| truthy(Some(v)))
-        .map(crate::pyrepr::str_json)
-        .unwrap_or_default();
-    if let Some(m) = agent_id().captures(&response) {
-        agent_map_remember(hook, &m[1], agent);
-    }
-    if logged.is_some() {
-        inflight::finish(&hook.state(), agent, hook.unix_now());
-    }
+/// `posttooluse_dispatch`: nothing, since #1451. It logged which persona a `Task`/`Agent` call
+/// was sent to; a persona is no longer a sub-agent, so there is no such call to log, and a
+/// dispatch to a persona is recorded by the app that starts its chat. The word stays answered
+/// because an installed plugin still names it.
+pub fn posttooluse_dispatch(_hook: &Hook) -> Answer {
     Answer::Nothing
 }
 
-/// `posttooluse_message`: a `SendMessage` to a persona, or to a sub-agent dispatched as one, is
-/// a RESUME of that persona — logged apart from a dispatch so the roster does not count it.
-pub fn posttooluse_message(hook: &Hook) -> Answer {
-    if !hook.in_plane {
-        return Answer::Nothing;
-    }
-    if hook.tool_name() != "SendMessage" {
-        return Answer::Nothing;
-    }
-    let target = hook.input_text("to");
-    if target.is_empty() {
-        return Answer::Nothing;
-    }
-    let name = if personagrant::list_personas(hook.root)
-        .iter()
-        .any(|p| p == target)
-    {
-        Some(target.to_string())
-    } else {
-        agent_map_lookup(hook, target)
-    };
-    if let Some(name) = name {
-        let _ = dispatch::record_resume(hook.root, &name, hook.now, &hook.log_name());
-    }
+/// `posttooluse_message`: nothing, since #1451. It logged a `SendMessage` to a persona's
+/// sub-agent as a resume of that persona; there is no such sub-agent now. The word stays
+/// answered because an installed plugin still names it.
+pub fn posttooluse_message(_hook: &Hook) -> Answer {
     Answer::Nothing
 }
 

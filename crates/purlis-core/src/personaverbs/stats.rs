@@ -1,7 +1,15 @@
 //! `charter persona stats` — roster health mined from committed memory and the dispatch and
 //! skill logs. Read-only. A port of `commands_persona.cmd_persona_stats`, `persona.stats`,
-//! `dispatch.advice_tally` / `first_advice` / `routed_since_first_advice` / `last_backfill`
-//! and `skilluse.drift`.
+//! `dispatch.advice_tally` / `first_advice` / `routed_since_first_advice` and `skilluse.drift`.
+//!
+//! # What `DISP` counts (#1451)
+//!
+//! A dispatch: work given to a persona. A persona is never a harness sub-agent now, so no
+//! hook writes a row when a sub-agent returns. `DISP` is counted from what there is: the rows
+//! the committed dispatch log (`personas/_dispatch/`) holds for the persona, which were
+//! written while a persona could still be sent out as a sub-agent, and the log's `handoff`
+//! rows, which name no persona and are counted as one total. Counting from the app's record
+//! of each dispatch is not in this version yet (#1452).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -17,9 +25,6 @@ const MEMORY_BLIND: [&str; 3] = ["orchestrator", "standby", "advisory"];
 
 /// The dispatch log's advice event — `dispatch.ADVICE`.
 const ADVICE: &str = "advice";
-
-/// The suffix a backfill writes its rows under — `dispatch.BACKFILL_SUFFIX`.
-const BACKFILL_SUFFIX: &str = ".backfill.jsonl";
 
 /// One persona's (or the shared namespace's) row — `persona.stats`'s dict.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,18 +291,6 @@ fn advice(rows: &[serde_json::Value]) -> (usize, Option<NaiveDate>, usize) {
     (fired, first.map(|(_, day)| day), followed)
 }
 
-/// `dispatch.last_backfill`: the newest backfill file's modification time, local.
-fn last_backfill(root: &Path) -> Option<NaiveDate> {
-    let dir = crate::dispatch::dir(root);
-    let newest = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .filter(|e| e.file_name().to_string_lossy().ends_with(BACKFILL_SUFFIX))
-        .filter_map(|e| e.metadata().ok()?.modified().ok())
-        .max()?;
-    Some(chrono::DateTime::<chrono::Local>::from(newest).date_naive())
-}
-
 /// `skilluse.by_persona`: `{leaf skill: count}` for one persona.
 fn skills_used(root: &Path, name: &str) -> BTreeSet<String> {
     let dir = root.join("personas").join(crate::skilluse::DIR_NAME);
@@ -501,7 +494,7 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
             };
             if !unused.is_empty() {
                 say(Say::Out(format!(
-                    "  {padded} unused: {}   (preloaded every dispatch)",
+                    "  {padded} declared and never used: {}",
                     joined(unused)
                 )));
             }
@@ -517,20 +510,21 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
     say(Say::Info(format!(
         "RECENT = memories in the last {recent_days} days · VERIFY = share carrying a \
          verification marker (quality proxy) · DUP = share in a near-dup pair (noise) · DISP = \
-         times DISPATCHED as a sub-agent (committed tally) · ⬡/◇ = memory-blind role \
+         times work was DISPATCHED to it (committed dispatch log) · ⬡/◇ = memory-blind role \
          (activity: profile), not judged by volume."
     )));
-    let (generic, total) = crate::dispatch::generic_share(&disp);
-    if total > 0 {
+    let total: u64 = disp.values().sum();
+    let log = crate::dispatch::rows(root);
+    let handoffs = log
+        .iter()
+        .filter(|row| is_event(row, crate::dispatch::HANDOFF))
+        .count();
+    if handoffs > 0 {
         say(Say::Info(format!(
-            "Routing: {}/{total} dispatches went to a persona · {generic} to a generic agent \
-             ({}%). A high generic share means the work a persona owns is being done without \
-             it.",
-            total - generic,
-            100 * generic / total
+            "{handoffs} chat(s) were started by another chat (a handoff). The log names no \
+             persona for them, so they are in no row above."
         )));
     }
-    let log = crate::dispatch::rows(root);
     let (fired, first, followed) = advice(&log);
     if fired > 0 {
         let since = first.map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string());
@@ -550,34 +544,29 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
         ));
     }
     if total == 0 {
-        // Seeding the tally from past sessions: OB-13, #995.
         say(Say::Info(
-            "No dispatches recorded yet — the tally starts filling as sub-agents are dispatched; \
-             seeding it from past sessions is not in this version yet."
-                .into(),
+            "No dispatch to a persona is in the committed dispatch log.".into(),
         ));
     }
-    let when = last_backfill(root).map_or_else(
-        || "never reconciled".to_string(),
-        |d| format!("last reconciled {}", d.format("%Y-%m-%d")),
-    );
-    // Reconciling the tally against past sessions: OB-13, #995.
-    say(Say::Info(format!(
-        "Tallied live from a PostToolUse hook, which can miss background dispatches — treat \
-         DISP and ⚑ as a FLOOR ({when}). Reconciling it against this project's transcripts \
-         is not in this version yet."
-    )));
+    // The dispatch records as DISP's source: #1452.
+    say(Say::Info(
+        "DISP is read from the committed dispatch log (personas/_dispatch/). Its rows for a \
+         persona were written when one was sent out as a sub-agent, which a persona no longer \
+         is, so DISP and ⚑ stop moving until they are counted from each dispatch's record, \
+         which is not in this version yet (#1452)."
+            .into(),
+    ));
     if unused > 0 {
         say(Say::Warn(format!(
             "{unused} persona(s) NEVER dispatched — they exist, lint green, and are unused. \
-             Check whether their work is routing to a generic agent instead."
+             Check whether a chat does their work itself where it could dispatch to them."
         )));
     }
     if drafts > 0 {
         say(Say::Info(format!(
-            "{drafts} draft persona(s) — purlis generates no sub-agent while `draft: true` is \
-             set, so they are undispatchable BY DESIGN and are not counted above. Finish the \
-             charter, drop the line, then sync-agents."
+            "{drafts} draft persona(s) — no chat is dispatched to a persona while `draft: \
+             true` is set, so they are not counted above. Finish the charter, then drop the \
+             line."
         )));
     }
     if dormant > 0 {

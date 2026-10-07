@@ -77,7 +77,6 @@ fn create_in(
     delegate_when: Option<&str>,
     extends: Option<&str>,
 ) -> Result<Vec<String>, String> {
-    let state = purlis_core::personaverbs::state_dir(root);
     let ask = define::Create {
         name: name.trim(),
         role: given(role),
@@ -90,7 +89,7 @@ fn create_in(
         force: false,
     };
     let mut said = Vec::new();
-    let code = define::create(root, &state, &ask, None, &mut |line: Say| said.push(line));
+    let code = define::create(root, &ask, None, &mut |line: Say| said.push(line));
     ran(code, said)
 }
 
