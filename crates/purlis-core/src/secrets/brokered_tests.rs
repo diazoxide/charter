@@ -52,6 +52,15 @@ fn machine() -> Machine {
 /// What a sandboxed chat of `harness` in `root` on `machine` is held to, with no hosts, as the
 /// app records it when the chat starts.
 fn confines_of(harness: Harness, root: &Path, machine: &Machine) -> Confines {
+    held_to(harness, root, machine).expect("compiles")
+}
+
+/// [`confines_of`], or why purlis starts no sandboxed chat of `harness` on `machine`.
+fn held_to(
+    harness: Harness,
+    root: &Path,
+    machine: &Machine,
+) -> Result<Confines, crate::sandbox::NotStarted> {
     let compiled = Compiled::of(
         &Policy {
             egress: Vec::new(),
@@ -66,9 +75,7 @@ fn confines_of(harness: Harness, root: &Path, machine: &Machine) -> Confines {
     );
     let compile = crate::sandbox::compiler(harness).expect("a compiler");
     crate::sandbox::applied_of(harness, compile, &compiled, root, machine)
-        .expect("compiles")
-        .confines()
-        .clone()
+        .map(|applied| applied.confines().clone())
 }
 
 /// A Claude Code chat's, in `root`.
@@ -1313,21 +1320,34 @@ fn the_app_lists(root: &Path) -> crate::hookwire::Answerer {
 #[test]
 fn what_a_sandboxed_chat_is_compiled_to_denies_it_every_place_a_listing_would_read() {
     // Why `vault list` in a chat is the app's answer: the chat's own sandbox denies it the
-    // provider's session and the project's vaults, reads included, on every harness.
+    // provider's session and the project's vaults, reads included, on every harness purlis
+    // sandboxes on this system. Where it has no wrap for one yet (Codex and opencode off
+    // macOS), no sandboxed chat of it starts, so there is no chat to deny anything.
     let project = project_with_ops();
     let root = project.path().canonicalize().unwrap();
     let home = tempfile::tempdir().unwrap();
     let home = home.path().canonicalize().unwrap();
     for harness in [Harness::ClaudeCode, Harness::Codex, Harness::Opencode] {
-        let confined = confines_of(
-            harness,
-            &root,
-            &Machine {
-                env: Env::of(&[]),
-                home: Some(home.clone()),
-                os: Os::this(),
-            },
-        );
+        let machine = Machine {
+            env: Env::of(&[]),
+            home: Some(home.clone()),
+            os: Os::this(),
+        };
+        // As `sandbox/tests.rs` holds it: off macOS, the wrap of Codex and of opencode is
+        // refused, by name.
+        if harness != Harness::ClaudeCode && machine.os != Os::MacOs {
+            assert_eq!(
+                held_to(harness, &root, &machine).err(),
+                Some(crate::sandbox::NotStarted::Uncompilable(
+                    crate::sandbox::Uncompilable {
+                        harness,
+                        unheld: crate::sandbox::Unheld::Wrap(machine.os),
+                    }
+                ))
+            );
+            continue;
+        }
+        let confined = confines_of(harness, &root, &machine);
         let denied_to_read = |path: &Path| {
             confined.denied.iter().any(|denial| {
                 denial.class == crate::sandbox::Class::Vaults
