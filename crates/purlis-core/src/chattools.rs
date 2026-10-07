@@ -53,6 +53,12 @@ pub const SESSION_RECORD: &str = "session_record";
 /// the app (#1333), the one operation `purlis persona remember` run in the chat performs.
 pub const PERSONA_REMEMBER: &str = "persona_remember";
 
+/// The tool that says where this chat is working: who asked for it, its sibling tasks and the
+/// other chats running as its persona (#1450). [`call`] does not answer it: only the app that
+/// started the chat knows, so the server asks it over the chat's hook socket, as
+/// `purlis persona where` run in the chat does.
+pub const PERSONA_WHERE: &str = "persona_where";
+
 /// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
 /// the five that only read. Named one by one, never derived from [`Tool::read_only`]:
 /// `ask_operator` is marked read-only too and still asks, and a tool added later is asked
@@ -198,7 +204,7 @@ fn one_string(key: &str, description: &str) -> Value {
 }
 
 /// Every tool, in the order a harness lists them.
-pub static TOOLS: [Tool; 11] = [
+pub static TOOLS: [Tool; 12] = [
     Tool {
         name: "todo_list",
         description: "List the open todos of the workspace this chat works in, oldest first, \
@@ -268,6 +274,16 @@ pub static TOOLS: [Tool; 11] = [
             })
         },
         read_only: false,
+    },
+    Tool {
+        name: PERSONA_WHERE,
+        description: "Where this chat is working, from purlis's own record: the chat that \
+                      asked for it, the other tasks that chat asked for, and every other chat \
+                      running as the same persona in this project, each with its workspace, \
+                      its name, its state and when it started. Names and states only, never \
+                      another chat's content.",
+        schema: no_arguments,
+        read_only: true,
     },
     Tool {
         name: "session_record_list",
@@ -371,6 +387,11 @@ pub fn call(
     if tool == SESSION_RECORD || tool == PERSONA_REMEMBER {
         return Err(format!(
             "{tool} is handed to the app by purlis's MCP server, not written here"
+        ));
+    }
+    if tool == PERSONA_WHERE {
+        return Err(format!(
+            "{tool} is answered by the app through purlis's MCP server, not here"
         ));
     }
     // FR-24, at every write and not only when the server started: the server lives as long

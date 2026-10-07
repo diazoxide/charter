@@ -305,6 +305,11 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
         if let Some(reports) = purlis_core::handback::context(&kept, true) {
             parts.push(reports);
         }
+        // Where this chat is working (#1450): who asked for it, its sibling tasks and the
+        // other chats running as its persona, as the app that started it has them recorded.
+        if let Some(working) = crate::whereworking::briefing(hook.now) {
+            parts.push(working);
+        }
         if let Some(line) = purlis_core::briefing::emitted(&parts) {
             say(&line);
         }
@@ -315,7 +320,8 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
 /// `additionalContext`: the heartbeat; the commitment gate
 /// ([`purlis_core::commitgate`], charter#369), which tells a prompt asking for work with a real
 /// fork in it to scout and ask before building; and any report a chat this one handed work to
-/// has sent back (charter-app#259), quoted as data, never typed into the chat.
+/// has sent back (charter-app#259), quoted as data, never typed into the chat; and one line when
+/// where the chat is working has changed ([`crate::whereworking`], #1450).
 ///
 /// Of the rest of the Python handler, the persona roster went with `routing:`, which is
 /// retired, and "control plane updated" is the window's to say, as a mark on the chat's tab
@@ -334,6 +340,9 @@ pub fn userpromptsubmit(payload: &str, now: Option<&str>) {
                 purlis_core::handback::take(hook.root, purlis_core::handback::For::Chat(chat));
             parts.extend(purlis_core::handback::context(&reports, false));
         }
+        // One line when where this chat is working has changed since it was last told (#1450),
+        // by the app's own count of what it was told.
+        parts.extend(crate::whereworking::update(hook.now));
         if !parts.is_empty() {
             say(&purlis_core::handback::emitted(
                 "UserPromptSubmit",
