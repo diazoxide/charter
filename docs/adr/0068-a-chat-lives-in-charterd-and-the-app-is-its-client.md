@@ -290,6 +290,15 @@ differently as built:
 - **A gap is found from the file's own highest number.** Lines removed from the end are not
   detected, and neither are lines removed and then followed by new ones.
 
+*Note, 2026-10-07, for issue 983: the shape as built, with nothing above changed.* A chat's
+spool is a folder, `spool/<n>/`, with one file per line, where it was one file of lines. A hook
+takes its number by making a file exclusively and waits on no lock, so hooks of one chat that
+spool at once no longer cost each other a line: under the lock the file needed, a hook that
+waited 250 ms behind the others' syncs lost its line and said so. The line, its number, its MAC,
+the keys, the drain's checks and the sandbox's denial are as above, and a gap is found from the
+highest number a key's files hold. The file of a build before is still drained (N−1).
+`docs/plane-format.md` has the shape.
+
 ### 7. An upgrade hands the terminals over, and drains only when it must (V7; FD-28: upgrade without losing agents)
 
 **The normal path hands every live PTY master to the new host over `SCM_RIGHTS`.** A PTY master is

@@ -153,7 +153,9 @@ fn a_line_no_host_takes_outside_the_sandboxs_denial_is_lost_and_says_so() {
     let lost = deliver_tool(&path, Some(&token), &call(7, "a"));
 
     assert!(lost.is_err(), "{lost:?}");
-    assert!(!spool::dir_for(&path).join("7.jsonl").exists());
+    for spooled in ["7", "7.jsonl"] {
+        assert!(!spool::dir_for(&path).join(spooled).exists(), "{spooled}");
+    }
 }
 
 #[test]
@@ -162,6 +164,28 @@ fn a_line_with_no_token_and_no_host_is_lost_and_says_so() {
     let path = dir.path().join(".charter/app/hooks.sock");
 
     assert!(deliver_tool(&path, None, &call(4, "a")).is_err());
+}
+
+#[test]
+fn a_line_its_spool_gave_up_waiting_on_may_be_lost_and_any_other_is_lost() {
+    let away = io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused");
+    let slow = io::Error::new(
+        io::ErrorKind::TimedOut,
+        "this chat's spool did not take the line within 1000 ms",
+    );
+    let full = io::Error::other("no space left on the device");
+
+    let may_be = not_spooled(&away, slow);
+    let is = not_spooled(&away, full);
+
+    // The write goes on after the hook stops waiting, so the next open may still record it.
+    assert_eq!(may_be.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        may_be.to_string().ends_with("so it may be lost"),
+        "{may_be}"
+    );
+    assert!(may_be.to_string().contains("within 1000 ms"), "{may_be}");
+    assert!(is.to_string().ends_with("so it is lost"), "{is}");
 }
 
 /// The first acceptance line of #667: a host restart during a busy turn loses no event.
@@ -184,6 +208,7 @@ fn a_host_restart_during_a_busy_turn_loses_no_event() {
     // Eight hooks at a time, two hundred calls, and the host goes away a third of the way in.
     let next = AtomicUsize::new(0);
     let delivered = Mutex::new(Vec::new());
+    let lost = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..8 {
             scope.spawn(|| {
@@ -196,8 +221,9 @@ fn a_host_restart_during_a_busy_turn_loses_no_event() {
                         drop(reading.lock().unwrap().take());
                     }
                     let id = format!("call-{n}");
-                    if deliver_tool(&path, Some(&token), &call(5, &id)).is_ok() {
-                        delivered.lock().unwrap().push(id);
+                    match deliver_tool(&path, Some(&token), &call(5, &id)) {
+                        Ok(_) => delivered.lock().unwrap().push(id),
+                        Err(why) => lost.lock().unwrap().push(format!("{id}: {why}")),
                     }
                 }
             });
@@ -208,10 +234,12 @@ fn a_host_restart_during_a_busy_turn_loses_no_event() {
     let mut recorded = heard.lock().unwrap().clone();
     recorded.extend(spooled_calls(&path));
     let delivered = delivered.into_inner().unwrap();
+    // What each hook that lost its line said, so a red run names the wait that ran out.
+    let lost = lost.into_inner().unwrap();
     assert_eq!(
         delivered.len(),
         200,
-        "every hook either reached the host or spooled"
+        "every hook either reached the host or spooled; the ones that did not said: {lost:#?}"
     );
     for id in &delivered {
         assert!(recorded.contains(id), "{id} was lost");
