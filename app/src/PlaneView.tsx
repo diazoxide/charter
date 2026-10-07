@@ -245,6 +245,8 @@ import { projectThemeChanged, useProjectThemeKept } from "./projectTheme";
 import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
+import { ChatsSection } from "./ChatsSection";
+import { chatsTree, listedChat, startedElsewhere } from "./chatsTree";
 import { HarnessChip } from "./HarnessCard";
 import {
   ChatsHere,
@@ -870,11 +872,15 @@ export const PlaneView = memo(function PlaneView({
         // The persona comes with the chat, so a tab put back reads `steward 3` from its first
         // frame rather than reading `3` until the sidebar has been read (charter-app#130) — and
         // so does the name the operator gave it, which rides the record (charter-app#254).
-        const chats = open.reduce(
-          (tabs, chat) =>
-            openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
-          noTabs(),
-        );
+        // **A task chat nobody has opened is put back with no tab** (#1447): it is listed in
+        // the Chats section, as it was, and its row opens one.
+        const chats = open
+          .filter((chat) => chat.from?.tab !== false)
+          .reduce(
+            (tabs, chat) =>
+              openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
+            noTabs(),
+          );
         // Each view at the place it had, in the order of those places, so a view recorded at 2
         // lands at 2 after the one at 1 is already in.
         const drawn = [...back]
@@ -980,6 +986,10 @@ export const PlaneView = memo(function PlaneView({
       setStartedIn((was) => ({ ...was, [arrived.session]: arrived.workspace }));
       const note = handedFromNote(arrived.from);
       if (note) setHandedFrom((was) => ({ ...was, [arrived.session]: note }));
+      // **A task chat arrives with no tab** (#1447): the work was not sent for the person to
+      // read, so it is listed in the Chats section and its row opens a tab. Filing it above is
+      // what reads the list again.
+      if (arrived.from?.tab === false) return;
       // Named for its task where the handoff named one, and `<persona> <N>` where it did not
       // (charter-app#258).
       change((tabs) =>
@@ -2191,17 +2201,48 @@ export const PlaneView = memo(function PlaneView({
     [change, filedIn, sidebar],
   );
 
+  /** Every chat the core lists, by session, as of the last read: what {@link showChat} opens a
+   *  tab from for a chat that has none. A ref, so a read of the list does not make a new
+   *  `showChat` for every row and catalogue entry holding one. */
+  const listedNow = useRef<ReadonlyMap<number, OpenChat>>(new Map());
+  useEffect(() => {
+    listedNow.current = new Map(
+      [...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []), ...(sidebar?.unfiled ?? [])].map(
+        (chat) => [chat.session, chat],
+      ),
+    );
+  }, [sidebar]);
+
   /** Brings the tab holding a chat to the front. The queue and the palette both use it. A chat
    *  listed because its Smart close stopped (SI-8f) has been looked at, so it leaves the list. */
   const showChat = useCallback(
     (session: number) => {
-      const tab = now.current.order.find((id) =>
-        panesOf(now.current, id).some((pane) => pane.session === session),
-      );
+      const holding = (tabs: Tabs) =>
+        tabs.order.find((id) => panesOf(tabs, id).some((pane) => pane.session === session));
+      let tab = holding(now.current);
+      // **A task chat listed with no tab gets an ordinary one, in front** (#1447). The core is
+      // told, so a reloaded window and the next launch draw it again.
+      const listed = tab === undefined ? listedNow.current.get(session) : undefined;
+      if (listed !== undefined) {
+        tab = holding(
+          change((tabs) =>
+            alreadyShows(tabs, session)
+              ? tabs
+              : openTab(
+                  tabs,
+                  session,
+                  listed.name,
+                  whoOf(listed.persona, listed.harness),
+                  listed.label,
+                ),
+          ),
+        );
+        void commands.openChatTab(plane, session).catch(() => undefined);
+      }
       if (tab !== undefined) bringToFront(tab);
       stoppedFor(session, undefined);
     },
-    [bringToFront, stoppedFor],
+    [bringToFront, change, plane, stoppedFor],
   );
 
   /**
@@ -3977,6 +4018,39 @@ export const PlaneView = memo(function PlaneView({
   );
 
   /**
+   * Every running chat of the project, as the Chats section lists it (#1447): the core's own
+   * list, each named as its tab is, or as its tab would be for a task chat that has none yet.
+   * Whether it has a tab is this window's answer, since the tabs are this window's.
+   */
+  const listedChats = useMemo(() => {
+    if (sidebar === undefined) return [];
+    const one = (chat: OpenChat, workspace: string) => {
+      const tab = tabs.order.find((id) =>
+        panesOf(tabs, id).some((pane) => pane.session === chat.session),
+      );
+      const who = whoOf(chat.persona, chat.harness);
+      return listedChat(
+        chat,
+        workspace,
+        tab !== undefined
+          ? tabs.byId[tab].name
+          : (chat.label ?? (who ? `${who} ${chat.name}` : chat.name)),
+        tab !== undefined,
+      );
+    };
+    // By number, which is the order they were started in: the list arrives workspace by
+    // workspace, and a chat's children are read in the order it asked for them.
+    return [
+      ...sidebar.workspaces.flatMap((ws) => ws.chats.map((chat) => one(chat, ws.name))),
+      ...sidebar.unfiled.map((chat) => one(chat, ROOT_WORD)),
+    ].sort((a, b) => a.session - b.session);
+  }, [sidebar, tabs]);
+  const chatRows = useMemo(() => chatsTree(listedChats), [listedChats]);
+  /** The chats each chat started that went to another workspace, which the explorer draws
+   *  under its row with that workspace named. */
+  const chatsStarted = useMemo(() => startedElsewhere(listedChats), [listedChats]);
+
+  /**
    * The focused workspace's worktrees, as the catalogue names them (charter-app#174).
    *
    * **The clones in the plane's own order, and the pieces in git's** — the order the explorer
@@ -5156,26 +5230,36 @@ export const PlaneView = memo(function PlaneView({
         onResized={resized}
         content={{
           explorer: (
-            <Explorer
-              plane={plane}
-              workspace={ofWorkspace}
-              live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
-              state={workspaceState}
-              chats={workspaceChats}
-              spot={spot}
-              onPick={pickSpot}
-              onShowChat={showChat}
-              wrapping={wrapping}
-              offers={found}
-              onPress={press}
-              onOpenFile={(place, path) =>
-                showView(pieceFileView(place, path), pieceFileTitle(place, path))
-              }
-              focus={cockpit}
-              onFocus={setFocusedBranch}
-              cloning={cloning}
-              onReadAgain={rereadPanels}
-            />
+            /* The left region is navigation (ADR 0038): the project's chats above, and the
+               focused workspace's repos and branches under them. */
+            <div className="left-region">
+              <ChatsSection
+                rows={chatRows}
+                front={frontTab === undefined ? undefined : chatOf(tabs, frontTab.id)}
+                onOpen={showChat}
+              />
+              <Explorer
+                plane={plane}
+                workspace={ofWorkspace}
+                live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
+                state={workspaceState}
+                chats={workspaceChats}
+                spot={spot}
+                onPick={pickSpot}
+                onShowChat={showChat}
+                wrapping={wrapping}
+                offers={found}
+                onPress={press}
+                onOpenFile={(place, path) =>
+                  showView(pieceFileView(place, path), pieceFileTitle(place, path))
+                }
+                focus={cockpit}
+                onFocus={setFocusedBranch}
+                cloning={cloning}
+                onReadAgain={rereadPanels}
+                started={chatsStarted}
+              />
+            </div>
           ),
           aside: (
             <Panels
@@ -5781,8 +5865,9 @@ type Arrived = {
   harness?: string | null;
   /** The task name the handoff gave it, which its tab says instead (charter-app#258). */
   label?: string | null;
-  /** The chat it was handed off from, by name, and that chat's workspace. */
-  from?: HandedFrom | null;
+  /** The chat that started it, by name, and that chat's workspace; and, where the core says
+   *  (#1447), whether it arrives with a tab. */
+  from?: (HandedFrom & { tab?: boolean }) | null;
 };
 
 /** A harness started by hand in a shell tab, as its banner needs it (ADR 0062). */
@@ -5961,6 +6046,9 @@ function StartNotice({
 function whoOf(persona: string | null, harness: string | null | undefined): string | null {
   return persona ?? harness ?? null;
 }
+
+/** Where a chat in no workspace works, in the words its handoff note uses (`plane root`). */
+const ROOT_WORD = "plane root";
 
 /** Whether any tab already shows `session`, in any of its panes. */
 function alreadyShows(tabs: Tabs, session: number): boolean {

@@ -112,6 +112,11 @@ export function movedAt(states: ChatStates, session: number): number {
   return states.movedAt[session] ?? 0;
 }
 
+/** Whether `session` is in the needs-you queue. */
+export function isAsking(states: ChatStates, session: number): boolean {
+  return states.needsYou.includes(session);
+}
+
 /** The chats that reported back to `session` and have not been read yet, oldest first. */
 export function reportsTo(states: ChatStates, session: number): readonly string[] {
   return states.reports[session] ?? [];

@@ -474,6 +474,9 @@ fn open_it(
             } else {
                 Owed::Nothing
             },
+            // The work moved, so the chat opens as a tab. A task dispatch records
+            // `Mode::Task` through this same field.
+            mode: purlis_core::reopen::Mode::Handoff,
         }),
         held: held_grants,
         renamed_from: None,
@@ -489,7 +492,10 @@ fn open_it(
         session,
         name,
         label,
-        from: chat.from.as_ref().map(crate::HandedFromNote::from),
+        from: chat
+            .from
+            .as_ref()
+            .map(|from| crate::HandedFromNote::of(from, chat.has_tab())),
         workspace: ws.to_owned(),
         persona,
         harness: ready.harness.map(|harness| harness.name().to_owned()),
@@ -872,6 +878,9 @@ mod tests {
                 from: Some(crate::HandedFromNote {
                     name: "claude 1".to_owned(),
                     workspace: "default".to_owned(),
+                    chat: 1,
+                    task: false,
+                    tab: true,
                 }),
                 workspace: "alpha".to_owned(),
                 persona: None,
@@ -1094,6 +1103,9 @@ mod tests {
             Some(crate::HandedFromNote {
                 name: "platform steward".to_owned(),
                 workspace: "default".to_owned(),
+                chat: asking,
+                task: false,
+                tab: true,
             })
         );
         assert!(first_message_of(&plane).contains("⟨handoff from platform steward · workspace"));

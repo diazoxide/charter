@@ -48,13 +48,17 @@ import { Menued } from "./Menus";
 import { NotClonedHere, type Cloning } from "./NotCloned";
 import { WorktreeMark } from "./Worktree";
 import { isShell } from "./chatState";
-import { ChatStateMark, ChildAgents, childAgentsId } from "./ChatRows";
+import { ChatStateMark, ChildAgents, StartedElsewhere, childAgentsId } from "./ChatRows";
+import type { ListedChat } from "./chatsTree";
 import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
 import { Breadcrumb, CockpitHeader, focusStands, useAheadBehind } from "./Cockpit";
 import { dragReference } from "./references";
 import { touchingIn, touchSaid, useTouching, type Touching } from "./touching";
+
+/** No chat started another, for a window that has not said. */
+const NONE_STARTED: ReadonlyMap<number, readonly ListedChat[]> = new Map();
 
 /** No chat wrapping up, for a window that has not said. */
 const NONE_WRAPPING: ReadonlySet<number> = new Set();
@@ -167,6 +171,12 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  * keyboard lands on the branch's row. Which branch is the window's (`PlaneView.tsx`), and it is
  * remembered with the window's views.
  *
+ * **A chat that started one in another workspace says so under its row** (#1447), after its
+ * sub-agents: the started chat by name, with what it is doing and the workspace it went to.
+ * One that works here has its own row at the place it works, because this tree's axis is the
+ * place. The project-wide tree of who started whom is the Chats section above this region's
+ * explorer (`ChatsSection.tsx`).
+ *
  * **What a chat is touching right now is marked live** (FM-6, #1109; V86 F6): a file a chat's
  * tool reads or edits, and every folder above it up to the branch's *Files* row, carry a dot
  * naming the chat on hover, which fades a few seconds after the chat goes quiet on it
@@ -190,6 +200,7 @@ export function Explorer({
   onFocus,
   cloning,
   onReadAgain,
+  started = NONE_STARTED,
 }: {
   /** The project, for reading a branch's folders. Without one no folder is read. */
   plane?: PlaneId;
@@ -222,6 +233,9 @@ export function Explorer({
   /** Asks the workspace's reads again: the way out of a refused one (NO-4). It is this
    *  region's to offer, for the bottom bar's lines too, since that region is not pressed. */
   onReadAgain: () => void;
+  /** The chats each chat here started that work in another workspace, by its number (#1447):
+   *  drawn under its row, naming that workspace. */
+  started?: ReadonlyMap<number, readonly ListedChat[]>;
 }) {
   /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
    *  it cannot be where the keyboard comes back in. */
@@ -523,6 +537,7 @@ export function Explorer({
           <div role="tree" aria-label={`Chats and files of ${name}`} onKeyDown={onTreeKey}>
             <ChatList
               chats={here}
+              started={started}
               wrapping={wrapping}
               onShow={onShowChat}
               treeitem={treeitem}
@@ -577,6 +592,7 @@ export function Explorer({
           </RovingFocusGroup.Item>
           <ChatList
             chats={atTheRoot}
+            started={started}
             wrapping={wrapping}
             onShow={onShowChat}
             treeitem={treeitem}
@@ -722,6 +738,7 @@ export function Explorer({
                             </ul>
                             <ChatList
                               chats={working}
+                              started={started}
                               wrapping={wrapping}
                               onShow={onShowChat}
                               treeitem={treeitem}
@@ -841,12 +858,15 @@ function PieceCount({ pieces, refused }: { pieces?: readonly unknown[]; refused?
  *  the operator starts a second one in it. */
 function ChatList({
   chats,
+  started,
   wrapping,
   onShow,
   treeitem,
   isDrawn,
 }: {
   chats: readonly OpenChat[];
+  /** The chats each chat started that work in another workspace, by its number. */
+  started: ReadonlyMap<number, readonly ListedChat[]>;
   wrapping: ReadonlySet<number>;
   onShow: (session: number) => void;
   /** What a row says about its place in the tree. */
@@ -904,6 +924,8 @@ function ChatList({
           {chat.unreported && <p className="unreported">{chat.unreported}</p>}
           {/* What it spawned, under it (FD-18): its sub-agents, each with its state. */}
           <ChildAgents session={chat.session} name={chat.name} />
+          {/* The chats it started that went to another workspace (#1447), each naming it. */}
+          <StartedElsewhere chats={started.get(chat.session)} name={chat.name} onShow={onShow} />
         </li>
       ))}
     </ul>

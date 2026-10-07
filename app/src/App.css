@@ -2108,6 +2108,142 @@ h2.sidebar-title .node-icon {
   white-space: nowrap;
 }
 
+/* The chats a chat started that went to another workspace, under it and after its sub-agents
+   (#1447): one line each, a button that brings that chat forward, and a badge naming the
+   workspace. */
+.explorer .started-chats {
+  margin: 0.1rem 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.explorer .started-chat {
+  white-space: nowrap;
+}
+
+.explorer .started-chat .elsewhere,
+.chats-section .workspace,
+.chats-section .from,
+.chats-section .no-tab {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.explorer .started-chat .elsewhere,
+.chats-section .no-tab {
+  padding: 0 0.3rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+}
+
+/* **The left region** (ADR 0038, as amended): the project's chats over the workspace's
+   explorer. The chats take what they need up to two fifths of the region and scroll inside it,
+   so fifty chats never push the explorer off the screen; the explorer has the rest. */
+.left-region {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.left-region > .explorer {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+}
+
+.chats-section {
+  flex: 0 1 auto;
+  max-height: 40%;
+  overflow: auto;
+  padding: 0.5rem;
+  border-block-end: 1px solid var(--border-subtle);
+  font-size: 0.85rem;
+}
+
+.chats-section ul {
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One level of the tree is one step of indent. The level is the row's own, so the list stays
+   flat and a row is drawn again only for its own facts. */
+.chats-section li[data-level="2"] {
+  padding-inline-start: 0.85rem;
+}
+.chats-section li[data-level="3"] {
+  padding-inline-start: 1.7rem;
+}
+.chats-section li[data-level="4"] {
+  padding-inline-start: 2.55rem;
+}
+.chats-section li[data-level="5"],
+.chats-section li[data-level="6"],
+.chats-section li[data-level="7"],
+.chats-section li[data-level="8"] {
+  padding-inline-start: 3.4rem;
+}
+
+/* A row names one chat on one line, as an explorer row does, and the section scrolls sideways
+   for a long one. */
+.chats-section .chat {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  min-width: max-content;
+  padding: 0.1rem 0.2rem;
+  border: none;
+  border-radius: 2px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.chats-section .chat:hover,
+.chats-section .chat[aria-current="true"] {
+  background: var(--surface-hover);
+}
+
+.chats-section .empty {
+  margin: 0.25rem 0 0;
+}
+
+/* A persona's initials, until its icon lands (#1449): a small tile in the row's own colours.
+   Drawn here, from the attribute, so they are no part of the row's text. */
+.persona-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  height: 1.4em;
+  padding: 0 0.15em;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 0.7em;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.persona-initials::before {
+  content: attr(data-initials);
+}
+
+/* The hand a chat wears on its row while it is asking for you: the title bar's, at the row's
+   size. The mark may be `needs-you.base`; words beside it are not. */
+.needs-you-mark {
+  display: inline-flex;
+}
+
+.needs-you-mark svg {
+  width: 1em;
+  height: 1em;
+  color: var(--needs-you-base);
+}
+
 /* The bottom region: what the focused workspace's repos are doing. Nothing in it can be
    pressed, which is the half of ADR 0038's reading a test can hold. */
 .state-bar {

@@ -104,6 +104,7 @@ macro_rules! app_commands {
                 thismachine::revoke_approval,
                 thismachine::pin_on_this_machine,
                 pin_chat,
+                open_chat_tab,
                 chat_order,
                 rename_chat,
                 ask_to_quit,

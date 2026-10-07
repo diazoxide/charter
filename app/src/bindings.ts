@@ -622,6 +622,11 @@ export const commands = {
 	 */
 	pinChat: (plane: PlaneId, session: number, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_chat", { plane, session, pinned })),
 	/**
+	 *  The person opened a task chat's tab from the Chats section (#1447): the record keeps it,
+	 *  so a reloaded window and the next launch draw the tab again.
+	 */
+	openChatTab: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("open_chat_tab", { plane, session })),
+	/**
 	 *  The order the chat strip draws this project's chats in, by session, so the record lists
 	 *  them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
 	 * 
@@ -2872,7 +2877,10 @@ export type Handed =
 /**  Put on the clipboard instead, with the sentence saying why. */
 { kind: "copied"; text: string; why: string };
 
-/**  Where a handed-off chat came from, as the window draws it. */
+/**
+ *  Where a chat another chat started came from, as the window draws it: its note, and its
+ *  place in the project's tree of chats (#1447).
+ */
 export type HandedFromNote = {
 	/**  The chat it came from, by the name the operator saw it under. */
 	name: string,
@@ -2881,6 +2889,21 @@ export type HandedFromNote = {
 	 *  (SI-1b) — `purlis_core::active::Place::word`, drawn as it is.
 	 */
 	workspace: string,
+	/**
+	 *  That chat's number: what the Chats section nests this one under while it is open.
+	 *  Never drawn; the note says the name.
+	 */
+	chat: number,
+	/**
+	 *  Whether a dispatch started it as a task, which owes that chat a report; a handoff, where
+	 *  the work moved, is not one.
+	 */
+	task: boolean,
+	/**
+	 *  Whether it has a tab. A handoff always has one; a task chat has none until the person
+	 *  opens it from the Chats section (`open_chat_tab`).
+	 */
+	tab: boolean,
 };
 
 /**
