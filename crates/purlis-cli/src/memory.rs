@@ -186,6 +186,16 @@ pub enum PersonaCommand {
         #[arg(long, hide = true)]
         now: Option<String>,
     },
+    /// Where this chat is working: who asked for it, its sibling tasks, and the other chats
+    /// running as its persona, from the app's own record.
+    ///
+    /// Names, workspaces and states only, never another chat's content. Answered by the app
+    /// that started the chat ([`crate::whereworking`], #1450); outside one it says so.
+    Where {
+        /// Pin the clock times are said against, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
     /// Generate a Claude Code sub-agent (.claude/agents/<name>.md) per persona.
     ///
     /// The work is [`purlis_core::personaverbs::agents`].
@@ -1178,7 +1188,7 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
     let plane = &here.plane;
     match command {
         // Answered in `main` before a plane is even looked for.
-        PersonaCommand::Gc { .. } | PersonaCommand::Secret(_) => {
+        PersonaCommand::Gc { .. } | PersonaCommand::Secret(_) | PersonaCommand::Where { .. } => {
             unreachable!("answered before run")
         }
         PersonaCommand::Curation(command) => crate::curation::persona(plane.root(), command),

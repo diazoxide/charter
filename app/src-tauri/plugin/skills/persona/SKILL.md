@@ -18,6 +18,8 @@ memory model and roster health.
 purlis persona current        # the active persona's name, or (none)
 purlis persona list           # every persona, the active one marked, each vault's state
 purlis persona show <name>    # its charter: the role to actually adopt
+purlis persona where          # in a chat purlis started: who asked for it, its sibling tasks,
+                              # and where else this persona is working right now
 ```
 
 The first rung that names a persona wins:

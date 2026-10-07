@@ -374,6 +374,12 @@ pub struct Chats {
     /// The chats being started again in their place right now (#1342): one restart at a time
     /// per chat, whichever asked for it.
     restarting: Mutex<std::collections::HashSet<u32>>,
+    /// What each chat was last told of where it is working (#1450), by its number: who its
+    /// siblings and its persona's other chats were then, so a later turn is told only what
+    /// changed ([`Self::working`]). **Here, beside the app's record of the chat, and in
+    /// memory only**: never a file a chat could write, and a chat started again is briefed
+    /// afresh.
+    told: Mutex<HashMap<u32, purlis_core::awareness::Told>>,
 }
 
 /// One grant a person made for one chat (#1342), as Settings' Granted list shows it.
@@ -451,6 +457,7 @@ impl Chats {
             grants: Mutex::new(HashMap::new()),
             owed: Mutex::new(HashMap::new()),
             restarting: Mutex::new(std::collections::HashSet::new()),
+            told: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1418,6 +1425,8 @@ impl Chats {
             lock(&self.late_notes).insert(session, late);
         }
         let workspace = workspace_at_start(Some(&self.project), under.cwd.as_deref());
+        // A start under this number has been told nothing yet (#1450).
+        lock(&self.told).remove(&session);
         lock(&self.open).insert(
             session,
             Running {
@@ -1437,6 +1446,7 @@ impl Chats {
     pub fn close(&self, session: u32) -> Result<(), String> {
         let gone = lock(&self.open).remove(&session);
         lock(&self.owed).remove(&session);
+        lock(&self.told).remove(&session);
         if let Some(gone) = gone {
             // A chat's grants end with it (D-1348-1): kept only while a session of that chat is
             // open, which a restart for a grant is, since it starts before the old one ends.
@@ -1582,6 +1592,55 @@ impl Chats {
         from.report = owed;
         drop(open);
         self.write_it_down();
+    }
+
+    /// **Where chat `session` is working** (#1450): who asked for it, its sibling tasks and the
+    /// other chats running as its persona, drawn from this app's own record of every chat it
+    /// has open in the project ([`purlis_core::awareness`]), with each one's state as
+    /// `state_of` has it on the board. `tell` says whether the chat counts as told from now,
+    /// which is kept here. `None` for a chat that is not open.
+    ///
+    /// Nothing but `session` comes from the chat that asks, and the answer has a chat's name,
+    /// persona, workspace, state and start: never its arguments, where a brief travels.
+    pub fn working(
+        &self,
+        session: u32,
+        tell: purlis_core::awareness::Tell,
+        state_of: &dyn Fn(u32) -> purlis_core::state::State,
+    ) -> Option<purlis_core::awareness::Working> {
+        use purlis_core::awareness::{Asker, Known};
+        // The board is asked once `open` is let go: nothing waits on both.
+        let mut known: Vec<Known> = lock(&self.open)
+            .iter()
+            .map(|(number, one)| Known {
+                chat: *number,
+                name: purlis_core::reopen::shown_name(&one.chat, one.harness.map(Harness::name)),
+                persona: one.chat.persona.clone(),
+                workspace: one.workspace.clone().map_or(
+                    purlis_core::active::Place::PlaneRoot,
+                    purlis_core::active::Place::Workspace,
+                ),
+                state: purlis_core::state::State::Unknown,
+                started: one
+                    .chat
+                    .identity
+                    .id
+                    .as_deref()
+                    .and_then(purlis_core::awareness::started_of),
+                from: one.chat.from.as_ref().map(|from| Asker {
+                    chat: from.chat,
+                    name: from.name.clone(),
+                    reported: from.report == purlis_core::reopen::Owed::Sent,
+                }),
+            })
+            .collect();
+        for one in &mut known {
+            one.state = state_of(one.chat);
+        }
+        // Only a chat that is open has anything kept of what it was told.
+        known.iter().find(|one| one.chat == session)?;
+        let mut told = lock(&self.told);
+        purlis_core::awareness::answer(&known, session, tell, told.entry(session).or_default())
     }
 
     /// Chat `session`'s own record, as the app keeps it while it is open: what a handoff from it
