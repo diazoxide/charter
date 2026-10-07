@@ -3,7 +3,7 @@ import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { MessagesSquare, SquareTerminal } from "lucide-react";
 import { ChatStateMark, NeedsYouMark } from "./ChatRows";
 import type { ChatRow } from "./chatsTree";
-import { PersonaMark } from "./PersonaMarkStandIn";
+import { PersonaMark } from "./PersonaMark";
 import { useTabStop } from "./roving";
 
 /** A row's id in the section's roving focus. */
