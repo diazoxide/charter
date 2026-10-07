@@ -789,7 +789,7 @@ fn a_fifo_in_a_store_is_refused_at_once_and_the_store_is_let_go() {
 #[test]
 fn every_tool_pre_allowed_in_claude_code_is_one_that_only_reads() {
     // V79: the pre-allowed tools are the five reads, and `persona_where` beside them
-    // (D-T58-1, #1450): each a tool the server offers and marks read-only, and never
+    // (V98a, #1450): each a tool the server offers and marks read-only, and never
     // `ask_operator`, which is marked read-only and still asks.
     assert_eq!(
         PRE_ALLOWED,

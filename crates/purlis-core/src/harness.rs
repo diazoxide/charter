@@ -951,7 +951,7 @@ mod tests {
         // SI-8e, the operator's ruling: a Smart close never stops on a permission prompt for
         // the one command that ends it. Amended by V79 (#1050): the five read-only tools of
         // charter's own MCP server are pre-allowed beside it, and `persona_where` with them
-        // (D-T58-1, #1450). Only grants, for exactly these —
+        // (V98a, #1450). Only grants, for exactly these —
         // no `ask`, no `deny`, no mode — so every rule of the operator's and the project's
         // still stands beside them (measured on 2.1.283: `--settings` permissions merge with
         // them, and a compound command holding the record command is still asked about).
@@ -966,7 +966,10 @@ mod tests {
             serde_json::json!({"allow": [
                 "Bash(purlis session record *)",
                 "mcp__purlis__session_record",
-                "Bash(purlis dispatch *)",
+                "Bash(purlis dispatch --name *)",
+                "Bash(purlis dispatch --to *)",
+                "Bash(purlis dispatch --profile *)",
+                "Bash(purlis dispatch report *)",
                 "mcp__purlis__dispatch",
                 "mcp__purlis__dispatch_report",
                 "mcp__purlis__todo_list",
@@ -980,9 +983,45 @@ mod tests {
     }
 
     #[test]
+    fn a_dispatch_is_pre_allowed_by_each_spelling_it_has_and_by_no_wildcard_over_the_rest() {
+        // V98b, as narrowed: a rule that ended `dispatch *` would also allow whatever
+        // subcommand `dispatch` grows next, which nobody ruled on. Each is added by name.
+        let empty = tempfile::tempdir().expect("a directory");
+        let (args, _) = claude("/bin/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(settings_of(&args)).expect("JSON");
+        let dispatch: Vec<&str> = settings["permissions"]["allow"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|rule| rule.starts_with("Bash(purlis dispatch"))
+            .collect();
+        assert_eq!(
+            dispatch,
+            [
+                "Bash(purlis dispatch --name *)",
+                "Bash(purlis dispatch --to *)",
+                "Bash(purlis dispatch --profile *)",
+                "Bash(purlis dispatch report *)",
+            ]
+        );
+        for rule in &dispatch {
+            assert_ne!(*rule, "Bash(purlis dispatch *)");
+            // And every flag the rules start with is one the command takes.
+            if let Some(flag) = rule
+                .strip_prefix("Bash(purlis dispatch ")
+                .and_then(|rest| rest.split(' ').next())
+                .filter(|word| word.starts_with("--"))
+            {
+                assert!(["--name", "--to", "--profile"].contains(&flag), "{flag}");
+            }
+        }
+    }
+
+    #[test]
     fn a_claude_code_chat_is_still_asked_before_every_other_charter_tool() {
         // V79: the writes and `ask_operator` keep Claude Code's prompt. Every tool the server
-        // offers that is not one of the five reads or `persona_where` (D-T58-1) has no allow,
+        // offers that is not one of the five reads or `persona_where` (V98a) has no allow,
         // whatever it is marked.
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
@@ -1220,7 +1259,10 @@ mod tests {
             serde_json::json!([
                 "Bash(purlis session record *)",
                 "mcp__purlis__session_record",
-                "Bash(purlis dispatch *)",
+                "Bash(purlis dispatch --name *)",
+                "Bash(purlis dispatch --to *)",
+                "Bash(purlis dispatch --profile *)",
+                "Bash(purlis dispatch report *)",
                 "mcp__purlis__dispatch",
                 "mcp__purlis__dispatch_report",
                 "mcp__purlis__todo_list",
