@@ -924,6 +924,15 @@ function ChatList({
               {/* Its own chat's state, read by the mark itself (SC-3). */}
               <ChatStateMark session={chat.session} shell={isShell(chat)} />
               <WrappingUp held={wrapping.has(chat.session)} />
+              {/* A task that has made its one report stays open, and says so, until you or
+                the chat that asked for it closes it. One that ended without reporting says
+                that instead: purlis told the chat that asked. */}
+              {chat.from?.task && chat.from.reported && (
+                <span className="harness reported">reported</span>
+              )}
+              {chat.from?.task && chat.from.unreported && (
+                <span className="harness reported">ended without a report</span>
+              )}
               {/* The PROFILE where there is one, and the harness otherwise. A profile is what
                 the operator picked and what a relaunch looks up again; the kind is what the
                 plane calls the harness. Showing the profile alone would hide which harness

@@ -229,7 +229,7 @@ fn report_it(
     summary: &str,
     task: Option<&TaskReport>,
 ) -> Result<Answer, String> {
-    use purlis_core::handback::{self, For, Handback};
+    use purlis_core::handback;
 
     // From "is one owed" to "one was sent" under one lock, so two reports in flight are one
     // report and one refusal, and a restart of the chat that asked lands on one side of it.
@@ -270,6 +270,15 @@ fn report_it(
                 from.name
             ));
         }
+        // purlis reported for it (#1443): its program had ended, or its tab was closed and
+        // reopened, before it said a word. That was the task's one report.
+        (Owed::Failed, _) => {
+            return Err(format!(
+                "purlis already told '{}' that this chat ended without a report, and a task \
+                 gets one report — already reported. Say what you found to the person instead",
+                from.name
+            ));
+        }
     }
     // **Which kind of report it is, is this app's record of how the chat was started**, never
     // what the line says. A handoff's report is its summary, whatever else the line carried.
@@ -303,8 +312,60 @@ fn report_it(
                 .last_record(chat)
                 .and_then(|path| handback::record_path(&path)),
             by_person: from.by_person,
+            unreported: false,
+            stopped: false,
         }),
     };
+    // The dispatch's record ends with the report (#1452). A task's says how it ended; a
+    // handoff's is a summary with no outcome word of its own, so it is recorded as done.
+    let outcome = match task.as_ref().map(|task| task.outcome) {
+        Some(handback::Outcome::Blocked) => purlis_core::dispatchrecord::Outcome::Blocked,
+        Some(handback::Outcome::Failed) => purlis_core::dispatchrecord::Outcome::Failed,
+        Some(handback::Outcome::Done) | None => purlis_core::dispatchrecord::Outcome::Done,
+    };
+    let delivered = deliver(held, chat, &from, summary.clone(), task)?;
+    held.chats().owes(chat, Owed::Sent);
+    crate::dispatches::reported(held, chat, outcome, &summary);
+    // A handoff's report is the person's to see, so it is a needs-you item on the chat that
+    // asked. A task's is that chat's own to read, on its next turn (#1434).
+    if delivered.reached_the_chat && from.mode == Mode::Handoff {
+        held.reported_back(from.chat, &delivered.from);
+    }
+    Ok(Answer::Reported {
+        to: delivered.to,
+        kept_for: delivered.kept_for,
+    })
+}
+
+/// Where a report went.
+struct Delivered {
+    /// The chat that reported, by the name the person sees it under.
+    from: String,
+    /// The chat it was for, by the name the person sees it under.
+    to: String,
+    /// The place it is kept for, where the chat it was for is gone: by `Place::word`, a
+    /// workspace's name or the plane root's word (SI-1b).
+    kept_for: Option<String>,
+    /// Whether it waits for the asking chat's own next turn.
+    reached_the_chat: bool,
+}
+
+/// Leaves a report from chat `chat` for the chat `from` names, or, where that chat is gone,
+/// for the place it asked from: the one road every report takes, whoever wrote it — the chat
+/// itself ([`report_it`]), or the app in its place ([`ended_without_report`]).
+///
+/// **A chat is reachable when its tab is open AND its program is still running**: one that has
+/// ended will never fire the prompt its report waits for, so the report goes where the next
+/// chat to start will read it, as it does for a chat that has closed.
+fn deliver(
+    held: &Held,
+    chat: u32,
+    from: &HandedFrom,
+    summary: String,
+    task: Option<purlis_core::handback::Task>,
+) -> Result<Delivered, String> {
+    use purlis_core::handback::{self, For, Handback};
+
     let chats = held.chats().open_now();
     let child = chats
         .iter()
@@ -314,9 +375,6 @@ fn report_it(
         .chats()
         .shown_name(chat)
         .unwrap_or_else(|| child.name.clone());
-    // A parent is reachable when its tab is open AND its program is still running: one that
-    // has ended will never fire the prompt its report waits for, so the report goes where the
-    // next chat to start will read it, as it does for a parent that has closed.
     let parent_open = chats.iter().any(|open| open.session == from.chat)
         && !matches!(
             held.board().glance(from.chat).state,
@@ -342,6 +400,19 @@ fn report_it(
         task,
         answered: None,
     };
+    // **A task the person started, whose tab chat is gone, is the person's and nobody
+    // else's** (D-1443-9): its report is not handed to whichever chat starts next in that
+    // workspace, which never asked for it and would read it as its own business. It stays
+    // with the persona chat, and that chat is marked as needing the person.
+    if !parent_open && from.by_person {
+        held.reported_back(chat, &child_name);
+        return Ok(Delivered {
+            from: child_name,
+            to,
+            kept_for: Some(handback::FOR_THE_PERSON.to_owned()),
+            reached_the_chat: false,
+        });
+    }
     let whose = if parent_open {
         For::Chat(from.chat)
     } else {
@@ -349,29 +420,372 @@ fn report_it(
     };
     handback::leave(held.root(), whose, &report)
         .map_err(|why| format!("the report could not be kept ({why})"))?;
-    held.chats().owes(chat, Owed::Sent);
-    // The dispatch's record ends with the report (#1452). A task's says how it ended; a
-    // handoff's is a summary with no outcome word of its own, so it is recorded as done.
-    crate::dispatches::reported(
-        held,
-        chat,
-        match report.task.as_ref().map(|task| task.outcome) {
-            Some(handback::Outcome::Blocked) => purlis_core::dispatchrecord::Outcome::Blocked,
-            Some(handback::Outcome::Failed) => purlis_core::dispatchrecord::Outcome::Failed,
-            Some(handback::Outcome::Done) | None => purlis_core::dispatchrecord::Outcome::Done,
-        },
-        &report.summary,
-    );
-    // A handoff's report is the person's to see, so it is a needs-you item on the chat that
-    // asked. A task's is that chat's own to read, on its next turn (#1434).
-    if parent_open && from.mode == Mode::Handoff {
-        held.reported_back(from.chat, &child_name);
-    }
-    Ok(Answer::Reported {
+    Ok(Delivered {
+        from: child_name,
         to,
         // By `Place::word`: a workspace's name, or the plane root's word (SI-1b).
         kept_for: (!parent_open).then(|| from.workspace.word().to_owned()),
+        reached_the_chat: parent_open,
     })
+}
+
+/// The hold [`crate::chats::Chats::deciding`] gives: proof, to the functions below, that the
+/// caller is the one deciding. They read and then write the chats' records, and none of them
+/// takes the lock itself, so one hold covers a whole close.
+pub type Deciding<'a> = std::sync::MutexGuard<'a, ()>;
+
+/// Why the app reports in a persona chat's place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unreported {
+    /// Its program ended on its own before it reported: `failed: ended without a report`.
+    Ended,
+    /// The person closed it, or stopped it with the chat that asked: `stopped by the operator`.
+    Stopped,
+}
+
+/// **A persona chat that will not report is reported for** (#1443): chat `chat` still owed
+/// its asking chat a task's report, and its program ended (`failed: ended without a report`)
+/// or the person closed it (`stopped by the operator`). The app says so in its place, with
+/// the path of the session record it wrote for that chat where it wrote one.
+///
+/// **Once, by nobody's word but the app's, and final** (D-1443-10). Under the caller's hold
+/// of the lock a report is taken under, so the program's end, a close of its tab and the
+/// chat's own report are one report between them. The record is marked only once the report
+/// is kept: one that could not be written is still owed, and is tried again at the chat's
+/// close. It goes where that chat's own report would have gone ([`deliver`]).
+///
+/// **Only for a program that ended on its own, or a close.** Not at a quit, not as the
+/// project is let go of, not when every agent is stopped and not for a chat started again in
+/// its own place: those chats are kept, and report when they run again. The callers hold to
+/// that; this does what it is asked.
+pub fn unreported(held: &Held, chat: u32, why: Unreported, _deciding: &Deciding<'_>) {
+    use purlis_core::handback;
+
+    let Some(from) = held.chats().owed_task_report(chat) else {
+        return;
+    };
+    let record = held
+        .chats()
+        .last_record(chat)
+        .and_then(|path| handback::record_path(&path));
+    let (text, task) = match why {
+        Unreported::Ended => (
+            handback::UNREPORTED,
+            handback::Task::unreported(record, from.by_person),
+        ),
+        Unreported::Stopped => (
+            handback::STOPPED,
+            handback::Task::stopped(record, from.by_person),
+        ),
+    };
+    match deliver(held, chat, &from, text.to_owned(), Some(task)) {
+        Ok(delivered) => {
+            held.chats().owes(chat, Owed::Failed);
+            // Its dispatch's record ends here too, in the app's own words (#1452).
+            crate::dispatches::reported(
+                held,
+                chat,
+                purlis_core::dispatchrecord::Outcome::Failed,
+                text,
+            );
+            tracing::info!(
+                "purlis: chat {chat} {text}, so '{}' is told{}",
+                delivered.to,
+                delivered
+                    .kept_for
+                    .map(|place| format!(" (kept for {place}: that chat is gone)"))
+                    .unwrap_or_default()
+            );
+        }
+        Err(why) => tracing::warn!(
+            "purlis: chat {chat} {text}, and its asking chat could not be told yet ({why})"
+        ),
+    }
+}
+
+/// **A persona chat's program ended on its own** (#1443): [`unreported`], as
+/// [`Unreported::Ended`], called as the operating system says the process is gone. That is
+/// the bound on how long an asking chat can wait on a task that died.
+///
+/// It waits for the deciding lock only while the chat still owes a report. A close holds that
+/// lock while it ends the chat's program, and has settled what the chat owed before it does;
+/// so the end of a program that a close is ending finds nothing owed and returns at once,
+/// and never waits on the close that is waiting on it.
+pub fn its_program_ended(held: &Held, chat: u32) {
+    loop {
+        if held.chats().owed_task_report(chat).is_none() {
+            return;
+        }
+        if let Some(deciding) = held.chats().try_deciding() {
+            unreported(held, chat, Unreported::Ended, &deciding);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+// ----------------------------------------------------------------------------------------
+// a chat's persona chats: where each stands, and what closing their asking chat does (#1443)
+// ----------------------------------------------------------------------------------------
+
+/// Where a persona chat stands (`purlis_core::dispatchdecision::Standing`), as the window and
+/// a chat's own list of its dispatches are told it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonaChatState {
+    /// At work, and its report is still to come.
+    Running,
+    /// Stopped on something only you can answer, in its own tab: a permission prompt or a
+    /// question.
+    WaitingOnOperator,
+    /// It sent its report, and stays open until it is closed.
+    Reported,
+    /// Its program ended before it reported, and the chat that asked was told it failed.
+    Ended,
+}
+
+impl From<dispatchdecision::Standing> for PersonaChatState {
+    fn from(standing: dispatchdecision::Standing) -> Self {
+        use dispatchdecision::Standing;
+        match standing {
+            Standing::Running => Self::Running,
+            Standing::WaitingOnOperator => Self::WaitingOnOperator,
+            Standing::Reported => Self::Reported,
+            Standing::Ended => Self::Ended,
+        }
+    }
+}
+
+/// One persona chat a chat dispatched as a task, as that chat sees it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct PersonaChat {
+    pub session: u32,
+    /// The name the person sees it under: its task's name.
+    pub name: String,
+    /// The persona it runs as.
+    pub persona: Option<String>,
+    pub state: PersonaChatState,
+    /// [`PersonaChatState`] in the words a chat's list of its dispatches says: `running`,
+    /// `waiting on the operator`, `reported`, `ended without a report`.
+    pub said: String,
+    /// Whether closing the chat that asked for it closes it too: it has reported, it is not
+    /// at work, and its session record is written or can be asked for ([`close_reported`]).
+    pub closes_with_its_asker: bool,
+}
+
+/// Where chat `chat`, a persona chat with lineage record `from`, stands: read from the app's
+/// records of it and nothing it says.
+///
+/// **Waiting on the operator is the board's own word that it asks mid-turn** (a permission
+/// prompt, a question), or a permission ask this app holds open for it. Its asking chat cannot
+/// answer either, and reads this to know the wait is not its own to end.
+fn standing_of(held: &Held, chat: u32, from: &HandedFrom) -> dispatchdecision::Standing {
+    dispatchdecision::standing(from.report, !still_working(held, chat), asks(held, chat))
+}
+
+/// Whether chat `chat` is asking the person something mid-turn, or holds a permission ask
+/// open: it cannot go on until they answer in its own tab.
+fn asks(held: &Held, chat: u32) -> bool {
+    held.board().glance(chat).asking || held.asks().asks.iter().any(|ask| ask.session == chat)
+}
+
+/// **The persona chats chat `asker` dispatched as tasks, each with where it stands** (#1443):
+/// what that chat's own list of its dispatches reads, and what closing it says.
+///
+/// `asker` is the app's number for a chat it has open. The list is of the chats still open: a
+/// persona chat that was closed is not one anybody waits on. A task the person started from
+/// that chat's tab is listed too, by name and state, and that is all the list gives a chat of
+/// it: who may steer a listed chat is not this function's to say.
+pub fn persona_chats(held: &Held, asker: u32) -> Vec<PersonaChat> {
+    held.chats()
+        .tasks_of(asker)
+        .into_iter()
+        .map(|(session, from)| {
+            let standing = standing_of(held, session, &from);
+            PersonaChat {
+                session,
+                name: held
+                    .chats()
+                    .shown_name(session)
+                    .unwrap_or_else(|| session.to_string()),
+                persona: held
+                    .chats()
+                    .recorded_chat(session)
+                    .and_then(|chat| chat.persona),
+                state: standing.into(),
+                said: standing.word().to_owned(),
+                closes_with_its_asker: closes_with(held, session, &from) != ClosesWith::Stays,
+            }
+        })
+        .collect()
+}
+
+/// Whether chat `chat`, started by another, is **at work**: what "Stop them" stops, and what
+/// closing a chat above it asks about. Its program runs, and either it is a task that has not
+/// reported, or it is mid-turn or asking the person something. A chat that reported and sits
+/// idle, and a handoff's chat waiting for its next prompt, are not at work: each is a tab the
+/// person can see, with nothing running unseen in it.
+fn at_work(held: &Held, chat: u32, from: &HandedFrom) -> bool {
+    if !still_working(held, chat) {
+        return false;
+    }
+    let owes_a_report = from.mode == Mode::Task && from.report == Owed::Due;
+    owes_a_report
+        || held.board().glance(chat).state == purlis_core::state::State::Running
+        || asks(held, chat)
+}
+
+/// Every chat below chat `asker` that is at work ([`at_work`]), deepest first: the chats it
+/// started, as tasks or by a handoff, and the chats they started, through every chat on the
+/// way whether or not that one is still at work. A chat that reported may have dispatched
+/// before it did, and what it started is still below `asker`.
+fn at_work_below(held: &Held, asker: u32) -> Vec<u32> {
+    fn below(held: &Held, asker: u32, deeper: u32, seen: &mut Vec<u32>, found: &mut Vec<u32>) {
+        if deeper == 0 {
+            return;
+        }
+        for (chat, from) in held.chats().started_by(asker) {
+            if seen.contains(&chat) {
+                continue;
+            }
+            seen.push(chat);
+            below(held, chat, deeper - 1, seen, found);
+            if at_work(held, chat, &from) {
+                found.push(chat);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    // The ceiling no chain passes, and each chat once: a record that names a loop ends.
+    below(
+        held,
+        asker,
+        dispatchdecision::DEEPEST,
+        &mut vec![asker],
+        &mut found,
+    );
+    found
+}
+
+/// The chats at work below chat `asker`, by the names the person sees them under, deepest
+/// first: what closing `asker` asks about, keep them running or stop them.
+pub fn running_below(held: &Held, asker: u32) -> Vec<String> {
+    at_work_below(held, asker)
+        .into_iter()
+        .map(|chat| {
+            held.chats()
+                .shown_name(chat)
+                .unwrap_or_else(|| chat.to_string())
+        })
+        .collect()
+}
+
+/// **Stops every chat at work below chat `asker`** (#1443): the person's "Stop them", asked
+/// once as they close the asking chat. Answers every chat it closed.
+///
+/// Deepest first, so no chat is closed while one it started still runs under it. Each is
+/// closed as a tab's Close closes it ([`Held::close_chat_held`]): a task's asking chat is told
+/// it was stopped by the operator, so what was stopped is on record where the next chat reads
+/// it. Under the caller's hold of the deciding lock, which is also what a dispatch is decided
+/// under: no chat below can start another between the answer and the stop.
+pub fn stop_below(held: &Held, asker: u32, deciding: &Deciding<'_>) -> Vec<u32> {
+    let stopped = at_work_below(held, asker);
+    for &chat in &stopped {
+        if let Err(why) = held.close_chat_held(chat, deciding) {
+            tracing::warn!(
+                "purlis: chat {chat}, stopped with its asking chat, did not end cleanly ({why})"
+            );
+        }
+    }
+    stopped
+}
+
+/// What closing its asking chat does with a persona chat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClosesWith {
+    /// It stays open: it has not reported, it is at work or asking the person something, or
+    /// its session record is gone.
+    Stays,
+    /// It closes now, on the session record the app wrote for it.
+    OnItsRecord(crate::smartclose::SavedRecord),
+    /// It has no session record yet: it is asked for one, and closes when that is saved.
+    OnceRecorded,
+}
+
+/// What closing its asking chat does with chat `chat`, a persona chat with lineage `from`.
+///
+/// **Only a chat that reported and is at rest closes with its asker.** One that reported and
+/// was then given more to do (the person typed in it, a follow-up arrived) is working, and
+/// its work is not ended because the chat that once asked it something has closed. And **one
+/// whose saved record is gone is not closed**: the record is what a close leaves of it.
+fn closes_with(held: &Held, chat: u32, from: &HandedFrom) -> ClosesWith {
+    use purlis_core::state::State;
+
+    if from.mode != Mode::Task || !matches!(from.report, Owed::Sent | Owed::Failed) {
+        return ClosesWith::Stays;
+    }
+    let state = held.board().glance(chat).state;
+    if state == State::Running || asks(held, chat) {
+        return ClosesWith::Stays;
+    }
+    match held.chats().last_record(chat) {
+        Some(path) => {
+            match purlis_core::sessionrecord::saved(held.root(), &held.root().join(&path)) {
+                Some(listed) => ClosesWith::OnItsRecord(crate::smartclose::SavedRecord {
+                    path: listed.shown,
+                    title: listed.title,
+                }),
+                None => ClosesWith::Stays,
+            }
+        }
+        // Asked for its record, which only a chat whose program still runs can write.
+        None if matches!(state, State::Done | State::Failed) => ClosesWith::Stays,
+        None => ClosesWith::OnceRecorded,
+    }
+}
+
+/// The persona chats chat `asker` dispatched that close with it, each with how
+/// ([`closes_with`]): read before `asker` is closed, and carried out after ([`close_reported`]).
+pub fn reported_by(held: &Held, asker: u32) -> Vec<(u32, ClosesWith)> {
+    held.chats()
+        .tasks_of(asker)
+        .into_iter()
+        .map(|(chat, from)| (chat, closes_with(held, chat, &from)))
+        .filter(|(_, how)| *how != ClosesWith::Stays)
+        .collect()
+}
+
+/// **Closes the persona chats in `reported`, whose asking chat has just closed, each once its
+/// session record is written** (#1443).
+///
+/// One whose record the app has written closes now, and the window is told as it is told of a
+/// Smart close that ended on its record. One with no record yet is smart-closed: it is asked
+/// to write its record, and closes when that is saved. **None is closed without its record.**
+pub fn close_reported(held: &Arc<Held>, reported: Vec<(u32, ClosesWith)>, deciding: &Deciding<'_>) {
+    for (chat, how) in reported {
+        match how {
+            ClosesWith::Stays => {}
+            ClosesWith::OnItsRecord(record) => {
+                if let Err(why) = held.close_chat_held(chat, deciding) {
+                    tracing::warn!(
+                        "purlis: chat {chat}, closed with its asking chat, did not end cleanly \
+                         ({why})"
+                    );
+                }
+                held.tell_smart_closed(chat, Some(record));
+            }
+            ClosesWith::OnceRecorded => match crate::smartclose::begin(held, chat) {
+                Ok(_) => tracing::info!(
+                    "purlis: chat {chat} reported and its asking chat closed, so it is asked \
+                     for its session record and closes on it"
+                ),
+                Err(why) => tracing::info!(
+                    "purlis: chat {chat} reported and its asking chat closed; it stays open \
+                     with no session record ({why})"
+                ),
+            },
+        }
+    }
 }
 
 /// The workspace a chat standing in `cwd` works in: the directory under the plane's
@@ -1703,6 +2117,68 @@ pub async fn ask_persona_chat(
     Ok(started)
 }
 
+/// What closing chat `session` would do with the chats below it: what the close dialog says
+/// before it is answered.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ClosingChat {
+    /// The persona chats it dispatched as tasks, each with where it stands.
+    pub tasks: Vec<PersonaChat>,
+    /// Every chat below it that is at work, by name, deepest first: its tasks that have not
+    /// reported, the chats it handed work to that are mid-turn, and the same below those. With
+    /// any, the close asks once: keep them running, or stop them.
+    pub running: Vec<String>,
+}
+
+/// What closing chat `session` would do with the chats below it: its persona chats, each with
+/// where it stands and whether it closes too, and every chat below it that is at work.
+// Its plane is a `PlaneId` the registry vouches for.
+#[tauri::command]
+#[specta::specta]
+pub fn persona_chats_of(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<ClosingChat, String> {
+    let held = planes.held(&plane)?;
+    Ok(ClosingChat {
+        tasks: persona_chats(&held, session),
+        running: running_below(&held, session),
+    })
+}
+
+/// What a close that stops the chats below does next with the chat itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ThenClose {
+    /// Close it now.
+    Close,
+    /// Smart close it: it is asked for its session record, and closes when that is saved.
+    SmartClose,
+}
+
+/// **Stop them**, your answer to what closing chat `session` asks: every chat at work below
+/// it is ended, deepest first, and then it is closed (`then: close`), in one step, so it
+/// cannot start another in between. For a Smart close (`then: smart_close`) the chats below
+/// are ended now, and any it starts while it writes its record are ended as it closes.
+/// Answers every chat this closed. A stopped task's asking chat is told it was stopped by
+/// the operator.
+// On a blocking thread: ending a program waits for it to go.
+#[tauri::command]
+#[specta::specta]
+pub async fn close_chat_stopping(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: PlaneId,
+    session: u32,
+    then: ThenClose,
+) -> Result<Vec<u32>, String> {
+    let held = planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        held.close_chat_stopping(session, then == ThenClose::Close)
+    })
+    .await
+    .map_err(|err| format!("purlis could not stop those chats: {err}"))
+}
+
 /// The handoff's row in the project's dispatch log (`purlis_core::dispatch::record_handoff`),
 /// written here, by the app that opened the chat (#1421): a sandboxed chat may not write the
 /// project's `personas/_dispatch/`, and the app is not sandboxed. Its four fields name no
@@ -2482,6 +2958,8 @@ mod tests {
                     chat: asking,
                     task: false,
                     tab: true,
+                    reported: false,
+                    unreported: false,
                 }),
                 workspace: Some("alpha".to_owned()),
                 persona: None,
@@ -3062,6 +3540,8 @@ mod tests {
                 chat: asking,
                 task: false,
                 tab: true,
+                reported: false,
+                unreported: false,
             })
         );
         assert!(first_message_of(&plane).contains("⟨handoff from platform steward · workspace"));
@@ -3523,6 +4003,8 @@ mod tests {
                 task: true,
                 // Listed in the Chats section, with no tab until the person opens it (#1447).
                 tab: false,
+                reported: false,
+                unreported: false,
             })
         );
         // Its lineage is on its own record: who asked, that it is a task, and what it owes.
@@ -4170,6 +4652,8 @@ mod tests {
                 changed: Some("svc: 2 files".to_owned()),
                 record: Some("workspaces/alpha/sessions/20261007-143900-queue.md".to_owned()),
                 by_person: false,
+                unreported: false,
+                stopped: false,
             })
         );
         // For the chat that asked, not for the person (#1434).
@@ -5454,6 +5938,795 @@ mod tests {
         );
         assert_eq!(said.err(), offer.locked);
         assert_eq!(held.chats().open_now().len(), before);
+    }
+
+    // ----- a persona chat that fails, is orphaned or outlives its asker (#1443) -----
+
+    use purlis_core::handback::{For, Outcome};
+    use purlis_core::state::Event;
+
+    /// A project with personas, held on `host`, and a steward chat in workspace `alpha`.
+    fn a_steward_chat(host: &Pretend, plane: &Plane) -> (Planes, PlaneId, u32) {
+        let planes = planes_on(host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let steward = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        (planes, id, steward)
+    }
+
+    /// Chat `asking` dispatches a task to its own persona, as a chat does: the task's number.
+    fn a_task_of(held: &Held, id: &PlaneId, asking: u32, name: &str) -> u32 {
+        match dispatch(held, id, &Tickets::default(), asking, None, name).0 {
+            Answer::Dispatched { chat, .. } => chat,
+            other => panic!("dispatched, not {other:?}"),
+        }
+    }
+
+    /// The task sends its report.
+    fn reports(held: &Held, id: &PlaneId, task: u32) -> Answer {
+        tasks_report(held, id, &Tickets::default(), task, Outcome::Done, None)
+    }
+
+    /// The board hears `event` from chat `chat`'s own harness: in the conversation the app
+    /// started it under and from one process, which is what makes a report that chat's own.
+    fn the_board_hears(held: &Held, chat: u32, event: Event) {
+        use purlis_core::hookwire::Conversation;
+        let conversation = held
+            .board()
+            .conversation(chat)
+            .map_or(Conversation::Unknown, Conversation::Named);
+        held.hooks()
+            .board()
+            .reported(&purlis_core::hookwire::Report {
+                chat,
+                event,
+                conversation,
+                // One pid for the chat's whole run, as its harness has.
+                pid: Some(4000 + chat),
+                agent: None,
+                detail: purlis_core::state::Detail::default(),
+            });
+    }
+
+    /// Chat `chat` is mid-turn.
+    fn works(held: &Held, chat: u32) {
+        the_board_hears(held, chat, Event::UserPromptSubmit);
+    }
+
+    /// Chat `chat` has had a turn and waits for its next prompt.
+    fn rests(held: &Held, chat: u32) {
+        the_board_hears(held, chat, Event::UserPromptSubmit);
+        the_board_hears(held, chat, Event::Stop);
+    }
+
+    /// The app writes chat `chat`'s session record, as it does when the chat asks: the path.
+    fn writes_its_record(held: &Held, chat: u32) -> String {
+        match crate::smartclose::record(
+            held,
+            &purlis_core::hookwire::RecordAsk {
+                chat,
+                title: format!("Record of {chat}"),
+                body: "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\no\n\n## \
+                       How to resume\n\nr\n"
+                    .to_owned(),
+                pieces: Vec::new(),
+                cwd: None,
+            },
+        ) {
+            Answer::Recorded { record, .. } => record,
+            other => panic!("recorded, not {other:?}"),
+        }
+    }
+
+    /// Where chat `task` stands in its asking chat `asker`'s list of its dispatches.
+    fn stands(held: &Held, asker: u32, task: u32) -> Option<(PersonaChatState, String)> {
+        persona_chats(held, asker)
+            .into_iter()
+            .find(|one| one.session == task)
+            .map(|one| (one.state, one.said))
+    }
+
+    fn open_chats(held: &Held) -> Vec<u32> {
+        let mut open: Vec<u32> = held
+            .chats()
+            .open_now()
+            .iter()
+            .map(|open| open.session)
+            .collect();
+        open.sort_unstable();
+        open
+    }
+
+    /// What waits for `whose`, as `(from, the app's own voice, a deliberate stop)`.
+    fn waiting(held: &Held, whose: For<'_>) -> Vec<(String, bool, bool)> {
+        purlis_core::handback::take(held.root(), whose)
+            .into_iter()
+            .map(|report| {
+                let task = report.task.expect("a task's report");
+                (report.from, task.unreported, task.stopped)
+            })
+            .collect()
+    }
+
+    const KILLED: fn() -> purlis_core::session::Exit =
+        || purlis_core::session::Exit::Signal("SIGKILL".to_owned());
+
+    #[test]
+    fn a_killed_persona_chat_gives_its_asking_chat_failed_within_a_bounded_time() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+        // The app wrote this chat's session record, and knows where.
+        held.chats()
+            .wrote_record(task, "workspaces/alpha/sessions/20261007-143900-prod.md");
+        assert_eq!(held.chats().lineage(steward, None, &|_| true).running, 1);
+
+        let killed_at = Instant::now();
+        host.program_ends(task, KILLED());
+
+        // Bounded: it is there as soon as the operating system has said the program is gone.
+        let bound = std::time::Duration::from_secs(5);
+        let mut left = Vec::new();
+        while left.is_empty() && killed_at.elapsed() < bound {
+            left = purlis_core::handback::take(held.root(), For::Chat(steward));
+            if left.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        assert!(
+            killed_at.elapsed() < bound,
+            "the asking chat was never told"
+        );
+        assert_eq!(
+            left.len(),
+            1,
+            "one report, for the steward chat's next turn"
+        );
+        assert_eq!(left[0].from, "check prod");
+        assert_eq!(left[0].summary, "ended without a report");
+        assert_eq!(
+            left[0].task,
+            Some(purlis_core::handback::Task {
+                outcome: Outcome::Failed,
+                changed: None,
+                record: Some("workspaces/alpha/sessions/20261007-143900-prod.md".to_owned()),
+                by_person: false,
+                unreported: true,
+                stopped: false,
+            })
+        );
+        let told = purlis_core::handback::context(&left, false).expect("a turn's context");
+        assert!(
+            told.starts_with("⬢ **`check prod` failed: ended without a report**"),
+            "{told}"
+        );
+        assert!(
+            told.ends_with(
+                "Its session record: `workspaces/alpha/sessions/20261007-143900-prod.md`"
+            ),
+            "{told}"
+        );
+        assert_eq!(
+            stands(&held, steward, task),
+            Some((PersonaChatState::Ended, "ended without a report".to_owned()))
+        );
+        // Final: a report from it now (that tab, started again) is refused as already made,
+        // and closing its tab afterwards says nothing more.
+        let again = reports(&held, &id, task);
+        assert!(
+            matches!(&again, Answer::No { why } if why.contains("already told 'steward 1'")),
+            "{again:?}"
+        );
+        let _ = held.close_chat(task);
+        assert!(purlis_core::handback::take(held.root(), For::Chat(steward)).is_empty());
+    }
+
+    #[test]
+    fn a_failed_report_that_could_not_be_kept_is_still_owed_and_sent_when_it_can_be() {
+        // The debt is marked answered only once the report is kept.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+        // Nothing can be left: where the reports wait is a file, not a directory.
+        let reports_dir = purlis_core::handback::dir(held.root());
+        std::fs::create_dir_all(reports_dir.parent().unwrap()).unwrap();
+        std::fs::write(&reports_dir, "").unwrap();
+
+        host.program_ends(task, KILLED());
+
+        assert_eq!(
+            held.chats().handed_from(task).map(|from| from.report),
+            Some(Owed::Due),
+            "not marked as told when nobody was"
+        );
+        // It can be kept again, and the chat's close sends it.
+        std::fs::remove_file(&reports_dir).unwrap();
+        held.close_chat(task).expect("closed");
+        assert_eq!(
+            waiting(&held, For::Chat(steward))
+                .iter()
+                .map(|(from, by_purlis, _)| (from.as_str(), *by_purlis))
+                .collect::<Vec<_>>(),
+            [("check prod", true)]
+        );
+    }
+
+    #[test]
+    fn a_persona_chat_the_person_closes_before_it_reports_is_said_stopped_by_the_operator() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let unreported = a_task_of(&held, &id, steward, "check prod");
+        let reported = a_task_of(&held, &id, steward, "check staging");
+        assert!(matches!(
+            reports(&held, &id, reported),
+            Answer::Reported { .. }
+        ));
+
+        // The person closes both tabs.
+        held.close_chat(unreported).expect("closed");
+        held.close_chat(reported).expect("closed");
+
+        let left = purlis_core::handback::take(held.root(), For::Chat(steward));
+        assert_eq!(left.len(), 2, "{left:?}");
+        // The one that reported said it itself.
+        assert_eq!(left[0].from, "check staging");
+        assert!(!left[0].task.as_ref().unwrap().unreported);
+        // The one closed first is said by purlis, as a stop and not as a failure of its own.
+        assert_eq!(left[1].from, "check prod");
+        assert_eq!(left[1].summary, "stopped by the operator");
+        let told = purlis_core::handback::context(&left[1..], false).expect("context");
+        assert!(
+            told.starts_with("⬢ **`check prod` was stopped by the operator**"),
+            "{told}"
+        );
+        assert!(!told.contains("failed"), "{told}");
+        assert!(told.ends_with("It wrote no session record."), "{told}");
+    }
+
+    #[test]
+    fn a_handoff_that_asked_for_a_report_and_a_chat_nobody_dispatched_are_not_reported_for() {
+        // Only a task owes its asking chat an outcome. A handoff's work is the person's to
+        // follow, and its tab ending is theirs to see.
+        let plane = Plane::new();
+        let host = Pretend::default();
+        let planes = planes_on(&host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let parent = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let ticket = ticket(&held, &id, &tickets, parent);
+        let Answer::Opened { chat: handed, .. } = answer(
+            &held,
+            &id,
+            &tickets,
+            1,
+            a_named_open(parent, &ticket, stamped(parent), None, true),
+            &nobody,
+        ) else {
+            panic!("the handoff opens")
+        };
+
+        host.program_ends(handed, KILLED());
+        host.program_ends(parent, KILLED());
+
+        assert!(purlis_core::handback::take(held.root(), For::Chat(parent)).is_empty());
+        assert_eq!(
+            held.chats().handed_from(handed).map(|from| from.report),
+            Some(Owed::Due)
+        );
+    }
+
+    #[test]
+    fn a_persona_chat_restarted_in_its_own_place_still_owes_its_report() {
+        // Restart chat ends the old run and starts the same chat again: that is the chat
+        // going on, and nothing is reported for it.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+
+        let again = held
+            .start_chat_fresh(task, STARTING)
+            .expect("it starts again");
+
+        assert!(purlis_core::handback::take(held.root(), For::Chat(steward)).is_empty());
+        assert_eq!(
+            held.chats().handed_from(again).map(|from| from.report),
+            Some(Owed::Due)
+        );
+        assert_eq!(held.chats().lineage(steward, None, &|_| true).running, 1);
+    }
+
+    #[test]
+    fn stopping_every_agent_fails_no_task_and_each_reports_once_it_is_started_again() {
+        // D-1443-10: the stop-all switch ends every program at once. That is the person
+        // stopping the machine, not a task failing, and "failed" is final.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+
+        let _ = planes.kill_switch().stop(purlis_core::halt::Actor::Window);
+        host.program_ends(task, KILLED());
+        host.program_ends(steward, KILLED());
+
+        assert!(purlis_core::handback::take(held.root(), For::Chat(steward)).is_empty());
+        let alpha = Place::Workspace("alpha".to_owned());
+        assert!(purlis_core::handback::take(held.root(), For::Place(&alpha)).is_empty());
+        assert_eq!(
+            held.chats().handed_from(task).map(|from| from.report),
+            Some(Owed::Due),
+            "still owed"
+        );
+        // Its real report is taken when it comes.
+        assert!(matches!(reports(&held, &id, task), Answer::Reported { .. }));
+    }
+
+    #[test]
+    fn a_reported_persona_chat_stays_open_and_typeable_until_it_is_closed() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+        assert_eq!(
+            stands(&held, steward, task),
+            Some((PersonaChatState::Running, "running".to_owned()))
+        );
+
+        let said = reports(&held, &id, task);
+
+        assert!(matches!(said, Answer::Reported { .. }), "{said:?}");
+        // Marked reported, and still a chat: open, and the person's keys reach it.
+        assert_eq!(
+            stands(&held, steward, task),
+            Some((PersonaChatState::Reported, "reported".to_owned()))
+        );
+        assert!(open_chats(&held).contains(&task));
+        assert_eq!(held.operator_input(task, b"one more thing\r"), Ok(()));
+        // Typing in it, and a turn of its own afterwards, leave it reported.
+        works(&held, task);
+        assert_eq!(
+            stands(&held, steward, task).map(|(state, _)| state),
+            Some(PersonaChatState::Reported)
+        );
+        // Until the person closes it, which reports nothing more.
+        held.close_chat(task).expect("closed");
+        assert_eq!(stands(&held, steward, task), None);
+        assert_eq!(
+            waiting(&held, For::Chat(steward)).len(),
+            1,
+            "its own report"
+        );
+    }
+
+    #[test]
+    fn the_asking_chat_s_list_says_waiting_on_the_operator_for_a_persona_chat_at_a_permission_prompt()
+     {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+        works(&held, task);
+        assert_eq!(
+            stands(&held, steward, task),
+            Some((PersonaChatState::Running, "running".to_owned()))
+        );
+
+        // Its harness stops mid-turn on a permission prompt, in its own tab.
+        the_board_hears(&held, task, Event::Notification);
+
+        assert_eq!(
+            stands(&held, steward, task),
+            Some((
+                PersonaChatState::WaitingOnOperator,
+                "waiting on the operator".to_owned()
+            ))
+        );
+        // The person answers there, and it is at work again.
+        works(&held, task);
+        assert_eq!(
+            stands(&held, steward, task).map(|(state, _)| state),
+            Some(PersonaChatState::Running)
+        );
+        // The list is the asking chat's own: no other chat's tasks are in it.
+        assert!(persona_chats(&held, task).is_empty());
+    }
+
+    /// The tree "Stop them" is asked about: under the steward chat, a task that **reported**
+    /// and had dispatched one that is still running; a task still running; a handoff's chat
+    /// mid-turn, opened by that running task; and a handoff's chat at rest.
+    struct Tree {
+        steward: u32,
+        reported: u32,
+        under_reported: u32,
+        running: u32,
+        handed_mid_turn: u32,
+        handed_at_rest: u32,
+    }
+
+    fn a_tree(held: &Held, id: &PlaneId, steward: u32) -> Tree {
+        let reported = a_task_of(held, id, steward, "tidy up");
+        let under_reported = a_task_of(held, id, reported, "read the logs");
+        assert!(matches!(
+            reports(held, id, reported),
+            Answer::Reported { .. }
+        ));
+        rests(held, reported);
+        let running = a_task_of(held, id, steward, "check prod");
+        let hand_off = |from: u32| {
+            let tickets = Tickets::default();
+            let ticket = ticket(held, id, &tickets, from);
+            match answer(
+                held,
+                id,
+                &tickets,
+                1,
+                a_named_open(from, &ticket, stamped(from), None, false),
+                &nobody,
+            ) {
+                Answer::Opened { chat, .. } => chat,
+                other => panic!("opened, not {other:?}"),
+            }
+        };
+        let handed_mid_turn = hand_off(running);
+        works(held, handed_mid_turn);
+        let handed_at_rest = hand_off(steward);
+        rests(held, handed_at_rest);
+        Tree {
+            steward,
+            reported,
+            under_reported,
+            running,
+            handed_mid_turn,
+            handed_at_rest,
+        }
+    }
+
+    #[test]
+    fn closing_asks_about_every_chat_at_work_below_through_chats_that_are_not() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let tree = a_tree(&held, &id, steward);
+
+        // Deepest first: the task under the one that reported, the handoff's chat mid-turn
+        // under the running task, then that task. Never the reported one or the chat at rest.
+        assert_eq!(
+            at_work_below(&held, tree.steward),
+            [tree.under_reported, tree.handed_mid_turn, tree.running]
+        );
+        assert_eq!(running_below(&held, tree.steward).len(), 3);
+        // A chat whose own tasks have all reported is still asked about what runs below them.
+        held.close_chat(tree.running).expect("closed");
+        assert_eq!(
+            at_work_below(&held, tree.steward),
+            [tree.under_reported],
+            "below a chat that is not itself at work"
+        );
+    }
+
+    #[test]
+    fn stop_them_ends_every_chat_at_work_below_and_the_asking_chat_in_one_step() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let tree = a_tree(&held, &id, steward);
+
+        let closed = held.close_chat_stopping(tree.steward, true);
+
+        assert_eq!(
+            closed,
+            [
+                tree.under_reported,
+                tree.handed_mid_turn,
+                tree.running,
+                tree.steward
+            ]
+        );
+        // What is left is what was not at work: the reported task, which has no session
+        // record to close on, and the handoff's chat at rest.
+        assert_eq!(open_chats(&held), [tree.reported, tree.handed_at_rest]);
+        // What was stopped is on record, as a stop: for the chat that asked it where that is
+        // still open, and for the workspace where it closed in the same step.
+        assert_eq!(
+            waiting(&held, For::Chat(tree.reported)),
+            [("read the logs".to_owned(), true, true)]
+        );
+        let alpha = Place::Workspace("alpha".to_owned());
+        let for_alpha = waiting(&held, For::Place(&alpha));
+        assert!(
+            for_alpha.contains(&("check prod".to_owned(), true, true)),
+            "{for_alpha:?}"
+        );
+    }
+
+    #[test]
+    fn a_smart_close_s_stop_them_also_ends_what_the_chat_starts_while_it_writes_its_record() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let first = a_task_of(&held, &id, steward, "check prod");
+
+        // Stop them, then Smart close: the chats below end now, and the chat is not closed.
+        assert_eq!(held.close_chat_stopping(steward, false), [first]);
+        assert!(open_chats(&held).contains(&steward));
+        // Still running, it dispatches again while it wraps up.
+        let late = a_task_of(&held, &id, steward, "one more thing");
+
+        // Its record lands and it closes: what it started in between goes with it.
+        held.close_chat(steward).expect("closed");
+        assert_eq!(open_chats(&held), Vec::<u32>::new());
+        let _ = late;
+    }
+
+    #[test]
+    fn a_smart_close_that_ends_without_closing_takes_its_stop_them_with_it() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        assert_eq!(held.close_chat_stopping(steward, false), Vec::<u32>::new());
+        // The person cancels the Smart close, and later starts a task they mean to keep.
+        held.tell_smart_close(steward, crate::smartclose::Phase::Cancelled);
+        let kept = a_task_of(&held, &id, steward, "check prod");
+
+        held.close_chat(steward).expect("closed");
+
+        assert_eq!(
+            open_chats(&held),
+            [kept],
+            "the old answer is not this close's"
+        );
+    }
+
+    #[test]
+    fn a_persona_chat_kept_running_reports_to_the_workspace_once_its_asking_chat_is_gone() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let kept = a_task_of(&held, &id, steward, "check prod");
+        let dies = a_task_of(&held, &id, steward, "check staging");
+
+        // Keep them running: the asking chat closes, and they do not.
+        held.close_chat(steward).expect("closed");
+
+        assert_eq!(open_chats(&held), [kept, dies], "both kept running");
+        // One reports, and one's program dies: both go to the workspace the chat asked from.
+        assert_eq!(
+            reports(&held, &id, kept),
+            Answer::Reported {
+                to: "steward 1".to_owned(),
+                kept_for: Some("alpha".to_owned()),
+            }
+        );
+        host.program_ends(dies, KILLED());
+        let alpha = Place::Workspace("alpha".to_owned());
+        assert_eq!(
+            waiting(&held, For::Place(&alpha)),
+            [
+                ("check prod".to_owned(), false, false),
+                ("check staging".to_owned(), true, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_report_of_a_task_the_person_started_stays_with_it_when_its_tab_chat_is_gone() {
+        // D-1443-9: the person asked, from a tab that has since closed. The report is theirs:
+        // it is not handed to whichever chat starts next in that workspace.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = ask_from_the_tab(&held, &id, steward, "devops", "check prod")
+            .expect("it starts")
+            .session;
+        works(&held, task);
+        held.close_chat(steward).expect("closed");
+
+        let said = reports(&held, &id, task);
+
+        assert_eq!(
+            said,
+            Answer::Reported {
+                to: "steward 1".to_owned(),
+                kept_for: Some("the person".to_owned()),
+            }
+        );
+        let alpha = Place::Workspace("alpha".to_owned());
+        assert!(purlis_core::handback::take(held.root(), For::Place(&alpha)).is_empty());
+        assert!(
+            !purlis_core::handback::dir(held.root())
+                .join("chat-1")
+                .exists()
+        );
+        // The task chat needs the person, and says its report is why.
+        assert!(held.hooks().board().needs_you().contains(&task));
+        assert_eq!(held.hooks().board().reports(task), ["check prod"]);
+    }
+
+    #[test]
+    fn closing_an_asking_chat_closes_only_its_reported_chats_that_are_at_rest_on_a_record() {
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let closes: Arc<Mutex<Vec<crate::smartclose::SmartClosing>>> = Arc::default();
+        let planes = {
+            let closes = Arc::clone(&closes);
+            planes_on(&host).telling_smart_close(Arc::new(move |step| {
+                closes.lock().unwrap().push(step);
+            }))
+        };
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let steward = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let task = |name: &str| a_task_of(&held, &id, steward, name);
+        // Each of these has reported and has its session record written.
+        let at_rest = task("at rest");
+        let working_again = task("working again");
+        let asking_you = task("asking you");
+        let record_gone = task("record gone");
+        for chat in [at_rest, working_again, asking_you, record_gone] {
+            writes_its_record(&held, chat);
+            assert!(matches!(reports(&held, &id, chat), Answer::Reported { .. }));
+            rests(&held, chat);
+        }
+        // The person gave one more to do, one is at a permission prompt, and one's record was
+        // deleted from the project.
+        works(&held, working_again);
+        works(&held, asking_you);
+        the_board_hears(&held, asking_you, Event::Notification);
+        let gone = held.chats().last_record(record_gone).expect("its record");
+        std::fs::remove_file(held.root().join(&gone)).expect("deleted");
+        // And two that have not reported: closing asks about them, and this close keeps them.
+        let running = task("still running");
+        let unrecorded = task("reported with no record");
+        assert!(matches!(
+            reports(&held, &id, unrecorded),
+            Answer::Reported { .. }
+        ));
+
+        // What the dialog is told closes with it: the one at rest on its record, and the one
+        // that can still be asked for its record. Never one at work, asking, or unrecorded
+        // for good.
+        let closes_with: Vec<String> = persona_chats(&held, steward)
+            .into_iter()
+            .filter(|one| one.closes_with_its_asker)
+            .map(|one| one.name)
+            .collect();
+        assert_eq!(closes_with, ["at rest", "reported with no record"]);
+
+        held.close_chat(steward).expect("closed");
+
+        assert_eq!(
+            open_chats(&held),
+            [working_again, asking_you, record_gone, running, unrecorded]
+        );
+        let told: Vec<(u32, crate::smartclose::Phase)> = closes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|step| (step.session, step.phase))
+            .collect();
+        assert!(
+            told.contains(&(at_rest, crate::smartclose::Phase::Closed)),
+            "{told:?}"
+        );
+        for kept in [working_again, asking_you, record_gone, running] {
+            assert!(
+                !told.iter().any(|(session, _)| *session == kept),
+                "{kept}: {told:?}"
+            );
+        }
+    }
+
+    // What only a real program and a real sandbox show (the pretend host ends a program on the
+    // test's own thread, ends none on a close, and compiles no project that has a sandbox).
+
+    #[cfg(unix)]
+    #[test]
+    fn a_task_chat_whose_real_program_is_killed_reports_failed_to_the_chat_that_asked() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let steward = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let task = a_task_of(&held, &id, steward, "check prod");
+        // Its program is running: the stand-in has written what it was started on.
+        assert!(!tasks_first_message(&plane).is_empty());
+        let pid = held
+            .chats()
+            .sessions()
+            .process_id(task)
+            .expect("its program's pid");
+
+        let killed = purlis_core::forklock::status(
+            std::process::Command::new("kill").args(["-9", &pid.to_string()]),
+        )
+        .expect("kill runs");
+        assert!(killed.success());
+
+        // The exit is heard on the session's own thread, and the report is left from there.
+        let until = Instant::now() + std::time::Duration::from_secs(30);
+        let mut left = Vec::new();
+        while left.is_empty() && Instant::now() < until {
+            left = purlis_core::handback::take(held.root(), For::Chat(steward));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(left.len(), 1, "the asking chat was never told");
+        assert_eq!(left[0].summary, "ended without a report");
+        assert_eq!(
+            held.chats().handed_from(task).map(|from| from.report),
+            Some(Owed::Failed)
+        );
+        // And a chat closed while it runs is told once, as a stop, by the close: the end of
+        // the program the close ended says nothing more.
+        let other = a_task_of(&held, &id, steward, "check staging");
+        held.close_chat(other).expect("closed");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(
+            waiting(&held, For::Chat(steward)),
+            [("check staging".to_owned(), true, true)]
+        );
+    }
+
+    #[test]
+    fn in_a_sandboxed_project_the_person_s_ask_from_an_unsandboxed_chat_is_sandboxed_or_not_started()
+     {
+        // The project is sandboxed, and the steward chat was started without the sandbox: the
+        // person's one-off choice for that chat. The chat they ask for from its tab is put to
+        // the project's sandbox decision, not to that choice. Here the profile's program is
+        // one the sandbox cannot vouch for, so the decision is "not started", and it says so.
+        // What the project compiles for the persona asked is `dispatchdecision`'s own test
+        // (`the_persona_chats_compiled_sandbox_is_the_projects_for_its_persona_and_not_the_askers`).
+        let plane = a_plane_with_personas();
+        std::fs::write(
+            plane.root.join(purlis_core::plane::MANIFEST),
+            format!("[persona]\ndefault = \"steward\"\n{PERSONAS}"),
+        )
+        .unwrap();
+        let host = Pretend::default();
+        let planes = planes_on(&host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = Chat {
+            program: "/bin/sh".to_owned(),
+            name: "1".to_owned(),
+            profile: Some("work".to_owned()),
+            persona: Some("steward".to_owned()),
+            cwd: Some(plane.root.clone()),
+            unsandboxed: true,
+            ..Default::default()
+        };
+        let steward = held.chats().start(&asking, STARTING).expect("it runs");
+        let before = open_chats(&held);
+
+        let said = ask_from_the_tab(&held, &id, steward, "devops", "check prod").unwrap_err();
+
+        assert!(
+            said.contains("runs every chat sandboxed") && said.contains("not started sandboxed"),
+            "{said}"
+        );
+        assert_eq!(open_chats(&held), before, "never started without it");
+        // And the slot it held is let go: the next ask is not counted against a chat that
+        // never ran.
+        assert_eq!(held.chats().lineage(steward, None, &|_| true).running, 0);
     }
 
     #[test]

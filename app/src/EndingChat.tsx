@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import * as Alert from "@radix-ui/react-alert-dialog";
 import { ENDS_IT, type Offer } from "./actions";
 
@@ -65,6 +65,9 @@ import { ENDS_IT, type Offer } from "./actions";
 export function EndingChat({
   offer,
   smart,
+  running = [],
+  closing = [],
+  keeps = false,
   onEnd,
   onSmartClose,
   onCancel,
@@ -75,10 +78,25 @@ export function EndingChat({
   /** Whether the chat is offered **Smart close** (ADR 0064), as the core answered — or none,
    *  when charter could not say, which offers Close only. */
   smart?: SmartAsk;
-  onEnd: () => void;
-  onSmartClose: () => void;
+  /**
+   * The chats at work below this chat, by name: its persona chats that have not reported, the
+   * chats it handed work to that are mid-turn, and the same below those. With any, the dialog
+   * asks once what becomes of them, and the answer rides whichever close is pressed.
+   */
+  running?: readonly string[];
+  /** Its persona chats that have reported and close with it, by name. */
+  closing?: readonly string[];
+  /** For a close of several chats at once, which asks nothing about them: whether any has
+   *  chats at work below it. They keep running, and the dialog says so. */
+  keeps?: boolean;
+  /** `stop` is the answer about the running persona chats: stop them, or keep them running. */
+  onEnd: (stop: boolean) => void;
+  onSmartClose: (stop: boolean) => void;
   onCancel: () => void;
 }) {
+  // Keep is where it starts: the answer that ends nothing more than was asked for.
+  const [stop, setStop] = useState(false);
+  const theirs = useId();
   // Focused by the dialog itself rather than by `autoFocus`: see `StartChat` for why.
   const cancel = useRef<HTMLButtonElement>(null);
   const close = useRef<HTMLButtonElement>(null);
@@ -123,6 +141,38 @@ export function EndingChat({
               {smart.why}
             </p>
           )}
+          {/* What else this close closes, said before it is answered. */}
+          {closing.length > 0 && <p className="honest">{CLOSING_SAYS(closing)}</p>}
+          {/* Several chats at once: nothing is asked about what each started, so it is said. */}
+          {keeps && <p className="honest">{KEEPS_SAYS}</p>}
+          {/* **Asked once, here, with both answers** (`RUNNING_SAYS`): the chats this one
+              asked for are not ended by its close unless the person says so. */}
+          {running.length > 0 && (
+            <fieldset className="persona-chats-running" aria-describedby={theirs}>
+              <legend>{RUNNING_SAYS(running)}</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="persona-chats-running"
+                  checked={!stop}
+                  onChange={() => setStop(false)}
+                />
+                Keep them running
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="persona-chats-running"
+                  checked={stop}
+                  onChange={() => setStop(true)}
+                />
+                Stop them
+              </label>
+              <p className="honest" id={theirs}>
+                {stop ? STOP_SAYS : KEEP_SAYS}
+              </p>
+            </fieldset>
+          )}
           {/* `tabIndex={0}` on each, per `docs/ui-primitives.md` (charter-app#186). Cancel
               first and Smart close last, at the edge where a primary answer sits. */}
           <div className="answer">
@@ -132,7 +182,7 @@ export function EndingChat({
               </button>
             </Alert.Cancel>
             <Alert.Action asChild>
-              <button ref={close} className="ends-it" tabIndex={0} onClick={onEnd}>
+              <button ref={close} className="ends-it" tabIndex={0} onClick={() => onEnd(stop)}>
                 Close
               </button>
             </Alert.Action>
@@ -143,7 +193,7 @@ export function EndingChat({
                 tabIndex={0}
                 disabled={!smart?.available}
                 aria-describedby={smart?.why ? "smart-close-why" : undefined}
-                onClick={onSmartClose}
+                onClick={() => onSmartClose(stop)}
               >
                 Smart close
               </button>
@@ -154,6 +204,33 @@ export function EndingChat({
     </Alert.Root>
   );
 }
+
+/** What the dialog asks about the chats at work below a closing chat. */
+export function RUNNING_SAYS(running: readonly string[]): string {
+  const count = running.length === 1 ? "1 chat" : `${running.length} chats`;
+  return `${count} it started ${running.length === 1 ? "is" : "are"} still at work: ${running.join(", ")}.`;
+}
+
+/** What keeping them does, said under the choice. */
+export const KEEP_SAYS =
+  "They go on working. A persona chat's report goes to this chat's workspace, where the next chat to start reads it.";
+
+/** What stopping them does, said under the choice. */
+export const STOP_SAYS =
+  "Their programs end now, and so do the chats they started. There is no undo.";
+
+/** What the dialog says of the reported persona chats that close with a closing chat. */
+export function CLOSING_SAYS(closing: readonly string[]): string {
+  const count =
+    closing.length === 1
+      ? "1 reported persona chat closes"
+      : `${closing.length} reported persona chats close`;
+  return `${count} with it, each once its session record is written: ${closing.join(", ")}.`;
+}
+
+/** What a close of several chats says where any has chats at work below it. */
+export const KEEPS_SAYS =
+  "The chats these chats started keep running. Close one chat at a time to be asked about them.";
 
 /** What **Smart close** does, said beside Close's cost when it is offered. */
 export const SMART_CLOSE_SAYS =

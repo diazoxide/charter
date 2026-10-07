@@ -612,6 +612,12 @@ pub struct HandedFromNote {
     /// Whether it has a tab. A handoff always has one; a task chat has none until the person
     /// opens it from the Chats section (`open_chat_tab`).
     pub tab: bool,
+    /// Whether, as a task, it has sent its one report: it stays open, marked reported,
+    /// until it is closed.
+    pub reported: bool,
+    /// Whether, as a task, it ended without a report, and purlis told the chat that asked
+    /// that it failed.
+    pub unreported: bool,
 }
 
 impl HandedFromNote {
@@ -623,6 +629,10 @@ impl HandedFromNote {
             chat: from.chat,
             task: from.mode == purlis_core::reopen::Mode::Task,
             tab,
+            reported: from.mode == purlis_core::reopen::Mode::Task
+                && from.report == purlis_core::reopen::Owed::Sent,
+            unreported: from.mode == purlis_core::reopen::Mode::Task
+                && from.report == purlis_core::reopen::Owed::Failed,
         }
     }
 }

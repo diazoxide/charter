@@ -299,6 +299,36 @@ summary whichever command sent it.
 purlis's `dispatch` and `dispatch_report` tools do the same two things, for a harness that
 calls tools instead of running a command.
 
+### When a persona chat ends, or the chat that asked closes
+
+A task is never lost for want of the chat that was doing it, or of the chat that asked.
+
+- **A persona chat that ends without a report is reported for.** If its program ends on its
+  own before it sent its report, purlis tells the chat that asked `failed: ended without a
+  report`, in its own words and with the path of that chat's session record where one was
+  written. It is said as soon as the program is gone, once, and it is final: a chat started
+  again in that tab cannot report for the task. If you close the tab before it reported, the
+  chat that asked is told it was `stopped by the operator` instead.
+- **Stopping every agent, quitting, closing the project and restarting a chat report
+  nothing.** Those chats are kept, and each reports when it runs again.
+- **A persona chat stays open after it reports.** It is marked `reported` under the chat that
+  asked, and you can still open it and type in it, until you or the chat that asked closes it.
+- **Closing a chat asks you once about the chats at work below it**: its persona chats that
+  have not reported, the chats it handed work to that are mid-turn, and the same below those,
+  however deep. Keep them running, or stop them. Kept, they go on working, and a persona
+  chat's report goes to the workspace that chat asked from, where the next chat to start
+  reads it. Stopped, their programs end, deepest first, and the chat closes in the same step.
+- **The persona chats that have reported and are at rest close with the chat that asked**,
+  each once its session record is written, and the dialog says which. One with no record yet
+  is asked for it first, and closes when it is saved. One you gave more to do, one asking you
+  something, and one whose saved record is gone, stay open.
+- **A task you started yourself is yours.** If the chat whose tab you asked from has closed,
+  its report is not handed to the next chat in that workspace: it stays with the persona
+  chat, which is marked as needing you.
+- **A persona chat that is waiting on you** (a permission prompt, a question, in its own tab)
+  reads `waiting on the operator` to the chat that asked. That chat cannot answer for you,
+  and is told the wait is not its own to end.
+
 ### Asking a persona yourself
 
 You can dispatch too, from the app: **Ask <persona>…** on a chat's tab menu and in the palette,

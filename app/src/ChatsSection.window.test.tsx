@@ -90,7 +90,15 @@ function by(
   name = `steward ${asker}`,
   workspace = "alpha",
 ): Lineage {
-  return { chat: asker, name, workspace, task: mode === "task", tab: mode === "handoff" };
+  return {
+    chat: asker,
+    name,
+    workspace,
+    task: mode === "task",
+    tab: mode === "handoff",
+    reported: false,
+    unreported: false,
+  };
 }
 
 /** A fixture's chat as the core sends it: the workspace is where it is filed, not a field. */
