@@ -1,6 +1,9 @@
 //! `personas` and `persona grant`: the roster's health and the active persona's, read by
 //! [`crate::personaverbs::lint::Linter`] — the one implementation `charter persona lint`
 //! prints — so the doctor cannot call a persona well-formed that `lint` calls broken.
+//!
+//! The `personas` row also counts the sub-agent files purlis generated before a persona ran as
+//! its own chat (#1451), and offers the fix that removes them.
 
 use super::{Doctor, Row};
 use crate::personaverbs::lint::{Level, Linter};
@@ -8,6 +11,31 @@ use crate::personaverbs::lint::{Level, Linter};
 /// `personas`: `persona lint` across every persona, one line. WARN, never FAIL: an untidy
 /// persona does not stop anybody cloning a repo or reaching a forge.
 pub(super) fn personas(d: &Doctor) -> Row {
+    let row = roster(d);
+    let leftover = crate::personaverbs::retired::generated(&d.root);
+    if leftover.is_empty() {
+        return row;
+    }
+    let said = format!(
+        "{} generated sub-agent file(s) remain in .claude/agents/",
+        leftover.len()
+    );
+    let detail = match row.status {
+        super::Status::Ok => said,
+        _ => format!("{} · {said}", row.detail),
+    };
+    let fix = "purlis doctor --fix persona-agents  (a persona runs as its own chat now; this \
+               removes the sub-agent files purlis wrote and says what it changed)";
+    let hint = if row.hint.is_empty() {
+        fix.to_owned()
+    } else {
+        format!("{}  ·  {fix}", row.hint)
+    };
+    Row::warn(&row.name, detail, hint).fixed_by(super::fix::FixId::PersonaAgents)
+}
+
+/// `persona lint` across every persona, one line.
+fn roster(d: &Doctor) -> Row {
     const NAME: &str = "personas";
     let state = crate::personaverbs::state_dir(&d.root);
     let linter = Linter::new(&d.root, &state).with_home(d.home.clone());

@@ -200,6 +200,55 @@ fn the_persona_a_chat_adopts_rides_on_its_environment() {
 }
 
 #[test]
+fn a_persona_with_a_deny_list_starts_only_where_purlis_can_enforce_it() {
+    purlis_core::unsteered!();
+    // #1451, D-1451-18: `disallowed-tools:` was enforced for the persona as a sub-agent. A
+    // chat as that persona carries it on Claude Code, and is refused on a harness where
+    // purlis cannot hand it over, rather than started with every tool.
+    let plane = Plane::new();
+    fs::create_dir_all(plane.root().join("personas/reviewer")).unwrap();
+    fs::write(
+        plane.root().join("personas/reviewer/persona.md"),
+        "---\nname: reviewer\ndisallowed-tools: Write, Edit\n---\n\n# reviewer\n",
+    )
+    .unwrap();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+    let mut start = plane.start("work");
+    start.persona = Some("reviewer".to_owned());
+    start::ready(&start, plane.root()).expect("it starts on Claude Code");
+
+    let codex = plane.harness_as("codex-stand-in");
+    plane.profile("codex", &codex, "");
+    let why = start::ready(&start, plane.root()).expect_err("refused on Codex");
+    assert_eq!(
+        why,
+        "persona 'reviewer' declares `disallowed-tools:`, and purlis can deny a chat those \
+         tools only on Claude Code. On Codex its chat would run with them, so it was not \
+         started. Start it on a Claude Code profile, or take the line out of \
+         personas/reviewer/persona.md if the rule is no longer meant."
+    );
+    assert!(!plane.root().join("ran").exists(), "nothing was run");
+
+    // The project's default persona is the one a chat that names none runs as: refused too.
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[persona]\ndefault = \"reviewer\"\n",
+    )
+    .unwrap();
+    start.persona = None;
+    let why = start::ready(&start, plane.root()).expect_err("the default persona's rule holds");
+    assert!(
+        why.starts_with("persona 'reviewer' declares `disallowed-tools:`"),
+        "{why}"
+    );
+
+    // A persona with no deny-list starts on Codex as it always did.
+    start.persona = Some("steward".to_owned());
+    start::ready(&start, plane.root()).expect("steward starts on Codex");
+}
+
+#[test]
 fn a_chat_that_asked_for_charters_footer_carries_the_word_that_says_so() {
     purlis_core::unsteered!();
     // Charter ADR 0029. The choice is per chat and it reaches the harness the only way it
@@ -395,6 +444,7 @@ fn an_opencode_chat_is_armed_through_its_environment_and_nothing_on_its_line() {
     let kit = purlis_core::harness::Kit {
         binary: &binary,
         plugin: Some(&plugin),
+        persona: None,
     };
     let purlis_core::harness::StateHooks::ThisSessionOnly { args, env, .. } =
         Harness::Opencode.state_hooks(kit, Some(plane.root()), &ready.plugins, None)
@@ -575,6 +625,7 @@ fn armed_with(
     let kit = purlis_core::harness::Kit {
         binary: &binary,
         plugin: Some(&plugin),
+        persona: None,
     };
     match harness.state_hooks(kit, Some(root), plugins, None) {
         purlis_core::harness::StateHooks::ThisSessionOnly { args, .. } => args,

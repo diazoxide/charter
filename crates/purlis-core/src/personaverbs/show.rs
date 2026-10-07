@@ -29,6 +29,10 @@ pub fn show(root: &Path, state: &Path, name: &str, session: &str, say: Sink) -> 
         ),
         say,
     );
+    // Its one-line description (#1451): what was the generated sub-agent's `description:`.
+    if let Some(said) = super::retired::description(&def.meta) {
+        out(format!("about:   {said}"), say);
+    }
     if def.lineage.len() > 1 {
         out(
             format!(

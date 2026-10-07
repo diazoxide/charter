@@ -278,3 +278,95 @@ fn the_doctor_runs_the_lint_for_the_personas_and_persona_grant_rows() {
         "1 with error(s): steward · 1 draft: devops"
     );
 }
+
+#[test]
+fn sync_agents_is_retired_and_answers_with_what_replaced_it_whatever_it_is_given() {
+    // #1451: a persona runs as its own chat, and purlis generates no sub-agent for it. The
+    // word is still taken, with the flags a script may still pass, and answers one sentence.
+    let tmp = daily();
+    let retired = "✗ `purlis persona sync-agents` is retired: a persona runs as its own chat \
+                   and purlis generates no sub-agent for it. Give a persona work with `purlis \
+                   dispatch --to <persona>`, and remove the sub-agent files purlis wrote with \
+                   `purlis doctor --fix persona-agents`.\n";
+    for args in [
+        vec!["persona", "sync-agents"],
+        vec!["persona", "sync-agents", "--persona", "devops"],
+        vec![
+            "persona",
+            "sync-agents",
+            "--approve-mcp",
+            "--yes",
+            "--dry-run",
+        ],
+    ] {
+        let said = charter(&tmp, &args);
+        assert_eq!(said.status.code(), Some(1), "{args:?}");
+        assert_eq!(err(&said), retired, "{args:?}");
+        assert_eq!(out(&said), "", "{args:?}");
+    }
+    assert!(
+        !root(&tmp).join(".claude/agents").exists(),
+        "nothing is generated"
+    );
+    // It is not offered: the help of `persona` does not list it.
+    let help = out(&charter(&tmp, &["persona", "--help"]));
+    assert!(!help.contains("sync-agents"), "{help}");
+}
+
+#[test]
+fn create_writes_no_sub_agent_file_and_says_a_draft_is_dispatched_to_by_nobody() {
+    let tmp = daily();
+    let made = charter(
+        &tmp,
+        &["persona", "create", "qa", "--delegate-when", "test plans"],
+    );
+    assert_eq!(made.status.code(), Some(0), "{}", err(&made));
+    assert!(
+        err(&made).contains("marked `draft: true` — no chat is dispatched to 'qa' yet."),
+        "{}",
+        err(&made)
+    );
+    assert!(!err(&made).contains("sub-agent"), "{}", err(&made));
+    assert!(!root(&tmp).join(".claude/agents").exists());
+}
+
+#[test]
+fn approve_mcp_is_refused_inside_a_chat_and_shows_its_lines_on_a_dry_run() {
+    // #1451, D-1451-17: the approval that lets a persona chat start a server with a vault
+    // credential is a person's. A chat cannot give it, with `--yes` or without.
+    let tmp = daily();
+    std::fs::write(
+        root(&tmp).join("personas/devops/mcp.json"),
+        r#"{"mcpServers": {"ga4": {"command": "ga4-mcp", "secrets": {"GA_TOKEN": "ga-token"}}}}"#,
+    )
+    .unwrap();
+    let dry = charter(&tmp, &["persona", "approve-mcp", "--dry-run"]);
+    assert_eq!(dry.status.code(), Some(0), "{}", err(&dry));
+    assert!(
+        err(&dry).contains("devops/ga4 → run ga4-mcp"),
+        "{}",
+        err(&dry)
+    );
+    assert!(
+        err(&dry).contains("--dry-run: nothing approved"),
+        "{}",
+        err(&dry)
+    );
+
+    let mut in_chat = Command::new(env!("CARGO_BIN_EXE_purlis"));
+    in_chat
+        .args(["persona", "approve-mcp", "--yes"])
+        .current_dir(root(&tmp))
+        .env("CHARTER_ROOT", root(&tmp))
+        .env("HOME", tmp.path().join("home"))
+        .env(purlis_core::hookwire::CHAT_ENV, "7")
+        .env("NO_COLOR", "1");
+    let refused = in_chat.output().expect("the binary runs");
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        err(&refused).contains("is not run from inside a chat"),
+        "{}",
+        err(&refused)
+    );
+    assert!(!root(&tmp).join(".charter/mcp-approved.json").exists());
+}

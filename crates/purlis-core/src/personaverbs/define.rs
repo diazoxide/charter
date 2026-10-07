@@ -4,9 +4,9 @@
 //! # A new persona is a draft
 //!
 //! The scaffold holds only true statements about the persona, and `draft: true` says it is
-//! unfinished: no sub-agent is generated for a draft, so a persona dispatched before anyone
-//! wrote its charter cannot hand the scaffold to a sub-agent as its remit. `persona lint`
-//! and the doctor's `personas` row say it is a draft until the line is dropped.
+//! unfinished: no chat is dispatched to a draft, so the scaffold is never a chat's remit
+//! before anyone wrote the charter. `persona lint` and the doctor's `personas` row say it is
+//! a draft until the line is dropped.
 //!
 //! # What `create` refuses that Python did not
 //!
@@ -129,13 +129,7 @@ fn one_line_refusal(flag: &str, value: &str) -> Option<String> {
 }
 
 /// `charter persona create <name>`, and its exit code.
-pub fn create(
-    root: &Path,
-    state: &Path,
-    ask: &Create,
-    register_vault: Option<RegisterVault>,
-    say: Sink,
-) -> u8 {
+pub fn create(root: &Path, ask: &Create, register_vault: Option<RegisterVault>, say: Sink) -> u8 {
     let name = ask.name;
     if let Some(refused) = crate::personas::shape_refusal(name) {
         say(Say::Fail(refused));
@@ -249,16 +243,12 @@ pub fn create(
          charter, then commit — personas are shared)."
     )));
     say_revived(name, revived, say);
-    match super::agents::write_agent(root, state, name, say) {
-        super::agents::Outcome::Written => say(Say::Info(format!(
-            "  generated .claude/agents/{name}.md — invokable as subagent '{name}'."
-        ))),
-        super::agents::Outcome::Draft => say(Say::Info(format!(
-            "  marked `draft: true` — no sub-agent yet, so '{name}' cannot be dispatched.\n  \
-             Write what it owns and how it works in personas/{name}/persona.md, drop the \
-             `draft: true` line,\n  then: purlis persona sync-agents"
-        ))),
-        _ => {}
+    if super::is_draft(root, name) {
+        say(Say::Info(format!(
+            "  marked `draft: true` — no chat is dispatched to '{name}' yet.\n  Write what it \
+             owns and how it works in personas/{name}/persona.md, then drop the `draft: true` \
+             line."
+        )));
     }
     match register_vault {
         Some(_) if vault == super::NO_VAULT => say(Say::Info(format!(
@@ -412,7 +402,7 @@ pub fn remove(
             super::rel(root, &target)
         )));
     }
-    if super::agents::remove_agent(root, name) {
+    if super::retired::remove_agent(root, name) {
         say(Say::Info(format!(
             "  also removed generated .claude/agents/{name}.md."
         )));

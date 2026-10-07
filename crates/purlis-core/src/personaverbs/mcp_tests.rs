@@ -1,6 +1,7 @@
 //! A persona's MCP servers against the recorded scenarios' `ops` plane: what is declared and
 //! refused, the consent lines and fingerprints the Python charter wrote, and this machine's
-//! approvals file (`persona-sync-agents-…` in `tests/fixtures/recorded/behaviour.jsonl`).
+//! approvals file. The lines and fingerprints were recorded from the Python charter's
+//! `persona sync-agents`, which is retired (#1451).
 
 use serde_json::json;
 

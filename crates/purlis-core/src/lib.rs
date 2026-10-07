@@ -78,7 +78,6 @@ pub mod heredoc;
 pub mod hookreg;
 pub mod hookstate;
 pub mod hookwire;
-pub mod inflight;
 pub mod instructions;
 pub mod inventory;
 pub mod layer;

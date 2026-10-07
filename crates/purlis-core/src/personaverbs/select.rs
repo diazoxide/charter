@@ -283,7 +283,8 @@ fn say_tool_ceiling(root: &Path, name: &str, sid: Option<&str>, say: Sink) {
     ));
 }
 
-/// `_say_mcp_boundary`: a persona's MCP servers are scoped to DISPATCH, not to this session.
+/// `_say_mcp_boundary`: a persona's MCP servers are not started for this session. They are
+/// what a chat started as the persona gets ([`super::chatstart`], #1451).
 fn say_mcp_boundary(root: &Path, name: &str, say: Sink) {
     let (servers, _) = super::mcp::declared(root, name);
     if servers.is_empty() {
@@ -301,10 +302,10 @@ fn say_mcp_boundary(root: &Path, name: &str, say: Sink) {
             .join(", ")
     )));
     say(Say::Info(
-        "  These are scoped to DISPATCH — the host starts them when this persona runs as a \
-         sub-agent and stops them after, and their tools never enter this conversation. They \
-         are NOT started for the session you are in, and servers already live here (from \
-         .mcp.json or an enabled plugin) stay live."
+        "  They are NOT started for the session you are in, and servers already live here \
+         (from .mcp.json or an enabled plugin) stay live. A chat started as this persona is \
+         started with them, on Claude Code, once a person has approved the ones that take a \
+         credential (`purlis persona approve-mcp`)."
             .into(),
     ));
 }
@@ -565,10 +566,10 @@ mod tests {
              it is what stops an edit from becoming an unprompted command. A new session picks \
              them up.\n\
              •   3 MCP server(s) declared: grafana, gsc, status.\n\
-             •   These are scoped to DISPATCH — the host starts them when this persona runs as a \
-             sub-agent and stops them after, and their tools never enter this conversation. They \
-             are NOT started for the session you are in, and servers already live here (from \
-             .mcp.json or an enabled plugin) stay live.\n"
+             •   They are NOT started for the session you are in, and servers already live here \
+             (from .mcp.json or an enabled plugin) stay live. A chat started as this persona \
+             is started with them, on Claude Code, once a person has approved the ones that \
+             take a credential (`purlis persona approve-mcp`).\n"
         );
         // Nothing new since the freeze, and no servers: neither note.
         plane.write(

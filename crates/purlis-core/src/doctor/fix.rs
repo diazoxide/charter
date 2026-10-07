@@ -21,14 +21,15 @@
 //!
 //! # No fix removes or replaces your content
 //!
-//! Each id's doc below says exactly what it writes. A fix adds what is missing, or rewrites a
-//! file charter generates and owns; it never deletes a line or a file you wrote.
+//! Each id's doc below says exactly what it writes. A fix adds what is missing, or rewrites or
+//! removes a file charter generates and owns; it never deletes a line or a file you wrote.
 
 use std::path::Path;
 
 use crate::scaffold::Say;
 
 pub mod identity;
+pub mod persona_agents;
 pub mod rename_plane;
 
 /// A fix charter can make, by the id every surface names it with.
@@ -96,6 +97,18 @@ pub enum FixId {
     /// a project with uncommitted changes, outside git, or with a file under both names
     /// ([`rename_plane`]).
     RenamePlane,
+    /// **`persona-agents`** (#1451): takes the persona sub-agents purlis used to generate out
+    /// of the project, now that a persona runs as its own chat. It removes each file under
+    /// `.claude/agents/` that purlis generated, told by its marker where the generator wrote
+    /// it; a hand-written file, or one somebody edited, is left and named. In each persona's
+    /// own definition it rewrites `model:` to `profile:` where the project offers a profile
+    /// of that name, and a `color:` that Claude Code spells otherwise than purlis (`cyan`,
+    /// `magenta`) to purlis's name for it. It reports, and leaves, the keys nothing reads now.
+    /// It makes no commit, and running it twice changes nothing more. Offered by the
+    /// `personas` row when a generated sub-agent file is still there. Applied only by name
+    /// ([`FixId::by_name_only`]): it changes committed files every teammate pulls
+    /// ([`persona_agents`]).
+    PersonaAgents,
     /// `charter workspace reinit --all`: brings every workspace behind the current layout up to
     /// it (NO-6), never removing your content. It writes each workspace's missing baseline
     /// files and its structure stamp, refreshes the live block charter manages in the project's
@@ -110,7 +123,7 @@ pub enum FixId {
 
 impl FixId {
     /// Every fix, in the order `charter doctor --fix` applies them.
-    pub const ALL: [FixId; 9] = [
+    pub const ALL: [FixId; 10] = [
         FixId::RenameLocal,
         FixId::PluginInstall,
         FixId::Reinit,
@@ -119,6 +132,7 @@ impl FixId {
         FixId::Discover,
         FixId::GitIdentity,
         FixId::RenamePlane,
+        FixId::PersonaAgents,
         FixId::WorkspaceReinit,
     ];
 
@@ -133,6 +147,7 @@ impl FixId {
             Self::Discover => "discover",
             Self::GitIdentity => "git-identity",
             Self::RenamePlane => "rename-plane",
+            Self::PersonaAgents => "persona-agents",
             Self::WorkspaceReinit => "workspace-reinit",
         }
     }
@@ -142,9 +157,13 @@ impl FixId {
     /// applies are local and additive; `discover` asks a forge over the network and writes the
     /// inventory and the docs, so it waits to be asked. `rename-plane` makes a commit every
     /// teammate pulls, so it is never automatic (V93g). `rename-local` moves this machine's
-    /// folders, not the project's, so it waits to be asked too (D-RN5-5).
+    /// folders, not the project's, so it waits to be asked too (D-RN5-5). `persona-agents`
+    /// removes and rewrites committed files, so it is the operator's to ask for (#1451).
     pub const fn by_name_only(self) -> bool {
-        matches!(self, Self::Discover | Self::RenamePlane | Self::RenameLocal)
+        matches!(
+            self,
+            Self::Discover | Self::RenamePlane | Self::RenameLocal | Self::PersonaAgents
+        )
     }
 
     /// Whether this fix needs the operator's input before it can be applied (FX-3, D-FX3-1).
@@ -248,6 +267,7 @@ fn applied(root: &Path, id: FixId, machine: Option<&crate::plugin_install::Machi
         FixId::Discover => discover(root),
         FixId::GitIdentity => needs_input(id),
         FixId::RenamePlane => rename_plane::apply(root),
+        FixId::PersonaAgents => persona_agents::apply(root),
         FixId::WorkspaceReinit => workspace_reinit(root),
         FixId::PluginInstall | FixId::RenameLocal => unreachable!("answered above"),
     }

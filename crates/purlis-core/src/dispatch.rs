@@ -6,11 +6,12 @@
 //! file per month per device ([`log_name`], FD-25). It is **committed**, which is what makes the roster block a
 //! fact every engineer sees the same way rather than a reading of one laptop.
 //!
-//! Three rows are written here. Two are written by a hook: [`record`], when a `Task`/`Agent`
-//! call returns (`posttooluse-dispatch`), and [`record_resume`], when a `SendMessage` resumes a
-//! persona (`posttooluse-message`). The third, [`record_handoff`], is written by `charter
-//! handoff` once the app has opened the chat. Without the hook rows the roster `charter docs`
-//! draws would count only what the Python charter once logged. Committing the log is not done
+//! Three kinds of row are read here. Two were written by a hook while a persona could be sent
+//! out as a sub-agent: [`record`], when a `Task`/`Agent` call returned, and [`record_resume`],
+//! when a `SendMessage` resumed one. **No hook writes either now** (#1451): a persona is a role
+//! a chat runs as and never a sub-agent, so there is no such call to log, and what a log
+//! already holds is still counted. The third, [`record_handoff`], is written once the app has
+//! opened a handed-off chat. A dispatch's own record is the app's (#1452). Committing the log is not done
 //! here: under `share = "commit"` or `"push"` the Python hook commits each row as it lands, and
 //! charter-app leaves that to the plane's next save — auto-save in the app, `charter save`
 //! outside it (ADR 0051) — which commits the plane's own files as one decision.
@@ -86,7 +87,7 @@ pub(crate) fn truthy(value: Option<&serde_json::Value>) -> bool {
 /// agent → dispatch count — `dispatch.tally()` with no day window.
 ///
 /// **A resume row carries an agent too, and must not land here.** The column is read as
-/// "times dispatched as a sub-agent", and it is what personas get retired on — so a row
+/// "times work was dispatched to it", and it is what personas get retired on — so a row
 /// with an `event` is excluded, whatever else it holds.
 ///
 /// The agent is taken as the string it is. A row whose `agent` is a number is truthy to

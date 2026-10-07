@@ -9,7 +9,8 @@ The operator is talking to you about one thing and has asked for another. There 
 places that second thing can run, and purlis names none of them for you — it cannot judge
 the work. It supplies the facts, the two tests below, and the mechanism.
 
-1. **A sub-agent** — your harness's own. purlis never touches one.
+1. **A sub-agent** — your harness's own helper. purlis leaves it alone, except that a
+   sub-agent named for a persona is refused: a persona's work is dispatched to it.
 2. **A new chat in this workspace.**
 3. **A new chat in another workspace**, existing or new.
 

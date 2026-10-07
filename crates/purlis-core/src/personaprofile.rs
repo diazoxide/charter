@@ -67,6 +67,10 @@ pub struct Named {
     pub model: Option<String>,
     /// The ancestor whose `profile:` line this is, where it is not the persona's own.
     pub inherited_from: Option<String>,
+    /// Set where the persona declares `disallowed-tools:`, to its definition's path in the
+    /// project: a chat as it starts only on a harness purlis can deny it those tools on
+    /// ([`crate::personaverbs::chatstart`], #1451 D-1451-18).
+    pub denies_tools: Option<String>,
 }
 
 /// The nearest `profile:` line of `chain` (child first), and whose it is.
@@ -82,11 +86,19 @@ fn nearest(root: &Path, chain: &[String]) -> Option<(String, String)> {
     })
 }
 
+/// Whether any definition of `persona`'s chain carries a `profile:` line, [`NONE`] included:
+/// the case in which its `model:` is not read ([`named_by`]).
+pub fn chain_names_one(root: &Path, persona: &str) -> bool {
+    nearest(root, &crate::personas::lineage(root, persona)).is_some()
+}
+
 /// What the definition of `persona` names, or nothing for a persona that does not load.
 pub fn named_by(root: &Path, persona: &str) -> Named {
     let chain = crate::personas::lineage(root, persona);
     let mut named = Named {
         persona: persona.to_owned(),
+        denies_tools: (!crate::personaverbs::chatstart::denied_tools(root, persona).is_empty())
+            .then(|| crate::personaverbs::def_rel(root, persona)),
         ..Named::default()
     };
     match nearest(root, &chain) {
@@ -186,6 +198,13 @@ pub enum Refused {
     },
     /// Nobody named a profile and the asking chat is on none.
     NoProfile,
+    /// The persona declares `disallowed-tools:`, and the profile chosen runs a harness purlis
+    /// cannot deny a chat those tools on (#1451, D-1451-18). `file` is its definition.
+    ToolRules {
+        persona: String,
+        file: String,
+        harness: Option<crate::harness::Harness>,
+    },
 }
 
 impl Refused {
@@ -232,6 +251,11 @@ impl Refused {
                                 one, so there is no profile to start the new chat on. Nothing \
                                 was started."
                 .to_owned(),
+            Self::ToolRules {
+                persona,
+                file,
+                harness,
+            } => crate::personaverbs::chatstart::unenforced_said(persona, file, *harness),
         }
     }
 }
@@ -299,6 +323,32 @@ impl Chosen {
 ///
 /// A persona's `model:` counts as naming a profile only where one of `offered` is called that.
 pub fn for_dispatch(
+    persona: &Named,
+    asking: Option<&str>,
+    named: Option<&str>,
+    offered: &[Offer],
+) -> Result<Chosen, Refused> {
+    let chosen = chosen_for(persona, asking, named, offered)?;
+    // Whoever chose the profile, a persona's deny-list holds on it or nothing starts
+    // (D-1451-18): the answer the start itself gives ([`crate::start::ready`]).
+    if let Some(file) = &persona.denies_tools {
+        let harness = offered
+            .iter()
+            .find(|offer| offer.name == chosen.profile)
+            .and_then(|offer| crate::harness::Harness::of_kind(&offer.kind));
+        if !crate::personaverbs::chatstart::carries(harness) {
+            return Err(Refused::ToolRules {
+                persona: persona.persona.clone(),
+                file: file.clone(),
+                harness,
+            });
+        }
+    }
+    Ok(chosen)
+}
+
+/// [`for_dispatch`]'s choice, before the persona's deny-list is asked about.
+fn chosen_for(
     persona: &Named,
     asking: Option<&str>,
     named: Option<&str>,
@@ -562,6 +612,7 @@ mod tests {
             profile: profile.map(str::to_owned),
             model: model.map(str::to_owned),
             inherited_from: None,
+            denies_tools: None,
         }
     }
 
@@ -571,6 +622,46 @@ mod tests {
             by,
             fell_back: None,
         })
+    }
+
+    #[test]
+    fn a_persona_with_a_deny_list_is_dispatched_to_only_on_a_harness_that_enforces_it() {
+        // #1451, D-1451-18: the same answer the start gives, at the choice of the profile,
+        // so the dispatch is refused with the sentence and nothing is started.
+        let reviewer = Named {
+            denies_tools: Some("personas/ops/persona.md".to_owned()),
+            ..names(None, None)
+        };
+        // The asking chat's profile runs Claude Code: carried.
+        assert_eq!(
+            for_dispatch(&reviewer, Some("claude"), None, &project()),
+            chosen("claude", Who::AskingChat)
+        );
+        // It runs Codex, or the dispatch names one that does: refused, whoever chose it.
+        for (asking, named) in [(Some("codex"), None), (Some("claude"), Some("codex"))] {
+            let refused = for_dispatch(&reviewer, asking, named, &project()).unwrap_err();
+            assert_eq!(
+                refused.say(),
+                "persona 'ops' declares `disallowed-tools:`, and purlis can deny a chat those \
+                 tools only on Claude Code. On Codex its chat would run with them, so it was \
+                 not started. Start it on a Claude Code profile, or take the line out of \
+                 personas/ops/persona.md if the rule is no longer meant."
+            );
+        }
+        // Its own profile, where that runs Codex.
+        let own = Named {
+            denies_tools: Some("personas/ops/persona.md".to_owned()),
+            ..names(Some("codex"), None)
+        };
+        assert!(matches!(
+            for_dispatch(&own, Some("claude"), None, &project()),
+            Err(Refused::ToolRules { .. })
+        ));
+        // A persona with no deny-list goes to Codex as before.
+        assert_eq!(
+            for_dispatch(&names(None, None), Some("codex"), None, &project()),
+            chosen("codex", Who::AskingChat)
+        );
     }
 
     #[test]

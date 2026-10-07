@@ -298,6 +298,19 @@ pub struct Kit<'a> {
     /// The bundled Claude Code plugin ([`crate::plugin`]), where the app found it. Its
     /// [`crate::opencode::shim_in`] is the plugin an opencode chat loads.
     pub plugin: Option<&'a std::path::Path>,
+    /// The persona the chat runs as, in its project: what an adapter that can hands the chat
+    /// of that persona's own (#1451: its MCP servers and its denied tools,
+    /// [`crate::personaverbs::chatstart`]). `None` for a chat on no persona.
+    pub persona: Option<As<'a>>,
+}
+
+/// The persona a chat runs as, and the project that defines it.
+#[derive(Debug, Clone, Copy)]
+pub struct As<'a> {
+    /// The project's root, which the persona's definition and this machine's approvals are
+    /// read under.
+    pub root: &'a std::path::Path,
+    pub persona: &'a str,
 }
 
 impl Harness {
@@ -562,6 +575,7 @@ mod tests {
         let kit = Kit {
             binary: std::path::Path::new("/bin/charter"),
             plugin: Some(&plugin),
+            persona: None,
         };
         let mut pairs = 0;
         for from in Harness::ALL {
@@ -824,6 +838,7 @@ mod tests {
         Kit {
             binary: std::path::Path::new(binary),
             plugin: Some(std::path::Path::new("/app/plugin")),
+            persona: None,
         }
     }
 
@@ -1453,6 +1468,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
                 plugin: None,
+                persona: None,
             },
             None,
             &BTreeMap::new(),
@@ -1822,6 +1838,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new(binary),
                 plugin: Some(plugin.path()),
+                persona: None,
             },
             None,
             &BTreeMap::from([("some-plugin".to_owned(), false)]),
@@ -1882,6 +1899,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
                 plugin: Some(&plugin),
+                persona: None,
             },
             None,
             &BTreeMap::new(),
@@ -1901,6 +1919,7 @@ mod tests {
         let kit = Kit {
             binary: std::path::Path::new("/bin/charter"),
             plugin: Some(&plugin),
+            persona: None,
         };
         for harness in [Harness::ClaudeCode, Harness::Opencode] {
             let env = env_of(harness.state_hooks(kit, None, &BTreeMap::new(), None));
@@ -1915,6 +1934,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
                 plugin: Some(&plugin),
+                persona: None,
             },
             None,
             &BTreeMap::new(),
@@ -1940,6 +1960,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
                 plugin: Some(plugin.path()),
+                persona: None,
             },
             None,
             &BTreeMap::new(),

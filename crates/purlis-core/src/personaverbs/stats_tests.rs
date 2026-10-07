@@ -1,6 +1,7 @@
 //! `charter persona stats` against the recorded scenarios' planes: each expected table and
 //! note below is the recorded row's stdout and stderr, byte for byte (`persona-stats-…` in
-//! `tests/fixtures/recorded/behaviour.jsonl`).
+//! `tests/fixtures/recorded/behaviour.jsonl`). The notes about dispatches are purlis's own
+//! since a persona stopped being a sub-agent (#1451).
 
 use chrono::NaiveDate;
 
@@ -23,26 +24,21 @@ fn legend(days: i64) -> String {
     format!(
         "• RECENT = memories in the last {days} days · VERIFY = share carrying a verification \
          marker (quality proxy) · DUP = share in a near-dup pair (noise) · DISP = times \
-         DISPATCHED as a sub-agent (committed tally) · ⬡/◇ = memory-blind role (activity: \
-         profile), not judged by volume.\n"
+         work was DISPATCHED to it (committed dispatch log) · ⬡/◇ = memory-blind role \
+         (activity: profile), not judged by volume.\n"
     )
 }
 
-const ONE_OF_ONE: &str = "• Routing: 1/1 dispatches went to a persona · 0 to a generic agent \
-                          (0%). A high generic share means the work a persona owns is being done \
-                          without it.\n";
+/// What `DISP` is read from, and that it stops moving until #1452.
+const SOURCE: &str = "• DISP is read from the committed dispatch log (personas/_dispatch/). Its \
+                      rows for a persona were written when one was sent out as a sub-agent, \
+                      which a persona no longer is, so DISP and ⚑ stop moving until they are \
+                      counted from each dispatch's record, which is not in this version yet \
+                      (#1452).\n";
 
-fn floor(when: &str) -> String {
-    format!(
-        "• Tallied live from a PostToolUse hook, which can miss background dispatches — treat \
-         DISP and ⚑ as a FLOOR ({when}). Reconciling it against this project's transcripts is \
-         not in this version yet.\n"
-    )
-}
-
-const ONE_DRAFT: &str = "• 1 draft persona(s) — purlis generates no sub-agent while `draft: \
-                         true` is set, so they are undispatchable BY DESIGN and are not counted \
-                         above. Finish the charter, drop the line, then sync-agents.\n";
+const ONE_DRAFT: &str = "• 1 draft persona(s) — no chat is dispatched to a persona while \
+                         `draft: true` is set, so they are not counted above. Finish the \
+                         charter, then drop the line.\n";
 
 fn dormant(n: usize) -> String {
     format!(
@@ -58,7 +54,7 @@ fn idle(n: usize) -> String {
 fn never_dispatched(n: usize) -> String {
     format!(
         "! {n} persona(s) NEVER dispatched — they exist, lint green, and are unused. Check \
-         whether their work is routing to a generic agent instead.\n"
+         whether a chat does their work itself where it could dispatch to them.\n"
     )
 }
 
@@ -79,8 +75,7 @@ fn the_roster_is_every_persona_and_the_shared_namespace_largest_memory_first() {
         heard.err,
         [
             legend(14),
-            ONE_OF_ONE.into(),
-            floor("never reconciled"),
+            SOURCE.into(),
             never_dispatched(1),
             ONE_DRAFT.into(),
             dormant(1),
@@ -106,10 +101,43 @@ fn a_plane_nothing_was_dispatched_on_says_so_and_judges_nobody_as_never_dispatch
         heard.err,
         [
             legend(14),
-            "• No dispatches recorded yet — the tally starts filling as sub-agents are \
-             dispatched; seeding it from past sessions is not in this version yet.\n"
+            "• No dispatch to a persona is in the committed dispatch log.\n".into(),
+            SOURCE.into(),
+            dormant(2),
+        ]
+        .concat()
+    );
+}
+
+#[test]
+fn chats_a_chat_started_are_one_total_because_the_log_names_no_persona_for_them() {
+    // #1451: `persona stats` counts dispatches from what the committed log holds. A handoff
+    // row has four fields and none is a persona (`dispatch::record_handoff`).
+    let plane = Plane::fixture("minimal");
+    let when = chrono::DateTime::parse_from_rfc3339("2026-10-07T10:00:00+00:00")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    for created in [false, true] {
+        crate::dispatch::record_handoff(
+            plane.root(),
+            crate::dispatch::Placement::Here,
+            created,
+            when,
+            "fixture-host",
+        )
+        .unwrap();
+    }
+    let (rc, heard) = run(&plane, None, 14);
+    assert_eq!(rc, 0);
+    assert_eq!(
+        heard.err,
+        [
+            legend(14),
+            "• 2 chat(s) were started by another chat (a handoff). The log names no persona \
+             for them, so they are in no row above.\n"
                 .into(),
-            floor("never reconciled"),
+            "• No dispatch to a persona is in the committed dispatch log.\n".into(),
+            SOURCE.into(),
             dormant(2),
         ]
         .concat()
@@ -129,14 +157,7 @@ fn one_named_persona_is_its_row_alone_with_no_shared_row_added() {
     );
     assert_eq!(
         heard.err,
-        [
-            legend(14),
-            ONE_OF_ONE.into(),
-            floor("never reconciled"),
-            ONE_DRAFT.into(),
-            idle(1),
-        ]
-        .concat()
+        [legend(14), SOURCE.into(), ONE_DRAFT.into(), idle(1),].concat()
     );
 }
 
@@ -151,16 +172,7 @@ fn the_shared_namespace_asked_for_by_name_is_never_refused_and_never_dispatched(
         "PERSONA    MEM  RECENT  VERIFY  DUP  DISP  STATUS\n\
          _shared      1       0      0%   0%     —  ○ idle\n\n"
     );
-    assert_eq!(
-        heard.err,
-        [
-            legend(14),
-            ONE_OF_ONE.into(),
-            floor("never reconciled"),
-            idle(1)
-        ]
-        .concat()
-    );
+    assert_eq!(heard.err, [legend(14), SOURCE.into(), idle(1)].concat());
 }
 
 #[test]
@@ -244,7 +256,7 @@ fn drift_plane() -> Plane {
 }
 
 #[test]
-fn drift_advice_verification_duplicates_and_the_last_backfill_are_each_reported() {
+fn drift_advice_verification_and_duplicates_are_each_reported() {
     // persona-stats-reads-drift-advice-quality-and-reconciliation
     let plane = drift_plane();
     let (rc, heard) = run(&plane, None, 100_000);
@@ -260,16 +272,13 @@ fn drift_advice_verification_duplicates_and_the_last_backfill_are_each_reported(
          steward       0       —       —     —     0  ⚑ never dispatched\n\
          \n\
          SKILLS — declared vs actually invoked\n  \
-         ops   unused: tdd   (preloaded every dispatch)\n  \
+         ops   declared and never used: tdd\n  \
          ops   used but not declared: brainstorming\n\n"
     );
     assert_eq!(
         heard.err,
         [
             legend(100_000),
-            "• Routing: 3/4 dispatches went to a persona · 1 to a generic agent (25%). A high \
-             generic share means the work a persona owns is being done without it.\n"
-                .into(),
             "• Routing advice: fired 1 time(s) · work handed to a persona 3 time(s) since the \
              first one (2026-03-02). Advice that fires and is never followed is the block \
              failing, not the roster — read it that way before adding more personas.\n"
@@ -279,7 +288,7 @@ fn drift_advice_verification_duplicates_and_the_last_backfill_are_each_reported(
              date or a persona reaching past its remit. Which it is depends on intent purlis \
              cannot read.\n"
                 .into(),
-            floor("last reconciled 2026-03-02"),
+            SOURCE.into(),
             never_dispatched(3),
             ONE_DRAFT.into(),
             dormant(3),
@@ -322,7 +331,7 @@ fn a_persona_drifting_one_way_only_is_listed_with_that_one_line() {
     assert!(
         heard.out.ends_with(
             "\nSKILLS — declared vs actually invoked\n  \
-             ops   unused: tdd   (preloaded every dispatch)\n\n"
+             ops   declared and never used: tdd\n\n"
         ),
         "{}",
         heard.out

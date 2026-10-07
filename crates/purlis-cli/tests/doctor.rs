@@ -691,3 +691,117 @@ fn bare_fix_never_renames_the_project() {
     assert!(root.join("charter.toml").is_file(), "{said}");
     assert!(!root.join("purlis.toml").exists(), "{said}");
 }
+
+// ---- persona-agents (#1451) -----------------------------------------------------------------
+
+/// A sub-agent file as `persona sync-agents` wrote it before it was retired.
+fn generated_agent(name: &str) -> String {
+    format!(
+        "---\nname: {name}\ndescription: \"The {name} persona.\"\n---\n<!-- {} from \
+         personas/{name}/persona.md — edit the persona, not this file. -->\n\nThis sub-agent \
+         acts as the **{name}** persona — Role — in an\nisolated context. Adopt the charter \
+         below as your role.\n\n# {name}\n",
+        purlis_core::names::SYNC_AGENTS_MARKER.reads[0]
+    )
+}
+
+/// A project that used `sync-agents`, committed: one generated sub-agent, one hand-written, a
+/// generated one nobody committed, and a persona that carries a key which only fed the
+/// generated file.
+fn plane_with_generated_agents() -> (tempfile::TempDir, PathBuf) {
+    let (d, root) = committed_plane();
+    std::fs::create_dir_all(root.join("personas/ops")).unwrap();
+    std::fs::write(
+        root.join("personas/ops/persona.md"),
+        "---\nname: ops\nrole: Ops\nvault: none\ndelegate-when: deploys\ncolor: cyan\n\
+         agent-tools: Read, Bash\n---\n\n# Ops\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join(".claude/agents")).unwrap();
+    std::fs::write(root.join(".claude/agents/ops.md"), generated_agent("ops")).unwrap();
+    std::fs::write(
+        root.join(".claude/agents/runner.md"),
+        "---\nname: runner\n---\nMine.\n",
+    )
+    .unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "with agents"]);
+    // Generated after the last commit: git could not give this one back.
+    std::fs::write(root.join(".claude/agents/late.md"), generated_agent("late")).unwrap();
+    (d, root)
+}
+
+/// `persona-agents` is applied by name, prints every file and key it changed and every file it
+/// left alone, and a second run changes nothing.
+#[test]
+fn fix_persona_agents_by_name_removes_what_purlis_generated_and_says_every_line() {
+    let (_d, root) = plane_with_generated_agents();
+
+    let out = doctor(&root, &root.join("home"), &["--fix", "persona-agents"]);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("fix persona-agents:"), "{said}");
+    for line in [
+        "✓ removed .claude/agents/ops.md (purlis generated it).",
+        "• left alone .claude/agents/runner.md: hand-written (it does not carry purlis's marker).",
+        "✓ personas/ops/persona.md: `color: cyan` is now `color: teal`.",
+        "• personas/ops/persona.md: `agent-tools:` is no longer read: ",
+        "• left alone .claude/agents/late.md: it is a file purlis generated, but git does not \
+         track it",
+        "✓ removed 1 generated sub-agent file(s) and rewrote 1 persona key(s).",
+        "`git restore -- .claude/agents personas`",
+    ] {
+        assert!(said.contains(line), "{line}\n--\n{said}");
+    }
+    assert!(!root.join(".claude/agents/ops.md").exists(), "{said}");
+    assert!(root.join(".claude/agents/late.md").is_file(), "{said}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".claude/agents/runner.md")).unwrap(),
+        "---\nname: runner\n---\nMine.\n"
+    );
+    let ops = std::fs::read_to_string(root.join("personas/ops/persona.md")).unwrap();
+    assert!(
+        ops.contains("\ncolor: teal\nagent-tools: Read, Bash\n"),
+        "{ops}"
+    );
+
+    let again = doctor(&root, &root.join("home"), &["--fix", "persona-agents"]);
+    let said = String::from_utf8_lossy(&again.stderr);
+    assert!(
+        said.contains(
+            "✓ no generated persona sub-agent file to remove and no persona key to carry over"
+        ),
+        "{said}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("personas/ops/persona.md")).unwrap(),
+        ops
+    );
+}
+
+/// Bare `--fix` never runs it: it changes committed files, so it waits to be asked for. The
+/// `personas` row says the files are there and carries the fix's id.
+#[test]
+fn bare_fix_never_removes_a_generated_sub_agent_and_the_row_offers_the_fix() {
+    let (_d, root) = plane_with_generated_agents();
+
+    let out = doctor(&root, &root.join("home"), &["--fix"]);
+
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!said.contains("fix persona-agents:"), "{said}");
+    assert!(root.join(".claude/agents/ops.md").is_file(), "{said}");
+    let json = doctor(&root, &root.join("home"), &["--json"]);
+    let personas = rows(&json)
+        .into_iter()
+        .find(|row| row["name"] == "personas")
+        .expect("a personas row");
+    assert_eq!(personas["status"], "warn", "{personas}");
+    assert_eq!(personas["fix"], "persona-agents", "{personas}");
+    assert!(
+        personas["detail"]
+            .as_str()
+            .unwrap()
+            .contains("2 generated sub-agent file(s) remain in .claude/agents/"),
+        "{personas}"
+    );
+}

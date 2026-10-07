@@ -231,6 +231,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
                 plugin: Some(bundle.path()),
+                persona: None,
             },
             None,
             &crate::harness_plugin::Chosen::new(),

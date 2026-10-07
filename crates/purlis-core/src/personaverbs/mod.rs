@@ -1,13 +1,15 @@
-//! The persona verbs: `charter persona list`, `use`, `sync-agents` and `stats` (the four the
+//! The persona verbs: `charter persona list`, `use` and `stats` (three of the four the
 //! operator's planes called that the app's `charter` did not have, charter-app 0.1.0 audit,
 //! 2026-09-24), and `create`, `show`, `clear`, `remove` and `lint` (#365).
 //!
-//! A port of `commands_persona.cmd_persona_list`, `cmd_persona_use`,
-//! `cmd_persona_sync_agents`, `cmd_persona_stats`, `cmd_persona_create`, `cmd_persona_show`,
-//! `cmd_persona_clear`, `cmd_persona_remove` and `cmd_persona_lint`, and of the parts of `persona.py`,
-//! `mcpseen.py`, `dispatch.py` and `skilluse.py` beneath them that no earlier port needed.
-//! Every sentence here is the Python charter's, byte for byte; the recorded scenarios named
-//! `persona-list-…`, `persona-use-…`, `persona-sync-agents-…` and `persona-stats-…` hold them.
+//! A port of `commands_persona.cmd_persona_list`, `cmd_persona_use`, `cmd_persona_stats`,
+//! `cmd_persona_create`, `cmd_persona_show`, `cmd_persona_clear`, `cmd_persona_remove` and
+//! `cmd_persona_lint`, and of the parts of `persona.py`, `mcpseen.py`, `dispatch.py` and
+//! `skilluse.py` beneath them that no earlier port needed. The recorded scenarios named
+//! `persona-list-…`, `persona-use-…` and `persona-stats-…` hold their sentences.
+//!
+//! The fourth verb of that audit, `sync-agents`, is retired with the persona sub-agent it
+//! generated (#1451): [`retired`] holds what is left of it.
 //!
 //! # The vault registry is [`crate::secrets`]'s
 //!
@@ -18,11 +20,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub mod agents;
+pub mod approve;
+pub mod chatstart;
 pub mod define;
 pub mod lint;
 pub mod list;
 pub mod mcp;
+pub mod retired;
 pub mod select;
 pub mod show;
 pub mod stats;
@@ -87,9 +91,8 @@ pub fn own_meta(root: &Path, name: &str) -> Option<BTreeMap<String, String>> {
 /// `persona.md`, by its FULL name.
 ///
 /// Not [`crate::personagrant::list_personas`], which takes a directory's `file_stem` and so
-/// listed `personas/ops.v2/` as `ops`: `sync-agents` then generated nothing for it and pruned
-/// its existing agent as stale. The names here decide what gets written and what gets
-/// deleted, so they are Python's exactly.
+/// lists `personas/ops.v2/` as `ops`. The names here decide which definitions a command reads
+/// and rewrites, so they are Python's exactly.
 pub fn names(root: &Path) -> Vec<String> {
     let Ok(reader) = std::fs::read_dir(root.join("personas")) else {
         return Vec::new();
