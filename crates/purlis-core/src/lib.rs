@@ -29,6 +29,7 @@ pub mod datahome;
 pub mod diffscan;
 pub mod dispatch;
 pub mod dispatchdecision;
+pub mod dispatched;
 pub mod dispatchgrant;
 pub mod dispatchguard;
 pub mod dispatchlimits;

@@ -67,6 +67,10 @@ pub const DISPATCH: &str = "dispatch";
 /// one operation `purlis dispatch report` performs, handed to the app as [`DISPATCH`] is.
 pub const DISPATCH_REPORT: &str = "dispatch_report";
 
+/// The tool that lists the tasks this chat dispatched (#1441): the one operation `purlis
+/// dispatch list` performs, answered by the app as [`DISPATCH`] is.
+pub const DISPATCH_LIST: &str = "dispatch_list";
+
 /// The tools a Claude Code chat runs without asking (V79, #1050, amending SI-8e in ADR 0064):
 /// the five that only read, and [`PERSONA_WHERE`] (D-T58-1, #1450), which reads the app's own
 /// record and answers names and states a chat is told at its start anyway. Named one by one,
@@ -215,7 +219,7 @@ fn one_string(key: &str, description: &str) -> Value {
 }
 
 /// Every tool, in the order a harness lists them.
-pub static TOOLS: [Tool; 14] = [
+pub static TOOLS: [Tool; 15] = [
     Tool {
         name: "todo_list",
         description: "List the open todos of the workspace this chat works in, oldest first, \
@@ -398,12 +402,30 @@ pub static TOOLS: [Tool; 14] = [
                                         on. Leave it out for the persona's own, else this \
                                         chat's.",
                     },
+                    "wait": {
+                        "type": "boolean",
+                        "description": "Wait for the task's report and answer with it, \
+                                        instead of carrying on. A wait that runs out says the \
+                                        task is still running.",
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "With wait, how long to wait: 100 seconds when left \
+                                        out, 540 at most.",
+                    },
                 },
                 "required": ["name", "brief"],
                 "additionalProperties": false,
             })
         },
         read_only: false,
+    },
+    Tool {
+        name: DISPATCH_LIST,
+        description: "List the tasks this chat dispatched: each one's chat number, name, \
+                      persona, where it works, its state and how long ago it started.",
+        schema: || json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        read_only: true,
     },
     Tool {
         name: DISPATCH_REPORT,
@@ -417,7 +439,7 @@ pub static TOOLS: [Tool; 14] = [
                 "properties": {
                     "outcome": {
                         "type": "string",
-                        "enum": ["done", "blocked", "failed"],
+                        "enum": ["done", "blocked", "failed", "cancelled"],
                         "description": "How the task ended.",
                     },
                     "text": {
@@ -466,7 +488,15 @@ pub fn call(
             "{ASK_OPERATOR} is asked through the harness by purlis's MCP server, not here"
         ));
     }
-    if [SESSION_RECORD, PERSONA_REMEMBER, DISPATCH, DISPATCH_REPORT].contains(&tool) {
+    if [
+        SESSION_RECORD,
+        PERSONA_REMEMBER,
+        DISPATCH,
+        DISPATCH_LIST,
+        DISPATCH_REPORT,
+    ]
+    .contains(&tool)
+    {
         return Err(format!(
             "{tool} is handed to the app by purlis's MCP server, not written here"
         ));
@@ -672,6 +702,26 @@ pub fn persona_remember_args(
         shared,
     ))
 }
+/// How long the `dispatch` tool waits for the task's report, in seconds, where its arguments
+/// say to wait: `wait_seconds`, or [`crate::dispatched::WAITS_BY_DEFAULT`].
+pub fn dispatch_waits(args: &Map<String, Value>) -> Result<Option<u32>, String> {
+    let wait = match args.get("wait") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(wait)) => *wait,
+        Some(_) => return Err("`wait` is true or false".to_owned()),
+    };
+    let seconds = match args.get("wait_seconds") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) => Some(
+            n.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or("`wait_seconds` is a whole number of seconds")?,
+        ),
+        Some(_) => return Err("`wait_seconds` is a whole number of seconds".to_owned()),
+    };
+    Ok(wait.then(|| seconds.unwrap_or(crate::dispatched::WAITS_BY_DEFAULT)))
+}
+
 /// The `dispatch` tool's arguments: the persona where one is named, the task's name and the
 /// brief.
 pub fn dispatch_args(

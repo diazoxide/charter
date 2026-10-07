@@ -499,7 +499,7 @@ rule while one who reads a bare refusal files an issue.
   refuses a Bash command that runs `purlis dispatch` in any segment, a report included; the
   same one level inside a string a shell runs (`bash -c '…'`, `sh -c "…"`, `eval …`); the same
   run through the variable that names purlis's own binary (`$PURLIS_HOOK_BINARY`, under either
-  name); and a call of purlis's `dispatch` or `dispatch_report` tool. It tells the sub-agent
+  name); and a call of purlis's `dispatch`, `dispatch_list` or `dispatch_report` tool. It tells the sub-agent
   to return what it found to its chat. Gated on a control plane.
 
   **This refusal is hook-level, and it is advice.** Nothing behind it enforces it: the app

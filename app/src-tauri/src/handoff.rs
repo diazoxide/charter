@@ -169,6 +169,7 @@ pub fn answer(
                         persona: it.persona.clone(),
                         note,
                     };
+                    crate::dispatched::started(held, it.session);
                     arrived(*it);
                     answer
                 }
@@ -202,7 +203,25 @@ pub fn answer(
                 || no(format!("chat {} is not one this app has open", asks.chat)),
                 |working| Answer::Working(Box::new(working)),
             ),
+        // An ask after a task this chat dispatched (#1441): no ticket, for the record's reason,
+        // and whose task it names is the app's record of that chat.
+        Ask::Task(asked) => crate::dispatched::answer(held, &asked),
     }
+}
+
+/// Writes task `chat`'s report for it, with `outcome`: the report of a cancelled task whose
+/// chat sent none (#1441). The app's own sentence, delivered as any report is.
+pub(crate) fn report_for(
+    held: &Held,
+    chat: u32,
+    text: &str,
+    outcome: purlis_core::handback::Outcome,
+) -> Result<(), String> {
+    let task = TaskReport {
+        outcome,
+        changed: None,
+    };
+    report_it(held, chat, text, Some(&task)).map(|_| ())
 }
 
 /// Hands `summary` back from `chat` to the chat whose handoff opened it, or says why not
@@ -291,7 +310,8 @@ fn report_it(
     let task = match task {
         None => None,
         Some(said) => Some(handback::Task {
-            outcome: said.outcome,
+            // A cancelled task's outcome is the app's record, whatever its chat says (#1441).
+            outcome: crate::dispatched::outcome_for(held, chat, said.outcome)?,
             changed: match said.changed.as_deref() {
                 None => None,
                 Some(changed) => {
@@ -346,7 +366,7 @@ fn report_it(
     } else {
         For::Place(&from.workspace)
     };
-    handback::leave(held.root(), whose, &report)
+    let kept = handback::leave_at(held.root(), whose, &report)
         .map_err(|why| format!("the report could not be kept ({why})"))?;
     held.chats().owes(chat, Owed::Sent);
     // The dispatch's record ends with the report (#1452). A task's says how it ended; a
@@ -356,11 +376,27 @@ fn report_it(
         chat,
         match report.task.as_ref().map(|task| task.outcome) {
             Some(handback::Outcome::Blocked) => purlis_core::dispatchrecord::Outcome::Blocked,
-            Some(handback::Outcome::Failed) => purlis_core::dispatchrecord::Outcome::Failed,
+            // The record has no word for a cancelled task yet: it did not do the work, so
+            // it is recorded as failed until the record's own ticket gives it one (#1441).
+            Some(handback::Outcome::Failed | handback::Outcome::Cancelled) => {
+                purlis_core::dispatchrecord::Outcome::Failed
+            }
             Some(handback::Outcome::Done) | None => purlis_core::dispatchrecord::Outcome::Done,
         },
         &report.summary,
     );
+    // A command waiting on this task has its report now, and an asking chat that is waiting
+    // for the person is told it landed (#1441). Only a file left for the chat itself is one a
+    // wait may take back: one kept for a workspace is the next chat's there.
+    if from.mode == Mode::Task {
+        crate::dispatched::reported(
+            held,
+            chat,
+            from.chat,
+            report.clone(),
+            parent_open.then_some(kept),
+        );
+    }
     // A handoff's report is the person's to see, so it is a needs-you item on the chat that
     // asked. A task's is that chat's own to read, on its next turn (#1434).
     if parent_open && from.mode == Mode::Handoff {
@@ -1111,6 +1147,7 @@ pub fn answered(
                     (Some(persona), None) => format!("running as {persona}"),
                     (None, _) => "running".to_owned(),
                 };
+                crate::dispatched::started(held, it.session);
                 arrived(*it);
                 (Answered::Started, detail)
             }
@@ -3898,6 +3935,377 @@ mod tests {
             Answer::No {
                 why: NO_TICKET.to_owned()
             }
+        );
+    }
+
+    // ----- waiting on, listing and cancelling a task (#1441) -----
+
+    use purlis_core::dispatched::{Answered, Asked, Waited, What};
+
+    /// Chat `chat` asks after a task, as `purlis dispatch wait`, `list` and `cancel` do.
+    fn asks(held: &Held, id: &PlaneId, chat: u32, what: What) -> Answer {
+        answer(
+            held,
+            id,
+            &Tickets::default(),
+            1,
+            Ask::Task(Box::new(Asked { chat, what })),
+            &nothing_opens,
+        )
+    }
+
+    /// A project with a `steward` chat in workspace `alpha` that has dispatched one task.
+    fn a_dispatched_task() -> (Plane, Planes, PlaneId, Arc<Held>, u32, u32) {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let (said, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            None,
+            "check the queue",
+        );
+        let Answer::Dispatched { chat: task, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        (plane, planes, id, held, asking, task)
+    }
+
+    fn not_yours(of: u32) -> Answer {
+        Answer::No {
+            why: purlis_core::dispatched::not_yours(of),
+        }
+    }
+
+    #[test]
+    fn a_wait_is_answered_with_the_report_and_reading_it_takes_it_from_the_next_turn() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let tickets = Tickets::default();
+        // Nothing yet: a wait of a second says where the task stands.
+        let said = asks(
+            &held,
+            &id,
+            asking,
+            What::Wait {
+                of: task,
+                within_secs: 1,
+            },
+        );
+        let Answer::Task(answered) = said else {
+            panic!("an answer, not {said:?}")
+        };
+        assert!(
+            matches!(
+                &*answered,
+                Answered::Waited { of, name, what: Waited::Running { .. } }
+                    if *of == task && name == "check the queue"
+            ),
+            "{answered:?}"
+        );
+
+        tasks_report(
+            &held,
+            &id,
+            &tickets,
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+        let said = asks(
+            &held,
+            &id,
+            asking,
+            What::Wait {
+                of: task,
+                within_secs: 30,
+            },
+        );
+
+        let Answer::Task(answered) = said else {
+            panic!("an answer, not {said:?}")
+        };
+        let Answered::Waited {
+            what: Waited::Reported { report },
+            ..
+        } = *answered
+        else {
+            panic!("the report, not {answered:?}")
+        };
+        assert_eq!(report.summary, "Forty are stuck.");
+        assert_eq!(
+            report.task.as_ref().map(|task| task.outcome),
+            Some(purlis_core::handback::Outcome::Done)
+        );
+        // Unread, it still waits for the asking chat's next turn; read, it does not.
+        let dir = purlis_core::handback::dir(held.root()).join(format!("chat-{asking}"));
+        assert_eq!(std::fs::read_dir(&dir).expect("kept").count(), 1);
+        assert_eq!(
+            asks(&held, &id, asking, What::Read { of: task }),
+            Answer::Task(Box::new(Answered::Noted))
+        );
+        assert!(
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking))
+                .is_empty()
+        );
+        // And a later wait still answers with it.
+        let again = asks(
+            &held,
+            &id,
+            asking,
+            What::Wait {
+                of: task,
+                within_secs: 1,
+            },
+        );
+        assert!(
+            matches!(&again, Answer::Task(answered)
+                if matches!(&**answered, Answered::Waited { what: Waited::Reported { .. }, .. })),
+            "{again:?}"
+        );
+    }
+
+    #[test]
+    fn a_wait_that_begins_before_the_report_ends_when_it_lands() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let began = Instant::now();
+        let waiting = std::thread::spawn({
+            let (held, id) = (Arc::clone(&held), id.clone());
+            move || {
+                asks(
+                    &held,
+                    &id,
+                    asking,
+                    What::Wait {
+                        of: task,
+                        within_secs: 60,
+                    },
+                )
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Blocked,
+            None,
+        );
+
+        let said = waiting.join().expect("the wait ended");
+        assert!(
+            matches!(&said, Answer::Task(answered)
+                if matches!(&**answered, Answered::Waited { what: Waited::Reported { .. }, .. })),
+            "{said:?}"
+        );
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(30),
+            "on the report"
+        );
+    }
+
+    #[test]
+    fn a_chat_cannot_wait_on_read_or_cancel_a_task_it_did_not_dispatch() {
+        // The forged asks: a sibling's task, the chat above, an unrelated chat, no chat at all.
+        let (plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let tickets = Tickets::default();
+        let alpha = held.root().join("workspaces").join("alpha");
+        let other = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let (said, _) = dispatch(&held, &id, &tickets, other, None, "read the logs");
+        let Answer::Dispatched {
+            chat: others_task, ..
+        } = said
+        else {
+            panic!("dispatched, not {said:?}")
+        };
+        tasks_report(
+            &held,
+            &id,
+            &tickets,
+            others_task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+
+        for (asker, of) in [
+            (asking, others_task),
+            (task, others_task),
+            (task, asking),
+            (asking, other),
+            (asking, 9999),
+            (asking, asking),
+        ] {
+            for what in [
+                What::Wait {
+                    of,
+                    within_secs: 30,
+                },
+                What::Read { of },
+                What::Cancel { of },
+            ] {
+                assert_eq!(
+                    asks(&held, &id, asker, what.clone()),
+                    not_yours(of),
+                    "{asker}: {what:?}"
+                );
+            }
+        }
+        // Nothing was read, taken or cancelled: the other chat's report still waits for it.
+        let waiting =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(other));
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(
+            waiting[0].task.as_ref().map(|task| task.outcome),
+            Some(purlis_core::handback::Outcome::Done)
+        );
+    }
+
+    #[test]
+    fn the_list_is_the_asking_chats_own_tasks_with_persona_task_where_state_and_age() {
+        let (plane, _planes, id, held, asking, task) = a_dispatched_task();
+        let tickets = Tickets::default();
+        let alpha = held.root().join("workspaces").join("alpha");
+        let other = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        dispatch(&held, &id, &tickets, other, None, "read the logs");
+        let (said, _) = dispatch(&held, &id, &tickets, asking, None, "count the retries");
+        let Answer::Dispatched { chat: second, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        tasks_report(
+            &held,
+            &id,
+            &tickets,
+            second,
+            purlis_core::handback::Outcome::Failed,
+            None,
+        );
+
+        let said = asks(&held, &id, asking, What::List);
+
+        let Answer::Task(answered) = said else {
+            panic!("a list, not {said:?}")
+        };
+        let Answered::Listed { rows } = *answered else {
+            panic!("a list, not {answered:?}")
+        };
+        let told: Vec<_> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.chat,
+                    row.name.as_str(),
+                    row.persona.as_deref(),
+                    row.place.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            told,
+            [
+                (task, "check the queue", Some("steward"), "alpha"),
+                (second, "count the retries", Some("steward"), "alpha"),
+            ]
+        );
+        assert_eq!(rows[1].state, "reported: failed");
+        assert!(rows.iter().all(|row| row.age_secs.is_some()));
+        // The task's own list is empty: it dispatched nothing.
+        assert_eq!(
+            asks(&held, &id, task, What::List),
+            Answer::Task(Box::new(Answered::Listed { rows: Vec::new() }))
+        );
+    }
+
+    #[test]
+    fn a_cancelled_task_reports_as_cancelled_whatever_it_says_and_cannot_be_cancelled_again() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+
+        let said = asks(&held, &id, asking, What::Cancel { of: task });
+
+        assert_eq!(
+            said,
+            Answer::Task(Box::new(Answered::Cancelling {
+                of: task,
+                name: "check the queue".to_owned()
+            }))
+        );
+        let listed = asks(&held, &id, asking, What::List);
+        assert!(
+            matches!(&listed, Answer::Task(answered)
+                if matches!(&**answered, Answered::Listed { rows } if rows[0].state == "cancelling")),
+            "{listed:?}"
+        );
+        // Its one short report says done; the app's record says it was cancelled.
+        tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+        let waiting =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
+        assert_eq!(
+            waiting[0].task.as_ref().map(|task| task.outcome),
+            Some(purlis_core::handback::Outcome::Cancelled)
+        );
+        let again = asks(&held, &id, asking, What::Cancel { of: task });
+        assert!(
+            matches!(&again, Answer::No { why } if why.contains("already reported (cancelled)")),
+            "{again:?}"
+        );
+    }
+
+    #[test]
+    fn a_task_nobody_cancelled_cannot_report_that_it_was() {
+        let (_plane, _planes, id, held, _asking, task) = a_dispatched_task();
+
+        let said = tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Cancelled,
+            None,
+        );
+
+        assert_eq!(
+            said,
+            Answer::No {
+                why: purlis_core::dispatched::NOT_CANCELLED.to_owned()
+            }
+        );
+        // Refused, and still owed.
+        assert_eq!(
+            held.chats().handed_from(task).map(|from| from.report),
+            Some(Owed::Due)
+        );
+    }
+
+    #[test]
+    fn a_cancelled_task_whose_chat_has_ended_has_its_report_written_for_it() {
+        let (_plane, _planes, id, held, asking, task) = a_dispatched_task();
+        // Its program is gone, and its tab is still there.
+        held.hooks().board().exited(task, Some(0));
+
+        asks(&held, &id, asking, What::Cancel { of: task });
+
+        let waiting =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(
+            waiting[0].summary,
+            purlis_core::dispatched::ENDED_UNREPORTED
+        );
+        assert_eq!(
+            waiting[0].task.as_ref().map(|task| task.outcome),
+            Some(purlis_core::handback::Outcome::Cancelled)
         );
     }
 

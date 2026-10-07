@@ -241,7 +241,8 @@ The persona chat finishes by writing its session record and sending **one report
 purlis dispatch report --outcome done "<what was done and what was found>" [--changed "<files, commits, a branch>"]
 ```
 
-`--outcome` is `done`, `blocked` or `failed`. The report reaches the chat that asked as
+`--outcome` is `done`, `blocked` or `failed` (and `cancelled`, from a task its asking chat
+cancelled, and from no other). The report reaches the chat that asked as
 context on its next turn, the way a handoff's does and under the same pairing: it names no
 recipient. It carries the outcome, the text, what the persona chat says changed, and the path
 of the session record purlis wrote for it, and every line the persona chat wrote is quoted as
@@ -256,6 +257,64 @@ summary whichever command sent it.
 
 purlis's `dispatch` and `dispatch_report` tools do the same two things, for a harness that
 calls tools instead of running a command.
+
+### Waiting for the report, or being told
+
+A dispatch carries on by default: the command answers as soon as the chat has started. The
+chat that asked then has three ways to get the report.
+
+- **Wait for it in the same turn.** `purlis dispatch --name "<task>" --wait <<'BRIEF'` holds
+  the command until the report lands and prints it as the command's result, quoted as data the
+  way a turn is handed it. The `dispatch` tool's `wait` does the same. `purlis dispatch wait
+  <chat>` waits on a task dispatched earlier.
+- **A wait is bounded.** 100 seconds unless `--timeout <seconds>` says otherwise, and 540 at
+  most, because a harness ends a command that runs longer. A wait that runs out is an answer
+  and not a failure: it says the task is still running and how to look again. Nothing is lost
+  by it, or by a command that is stopped while it waits: the report still reaches the chat
+  when it lands.
+- **Be told when it lands.** A report nobody waited for is left for the asking chat's next
+  turn, as before. If that chat is waiting for you and asking nothing when the report lands,
+  or once its turn ends, purlis types one line of its own into it, which starts that turn:
+  `purlis: a task this chat dispatched has reported (chat 9). …`. The line is purlis's sentence
+  and a chat's number. The report is never typed: it arrives as the turn's context, quoted as
+  data. Nothing is typed into a chat that is in the middle of a turn, that is showing you a
+  prompt, or in whose pane you have started typing; there the report waits for the next turn.
+
+What each harness does with that line:
+
+| Harness | Told without you | How the report arrives |
+| --- | --- | --- |
+| Claude Code | yes | the turn's `UserPromptSubmit` hook hands it over as context |
+| Codex | yes, once you have trusted purlis's hooks in Codex | the same hook; until the hooks are trusted the line still starts a turn, with nothing attached, and it says to run `purlis dispatch wait <chat>`, which prints the report |
+| opencode | no: purlis types nothing there, because it has not measured that the turn is handed its context | on the next turn you start, as before |
+
+This was built where no app could be run, so the typed line has been tested against the app's
+own records and not yet watched in a running harness.
+
+### Listing and cancelling
+
+```bash
+purlis dispatch list
+purlis dispatch cancel <chat>
+```
+
+`list` prints the tasks this chat dispatched, one a line: the chat's number, the task's name,
+its persona, where it works, its state and how long ago it started. The states are `running`,
+`idle, with no report yet`, `waiting on the person`, `cancelling`, `reported: <outcome>` and
+`ended without a report`. A task is listed until its chat is closed. The `dispatch_list` tool
+prints the same list.
+
+`cancel` ends the task's turn and asks its chat for one short report of what it did, which
+arrives with the outcome `cancelled` whatever the chat calls it. A chat that ends that turn
+without reporting, or whose program had already ended, has a report written for it, so a
+cancel always ends in one. If the chat is showing you a prompt, nothing is sent to it until
+you have answered.
+
+**A chat can wait on, list and cancel only the tasks it dispatched itself.** Which those are is
+purlis's record of each chat, written when the chat was started; the command names a chat by
+number and says nothing else. A sibling's task, the chat that dispatched this one, a chat a
+handoff opened and a number no chat has are all refused in the same sentence. A task that has
+reported cannot be cancelled.
 
 ## What `purlis handoff` refuses before it changes anything
 

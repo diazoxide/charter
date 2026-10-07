@@ -6,6 +6,11 @@
 //! BRIEF
 //!
 //! purlis dispatch report --outcome done|blocked|failed [--changed "<what changed>"] "<text>"
+//!
+//! purlis dispatch --name "<task>" --wait [--timeout <seconds>] <<'BRIEF' …
+//! purlis dispatch wait <chat> [--timeout <seconds>]
+//! purlis dispatch list
+//! purlis dispatch cancel <chat>
 //! ```
 //!
 //! A dispatch is one chat starting another, which runs as a persona for its whole life
@@ -22,6 +27,13 @@
 //! checks it; here the request says nothing about the chat that asks but its number, and the
 //! app writes the stamp from its own record ([`purlis_core::hookwire::DispatchAsk`]).
 //!
+//! **Asking after a task** (#1441): `--wait` and `wait` hold the command until the task's report
+//! lands, and print the report as the next turn would have been handed it; `list` prints the
+//! tasks this chat dispatched; `cancel` ends one's turn and asks it for a short report. Each is
+//! one ask on the chat's hook socket with no ticket, which names a chat by the app's number
+//! for it. Whether that chat is this chat's task is the app's record, never anything said here
+//! ([`purlis_core::dispatched`]).
+//!
 //! **Nothing here decides.** The checks in front of the ask are the ones that need no app: a
 //! name purlis would draw, a brief that is there and carries no secret, a persona this project
 //! defines. The persona is asked again by the app, with everything else.
@@ -30,6 +42,7 @@ use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 
 use purlis_core::dispatchdecision::{self, Persona, Refused};
+use purlis_core::dispatched::{self, Answered, Asked, Waited, What};
 use purlis_core::handback::Outcome;
 use purlis_core::handoff;
 use purlis_core::hookwire::{Answer, Ask, DispatchAsk, ReportBack, TaskReport};
@@ -65,15 +78,37 @@ pub enum DispatchCommand {
         #[arg(long)]
         changed: Option<String>,
     },
+    /// Wait for the report of a task this chat dispatched, and print it. `purlis dispatch
+    /// list` shows each task's chat number. A wait that runs out says the task is still
+    /// running; its report reaches this chat when it lands all the same.
+    Wait {
+        /// The task's chat, by its number in `purlis dispatch list`.
+        chat: u32,
+        /// How long to wait, in seconds (default 100, at most 540).
+        #[arg(long)]
+        timeout: Option<u32>,
+    },
+    /// List the tasks this chat dispatched: each one's chat number, name, persona, where it
+    /// works, its state and how long ago it started.
+    List,
+    /// Cancel a task this chat dispatched: its turn is ended and it is asked for one short
+    /// report of what it did, which arrives with the outcome `cancelled`. Only a task this
+    /// chat dispatched can be cancelled by it.
+    Cancel {
+        /// The task's chat, by its number in `purlis dispatch list`.
+        chat: u32,
+    },
 }
 
-/// `purlis dispatch --name <task> [--to <persona>] [--profile <profile>]`, with the brief on
-/// stdin.
+/// `purlis dispatch --name <task> [--to <persona>] [--profile <profile>] [--wait]`, with the
+/// brief on stdin. `waits` is how long to wait for the report, in seconds, where the command
+/// was told to wait.
 pub fn dispatch(
     here: &crate::Here,
     to: Option<&str>,
     name: Option<&str>,
     profile: Option<&str>,
+    waits: Option<u32>,
 ) -> ExitCode {
     let Some(name) = name else {
         voice::err(&format!(
@@ -95,7 +130,7 @@ pub fn dispatch(
             return ExitCode::FAILURE;
         }
     };
-    said(send(here, to, name, &brief, profile))
+    said(send(here, to, name, &brief, profile, waits))
 }
 
 /// Prints what a dispatch or a report answered: `Ok` on stdout, `Err` on stderr as a refusal.
@@ -139,12 +174,16 @@ fn checked(here: &crate::Here, to: Option<&str>, name: &str) -> Result<String, S
 ///
 /// Every check a caller could skip is made here, so the tool, which reads no stdin, is held to
 /// exactly what the command is.
+///
+/// With `waits`, the answer goes on to the task's report, or to where the task stands once
+/// that many seconds have passed ([`wait`]): a dispatch and its result in one call (#1441).
 pub fn send(
     here: &crate::Here,
     to: Option<&str>,
     name: &str,
     brief: &str,
     profile: Option<&str>,
+    waits: Option<u32>,
 ) -> Result<String, String> {
     let name = checked(here, to, name)?;
     if !brief
@@ -213,10 +252,20 @@ pub fn send(
                 Some(note) => format!(" Note: {}.", purlis_core::personas::one_line(&note)),
                 None => String::new(),
             };
+            let name = purlis_core::personas::one_line(&name);
+            let Some(within) = waits else {
+                return Ok(format!(
+                    "{SAYS} started '{name}'{who} (chat {chat}). It works in this chat's \
+                     folder, and its report reaches this chat as context on its next turn.{note}"
+                ));
+            };
+            // The chat is running either way: what the wait says is added to that, never
+            // instead of it, so a wait that fails still leaves the chat's number said.
+            let waited = match wait(chat, Some(within)) {
+                Ok(said) | Err(said) => said,
+            };
             Ok(format!(
-                "{SAYS} started '{}'{who} (chat {chat}). It works in this chat's folder, and \
-                 its report reaches this chat as context on its next turn.{note}",
-                purlis_core::personas::one_line(&name)
+                "{SAYS} started '{name}'{who} (chat {chat}), in this chat's folder.{note}\n{waited}"
             ))
         }
         // Held, not refused: the dispatch is accepted and waits on the person, so this is not
@@ -236,7 +285,8 @@ pub fn send(
             | Answer::Written { .. }
             | Answer::Said { .. }
             | Answer::Vaults { .. }
-            | Answer::Working(_),
+            | Answer::Working(_)
+            | Answer::Task(_),
         )
         | Err(_) => Err(format!(
             "{SAYS} the purlis app did not answer, so purlis cannot say whether the chat \
@@ -384,7 +434,8 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
             | Answer::Vaults { .. }
             | Answer::Working(_)
             | Answer::Dispatched { .. }
-            | Answer::NeedsGrant { .. },
+            | Answer::NeedsGrant { .. }
+            | Answer::Task(_),
         )
         | Err(_) => Err(format!(
             "{REPORT_SAYS} the purlis app did not answer, so nothing was sent."
@@ -410,7 +461,7 @@ fn not_sent(why: &str) -> String {
     )
 }
 
-/// `purlis dispatch report …`, printed.
+/// `purlis dispatch report …`, `wait`, `list` and `cancel`, printed.
 pub fn run(command: &DispatchCommand) -> ExitCode {
     match command {
         DispatchCommand::Report {
@@ -418,6 +469,130 @@ pub fn run(command: &DispatchCommand) -> ExitCode {
             outcome,
             changed,
         } => said(report(outcome, text, changed.as_deref())),
+        DispatchCommand::Wait { chat, timeout } => said(wait(*chat, *timeout)),
+        DispatchCommand::List => said(list()),
+        DispatchCommand::Cancel { chat } => said(cancel(*chat)),
+    }
+}
+
+/// How much longer than the wait itself the app has to answer one: it answers when the wait
+/// ends, and the answer is one line.
+const A_WAIT_IS_ANSWERED_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A conversation with the app that started this chat, and the chat's number: what an ask
+/// that needs no ticket is made on.
+fn the_app() -> Option<(purlis_core::hookwire::Asking, u32)> {
+    use purlis_core::hookwire::{Asking, CHAT_ENV, ChatToken, SOCKET_ENV};
+
+    let socket = purlis_core::envvar::var_os(SOCKET_ENV).filter(|s| !s.is_empty())?;
+    let chat = purlis_core::envvar::var(CHAT_ENV).and_then(|chat| chat.parse::<u32>().ok())?;
+    let asking = Asking::on(std::path::Path::new(&socket), ChatToken::from_env()).ok()?;
+    Some((asking, chat))
+}
+
+/// One ask after a dispatched task, answered: what the app said of it, or the refusal.
+fn asked(what: What, within: std::time::Duration) -> Result<Answered, String> {
+    let Some((mut asking, chat)) = the_app() else {
+        return Err(format!(
+            "{SAYS} no purlis app answered this call. A chat's dispatched tasks are the app's \
+             to say: run it from a chat the purlis app started."
+        ));
+    };
+    answered(&mut asking, chat, what, within)
+}
+
+fn answered(
+    asking: &mut purlis_core::hookwire::Asking,
+    chat: u32,
+    what: What,
+    within: std::time::Duration,
+) -> Result<Answered, String> {
+    match asking.ask(&Ask::Task(Box::new(Asked { chat, what })), within) {
+        Ok(Answer::Task(answered)) => Ok(*answered),
+        Ok(Answer::No { why }) => Err(format!("{SAYS} {}", purlis_core::personas::one_line(&why))),
+        Ok(_) | Err(_) => Err(format!(
+            "{SAYS} the purlis app did not answer. `purlis dispatch list` shows where this \
+             chat's tasks stand."
+        )),
+    }
+}
+
+/// `purlis dispatch wait <chat>`: the report of task `of`, as this chat's next turn would have
+/// been handed it, or where the task stands once the wait has run out.
+///
+/// **A wait that runs out is an answer, not a failure**: the task is still running, its report
+/// still reaches this chat when it lands, and the sentence says how to look again.
+pub fn wait(of: u32, within: Option<u32>) -> Result<String, String> {
+    let within = dispatched::wait_secs(within.unwrap_or(dispatched::WAITS_BY_DEFAULT));
+    let Some((mut asking, chat)) = the_app() else {
+        return Err(format!(
+            "{SAYS} no purlis app answered this call, so there is no report to wait for here. \
+             Run it from a chat the purlis app started."
+        ));
+    };
+    let held = std::time::Duration::from_secs(u64::from(within)) + A_WAIT_IS_ANSWERED_WITHIN;
+    let waited = answered(
+        &mut asking,
+        chat,
+        What::Wait {
+            of,
+            within_secs: within,
+        },
+        held,
+    )?;
+    let Answered::Waited { of, name, what } = waited else {
+        return Err(format!("{SAYS} the purlis app did not answer the wait."));
+    };
+    let name = purlis_core::personas::one_line(&name);
+    Ok(match what {
+        Waited::Reported { report } => {
+            // Said on the same connection, so the turn after this one is not handed the same
+            // report again. Unsaid, by a command that was killed here, the report is still
+            // waiting for that turn: nothing is lost either way.
+            let _ = answered(
+                &mut asking,
+                chat,
+                What::Read { of },
+                crate::handoff::A_TICKET_TAKES_AT_MOST,
+            );
+            purlis_core::handback::context(&[*report], false).unwrap_or_default()
+        }
+        Waited::Running { state } => format!(
+            "{SAYS} '{name}' (chat {of}) has not reported after {within} seconds: it is {}. \
+             It is still running, and its report reaches this chat as context when it lands. \
+             `purlis dispatch wait {of}` waits again, and `purlis dispatch list` shows where \
+             it stands.",
+            purlis_core::personas::one_line(&state)
+        ),
+        Waited::AlreadyRead => format!(
+            "{SAYS} '{name}' (chat {of}) reported earlier, and its report was handed to this \
+             chat then. The app no longer holds its text."
+        ),
+        Waited::Ended => {
+            format!("{SAYS} '{name}' (chat {of}) failed: its chat ended without a report.")
+        }
+    })
+}
+
+/// `purlis dispatch list`: the tasks this chat dispatched.
+pub fn list() -> Result<String, String> {
+    match asked(What::List, crate::handoff::A_TICKET_TAKES_AT_MOST)? {
+        Answered::Listed { rows } => Ok(dispatched::list_text(&rows)),
+        _ => Err(format!("{SAYS} the purlis app did not answer the list.")),
+    }
+}
+
+/// `purlis dispatch cancel <chat>`: ends task `of`'s turn and asks it for a short report.
+pub fn cancel(of: u32) -> Result<String, String> {
+    match asked(What::Cancel { of }, crate::handoff::A_TICKET_TAKES_AT_MOST)? {
+        Answered::Cancelling { of, name } => Ok(format!(
+            "{SAYS} cancelling '{}' (chat {of}). Its turn is ended and it is asked for one \
+             short report of what it did, which reaches this chat with the outcome \
+             `cancelled`. If it is showing the person a prompt, that happens once the prompt \
+             is answered. `purlis dispatch wait {of}` waits for the report here.",
+            purlis_core::personas::one_line(&name)
+        )),
+        _ => Err(format!("{SAYS} the purlis app did not answer the cancel.")),
     }
 }
 

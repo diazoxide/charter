@@ -83,6 +83,9 @@ pub enum Outcome {
     Blocked,
     /// It tried, and the work did not succeed.
     Failed,
+    /// The chat that asked cancelled it (#1441). The app's own record of what happened, never
+    /// only the persona chat's word: [`crate::dispatched::Ledger::outcome_for`].
+    Cancelled,
 }
 
 impl Outcome {
@@ -92,12 +95,13 @@ impl Outcome {
             Self::Done => "done",
             Self::Blocked => "blocked",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
         }
     }
 
     /// The outcome `word` names, or none.
     pub fn of(word: &str) -> Option<Self> {
-        [Self::Done, Self::Blocked, Self::Failed]
+        [Self::Done, Self::Blocked, Self::Failed, Self::Cancelled]
             .into_iter()
             .find(|outcome| outcome.word() == word)
     }
@@ -148,6 +152,12 @@ fn dir_for(root: &Path, whose: For<'_>) -> Option<PathBuf> {
 
 /// Leaves `report` for `whose` to read. Refuses a workspace that cannot be one.
 pub fn leave(root: &Path, whose: For<'_>, report: &Handback) -> std::io::Result<()> {
+    leave_at(root, whose, report).map(|_| ())
+}
+
+/// [`leave`], answering the file the report waits in: what a command that hands the report
+/// over itself removes, so the next turn is not handed it a second time (#1441).
+pub fn leave_at(root: &Path, whose: For<'_>, report: &Handback) -> std::io::Result<PathBuf> {
     let Some(dir) = dir_for(root, whose) else {
         return Err(std::io::Error::other("that cannot name a workspace"));
     };
@@ -162,7 +172,20 @@ pub fn leave(root: &Path, whose: For<'_>, report: &Handback) -> std::io::Result<
     // reader from taking it before the rename.
     let partial = dir.join(format!(".{name}"));
     std::fs::write(&partial, text)?;
-    std::fs::rename(&partial, dir.join(name))
+    let kept = dir.join(name);
+    std::fs::rename(&partial, &kept)?;
+    Ok(kept)
+}
+
+/// Removes the report waiting in `file`, which a command has handed over itself. Only a file
+/// in the directory reports wait in is removed, and one a hook took first is nobody's loss.
+pub fn took(root: &Path, file: &Path) {
+    if file.starts_with(dir(root)) {
+        let _ = std::fs::remove_file(file);
+        if let Some(parent) = file.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
 }
 
 /// Takes every report waiting for `whose`, oldest first. Each is gone from disk once taken,

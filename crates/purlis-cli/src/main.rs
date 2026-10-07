@@ -469,6 +469,10 @@ enum Command {
     ///
     /// `purlis dispatch report --outcome done "<text>"`, from a chat a dispatch started, sends
     /// its one report back.
+    ///
+    /// The chat that asked can wait for that report (`--wait`, or `purlis dispatch wait
+    /// <chat>` later), list its tasks (`purlis dispatch list`) and cancel one (`purlis dispatch
+    /// cancel <chat>`). A report nobody waits for reaches the chat as context when it lands.
     #[command(args_conflicts_with_subcommands = true)]
     Dispatch {
         /// The persona the new chat runs as (default: this chat's own).
@@ -482,6 +486,13 @@ enum Command {
         /// persona's own, else this chat's).
         #[arg(long)]
         profile: Option<String>,
+        /// Wait for the task's report and print it as this command's result, instead of
+        /// carrying on. A wait that runs out says the task is still running.
+        #[arg(long)]
+        wait: bool,
+        /// With --wait, how long to wait, in seconds (default 100, at most 540).
+        #[arg(long, requires = "wait")]
+        timeout: Option<u32>,
         #[command(subcommand)]
         command: Option<dispatch::DispatchCommand>,
     },
@@ -3637,6 +3648,8 @@ fn main() -> ExitCode {
         to,
         name,
         profile,
+        wait,
+        timeout,
         command,
     } = &cli.command
     {
@@ -3650,7 +3663,14 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        return dispatch::dispatch(&here, to.as_deref(), name.as_deref(), profile.as_deref());
+        let waits = wait.then(|| timeout.unwrap_or(purlis_core::dispatched::WAITS_BY_DEFAULT));
+        return dispatch::dispatch(
+            &here,
+            to.as_deref(),
+            name.as_deref(),
+            profile.as_deref(),
+            waits,
+        );
     }
     // `handoff` says one refusal and exits 1; it never returns 0 in this charter.
     if let Command::Handoff {
