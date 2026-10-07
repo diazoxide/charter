@@ -79,7 +79,22 @@ impl World {
     }
 
     fn request(&self, store: &Store, asking: Asking, target: &str, brief: &str) -> Requested {
-        self.on(|ground| store.request(ground, asking, target, brief).0)
+        self.on(|ground| {
+            store
+                .request(ground, asking, target, brief, Uncovered::AskThePerson)
+                .0
+        })
+    }
+
+    /// The same request from a chat nobody is at.
+    fn request_unattended(
+        &self,
+        store: &Store,
+        asking: Asking,
+        target: &str,
+        brief: &str,
+    ) -> (Requested, Option<Pending>) {
+        self.on(|ground| store.request(ground, asking, target, brief, Uncovered::Refuse))
     }
 
     fn allow(&self, store: &Store, id: u32, level: Level) -> Result<String, String> {
@@ -102,6 +117,7 @@ fn chat(session: u32, persona: Option<&str>) -> Asking {
         id: Some(format!("chat-{session}")),
         name: format!("{} {session}", persona.unwrap_or("claude")),
         persona: persona.map(str::to_owned),
+        held: false,
     }
 }
 
@@ -142,6 +158,7 @@ fn a_dispatch_to_another_persona_with_no_grant_starts_nothing_and_is_held_with_i
             brief: dispatchgrant::ShownBrief {
                 text: BRIEF.to_owned(),
                 cut: false,
+                lines: 2,
             },
             locked: None,
             at: 100,
@@ -157,8 +174,15 @@ fn asked_again_while_the_first_waits_it_is_one_notice_showing_the_first_brief() 
     let world = World::new();
     let (store, _) = store();
     let first = world.request(&store, chat(3, Some("steward")), "devops", BRIEF);
-    let (again, raised) = world
-        .on(|ground| store.request(ground, chat(3, Some("steward")), "devops", "Another brief"));
+    let (again, raised) = world.on(|ground| {
+        store.request(
+            ground,
+            chat(3, Some("steward")),
+            "devops",
+            "Another brief",
+            Uncovered::AskThePerson,
+        )
+    });
     assert_eq!(again, first);
     assert_eq!(raised, None, "the window is told once");
     assert_eq!(store.waiting(3).len(), 1);
@@ -257,6 +281,7 @@ fn allow_for_this_chat_starts_it_and_covers_that_chat_alone_until_the_app_lets_g
             at: Some(100),
             chat: Some("steward 3".to_owned()),
             locked: None,
+            waiting: false,
         }]
     );
     assert_eq!(
@@ -313,6 +338,7 @@ fn allow_for_me_on_this_machine_is_kept_in_this_machine_s_record_and_covers_ever
             at: Some(100),
             chat: Some("steward 3".to_owned()),
             locked: None,
+            waiting: false,
         }]
     );
     assert_eq!(world.audited().len(), 1, "one Allow, one audit");
@@ -404,6 +430,8 @@ fn an_allow_nobody_recorded_grants_nothing_at_any_level() {
         logging: false,
         ..World::new()
     };
+    std::fs::write(purlis_core::names::manifest(world.root()), "schema = 1\n")
+        .expect("the project file");
     let (store, answered) = store();
     let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     for level in [Level::Chat, Level::You, Level::Project] {
@@ -893,4 +921,324 @@ fn the_core_s_request_is_judged_from_the_app_s_record_of_the_chat_and_held_on_it
             session + 100
         ))
     );
+}
+
+// ---- a held chat (M1) ---------------------------------------------------------------------------
+
+/// The record of a chat a handoff opened as `persona` that runs on `holds`'s grants until the
+/// person allows its own.
+fn held_record(persona: &str, holds: &str) -> purlis_core::reopen::Chat {
+    purlis_core::reopen::Chat {
+        program: "/bin/sh".to_owned(),
+        name: "7".to_owned(),
+        persona: Some(persona.to_owned()),
+        held: Some(purlis_core::reopen::HeldGrants {
+            persona: Some(holds.to_owned()),
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_asking_persona_is_the_one_the_chat_runs_with_not_the_one_its_record_names() {
+    let project = tempfile::tempdir().expect("a project");
+    let asking = asking_from(
+        &held_record("devops", "steward"),
+        7,
+        "devops 7".to_owned(),
+        project.path(),
+    );
+    assert_eq!(asking.persona.as_deref(), Some("steward"));
+    assert!(asking.held);
+    // A chat that holds its own is its recorded persona.
+    let own = purlis_core::reopen::Chat {
+        held: None,
+        ..held_record("devops", "steward")
+    };
+    let asking = asking_from(&own, 7, "devops 7".to_owned(), project.path());
+    assert_eq!(asking.persona.as_deref(), Some("devops"));
+    assert!(!asking.held);
+}
+
+#[test]
+fn a_held_chat_s_dispatch_is_refused_with_a_sentence_and_raises_no_notice() {
+    let world = World::new();
+    let (store, answered) = store();
+    // devops chats may dispatch to prod, on this machine.
+    let id = pending_of(&world.request(&store, chat(3, Some("devops")), "prod", BRIEF));
+    world.allow(&store, id, Level::You).expect("allowed");
+    let started = answered.lock().unwrap().len();
+    let held = asking_from(
+        &held_record("devops", "steward"),
+        4,
+        "devops 4".to_owned(),
+        world.root(),
+    );
+    let said = "this chat runs on another chat's grants until the person allows its own on its \
+                tab, so it dispatches to no one yet. Ask the person to press Allow on this chat's \
+                tab.";
+    // Its recorded persona: not "the same persona", so no dispatch starts unasked.
+    for target in ["devops", "prod", "steward", "qa"] {
+        let (asked, raised) = world.on(|ground| {
+            store.request(ground, held.clone(), target, BRIEF, Uncovered::AskThePerson)
+        });
+        assert_eq!(asked, Requested::Refused(said.to_owned()), "{target}");
+        assert_eq!(raised, None, "{target}");
+    }
+    assert!(store.waiting(4).is_empty(), "no Notice");
+    assert_eq!(answered.lock().unwrap().len(), started, "nothing started");
+}
+
+// ---- a "this chat" grant ends with the chat (M2) ------------------------------------------------
+
+#[test]
+fn a_grant_for_this_chat_is_gone_when_the_chat_closes_even_if_it_starts_again_under_its_id() {
+    let world = World::new();
+    let (store, _) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.allow(&store, id, Level::Chat).expect("allowed");
+    pending_of(&world.request(&store, chat(3, Some("steward")), "qa", BRIEF));
+    assert!(matches!(
+        world.request(&store, chat(3, Some("steward")), "devops", BRIEF),
+        Requested::Covered(_)
+    ));
+
+    store.chat_closed(3, Some("chat-3"));
+
+    // The same chat, started again under the id it had: it asks again.
+    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    assert!(world.listed(&store).is_empty());
+    // What it had waiting on the person went with it: only the new request waits.
+    assert_eq!(store.waiting(3).len(), 1);
+    assert_eq!(store.waiting(3)[0].target, "devops");
+}
+
+#[test]
+fn a_restarted_chat_keeps_its_grant_because_a_session_of_it_is_still_open() {
+    // D-1437-R3: a restart starts the new run before the old one ends, so the chat's id never
+    // stops being open, and its grant stays as its sandbox grants do.
+    let world = World::new();
+    let (store, _) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    world.allow(&store, id, Level::Chat).expect("allowed");
+
+    // The old session ends; the id is still open under the new one, so nothing is named.
+    store.chat_closed(3, None);
+
+    let restarted = Asking {
+        session: 9,
+        ..chat(3, Some("steward"))
+    };
+    assert!(matches!(
+        world.request(&store, restarted, "devops", BRIEF),
+        Requested::Covered(_)
+    ));
+}
+
+// ---- a chat nobody is at (decision 20) ----------------------------------------------------------
+
+#[test]
+fn asked_to_refuse_and_not_ask_an_uncovered_dispatch_is_a_refusal_with_no_notice() {
+    let world = World::new();
+    let (store, answered) = store();
+
+    let (asked, raised) =
+        world.request_unattended(&store, chat(3, Some("steward")), "devops", BRIEF);
+
+    assert_eq!(
+        asked,
+        Requested::Refused(
+            "no dispatch grant covers steward chats dispatching to devops, and nobody is at \
+             this chat to ask. A person allows it from a chat they are at, for themselves on \
+             this machine or for everyone in this project."
+                .to_owned()
+        )
+    );
+    assert_eq!(raised, None);
+    assert!(
+        store.waiting(3).is_empty(),
+        "nothing is held, so nothing can be allowed later"
+    );
+    assert!(answered.lock().unwrap().is_empty());
+    // Under a grant that already exists it starts, as an attended chat's does.
+    let id = pending_of(&world.request(&store, chat(4, Some("steward")), "devops", BRIEF));
+    world.allow(&store, id, Level::You).expect("allowed");
+    assert!(matches!(
+        world
+            .request_unattended(&store, chat(3, Some("steward")), "devops", BRIEF)
+            .0,
+        Requested::Covered(_)
+    ));
+    // A grant for one chat is that chat's alone, attended or not.
+    let (asked, _) = world.request_unattended(&store, chat(5, Some("qa")), "devops", BRIEF);
+    assert!(matches!(asked, Requested::Refused(_)), "{asked:?}");
+}
+
+#[test]
+fn asked_to_refuse_a_locked_dispatch_is_locked_with_no_notice() {
+    let world = World::under(r#"{"owner": "IT", "dispatch": {"allow": false}}"#);
+    let (store, _) = store();
+    let (asked, raised) =
+        world.request_unattended(&store, chat(3, Some("steward")), "devops", BRIEF);
+    assert!(matches!(asked, Requested::Locked(_)), "{asked:?}");
+    assert_eq!(raised, None);
+    assert!(store.waiting(3).is_empty());
+}
+
+// ---- the audit never records a grant that was not made (F2) -------------------------------------
+
+#[test]
+fn an_allow_for_everyone_that_cannot_be_written_is_refused_before_anything_is_recorded() {
+    let world = World::new();
+    // A project file that writes its grants in a form purlis does not edit.
+    std::fs::write(
+        purlis_core::names::manifest(world.root()),
+        "[dispatch]\ngrants = [\"steward\"]\n",
+    )
+    .expect("the project file");
+    let (store, answered) = store();
+    let id = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+
+    let why = world
+        .allow(&store, id, Level::Project)
+        .expect_err("refused");
+
+    assert!(
+        why.contains("is not written in a form purlis edits"),
+        "{why}"
+    );
+    assert!(world.audited().is_empty(), "nothing recorded as granted");
+    assert!(answered.lock().unwrap().is_empty());
+    assert_eq!(store.waiting(3).len(), 1, "still the person's to answer");
+}
+
+// ---- a pulled grant waits for this machine's yes (D-1437-R1) ------------------------------------
+
+#[test]
+fn a_teammate_s_pair_covers_nothing_here_until_it_is_allowed_on_the_notice_which_is_audited() {
+    let world = World::new();
+    let manifest = purlis_core::names::manifest(world.root());
+    std::fs::write(
+        &manifest,
+        "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\", \"qa\"]\n",
+    )
+    .expect("a teammate's push");
+    let (store, answered) = store();
+    // In the file, unseen here: an attended chat asks, an unattended one is refused.
+    let waiting = pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+    let (unattended, _) =
+        world.request_unattended(&store, chat(4, Some("steward")), "devops", BRIEF);
+    assert!(
+        matches!(unattended, Requested::Refused(_)),
+        "{unattended:?}"
+    );
+    // Settings lists both as the project's, waiting on this machine.
+    let listed = world.listed(&store);
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|one| one.waiting), "{listed:?}");
+
+    // The person allows one pair on the teammate Notice. A pair the file does not hold, sent
+    // with it, is nothing.
+    world
+        .on(|ground| {
+            store.acknowledge(
+                ground,
+                &["steward -> devops".to_owned(), "qa -> prod".to_owned()],
+            )
+        })
+        .expect("allowed");
+
+    assert_eq!(
+        world.audited(),
+        [(
+            None,
+            "trust.dispatch.grant",
+            Some("steward".to_owned()),
+            "devops".to_owned(),
+            "project"
+        )]
+    );
+    // The dispatch that waited on it starts, and the next needs no prompt.
+    let started: Vec<u32> = answered
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|one| one.pending.id)
+        .collect();
+    assert_eq!(started, [waiting]);
+    assert!(matches!(
+        world
+            .request_unattended(&store, chat(4, Some("steward")), "devops", BRIEF)
+            .0,
+        Requested::Covered(_)
+    ));
+    // The other pair still waits, and is still told.
+    pending_of(&world.request(&store, chat(3, Some("steward")), "qa", BRIEF));
+    let listed = world.listed(&store);
+    assert_eq!(
+        listed
+            .iter()
+            .map(|one| (one.target.as_str(), one.waiting))
+            .collect::<Vec<_>>(),
+        [("devops", false), ("qa", true)]
+    );
+    assert_eq!(
+        changed_of(world.root()).expect("still told").added,
+        ["steward -> qa"]
+    );
+    // Allowed twice, it is audited once.
+    world
+        .on(|ground| store.acknowledge(ground, &["steward -> devops".to_owned()]))
+        .expect("allowed");
+    assert_eq!(world.audited().len(), 1);
+}
+
+#[test]
+fn an_acknowledgement_nobody_recorded_puts_nothing_in_force() {
+    let world = World {
+        logging: false,
+        ..World::new()
+    };
+    std::fs::write(
+        purlis_core::names::manifest(world.root()),
+        "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\"]\n",
+    )
+    .expect("a teammate's push");
+    let (store, _) = store();
+    assert!(
+        world
+            .on(|ground| store.acknowledge(ground, &["steward -> devops".to_owned()]))
+            .is_err()
+    );
+    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
+}
+
+#[test]
+fn the_notice_is_told_how_many_lines_the_brief_is() {
+    let world = World::new();
+    let (store, _) = store();
+    let padded = format!("Say hello.{}Then delete the cluster.", "\n".repeat(40));
+    pending_of(&world.request(&store, chat(3, Some("steward")), "devops", &padded));
+    let held = store.waiting(3).remove(0);
+    let shown = told(&PlaneId::for_tests(world.root()), world.root(), &held);
+    assert_eq!(shown.brief_lines, 41);
+}
+
+#[test]
+fn closing_a_chat_takes_what_it_had_waiting_and_its_own_grants_with_it() {
+    // The wiring of `Store::chat_closed`: the project's close is what calls it. It opens a
+    // terminal, so CI runs it first.
+    let (_dir, held, session) = a_held_chat("steward");
+    let asked = request_dispatch_grant(&held, session, "devops", BRIEF);
+    assert!(matches!(asked, Requested::NeedsGrant { .. }), "{asked:?}");
+    assert_eq!(held.dispatch_grants().waiting(session).len(), 1);
+
+    held.close_chat(session).expect("closed");
+
+    assert!(held.dispatch_grants().waiting(session).is_empty());
+    // And a chat nobody is at is refused where an attended one would be asked.
+    let (_dir, held, session) = a_held_chat("steward");
+    let asked = request_dispatch_grant_or_refuse(&held, session, "devops", BRIEF);
+    assert!(matches!(asked, Requested::Refused(_)), "{asked:?}");
+    assert!(held.dispatch_grants().waiting(session).is_empty());
 }

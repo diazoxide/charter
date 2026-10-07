@@ -54,6 +54,40 @@ describe("the project's dispatch grants Notice", () => {
     const notice = await screen.findByRole("status", { name: LABEL });
     expect(notice).toHaveTextContent("Added: steward to devops, qa to devops.");
     expect(notice).toHaveTextContent("Taken away: steward to billing.");
+    // What a pull added covers nothing here until someone at this machine allows it.
+    expect(notice).toHaveTextContent(
+      "What was added covers no chat on this machine until you allow it here.",
+    );
+  });
+
+  it("allows one pair alone, and the others still wait", async () => {
+    const asked = core(CHANGED);
+    render(<ProjectDispatchNotice plane={PLANE} onReview={() => {}} />);
+
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Allow steward to devops" }));
+
+    const acknowledged = asked.filter((one) => one.cmd === "acknowledge_dispatch_grants");
+    expect(acknowledged.map((one) => one.args)).toMatchObject([
+      { plane: PLANE, shown: ["steward -> devops"] },
+    ]);
+  });
+
+  it("only says so when grants were taken away, with nothing to allow", async () => {
+    const asked = core({
+      ...QUIET,
+      changed: { added: [], removed: ["steward -> billing"], now: [] },
+    });
+    render(<ProjectDispatchNotice plane={PLANE} onReview={() => {}} />);
+
+    const notice = await screen.findByRole("status", { name: LABEL });
+    expect(notice).not.toHaveTextContent("until you allow it here");
+    expect(screen.queryByRole("button", { name: /^Allow/ })).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Got it" }));
+    await waitFor(() =>
+      expect(asked.map((one) => one.cmd)).toContain("acknowledge_dispatch_grants"),
+    );
   });
 
   it("says nothing when they did not change", async () => {
@@ -64,11 +98,11 @@ describe("the project's dispatch grants Notice", () => {
     expect(screen.queryByRole("status", { name: LABEL })).not.toBeInTheDocument();
   });
 
-  it("records the list it showed once read, and is gone", async () => {
+  it("allows every pair it showed on Allow all, and is gone", async () => {
     const asked = core(CHANGED);
     render(<ProjectDispatchNotice plane={PLANE} onReview={() => {}} />);
 
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Got it" }));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Allow all 2" }));
 
     await waitFor(() =>
       expect(screen.queryByRole("status", { name: LABEL })).not.toBeInTheDocument(),
