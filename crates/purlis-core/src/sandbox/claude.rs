@@ -248,15 +248,19 @@ impl Settings {
         let Some(socket) = socket else {
             return out;
         };
-        let socket = super::real(socket);
-        out.sandbox["network"]["allowUnixSockets"] = json!([socket.display().to_string()]);
+        out.sandbox["network"]["allowUnixSockets"] =
+            json!([super::real(socket).display().to_string()]);
+        // The folder under every name a rule on it is written by, as a denied path is
+        // ([`names_for`]): through a link and across a firmlink too (#1418).
         if let Some(folder) = socket.parent() {
-            let folder = folder.display().to_string();
-            if let Some(denied) = out.sandbox["filesystem"]["denyWrite"].as_array_mut() {
-                denied.push(json!(folder));
+            for name in names_for(folder) {
+                let folder = name.display().to_string();
+                if let Some(denied) = out.sandbox["filesystem"]["denyWrite"].as_array_mut() {
+                    denied.push(json!(folder));
+                }
+                out.deny.push(format!("Edit(/{folder})"));
+                out.deny.push(format!("Edit(/{folder}/**)"));
             }
-            out.deny.push(format!("Edit(/{folder})"));
-            out.deny.push(format!("Edit(/{folder}/**)"));
         }
         out
     }
@@ -295,24 +299,32 @@ impl Settings {
 /// Each of those is also denied on the other side of a macOS firmlink (`/Users` and
 /// `/System/Volumes/Data/Users`, #1356), which resolving leaves as it is spelled.
 fn names_of(denied: &[super::Denial]) -> Vec<(&super::Denial, std::path::PathBuf)> {
-    let mut out = Vec::new();
-    for denial in denied {
-        let mut names = vec![denial.path.clone()];
-        for name in super::seatbelt::held_names(&denial.path) {
-            if !names.contains(&name) {
-                names.push(name);
-            }
+    denied
+        .iter()
+        .flat_map(|denial| {
+            names_for(&denial.path)
+                .into_iter()
+                .map(move |name| (denial, name))
+        })
+        .collect()
+}
+
+/// The names [`names_of`] writes a rule on `path` under.
+fn names_for(path: &Path) -> Vec<std::path::PathBuf> {
+    let mut names = vec![path.to_path_buf()];
+    for name in super::seatbelt::held_names(path) {
+        if !names.contains(&name) {
+            names.push(name);
         }
-        let twins: Vec<_> = names
-            .iter()
-            .filter_map(|it| super::firmlink_twin(it))
-            .collect();
-        for twin in twins {
-            if !names.contains(&twin) {
-                names.push(twin);
-            }
-        }
-        out.extend(names.into_iter().map(|name| (denial, name)));
     }
-    out
+    let twins: Vec<_> = names
+        .iter()
+        .filter_map(|it| super::firmlink_twin(it))
+        .collect();
+    for twin in twins {
+        if !names.contains(&twin) {
+            names.push(twin);
+        }
+    }
+    names
 }

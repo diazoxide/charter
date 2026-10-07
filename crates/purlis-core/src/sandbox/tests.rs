@@ -1302,8 +1302,10 @@ fn a_later_letter_s_value_in_the_project_s_cache_home_is_denied() {
     let plane = tempfile::tempdir().expect("a plane");
     let cache = caches::root_of(&machine, plane.path()).expect("a data home");
     assert!(cache.starts_with("/srv/data"), "{cache:?}");
-    let want = cache.join("npm/x.awk");
-    hook_runs(plane.path(), &format!("gawk -bf{} data", want.display()));
+    // A cluster whose letters purlis does not know (gawk's own are read as gawk reads them,
+    // D-1418-1).
+    let want = cache.join("npm/x.h");
+    hook_runs(plane.path(), &format!("cc -xI{} a.c", want.display()));
     assert!(!denies_later_code(
         &Denied::of(
             plane.path(),
@@ -2412,7 +2414,8 @@ fn claude_code_allows_a_chat_no_unix_socket_but_its_hook_socket() {
     assert_eq!(settings.reporting_on(None), settings);
 
     let sockets = tempfile::tempdir().expect("a directory");
-    let socket = sockets.path().join("hooks.sock");
+    let sockets_at = sockets.path().canonicalize().expect("the directory");
+    let socket = sockets_at.join("hooks.sock");
     let reporting = settings.reporting_on(Some(&socket));
     assert_eq!(
         serde_json::Value::Object(unix(&reporting.sandbox)),
@@ -2422,8 +2425,12 @@ fn claude_code_allows_a_chat_no_unix_socket_but_its_hook_socket() {
         })
     );
     // Nothing else moves but the socket's folder, denied to writes, so the bind the grant
-    // carries can never replace the app's socket.
-    let folder = real(sockets.path()).display().to_string();
+    // carries can never replace the app's socket: as the kernel names it, and on the data
+    // volume's other side where it has one (#1418).
+    let folders: Vec<String> = std::iter::once(sockets_at.clone())
+        .chain(firmlink_twin(&sockets_at))
+        .map(|it| it.display().to_string())
+        .collect();
     let mut without = reporting.clone();
     without.sandbox["network"]
         .as_object_mut()
@@ -2432,10 +2439,20 @@ fn claude_code_allows_a_chat_no_unix_socket_but_its_hook_socket() {
     let denied = without.sandbox["filesystem"]["denyWrite"]
         .as_array_mut()
         .expect("a denyWrite list");
-    assert_eq!(denied.pop(), Some(serde_json::json!(folder)));
+    let added = denied.split_off(denied.len() - folders.len());
+    assert_eq!(
+        added,
+        folders
+            .iter()
+            .map(|it| serde_json::json!(it))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         without.deny.split_off(settings.deny.len()),
-        [format!("Edit(/{folder})"), format!("Edit(/{folder}/**)")]
+        folders
+            .iter()
+            .flat_map(|folder| [format!("Edit(/{folder})"), format!("Edit(/{folder}/**)")])
+            .collect::<Vec<_>>()
     );
     assert_eq!(without, settings);
 }
@@ -3735,4 +3752,105 @@ fn the_firmlinks_are_the_system_s_list_and_the_known_one_together() {
     let read = firmlinks_from(Some("/Extra\tExtra\n/Users\tUsers\n/\t\n"));
     assert!(read.contains(&std::path::PathBuf::from("/Extra")));
     assert_eq!(read.len(), 19);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_reporting_socket_s_folder_is_denied_under_every_name_it_has() {
+    // #1418: as written, as the kernel resolves it, and on the data volume's other side.
+    let (_plane, denied) = denied_with(None, Os::MacOs);
+    let settings = claude::settings(&compiled(denied, Os::MacOs)).expect("compiles");
+    let socket = std::path::Path::new("/tmp/purlis-1418-absent/app/hooks.sock");
+    let mut reporting = settings.reporting_on(Some(socket));
+    let names = [
+        "/tmp/purlis-1418-absent/app",
+        "/private/tmp/purlis-1418-absent/app",
+        "/System/Volumes/Data/private/tmp/purlis-1418-absent/app",
+    ];
+    assert_eq!(
+        deny_write(&reporting).split_off(deny_write(&settings).len()),
+        names
+    );
+    let edits: Vec<String> = names
+        .iter()
+        .flat_map(|name| [format!("Edit(/{name})"), format!("Edit(/{name}/**)")])
+        .collect();
+    assert_eq!(reporting.deny.split_off(settings.deny.len()), edits);
+    // The one socket a chat may reach is still the one the kernel names.
+    assert_eq!(
+        reporting.sandbox["network"]["allowUnixSockets"],
+        serde_json::json!(["/private/tmp/purlis-1418-absent/app/hooks.sock"])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_case_swapped_link_beside_a_folder_does_not_make_its_volume_fold_case() {
+    // #1418: the probe asks the folder itself, never what a link of the swapped name reaches.
+    let base = tempfile::tempdir().expect("a base");
+    let base = base.path().canonicalize().expect("the base");
+    std::fs::create_dir_all(base.join("plane")).expect("the plane");
+    if std::os::unix::fs::symlink(base.join("plane"), base.join("PLANE")).is_err() {
+        // A volume that folds case already has `PLANE`: nothing to tell apart here.
+        return;
+    }
+    let ground = [base.join("plane/new/repo")];
+    let denied = [later_code(
+        base.join("plane/NEW").to_str().expect("a path"),
+        "/f",
+        "NEW",
+    )];
+    assert_eq!(covering(&denied, &ground), None);
+}
+
+#[test]
+fn a_profile_too_large_to_hand_seatbelt_is_refused_by_name() {
+    // #1418: the profile goes in argv, which holds 1 MiB with the environment. One config at
+    // its cap fits; a profile past `MOST_PROFILE` is refused with a reason, never an E2BIG.
+    let cwd = std::path::Path::new("/opt/purlis-1418/plane");
+    let tmp = std::path::Path::new("/opt/purlis-1418/tmp");
+    let denied = |count: usize| -> Vec<Denial> {
+        (0..count)
+            .map(|at| {
+                later_code(
+                    &format!("/opt/purlis-1418/elsewhere/a-folder-name/{at:06}/hook.sh"),
+                    "/f",
+                    "x",
+                )
+            })
+            .collect()
+    };
+    let one = seatbelt::profile(
+        &denied(planted::MOST_NAMED),
+        &seatbelt::Own::default(),
+        cwd,
+        tmp,
+        4040,
+        None,
+    )
+    .expect("one config at its cap");
+    assert!(one.len() <= seatbelt::MOST_PROFILE, "{}", one.len());
+    assert_eq!(
+        seatbelt::profile(
+            &denied(16 * planted::MOST_NAMED),
+            &seatbelt::Own::default(),
+            cwd,
+            tmp,
+            4040,
+            None,
+        ),
+        Err(seatbelt::TOO_LARGE)
+    );
+    // The way out, after what happened, as every refusal names one.
+    assert_eq!(
+        seatbelt::not_started("purlis could not start this chat.", seatbelt::TOO_LARGE),
+        "purlis could not start this chat. purlis cannot hand the sandbox a profile this long: \
+         the project's configs name more paths than one chat's sandbox can hold, so nothing was \
+         started. Have the configs name fewer scripts, or start this chat without the sandbox \
+         from the new-chat picker."
+    );
+    assert_eq!(
+        seatbelt::not_started("Lead.", seatbelt::CONTROL),
+        format!("Lead. {}, so nothing was started.", seatbelt::CONTROL)
+    );
 }
