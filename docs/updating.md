@@ -15,6 +15,18 @@ updates fine (ADR 0042 §3, amended 2026-09-23).
 | **stable** (the default) | a `v*` tag, pushed by the operator | `releases/latest/download/latest.json` |
 | **dev** | any green `main` | `releases/download/dev/dev.json` |
 
+The two channels' builds differ in two things and no others (ADR 0092). A **dev channel build**
+is compiled with the lighter `dev-release` profile and has no `.dmg`, which is what makes it
+take about half the time; a first install of one on macOS uses `purlis-macos-arm64.app.zip`. A
+**stable build** uses Cargo's `release` profile and has every bundle. Both are signed, checked
+and built cold in the same way. `purlis --version` and About purlis say which profile a build
+was made with.
+
+Because the dev channel no longer builds the stable profile, a **profile guard** does: the
+release workflow runs every night, builds `main` as a stable build is built, with no signing key,
+and publishes nothing. If it fails it opens an issue titled *the stable profile does not build
+on main*, and the first clean night closes it. Fix that before tagging.
+
 A machine switches with `purlis update --channel dev` (or `stable`). The app checks a minute
 after launch and every six hours after that. The week's first check reads the channel's weekly
 manifest instead, which is how purlis counts weekly users without an identifier (below). It **installs only when asked**, because

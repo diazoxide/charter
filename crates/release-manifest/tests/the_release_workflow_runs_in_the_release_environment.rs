@@ -15,15 +15,17 @@ use workflow::{Job, release_jobs};
 
 /// What each guarded job's `environment:` says, exactly.
 ///
-/// `plan` cannot read another job's output, so it keys on the event: every event but a
-/// hand-started build can publish. `build` keys on what `plan` decided. `publish` only runs
+/// `plan` cannot read another job's output, so it keys on the event, and NAMES the two that
+/// can publish: a `v*` tag and a green `ci` on `main`. A hand-started build and the nightly
+/// profile guard get no environment, and neither does an event added to `on:` later, until
+/// this line says so (ADR 0092). `build` keys on what `plan` decided. `publish` only runs
 /// when the run publishes, so it names the environment outright. And `x && 'release' || ''`,
 /// never `x && '' || 'release'`: an empty string is falsy in a workflow expression, so the
 /// second form is `release` every time.
 const EXPECTED: [(&str, &str); 3] = [
     (
         "plan",
-        "${{ github.event_name != 'workflow_dispatch' && 'release' || '' }}",
+        "${{ (github.event_name == 'push' || github.event_name == 'workflow_run') && 'release' || '' }}",
     ),
     (
         "build",

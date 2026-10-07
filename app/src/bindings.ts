@@ -1795,6 +1795,11 @@ export type About = {
 	/**  Whether that version is released, a dev build, or not in the changelog. */
 	build: Build,
 	/**
+	 *  The Cargo profile this build was made with: `release` for a stable build, `dev-release`
+	 *  for a dev channel build, `debug` for a local one (ADR 0092).
+	 */
+	profile: string,
+	/**
 	 *  The section shown: the version's own for a release, `[Unreleased]` otherwise. `None`
 	 *  only when there is no such section to show.
 	 */

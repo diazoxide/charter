@@ -52,6 +52,24 @@ fn purlis_and_charter_both_run_the_cli() {
 }
 
 #[test]
+fn the_version_line_names_the_profile_the_binary_was_built_with() {
+    // Cargo files a binary under its profile's name (`target/<profile>/purlis`), which is the
+    // answer the line has to give without having been told it: `dev-release` for a dev channel
+    // build and `release` for a stable one (ADR 0092), `debug` here. `PROFILE` in a build
+    // script would call the first of those `release`.
+    let profile = Path::new(PURLIS)
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .expect("the binary is in its profile's directory");
+    let line = format!("purlis {} ({profile} profile)\n", env!("CARGO_PKG_VERSION"));
+    for binary in [PURLIS, CHARTER] {
+        let out = run(Path::new(binary), &["--version"], "");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), line, "{binary}");
+    }
+}
+
+#[test]
 fn the_charter_alias_answers_exactly_what_purlis_answers() {
     // A usage error: its exit code and its sentence, carried through unchanged — except the
     // usage line, which names the command the way it was called (`argv[0]` is handed on).

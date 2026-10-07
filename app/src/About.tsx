@@ -39,6 +39,10 @@ export const HELP = {
  * - **a version the changelog does not list**, such as a local build of `main`: said plainly,
  *   with `[Unreleased]` beside it.
  *
+ * Under that, whatever the build is, the Cargo profile it was made with: `release` for a stable
+ * build, `dev-release` for a dev channel build (ADR 0092). The two are the same source and not
+ * the same binary, so a report of a slow one can say which it was.
+ *
  * The notes are Markdown and are drawn as Markdown (`ReleaseNotes.tsx`). The body scrolls
  * inside a bounded height, so the title and Close stay put however long a release is.
  *
@@ -148,6 +152,9 @@ function Said({ about }: { about: About }) {
       ) : (
         <p>This is purlis {version}. The changelog this build carries has no section for it.</p>
       )}
+      <p className="honest">
+        Built with the <code data-testid="about-profile">{about.profile}</code> profile.
+      </p>
       {notes === null ? (
         // An unlisted version has already been told so, one line up.
         build.kind !== "unlisted" && (

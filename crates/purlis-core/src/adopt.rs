@@ -124,6 +124,24 @@ pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// The Cargo profile this build was made with: `release` for a stable build, `dev-release` for
+/// a dev channel build, `debug` for a local one (ADR 0092). `build.rs` says where it is read.
+pub fn build_profile() -> &'static str {
+    env!("PURLIS_BUILD_PROFILE")
+}
+
+/// What `purlis --version` prints after the program's name: the version, then the profile.
+///
+/// A dev channel build and a stable build of the same source are not the same binary, and a
+/// report of a slow or a crashing one has to say which it was. The release workflow reads this
+/// line off the binary it built and refuses a build whose profile is not the one it asked for.
+pub const VERSION_LINE: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("PURLIS_BUILD_PROFILE"),
+    " profile)"
+);
+
 /// What a plane's `[charter] version` pin says against this charter — ADR 0045, and the one
 /// comparison every surface asks (`charter version`, the status line's alert row, the window's
 /// pin dialog). ADR 0030's rule, kept: no surface compares a pin its own way.

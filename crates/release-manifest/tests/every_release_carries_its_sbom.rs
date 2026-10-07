@@ -49,21 +49,24 @@ fn every_rust_binary_the_release_ships_is_built_with_its_dependency_list() {
             build,
             "The purlis binary the app's hooks run, its charter alias, and the built-in extensions"
         )),
-        ["cargo auditable build --release --locked -p purlis-cli -p persona-statistics"]
+        [
+            r#"cargo auditable build --profile "$PROFILE" --locked -p purlis-cli -p persona-statistics"#
+        ]
     );
 
     // Tauri runs `<runner> build …` itself, so the app binary goes through the wrapper. Both
     // `tauri build` calls, or the one that makes the published bundle may be the plain one.
+    // `-- --profile` is the same profile the command line above was built with (ADR 0092).
     assert_eq!(
         run_lines(&step(build, "Build the app")),
         [format!(
-            r#"npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{{{ matrix.bundles }}}} --runner "$GITHUB_WORKSPACE/{RUNNER}""#
+            r#"npx tauri build --config src-tauri/tauri.build.conf.json --bundles "$BUNDLES" --runner "$GITHUB_WORKSPACE/{RUNNER}" -- --profile "$PROFILE""#
         )]
     );
     assert_eq!(
         run_lines(&step(build, "Build the extra bundle")),
         [format!(
-            r#"npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{{{ matrix.bundles }}}},${{{{ matrix.extra_bundles }}}} --runner "$GITHUB_WORKSPACE/{RUNNER}""#
+            r#"npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{{{ matrix.bundles }}}},${{{{ matrix.extra_bundles }}}} --runner "$GITHUB_WORKSPACE/{RUNNER}" -- --profile "$PROFILE""#
         )]
     );
 

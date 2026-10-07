@@ -917,3 +917,23 @@ operator to send, and shows a chat's changes. It speaks the **editor protocol**,
 purlis **extension** nor a **harness plugin**. It is a view of a **Workspace** and its chats,
 drawn in your editor (ADR 0072 §2, ADR 0081).
 _Avoid_: extension or plugin (on their own), IDE plugin
+
+### How purlis is built
+
+**Dev channel build**:
+The build a green `main` publishes to the dev channel: compiled with the lighter `dev-release`
+profile, and with no `.dmg`. It is signed, checked and isolated exactly as a stable build is,
+and it is for trying a change, never for measuring one (ADR 0092).
+_Avoid_: nightly, debug build, fast build
+
+**Stable build**:
+The build a `v*` tag publishes to the stable channel: compiled with Cargo's `release` profile,
+with every bundle. Every performance budget is measured on this profile (ADR 0042, ADR 0092).
+_Avoid_: release build (that is the profile, and both channels' builds are releases of a kind),
+production build
+
+**Profile guard**:
+The nightly build of `main` with the stable build's profile and bundles. It holds no signing key
+and publishes nowhere, and a failure opens one issue or rewrites it. It is what shows the stable
+build still works now that the dev channel no longer uses its profile (ADR 0092).
+_Avoid_: nightly release, canary, stable dry run

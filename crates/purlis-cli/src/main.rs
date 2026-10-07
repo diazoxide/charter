@@ -80,7 +80,7 @@ fn speak(line: purlis_core::repocmd::Say) {
 #[derive(Parser)]
 #[command(
     name = "purlis",
-    version,
+    version = purlis_core::adopt::VERSION_LINE,
     about = "purlis: run tons of harness sessions in parallel"
 )]
 struct Cli {
