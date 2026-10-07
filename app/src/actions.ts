@@ -36,6 +36,8 @@ import type {
   RowAction,
   SubjectCurations,
 } from "./bindings";
+import { backSaid } from "./chatState";
+import { startedBy, type ListedChat } from "./chatsTree";
 import { MAIN } from "./here";
 import {
   DRAFT,
@@ -220,6 +222,10 @@ export type Does =
   /** Takes a chat off the needs-you list where its Smart close stopped without a record
    *  (SI-8f). Nothing is asked of the core: the list's entry is the window's own. */
   | { verb: "dismissStopped"; session: number }
+  /** Asks to stop a chat, or a chat and every chat `below` it (#1448). **It stops nothing by
+   *  itself**: the window asks first, and the core's `stop_chat` is what ends anything. Only a
+   *  person's press reaches it: no chat has a way to this verb. */
+  | { verb: "stopChat"; session: number; below: boolean }
   /** Opens a view in a tab of its own, or brings forward the tab already showing it.
    *
    *  **One verb for charter's views and an extension's** — the persona view is
@@ -588,6 +594,16 @@ export type Now = {
   planeUpdated?: Readonly<Record<number, readonly string[]>>;
   /** Why each chat's Smart close stopped without its record (SI-8f), for its needs-you rows. */
   stopped?: Readonly<Record<number, string>>;
+  /** Why a chat in the queue needs you when nothing it said itself says so (#1448), as its row
+   *  says each. */
+  neededFor?: (session: number) => readonly string[];
+  /** The chats a chat in the queue started that the operator stopped, by name (#1448). */
+  stoppedBelow?: (session: number) => readonly string[];
+  /** Every running chat of the project, with or without a tab, as the Chats section lists it
+   *  (#1447): each is offered Stop (#1448). */
+  listed?: readonly ListedChat[];
+  /** The chats being stopped (#1448): each one's Stop row ends it now. */
+  stopping?: readonly number[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -627,6 +643,9 @@ export type Doing = {
   /** Answers a `Ran`, because the core can refuse it — a project closed meanwhile. */
   cancelSmartClose: (session: number) => Promise<Ran>;
   dismissStopped: (session: number) => void;
+  /** Opens the question a stop asks first, or ends at once a chat that is already stopping.
+   *  Nothing is stopped until it is answered, so it answers no `Ran`. */
+  stopChat: (session: number, below: boolean) => void;
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
@@ -1127,7 +1146,18 @@ export function catalogue(now: Now): Offer[] {
       ? cannot("needs.next", "Show the chat that needs you", nothingSaidSoFar(now.quiet ?? []))
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
-  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs, now.reportsTo, now.refusedIn));
+  offers.push(
+    ...needsYouRows(
+      now.needsYou,
+      now.nameOf,
+      now.tabs,
+      now.reportsTo,
+      now.refusedIn,
+      now.neededFor,
+      (session) => (now.listed ?? []).some((chat) => chat.session === session),
+      now.stoppedBelow,
+    ),
+  );
   offers.push(...stoppedRows(now.stopped ?? {}, now.needsYou, now.nameOf, now.tabs));
 
   const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
@@ -1884,6 +1914,8 @@ export function catalogue(now: Now): Offer[] {
     });
   }
 
+  offers.push(...stopRows(now.listed ?? [], now.stopping ?? []));
+
   const remove = "Remove the folder of this chat's branch";
   offers.push(
     "cut" in inFront
@@ -2109,6 +2141,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "dismissStopped":
       doing.dismissStopped(does.session);
       return DID;
+    case "stopChat":
+      doing.stopChat(does.session, does.below);
+      return DID;
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
@@ -2258,19 +2293,32 @@ export function needsYouRows(
   reportsTo: (session: number) => readonly string[] = () => [],
   /** What a chat's commits were refused for (SQ-16), so its row says the latest. */
   refusedIn: (session: number) => readonly string[] = () => [],
+  /** Why a chat needs you when nothing it said itself says so (#1448), so its row says the
+   *  latest. */
+  neededFor: (session: number) => readonly string[] = () => [],
+  /** Whether a chat is one the project lists (#1447). A task chat that needs you has no tab
+   *  until it is shown, and showing it opens one, so its row can run (#1448). */
+  listed: (session: number) => boolean = () => false,
+  /** The chats each chat started that the operator stopped (#1448), so its row says so. */
+  stoppedBelow: (session: number) => readonly string[] = () => [],
 ): Offer[] {
   return needsYou.flatMap((session) => {
     const name = nameOf(session);
-    const reported = reportsTo(session);
     const refused = refusedIn(session);
+    const needed = neededFor(session);
+    const back = backSaid(reportsTo(session), stoppedBelow(session));
+    // **Why it needs you first** (#1448): a reason of its own is what the person is asked to
+    // look at, and what the chats it started did is the chat's to read.
     const title =
-      reported.length > 0
-        ? `Show ${name}: ${reported.join(", ")} reported back`
-        : refused.length > 0
-          ? `Show ${name}: ${refused[refused.length - 1]}`
-          : `Show ${name}, which needs you`;
+      needed.length > 0
+        ? `Show ${name}: ${needed[needed.length - 1]}`
+        : back !== undefined
+          ? `Show ${name}: ${back}`
+          : refused.length > 0
+            ? `Show ${name}: ${refused[refused.length - 1]}`
+            : `Show ${name}, which needs you`;
     return [
-      tabHolding(tabs, session) === undefined
+      tabHolding(tabs, session) === undefined && !listed(session)
         ? cannot(showId(session), title, "That chat has no tab in this window.", name)
         : can(showId(session), title, { verb: "showChat", session }, name),
       // **Ignore, until the chat asks again** (charter-app#248): the item's `✕`, Delete on
@@ -2318,6 +2366,91 @@ export function stoppedRows(
         ),
       ];
     });
+}
+
+/**
+ * **A running chat's two Stop rows** (#1448): `chat.stop:<session>`, that chat alone, and
+ * `chat.stop.below:<session>`, that chat and every chat nested under it. One pair per chat the
+ * Chats section lists, so a task chat with no tab has them too.
+ *
+ * **Each asks first** (`stopChat`), and says there what it ends. A chat that is already
+ * stopping is writing what it did, or waiting for the chats below it: its row then ends it
+ * without waiting, and says so.
+ * **They end chats, so they are last among a menu's rows**, under its line, as `End chat` is.
+ */
+export function stopRows(listed: readonly ListedChat[], stopping: readonly number[]): Offer[] {
+  const started = startedBy(listed);
+  return listed.flatMap((chat) => {
+    const { session, name } = chat;
+    const below = `Stop chat ${name} and everything below it`;
+    if (stopping.includes(session))
+      return [
+        {
+          ...can(
+            stopId(session),
+            `End chat ${name} now`,
+            { verb: "stopChat", session, below: false },
+            name,
+          ),
+          note: "It is being stopped. This ends it without waiting.",
+        },
+        // The chats under it are still running when it was stopped alone: this stops them
+        // too, each in the ordinary way.
+        ...(started.has(session)
+          ? [
+              {
+                ...can(
+                  stopBelowId(session),
+                  below,
+                  { verb: "stopChat", session, below: true },
+                  name,
+                ),
+                note: BELOW_TOO,
+              },
+            ]
+          : []),
+      ];
+    return [
+      {
+        ...can(
+          stopId(session),
+          `Stop chat ${name}`,
+          { verb: "stopChat", session, below: false },
+          name,
+        ),
+        note: STOPS_IT,
+      },
+      started.has(session)
+        ? {
+            ...can(stopBelowId(session), below, { verb: "stopChat", session, below: true }, name),
+            note: BELOW_TOO,
+          }
+        : cannot(
+            stopBelowId(session),
+            below,
+            `${name} started no chat that is still running.`,
+            name,
+          ),
+    ];
+  });
+}
+
+/** What stopping everything below does that its title cannot fit. */
+export const BELOW_TOO =
+  "Every chat it started, and every chat those started, deepest first. Nothing outside them is touched.";
+
+/** What Stop does that its title cannot fit. */
+export const STOPS_IT =
+  "A chat another chat started gets one short turn to write what it did, then it ends. The chat that asked is told you stopped it.";
+
+/** The catalogue's id for a chat's Stop row (#1448). */
+export function stopId(session: number): string {
+  return `chat.stop:${session}`;
+}
+
+/** The catalogue's id for a chat's Stop-and-everything-below row (#1448). */
+export function stopBelowId(session: number): string {
+  return `chat.stop.below:${session}`;
 }
 
 /** The catalogue's id for a stopped smart close's Dismiss row (SI-8f). */
@@ -2578,8 +2711,12 @@ export function aim(rows: readonly Offer[]): number {
  * carried its own copy would be the second answer this module exists to not have.
  */
 export type MenuOn =
-  /** One chat, by the tab that holds it. Its rows are the same rows the tab strip draws. */
-  | { on: "chat"; tab: number }
+  /** One chat, by the tab that holds it. Its rows are the same rows the tab strip draws. The
+   *  chat's own number, where the tab holds one, is what its Stop rows are named by (#1448). */
+  | { on: "chat"; tab: number; session?: number }
+  /** One running chat, by its number: a row of the Chats section (#1447), which a task chat
+   *  has before it has a tab. */
+  | { on: "listed"; session: number }
   | { on: "workspace"; workspace: string }
   /** The plane root's tab (SI-1): not a workspace, so a menu of its own. */
   | { on: "root" }
@@ -2642,7 +2779,16 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `tab.worklink:${what.tab}`,
           `tab.workunlink:${what.tab}`,
         ],
-        below: [`tab.fresh:${what.tab}`, `tab.close:${what.tab}`],
+        below: [
+          `tab.fresh:${what.tab}`,
+          `tab.close:${what.tab}`,
+          ...(what.session === undefined ? [] : [stopId(what.session), stopBelowId(what.session)]),
+        ],
+      };
+    case "listed":
+      return {
+        above: [showId(what.session)],
+        below: [stopId(what.session), stopBelowId(what.session)],
       };
     case "workspace":
       return {

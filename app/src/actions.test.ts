@@ -16,6 +16,11 @@ import {
   memoryOffers,
   menuRows,
   narrow,
+  needsYouRows,
+  stopBelowId,
+  stopId,
+  stopRows,
+  STOPS_IT,
   toKeep,
   OUTSIDE,
   perform,
@@ -28,6 +33,7 @@ import {
   type Now,
   type Offer,
 } from "./actions";
+import type { ListedChat } from "./chatsTree";
 import {
   noTabs,
   openTab,
@@ -99,6 +105,9 @@ function doing(): Doing & { calls: string[] } {
     }),
     dismissStopped: vi.fn((session: number) => {
       calls.push(`dismissStopped:${session}`);
+    }),
+    stopChat: vi.fn((session: number, below: boolean) => {
+      calls.push(`stopChat:${session}:${below}`);
     }),
     pinTab: vi.fn(async (tab: number, pinned: boolean) => {
       calls.push(`pinTab:${tab},${pinned}`);
@@ -2415,5 +2424,180 @@ describe("a branch's file and folder rows (FM-10)", () => {
       "shellInFolder:svc/fix-it:src",
       "startChatHere:svc/fix-it:src",
     ]);
+  });
+});
+
+/** A running chat as the Chats section lists it, started by `parent` where one started it. */
+function listed(session: number, parent: number | null = null, tab = true): ListedChat {
+  return {
+    session,
+    name: `chat ${session}`,
+    persona: null,
+    workspace: "alpha",
+    shell: false,
+    parent,
+    mode: parent === null ? null : "task",
+    from: parent === null ? null : `chat ${parent}`,
+    tab,
+  };
+}
+
+describe("stopping a chat (#1448)", () => {
+  /** 1 started 2, which started 3. 3 is a task chat with no tab. */
+  const three = [listed(1), listed(2, 1), listed(3, 2, false)];
+
+  it("offers Stop, and Stop with everything below it, on every running chat", () => {
+    const offers = catalogue(now({ listed: three }));
+
+    expect(by(offers, stopId(2))).toMatchObject({
+      title: "Stop chat chat 2",
+      available: true,
+      note: STOPS_IT,
+      does: { verb: "stopChat", session: 2, below: false },
+    });
+    expect(by(offers, stopBelowId(2))).toMatchObject({
+      title: "Stop chat chat 2 and everything below it",
+      available: true,
+      does: { verb: "stopChat", session: 2, below: true },
+    });
+    // A task chat has no tab, and has the rows all the same.
+    expect(by(offers, stopId(3))?.available).toBe(true);
+  });
+
+  it("says why a chat with nothing below it cannot be stopped with what is below it", () => {
+    const below = by(catalogue(now({ listed: three })), stopBelowId(3));
+
+    expect(below).toMatchObject({
+      available: false,
+      reason: "chat 3 started no chat that is still running.",
+      does: { verb: "nothing" },
+    });
+  });
+
+  it("offers to end a chat that is already stopping, without waiting", () => {
+    const rows = stopRows(three, [2]);
+
+    expect(rows.find((row) => row.id === stopId(2))?.title).toBe("End chat chat 2 now");
+    // The chat under it is still running: it can be stopped too, in the ordinary way.
+    expect(rows.find((row) => row.id === stopBelowId(2))).toMatchObject({
+      title: "Stop chat chat 2 and everything below it",
+      available: true,
+      does: { verb: "stopChat", session: 2, below: true },
+    });
+    // A chat stopping with nothing under it has only the one row.
+    expect(stopRows(three, [3]).some((row) => row.id === stopBelowId(3))).toBe(false);
+    expect(rows.find((row) => row.id === stopId(1))?.title).toBe("Stop chat chat 1");
+  });
+
+  it("asks first: the row opens the question and stops nothing by itself", () => {
+    const hands = doing();
+    const offers = catalogue(now({ listed: three }));
+
+    void run(offers, stopBelowId(1), hands);
+
+    expect(hands.calls).toEqual(["stopChat:1:true"]);
+  });
+
+  it("puts both rows under the line of a row's menu and of the chat's tab menu", () => {
+    const offers = catalogued(catalogue(now({ listed: three })));
+
+    const row = menuRows({ on: "listed", session: 2 }, offers);
+    expect(ids(row.below)).toEqual([stopId(2), stopBelowId(2)]);
+    expect(ids(row.above)).toEqual([]);
+
+    expect(menuOn({ on: "chat", tab: 7, session: 2 }).below.slice(-2)).toEqual([
+      stopId(2),
+      stopBelowId(2),
+    ]);
+    // A tab that holds no chat has no chat to stop.
+    expect(menuOn({ on: "chat", tab: 7 }).below).toEqual(["tab.fresh:7", "tab.close:7"]);
+  });
+
+  it("offers no stop for a chat that is not running", () => {
+    expect(ids(catalogue(now())).filter((id) => id.startsWith("chat.stop"))).toEqual([]);
+  });
+});
+
+describe("a chat in the queue the app found a reason for (#1448)", () => {
+  const nameOf = (session: number) => `chat ${session}`;
+
+  it("says why on its row", () => {
+    const [show] = needsYouRows(
+      [3],
+      nameOf,
+      noTabs(),
+      () => [],
+      () => [],
+      () => ["its report has nowhere to go because chat 1 has closed or its program has ended"],
+      () => true,
+    );
+
+    expect(show.title).toBe(
+      "Show chat 3: its report has nowhere to go because chat 1 has closed or its program has ended",
+    );
+  });
+
+  it("can show a listed chat that has no tab yet, and not one the project does not list", () => {
+    const show = (isListed: boolean) =>
+      needsYouRows(
+        [3],
+        nameOf,
+        noTabs(),
+        () => [],
+        () => [],
+        () => [],
+        () => isListed,
+      )[0];
+
+    expect(show(true)).toMatchObject({ available: true, does: { verb: "showChat", session: 3 } });
+    expect(show(false)).toMatchObject({
+      available: false,
+      reason: "That chat has no tab in this window.",
+    });
+  });
+});
+
+describe("what a queued chat's row says first (#1448)", () => {
+  const nameOf = (session: number) => `chat ${session}`;
+  const title = (
+    reported: string[],
+    needed: string[],
+    stoppedBelow: string[] = [],
+    refused: string[] = [],
+  ) =>
+    needsYouRows(
+      [3],
+      nameOf,
+      noTabs(),
+      () => reported,
+      () => refused,
+      () => needed,
+      () => true,
+      () => stoppedBelow,
+    )[0].title;
+
+  it("says why the chat itself needs you before what the chats it started did", () => {
+    expect(
+      title(
+        ["chat 5"],
+        ["its report has nowhere to go because chat 1 has closed or its program has ended"],
+      ),
+    ).toBe(
+      "Show chat 3: its report has nowhere to go because chat 1 has closed or its program has ended",
+    );
+  });
+
+  it("says a chat it started was stopped, in purlis's words and not as a report", () => {
+    expect(title([], [], ["chat 5"])).toBe("Show chat 3: chat 5 was stopped");
+    expect(title(["chat 4"], [], ["chat 5"])).toBe(
+      "Show chat 3: chat 4 reported back; chat 5 was stopped",
+    );
+  });
+
+  it("says a refused commit only when nothing above applies", () => {
+    expect(title([], [], [], ["a key in config.env"])).toBe("Show chat 3: a key in config.env");
+    expect(title(["chat 4"], [], [], ["a key in config.env"])).toBe(
+      "Show chat 3: chat 4 reported back",
+    );
   });
 });

@@ -570,8 +570,10 @@ _Avoid_: overflow (in UI text), more tabs
 
 **Needs you**:
 A chat that is waiting on the operator: a view, computed from its current run (an ask, a turn
-that ended, a budget or policy pause) and its own items (a report back, a refused commit, a
-secret waiting for approval), and never a state of its own. Every project's are listed in the
+that ended, a budget or policy pause) and its own items (a report it wrote that has nowhere to
+go, a refused commit, a secret waiting for approval), and never a state of its own. A report
+that reaches the chat that asked is that chat's to read, and is not an item. An item shows on
+its chat's row and on every row above it in the Chats section. Every project's are listed in the
 title bar's ✋ menu, and each is counted in red on its tab and on any show-more hiding it.
 **Ignore** clears a chat's items until the next one arrives (ADR 0076).
 _Avoid_: notification, alert (alerts are a separate drawer), waiting (for the state)

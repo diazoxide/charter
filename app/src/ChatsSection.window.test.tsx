@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render as renderBare,
   screen,
   waitFor,
@@ -125,6 +126,7 @@ function core(open: (OpenChat & { workspace: string })[]) {
       if (one?.from) one.from = { ...one.from, tab: true };
       return null;
     }
+    if (cmd === "stopping_chats") return [];
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,
@@ -184,6 +186,24 @@ function core(open: (OpenChat & { workspace: string })[]) {
         });
       });
     },
+    /** The core says chat `session`'s stop is at `phase`. One that has ended is gone from
+     *  what the core lists, as it is from the core. */
+    stop: (session: number, phase: "stopping" | "stopped") => {
+      const handler = listeners.get("chat-stop");
+      if (handler === undefined) throw new Error("the window is not listening for stops");
+      if (phase === "stopped")
+        open.splice(
+          open.findIndex((chat) => chat.session === session),
+          1,
+        );
+      act(() => {
+        window.__TAURI_INTERNALS__.runCallback(handler, {
+          event: "chat-stop",
+          id: 1,
+          payload: { plane: PLANE, session, phase },
+        });
+      });
+    },
     /** The core says chat `session` moved to `state`. */
     move: (
       session: number,
@@ -191,6 +211,9 @@ function core(open: (OpenChat & { workspace: string })[]) {
       at: number,
       queue: number[] = [],
       children: Moved["children"] = [],
+      needs: Moved["needs"] = null,
+      reports: string[] = [],
+      stopped: Moved["stopped"] = null,
     ) => {
       const handler = listeners.get("chat-moved");
       if (handler === undefined) throw new Error("the window is not listening for moves");
@@ -202,9 +225,11 @@ function core(open: (OpenChat & { workspace: string })[]) {
         queue,
         moved_at: at,
         sequence: at,
-        reports: [],
+        reports,
         refusals: [],
         children,
+        needs,
+        stopped,
       };
       act(() => {
         window.__TAURI_INTERNALS__.runCallback(handler, {
@@ -488,5 +513,335 @@ describe("an anonymous helper", () => {
 
     const helpers = await screen.findByRole("list", { name: "Sub-agents of steward 1" });
     expect(within(helpers).getByText("sub-agent thread-7")).toBeTruthy();
+  });
+});
+
+/** 1 in alpha started 2 in alpha, which started the task chat 3 in beta. 4 is on its own. */
+const threeDeep = () => [
+  chat(1, "alpha"),
+  chat(2, "alpha", { from: by(1, "handoff"), label: "drop commons" }),
+  chat(3, "beta", { persona: "devops", from: by(2, "task", "drop commons") }),
+  chat(4, "alpha"),
+];
+
+/** The hand a row wears for a chat below it: a button beside the row, in the row's item. */
+const rolledUp = (tree: HTMLElement, name: string) =>
+  row(tree, name).closest("li")?.querySelector<HTMLElement>("button.rolled-up") ?? null;
+
+/** The same, where a test is about pressing it. */
+const theRolledUp = (tree: HTMLElement, name: string) => {
+  const found = rolledUp(tree, name);
+  if (found === null) throw new Error(`${name} wears no hand for a chat below it`);
+  return found;
+};
+
+describe("the needs-you mark rolling up the tree (#1448)", () => {
+  it("is on the chat that needs you and on every row above it, and on no other", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    move(3, "waiting", 10, [3]);
+
+    expect(within(row(tree, "devops 3")).getByRole("img", { name: "needs you" })).toBeTruthy();
+    expect(rolledUp(tree, "drop commons")?.getAttribute("aria-label")).toBe(
+      "Go to devops 3 below drop commons, which needs you",
+    );
+    expect(rolledUp(tree, "steward 1")?.getAttribute("aria-label")).toBe(
+      "Go to devops 3 below steward 1, which needs you",
+    );
+    expect(rolledUp(tree, "steward 4")).toBeNull();
+    expect(within(row(tree, "steward 4")).queryByRole("img", { name: "needs you" })).toBeNull();
+    // Its own row wears the mark and no button: the row itself goes to it.
+    expect(rolledUp(tree, "devops 3")).toBeNull();
+
+    move(3, "running", 11, []);
+    expect(rolledUp(tree, "steward 1")).toBeNull();
+    expect(rolledUp(tree, "drop commons")).toBeNull();
+  });
+
+  it("still shows on a folded row when a chat two levels down needs you", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    expect(row(tree, "steward 1").getAttribute("aria-expanded")).toBe("true");
+    expect(row(tree, "steward 4").getAttribute("aria-expanded")).toBeNull();
+
+    await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
+    expect(shape(tree)).toEqual(["1 steward 1", "1 steward 4"]);
+    expect(row(tree, "steward 1").getAttribute("aria-expanded")).toBe("false");
+
+    // The grandchild asks while its row, and its parent's, are folded away.
+    move(3, "waiting", 10, [3]);
+
+    expect(rolledUp(tree, "steward 1")?.getAttribute("data-leads-to")).toBe("3");
+    expect(shape(tree)).toEqual(["1 steward 1", "1 steward 4"]);
+  });
+
+  it("goes to the chat that needs you when the rolled-up mark is pressed", async () => {
+    const { asked, move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
+    move(3, "waiting", 10, [3]);
+
+    await userEvent.click(theRolledUp(tree, "steward 1"));
+
+    // Chat 3 is a task chat in beta with no tab: it gets one, in front, on beta's strip.
+    await waitFor(() => expect(tabNames()).toEqual(["devops 3"]));
+    expect(screen.getByTestId("pane").textContent).toBe("session 3");
+    expect(asked.filter((one) => one.cmd === "open_chat_tab").map((one) => one.args)).toEqual([
+      { plane: PLANE, session: 3 },
+    ]);
+  });
+
+  it("folds and opens a row from the keyboard", async () => {
+    core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    row(tree, "drop commons").focus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "1 steward 4"]);
+    await userEvent.keyboard("{ArrowRight}");
+    expect(shape(tree)).toHaveLength(4);
+  });
+
+  it("counts a chat with no tab on the tab of the workspace it works in", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    move(3, "waiting", 10, [3]);
+
+    // Beta is neither pinned nor in front, so its tab is behind the strip's show-more button,
+    // which counts it. Brought forward, its own tab does.
+    const more = await screen.findByRole("button", {
+      name: /the strip is not showing, where 1 chat needs you$/,
+    });
+    await userEvent.click(more);
+    const beta = await screen.findByRole("menuitem", { name: /beta/ });
+    expect(within(beta).getByLabelText("1 chats need you in beta")).toBeTruthy();
+    expect(screen.queryByLabelText(/need you in alpha/)).toBeNull();
+  });
+
+  it("opens a chat with no tab from the title bar's list", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    move(3, "waiting", 10, [3]);
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 chat needs you" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^Go to devops 3/ }));
+
+    await waitFor(() => expect(tabNames()).toEqual(["devops 3"]));
+  });
+});
+
+describe("what needs you (#1448)", () => {
+  it("draws no item for a report that reached the chat that asked", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    // The core's word when chat 2 reports to chat 1, which is open: chat 1 has a report to
+    // read, and nothing is in the queue.
+    move(1, "running", 10, [], [], null, ["drop commons"]);
+
+    expect(screen.queryByRole("button", { name: /needs? you$/ })).toBeNull();
+    expect(tree.querySelector('[data-mark="needs-you"]')).toBeNull();
+  });
+
+  it("says a report has nowhere to go, on the chat that wrote it", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    move(3, "running", 10, [3], [], [{ kind: "report_undelivered", asker: "drop commons" }]);
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 chat needs you" }));
+    expect(
+      await screen.findByRole("menuitem", {
+        name: /^Go to devops 3: its report has nowhere to go because drop commons has closed or its program has ended/,
+      }),
+    ).toBeTruthy();
+  });
+});
+
+describe("stopping a chat (#1448)", () => {
+  const stops = (asked: Asked[]) =>
+    asked.filter((one) => one.cmd === "stop_chat").map((one) => one.args);
+
+  it("offers both stops on a row's menu, and asks before it stops anything", async () => {
+    const { asked } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    fireEvent.contextMenu(row(tree, "drop commons"));
+    expect(await screen.findByRole("menuitem", { name: "Stop chat drop commons" })).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Stop chat drop commons and everything below it" }),
+    );
+
+    const question = await screen.findByRole("alertdialog", {
+      name: "Stop chat drop commons and everything below it?",
+    });
+    expect(question.textContent).toContain("drop commons and the 1 chat below it end");
+    expect(stops(asked)).toEqual([]);
+
+    await userEvent.click(within(question).getByRole("button", { name: "Stop 2 chats" }));
+
+    await waitFor(() => expect(stops(asked)).toEqual([{ plane: PLANE, session: 2, below: true }]));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("stops nothing when the question is cancelled", async () => {
+    const { asked } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    fireEvent.contextMenu(row(tree, "drop commons"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Stop chat drop commons" }));
+    const question = await screen.findByRole("alertdialog", { name: "Stop chat drop commons?" });
+    expect(question.textContent).toContain("one short turn to write what it did");
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+
+    expect(stops(asked)).toEqual([]);
+    expect(shape(tree)).toHaveLength(4);
+  });
+
+  it("says a chat with nothing below it has nothing below it", async () => {
+    core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    fireEvent.contextMenu(row(tree, "steward 4"));
+    const below = await screen.findByRole("menuitem", {
+      name: "Stop chat steward 4 and everything below it",
+    });
+
+    expect(below.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("offers both stops on the chat's tab menu too", async () => {
+    const { asked } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    fireEvent.contextMenu(within(strip()).getByRole("tab", { name: /steward 1/ }));
+    expect(
+      await screen.findByRole("menuitem", { name: "Stop chat steward 1 and everything below it" }),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Stop chat steward 1" }));
+    const question = await screen.findByRole("alertdialog", { name: "Stop chat steward 1?" });
+    // The person started this one: nobody is waiting on what it would write.
+    expect(question.textContent).toContain("steward 1 ends. There is no undo.");
+    await userEvent.click(within(question).getByRole("button", { name: "Stop chat" }));
+
+    await waitFor(() => expect(stops(asked)).toEqual([{ plane: PLANE, session: 1, below: false }]));
+  });
+
+  it("says a chat is stopping, and takes its row and its tab away when it has ended", async () => {
+    const { asked, stop } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    expect(tabNames()).toContain("drop commons");
+
+    stop(2, "stopping");
+    expect(row(tree, "drop commons").querySelector(".stopping")?.textContent).toBe("Stopping…");
+    // Pressed again, it ends without waiting, and the row says so.
+    fireEvent.contextMenu(row(tree, "drop commons"));
+    expect(await screen.findByRole("menuitem", { name: "End chat drop commons now" })).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+
+    stop(2, "stopped");
+
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 devops 3", "1 steward 4"]));
+    expect(tabNames()).not.toContain("drop commons");
+    // The core ended it: the window does not end it a second time.
+    expect(asked.filter((one) => one.cmd === "close_session")).toEqual([]);
+  });
+});
+
+describe("how the tree reads to a screen reader (#1448)", () => {
+  it("says on a row that a chat below it needs you, and keeps the fold out of the tree", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    move(3, "waiting", 10, [3]);
+
+    expect(row(tree, "steward 1").getAttribute("aria-description")).toBe(
+      "devops 3 below it needs you",
+    );
+    expect(row(tree, "drop commons").getAttribute("aria-description")).toBe(
+      "devops 3 below it needs you",
+    );
+    // The chat itself wears the mark, whose name says it; no description repeats it.
+    expect(row(tree, "devops 3").getAttribute("aria-description")).toBeNull();
+    expect(row(tree, "steward 4").getAttribute("aria-description")).toBeNull();
+    // The fold is the pointer's: the row says expanded and folds on the arrows, so the button
+    // is not a second thing to read.
+    const fold = within(tree).getByTitle("Fold the chats under steward 1");
+    expect(fold.getAttribute("aria-hidden")).toBe("true");
+    expect(fold.getAttribute("tabindex")).toBe("-1");
+    expect(within(tree).queryByRole("button", { name: /Fold the chats/ })).toBeNull();
+  });
+});
+
+describe("what the chat that asked is shown of a stop (#1448)", () => {
+  it("says the chat it started was stopped, and not that it reported back", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    // Chat 1 is waiting on you for its own turn's end, and the chat it started was stopped.
+    move(1, "waiting", 10, [1], [], null, [], ["drop commons"]);
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 chat needs you" }));
+    const item = await screen.findByRole("menuitem", { name: /^Go to steward 1/ });
+    expect(item.getAttribute("aria-label")).toContain("steward 1: drop commons was stopped");
+    expect(item.getAttribute("aria-label")).not.toContain("reported back");
+  });
+
+  it("offers everything below on a chat that is already stopping, and says what it adds", async () => {
+    const { asked, stop } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    stop(2, "stopping");
+
+    fireEvent.contextMenu(row(tree, "drop commons"));
+    await userEvent.click(
+      await screen.findByRole("menuitem", {
+        name: "Stop chat drop commons and everything below it",
+      }),
+    );
+    const question = await screen.findByRole("alertdialog", {
+      name: "Stop chat drop commons and everything below it?",
+    });
+    expect(question.textContent).toContain("drop commons is being stopped already.");
+    await userEvent.click(within(question).getByRole("button", { name: "Stop 1 chat" }));
+
+    await waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "stop_chat").map((one) => one.args)).toEqual([
+        { plane: PLANE, session: 2, below: true },
+      ]),
+    );
   });
 });

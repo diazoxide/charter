@@ -10,7 +10,14 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import { listen } from "./here";
 
-import { commands, type ChildAgent, type Moved, type OpenChat, type PlaneId } from "./bindings";
+import {
+  commands,
+  type ChildAgent,
+  type Moved,
+  type Need,
+  type OpenChat,
+  type PlaneId,
+} from "./bindings";
 
 /** The five states the spec names. `unknown` is a harness that carries no state hook. */
 export type State = "unknown" | "running" | "waiting" | "done" | "failed";
@@ -47,7 +54,8 @@ export type ChatStates = {
   readonly heardAt: Readonly<Record<number, number>>;
   /**
    * The chats that have reported back to each chat and not been read, by name (charter-app#259).
-   * A chat with any is a needs-you item that says `<child> reported back`. Only the chat's own
+   * No needs-you item of its own (#1448): a chat that is in the queue for another reason says
+   * `<child> reported back` there. Only the chat's own
    * snapshots change it, under `heardAt`'s rule, and its next prompt empties it.
    */
   readonly reports: Readonly<Record<number, readonly string[]>>;
@@ -57,6 +65,18 @@ export type ChatStates = {
    * next prompt empties it.
    */
   readonly refusals: Readonly<Record<number, readonly string[]>>;
+  /**
+   * The chats each chat started that the operator stopped, by name (#1448): purlis's own word,
+   * kept apart from `reports`, which are what chats said. Its row says `<child> was stopped`.
+   * Under `heardAt`'s rule, like `reports`, and its next prompt empties it.
+   */
+  readonly stoppedBelow: Readonly<Record<number, readonly string[]>>;
+  /**
+   * Why each chat needs you when nothing it said itself says so, each as the sentence its
+   * needs-you item says (#1448, `needSays`). Under `heardAt`'s rule, like `reports`, and its
+   * next prompt empties it.
+   */
+  readonly needs: Readonly<Record<number, readonly string[]>>;
   /**
    * Each chat's child agents: the sub-agents and children its harness spawned, drawn under the
    * chat (FD-18, W8). Under `heardAt`'s rule, like `reports`: only the chat's own snapshots
@@ -73,6 +93,8 @@ export const nothingKnown: ChatStates = {
   heardAt: {},
   reports: {},
   refusals: {},
+  stoppedBelow: {},
+  needs: {},
   children: {},
 };
 
@@ -125,6 +147,43 @@ export function reportsTo(states: ChatStates, session: number): readonly string[
 /** `session`'s child agents, oldest first: none for a chat that has spawned none. */
 export function childrenOf(states: ChatStates, session: number): readonly ChildAgent[] {
   return states.children[session] ?? [];
+}
+
+/**
+ * **What the chats a chat started have done since it last read**, as its item says it after
+ * the chat's name: who reported back, and who was stopped (#1448). None when neither.
+ */
+export function backSaid(
+  reported: readonly string[],
+  stopped: readonly string[] = [],
+): string | undefined {
+  const said = [
+    reported.length > 0 ? `${reported.join(", ")} reported back` : undefined,
+    stopped.length === 1
+      ? `${stopped[0]} was stopped`
+      : stopped.length > 1
+        ? `${stopped.join(", ")} were stopped`
+        : undefined,
+  ].filter((one) => one !== undefined);
+  return said.length > 0 ? said.join("; ") : undefined;
+}
+
+/** Why `session` needs you beyond what it said itself, oldest first, as its item says each. */
+export function needsOf(states: ChatStates, session: number): readonly string[] {
+  return states.needs[session] ?? [];
+}
+
+/**
+ * **What a needs-you item says of a need the app found** (#1448), after the chat's name and a
+ * colon. One sentence per kind, written here once. A dispatch grant that is needed is the next
+ * kind (#1437), and its sentence goes here.
+ */
+export function needSays(need: Need): string {
+  switch (need.kind) {
+    case "report_undelivered":
+      // Closed, or still open with its program gone: either way nothing will read it.
+      return `its report has nowhere to go because ${need.asker} has closed or its program has ended`;
+  }
 }
 
 /** What `session`'s refused commits were refused for, oldest first. */
@@ -185,6 +244,12 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
     heardAt: newerChat ? { ...states.heardAt, [move.session]: move.sequence } : states.heardAt,
     reports: newerChat ? withLines(states.reports, move.session, move.reports) : states.reports,
     refusals: newerChat ? withLines(states.refusals, move.session, move.refusals) : states.refusals,
+    stoppedBelow: newerChat
+      ? withLines(states.stoppedBelow, move.session, move.stopped ?? undefined)
+      : states.stoppedBelow,
+    needs: newerChat
+      ? withLines(states.needs, move.session, move.needs?.map(needSays))
+      : states.needs,
     children: newerChat
       ? withChildren(states.children, move.session, move.children)
       : states.children,

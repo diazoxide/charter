@@ -125,6 +125,11 @@ pub fn answer(
             if !is_open(held, chat) {
                 return no(format!("chat {chat} is not one this app has open"));
             }
+            // A chat the person is stopping, or one below it, starts no chat (#1448). Refused
+            // here too, so it learns before it has written a brief; the start itself asks again.
+            if crate::stopping::refuses_a_start(held, chat) {
+                return no(crate::stopping::STARTS_NOTHING.to_owned());
+            }
             match tickets.mint(chat, connection, now) {
                 Ok(ticket) => Answer::Ticket { ticket },
                 Err(why) => no(why),
@@ -210,27 +215,49 @@ pub fn answer(
 /// record when it opened it ([`HandedFrom`]). Nothing the reporting chat says can point it
 /// anywhere else.
 ///
-/// It reaches the parent in two ways and neither types anything into it: a needs-you item
-/// (`<child> reported back`), and the report itself, left in the plane for the parent's next
-/// `UserPromptSubmit` hook to hand its turn as context (`purlis_core::handback`). A parent
-/// that has closed gets neither; the report is kept for its workspace instead, and the next
-/// chat to start there reads it.
+/// **A report goes to the chat that asked, and not to the person** (#1448), a handoff's and a
+/// task's alike. While that chat is open the report is left for its next turn ([`deliver`])
+/// and raises no needs-you item, on either chat: the asking chat reads it, and the chat that
+/// wrote it now waits on that chat. When the asking chat has gone the report has nowhere to
+/// go, and that is a needs-you item on the chat that wrote it; the report is kept for the
+/// workspace, where the next chat to start reads it.
+///
+/// **A chat the person is stopping may send one last report whatever it owed** (#1448): its
+/// stop asked for it ([`crate::stopping`]). It is taken in one call, and given back if the
+/// report is then refused or cannot be kept, so one last turn is one report.
 ///
 /// **A task's report** (#1436) is the same report with three more parts: its outcome and what
 /// changed, which the persona chat says, and its session record's path, which is this app's
-/// own record of what it wrote for that chat and never a path the chat named. It raises no
-/// needs-you item: a task's report is for the chat that asked, not for the person.
+/// own record of what it wrote for that chat and never a path the chat named.
 fn report_it(
     held: &Held,
     chat: u32,
     summary: &str,
     task: Option<&TaskReport>,
 ) -> Result<Answer, String> {
-    use purlis_core::handback::{self, For, Handback};
-
     // From "is one owed" to "one was sent" under one lock, so two reports in flight are one
     // report and one refusal, and a restart of the chat that asked lands on one side of it.
     let _deciding = held.chats().deciding();
+    // The one report a stop asks for, tested and taken in one call.
+    let last_words = held.stopping().take_last_report(chat);
+    let said = report_under(held, chat, summary, task, last_words);
+    if said.is_err() && last_words {
+        held.stopping().give_back_last_report(chat);
+    }
+    said
+}
+
+/// [`report_it`], under its lock. `last_words` says the chat is being stopped and this is the
+/// one report its stop asked for.
+fn report_under(
+    held: &Held,
+    chat: u32,
+    summary: &str,
+    task: Option<&TaskReport>,
+    last_words: bool,
+) -> Result<Answer, String> {
+    use purlis_core::handback;
+
     let from = held.chats().handed_from(chat).ok_or_else(|| {
         if task.is_some() {
             format!(
@@ -246,6 +273,7 @@ fn report_it(
     })?;
     match (from.report, from.mode) {
         (Owed::Due, _) => {}
+        _ if last_words => {}
         (Owed::Nothing, _) => {
             return Err(format!(
                 "the handoff that opened this chat did not ask for a report (it had no \
@@ -301,6 +329,54 @@ fn report_it(
                 .and_then(|path| handback::record_path(&path)),
         }),
     };
+    let delivered = deliver(held, chat, &from, summary, task, None)?;
+    held.chats().owes(chat, Owed::Sent);
+    if delivered.kept_for.is_none() {
+        held.board().reported_to_its_asker(chat);
+    } else if !last_words {
+        // Nowhere to go, and the chat that wrote it stays open: the person is told there.
+        held.needs_the_person(
+            chat,
+            purlis_core::state::Need::ReportUndelivered {
+                asker: delivered.to.clone(),
+            },
+        );
+    }
+    Ok(Answer::Reported {
+        to: delivered.to,
+        kept_for: delivered.kept_for,
+    })
+}
+
+/// Where [`deliver`] left what a chat said.
+pub(crate) struct Delivered {
+    /// The chat that asked, as the person sees it.
+    pub to: String,
+    /// The place it was kept for, by `Place::word`, when that chat has gone.
+    pub kept_for: Option<String>,
+}
+
+/// **The one delivery from a chat to the chat that started it** (charter-app#259, #1448):
+/// `summary` from `chat`, with a task's `task` part where it is a task's report, to the chat
+/// `from` names. A report travels by it, and so does purlis's own word that the person stopped
+/// the chat (`stopped`, [`crate::stopping`]), which carries no words of the chat's and is
+/// marked so nothing a chat reports can pass for it.
+///
+/// Nothing is typed into the asking chat. While it is open and its program runs, what is
+/// delivered is left in the plane for its next `UserPromptSubmit` hook to hand its turn as
+/// context (`purlis_core::handback`), and its row says who reported back, or who was stopped.
+/// When it has gone, it is kept for the workspace it asked from, and the next chat to start
+/// there reads it. No needs-you item is raised here, for a handoff or a task (#1448).
+pub(crate) fn deliver(
+    held: &Held,
+    chat: u32,
+    from: &HandedFrom,
+    summary: String,
+    task: Option<purlis_core::handback::Task>,
+    stopped: Option<purlis_core::handback::Stopped>,
+) -> Result<Delivered, String> {
+    use purlis_core::handback::{self, For, Handback};
+
     let chats = held.chats().open_now();
     let child = chats
         .iter()
@@ -336,6 +412,7 @@ fn report_it(
         to_workspace: from.workspace.clone(),
         summary,
         task,
+        stopped,
     };
     let whose = if parent_open {
         For::Chat(from.chat)
@@ -344,13 +421,14 @@ fn report_it(
     };
     handback::leave(held.root(), whose, &report)
         .map_err(|why| format!("the report could not be kept ({why})"))?;
-    held.chats().owes(chat, Owed::Sent);
-    // A handoff's report is the person's to see, so it is a needs-you item on the chat that
-    // asked. A task's is that chat's own to read, on its next turn (#1434).
-    if parent_open && from.mode == Mode::Handoff {
-        held.reported_back(from.chat, &child_name);
+    if parent_open {
+        if stopped.is_some() {
+            held.stopped_below(from.chat, &child_name);
+        } else {
+            held.reported_back(from.chat, &child_name);
+        }
     }
-    Ok(Answer::Reported {
+    Ok(Delivered {
         to,
         // By `Place::word`: a workspace's name, or the plane root's word (SI-1b).
         kept_for: (!parent_open).then(|| from.workspace.word().to_owned()),
@@ -412,6 +490,11 @@ fn open_it(
 
     let root = held.root();
     let from = open.chat;
+    // A chat the person is stopping, or one below it, starts no chat (#1448). First, so a
+    // refused handoff has made no workspace.
+    if crate::stopping::refuses_a_start(held, from) {
+        return Err(crate::stopping::STARTS_NOTHING.to_owned());
+    }
     let asking = held
         .chats()
         .open_now()
@@ -657,6 +740,13 @@ fn start_on(
         ..Default::default()
     };
     let session = held.chats().start_ready(&chat, &ready, size)?;
+    // **The stop may have been pressed while this chat was starting** (#1448). The press reads
+    // the lineage and records the stop in one hold, and this asks in the same hold: either the
+    // press saw this chat and stops it with the rest, or this sees the stop and ends the chat
+    // here, before anything is told of it.
+    if crate::stopping::sweeps(held, session, opening.from.chat) {
+        return Err(crate::stopping::STARTS_NOTHING.to_owned());
+    }
     Ok(Arrived {
         plane: plane.clone(),
         session,
@@ -750,6 +840,11 @@ fn dispatch_it(
     // are one step, and the lock is let go before anything starts.
     let (to, lineage_of_it, number, _slot) = {
         let _deciding = held.chats().deciding();
+        // A chat the person is stopping, or one below it, starts no chat (#1448). Under the
+        // lock the decision is made under, so it is part of that decision.
+        if crate::stopping::refuses_a_start(held, from) {
+            return Err(crate::stopping::STARTS_NOTHING.to_owned());
+        }
         let lineage = held
             .chats()
             .lineage(from, default.as_deref(), &|chat| still_working(held, chat));
@@ -1989,7 +2084,7 @@ mod tests {
     }
 
     #[test]
-    fn a_report_reaches_the_chat_that_asked_as_a_needs_you_item_and_its_next_turn() {
+    fn a_report_reaches_the_chat_that_asked_at_its_next_turn_and_raises_no_needs_you_item() {
         let plane = Plane::new();
         let planes = planes();
         let id = planes.open(&plane.root);
@@ -2013,7 +2108,9 @@ mod tests {
             vec!["drop commons".to_owned()],
             "`drop commons reported back`, on the chat that asked"
         );
-        assert!(held.hooks().board().needs_you().contains(&asking));
+        // A report is the asking chat's to read, not the person's (#1448): no item on either.
+        assert!(held.hooks().board().needs_you().is_empty());
+        assert!(held.hooks().board().needs_of(child).is_empty());
         let waiting =
             purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
         assert_eq!(waiting.len(), 1, "left for its next turn");
@@ -2168,6 +2265,397 @@ mod tests {
         );
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].to, "claude 1");
+        // Nowhere to go is the one report that needs the person (#1448): an item on the chat
+        // that wrote it, which says whose it was.
+        assert_eq!(held.hooks().board().needs_you(), vec![child]);
+        assert_eq!(
+            held.hooks().board().needs_of(child),
+            vec![purlis_core::state::Need::ReportUndelivered {
+                asker: "claude 1".to_owned()
+            }]
+        );
+    }
+
+    // ----- stopped by the person (#1448) -----
+
+    fn open_chats(held: &Held) -> Vec<u32> {
+        let mut open: Vec<u32> = held
+            .chats()
+            .open_now()
+            .iter()
+            .map(|chat| chat.session)
+            .collect();
+        open.sort_unstable();
+        open
+    }
+
+    #[test]
+    fn stopping_a_chat_ends_it_and_tells_the_chat_that_asked_the_operator_stopped_it() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) =
+            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+
+        // The stand-in reports nothing, so there is no turn to give it: it ends as it stands.
+        crate::stopping::press_in_a_test(&held, child, false).expect("stopped");
+
+        assert_eq!(
+            open_chats(&held),
+            vec![asking],
+            "only the stopped chat ended"
+        );
+        let told =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
+        assert_eq!(told.len(), 1, "by the delivery a report uses");
+        assert_eq!(told[0].from, "drop commons");
+        // purlis's own word, marked, with no words of the chat's in it.
+        assert_eq!(
+            told[0].stopped,
+            Some(purlis_core::handback::Stopped { wrote: false })
+        );
+        assert_eq!(told[0].summary, "");
+        assert_eq!(
+            held.hooks().board().stopped_of(asking),
+            vec!["drop commons".to_owned()],
+            "`drop commons was stopped`, on the chat that asked"
+        );
+        assert!(held.hooks().board().reports(asking).is_empty());
+        assert!(
+            held.hooks().board().needs_you().is_empty(),
+            "and it is no needs-you item"
+        );
+        assert!(held.stopping().now().is_empty());
+    }
+
+    #[test]
+    fn stopping_a_chat_and_everything_below_it_ends_the_subtree_and_nothing_else() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (grandchild, _) = hand_off(&held, &id, &tickets, child, None, true).expect("opened");
+        let (sibling, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+
+        crate::stopping::press_in_a_test(&held, child, true).expect("stopped");
+
+        assert_eq!(
+            open_chats(&held),
+            vec![asking, sibling],
+            "{child} and {grandchild} ended, and nothing outside them"
+        );
+        // The grandchild ended first. The chat above it was ending in the same stop, with no
+        // turn left to read anything in, so it was left no word and none went on to a workspace.
+        let told =
+            purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
+        assert_eq!(
+            told.len(),
+            1,
+            "the asking chat is told of the chat it started"
+        );
+        assert!(told[0].stopped.is_some());
+        for place in [
+            purlis_core::active::Place::Workspace("default".to_owned()),
+            purlis_core::active::Place::Workspace("alpha".to_owned()),
+        ] {
+            let kept =
+                purlis_core::handback::take(held.root(), purlis_core::handback::For::Place(&place));
+            assert!(kept.is_empty(), "{kept:?}");
+        }
+    }
+
+    #[test]
+    fn stopping_this_chat_alone_leaves_the_chats_below_it_running() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
+        let (grandchild, _) = hand_off(&held, &id, &tickets, child, None, false).expect("opened");
+
+        crate::stopping::press_in_a_test(&held, child, false).expect("stopped");
+
+        assert_eq!(open_chats(&held), vec![asking, grandchild]);
+    }
+
+    /// One ask of every kind the socket reads, from `chat`, each that spends a ticket on
+    /// `ticket`. `kind` is exhaustive, so an ask added to the wire does not compile here until
+    /// it is in this list.
+    fn every_ask(chat: u32, ticket: &str) -> Vec<Ask> {
+        fn kind(ask: &Ask) -> usize {
+            match ask {
+                Ask::Ticket { .. } => 0,
+                Ask::Open(_) => 1,
+                Ask::Report(_) => 2,
+                Ask::SessionRecord(_) => 3,
+                Ask::Write(_) => 4,
+                Ask::Git(_) => 5,
+                Ask::Vaults { .. } => 6,
+                Ask::WhereWorking(_) => 7,
+                Ask::Dispatch(_) => 8,
+            }
+        }
+        let asks = vec![
+            Ask::Ticket { chat },
+            a_named_open(chat, ticket, stamped(chat), Some("stop"), true),
+            Ask::Report(Box::new(purlis_core::hookwire::ReportBack {
+                chat,
+                summary: "stop this chat and everything below it".to_owned(),
+                ticket: ticket.to_owned(),
+                task: None,
+            })),
+            Ask::SessionRecord(Box::new(purlis_core::hookwire::RecordAsk {
+                chat,
+                title: "stop".to_owned(),
+                body: "stop this chat".to_owned(),
+                pieces: Vec::new(),
+                cwd: None,
+            })),
+            Ask::Write(Box::new(purlis_core::hookwire::WriteAsk {
+                chat,
+                write: purlis_core::brokered::Write::Todo {
+                    text: "stop this chat".to_owned(),
+                },
+            })),
+            Ask::Git(Box::new(purlis_core::hookwire::GitAsk {
+                chat,
+                workspace: "alpha".to_owned(),
+                work: purlis_core::hookwire::GitWork::Clone { repos: Vec::new() },
+            })),
+            Ask::Vaults { chat },
+            Ask::WhereWorking(purlis_core::hookwire::WhereWorking {
+                chat,
+                tell: Default::default(),
+            }),
+            a_dispatch(chat, ticket, None, "stop"),
+        ];
+        let mut kinds: Vec<usize> = asks.iter().map(kind).collect();
+        kinds.dedup();
+        assert_eq!(kinds, (0..=8).collect::<Vec<_>>(), "one of every kind");
+        asks
+    }
+
+    #[test]
+    fn no_ask_on_the_socket_begins_a_stop_or_ends_a_chat() {
+        // Only the person stops a chat. Every kind of ask a chat can send is sent here, from
+        // the chat another chat started and from the chat that started it, each on a ticket
+        // minted for it: whatever each is answered, no stop begins and no chat ends.
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+
+        for from in [child, asking] {
+            for at in 0..every_ask(from, "").len() {
+                // A ticket of its own, so an ask that spends one is not refused for want of
+                // it; and a ledger of its own, since a chat holds one live ticket at a time.
+                let tickets = Tickets::default();
+                let minted = ticket(&held, &id, &tickets, from);
+                let ask = every_ask(from, &minted).swap_remove(at);
+                let said = format!("{ask:?}");
+                let _ = answer(&held, &id, &tickets, 1, ask, &|_| {});
+                assert!(held.stopping().now().is_empty(), "a stop began on {said}");
+                assert!(
+                    open_chats(&held).starts_with(&[asking, child]),
+                    "a chat ended on {said}"
+                );
+            }
+        }
+    }
+
+    /// Chat `chat`'s harness says a prompt began a turn, and the board has taken it.
+    fn mid_turn(held: &Held, chat: u32) {
+        let conversation = held
+            .hooks()
+            .board()
+            .conversation(chat)
+            .map(str::to_owned)
+            .expect("the chat was started under a conversation purlis chose");
+        purlis_core::hookwire::send(
+            held.hooks().socket().expect("the plane listens"),
+            Some(&held.hooks().token_for(chat)),
+            &purlis_core::hookwire::Report {
+                chat,
+                event: purlis_core::state::Event::UserPromptSubmit,
+                conversation: purlis_core::hookwire::Conversation::Named(conversation),
+                pid: Some(4242),
+                agent: None,
+                detail: purlis_core::state::Detail::default(),
+            },
+        )
+        .expect("the prompt is sent");
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while held.hooks().board().state(chat) != purlis_core::state::State::Running
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(
+            held.hooks().board().state(chat),
+            purlis_core::state::State::Running,
+            "the prompt reached the board"
+        );
+    }
+
+    #[test]
+    fn a_chat_being_stopped_or_waiting_under_a_stop_is_refused_a_new_chat() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (grandchild, _) = hand_off(&held, &id, &tickets, child, None, true).expect("opened");
+        // The grandchild is mid-turn, so its stop waits for the turn to end, and the chat above
+        // it is held until the grandchild has ended.
+        mid_turn(&held, grandchild);
+        let before = ticket(&held, &id, &tickets, child);
+
+        crate::stopping::press_in_a_test(&held, child, true).expect("stopped");
+        assert_eq!(held.stopping().now(), vec![child, grandchild]);
+
+        // The held parent, and the chat writing under it, ask for a ticket: refused.
+        for stopping in [child, grandchild] {
+            let said = answer(
+                &held,
+                &id,
+                &tickets,
+                1,
+                Ask::Ticket { chat: stopping },
+                &nobody,
+            );
+            assert_eq!(
+                said,
+                Answer::No {
+                    why: crate::stopping::STARTS_NOTHING.to_owned()
+                },
+                "chat {stopping} was given a ticket"
+            );
+        }
+        // A ticket it held from before the press opens nothing either, by a handoff or a
+        // dispatch.
+        let opened = answer(
+            &held,
+            &id,
+            &tickets,
+            1,
+            a_named_open(child, &before, stamped(child), Some("carry on"), false),
+            &nothing_opens,
+        );
+        assert_eq!(
+            opened,
+            Answer::No {
+                why: crate::stopping::STARTS_NOTHING.to_owned()
+            }
+        );
+        assert_eq!(
+            open_chats(&held),
+            vec![asking, child, grandchild],
+            "nothing was started"
+        );
+        // A chat outside the stop starts chats as it always did.
+        assert!(hand_off(&held, &id, &tickets, asking, None, false).is_ok());
+
+        // Pressed again, the subtree ends now, and nothing it started is left behind.
+        crate::stopping::press_in_a_test(&held, child, true).expect("stopped");
+        assert!(!open_chats(&held).contains(&child));
+        assert!(!open_chats(&held).contains(&grandchild));
+    }
+
+    #[test]
+    fn a_chat_being_stopped_is_not_started_again_under_a_new_number() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        mid_turn(&held, child);
+        crate::stopping::press_in_a_test(&held, child, false).expect("stopped");
+        assert_eq!(held.stopping().now(), vec![child]);
+
+        assert_eq!(
+            held.restart_chat(child, STARTING),
+            Err(crate::stopping::NOT_STARTED_AGAIN.to_owned())
+        );
+        assert_eq!(
+            held.start_chat_fresh(child, STARTING),
+            Err(crate::stopping::NOT_STARTED_AGAIN.to_owned())
+        );
+        assert_eq!(held.restart_chat_owed(child, STARTING), Ok(None));
+        assert_eq!(held.stopping().now(), vec![child], "still being stopped");
+        assert_eq!(open_chats(&held), vec![asking, child]);
+    }
+
+    #[test]
+    fn a_report_still_waiting_when_its_asker_closes_is_a_needs_you_item_on_its_writer() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) =
+            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+        let (quiet, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        // It reached the chat that asked, which is open: nobody needs the person.
+        report(&held, &id, &tickets, child, "Dropped it.");
+        assert!(held.hooks().board().needs_you().is_empty());
+
+        // The asking chat is closed before any turn of it read the report.
+        held.close_chat(asking).expect("closed");
+
+        assert_eq!(
+            held.hooks().board().needs_of(child),
+            vec![purlis_core::state::Need::ReportUndelivered {
+                asker: "claude 1".to_owned()
+            }]
+        );
+        assert_eq!(held.hooks().board().needs_you(), vec![child]);
+        assert!(
+            held.hooks().board().needs_of(quiet).is_empty(),
+            "a chat that had sent nothing has nothing with nowhere to go"
+        );
+        // And the report is where the next chat to start there reads it.
+        let kept = purlis_core::handback::take(
+            held.root(),
+            purlis_core::handback::For::Place(&purlis_core::active::Place::Workspace(
+                "default".to_owned(),
+            )),
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].summary, "Dropped it.");
+    }
+
+    #[test]
+    fn the_word_that_a_chat_was_stopped_raises_no_item_when_its_asker_then_closes() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        let (other, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        crate::stopping::press_in_a_test(&held, child, false).expect("stopped");
+
+        held.close_chat(asking).expect("closed");
+
+        assert!(held.hooks().board().needs_you().is_empty());
+        assert!(held.hooks().board().needs_of(other).is_empty());
     }
 
     // ----- a handoff from the plane root (SI-1b) -----
@@ -2929,7 +3417,8 @@ mod tests {
         let _ = purlis_core::handback::take(held.root(), purlis_core::handback::For::Chat(asking));
 
         // A handed-off chat that sends a task's line reports as a handoff does: its summary,
-        // with no outcome, and as a needs-you item.
+        // with no outcome. Neither report is a needs-you item (#1448), and the asking chat's
+        // row names both chats that reported.
         let (handed, _) =
             hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
         let said = tasks_report(
@@ -2947,8 +3436,9 @@ mod tests {
         assert_eq!(waiting[0].task, None);
         assert_eq!(
             held.hooks().board().reports(asking),
-            vec!["drop commons".to_owned()]
+            vec!["check the queue".to_owned(), "drop commons".to_owned()]
         );
+        assert!(!held.hooks().board().needs_you().contains(&asking));
     }
 
     #[test]
@@ -3049,7 +3539,12 @@ mod tests {
             })
         );
         // For the chat that asked, not for the person (#1434).
-        assert!(held.hooks().board().reports(asking).is_empty());
+        // The asking chat's row says who reported, and it is no item, as a handoff's is none
+        // (#1448).
+        assert_eq!(
+            held.hooks().board().reports(asking),
+            vec!["check the queue".to_owned()]
+        );
         assert!(!held.hooks().board().needs_you().contains(&asking));
         // One report: the task is no longer one the asking chat has running.
         assert_eq!(held.chats().lineage(asking, None, &|_| true).running, 0);

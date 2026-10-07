@@ -235,6 +235,10 @@ pub struct Held {
     closing: Arc<crate::smartclose::Closing>,
     /// The window, for each step of a smart close.
     smart: crate::smartclose::Teller,
+    /// The chats the person is stopping (#1448).
+    stopping: crate::stopping::Stopping,
+    /// The window, for each step of a stop.
+    stops: crate::stopping::Teller,
     /// How many brokered writes each chat has made lately (#1333).
     brokered: purlis_core::brokered::Rate,
     /// The vaults each chat was refused for its persona, until the person answers (#1430).
@@ -421,6 +425,20 @@ impl Held {
     /// This project, as the window names it.
     pub fn plane_id(&self) -> &PlaneId {
         &self.id
+    }
+
+    /// The chats the person is stopping (#1448).
+    pub fn stopping(&self) -> &crate::stopping::Stopping {
+        &self.stopping
+    }
+
+    /// Tells the window chat `session`'s stop is at `phase`.
+    pub fn tell_stop(&self, session: u32, phase: crate::stopping::StopPhase) {
+        (self.stops)(crate::stopping::ChatStop {
+            plane: self.id.clone(),
+            session,
+            phase,
+        });
     }
 
     /// Tells the window chat `session`'s smart close is at `phase`.
@@ -627,8 +645,18 @@ impl Held {
         self.dispatch_grants.chat_closed(session, ended.as_deref());
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
-        purlis_core::handback::orphan(&self.root, session);
+        let orphaned = purlis_core::handback::orphan(&self.root, session);
         (self.tell)(gone);
+        // **A report that was still waiting for this chat now has nowhere to go** (#1448). It
+        // is kept for the workspace, and the chat that wrote it, where it is still open, is a
+        // needs-you item that says so: nobody else will read what it wrote. purlis's own word
+        // that a chat was stopped is no report, and raises none.
+        self.reports_have_nowhere_to_go(session, &orphaned);
+        // A stop of it is over, and a chat above it that waited for it to end waits no more
+        // (#1448). Last, with the chat already gone, so nothing here ends it a second time.
+        if let Some(me) = self.me.get().and_then(std::sync::Weak::upgrade) {
+            crate::stopping::closed(&me, session);
+        }
         closed
     }
 
@@ -647,6 +675,7 @@ impl Held {
     }
 
     fn start_chat_again(&self, session: u32, size: Size, resuming: bool) -> Result<u32, String> {
+        self.not_while_stopping(session)?;
         let started = self.chats.start_again(session, size, resuming)?;
         self.followed(session, started);
         let in_front = self.chats.front() == Some(session);
@@ -674,6 +703,11 @@ impl Held {
         if self.asks().asks.iter().any(|ask| ask.session == session) {
             return Ok(None);
         }
+        // Nor while the person is stopping it (#1448): the window asks this on its own when a
+        // turn ends, which is when a stop sends its prompt, and the stop is the later word.
+        if self.stopping.is_stopping(session) {
+            return Ok(None);
+        }
         let started = self.chats.restart_owed(session, size)?;
         self.in_its_place(session, started);
         Ok(Some(started))
@@ -683,9 +717,19 @@ impl Held {
     /// block's Notice that purlis grants nothing for, for this chat's next run only, and audited
     /// as any opt-out is. In the old one's place, as [`Self::restart_chat_owed`]'s is.
     pub fn restart_chat_without_sandbox(&self, session: u32, size: Size) -> Result<u32, String> {
+        self.not_while_stopping(session)?;
         let started = self.chats.restart_without_sandbox(session, size)?;
         self.in_its_place(session, started);
         Ok(started)
+    }
+
+    /// **A chat the person is stopping is not started again** (#1448): a restart gives it a new
+    /// number, which would take it out of its stop with nobody told.
+    fn not_while_stopping(&self, session: u32) -> Result<(), String> {
+        if self.stopping.is_stopping(session) {
+            return Err(crate::stopping::NOT_STARTED_AGAIN.to_owned());
+        }
+        Ok(())
     }
 
     /// `started` takes chat `session`'s place: the old one ends, and the new one is in front
@@ -714,10 +758,64 @@ impl Held {
         purlis_core::handback::moved(&self.root, session, started);
     }
 
-    /// A chat `session` handed work to, shown as `from`, has reported back to it — a needs-you
-    /// item now — and the window is told (charter-app#259). Nothing is typed into the chat.
+    /// A chat `session` handed work to, shown as `from`, has reported back to it, and the
+    /// window is told (charter-app#259). Nothing is typed into the chat, and it is no needs-you
+    /// item: a report is the asking chat's to read (#1448).
     pub fn reported_back(&self, session: u32, from: &str) {
         if let Some(moved) = self.board().reported_back(session, from) {
+            (self.tell)(moved);
+        }
+    }
+
+    /// The operator stopped `from`, a chat `session` started, and the window is told (#1448):
+    /// the row says so. Nothing is typed into the chat, and it is no needs-you item.
+    pub fn stopped_below(&self, session: u32, from: &str) {
+        if let Some(moved) = self.board().stopped_below(session, from) {
+            (self.tell)(moved);
+        }
+    }
+
+    /// Chat `closed` has closed with `orphaned` still waiting for its next turn: each open chat
+    /// it started that had sent its report, and whose report is one of those, needs the person.
+    fn reports_have_nowhere_to_go(
+        &self,
+        closed: u32,
+        orphaned: &[purlis_core::handback::Handback],
+    ) {
+        let waiting: Vec<&purlis_core::handback::Handback> = orphaned
+            .iter()
+            .filter(|report| report.stopped.is_none())
+            .collect();
+        if waiting.is_empty() {
+            return;
+        }
+        for open in self.chats.open_now() {
+            let Some(from) = open.from.as_ref().filter(|from| {
+                from.chat == closed && from.report == purlis_core::reopen::Owed::Sent
+            }) else {
+                continue;
+            };
+            let name = self
+                .chats
+                .shown_name(open.session)
+                .unwrap_or_else(|| open.name.clone());
+            if waiting.iter().any(|report| report.from == name) {
+                self.needs_the_person(
+                    open.session,
+                    purlis_core::state::Need::ReportUndelivered {
+                        asker: from.name.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// **The app found that chat `session` needs the person**, for `need`: a needs-you item on
+    /// it, and the window is told (#1448). The one way a needs-you item is raised that no hook
+    /// of the chat's own raised: a report with nowhere to go today, and a dispatch grant that
+    /// is needed next (#1437).
+    pub fn needs_the_person(&self, session: u32, need: purlis_core::state::Need) {
+        if let Some(moved) = self.board().needs(session, need) {
             (self.tell)(moved);
         }
     }
@@ -889,6 +987,8 @@ pub struct Planes {
     vault_refused: crate::vaultroute::Teller,
     /// Told each step of a smart close in any plane (ADR 0064).
     smart: crate::smartclose::Teller,
+    /// Told each step of a stop in any plane (#1448).
+    stops: crate::stopping::Teller,
     /// Told a plane's permission asks each time they change (HP-6).
     asks: crate::asking::Teller,
     /// The launch's question and its answer — see [`Relaunching`].
@@ -987,6 +1087,7 @@ impl Planes {
             blocks: Arc::new(|_| {}),
             vault_refused: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
+            stops: Arc::new(|_| {}),
             asks: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
             hosting: Arc::new(|reporting| Box::new(Sessions::reporting_to(reporting))),
@@ -1089,6 +1190,13 @@ impl Planes {
     /// draw the tab wrapping up and close it when its record lands (ADR 0064).
     pub fn telling_smart_close(mut self, smart: crate::smartclose::Teller) -> Self {
         self.smart = smart;
+        self
+    }
+
+    /// Tells `stops` each step of a stop in a plane this registry holds, so the window can say
+    /// a chat is stopping and take its tab away when it has ended (#1448).
+    pub fn telling_stops(mut self, stops: crate::stopping::Teller) -> Self {
+        self.stops = stops;
         self
     }
 
@@ -1205,6 +1313,9 @@ impl Planes {
                     crate::smartclose::reported(&held, report);
                     // What an Allow queued for this chat's turn to end is sent then (#1430).
                     crate::vaultroute::reported(&held, report.chat);
+                    // And a chat the person is stopping is sent its last-turn prompt when the
+                    // turn it was in ends, and is ended when that last turn does (#1448).
+                    crate::stopping::reported(&held, report.chat);
                 }
             })
         });
@@ -1973,6 +2084,9 @@ impl Planes {
                     // And the record no longer names the ended program's pid (V82, #1018).
                     if let Some(held) = me.get().and_then(std::sync::Weak::upgrade) {
                         held.chats.a_program_ended();
+                        // A chat being stopped whose program ended on its own has ended: the
+                        // chat that asked is told, and its tab goes (#1448).
+                        crate::stopping::exited(&held, session);
                     }
                 }));
         }
@@ -2005,6 +2119,8 @@ impl Planes {
             typed,
             closing,
             smart: Arc::clone(&self.smart),
+            stopping: crate::stopping::Stopping::default(),
+            stops: Arc::clone(&self.stops),
             brokered: purlis_core::brokered::Rate::default(),
             vault_refusals: crate::vaultroute::Refusals::default(),
             dispatch_grants: crate::dispatchgrants::Store::default(),

@@ -232,6 +232,8 @@ macro_rules! app_commands {
                 smartclose::smart_close,
                 smartclose::cancel_smart_close,
                 smartclose::smart_closing,
+                stopping::stop_chat,
+                stopping::stopping_chats,
                 extensions::project_extensions,
                 extensions::extensions_on,
                 extensions::extension_facts,

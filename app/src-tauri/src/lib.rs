@@ -68,6 +68,7 @@ mod sessions;
 mod settings;
 mod slowstart;
 mod smartclose;
+mod stopping;
 mod thismachine;
 mod todos;
 mod updates;
@@ -2137,6 +2138,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<hooks::ChatBlocked>()
         // What `smart-close` carries (ADR 0064).
         .typ::<smartclose::SmartClosing>()
+        // What `chat-stop` carries (#1448).
+        .typ::<stopping::ChatStop>()
         // The event a launch without the session bus is told the bus answers on (`portal.rs`),
         // named once for both sides.
         .constant("SESSION_BUS_ANSWERS", portal::ANSWERS)
@@ -2800,6 +2803,19 @@ pub fn run() {
                             &window,
                             &step.plane.clone(),
                             smartclose::EVENT,
+                            &step,
+                        );
+                    })
+                })
+                // Each step of a stop: the window says the chat is stopping, and takes its tab
+                // away when it has ended (#1448).
+                .telling_stops({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |step: stopping::ChatStop| {
+                        windows::emit_for_plane(
+                            &window,
+                            &step.plane.clone(),
+                            stopping::EVENT,
                             &step,
                         );
                     })

@@ -1499,6 +1499,13 @@ export const commands = {
 	 */
 	smartClosing: (plane: PlaneId) => typedError<SmartClosing[], string>(__TAURI_INVOKE("smart_closing", { plane })),
 	/**
+	 *  Stops a chat, or a chat and every chat below it. A chat another chat started gets one short
+	 *  turn to write what it did, and the chat that asked is told the operator stopped it.
+	 */
+	stopChat: (plane: PlaneId, session: number, below: boolean) => typedError<null, string>(__TAURI_INVOKE("stop_chat", { plane, session, below })),
+	/**  Every chat of a plane being stopped, so a window that has just drawn it says so. */
+	stoppingChats: (plane: PlaneId) => typedError<number[], string>(__TAURI_INVOKE("stopping_chats", { plane })),
+	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
 	 *  `workspace`, when one is named, that workspace's settings are a layer too (charter-app#280):
@@ -2221,6 +2228,13 @@ export type ChatBlocked = {
 	 *  each a policy does not forbid (#1343).
 	 */
 	levels: GrantLevel[],
+};
+
+/**  One step of one chat's stop, as the window is told it. */
+export type ChatStop = {
+	plane: PlaneId,
+	session: number,
+	phase: StopPhase,
 };
 
 /**
@@ -3584,9 +3598,10 @@ export type Moved = {
 	moved_at: number,
 	/**
 	 *  The chats that have reported back to this one and not been read yet, by the name the
-	 *  operator sees them under, oldest first (charter-app#259). Each is a needs-you item that
-	 *  says `<child> reported back` rather than only this chat's name. Empty for nearly every
-	 *  chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
+	 *  operator sees them under, oldest first (charter-app#259). No needs-you item of its own
+	 *  (#1448): a chat in the queue for another reason says `<child> reported back` there.
+	 *  Empty for nearly every chat, and emptied by this chat's next prompt, which is the turn
+	 *  the reports are handed.
 	 */
 	reports: string[],
 	/**
@@ -3595,6 +3610,18 @@ export type Moved = {
 	 *  next prompt, or by Ignore.
 	 */
 	refusals: string[],
+	/**
+	 *  The chats this one started that the operator stopped, by name, oldest first (#1448):
+	 *  its row says `<child> was stopped`. purlis's own word, apart from `reports`, which are
+	 *  what chats said. `null` for nearly every chat, and emptied as `reports` is.
+	 */
+	stopped?: string[] | null,
+	/**
+	 *  Why this chat needs the person when no hook of its own said so, oldest first (#1448):
+	 *  its needs-you item says the latest. `null` for nearly every chat, which needs the person
+	 *  for nothing of the kind, and emptied by the chat's next prompt, or by Ignore.
+	 */
+	needs?: Need[] | null,
 	/**
 	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
 	 * 
@@ -3624,6 +3651,14 @@ export type NearBranch = {
 	/**  No piece is the repo's own folder. */
 	piece: string | null,
 };
+
+/**
+ *  Why a chat needs the person, as the window says it (`purlis_core::state::Need`, #1448). A
+ *  dispatch grant that is needed is the next kind (#1437).
+ */
+export type Need = 
+/**  Its report has nowhere to go: the chat that asked for it, `asker`, has gone. */
+{ kind: "report_undelivered"; asker: string };
 
 /**
  *  **A profile's command waiting on the operator's approval** (ADR 0022), as a waiting chat's
@@ -5361,6 +5396,13 @@ export type StartedHere = {
 	/**  Why it was copied rather than typed, or none when it is typed once the harness starts. */
 	copied: string | null,
 };
+
+/**  Where a chat's stop stands. */
+export type StopPhase = 
+/**  It is being stopped: waiting for the chats below it, or writing its last turn. */
+"stopping" | 
+/**  It has ended, and its tab goes. */
+"stopped";
 
 /**  What one subject is offered. */
 export type SubjectCurations = {

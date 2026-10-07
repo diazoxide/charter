@@ -1,9 +1,8 @@
 import { memo, type ReactNode } from "react";
-import { Hand, SquareTerminal } from "lucide-react";
+import { SquareTerminal } from "lucide-react";
 import { ChatMark, WrappingUp } from "./NeedsYou";
 import {
   childrenOf,
-  isAsking,
   markOf,
   sameChildren,
   useChatsHere,
@@ -41,21 +40,6 @@ export const ChatStateMark = memo(function ChatStateMark({
 }) {
   const state = useChatsSelect(useChatsHere(), (states) => markOf(states, session ?? -1, shell));
   return <ChatMark state={state} />;
-});
-
-/**
- * **A chat asking for you, on its row** (#1447): the hand the title bar's queue wears, drawn
- * while the chat is in that queue and not otherwise. It reads its own chat off the project's
- * store, as the state mark does, so the queue changing redraws the hands that changed.
- */
-export const NeedsYouMark = memo(function NeedsYouMark({ session }: { session: number }) {
-  const asking = useChatsSelect(useChatsHere(), (states) => isAsking(states, session));
-  if (!asking) return null;
-  return (
-    <span className="needs-you-mark" data-mark="needs-you" role="img" aria-label="needs you">
-      <Hand aria-hidden="true" />
-    </span>
-  );
 });
 
 /** How many characters of a harness's id for a child agent its row shows: enough to tell

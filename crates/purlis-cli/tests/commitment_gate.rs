@@ -154,6 +154,7 @@ fn the_gate_and_a_report_back_arrive_as_one_context() {
         to_workspace: purlis_core::active::Place::Workspace("ops".to_owned()),
         summary: "Dropped it.".to_owned(),
         task: None,
+        stopped: None,
     };
     handback::leave(plane.path(), For::Chat(3), &report).unwrap();
 
