@@ -23,6 +23,7 @@ import {
 } from "./fileControls";
 import { asked, fileSetting, useSettingsDriver, type Driven, type Wrote } from "./driver";
 import type { FileSetting, LiveSetting, SettingsGroup } from "./groups";
+import { workspaceDispatchGroup } from "./dispatch";
 
 /**
  * **The Workspace level** (SE-20, #1170; V89b, V89e, V89h): one workspace's settings in the
@@ -135,7 +136,7 @@ function absentSetting(read: WorkspaceRead): LiveSetting {
 }
 
 /**
- * **The five groups**, in V89h's order, each with its stable id. A group with no setting is
+ * **The groups**, in V89h's order with Dispatch (#1440) after Repos, each with its stable id. A group with no setting is
  * hidden: Extensions with no extension, Plugins with no harness that can set one. A
  * `workspace.json` that is not a JSON object has no file settings to show until it is mended:
  * its standing refusals say why, above the groups.
@@ -164,6 +165,8 @@ export function workspaceGroups(read: WorkspaceRead, switched: () => void): Sett
       help: "The repos cloned in this workspace, and the ones it names that are not cloned here.",
       settings: [reposSetting(read), absentSetting(read)],
     },
+    // This workspace's own dispatch limits (#1440), kept in the project's file.
+    workspaceDispatchGroup(read.plane, read.workspace),
     {
       id: "workspace.extensions",
       label: "Extensions",

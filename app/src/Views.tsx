@@ -1,4 +1,13 @@
-import { Fragment, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  Suspense,
+  lazy,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Archive,
   Brain,
@@ -32,6 +41,7 @@ import { HarnessSetupTab } from "./HarnessSetupTab";
 import { RepoInstructionsTab } from "./RepoInstructionsTab";
 import { FirstTaskTab, type FirstTaskDoes } from "./FirstTaskTab";
 import { SettingsTab } from "./settings/SettingsTab";
+import { DispatchLimitsTable } from "./settings/dispatch";
 import {
   commands,
   type ExtensionCommand,
@@ -677,6 +687,7 @@ function Answer({
   onPress?: (offer: Offer) => void;
 }) {
   const { from, view: id, key } = view;
+  const dispatchHeading = useId();
   const keeps = isChanges(view);
   const keptAs = `${plane}\u0000${viewKey(view)}`;
   const [said, setSaid] = useState<ViewAnswerOrRefusal | undefined>(() =>
@@ -855,6 +866,14 @@ function Answer({
               }
         }
       />
+      {from === null && id === "persona" && (
+        /* This persona's own dispatch limits (#1440): kept in the project's file, never its
+           own, and edited here as on Settings › Project › Dispatch. */
+        <section className="view-dispatch" aria-labelledby={dispatchHeading}>
+          <h3 id={dispatchHeading}>Dispatch limits</h3>
+          <DispatchLimitsTable plane={plane} scope={{ kind: "persona", name: key }} />
+        </section>
+      )}
       {asking !== undefined && from !== null && (
         <AskFirst
           extension={from}
