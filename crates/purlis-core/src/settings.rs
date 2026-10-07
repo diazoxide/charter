@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 use crate::profiles::{self, COMMITTED_FILE, LOCAL_FILE};
 
 pub mod collection;
+pub mod dispatch;
 pub mod forges;
 pub mod harness_profiles;
 pub mod hosts;

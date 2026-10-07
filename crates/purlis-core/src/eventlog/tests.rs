@@ -1641,6 +1641,63 @@ fn every_sandbox_grant_and_revoke_is_a_trust_event_naming_what_it_named() {
     assert_eq!(read(dir.path()).unwrap().last(), Some(&revoked), "written");
 }
 
+#[test]
+fn every_dispatch_grant_and_revoke_is_a_trust_event_naming_the_pair() {
+    // #1437: a dispatch grant is in force only once it is recorded, under the chat it was
+    // allowed from.
+    use crate::dispatchgrant::Audited;
+    use crate::sandbox::grant::Level;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    let mut host = recorder(dir.path());
+
+    let granted = host
+        .dispatch_grant(
+            plane,
+            Some(3),
+            &Audited {
+                granted: true,
+                asking: Some("steward"),
+                target: "devops",
+                level: Level::You,
+            },
+        )
+        .unwrap();
+    assert_eq!(granted.kind, "trust.dispatch.grant");
+    assert!(
+        granted.chat.is_some() && granted.run.is_some(),
+        "{granted:?}"
+    );
+    assert_eq!(
+        granted.body,
+        serde_json::json!({
+            "actor_kind": "human",
+            "actor": "operator",
+            "scope": "local-ui",
+            "level": "you",
+            "asking": "steward",
+            "target": "devops",
+        })
+    );
+
+    // Taken back in Settings, where no chat asked.
+    let revoked = host
+        .dispatch_grant(
+            plane,
+            None,
+            &Audited {
+                granted: false,
+                asking: Some("steward"),
+                target: "devops",
+                level: Level::You,
+            },
+        )
+        .unwrap();
+    assert_eq!(revoked.kind, "trust.dispatch.revoke");
+    assert_eq!(revoked.chat, None);
+    assert_eq!(read(dir.path()).unwrap().last(), Some(&revoked), "written");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn a_segment_the_filesystem_refuses_to_open_names_the_segment() {

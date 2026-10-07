@@ -14,7 +14,7 @@
 //! **Nothing brokered changes what a chat runs under.** A persona's store is held by descriptor,
 //! as a workspace's is (V74), and every file a write touches is asked of [`guard`]: never under
 //! a name the sandbox denies as later code, never an ignore file, and never a manifest change
-//! to `[sandbox]`, `[chat_env]` or `[dispatch]` (the #1341 review; #1439).
+//! to `[sandbox]`, `[chat_env]` or `[dispatch]` (the #1341 review; #1439, #1437).
 
 use std::path::{Path, PathBuf};
 
@@ -298,7 +298,8 @@ fn shown(root: &Path, path: &Path) -> String {
 }
 
 /// The tables of a manifest a chat runs under, which no brokered write may change: its
-/// sandbox, its environment, and the limits on what it may dispatch (#1439).
+/// sandbox, its environment, and `[dispatch]`: the limits on what it may dispatch (#1439) and
+/// who may dispatch to whom (#1437). One table, named once.
 const RUNS_UNDER: [&str; 3] = ["sandbox", "chat_env", crate::dispatchlimits::TABLE];
 
 /// Whether a brokered write may write `target` in the project at `root`, with `after` the whole
@@ -349,7 +350,7 @@ pub fn guard(root: &Path, target: &Path, after: Option<&str>) -> Result<(), Stri
                 return Err(format!(
                     "{} is not purlis's to change for a chat this way: a chat never changes its \
                      sandbox settings ([sandbox]), its environment ([chat_env]) or its dispatch \
-                     limits ([dispatch])",
+                     limits and grants ([dispatch])",
                     said()
                 ));
             }
