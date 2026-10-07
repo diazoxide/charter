@@ -483,7 +483,7 @@ fn open_it(
         .chats()
         .start_ready(&chat, &ready, size)
         .map_err(stays)?;
-    let row = handoff_row(root, placement, created);
+    let row = handoff_row(root, held.config(), placement, created);
     let arrived = Arrived {
         plane: plane.clone(),
         session,
@@ -502,8 +502,13 @@ fn open_it(
 /// project's `personas/_dispatch/`, and the app is not sandboxed. Its four fields name no
 /// workspace and nothing of the brief. A row that could not be written is said back to the
 /// command, which tells the chat; the chat is open either way.
+///
+/// **The log is named from `config`, the machine store the app resolved at startup**
+/// ([`Held::config`]), as a brokered git action's piece log is (#1335): nothing on the hook
+/// listener's path resolves the store again, which a fenced test build refuses.
 fn handoff_row(
     root: &std::path::Path,
+    config: Option<&std::path::Path>,
     placement: purlis_core::dispatch::Placement,
     created: bool,
 ) -> Row {
@@ -512,7 +517,7 @@ fn handoff_row(
         placement,
         created,
         chrono::Utc::now(),
-        &purlis_core::dispatch::this_log_name(),
+        &purlis_core::dispatch::log_name(config, &purlis_core::dispatch::host()),
     ) {
         Ok(_) => Row::Written,
         Err(why) => Row::Unwritten {
