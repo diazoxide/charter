@@ -1269,13 +1269,73 @@ fn a_persona_still_declaring_routing_is_read_and_told_the_key_is_ignored() {
     assert_eq!(r.status, Status::Ok);
     assert_eq!(
         r.detail,
-        "ignored — `routing:` is retired; personas are offered to the harness as sub-agents \
-         (declared by ops, steward)"
+        "ignored — `routing:` is retired; work for another persona goes to a chat of its own, \
+         by dispatch (declared by ops, steward)"
     );
     assert_eq!(r.hint, "");
     let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
     let at = names.iter().position(|n| *n == "front door").unwrap();
     assert_eq!(names[at + 1], "routing", "{names:?}");
+}
+
+// ---- generated persona sub-agents (retired, #1451) -------------------------------------------
+
+#[test]
+fn a_generated_sub_agent_that_is_still_there_is_counted_and_its_fix_is_offered() {
+    let (_d, root) = plane("[persona]\ndefault = \"steward\"\n");
+    std::fs::create_dir_all(root.join("personas/steward")).unwrap();
+    std::fs::write(
+        root.join("personas/steward/persona.md"),
+        "---\nname: steward\nrole: Steward\nvault: none\ndelegate-when: routing\n---\nbody\n",
+    )
+    .unwrap();
+    let clean = one(&root, "personas");
+    assert_eq!(clean.status, Status::Ok, "{clean:?}");
+    assert_eq!(clean.fix, None);
+
+    let agents = root.join(".claude/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    // One purlis generated, for a persona that is gone, and one somebody wrote.
+    std::fs::write(
+        agents.join("gone.md"),
+        crate::personaverbs::tests_plane::generated_agent("gone"),
+    )
+    .unwrap();
+    std::fs::write(agents.join("mine.md"), "---\nname: mine\n---\nMine.\n").unwrap();
+
+    let r = one(&root, "personas");
+
+    assert_eq!(r.status, Status::Warn);
+    assert_eq!(
+        r.detail,
+        "1 generated sub-agent file(s) remain in .claude/agents/"
+    );
+    assert!(
+        r.hint
+            .starts_with("purlis doctor --fix persona-agents  (a persona runs as its own chat"),
+        "{}",
+        r.hint
+    );
+    assert_eq!(r.fix, Some(fix::FixId::PersonaAgents));
+
+    // Outside git nothing could give the file back, so the fix leaves it and the row stays.
+    assert!(fix::apply(&root, fix::FixId::PersonaAgents).complete());
+    assert!(
+        agents.join("gone.md").is_file(),
+        "not removed where git cannot restore it"
+    );
+    assert_eq!(one(&root, "personas").fix, Some(fix::FixId::PersonaAgents));
+
+    // Committed, the fix it offers clears the row, and leaves the hand-written file.
+    git(&root, &["init", "-q", "-b", "main", "."]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "plane"]);
+    assert!(fix::apply(&root, fix::FixId::PersonaAgents).complete());
+    let after = one(&root, "personas");
+    assert_eq!(after.status, Status::Ok, "{after:?}");
+    assert_eq!(after.fix, None);
+    assert!(agents.join("mine.md").is_file());
+    assert!(!agents.join("gone.md").exists());
 }
 
 // ---- harness profiles -------------------------------------------------------------------------

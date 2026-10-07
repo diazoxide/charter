@@ -2549,7 +2549,9 @@ curation actions is offered.
 - **Format:** Markdown with a minimal, line-based frontmatter block (NOT YAML: no parser,
   no quote stripping, no nesting, no comments).
 - **Status:** stable — hand-edited, committed, and read by the tool gate, the status line,
-  hooks, `sync-agents` and (in M1-M3) the app.
+  hooks and the app. **Not read by a sub-agent generator any more** (#1451): a persona runs
+  as its own chat and purlis generates no sub-agent from this file. The keys that only fed
+  the generated file are marked **retired** in the table below.
 - **Tier:** Plane — committed.
 - **Written by (purlis, #1449):** the persona's view in the app, which sets or removes the
   `icon` and `color` lines and leaves every other line as it was
@@ -2562,8 +2564,8 @@ curation actions is offered.
   project template** (FR-17, `crates/purlis-core/src/template.rs` `apply`): each template's
   two personas (`<stack>-engineer` and `<stack>-reviewer`; `docs-writer` and `docs-reviewer`
   for docs only), with `memory/.gitkeep` and `refs/.gitkeep`, only when the persona's
-  directory is not there at all, and each file only when it is absent, then its sub-agent in
-  `.claude/agents/<name>.md` as `persona create` writes one. They declare
+  directory is not there at all, and each file only when it is absent. No sub-agent file is
+  written for them, by a template or by `persona create` (#1451). They declare
   `name, role, vault: none, delegate-when` and no `tools`, so a template grants nothing the
   plane-trust fingerprint would ask about.
 - **Read by:** `charter/persona.py:456` (`load`) is the single reader; through it
@@ -2610,23 +2612,23 @@ is a string; "type" below is how purlis interprets it.
 | `extends` | one persona name | absent | Parent whose purlis+tools are inherited; chain resolved root→child, cycle-safe | stable | `charter/persona.py:839`, `:872` |
 | `uses` | CSV of persona names | absent | Routing edge; legacy grant (vault + tools + delegation) when `borrows:` is absent | stable | `charter/persona.py:1587`, `:1691` |
 | `borrows` | CSV of persona names, or `none` | **absent ≠ empty**: absent = legacy `uses:` grant, `none`/unreadable = nothing | Which personas' tools the gate auto-approves | stable | `charter/persona.py:1656`, `:1597`, `:1616` |
-| `delegate-when` | prose (one line) | none; `lint` warns; `create` requires it unless `--extends` | Routing trigger; becomes the generated agent's description | stable | `charter/commands_persona.py:780`, `:806` |
-| `description` | string | absent | Agent description override (lower precedence than `agent-description`) | stable | `charter/commands_persona.py:869` |
-| `agent-description` | string | absent | Agent description override (wins) | stable | `charter/commands_persona.py:869` |
+| `delegate-when` | prose (one line) | none; `lint` warns; `create` requires it unless `--extends` | Routing trigger: what work belongs to this persona. Quoted to a chat that runs as it and shown in its view. (It was the generated agent's description until #1451) | stable | `charter/commands_persona.py:780`, `:806` |
+| `description` | string | absent | **The persona's one-line description** (#1451), where `agent-description` is absent: quoted to a chat that runs as the persona (the session briefing's `> description:` line) and shown by `persona show` (`about:`). Inherited along `extends`. It was the generated agent's description override | stable | `charter/commands_persona.py:869` |
+| `agent-description` | string | absent | The persona's one-line description, read before `description` (#1451). It was the generated agent's description override (wins) | stable | `charter/commands_persona.py:869` |
 | `tools` | CSV of program names | absent = none | Programs auto-approved by the PreToolUse gate while active; unioned along `extends`. **purlis:** only as approved on this machine, since the grant is part of the plane-trust fingerprint (ADR 0035, *Grants*) with a digest of any `bin/` script a tool names; a grant that changed since prompts until the plane is approved again | stable | `charter/persona.py:1580`, `charter/toolgate.py:896` |
-| `agent-tools` | CSV of harness tool names | absent = sub-agent inherits every tool | Emitted as the agent's `tools:`; MCP grants appended | stable | `charter/commands_persona.py:879`-`:892` |
-| `disallowed-tools` | CSV | absent | Emitted as the agent's `disallowedTools:` (denylist) | stable | `charter/commands_persona.py:923` |
-| `skills` | CSV of `[plugin:]skill` | absent | Preloaded into the sub-agent; emitted as `skills:`; linted against installed skills | stable | `charter/persona.py:1957`, `charter/commands_persona.py:908` |
-| `draft` | `true/yes/1/on` (case-insensitive) truthy set | absent = not a draft | While set, **no** sub-agent is generated and any generated one is removed | stable | `charter/persona.py:1843`, `:1846`, `charter/commands_persona.py:1150` |
-| `routing` | `off` \| `advise` \| `require` | absent/unknown → `off` | Drove the Python's UserPromptSubmit roster block. **Retired** in purlis (charter#369): read without error, acted on by nothing, and `purlis doctor` names the personas that still declare it. Personas reach the harness as sub-agents, which is where routing happens | retired | `charter/persona.py:936`, `:939`, `charter/hooks.py:8518` |
+| `agent-tools` | CSV of harness tool names | absent | **Retired in purlis (#1451): read by nothing.** It was the generated sub-agent's `tools:` allow-list, and a persona chat has every tool of its harness: a persona that listed no editing tool could not edit files as a sub-agent and can as a chat. `persona lint` and the `persona-agents` fix say what widened and leave the line. To deny a persona's chats a tool, name it in `disallowed-tools`. An allow-list for one persona's chats: #1460 | retired |
+| `disallowed-tools` | CSV of the harness's own tool rules (`Write`, `Bash(git push:*)`) | absent | **Honoured for a persona chat on Claude Code** (#1451, D-1451-18): each entry is a deny rule of the chat's own `--settings`, which outranks every allow. Inherited along `extends`, child wins. **Fail closed elsewhere**: on Codex and opencode purlis cannot deny a chat a tool, so a chat as a persona that declares the key is not started there and a dispatch to it is refused, each with a sentence (`personaverbs::chatstart::unenforced`, asked by `start::ready` and `personaprofile::for_dispatch`). It was the generated sub-agent's `disallowedTools:` | stable | `crates/purlis-core/src/personaverbs/chatstart.rs`, `harness/claude.rs` `settings` |
+| `skills` | CSV of `[plugin:]skill` | absent | The persona's declared skills, which `persona stats` compares with the skills it used. **No chat preloads them** (retired in that sense, #1451): they were preloaded into the generated sub-agent. `persona lint` and the `persona-agents` fix say so and leave the line, and lint no longer checks them against installed skills. Preloading into a persona chat: #1460 | retired in a chat | `charter/persona.py:1957`, `charter/commands_persona.py:908` |
+| `draft` | `true/yes/1/on` (case-insensitive) truthy set | absent = not a draft | While set, the charter is unfinished: `persona lint`, `persona stats` and the doctor say so, and no chat is dispatched to the persona. (Until #1451 it also meant no sub-agent was generated) | stable | `charter/persona.py:1843`, `:1846`, `charter/commands_persona.py:1150` |
+| `routing` | `off` \| `advise` \| `require` | absent/unknown → `off` | Drove the Python's UserPromptSubmit roster block. **Retired** in purlis (charter#369): read without error, acted on by nothing, and `purlis doctor` names the personas that still declare it. Work for another persona goes to a chat of its own, by dispatch (#1434) | retired | `charter/persona.py:936`, `:939`, `charter/hooks.py:8518` |
 | `routes-to` | CSV of persona names | absent | Priority order for the roster (never restricts). **Retired** with `routing` — there is no roster | retired | `charter/persona.py:962`, `:1001` |
 | `activity` | `orchestrator` \| `standby` \| `advisory` | absent | Declares memory volume is not a usage signal; changes `persona stats` status | stable | `charter/persona.py:2408`, `:2444` |
-| `dispatch-isolation` | `worktree` | absent | Emits `isolation: worktree` into the agent and a sentence into its description | stable | `charter/commands_persona.py:802`, `:916` |
+| `dispatch-isolation` | `worktree` | absent | **Retired in purlis (#1451): read by nothing.** It emitted `isolation: worktree` into the generated sub-agent, and made the dispatch hook ask before two writers shared a tree. A persona chat works in the asking chat's folder and nothing asks. `persona lint` and the `persona-agents` fix say so and leave the line. A persona chat in its own worktree: #1453 | retired |
 | `profile` | the name of a harness profile, or the reserved `none` | absent = a chat dispatched to this persona starts on the asking chat's profile | **purlis only** (#1445). The profile this persona's chats start on: what the new-chat picker starts on when the persona is picked, and what a chat handed to it starts on, on whatever harness that profile runs. A name, never a command: it is only looked up among the profiles the project offers on this machine. **Only a built-in's name (`claude`, `codex`, `opencode`) or a declared harness's travels with the project**; a local profile's name is one machine's. Where the name is not offered on a machine, a chat handed to the persona starts on the asking chat's profile there, and the dispatch's answer, the new chat's stamp and the persona view say so. A profile that is offered and whose command has not been approved on that machine starts nothing. `none` names no profile, for a persona that would otherwise inherit one, so no profile called `none` can be named. Inherited along `extends`. Claude Code and Codex profiles are the ones tested in this version; an `opencode` profile goes the same way and is untested | stable | `crates/purlis-core/src/personaprofile.rs` `named_by`, `for_dispatch` |
-| `model` | string | absent | Passed through verbatim into the agent frontmatter. **purlis:** where `profile` is absent and the project offers a profile of exactly this name, it names that profile; any other value says nothing about a profile | stable | `charter/persona.py:305`, `charter/commands_persona.py:953` |
-| `color` | a palette name (`red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`) or `#rrggbb` | absent = a colour of the palette picked by the persona's name | **The persona's colour**, which its mark is drawn on wherever the persona appears in the app (#1449): a workspace's vocabulary (`settings.theme.colour`), and a hue of the theme drawn. Inherited along `extends`, child wins. A value that is neither is not drawn, and the persona's view says so. Still copied verbatim into the generated agent until that file is retired | stable | `crates/purlis-core/src/personamark.rs` (`mark`); `charter/persona.py:305` |
+| `model` | string | absent | **purlis:** where `profile` is absent and the project offers a profile of exactly this name, it names that profile; any other value is read by nothing (#1451: it was passed verbatim into the generated agent's frontmatter). The `persona-agents` fix rewrites the line to `profile:` where it is read as one and the profile travels with the project (a built-in or a declared harness the project offers on that machine, and no definition of the `extends` chain has a `profile:` line). Otherwise it and `persona lint` report it, with what follows: **a chat as that persona runs on the asking chat's profile and model** (D-1451-20) | retired, but for the profile it may name | `charter/persona.py:305`, `charter/commands_persona.py:953` |
+| `color` | a palette name (`red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`) or `#rrggbb` | absent = a colour of the palette picked by the persona's name | **The persona's colour**, which its mark is drawn on wherever the persona appears in the app (#1449): a workspace's vocabulary (`settings.theme.colour`), and a hue of the theme drawn. Inherited along `extends`, child wins. A value that is neither is not drawn, and the persona's view says so. No longer copied anywhere: the generated agent is retired (#1451). The `persona-agents` fix rewrites the two names Claude Code used that this palette spells otherwise (`cyan` to `teal`, `magenta` to `pink`) | stable | `crates/purlis-core/src/personamark.rs` (`mark`); `charter/persona.py:305` |
 | `icon` | one of purlis's persona icons, by name | absent = the persona's initials | **The persona's icon** (#1449): `anchor`, `book`, `bot`, `briefcase`, `bug`, `chart`, `clipboard`, `cloud`, `code`, `compass`, `cpu`, `database`, `eye`, `flask`, `git-branch`, `globe`, `graduation-cap`, `hammer`, `heart`, `key`, `leaf`, `lightbulb`, `lock`, `mail`, `map`, `megaphone`, `package`, `palette`, `pen`, `rocket`, `scale`, `search`, `server`, `shield`, `star`, `terminal`, `user`, `users`, `wrench`, `zap`. A name, never a path. Inherited along `extends`, child wins. Another value is not drawn, and the persona's view says so. A custom image in the folder is drawn instead (`icon.png` below) | stable | `crates/purlis-core/src/personamark.rs` (`ICONS`, `mark`) |
-| `memory` | string (truthy) | absent | Passed through verbatim **and** adds the "two memory stores" note to the body | stable | `charter/commands_persona.py:962` |
+| `memory` | string (truthy) | absent | **Retired in purlis (#1451): read by nothing.** It chose the harness's own memory store for the generated sub-agent and added a note to its body. A persona chat has the persona's memory in `personas/<name>/memory/`. `persona lint` and the `persona-agents` fix say so and leave the line. Choosing a harness store for a persona chat: #1460 | retired | `charter/commands_persona.py:962` |
 
 Inheritance merge (`charter/persona.py:872`-`:909`): iterate the chain root→child; every
 truthy scalar key overwrites (child wins, `:892`); `tools`, `agent-tools`, `uses` are
@@ -2807,7 +2809,16 @@ with `", "` (`:907`-`:908`).
 - **Format:** JSON — `.mcp.json`'s schema plus charter-only `secrets` / `secret_files` maps
   per server.
 - **Status:** stable — committed, hand-written (often pasted from a server's README), read
-  by `sync-agents`, `lint`, `persona use` and the consent flow.
+  by the chat's start, `lint`, `persona use`, `persona approve-mcp` and the `persona-agents`
+  fix. **In purlis a chat that runs as the persona is started with these servers on Claude
+  Code** (#1451, D-1451-17), on the `--mcp-config` that carries purlis's own server, for that
+  chat alone (`personaverbs::chatstart::servers`, `harness/claude.rs`). They were declared in
+  the generated sub-agent, which is retired. A server that declares `secrets` or
+  `secret_files` is started only wrapped in `purlis secret exec <vault> …`, run by purlis's
+  own binary, and only once this machine approved its line (`mcp-approved.json`); one nobody
+  approved is **withheld**, not started without its credential, and the chat's briefing says
+  which. A server named like purlis's own (`purlis`) is refused. **On Codex and opencode the
+  servers are not started**, and the briefing and `lint` say so.
 - **Tier:** Plane — committed.
 - **Written by:** nothing in purlis — hand-edited only.
 - **Read by:** `charter/persona.py:653` (`_mcp_declared`) → `mcp_servers` (`:622`),
@@ -2822,7 +2833,7 @@ with `", "` (`:907`-`:908`).
     `charter/persona.py:667`.
   - Server names are bounded at the boundary: `[A-Za-z0-9_][A-Za-z0-9._-]{0,63}`, `fullmatch`
     (`charter/persona.py:549`, `:552`). A refused name drops the server and is reported as a
-    lint error and a `sync-agents` warning.
+    lint error.
   - Rendering (`charter/persona.py:730`): `secrets`/`secret_files` keys are removed from the
     emitted entry; with a real vault (`vault: none` → no vault, `:689`) **and** a recorded
     approval (`charter/mcpseen.py`), the entry becomes
@@ -2991,8 +3002,13 @@ An unknown key is a warning, as it is in `persona.md`, and a repeated key is an 
 ### `personas/_dispatch/<YYYY-MM>.<device>.jsonl`
 
 - **Format:** JSON Lines, append-only; one object per line.
-- **Status:** stable — committed (so the tally merges across machines), written by a hook
-  process and read by the CLI, the status line and the frame switcher.
+- **Status:** stable — committed (so the tally merges across machines), and read by the CLI
+  (`persona stats`, the README roster). **In purlis the two hook rows are no longer written**
+  (#1451): the plain `{"agent", "ts"}` row of a returned `Task`/`Agent` call and the
+  `resume` row of a `SendMessage` each said which persona was sent out as a sub-agent, which
+  a persona never is now. The rows a log already holds are still read and counted. The
+  `handoff` row is still written, by the app that opens the chat. A dispatch's own record
+  is the app's (#1452).
 - **Tier:** Plane — committed, so the tally merges across machines.
 - **Written by:** `charter/dispatch.py:65` (`record`), `:98` (`record_advice`), `:134`
   (`record_resume`), `:170` (`record_handoff`) — driven by
@@ -3086,6 +3102,31 @@ handoff row (`charter/dispatch.py:170` docstring).
 ---
 
 ### `.claude/agents/<name>.md` (generated sub-agent)
+
+> **Retired in purlis (#1451, spec #1434 decision 2).** A persona is a role a chat runs as
+> for its whole life and is never a harness sub-agent, so purlis no longer writes, refreshes,
+> lints or reads this file, and `purlis persona sync-agents` answers with one sentence saying
+> what replaced it. A file under `.claude/agents/` that purlis did not generate is still
+> somebody's own sub-agent, mirrored into workspaces as before.
+>
+> **The migration** is `purlis doctor --fix persona-agents`, applied only by name. It removes
+> each file here that purlis generated **and that git can give back** (tracked, with no
+> uncommitted change) and no other, and says every file it removed and every file it left
+> alone. Authorship is the marker **where the generator wrote it**: the
+> file opens with a frontmatter, the first line under it is the marker comment described
+> below (under either spelling), a blank line follows, and the next line opens `This
+> sub-agent acts as the **<name>** persona — ` with the file's own name. A file with no
+> marker is hand-written. A file that carries the marker in any other shape was edited by
+> hand, copied to another name, or only quotes it, and is left alone. A link is never
+> followed or removed. The generator left no hash, and what it rendered depended on the
+> machine, so a generated file whose charter text was edited cannot be told from a stale
+> one: the marker line says not to edit the file, and every sync overwrote such an edit.
+> The same fix rewrites `model:` and two `color:` values in `persona.md` (the key table
+> above) and reports the retired keys. It makes no commit, and a second run changes nothing.
+>
+> A sub-agent call whose type is a persona's name is refused by `pretooluse-dispatch`, with
+> the route: `purlis dispatch --to <persona>`. What follows is the format as the generator
+> wrote it, kept because the fix's authorship check rests on it.
 
 - **Format:** Markdown with YAML frontmatter (the harness's format).
 - **Status:** stable — committed, read by Claude Code itself, and regenerated byte-for-byte
@@ -3332,8 +3373,11 @@ handed to nobody. What is handed over is quoted as data: every line of the summa
 ### `.charter/mcp-approved.json`
 
 - **Format:** JSON object, `indent=2`, `ensure_ascii=False`, trailing newline.
-- **Status:** stable — written by `sync-agents --approve-mcp` and read by the render on a
-  later run; machine-local by design (an approval must not travel in git).
+- **Status:** stable — machine-local by design (an approval must not travel in git). **In
+  purlis it is written by `purlis persona approve-mcp`** (#1451), which is refused inside a
+  chat, and read when a chat that runs as the persona is started (`mcp.json` above). It was
+  written by `sync-agents --approve-mcp`, which is retired; an approval recorded then
+  carries, because the fingerprint is of the entry and the vault and neither changed.
 - **Tier:** Clone state — an operator's consent record.
 - **Written by:** `charter/mcpseen.py:253` (`approve`, replaces the persona's whole set),
   from `charter/commands_persona.py:2029`.
@@ -4959,8 +5003,10 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 
 ### `dispatch-inflight/<agent>.<random>.json`
 - **Format:** JSON `{"agent": str, "kind": str, "ts": float}`, no newline
-- **Status:** **stable** — written by the dispatch hook, read by the status line and the
-  frame panels in other processes.
+- **Status:** **retired in purlis** (#1451) — it was written by the dispatch hook so that a
+  persona declaring `dispatch-isolation: worktree` could be asked about before it shared a
+  tree with a running agent. A persona is never a sub-agent now, so purlis neither writes
+  nor reads it. A file left from before is not removed.
 - **Tier:** Clone state, transient
 - **Written by:** `charter/inflight.py:246` (`start`, `tempfile.mkstemp` + `json.dump`);
   caller `charter/hooks.py:7954`. Also `kind="clone"` (`charter/commands.py:606`),
@@ -5029,8 +5075,10 @@ Only the **latest** sighting is kept (whole-file overwrite).
 
 ### `agent-personas.json`
 - **Format:** JSON object `{"<agent id>": "<persona>"}`, `sort_keys=True`, no newline
-- **Status:** **stable** — written by one hook event (dispatch) and read by a later one to
-  attribute a sub-agent's tools to a persona; it crosses processes.
+- **Status:** **retired in purlis** (#1451) — it was written by one hook event (dispatch)
+  and read by a later one to attribute a message to the persona behind a sub-agent. No
+  persona is behind a sub-agent now, so purlis neither writes nor reads it. A file left
+  from before is not removed.
 - **Tier:** Clone state, transient
 - **Written by:** `charter/hooks.py:8098` (`_agent_map_remember`)
 - **Read by:** `charter/hooks.py:8105` (`_agent_map_lookup`)

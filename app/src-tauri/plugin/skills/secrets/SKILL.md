@@ -111,7 +111,9 @@ purlis persona secret exec --env TOKEN=<key> -- <command...>
 ```
 
 A persona can reach only its own vault. When a task needs a credential another persona
-holds, delegate that step to that persona rather than copying the secret across.
+holds, dispatch that step to that persona (`purlis dispatch --to <persona>`) rather than
+copying the secret across. A sub-agent of this chat is not that persona: it has this chat's
+vault.
 
 ## Hard rules
 

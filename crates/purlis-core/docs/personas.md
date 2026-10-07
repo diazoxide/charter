@@ -6,7 +6,8 @@ they know*.
 
 The CLI's `purlis persona` has `create`, `show`, `list`, `use`, `current`, `clear`,
 `default`, `remove`, `lint`, `remember`, `recall`, `forget`, `dedupe`, `optimize`, `log`,
-`secret`, `sync-agents` and `stats`.
+`secret`, `approve-mcp` and `stats`. (`sync-agents` is retired; see *Personas are chats, not
+sub-agents* below.)
 
 ```
 purlis persona create qa --role "QA Engineer" --delegate-when "test plans, flaky suites"
@@ -14,8 +15,8 @@ purlis persona show qa                    # its metadata and the charter it adop
 purlis persona list                       # who exists, who's active, each one's vault
 purlis persona use devops                 # the active persona for this session + this pane
 purlis persona clear                      # drop this session's, pane's and plane-wide choice
-purlis persona lint                       # dangling uses:/extends:, missing role/vault, stale agents
-purlis persona sync-agents                # a Claude Code sub-agent per persona, in .claude/agents/
+purlis persona lint                       # dangling uses:/extends:, missing role/vault, retired keys
+purlis persona approve-mcp                # approve the MCP servers that take a vault credential
 purlis persona stats                      # roster health: memory, verification, dispatches
 purlis persona remove qa                  # refused while another persona extends or uses it
 ```
@@ -32,9 +33,9 @@ purlis persona log devops "<note>"        # note to this session's activity; no 
 `create` writes `personas/<name>/persona.md` as a **draft** (`draft: true`), with its
 `memory/` and `refs/`. `--delegate-when` is required unless `--extends` names a parent to
 inherit it from; a value holding a line break or `---` is refused, because each is written as
-one frontmatter line. While the draft line is there no sub-agent is generated: write what the
-persona owns, drop the line, then `purlis persona sync-agents`. `--with-vault` registers its
-vault as `purlis vault add <vault> --persona <name>` would, and `--use` selects it.
+one frontmatter line. While the draft line is there no chat is dispatched to the persona:
+write what it owns, then drop the line. `--with-vault` registers its vault as `purlis vault
+add <vault> --persona <name>` would, and `--use` selects it.
 
 `purlis doctor` runs the same lint: its `personas` row summarises the roster, and `persona
 grant` warns when the active persona is broken and its `tools:` are still approved.
@@ -77,11 +78,15 @@ The frontmatter is flat `key: value` lines. The keys this version acts on:
 | `extends` | Inherit another persona's frontmatter (see *Inheritance*). |
 | `uses` | Other personas whose `tools:` this one may also run without a prompt, unless `borrows:` narrows it. |
 | `borrows` | Which of those personas' tools are unioned in: a list of names, or `none`. |
-| `vault` | The vault `purlis persona secret` reads for this persona; `none` says it holds no credentials. Shown by `persona list` and named in its generated sub-agent ([secrets.md](secrets.md)). |
+| `vault` | The vault `purlis persona secret` reads for this persona; `none` says it holds no credentials. Shown by `persona list` ([secrets.md](secrets.md)). |
 | `activity` | `orchestrator`, `standby` or `advisory`: memory volume is not a usage signal for this persona, so `persona stats` does not call it dormant. |
 | `profile` | The harness profile this persona's chats start on: the new-chat picker starts on it when the persona is picked, and the persona view shows and sets it. It is the name of a profile, never a command. Name a built-in (`claude`, `codex`, `opencode`) or a declared harness if the project is shared: those travel with it, and a local profile's name exists on one machine only. On a machine that does not offer the name, a chat handed to this persona starts on the asking chat's profile and says so. `none` names no profile, for a persona that would otherwise inherit one along `extends`. Where the key is absent, a `model` that is exactly a profile's name is read the same way. Claude Code and Codex profiles are tested in this version; `opencode` is not yet. |
-| `draft` | `true` while the purlis is unfinished: `sync-agents` generates no sub-agent for it. |
-| `agent-tools`, `disallowed-tools`, `skills`, `dispatch-isolation`, `model`, `color`, `memory`, `agent-description`, `description` | Read by `sync-agents` into the generated sub-agent — see *Sub-agents* below. |
+| `draft` | `true` while the purlis is unfinished: no chat is dispatched to it, and `persona lint` and `persona stats` say it is a draft. |
+| `description`, `agent-description` | The persona's one-line description: quoted to a chat that runs as it, and shown by `persona show`. `agent-description` is read first. |
+| `icon`, `color` | What the persona is drawn with in the app: one of purlis's icons by name, and a palette colour or `#rrggbb`. |
+| `disallowed-tools` | Tools a chat as this persona is denied. **Honoured on Claude Code**, as deny rules of the chat's own settings. On Codex and opencode purlis cannot deny them, so a chat as this persona is **refused** there, and so is a dispatch to it. |
+| `skills` | The skills the persona declares, which `persona stats` compares with the skills it used. No chat preloads them (see below). |
+| `agent-tools`, `memory`, `dispatch-isolation`, and a `model` that names no profile | **Read by nothing.** Each only fed the sub-agent purlis used to generate — see *Personas are chats, not sub-agents* below. |
 
 Other keys are kept in the file and not acted on in this version.
 
@@ -258,66 +263,159 @@ Scripts in `bin/` are not put on `PATH`; call them by path, and declare their na
 `tools:` like any other program. `bin/` is committed, so on a shared plane it reaches
 teammates' machines.
 
-## Sub-agents: `purlis persona sync-agents`
+## Personas are chats, not sub-agents
 
-`purlis persona sync-agents` generates one Claude Code sub-agent per persona,
-`.claude/agents/<name>.md`, from its resolved definition: the charter, a description the
-router reads (built from `role`, `delegate-when`, `tools` and the vault unless
-`agent-description` or `description` says otherwise), and the frontmatter the harness acts
-on — `agent-tools` as `tools:`, `skills` (preloaded into the sub-agent at startup),
-`dispatch-isolation: worktree` as `isolation: worktree`, `disallowed-tools` as
-`disallowedTools:`, and `model`, `color` and `memory` as they are. `--persona <name>`
-generates one.
-
-Each file carries a ``GENERATED by `charter persona sync-agents` `` marker
-(``GENERATED by `purlis persona sync-agents` `` once the project is migrated to purlis names;
-either marks a generated file). A file at that name without either marker is hand-written
-and is left alone; a full sync removes the generated
-agents of personas that no longer exist. A persona marked `draft: true`, or whose frontmatter
-spells a key purlis reads in another case or declares one twice, gets no sub-agent, and a
-generated one from before is removed — the generated file *is* the sub-agent's system prompt.
-
-A persona's MCP servers live in `personas/<name>/mcp.json` (the `.mcp.json` schema) and are
-declared in its sub-agent, so the harness starts them only when that persona is dispatched.
-A server that declares `secrets` or `secret_files` is handed the persona's vault — wrapped in
-`purlis secret exec <vault> …` — only once this machine has approved the exact line
-`sync-agents` prints for it:
+A persona is a role a chat runs as for its whole life. It is never a harness sub-agent: a
+sub-agent runs inside the chat that started it, with that chat's vault, hosts and tool gate,
+so a `devops` sub-agent of a `steward` chat was never able to open the devops vault. Work for
+another persona goes to a chat of its own, which really holds that persona's vault and hosts:
 
 ```
-purlis persona sync-agents                # writes the agents; names every server it withheld
-purlis persona sync-agents --approve-mcp  # shows each one and asks, on a terminal
-purlis persona sync-agents --approve-mcp --dry-run   # shows them and records nothing
+purlis dispatch --to devops --name "check the queue" <<'BRIEF'
+…what you need done, and what to report back…
+BRIEF
 ```
 
-`--yes` approves every server without asking and is required off a terminal. The approval is
-a digest of the line, kept in `.charter/mcp-approved.json`, so any change to the entry lapses
-it. A server name outside letters, digits, `_`, `.` and `-` is refused and named.
+purlis used to generate one Claude Code sub-agent per persona, `.claude/agents/<name>.md`,
+with `purlis persona sync-agents`. It no longer writes or reads those files. `persona create`
+and a project template write none, and `purlis persona sync-agents` is still recognised and
+answers with one sentence that says so.
 
-Run from a linked worktree of the plane, `sync-agents` reads that worktree's `personas/` and
-writes that worktree's `.claude/agents/`, and says so: the generated files belong to the
-branch. The approvals and the vault registry stay the plane's.
+**A sub-agent call named for a persona is refused.** On Claude Code, a `Task` or `Agent` call
+whose `subagent_type` is a persona of this project is refused by purlis's tool hook, with the
+route: `purlis dispatch --to <persona>`. A helper that is not named for a persona (the
+harness's own `Explore` or `general-purpose`, a call with no type, a sub-agent you wrote
+yourself) still runs, as this chat's persona: it has the chat's vault and tools, and nobody
+else's.
 
-The output is the Python charter's, byte for byte, so the first re-sync in a plane that
-purlis generated agents for before changes nothing that its personas have not.
+What the other harnesses can and cannot refuse:
+
+| Harness | A sub-agent named for a persona |
+| --- | --- |
+| Claude Code | **Refused**, by the `pretooluse-dispatch` hook, before the sub-agent starts. |
+| opencode | Its `task` tool goes through the same hook where purlis's opencode plugin is loaded, so the same refusal is given. This was not run against a real opencode in this version. |
+| Codex | **Nothing to refuse, and nothing purlis could refuse it with.** Codex's sub-agents have no type to name a persona with, Codex does not read `.claude/agents/`, and the only tool hook purlis arms on Codex is the one on shell commands. A Codex helper runs as its chat's persona, like any helper. |
+
+On every harness the rule that matters holds without the hook: a helper has its chat's
+persona, vault and hosts, whatever it is called. The refusal is there so a chat learns the
+route, not to hold a boundary.
+
+### What a persona's chat is started with
+
+Two things the generated sub-agent carried are the chat's now.
+
+**Its MCP servers.** A persona's servers live in `personas/<name>/mcp.json` (the `.mcp.json`
+schema). On Claude Code a chat that runs as the persona is started with them, for that chat
+alone, beside purlis's own server. A server that declares `secrets` or `secret_files` takes a
+value from the persona's vault, so it is started only wrapped in `purlis secret exec <vault> …`
+and only once a person on this machine has approved the exact line it runs:
+
+```
+purlis persona approve-mcp                    # shows each one and asks, on a terminal
+purlis persona approve-mcp --persona marketing
+purlis persona approve-mcp --dry-run          # shows them and records nothing
+```
+
+`--yes` approves without asking and is required off a terminal. The command is refused inside
+a chat: the approval is a person's. It is a digest of the line, kept in
+`.charter/mcp-approved.json`, so any change to the entry or the vault lapses it. **An approval
+given while the persona was a sub-agent carries over**: the line is the same. A credentialed
+server nobody approved is **withheld**, never started without its credential, and the chat is
+told at its start which servers it did not get and how they are approved. No credential is
+ever written into the chat's configuration: the server asks the vault when it starts.
+
+On Codex and opencode purlis has no way to hand one chat a server, so a persona's servers are
+**not started** there. The chat is told so at its start, and `persona lint` says it.
+
+**Its denied tools.** `disallowed-tools:` is honoured on Claude Code: the chat is started with
+those tools denied, by rules that outrank every allow, the project's own included. Where
+purlis cannot enforce the line it does not start the chat: on Codex and opencode a chat as a
+persona that declares `disallowed-tools:` is refused with a sentence, in the new-chat picker
+and for a dispatch alike. A deny-list does not turn into a comment.
+
+**What a chat does not get.** `agent-tools:` was the sub-agent's allow-list, and nothing reads
+it: a persona that could not edit files as a sub-agent can as a chat. `dispatch-isolation:
+worktree` started the sub-agent in its own worktree and made purlis ask before a second one
+wrote in the same tree; a persona chat works in the asking chat's folder and nothing asks.
+`persona lint` says each of these by name. To keep a persona from a tool, name the tool in
+`disallowed-tools:`.
+
+### After updating: `purlis doctor --fix persona-agents`
+
+A project that used `sync-agents` still has the files it wrote, and Claude Code still offers
+each as a sub-agent type. `purlis persona lint`, the doctor's `personas` row and each chat's
+briefing say so. Remove them with:
+
+```
+purlis doctor --fix persona-agents
+```
+
+It is applied only by name, because it changes committed files. It makes no commit: what it
+changed is in the working tree for the project's next save, it prints every line of it, and
+until then `git restore -- .claude/agents personas` takes all of it back. Running it twice
+changes nothing more.
+
+- **It removes each file under `.claude/agents/` that purlis generated and git can give
+  back**, and no other. purlis's file is told by the marker comment the generator wrote as the
+  first line under the frontmatter (``GENERATED by `charter persona sync-agents` ``, or the
+  same with `purlis`), followed by the sentence that names the persona the file is called
+  after. It is removed only where git tracks it and it has no uncommitted change; otherwise it
+  is left and named, and you commit or remove it yourself. A file with no marker is
+  hand-written. A file that carries the marker in any other shape was edited by hand, copied
+  to another name, or only quotes it. Both are left as they are and named. A link is never
+  followed.
+- **A file that stays under a persona's name cannot be started.** A sub-agent call to that
+  name is refused as a call to the persona, and the fix says so on that file's line.
+- **It cannot tell a generated file whose charter text you edited from one that is only out
+  of date.** The marker line says to edit the persona and not the file, and every
+  `sync-agents` run overwrote such an edit, so a committed one is removed. `git` has it.
+- **`model:` becomes `profile:`** in a persona's own definition, where the name is a built-in
+  profile or one the project declares, the project offers it on this machine, and neither the
+  persona nor a persona it `extends:` has a `profile:` line. That is the case in which its
+  chats already start on that profile, so the rewrite moves no chat. A profile that exists on
+  this machine only is not written into a committed file.
+- **Any other `model:` is reported, and it changes what the persona costs.** A `model:` that
+  named a model (`opus`, `sonnet`, `haiku`) picked the sub-agent's model. A chat as that
+  persona runs on the asking chat's profile, with that profile's model. Name the profile the
+  persona's chats start on with `profile:`.
+- **`color: cyan` becomes `teal`, and `magenta` becomes `pink`**: Claude Code's names for two
+  colours of purlis's palette. Any other value purlis cannot draw is reported.
+- **The keys nothing reads are reported and left where they are**, each with what widened:
+
+  | Key | What it did in the generated sub-agent | Now |
+  | --- | --- | --- |
+  | `agent-tools` | its allow-list of tools | A persona chat has every tool of its harness. A persona that listed no editing tool could not edit files and now can. |
+  | `skills` | preloaded those skills | A persona chat loads a skill when it uses it. `persona stats` still compares the declaration with what was used. |
+  | `memory` | chose the harness's own memory store | A persona chat has the persona's memory in `personas/<name>/memory/`. |
+  | `dispatch-isolation` | started it in its own worktree, and asked before two wrote in one tree | A persona chat works in the asking chat's folder, and nothing asks. |
+
+- **`.claude/agent-memory/<persona>/` is named.** A sub-agent with `memory:` had the harness
+  keep notes there. Nothing reads them again. The fix says which folders hold files and leaves
+  them; move what is worth keeping into the persona's memory.
+- **`disallowed-tools:` and a persona's `mcp.json` are reported** with where each holds (the
+  section above).
+
+`purlis persona lint` also warns when a persona's charter still says `subagent_type` or
+`sync-agents`: a chat that follows that text is refused. A project's own `CLAUDE.md`, README
+and scripts may teach the old route too; purlis does not read those, so search them for
+`sync-agents` and `subagent_type` after updating.
 
 ## Roster health: `purlis persona stats`
 
 `purlis persona stats [<name>]` reads the committed memory and the dispatch and skill logs:
 per persona, how many memories it holds (`MEM`), how many are recent (`RECENT`,
 `--recent-days`, 14 by default), the share carrying a verification word (`VERIFY`), the share
-in a near-duplicate pair (`DUP`), and how often it was dispatched as a sub-agent (`DISP`). A
+in a near-duplicate pair (`DUP`), and how often work was dispatched to it (`DISP`). A
 persona with no memory is `dormant`, one with none recent `idle`, a draft `draft`, and one
 never dispatched while others were `never dispatched`. It also names skills a persona
 declares and never uses, or uses and never declared, and how often routing advice fired
 against the dispatches that followed it — advice only the Python charter gave, read from the
 dispatch log it wrote; `routing:` is retired, and purlis gives none now.
 
-The dispatch tally is written by a hook as sub-agents return, and can miss background
-dispatches, so `DISP` is a floor. Seeding it from past sessions' transcripts is not in this
-version yet.
-
-## Sub-agents in flight
-
-When a chat dispatches a sub-agent (the `Task` or `Agent` tool) in a plane, purlis records
-it as in flight, and asks first when a persona that writes code is sent out while another
-agent is still running in the same working tree.
+`DISP` counts dispatches, not sub-agent calls, from what the project holds today: the
+committed dispatch log, `personas/_dispatch/`. Its rows for a persona were written when a
+persona was sent out as a sub-agent, which it no longer is, so `DISP` and `never dispatched`
+stop moving until `persona stats` counts from the record the app keeps of each dispatch,
+which is not in this version yet. A chat that another chat started by a handoff is one row
+of that log with no persona in it, so `persona stats` says how many there were and puts them
+in no persona's row.

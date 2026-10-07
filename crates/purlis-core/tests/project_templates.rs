@@ -131,13 +131,11 @@ fn a_template_lays_out_its_personas_and_its_review_checklist_in_the_project() {
             );
         }
     }
-    for persona in ["rust-engineer", "rust-reviewer"] {
-        let agent = read(&root.join(".claude/agents").join(format!("{persona}.md")));
-        assert!(
-            purlis_core::personaverbs::agents::carries_marker(&agent),
-            "a chat can hand work to {persona}, as to a persona made with `persona create`: {agent}"
-        );
-    }
+    // No sub-agent is laid for a persona: it runs as its own chat (#1451).
+    assert!(
+        !root.join(".claude/agents").exists(),
+        "a template writes no sub-agent file"
+    );
     assert!(
         !root.join("template.toml").exists(),
         "the manifest is not copied"
@@ -683,8 +681,8 @@ fn a_template_that_fails_part_way_is_taken_back_whole() {
     .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
     // A workspace.md that reads, and that charter will not write: a link out of the project.
-    // So the last step, the workspace's starter, fails after the personas, their sub-agents
-    // and the ask rules are all written, and what the template wrote into both harness files
+    // So the last step, the workspace's starter, fails after the personas and the ask rules
+    // are all written, and what the template wrote into both harness files
     // has to be put back byte for byte.
     let outside = dir.path().join("elsewhere.md");
     std::fs::write(
@@ -741,7 +739,7 @@ fn a_workspace_md_charter_cannot_read_stops_the_template_and_is_never_removed() 
 }
 
 #[test]
-fn taking_a_template_back_keeps_a_sub_agent_that_was_there_before() {
+fn a_template_neither_writes_nor_takes_back_a_sub_agent_that_was_there_before() {
     purlis_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
     let root = firstrun::ensure_local_plane(
@@ -750,12 +748,13 @@ fn taking_a_template_back_keeps_a_sub_agent_that_was_there_before() {
     )
     .expect("a project");
     let repo = repo_with(dir.path(), "widget", "Cargo.toml");
-    // A sub-agent charter generated for an earlier `rust-engineer`, whose persona is gone.
+    // A sub-agent purlis generated for an earlier `rust-engineer`, before a persona ran as
+    // its own chat (#1451). The template lays a persona of that name and leaves the file.
     let agent = root.join(".claude/agents/rust-engineer.md");
     std::fs::create_dir_all(agent.parent().expect("agents")).expect("agents");
     let before = format!(
         "---\nname: rust-engineer\n---\n<!-- {} -->\nAn earlier one.\n",
-        purlis_core::personaverbs::agents::MARKER
+        purlis_core::names::SYNC_AGENTS_MARKER.write
     );
     std::fs::write(&agent, &before).expect("an earlier agent");
     // The last step fails, so the template is taken back.
@@ -763,9 +762,10 @@ fn taking_a_template_back_keeps_a_sub_agent_that_was_there_before() {
 
     firstrun::take_in_from(&root, &repo, &Choice::Fits).expect_err("refused");
 
-    assert!(
-        agent.is_file(),
-        "a sub-agent the template did not make stays"
+    assert_eq!(
+        read(&agent),
+        before,
+        "a sub-agent the template did not make stays as it was"
     );
 }
 

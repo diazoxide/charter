@@ -27,9 +27,10 @@ each is wired to.
 | `pretooluse` on `Bash` | the guards below, then the persona tool gate |
 | `pretooluse-read` on `Read`/`Grep` | the vault guard on those tools (*Vault read*, below) |
 | `pretooluse-edit` on `Write`/`Edit`/`MultiEdit` | the state-directory guard (*A hand-written state file*, below) |
-| `pretooluse-dispatch` on `Task`/`Agent` and on purlis's `dispatch` tools | asks before a persona that writes code is dispatched beside an agent already running (*A dispatch beside a running agent*, below), and refuses purlis's `dispatch` and `dispatch_report` tools to a sub-agent (*A dispatch from a sub-agent*, below) |
+| `pretooluse-dispatch` on `Task`/`Agent` and on purlis's `dispatch` tools | refuses a sub-agent call whose type is a persona, and names the dispatch route (*A sub-agent named for a persona*, below), and refuses purlis's `dispatch` and `dispatch_report` tools to a sub-agent (*A dispatch from a sub-agent*, below) |
 | `posttooluse` on `Write`/`Edit`/`MultiEdit`, in a plane | warns when a memory or ref just written looks like it holds a secret; says what the workspace flow expects on the first edit in a LIVE workspace's clone; and every twelfth change without a memory, reminds the session to record one |
-| `posttooluse-skill`, `posttooluse-dispatch`, `posttooluse-message`, in a plane | log which skill the active persona used, which persona was dispatched, and a message that resumes one |
+| `posttooluse-skill`, in a plane | logs which skill the active persona used |
+| `posttooluse-dispatch`, `posttooluse-message` | answered, and do nothing: each logged a persona sent out as a sub-agent, which a persona never is now |
 | `posttooluse-blocked` and `posttoolusefailure-blocked` on `Bash`, in a chat the app started sandboxed | read the `<sandbox_violations>` block Claude Code appended to the command's result, and, from the command's standard error alone, an egress proxy's refusal and a program's own "Operation not permitted" for a path outside what the chat may write. Each block goes to the app as an operation and the kind of path or host, and as purlis's own only when the process the sandbox names is `purlis`. Never the path, the command or its output. The harness is told nothing; the window shows a notice on the chat's tab and `purlis doctor` counts them (#1338) |
 | any other `pretooluse…` or `posttooluse…` word | **blocks** the tool call, with the reason on stderr |
 | any other word | exits 1 with the reason on stderr, and blocks nothing |
@@ -512,11 +513,17 @@ rule while one who reads a bare refusal files an issue.
   calls come from one has not been measured. What a sub-agent that gets past reaches is
   exactly what its chat reaches, so a dispatch allowed to a chat is allowed to its sub-agents.
 
-- **A dispatch beside a running agent.** A `Task`/`Agent` call that sends out a persona
-  declaring `dispatch-isolation: worktree` while another dispatched agent is still running is
-  **asked** about, because the two share one working tree and their edits interleave. In an
-  unattended run there is nobody to ask, so the note is given and the call goes ahead. Gated
-  on a control plane.
+- **A sub-agent named for a persona.** A `Task`/`Agent` call whose `subagent_type` is the
+  name of a persona of this project is **refused**, and told the route: `purlis dispatch --to
+  <persona>`. A persona runs as its own chat, with its own vault and hosts; a sub-agent runs
+  inside the chat that started it and has that chat's. A call with no type, or a type that is
+  no persona here (the harness's own helpers, a sub-agent you wrote), is not judged and runs
+  as this chat's persona. A call named for a draft persona is told it is a draft instead: a
+  dispatch to one is refused too. It is refused in an unattended run too: a refusal asks
+  nobody. On
+  opencode the `task` tool reaches the same hook; Codex's sub-agents carry no type and purlis
+  arms no hook on them, so there is nothing there to refuse ([personas.md](personas.md),
+  *Personas are chats, not sub-agents*). Gated on a control plane.
 
 ## Where the secret-leak guard stops
 
@@ -667,11 +674,11 @@ because one of them was wrong once. It is an uninstall.
 
 `SessionStart` briefs the session (see *What this version answers*), but not with the brief
 of a handed-off chat that reopened empty. `UserPromptSubmit` injects the commitment gate
-and nothing else of its own: no persona roster (`routing:` is retired — personas reach the
-harness as sub-agents), no placement advice, and no "control plane updated" note — a chat
+and nothing else of its own: no persona roster (`routing:` is retired — work for another
+persona goes to a chat of its own, by dispatch), no placement advice, and no "control plane updated" note — a chat
 running on instructions that changed after it started is marked on its tab in the window
-instead. The dispatch and skill logs are kept; no hook keeps a tally of routing advice or
-handoffs, and no trace of verdicts is written.
+instead. The skill log is kept, and the app writes a handoff's row in the dispatch log; no
+hook logs a sub-agent call, keeps a tally of routing advice, or writes a trace of verdicts.
 
 ## When a hook fails
 

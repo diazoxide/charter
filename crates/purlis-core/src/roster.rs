@@ -32,7 +32,7 @@ const BAR: u64 = 12;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub name: String,
-    /// Times this persona was dispatched as a sub-agent.
+    /// Times work was dispatched to this persona, as the committed dispatch log counts it.
     pub dispatches: u64,
     /// How many memory files it holds.
     pub memories: usize,

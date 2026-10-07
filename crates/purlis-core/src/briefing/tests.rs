@@ -71,6 +71,115 @@ fn told_at(root: &Path, cwd: &Path, env: &[(&str, &str)], payload: Value) -> Vec
 }
 
 #[test]
+fn a_persona_chat_is_told_its_persona_s_one_line_description_as_quoted_data() {
+    // #1451: `description:` was the description of the sub-agent purlis generated. The
+    // persona is the chat now, so the chat is told the line, quoted like the rest.
+    let (_d, root) = plane();
+    std::fs::write(
+        root.join("personas/ops/persona.md"),
+        "---\nname: ops\nrole: Ops\ndelegate-when: deploys\ndescription: Ships   the\n---\n",
+    )
+    .unwrap();
+    let got = told(&root, &[("PURLIS_SESSION_ID", "s1")], serde_json::json!({}));
+    assert!(
+        got[1].contains("\n> role: Ops\n> delegate-when: deploys\n> description: Ships the"),
+        "{}",
+        got[1]
+    );
+    // `agent-description:` answers first where a definition has both.
+    std::fs::write(
+        root.join("personas/ops/persona.md"),
+        "---\nname: ops\nrole: Ops\ndescription: Ships\nagent-description: Ships on Fridays\n---\n",
+    )
+    .unwrap();
+    let got = told(&root, &[("PURLIS_SESSION_ID", "s1")], serde_json::json!({}));
+    assert!(
+        got[1].contains("\n> role: Ops\n> description: Ships on Fridays"),
+        "{}",
+        got[1]
+    );
+    assert!(!got[1].contains("> description: Ships\n"), "{}", got[1]);
+}
+
+#[test]
+fn a_persona_chat_is_told_which_of_its_persona_s_servers_it_was_not_started_with() {
+    // #1451, D-1451-17: a credentialed server nobody approved is withheld, and on a harness
+    // purlis cannot hand servers to none is started. The chat is told, so it does not look
+    // for tools that are not there.
+    let (_d, root) = plane();
+    std::fs::write(
+        root.join("personas/ops/mcp.json"),
+        r#"{"mcpServers": {"status": {"type": "http", "url": "https://s.example.com/mcp"},
+            "ga4": {"command": "ga4-mcp", "secrets": {"GA_TOKEN": "ga-token"}}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("personas/ops/persona.md"),
+        "---\nname: ops\nrole: Ops\nvault: ops\ndelegate-when: deploys\n---\n",
+    )
+    .unwrap();
+    let told_on = |harness: &str| {
+        told(
+            &root,
+            &[("PURLIS_SESSION_ID", "s1"), ("PURLIS_HARNESS", harness)],
+            serde_json::json!({}),
+        )
+        .join("\n\n")
+    };
+
+    let claude = told_on("claude-code");
+    assert!(
+        claude.contains(
+            "⬡ This persona's MCP server(s) `ga4` were not started: each is handed a \
+             credential from the persona's vault, and nobody has approved that on this \
+             machine."
+        ),
+        "{claude}"
+    );
+    assert!(
+        claude.contains("`purlis persona approve-mcp --persona ops`"),
+        "{claude}"
+    );
+    let codex = told_on("codex");
+    assert!(
+        codex.contains(
+            "⬡ This persona's MCP servers (`status`, `ga4`) are not started for this chat: a \
+             persona's servers are started on Claude Code only."
+        ),
+        "{codex}"
+    );
+    // A persona that declares none is told nothing of servers.
+    std::fs::remove_file(root.join("personas/ops/mcp.json")).unwrap();
+    assert!(!told_on("codex").contains("MCP server"));
+}
+
+#[test]
+fn a_chat_is_told_when_generated_persona_sub_agents_are_still_in_the_project() {
+    // #1451, F8: until the fix is run the harness still lists each generated file as an agent
+    // type. One line at the start saves a refused call per chat.
+    let (_d, root) = plane();
+    let before = told(&root, &[("PURLIS_SESSION_ID", "s1")], serde_json::json!({})).join("\n");
+    assert!(!before.contains("sub-agent file"), "{before}");
+    std::fs::create_dir_all(root.join(".claude/agents")).unwrap();
+    std::fs::write(
+        root.join(".claude/agents/ops.md"),
+        crate::personaverbs::tests_plane::generated_agent("ops"),
+    )
+    .unwrap();
+    let after = told(&root, &[("PURLIS_SESSION_ID", "s1")], serde_json::json!({})).join("\n");
+    assert!(
+        after.contains(
+            "⬡ This project still holds 1 sub-agent file(s) purlis generated for a persona \
+             (`ops`). Your harness may offer each as an agent type, and a call to one is \
+             refused: a persona runs as its own chat. Give a persona work with `purlis \
+             dispatch --to <persona>`. The operator removes the files with `purlis doctor \
+             --fix persona-agents`."
+        ),
+        "{after}"
+    );
+}
+
+#[test]
 fn an_unlocked_session_is_asked_for_a_workspace_first_and_told_who_it_is() {
     let (_d, root) = plane();
     let got = told(&root, &[("PURLIS_SESSION_ID", "s1")], serde_json::json!({}));

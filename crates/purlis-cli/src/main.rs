@@ -543,12 +543,13 @@ enum Command {
     ///
     /// `pretooluse` is the Bash guard and the persona tool gate, `pretooluse-read` the vault
     /// guard on Read/Grep, `pretooluse-edit` the state-directory guard on Write/Edit, and
-    /// `pretooluse-dispatch` the ask before a code-writing persona is sent out beside a running
-    /// agent.
+    /// `pretooluse-dispatch` the refusal of a sub-agent call named for a persona, which names
+    /// the dispatch route.
     ///
-    /// `posttooluse`, `-skill`, `-dispatch` and `-message` keep the memory nudges, the secret
-    /// warning on a written memory, and the dispatch and skill logs. Every event word also tells
-    /// the app, over its socket, what the chat is doing.
+    /// `posttooluse` and `-skill` keep the memory nudges, the secret warning on a written
+    /// memory, and the skill log; `-dispatch` and `-message` are answered and do nothing since
+    /// a persona stopped being a sub-agent. Every event word also tells the app, over its
+    /// socket, what the chat is doing.
     ///
     /// Exit 2 — "block" — only when a denial it decided could not be printed. `--list` prints
     /// every word it answers, with the event and tool matcher each is wired to; `--json` makes
@@ -3402,6 +3403,15 @@ fn main() -> ExitCode {
             | Command::Persona(memory::PersonaCommand::Gc { .. })
     ) {
         return ExitCode::SUCCESS;
+    }
+    // `persona sync-agents` is retired with the persona sub-agent (#1451). The word is taken
+    // and refused by name, with what replaced it, wherever it is run from.
+    if matches!(
+        &cli.command,
+        Command::Persona(memory::PersonaCommand::SyncAgents { .. })
+    ) {
+        voice::err(purlis_core::personaverbs::retired::SYNC_AGENTS);
+        return ExitCode::FAILURE;
     }
     // A project this charter cannot write is read-only to it (FR-24, V37a,
     // `docs/plane-format.md` § Compatibility across charter versions): a format it does not

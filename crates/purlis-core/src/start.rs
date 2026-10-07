@@ -310,6 +310,15 @@ fn ready_given(
         None => None,
         Some(who) => Some(startable_persona(who, root)?),
     };
+    // A persona's deny-list holds or its chat does not start (#1451, D-1451-18): asked of the
+    // persona the chat runs as, the project's default where it names none, before anything
+    // is written or run. The same answer a dispatched chat's profile is chosen by.
+    if let Some(who) = persona.clone().or_else(|| persona_for_a_new_chat(root))
+        && let Some(why) =
+            crate::personaverbs::chatstart::unenforced(root, &who, Harness::of_kind(&profile.kind))
+    {
+        return Err(why);
+    }
 
     let here = start.cwd.clone().unwrap_or_else(|| root.to_path_buf());
     // The plane's layer: its ask/deny rules have to be in the tree before a chat stands in it.

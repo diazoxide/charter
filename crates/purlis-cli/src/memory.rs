@@ -128,7 +128,8 @@ pub enum PersonaCommand {
         #[arg(long)]
         force: bool,
     },
-    /// Config eval: dangling uses:, missing role/vault/delegate-when, stale agents.
+    /// Config eval: dangling uses:, missing role/vault/delegate-when, retired keys, leftover
+    /// generated sub-agents.
     ///
     /// The work is [`purlis_core::personaverbs::lint`].
     Lint {
@@ -196,26 +197,32 @@ pub enum PersonaCommand {
         #[arg(long, hide = true)]
         now: Option<String>,
     },
-    /// Generate a Claude Code sub-agent (.claude/agents/<name>.md) per persona.
-    ///
-    /// The work is [`purlis_core::personaverbs::agents`].
-    #[command(name = "sync-agents")]
+    /// Retired with the persona sub-agent (#1451): a persona runs as its own chat. The word
+    /// is still taken, with whatever it was given, and answered with what replaced it
+    /// ([`purlis_core::personaverbs::retired::SYNC_AGENTS`]).
+    #[command(name = "sync-agents", hide = true)]
     SyncAgents {
-        /// Only sync this persona (default: all).
+        /// What the retired command was given. Taken and not read.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+        given: Vec<String>,
+    },
+    /// Approve the MCP servers of a persona's mcp.json that take a credential from its vault.
+    ///
+    /// A chat started as the persona is started with such a server only once a person on
+    /// this machine has read the command it runs and said yes. What is recorded is a digest
+    /// of the line printed above the question, so any change to the entry or the persona's
+    /// vault lapses the approval. Refused inside a chat. The work is
+    /// [`purlis_core::personaverbs::approve`].
+    #[command(name = "approve-mcp")]
+    ApproveMcp {
+        /// Only this persona's servers (default: every persona's).
         #[arg(long)]
         persona: Option<String>,
-        /// Ask, per server, whether the MCP command the personas' mcp.json files name may
-        /// receive the persona's vault value. What is recorded is a digest of the line
-        /// printed above the question, so ANY change that changes that line — including the
-        /// persona's vault, an env value, or a key purlis does not read — lapses the
-        /// approval and asks again.
-        #[arg(long)]
-        approve_mcp: bool,
-        /// With --approve-mcp: approve every credentialed server without asking. Required
-        /// off a terminal, where nobody can be asked.
+        /// Approve every credentialed server without asking. Required off a terminal, where
+        /// nobody can be asked.
         #[arg(long)]
         yes: bool,
-        /// With --approve-mcp: print the servers it would ask about and record nothing.
+        /// Print the servers it would ask about and record nothing.
         #[arg(long)]
         dry_run: bool,
     },
@@ -1217,7 +1224,6 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
             force,
         } => {
             let root = plane.root();
-            let state = purlis_core::personaverbs::state_dir(root);
             let ask = purlis_core::personaverbs::define::Create {
                 name: &name,
                 role: role.as_deref(),
@@ -1239,7 +1245,6 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
             let mut sink = crate::speak;
             Ok(purlis_core::personaverbs::define::create(
                 root,
-                &state,
                 &ask,
                 with_vault.then_some(&mut register as _),
                 &mut sink,
@@ -1362,26 +1367,26 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
                 &mut sink,
             ))
         }
-        PersonaCommand::SyncAgents {
+        // Answered in `main` before a plane is even looked for.
+        PersonaCommand::SyncAgents { .. } => unreachable!("answered before run"),
+        PersonaCommand::ApproveMcp {
             persona,
-            approve_mcp,
             yes,
             dry_run,
         } => {
-            let options = purlis_core::personaverbs::agents::Options {
+            let options = purlis_core::personaverbs::approve::Options {
                 persona: persona.as_deref(),
-                approve_mcp,
                 yes,
                 dry_run,
+                in_chat: in_a_chat(),
             };
-            let mut confirm = purlis_core::personaverbs::agents::confirm_on_terminal();
+            let mut confirm = purlis_core::personaverbs::approve::confirm_on_terminal();
             let ask = confirm
                 .as_mut()
-                .map(|f| f.as_mut() as purlis_core::personaverbs::agents::Ask);
+                .map(|f| f.as_mut() as purlis_core::personaverbs::approve::Ask);
             let mut sink = crate::speak;
-            Ok(purlis_core::personaverbs::agents::sync_agents(
+            Ok(purlis_core::personaverbs::approve::approve(
                 plane.root(),
-                &here.cwd,
                 &options,
                 ask,
                 &mut sink,

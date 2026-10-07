@@ -59,11 +59,5 @@ A lesson that has held across several memories, or that every chat in this works
 should act on from its first turn, belongs in the charter. Write it there in a sentence that
 says what to do and why, then archive the memories it replaces.
 
-For a persona, regenerate its sub-agent after editing `persona.md`:
-
-```bash
-purlis persona sync-agents
-```
-
 Show the operator the charter's diff. Done when they have read it. Both files are committed, so
 the change travels with the plane's next save.

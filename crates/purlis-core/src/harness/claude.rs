@@ -53,7 +53,7 @@ impl HarnessAdapter for ClaudeCode {
                 // charter's MCP server (HP-7), before `--settings`: `--mcp-config` takes every
                 // word up to the next flag, and the chat's own words end the line.
                 "--mcp-config",
-                &crate::chattools::claude_code_config(kit.binary),
+                &mcp_config(kit),
                 "--settings",
                 &settings(
                     kit.binary,
@@ -61,6 +61,7 @@ impl HarnessAdapter for ClaudeCode {
                     crate::footerclaim::status_line(cwd).free(),
                     plugins,
                     sandbox,
+                    &denied_tools(kit),
                 ),
             ]),
             env: vec![(
@@ -221,6 +222,7 @@ fn settings(
     may_fill_the_footer: bool,
     plugins: &crate::harness_plugin::Chosen,
     sandbox: Option<&crate::sandbox::claude::Settings>,
+    denied_tools: &[String],
 ) -> String {
     let mut settings = serde_json::Map::new();
     // The project's own choice of Claude Code's plugins first (charter-app#274, ADR 0050): a
@@ -294,6 +296,19 @@ fn settings(
         settings.insert("sandbox".to_owned(), sandbox.sandbox.clone());
         permissions["deny"] = serde_json::json!(sandbox.deny);
     }
+    // **The tools the chat's persona denies it** (#1451, D-1451-18): its `disallowed-tools:`,
+    // which the generated sub-agent carried as `disallowedTools:`. A deny outranks every
+    // allow, here and in the project's own settings, so the chat cannot be given them back by
+    // a file it can write. Sandboxed or not: the rule is the persona's, not the sandbox's.
+    if !denied_tools.is_empty() {
+        let mut rules: Vec<serde_json::Value> = permissions
+            .get("deny")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        rules.extend(denied_tools.iter().cloned().map(serde_json::Value::String));
+        permissions["deny"] = serde_json::Value::Array(rules);
+    }
     // **The operator's ask and deny on charter's tools, under the server's new name**
     // (D-RN8-12). The server is `purlis` now (#1266), so a project's or a layer's rule on
     // `mcp__charter__<tool>` matches nothing; its `mcp__purlis__<tool>` twin rides here, beside
@@ -315,6 +330,36 @@ fn settings(
     settings.insert("permissions".to_owned(), permissions);
     settings.insert("hooks".to_owned(), permission_hook(binary));
     serde_json::Value::Object(settings).to_string()
+}
+
+/// The servers a chat is started with, as `--mcp-config` takes them: purlis's own
+/// ([`crate::chattools::claude_code_config`]) and, for a chat that runs as a persona, that
+/// persona's ([`crate::personaverbs::chatstart::servers`], #1451 D-1451-17). A credentialed
+/// server is there only once this machine approved it, wrapped in `secret exec`; purlis's own
+/// is written last, so no entry of a persona's file can take its name.
+fn mcp_config(kit: Kit<'_>) -> String {
+    let mut config: serde_json::Value =
+        serde_json::from_str(&crate::chattools::claude_code_config(kit.binary))
+            .unwrap_or_else(|_| serde_json::json!({ "mcpServers": {} }));
+    let Some(of) = kit.persona else {
+        return config.to_string();
+    };
+    let state = crate::personaverbs::state_dir(of.root);
+    let theirs =
+        crate::personaverbs::chatstart::servers(of.root, &state, of.persona, kit.binary).started;
+    if let Some(servers) = config["mcpServers"].as_object_mut() {
+        let own = std::mem::take(servers);
+        servers.extend(theirs);
+        servers.extend(own);
+    }
+    config.to_string()
+}
+
+/// The tools the chat's persona denies it ([`crate::personaverbs::chatstart::denied_tools`]).
+fn denied_tools(kit: Kit<'_>) -> Vec<String> {
+    kit.persona.map_or_else(Vec::new, |of| {
+        crate::personaverbs::chatstart::denied_tools(of.root, of.persona)
+    })
 }
 
 /// The Claude Code settings files a chat at `cwd` reads from its project: `.claude/settings.json`
@@ -482,6 +527,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
                 plugin: Some(std::path::Path::new("/app/plugin")),
+                persona: None,
             },
             Some(plane.path()),
             &crate::harness_plugin::Chosen::new(),
@@ -502,6 +548,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
                 plugin: Some(std::path::Path::new("/app/plugin")),
+                persona: None,
             },
             Some(empty.path()),
             &crate::harness_plugin::Chosen::new(),
@@ -531,6 +578,7 @@ mod tests {
             Kit {
                 binary: std::path::Path::new("/bin/charter"),
                 plugin: Some(std::path::Path::new("/app/plugin")),
+                persona: None,
             },
             None,
             &crate::harness_plugin::Chosen::new(),
@@ -550,6 +598,104 @@ mod tests {
         // `--mcp-config` takes every word up to the next flag, so a flag follows it and the
         // chat's own words that end the line are never read as a config.
         assert!(args[at + 2].starts_with("--"), "{args:?}");
+    }
+
+    /// The words a chat as `persona` in `plane` is armed with: its `--mcp-config` and its
+    /// `--settings`, parsed.
+    fn armed_as(
+        plane: &crate::personaverbs::tests_plane::Plane,
+        persona: &str,
+    ) -> (serde_json::Value, serde_json::Value) {
+        let StateHooks::ThisSessionOnly { args, .. } = adapter().arm(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: Some(std::path::Path::new("/app/plugin")),
+                persona: Some(crate::harness::As {
+                    root: plane.root(),
+                    persona,
+                }),
+            },
+            Some(plane.root()),
+            &crate::harness_plugin::Chosen::new(),
+            None,
+        ) else {
+            panic!("armed per session");
+        };
+        let word = |flag: &str| {
+            let at = args.iter().position(|arg| arg == flag).expect(flag);
+            serde_json::from_str::<serde_json::Value>(&args[at + 1]).expect("JSON")
+        };
+        (word("--mcp-config"), word("--settings"))
+    }
+
+    #[test]
+    fn a_persona_chat_is_started_with_its_persona_s_approved_mcp_servers_and_no_other() {
+        // #1451, D-1451-17: the generated sub-agent carried these servers, and it is retired.
+        // The chat that runs as the persona is started with them, on the same `--mcp-config`
+        // that carries purlis's own server, for that chat alone.
+        use crate::personaverbs::tests_plane::{OPS_APPROVED, Plane};
+        let plane = Plane::daily_with_ops();
+
+        // Nobody approved the two that take a credential: only the plain one is started.
+        let (config, _) = armed_as(&plane, "ops");
+        let servers = config["mcpServers"].as_object().expect("servers");
+        let mut names: Vec<&str> = servers.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["purlis", "status"]);
+        assert_eq!(
+            servers["purlis"],
+            serde_json::json!({"type": "stdio", "command": "/bin/charter", "args": ["mcp"]})
+        );
+
+        // Approved, as it was for the sub-agent: each is run through `secret exec` of the
+        // persona's vault by purlis's own binary, and no credential is in the config.
+        crate::personaverbs::mcp::approve(
+            plane.root(),
+            &plane.state(),
+            "ops",
+            &OPS_APPROVED.map(String::from),
+        );
+        let (config, _) = armed_as(&plane, "ops");
+        let servers = config["mcpServers"].as_object().expect("servers");
+        assert_eq!(servers.len(), 4, "{servers:?}");
+        assert_eq!(servers["grafana"]["command"], "/bin/charter");
+        assert_eq!(
+            servers["grafana"]["args"].as_array().expect("args")[..3],
+            ["secret", "exec", "ops"].map(serde_json::Value::from)
+        );
+        assert_eq!(servers["gsc"]["args"][3], "--file");
+        let text = config.to_string();
+        assert!(
+            !text.contains("\"secrets\"") && !text.contains("secret_files"),
+            "{text}"
+        );
+
+        // Another persona's chat in the same project gets none of them.
+        let (config, _) = armed_as(&plane, "steward");
+        assert_eq!(config["mcpServers"].as_object().expect("servers").len(), 1);
+    }
+
+    #[test]
+    fn a_persona_chat_is_denied_the_tools_its_persona_disallows() {
+        // #1451, D-1451-18: `disallowed-tools:` was the sub-agent's deny-list. It is the
+        // chat's now, as deny rules of its own settings, which outrank every allow.
+        use crate::personaverbs::tests_plane::Plane;
+        let plane = Plane::fixture("minimal");
+        plane.write(
+            "personas/reviewer/persona.md",
+            "---\nname: reviewer\ndisallowed-tools: Write, Edit, Bash(git push:*)\n---\n",
+        );
+
+        let (_, settings) = armed_as(&plane, "reviewer");
+        assert_eq!(
+            settings["permissions"]["deny"],
+            serde_json::json!(["Write", "Edit", "Bash(git push:*)"])
+        );
+        // The allows purlis pre-approves are still there, and a persona with no deny-list
+        // adds no deny rule.
+        assert!(settings["permissions"]["allow"].as_array().is_some());
+        let (_, settings) = armed_as(&plane, "steward");
+        assert_eq!(settings["permissions"].get("deny"), None);
     }
 
     #[test]

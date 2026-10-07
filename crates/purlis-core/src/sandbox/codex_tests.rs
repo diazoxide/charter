@@ -649,6 +649,7 @@ fn charters_hooks() -> Vec<String> {
         crate::harness::Kit {
             binary: Path::new("/Applications/charter.app/Contents/MacOS/charter"),
             plugin: None,
+            persona: None,
         },
         None,
         &std::collections::BTreeMap::new(),

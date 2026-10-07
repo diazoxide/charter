@@ -210,8 +210,8 @@ pub(super) fn routing(d: &Doctor) -> Option<Row> {
         Row::ok(
             "routing",
             format!(
-                "ignored — `routing:` is retired; personas are offered to the harness as \
-                 sub-agents (declared by {})",
+                "ignored — `routing:` is retired; work for another persona goes to a chat of \
+                 its own, by dispatch (declared by {})",
                 declaring.join(", ")
             ),
         )

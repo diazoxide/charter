@@ -1,9 +1,9 @@
 //! `charter persona lint` — a deterministic check of each persona's definition: a reference
 //! that names no persona, a key charter cannot read, a missing role, vault or
 //! `delegate-when`, an unfinished draft, a `bin/` file that cannot run, an MCP server that
-//! cannot be declared or will run without its credential, a skill no sub-agent can invoke,
-//! and a generated sub-agent that no longer matches its persona. A port of
-//! `commands_persona.cmd_persona_lint` and `persona.lint`, `structural_errors`,
+//! cannot be declared, a skill its charter names that no agent can invoke, a key that only
+//! fed the retired sub-agent, and a generated sub-agent file that is still there (#1451). A
+//! port of `commands_persona.cmd_persona_lint` and `persona.lint`, `structural_errors`,
 //! `key_issues`, `bin_issues` and the skill checks beneath them.
 //!
 //! [`Linter`] is the one implementation, and three readers ask it: this command, and the
@@ -13,8 +13,8 @@
 //!
 //! # Skills are looked for where the harness looks
 //!
-//! A skill a persona declares (`skills:`) or its charter names for agent use (`` `plugin:skill` ``)
-//! is checked against `~/.claude/plugins`, `~/.claude/skills` and the plane's own
+//! A skill a persona's charter names for agent use (`` `plugin:skill` ``) is checked against
+//! `~/.claude/plugins`, `~/.claude/skills` and the plane's own
 //! `.claude/skills` — the default config folder's, never one harness profile's, because a
 //! persona is declared once for every chat on the plane. With no plugin cache at all the
 //! skill checks are skipped rather than failed: charter cannot see a plugin's skills then,
@@ -69,6 +69,8 @@ pub struct Linter<'a> {
     home: Option<PathBuf>,
     known: BTreeSet<String>,
     skills: OnceLock<Option<BTreeMap<String, bool>>>,
+    /// The names of the profiles the project offers, read the first time a `model:` asks.
+    offered: OnceLock<Vec<String>>,
 }
 
 impl<'a> Linter<'a> {
@@ -82,6 +84,7 @@ impl<'a> Linter<'a> {
             home: crate::profiles::home(),
             known: super::names(root).into_iter().collect(),
             skills: OnceLock::new(),
+            offered: OnceLock::new(),
         }
     }
 
@@ -96,16 +99,16 @@ impl<'a> Linter<'a> {
         self.known.iter().cloned().collect()
     }
 
-    /// Everything wrong with `name`'s definition — `persona.lint`, and the generated
-    /// sub-agent's drift (`_agent_sync_issues`) after it.
+    /// Everything wrong with `name`'s definition — `persona.lint`, and a generated sub-agent
+    /// file left over for it ([`Linter::leftover_agent`]) after it.
     pub fn lint(&self, name: &str) -> Vec<Issue> {
         let mut issues = self.definition(name);
-        issues.extend(self.agent_sync(name));
+        issues.extend(self.leftover_agent(name));
         issues
     }
 
-    /// `persona.lint`: the definition alone, without the generated sub-agent's drift — what
-    /// the doctor's `personas` row counts.
+    /// `persona.lint`: the definition alone, without the leftover sub-agent file — what the
+    /// doctor's `personas` row counts.
     pub fn definition(&self, name: &str) -> Vec<Issue> {
         let root = self.root;
         let Some((pairs, charter)) = crate::personas::load_with_charter(root, name) else {
@@ -119,7 +122,7 @@ impl<'a> Linter<'a> {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        let mut issues = self.declared_skill_issues(name);
+        let mut issues: Vec<Issue> = Vec::new();
         if let Some(reserved) = crate::personas::reserved_refusal(name) {
             issues.push(Issue::error(format!("{reserved}. Rename the persona")));
         }
@@ -145,23 +148,71 @@ impl<'a> Linter<'a> {
         }
         if super::is_draft(root, name) {
             issues.push(Issue::warn(
-                "draft: true → charter unfinished; no sub-agent is generated and it cannot be \
-                 dispatched. Finish the charter, drop the line, then `purlis persona \
-                 sync-agents`",
+                "draft: true → charter unfinished, so no chat is dispatched to it. Finish the \
+                 charter, then drop the line",
             ));
         }
-        // A key charter neither reads nor emits does nothing — a warning, because a harness's
-        // own field is a legitimate thing to carry. A key that is a known one in another case
-        // is the error `structural_errors` names, and is not said twice.
+        // A key purlis does not read does nothing — a warning, because a harness's own field
+        // is a legitimate thing to carry. A key that is a known one in another case is the
+        // error `structural_errors` names, and is not said twice.
         for key in meta.keys() {
             if !crate::personagrant::known_key(key)
                 && crate::personagrant::misspelled_key(key).is_none()
             {
                 issues.push(Issue::warn(format!(
-                    "frontmatter key '{}' is neither read by purlis nor emitted into the \
-                     sub-agent — it does nothing (typo?)",
+                    "frontmatter key '{}' is not read by purlis — it does nothing (typo?)",
                     crate::shown::short(key)
                 )));
+            }
+            // A key that only fed the generated sub-agent (#1451): said by name, with what
+            // would bring it back, so nobody takes its line for a rule that is enforced.
+            if let Some(notice) = super::retired::key_notice(key, meta[key]) {
+                issues.push(Issue::warn(notice));
+            }
+        }
+        // `disallowed-tools:` holds where purlis can hand it to the chat, and the chat is
+        // refused where it cannot (D-1451-18): said, so the line is not read as holding
+        // everywhere. Of the resolved persona, because a parent's line denies its child too.
+        if !super::chatstart::denied_tools(root, name).is_empty() {
+            issues.push(Issue::warn(super::retired::DENIED_TOOLS));
+        }
+        // A harness's own helper cannot be started while a persona has its name: a call to
+        // it is refused with "is a persona".
+        if super::retired::HELPERS.contains(&name) {
+            issues.push(Issue::warn(format!(
+                "this persona is named like a harness's own helper, `{name}`. A sub-agent \
+                 call to that helper is now refused as a call to this persona. Rename the \
+                 persona"
+            )));
+        }
+        // A charter that still teaches the retired route sends its chat to a refusal.
+        let old = super::retired::old_route_in(&charter);
+        if !old.is_empty() {
+            issues.push(Issue::warn(format!(
+                "its charter still mentions {}: a persona is no longer a harness sub-agent, \
+                 so a chat that follows that text is refused. Say `purlis dispatch --to \
+                 <persona>` there instead",
+                old.iter()
+                    .map(|word| format!("`{word}`"))
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            )));
+        }
+        // `model:` named a model for that sub-agent too. It is read now only where it names a
+        // profile the project offers and no `profile:` line answers instead.
+        if let Some(model) = meta
+            .get(crate::personaprofile::MODEL_KEY)
+            .filter(|m| !m.is_empty())
+        {
+            let offered = self.offered.get_or_init(|| {
+                crate::personaprofile::offers_shown(root)
+                    .into_iter()
+                    .map(|offer| offer.name)
+                    .collect()
+            });
+            let chain = crate::personaprofile::chain_names_one(root, name);
+            if let Some(notice) = super::retired::model_notice(model, chain, offered) {
+                issues.push(Issue::warn(notice));
             }
         }
         issues.extend(self.structural_errors(name));
@@ -178,7 +229,7 @@ impl<'a> Linter<'a> {
     /// reference the resolver cannot build the persona from.
     pub fn structural_errors(&self, name: &str) -> Vec<Issue> {
         let root = self.root;
-        let mut issues: Vec<Issue> = super::agents::key_issues(root, name)
+        let mut issues: Vec<Issue> = key_issues(root, name)
             .into_iter()
             .map(Issue::error)
             .collect();
@@ -236,7 +287,8 @@ impl<'a> Linter<'a> {
     }
 
     /// The MCP rows: a server name that is refused, a credential with no vault to hold it,
-    /// and a credential this machine withholds.
+    /// a credential this machine withholds, and where a chat as the persona gets its servers
+    /// (#1451, D-1451-17).
     fn mcp_issues(&self, name: &str) -> Vec<Issue> {
         let (servers, refused) = mcp::declared(self.root, name);
         let mut issues: Vec<Issue> = refused
@@ -244,9 +296,8 @@ impl<'a> Linter<'a> {
             .map(|bad| {
                 Issue::error(format!(
                     "mcp: server name '{}' is refused and the server is not declared — a name \
-                     is emitted into the generated agent's YAML and into `mcp__<server>__*`, \
-                     so it may hold only letters, digits, '_', '.' and '-' (64 max). Rename it \
-                     in `{}`",
+                     becomes part of a tool's name, `mcp__<server>__*`, so it may hold only \
+                     letters, digits, '_', '.' and '-' (64 max). Rename it in `{}`",
                     mcp::label(&[bad]),
                     mcp::MCP_FILE
                 ))
@@ -273,61 +324,62 @@ impl<'a> Linter<'a> {
                 )));
             }
         }
+        // A credentialed server this machine has not approved is withheld from the persona's
+        // chats (`chatstart::servers`), and one purlis cannot show can never be approved.
         for (server, line) in mcp::withheld(self.root, self.state, name) {
             let shown = mcp::label(&[&server]);
             issues.push(if line.is_empty() {
                 Issue::error(format!(
                     "mcp: '{shown}' declares a credential and {} — it can never be approved, \
-                     so the vault is withheld permanently. Fix the entry in `{}`",
+                     so it is withheld from this persona's chats permanently. Fix the entry \
+                     in `{}`",
                     mcp::UNRENDERABLE,
                     mcp::MCP_FILE
                 ))
             } else {
                 Issue::warn(format!(
                     "mcp: '{shown}' declares a credential this machine has not approved, so \
-                     the generated sub-agent runs it WITHOUT the vault and it will fail to \
-                     authenticate. Read the command and approve it with `purlis persona \
-                     sync-agents --approve-mcp`, or drop `secrets`/`secret_files` from `{}` \
-                     if it should hold no credential",
+                     it is withheld from this persona's chats. Read the command and approve \
+                     it in a terminal with `{} --persona {}`, or drop \
+                     `secrets`/`secret_files` from `{}` if it should hold no credential",
+                    super::chatstart::APPROVE,
+                    crate::shown::short(name),
                     mcp::MCP_FILE
                 ))
             });
         }
+        // Where a chat as this persona gets its servers. Said of the persona's own file only:
+        // a child that inherits them has nothing of its own to read about.
+        let own = self
+            .root
+            .join("personas")
+            .join(name)
+            .join(mcp::MCP_FILE)
+            .is_file();
+        let count = servers.len() + refused.len();
+        if own && count > 0 {
+            issues.push(Issue::warn(format!(
+                "mcp: `{}` is read, and {}",
+                mcp::MCP_FILE,
+                super::retired::servers_notice(count)
+            )));
+        }
         issues
     }
 
-    /// `_agent_sync_issues`: is `.claude/agents/<name>.md` what `sync-agents` would write?
-    fn agent_sync(&self, name: &str) -> Vec<Issue> {
-        let Some(def) = super::resolve(self.root, name) else {
-            return Vec::new();
-        };
-        if super::is_draft(self.root, name) {
-            return Vec::new();
-        }
-        let path = super::agents::agents_dir(self.root).join(format!("{name}.md"));
-        // A committed link out of the plane is not a generated agent charter reads back.
-        if path.exists() && !crate::contain::within_plane(self.root, &path) {
+    /// A sub-agent file purlis generated for this persona that is still there (#1451). purlis
+    /// neither writes nor reads it now, and Claude Code would still offer it as a sub-agent
+    /// type, which a chat is then refused.
+    fn leftover_agent(&self, name: &str) -> Vec<Issue> {
+        let path = super::retired::agents_dir(self.root).join(format!("{name}.md"));
+        if !super::retired::is_generated(self.root, &path, name) {
             return Vec::new();
         }
-        let Ok(current) = std::fs::read_to_string(&path) else {
-            return if path.exists() {
-                Vec::new()
-            } else {
-                vec![Issue::warn(
-                    "no generated sub-agent — run `purlis persona sync-agents`",
-                )]
-            };
-        };
-        if !super::agents::carries_marker(&current) {
-            return Vec::new();
-        }
-        let rendered = super::agents::render(self.root, self.state, name, &def);
-        if crate::memstore::py_strip(&current) != crate::memstore::py_strip(&rendered) {
-            return vec![Issue::warn(
-                "generated sub-agent is stale — run `purlis persona sync-agents`",
-            )];
-        }
-        Vec::new()
+        vec![Issue::warn(format!(
+            "{} is a sub-agent purlis generated before a persona ran as its own chat. purlis \
+             no longer writes or reads it — remove it with `purlis doctor --fix persona-agents`",
+            crate::shown::short(&super::rel(self.root, &path))
+        ))]
     }
 
     /// Every installed skill by name, and whether a model may invoke it — `None` when this
@@ -360,38 +412,6 @@ impl<'a> Linter<'a> {
                 (!out.is_empty()).then_some(out)
             })
             .as_ref()
-    }
-
-    /// `declared_skill_issues`: each `skills:` entry is installed and a model may invoke it.
-    fn declared_skill_issues(&self, name: &str) -> Vec<Issue> {
-        let declared = super::declared_skills(self.root, name);
-        if declared.is_empty() {
-            return Vec::new();
-        }
-        let Some(skills) = self.installed_skills() else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        for reference in declared {
-            let leaf = reference
-                .split_once(':')
-                .map_or(reference.as_str(), |(_, l)| l);
-            match skills.get(leaf) {
-                None => out.push(Issue::error(format!(
-                    "declares skill `{reference}` — not found in ~/.claude/plugins, \
-                     ~/.claude/skills or this plane's .claude/skills. It is preloaded into the \
-                     agent, so this fails silently at dispatch. Install it, generate it, or \
-                     drop the entry"
-                ))),
-                Some(false) => out.push(Issue::warn(format!(
-                    "declares skill `{reference}`, which is human-only \
-                     (disable-model-invocation) — preloading its text is harmless but the agent \
-                     can never invoke it"
-                ))),
-                Some(true) => {}
-            }
-        }
-        out
     }
 
     /// `_skill_ref_issues`: every `` `plugin:skill` `` the charter names, for a plugin the
@@ -429,6 +449,39 @@ impl<'a> Linter<'a> {
         }
         out
     }
+}
+
+/// `persona.key_issues`: the persona's OWN keys written twice or spelled in another case.
+pub fn key_issues(root: &Path, name: &str) -> Vec<String> {
+    let Some(pairs) = crate::personas::load(root, name) else {
+        return Vec::new();
+    };
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for (key, _) in &pairs {
+        *counts.entry(key.as_str()).or_default() += 1;
+    }
+    let mut issues = Vec::new();
+    for (key, n) in &counts {
+        if *n > 1 {
+            issues.push(format!(
+                "frontmatter key '{}' is declared more than once — purlis keeps the LAST line \
+                 and the first is lost before anything reads it. Two lines are a contradiction \
+                 in the file, not a value to pick: delete one",
+                crate::shown::short(key)
+            ));
+        }
+    }
+    for key in counts.keys() {
+        if let Some(meant) = crate::personagrant::misspelled_key(key) {
+            issues.push(format!(
+                "frontmatter key '{}' is read by nothing — purlis matches keys exactly, so \
+                 this is not `{meant}:` and its value never reaches purlis. Spell it \
+                 `{meant}:`",
+                crate::shown::short(key)
+            ));
+        }
+    }
+    issues
 }
 
 /// `persona.definition_refusal`: the definition, or its directory, resolves out of the plane.

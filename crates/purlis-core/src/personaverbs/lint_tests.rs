@@ -3,7 +3,7 @@
 //! `charter/persona.py` at `cli-final`.
 
 use super::*;
-use crate::personaverbs::tests_plane::{Heard, Plane};
+use crate::personaverbs::tests_plane::{Heard, Plane, generated_agent};
 
 /// A persona that has everything a clean one needs, so a test adds exactly one fault.
 const CLEAN: &str =
@@ -58,12 +58,159 @@ fn a_missing_role_vault_and_delegate_when_are_each_a_warning() {
 #[test]
 fn a_draft_is_said_to_be_undispatchable() {
     let p = plane(&[("d", &clean("d").replace("---\n\n", "draft: true\n---\n\n"))]);
-    let issues = linter(&p).definition("d");
+    assert_eq!(
+        messages(&linter(&p).definition("d")),
+        vec![(
+            Level::Warn,
+            "draft: true → charter unfinished, so no chat is dispatched to it. Finish the \
+             charter, then drop the line"
+        )]
+    );
+}
+
+#[test]
+fn a_key_that_only_fed_the_retired_sub_agent_is_a_warning_that_names_its_ticket() {
+    // #1451: nothing enforces these lines now, and a reader must not take one for a rule.
+    let p = plane(&[(
+        "r",
+        &clean("r").replace(
+            "---\n\n",
+            "agent-tools: Read, Grep\nskills: deploy\nmemory: project\ndispatch-isolation: \
+             worktree\n---\n\n",
+        ),
+    )]);
+    let issues = linter(&p).definition("r");
+    let said: Vec<&str> = issues.iter().map(|i| i.message.as_str()).collect();
+    assert_eq!(issues.len(), 4, "{said:#?}");
+    assert!(issues.iter().all(|i| i.level == Level::Warn));
+    for key in ["agent-tools", "skills", "memory"] {
+        assert!(
+            said.iter()
+                .any(|m| m.starts_with(&format!("`{key}:` is no longer read: "))
+                    && m.contains("not in this version yet (#1460)")),
+            "{key}: {said:#?}"
+        );
+    }
+    // What widened is said (D-1451-19): this persona was read-only by its tool list.
+    assert!(
+        said.iter()
+            .any(|m| m
+                .contains("As a sub-agent this persona could not edit files; as a chat it can")),
+        "{said:#?}"
+    );
+    assert!(
+        said.iter().any(
+            |m| m.starts_with("`dispatch-isolation:` is no longer read: ")
+                && m.contains("nothing asks")
+                && m.ends_with("(#1453)")
+        ),
+        "{said:#?}"
+    );
+}
+
+#[test]
+fn a_deny_list_is_reported_as_honoured_or_refused_per_harness_and_not_as_retired() {
+    // D-1451-18. A parent's line denies its child too, so the child is told as well.
+    let p = plane(&[
+        (
+            "rev",
+            &clean("rev").replace("---\n\n", "disallowed-tools: Write, Edit\n---\n\n"),
+        ),
+        (
+            "kid",
+            "---\nname: kid\nextends: rev\nrole: Kid\nvault: none\ndelegate-when: w\n---\n\n# K\n",
+        ),
+    ]);
+    for who in ["rev", "kid"] {
+        assert_eq!(
+            messages(&linter(&p).definition(who)),
+            vec![(
+                Level::Warn,
+                "`disallowed-tools:` is honoured on Claude Code: a chat as this persona is \
+                 started with those tools denied. On Codex and opencode purlis cannot deny \
+                 them, so a chat as this persona is refused there, and so is a dispatch to it"
+            )],
+            "{who}"
+        );
+    }
+}
+
+#[test]
+fn a_charter_that_still_teaches_the_sub_agent_route_is_a_warning() {
+    // F3: both real projects' front-door charters do. Reported, never rewritten.
+    let p = plane(&[(
+        "front",
+        &clean("front").replace(
+            "# Clean\n",
+            "# Clean\n\nDelegate with the Agent tool (`subagent_type: devops`).\n",
+        ),
+    )]);
+    assert_eq!(
+        messages(&linter(&p).definition("front")),
+        vec![(
+            Level::Warn,
+            "its charter still mentions `subagent_type`: a persona is no longer a harness \
+             sub-agent, so a chat that follows that text is refused. Say `purlis dispatch --to \
+             <persona>` there instead"
+        )]
+    );
+}
+
+#[test]
+fn a_persona_named_like_a_harness_s_own_helper_is_a_warning() {
+    // F5: the helper of that name is refused as "a persona" from then on.
+    let p = plane(&[("general-purpose", &clean("general-purpose"))]);
+    let issues = linter(&p).definition("general-purpose");
     assert_eq!(issues.len(), 1, "{issues:?}");
     assert!(
         issues[0]
             .message
-            .starts_with("draft: true → charter unfinished")
+            .starts_with("this persona is named like a harness's own helper, `general-purpose`."),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn the_keys_that_have_a_job_now_are_no_finding() {
+    let p = plane(&[(
+        "j",
+        &clean("j").replace(
+            "---\n\n",
+            "color: blue\nicon: rocket\nprofile: claude\ndescription: Does the \
+             thing\nagent-description: Does it well\n---\n\n",
+        ),
+    )]);
+    assert_eq!(messages(&linter(&p).definition("j")), vec![]);
+}
+
+#[test]
+fn a_model_is_a_finding_unless_it_names_the_profile_a_chat_starts_on() {
+    let with = |extra: &str| clean("m").replace("---\n\n", &format!("{extra}\n---\n\n"));
+    // A built-in profile's name, and no `profile:` line: it is what a chat starts on.
+    let p = plane(&[("m", &with("model: codex"))]);
+    assert_eq!(messages(&linter(&p).definition("m")), vec![]);
+    // A model's name is no profile's.
+    let p = plane(&[("m", &with("model: opus"))]);
+    assert_eq!(
+        messages(&linter(&p).definition("m")),
+        vec![(
+            Level::Warn,
+            "`model: opus` is no longer read: it named a model for the generated sub-agent, \
+             and this project offers no profile called that on this machine. A chat as this \
+             persona runs on the asking chat's profile, with that profile's model and its \
+             cost, not on `opus`. Name the profile this persona's chats start on with \
+             `profile:`, or delete the line"
+        )]
+    );
+    // And a `profile:` line answers instead of any `model:`.
+    let p = plane(&[("m", &with("profile: claude\nmodel: codex"))]);
+    assert_eq!(
+        messages(&linter(&p).definition("m")),
+        vec![(
+            Level::Warn,
+            "`model: codex` is no longer read: this persona's profile is named with \
+             `profile:`. Delete the line"
+        )]
     );
 }
 
@@ -129,7 +276,7 @@ fn a_key_charter_does_not_read_warns_and_a_miscased_one_is_an_error_said_once() 
     assert!(issues.iter().any(|i| {
         i.level == Level::Warn
             && i.message
-                .starts_with("frontmatter key 'modell' is neither read by purlis")
+                .starts_with("frontmatter key 'modell' is not read by purlis")
     }));
     assert!(issues.iter().any(|i| {
         i.level == Level::Error
@@ -179,7 +326,7 @@ fn credentials_with_no_vault_and_a_refused_server_name_are_errors() {
         r#"{"mcpServers": {"bad name": {"url": "x"}, "g": {"command": "g", "secrets": {"T": "t"}}}}"#,
     );
     let issues = linter(&p).definition("m");
-    assert_eq!(issues.len(), 2, "{issues:?}");
+    assert_eq!(issues.len(), 3, "{issues:?}");
     assert!(
         issues[0]
             .message
@@ -189,22 +336,48 @@ fn credentials_with_no_vault_and_a_refused_server_name_are_errors() {
         issues[1].message,
         "mcp: server(s) g declare `secrets` or `secret_files` but this persona names no vault — add `vault:` or drop the declaration"
     );
+    assert_eq!(issues[2].level, Level::Warn);
 }
 
 #[test]
-fn a_credential_this_machine_has_not_approved_is_a_warning() {
-    let p = plane(&[("m", &clean("m").replace("vault: none", "vault: mv"))]);
+fn a_persona_s_servers_are_said_where_a_chat_gets_them_and_an_unapproved_one_how_to_approve() {
+    // #1451, D-1451-17: a chat as the persona is started with them on Claude Code.
+    let p = plane(&[
+        ("m", &clean("m").replace("vault: none", "vault: mv")),
+        (
+            "kid",
+            "---\nname: kid\nextends: m\nrole: Kid\ndelegate-when: nights\n---\n\n# Kid\n",
+        ),
+    ]);
     p.write(
         "personas/m/mcp.json",
         r#"{"mcpServers": {"g": {"command": "g", "secrets": {"T": "t"}}}}"#,
     );
-    let issues = linter(&p).definition("m");
-    assert_eq!(issues.len(), 1, "{issues:?}");
-    assert_eq!(issues[0].level, Level::Warn);
+    assert_eq!(
+        messages(&linter(&p).definition("m")),
+        vec![
+            (
+                Level::Warn,
+                "mcp: 'g' declares a credential this machine has not approved, so it is \
+                 withheld from this persona's chats. Read the command and approve it in a \
+                 terminal with `purlis persona approve-mcp --persona m`, or drop \
+                 `secrets`/`secret_files` from `mcp.json` if it should hold no credential"
+            ),
+            (
+                Level::Warn,
+                "mcp: `mcp.json` is read, and it declares 1 MCP server(s). A chat as this \
+                 persona is started with them on Claude Code; on Codex and opencode they are \
+                 not started"
+            ),
+        ]
+    );
+    // The child inherits the server and its withholding, and has no file of its own.
+    let kid = linter(&p).definition("kid");
+    assert_eq!(kid.len(), 1, "{kid:?}");
     assert!(
-        issues[0]
+        kid[0]
             .message
-            .starts_with("mcp: 'g' declares a credential this machine has not approved")
+            .contains("`purlis persona approve-mcp --persona kid`")
     );
 }
 
@@ -212,44 +385,6 @@ fn skill(home: &Path, rel: &str, front: &str) {
     let path = home.join(".claude").join(rel);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, format!("---\n{front}\n---\n\nBody.\n")).unwrap();
-}
-
-#[test]
-fn a_declared_skill_is_looked_for_in_the_plugin_cache_and_the_skill_folders() {
-    let home = tempfile::tempdir().unwrap();
-    skill(
-        home.path(),
-        "plugins/cache/x/skills/tdd/SKILL.md",
-        "name: tdd",
-    );
-    skill(
-        home.path(),
-        "skills/deploy/SKILL.md",
-        "name: deploy\ndisable-model-invocation: true",
-    );
-    let p = plane(&[(
-        "s",
-        &clean("s").replace("---\n\n", "skills: sp:tdd, deploy, gone\n---\n\n"),
-    )]);
-    let l = Linter::new(p.root(), p.root()).with_home(Some(home.path().to_path_buf()));
-    let issues = l.definition("s");
-    assert_eq!(issues.len(), 2, "{issues:?}");
-    assert_eq!(issues[0].level, Level::Warn);
-    assert!(
-        issues[0]
-            .message
-            .starts_with("declares skill `deploy`, which is human-only")
-    );
-    assert_eq!(issues[1].level, Level::Error);
-    assert!(
-        issues[1]
-            .message
-            .starts_with("declares skill `gone` — not found")
-    );
-    // With no plugin cache, nothing can be verified and nothing is said.
-    std::fs::remove_dir_all(home.path().join(".claude/plugins")).unwrap();
-    let l = Linter::new(p.root(), p.root()).with_home(Some(home.path().to_path_buf()));
-    assert_eq!(l.definition("s"), vec![]);
 }
 
 #[test]
@@ -278,35 +413,24 @@ fn a_charter_naming_an_enabled_plugins_skill_must_name_an_invokable_one() {
 }
 
 #[test]
-fn the_generated_agent_is_missing_stale_or_left_alone() {
+fn a_generated_sub_agent_that_is_still_there_is_a_warning_and_any_other_file_is_not() {
     let p = plane(&[("a", &clean("a"))]);
     let l = linter(&p);
+    // None there: nothing to say. purlis generates none, so a missing one is no finding.
+    assert_eq!(l.leftover_agent("a"), vec![]);
+    p.write(".claude/agents/a.md", &generated_agent("a"));
     assert_eq!(
-        messages(&l.agent_sync("a")),
+        messages(&l.leftover_agent("a")),
         vec![(
             Level::Warn,
-            "no generated sub-agent — run `purlis persona sync-agents`"
+            ".claude/agents/a.md is a sub-agent purlis generated before a persona ran as its \
+             own chat. purlis no longer writes or reads it — remove it with `purlis doctor \
+             --fix persona-agents`"
         )]
     );
-    p.write(".claude/agents/a.md", &format!("{}\nold\n", agents::MARKER));
-    assert_eq!(
-        messages(&l.agent_sync("a")),
-        vec![(
-            Level::Warn,
-            "generated sub-agent is stale — run `purlis persona sync-agents`"
-        )]
-    );
-    let def = crate::personaverbs::resolve(p.root(), "a").unwrap();
-    p.write(
-        ".claude/agents/a.md",
-        &agents::render(p.root(), p.root(), "a", &def),
-    );
-    assert_eq!(l.agent_sync("a"), vec![]);
     p.write(".claude/agents/a.md", "hand-written\n");
-    assert_eq!(l.agent_sync("a"), vec![]);
+    assert_eq!(l.leftover_agent("a"), vec![]);
 }
-
-use crate::personaverbs::agents;
 
 fn run(p: &Plane, name: Option<&str>, only: Option<&str>) -> (u8, Heard) {
     let mut heard = Heard::default();
@@ -317,28 +441,26 @@ fn run(p: &Plane, name: Option<&str>, only: Option<&str>) -> (u8, Heard) {
 #[test]
 fn the_command_exits_one_on_an_error_and_zero_on_warnings_alone() {
     let p = plane(&[("ok", &clean("ok"))]);
-    let def = crate::personaverbs::resolve(p.root(), "ok").unwrap();
-    p.write(
-        ".claude/agents/ok.md",
-        &agents::render(p.root(), p.root(), "ok", &def),
-    );
-    // The fixture's own `steward` has no generated agent: a warning.
+    p.write(".claude/agents/ok.md", &generated_agent("ok"));
+    // A leftover generated sub-agent is a warning; the fixture's own `steward` has none.
     let (rc, heard) = run(&p, None, None);
     assert_eq!(rc, 0);
     assert_eq!(
         heard.err,
-        "✓ ok: ok\n! steward: no generated sub-agent — run `purlis persona sync-agents`\n"
+        "! ok: .claude/agents/ok.md is a sub-agent purlis generated before a persona ran as \
+         its own chat. purlis no longer writes or reads it — remove it with `purlis doctor \
+         --fix persona-agents`\n✓ steward: ok\n"
     );
     p.write(
         "personas/ok/persona.md",
         &clean("ok").replace("---\n\n", "uses: ghost\n---\n\n"),
     );
+    std::fs::remove_file(p.path(".claude/agents/ok.md")).unwrap();
     let (rc, heard) = run(&p, Some("ok"), None);
     assert_eq!(rc, 1);
     assert_eq!(
         heard.err,
         "✗ ok: uses: 'ghost' — no such persona (dangling)\n\
-         ! ok: generated sub-agent is stale — run `purlis persona sync-agents`\n\
          ✗ 1 error(s) — dangling reuse or unloadable persona.\n"
     );
 }
@@ -346,10 +468,13 @@ fn the_command_exits_one_on_an_error_and_zero_on_warnings_alone() {
 #[test]
 fn only_narrows_to_one_finding_and_makes_it_an_error() {
     let p = plane(&[]);
+    p.write(".claude/agents/steward.md", &generated_agent("steward"));
     let (rc, heard) = run(&p, Some("steward"), Some("sub-agent"));
     assert_eq!(rc, 1);
     assert!(
-        heard.err.starts_with("✗ steward: no generated sub-agent"),
+        heard
+            .err
+            .starts_with("✗ steward: .claude/agents/steward.md is a sub-agent purlis generated"),
         "{}",
         heard.err
     );
