@@ -11,7 +11,8 @@
 //! ([`crate::names::state`]): **Clone state, never committed**. A brief and a report are a
 //! chat's words about the work, and can hold whatever the work held, so they stay on this
 //! machine. The committed dispatch log (`personas/_dispatch/`, [`crate::dispatch`]) keeps its
-//! handoff row of four fields for the roster's count, and names nothing this record holds.
+//! handoff row of four fields, and names nothing this record holds. `purlis persona stats`
+//! counts a persona's dispatches from both ([`tally`]).
 //!
 //! **Kept from git, and from the project's sandboxed chats** (D-1452-11). A sandboxed chat can
 //! neither read nor write the store: [`crate::sandbox`] denies it for both, as it denies the
@@ -204,6 +205,10 @@ impl Outcome {
 /// What a dispatch changed, as its report names it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Changed {
+    /// What the report says changed, in the persona chat's own words (`purlis dispatch report
+    /// --changed`): stored as written, held to a cap ([`cut`]). Absent where it said nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -612,6 +617,11 @@ fn capped_report(report: &Report) -> Report {
         outcome: report.outcome,
         text: cut(&report.text, MOST_REPORT_BYTES),
         changed: Changed {
+            said: report
+                .changed
+                .said
+                .as_deref()
+                .map(|said| cut(said, MOST_REPORT_BYTES)),
             files: listed(&report.changed.files, &path),
             commits: listed(&report.changed.commits, &name),
             branch: report.changed.branch.as_deref().map(name),
@@ -671,6 +681,11 @@ pub fn sound(record: &Record) -> bool {
         && maybe(&record.ended, &name)
         && record.report.as_ref().is_none_or(|report| {
             prose(&report.text, MOST_REPORT_BYTES)
+                && report
+                    .changed
+                    .said
+                    .as_deref()
+                    .is_none_or(|said| prose(said, MOST_REPORT_BYTES))
                 && report.changed.files.len() <= MOST_LISTED
                 && report.changed.commits.len() <= MOST_LISTED
                 && report.changed.files.iter().all(|file| path(file))
@@ -707,6 +722,33 @@ pub fn latest_for(root: &Path, chat: &ChatRef) -> Option<Record> {
     list(root)
         .into_iter()
         .find(|record| same_chat(&record.worker.chat, chat))
+}
+
+/// **How many dispatches each persona was given**, by the records this machine keeps: every
+/// record that names a persona, a task or a handoff, running or ended, counted once. What
+/// `purlis persona stats` adds to the committed log's count ([`crate::dispatch::tally`]).
+///
+/// **An error where the store is there and cannot be read**, which is what a sandboxed chat
+/// finds (D-1452-11): "no records" and "records this process may not read" are two answers,
+/// and a count that took the second for the first would call a persona never dispatched. No
+/// store at all is nothing counted.
+pub fn tally(root: &Path) -> io::Result<std::collections::BTreeMap<String, u64>> {
+    let mut counts = std::collections::BTreeMap::new();
+    let entries = match std::fs::read_dir(dir(root)) {
+        Ok(entries) => entries,
+        Err(none) if none.kind() == io::ErrorKind::NotFound => return Ok(counts),
+        Err(why) => return Err(why),
+    };
+    for entry in entries {
+        let name = entry?.file_name();
+        let Some(id) = name.to_str().and_then(|name| name.strip_suffix(".json")) else {
+            continue;
+        };
+        if let Some(persona) = read(root, id).and_then(|record| record.persona) {
+            *counts.entry(persona).or_default() += 1;
+        }
+    }
+    Ok(counts)
 }
 
 /// The dispatches listed on the session record at `path`: the ones its chat asked for, of
@@ -786,6 +828,29 @@ pub(crate) fn of_a_live_chat(file: &mut std::fs::File, live: &[Live]) -> bool {
 /// Whether `name` is a record's file name: `<ULID>.json`.
 pub(crate) fn a_record(name: &str) -> bool {
     name.strip_suffix(".json").is_some_and(an_id)
+}
+
+/// Whether `name` is what a record's write leaves behind when it is cut short: the temporary
+/// file [`crate::rewrite::replace`] writes beside `<ULID>.json` and renames over it,
+/// `.purlis-generated.<ULID>.json.<pid>.<tag>.tmp` (or an older build's
+/// `.charter-generated.…`). A write that finished left none. One that was killed first left a
+/// file holding a brief, which nothing reads and [`crate::retention`] collects with the
+/// records.
+pub(crate) fn a_record_s_temp(name: &str) -> bool {
+    let prefix = crate::names::GENERATED_TEMP_PREFIX;
+    std::iter::once(prefix.write)
+        .chain(prefix.reads.iter().copied())
+        .chain(prefix.history.iter().copied())
+        .filter_map(|prefix| name.strip_prefix(prefix))
+        .filter_map(|rest| rest.strip_suffix(".tmp"))
+        // `<ULID>.json.<pid>.<tag>`: a record's name, then the two parts a write adds.
+        .any(|rest| {
+            let mut parts = rest.rsplitn(3, '.');
+            let (tag, pid, record) = (parts.next(), parts.next(), parts.next());
+            tag.is_some_and(|tag| !tag.is_empty())
+                && pid.is_some_and(|pid| !pid.is_empty())
+                && record.is_some_and(a_record)
+        })
 }
 
 fn an_id(id: &str) -> bool {

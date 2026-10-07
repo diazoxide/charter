@@ -63,6 +63,7 @@ fn done(text: &str) -> Report {
         outcome: Outcome::Done,
         text: text.to_owned(),
         changed: Changed {
+            said: Some("values.yaml: replicas 2 to 3\nbranch fix/rollout, 1 commit".to_owned()),
             files: vec!["deploy/values.yaml".to_owned()],
             commits: vec!["3a823aab".to_owned()],
             branch: Some("fix/rollout".to_owned()),
@@ -666,6 +667,17 @@ fn a_record_holding_text_purlis_will_not_draw_is_counted_and_never_shown() {
                 },
             });
         }),
+        // What a report says changed is a chat's words too, and held to the same rule.
+        planted(&root, |record| {
+            record.report = Some(Report {
+                outcome: Outcome::Done,
+                text: "ok".to_owned(),
+                changed: Changed {
+                    said: Some("svc: 2 files\u{202e}".to_owned()),
+                    ..Changed::default()
+                },
+            });
+        }),
     ];
 
     let drawn = drawn(&root);
@@ -710,6 +722,7 @@ fn a_brief_or_a_report_longer_than_the_store_keeps_is_cut_and_says_so() {
                 outcome: Outcome::Done,
                 text: "r".repeat(MOST_REPORT_BYTES * 200),
                 changed: Changed {
+                    said: Some("s".repeat(MOST_REPORT_BYTES * 20)),
                     files: vec!["f".repeat(MOST_PATH_BYTES * 3); MOST_LISTED * 5],
                     commits: vec!["c".repeat(64); MOST_LISTED * 5],
                     branch: None,
@@ -965,4 +978,149 @@ fn the_newest_dispatch_a_chat_worked_on_is_found_running_or_ended() {
     );
     // The chat that asked is not the chat that worked.
     assert_eq!(latest_for(&root, &steward()), None);
+}
+
+// ----- what the report says changed, and the count `persona stats` reads (#1452) -----
+
+#[test]
+fn what_a_report_says_changed_is_kept_as_said_and_is_absent_where_it_said_nothing() {
+    let (_d, root) = project();
+    let told = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let silent = open(&root, a_handoff(), at("2026-10-07T12:00:01Z")).unwrap();
+    let said = "svc: 2 files\nbranch fix/queue, 1 commit";
+    for (id, changed) in [
+        (
+            &told.id,
+            Changed {
+                said: Some(said.to_owned()),
+                ..Changed::default()
+            },
+        ),
+        (&silent.id, Changed::default()),
+    ] {
+        let report = Report {
+            outcome: Outcome::Done,
+            text: "Drained.".to_owned(),
+            changed,
+        };
+        let ending = Ending {
+            report: Some(report),
+            usage: None,
+        };
+        assert!(close(&root, id, ending, at("2026-10-07T12:05:00Z")).unwrap());
+    }
+
+    let kept = |id: &str| read(&root, id).and_then(|record| record.report).unwrap();
+    assert_eq!(kept(&told.id).changed.said.as_deref(), Some(said));
+    assert_eq!(kept(&silent.id).changed, Changed::default());
+    let on_disk =
+        |id: &str| std::fs::read_to_string(dir(&root).join(format!("{id}.json"))).unwrap();
+    assert!(on_disk(&told.id).contains(r#""said": "svc: 2 files\nbranch fix/queue, 1 commit""#));
+    assert!(
+        !on_disk(&silent.id).contains("said"),
+        "{}",
+        on_disk(&silent.id)
+    );
+    // A record written before the field reads as one that said nothing.
+    let before = r#"{"outcome":"done","text":"ok","changed":{"branch":"b"}}"#;
+    let read: Report = serde_json::from_str(before).unwrap();
+    assert_eq!(read.changed.said, None);
+    assert_eq!(drawn(&root).refused, 0);
+}
+
+#[test]
+fn the_tally_counts_every_dispatch_a_persona_was_given_running_or_ended() {
+    let (_d, root) = project();
+    // No store yet: nothing is counted, and that is an answer.
+    assert_eq!(tally(&root).unwrap(), std::collections::BTreeMap::new());
+
+    let to = |persona: Option<&str>, mode: Mode| Opening {
+        persona: persona.map(str::to_owned),
+        mode,
+        ..a_handoff()
+    };
+    let first = open(
+        &root,
+        to(Some("devops"), Mode::Task),
+        at("2026-10-07T12:00:00Z"),
+    )
+    .unwrap();
+    open(
+        &root,
+        to(Some("devops"), Mode::Handoff),
+        at("2026-10-07T12:00:01Z"),
+    )
+    .unwrap();
+    open(
+        &root,
+        to(Some("qa"), Mode::Task),
+        at("2026-10-07T12:00:02Z"),
+    )
+    .unwrap();
+    // A chat started as no persona is nobody's dispatch.
+    open(&root, to(None, Mode::Handoff), at("2026-10-07T12:00:03Z")).unwrap();
+    close(
+        &root,
+        &first.id,
+        Ending::default(),
+        at("2026-10-07T12:09:00Z"),
+    )
+    .unwrap();
+    // What is not a record is not counted: a note, and a write that was cut short.
+    std::fs::write(dir(&root).join("notes.json"), "{}").unwrap();
+    std::fs::write(
+        dir(&root).join(format!(".purlis-generated.{}.json.41.7.tmp", first.id)),
+        std::fs::read(dir(&root).join(format!("{}.json", first.id))).unwrap(),
+    )
+    .unwrap();
+
+    let counted = tally(&root).unwrap();
+
+    assert_eq!(
+        counted.into_iter().collect::<Vec<_>>(),
+        [("devops".to_owned(), 2), ("qa".to_owned(), 1)]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_store_that_cannot_be_read_is_an_error_and_never_a_count_of_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, root) = project();
+    open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let store = dir(&root);
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads through any mode: there the refusal cannot be made, and nothing is claimed.
+    let refused = std::fs::read_dir(&store).is_err();
+
+    let counted = tally(&root);
+
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if refused {
+        assert!(counted.is_err(), "{counted:?}");
+    }
+}
+
+#[test]
+fn only_a_record_s_own_cut_short_write_is_named_as_its_temporary_file() {
+    let id = "01K6D5PATCH000000000000000";
+    assert!(an_id(id));
+    for name in [
+        format!(".purlis-generated.{id}.json.4171.9f3a.tmp"),
+        format!(".charter-generated.{id}.json.1.0.tmp"),
+    ] {
+        assert!(a_record_s_temp(&name), "{name}");
+        assert!(!a_record(&name), "{name}");
+    }
+    for name in [
+        format!("{id}.json"),
+        format!("{id}.json.tmp"),
+        format!(".purlis-generated.{id}.json.tmp"),
+        format!(".purlis-generated.{id}.json.4171.tmp"),
+        ".purlis-generated.notes.json.4171.9f3a.tmp".to_owned(),
+        format!(".purlis-generated.{id}.json.4171.9f3a"),
+        format!(".other.{id}.json.4171.9f3a.tmp"),
+    ] {
+        assert!(!a_record_s_temp(&name), "{name}");
+    }
 }

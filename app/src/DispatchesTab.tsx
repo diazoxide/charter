@@ -37,7 +37,10 @@ const WHILE_RUNNING_MS = 5000;
  * A row's task is its one control. It opens the persona chat while that chat is still open, else
  * the session record the chat wrote, and is plain text when neither is there. The brief and the
  * report are a row's own words and can be long, so they are drawn under the row on a press and
- * not in the table.
+ * not in the table, with what the report says changed where it said.
+ *
+ * A dispatch that has not ended and whose chat is not open (`not open`) is not running: it has
+ * no duration, and the list is not read again on a timer for it.
  *
  * **Cost is what the chat's harness reported**, relayed by the chat's status line: a figure a
  * chat can alter, so the column says *Cost (reported)* and nothing is decided by it. A row whose
@@ -297,9 +300,17 @@ export function DispatchesTab({
                         {[
                           row.mode === "task" ? "Task" : "Handoff",
                           `started ${saidAt(row.started)}`,
-                          row.ended === null ? "still running" : `ended ${saidAt(row.ended)}`,
+                          row.ended !== null
+                            ? `ended ${saidAt(row.ended)}`
+                            : row.outcome === "running"
+                              ? "still running"
+                              : "not ended, and its chat is not open",
                           `asked by ${row.asker}`,
                           row.asker_persona === null ? NO_PERSONA_SAID : `as ${row.asker_persona}`,
+                          // The messages the two chats sent each other after the brief.
+                          ...(row.messages === 0
+                            ? []
+                            : [row.messages === 1 ? "1 message" : `${row.messages} messages`]),
                         ].join(" · ")}
                       </p>
                       <h3>Brief</h3>
@@ -307,10 +318,18 @@ export function DispatchesTab({
                       <h3>Report</h3>
                       {row.report === null ? (
                         <p className="none">
-                          {row.outcome === "running" ? "Not reported yet." : "It ended with none."}
+                          {row.ended === null ? "Not reported yet." : "It ended with none."}
                         </p>
                       ) : (
                         <pre>{row.report}</pre>
+                      )}
+                      {/* The persona chat's own words for what it changed, as it reported
+                          them: said as its claim, never as a fact purlis checked. */}
+                      {row.changed !== null && (
+                        <>
+                          <h3>What it says changed</h3>
+                          <pre>{row.changed}</pre>
+                        </>
                       )}
                     </td>
                   </tr>
