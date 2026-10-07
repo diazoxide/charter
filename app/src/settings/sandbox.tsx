@@ -276,8 +276,16 @@ const NOTHING: Reach = {
 };
 
 /**
- * The sentences under the top one: what a chat can read; each persona's own hosts, and who
- * else holds them; and the harnesses never sandboxed on this machine.
+ * When a change on this page reaches a chat (#1428): a chat's sandbox is compiled as it starts,
+ * so one that is running keeps the sandbox it has. Restart chat is the row on its tab's menu.
+ */
+export const NEXT_START =
+  "A change here applies to a chat from its next start. A chat that is running keeps the sandbox it started with until you restart it, with Restart chat on its tab's menu.";
+
+/**
+ * The sentences under the top one: what a chat can read; when a change reaches a chat; each
+ * persona's own hosts, and who else holds them; and the harnesses never sandboxed on this
+ * machine.
  */
 export function sandboxNotes(shared: Shown, sandbox: SandboxState | undefined): string[] {
   if (valueAt(shared, SANDBOX_MODE) === undefined && sandbox?.on !== true) return [];
@@ -288,6 +296,7 @@ export function sandboxNotes(shared: Shown, sandbox: SandboxState | undefined): 
   return [
     // Reads are confined only by the classes (ADR 0067 §5): your own logins are not hidden.
     "A chat can read any file you can, except vaults and purlis's own keys, so keep secrets in a vault.",
+    NEXT_START,
     ...(personaLocked
       ? (sandbox?.persona_hosts ?? []).map(
           (one) =>

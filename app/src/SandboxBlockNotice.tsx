@@ -8,6 +8,7 @@ import {
   type OpenChat,
 } from "./bindings";
 import { Notice, type NoticeAction } from "./Notice";
+import { sandboxCommandReturned } from "./sandboxAsked";
 
 /**
  * **What a chat's sandbox blocked, on its tab** (#1338): the operation and the kind of path or
@@ -187,7 +188,12 @@ function AllowNotice({
         }
       })
       .catch((err: unknown) => setSaid(`purlis could not allow it: ${String(err)}`))
-      .finally(() => setBusy(false));
+      .finally(() => {
+        setBusy(false);
+        // Allowed for every chat, the other chats keep the sandbox they started with: the
+        // Notice for chats left behind asks again (#1428).
+        sandboxCommandReturned();
+      });
   };
   const withoutSandbox = () => {
     setBusy(true);
