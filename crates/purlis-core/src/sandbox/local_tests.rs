@@ -396,3 +396,52 @@ fn reordering_the_hosts_is_no_change() {
     .expect("kept");
     assert_eq!(hosts_changed(project.path()), None);
 }
+
+#[test]
+fn a_vault_allowed_for_a_persona_is_kept_here_once_and_revoked_with_its_record() {
+    let plane = tempfile::tempdir().expect("a directory");
+    let root = plane.path();
+    assert_eq!(granted_vaults(root), Vec::new());
+    grant_vault(root, "devops", "steward").expect("granted");
+    grant_vault(root, "devops", "steward").expect("granted again");
+    grant_vault(root, "devops", "reviewer").expect("another persona");
+    let steward = VaultGrant {
+        vault: "devops".into(),
+        persona: "steward".into(),
+    };
+    assert_eq!(steward.target(), "devops for steward");
+    assert_eq!(
+        granted_vaults(root),
+        vec![
+            steward.clone(),
+            VaultGrant {
+                vault: "devops".into(),
+                persona: "reviewer".into(),
+            },
+        ]
+    );
+    record_made(
+        root,
+        Made {
+            what: VAULT.to_owned(),
+            target: steward.target(),
+            level: "you".to_owned(),
+            at: 7,
+            chat: Some("steward 1".to_owned()),
+        },
+    )
+    .expect("recorded");
+    revoke_vault(root, "devops", "steward").expect("revoked");
+    assert_eq!(
+        granted_vaults(root),
+        vec![VaultGrant {
+            vault: "devops".into(),
+            persona: "reviewer".into(),
+        }]
+    );
+    assert_eq!(made(root), Vec::new(), "its record goes with it");
+    // It is this machine's file, in the state folder no sandboxed chat writes, and never the
+    // vault registry.
+    assert!(path(root).starts_with(crate::names::state(root)));
+    assert!(!root.join("vaults.json").exists());
+}

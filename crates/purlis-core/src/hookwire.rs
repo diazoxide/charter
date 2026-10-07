@@ -680,6 +680,13 @@ pub enum Ask {
     /// #1335). The app answers [`Answer::Said`], or [`Answer::No`] with the refusal. Boxed for
     /// `Open`'s reason.
     Git(Box<GitAsk>),
+    /// List the project's vaults for this chat (#1430): `purlis vault list` from a sandboxed
+    /// chat, whose sandbox denies it every provider's own files. The app answers
+    /// [`Answer::Vaults`] from the registry alone: names, tags, and whether the persona it
+    /// recorded for the chat may use each. **It names no persona**: that is the app's record of
+    /// the chat whose token the line carries. No ticket, for a record's reason: it changes
+    /// nothing.
+    Vaults { chat: u32 },
 }
 
 /// A write a chat asks the app to make for it ([`crate::brokered`]).
@@ -899,6 +906,17 @@ pub enum Answer {
         lines: Vec<crate::repocmd::Say>,
         code: u8,
     },
+    /// The project's vaults, for the chat that asked (#1430): the persona the app started it
+    /// as, and each vault with whether that persona may use it. No value and no key name.
+    Vaults {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persona: Option<String>,
+        vaults: Vec<crate::secrets::brokered::Listed>,
+        /// Whether a policy forbids the person's Allow for a vault here, so the listing does
+        /// not name it as a way forward.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        allow_locked: bool,
+    },
 }
 
 /// How long a ticket lives unspent.
@@ -1052,6 +1070,7 @@ impl Line {
             Self::Ask(Ask::SessionRecord(record)) => record.chat,
             Self::Ask(Ask::Write(write)) => write.chat,
             Self::Ask(Ask::Git(git)) => git.chat,
+            Self::Ask(Ask::Vaults { chat }) => *chat,
             Self::ByHand(notice) => notice.chat,
             Self::Saved(saved) => saved.chat,
             Self::Refused(refused) => refused.chat,
@@ -3761,11 +3780,13 @@ mod tests {
                             Err(why) => Answer::No { why },
                         }
                     }
-                    Ask::Report(_) | Ask::SessionRecord(_) | Ask::Write(_) | Ask::Git(_) => {
-                        Answer::No {
-                            why: "not here".to_owned(),
-                        }
-                    }
+                    Ask::Report(_)
+                    | Ask::SessionRecord(_)
+                    | Ask::Write(_)
+                    | Ask::Git(_)
+                    | Ask::Vaults { .. } => Answer::No {
+                        why: "not here".to_owned(),
+                    },
                 }
             }),
         );
@@ -4079,6 +4100,37 @@ mod tests {
             began.elapsed()
         );
         assert!(within(std::time::Duration::from_secs(1), || Ok(())).is_ok());
+    }
+
+    #[test]
+    fn a_vault_listing_is_an_ask_and_no_line_can_tag_a_vault_or_name_a_persona() {
+        let read = read_line(r#"{"vaults":{"chat":7},"token":"t"}"#).expect("an ask");
+        assert!(
+            matches!(&read.0, Line::Ask(Ask::Vaults { chat: 7 })),
+            "{read:?}"
+        );
+        assert_eq!(
+            read.0.chat(),
+            7,
+            "its token is checked for the chat it names"
+        );
+        // The ask names a chat and nothing else: a persona beside it is not read.
+        assert_eq!(
+            serde_json::to_value(Ask::Vaults { chat: 7 }).unwrap(),
+            serde_json::json!({"vaults": {"chat": 7}})
+        );
+        // No kind of line grants a vault or sets a persona: each of these is no line at all,
+        // so the listener drops it unanswered.
+        for forged in [
+            r#"{"chat":7,"vault_grant":{"vault":"ops","persona":"steward"}}"#,
+            r#"{"chat":7,"allow_vault":"ops","persona":"steward"}"#,
+            r#"{"vault_grant":{"chat":7,"vault":"ops","persona":"steward"}}"#,
+            r#"{"grant_vault":{"chat":7,"vault":"ops"}}"#,
+            r#"{"persona":{"chat":7,"name":"ops"}}"#,
+            r#"{"chat":7,"persona":"ops"}"#,
+        ] {
+            assert!(read_line(forged).is_none(), "{forged}");
+        }
     }
 
     #[test]

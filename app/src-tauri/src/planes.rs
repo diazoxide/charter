@@ -237,6 +237,8 @@ pub struct Held {
     smart: crate::smartclose::Teller,
     /// How many brokered writes each chat has made lately (#1333).
     brokered: purlis_core::brokered::Rate,
+    /// The vaults each chat was refused for its persona, until the person answers (#1430).
+    vault_refusals: crate::vaultroute::Refusals,
     /// This plane, once it is in its `Arc`: what a program's end writes the record through.
     me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
 }
@@ -401,6 +403,11 @@ impl Held {
     /// The cap on each chat's brokered writes (#1333).
     pub fn brokered(&self) -> &purlis_core::brokered::Rate {
         &self.brokered
+    }
+
+    /// The vaults each chat was refused for its persona, for the Notice on its tab (#1430).
+    pub fn vault_refusals(&self) -> &crate::vaultroute::Refusals {
+        &self.vault_refusals
     }
 
     /// Tells the window chat `session`'s smart close is at `phase`.
@@ -595,6 +602,7 @@ impl Held {
         // Closed by the operator's Close, or by its own record: either way nothing is owed.
         self.closing.forget(session);
         self.brokered.forget(session);
+        self.vault_refusals.forget(session);
         let closed = self.chats.close(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
@@ -843,6 +851,8 @@ pub struct Planes {
     touches: hooks::TouchTeller,
     /// Told each sandbox block a chat's hook found, once kept for the doctor (#1338).
     blocks: hooks::BlockTeller,
+    /// Told each vault a chat was refused for its persona (#1430).
+    vault_refused: crate::vaultroute::Teller,
     /// Told each step of a smart close in any plane (ADR 0064).
     smart: crate::smartclose::Teller,
     /// Told a plane's permission asks each time they change (HP-6).
@@ -941,6 +951,7 @@ impl Planes {
             by_hand: Arc::new(|_| {}),
             touches: Arc::new(|_| {}),
             blocks: Arc::new(|_| {}),
+            vault_refused: Arc::new(|_| {}),
             smart: Arc::new(|_| {}),
             asks: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
@@ -1033,6 +1044,13 @@ impl Planes {
         self
     }
 
+    /// Tells `refused` each vault a chat is refused for its persona in a plane this registry
+    /// holds, so the window can show the ways forward on the chat's tab (#1430).
+    pub fn telling_vault_refusals(mut self, refused: crate::vaultroute::Teller) -> Self {
+        self.vault_refused = refused;
+        self
+    }
+
     /// Tells `smart` each step of a smart close in a plane this registry holds, so the window can
     /// draw the tab wrapping up and close it when its record lands (ADR 0064).
     pub fn telling_smart_close(mut self, smart: crate::smartclose::Teller) -> Self {
@@ -1121,8 +1139,12 @@ impl Planes {
         // reason.
         held.hooks.exec_secrets_with({
             let held = Arc::downgrade(&held);
+            let plane = id.clone();
+            let refused = Arc::clone(&self.vault_refused);
             Arc::new(move |ask, reader, writer| match held.upgrade() {
-                Some(held) => crate::vaults::run_brokered(&held, ask, reader, writer),
+                Some(held) => {
+                    crate::vaults::run_brokered(&held, &plane, &*refused, ask, reader, writer);
+                }
                 None => purlis_core::secrets::brokered::not_answered(writer),
             })
         });
@@ -1147,6 +1169,8 @@ impl Planes {
             Arc::new(move |report| {
                 if let Some(held) = held.upgrade() {
                     crate::smartclose::reported(&held, report);
+                    // What an Allow queued for this chat's turn to end is sent then (#1430).
+                    crate::vaultroute::reported(&held, report.chat);
                 }
             })
         });
@@ -1948,6 +1972,7 @@ impl Planes {
             closing,
             smart: Arc::clone(&self.smart),
             brokered: purlis_core::brokered::Rate::default(),
+            vault_refusals: crate::vaultroute::Refusals::default(),
             me,
         }
     }

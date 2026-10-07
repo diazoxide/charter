@@ -23,7 +23,11 @@ function when(at: number | null): string {
 /** One grant, as a sentence: what it allows, for whom, who granted it and when. */
 export function grantSaid(one: SandboxGrant): string {
   const allows =
-    one.what === "host" ? `Reach ${one.target}` : `Write ${one.target} and everything in it`;
+    one.what === "host"
+      ? `Reach ${one.target}`
+      : one.what === "vault"
+        ? `Use vault ${one.target} as ${one.persona ?? "a persona"}`
+        : `Write ${one.target} and everything in it`;
   const by =
     one.level !== "project"
       ? "granted by you"
@@ -33,6 +37,13 @@ export function grantSaid(one: SandboxGrant): string {
   const from = one.chat === null ? "" : `, from ${one.chat}`;
   const at = when(one.at);
   return `${allows} · ${LEVELS[one.level]} · ${by}${at === "" ? "" : `, ${at}`}${from}`;
+}
+
+/** What Revoke takes away, as its button says it. */
+function revoked(one: SandboxGrant): string {
+  if (one.what === "host") return `reaching ${one.target}`;
+  if (one.what === "vault") return `using vault ${one.target} as ${one.persona ?? "a persona"}`;
+  return `writing ${one.target}`;
 }
 
 /** What the core said went wrong, through the Notice every surface says it with. */
@@ -47,7 +58,8 @@ function Trouble({ said, onDismiss }: { said: string; onDismiss: () => void }) {
 /**
  * **Every grant, each revocable** (#1348): what a person allowed past this project's sandbox,
  * at every level — this chat, every chat here on this machine, and the project's own hosts —
- * with who granted it and when. **Revoke** takes it out of every later start, through the core,
+ * with who granted it and when. A vault you let a persona's chats use on this machine although
+ * it is not tagged for the persona is one of them (#1430). **Revoke** takes it out of every later start, through the core,
  * which audits it; a project host's revoke is a change to the committed file, which teammates
  * follow. One a policy locks out says so, and is drawn locked.
  */
@@ -97,7 +109,7 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
                 <button
                   type="button"
                   tabIndex={0}
-                  aria-label={`Revoke ${one.what === "host" ? "reaching" : "writing"} ${one.target}`}
+                  aria-label={`Revoke ${revoked(one)}`}
                   onClick={() => revoke(one)}
                 >
                   Revoke

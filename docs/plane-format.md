@@ -448,7 +448,8 @@ offers no control. It is read by `crates/purlis-core/src/sandbox/policy.rs` (`Lo
     "personal-hosts": false,
     "persona-hosts": false,
     "opt-out": false,
-    "write-grants": false
+    "write-grants": false,
+    "vault-grants": false
   }
 }
 ```
@@ -462,6 +463,7 @@ offers no control. It is read by `crates/purlis-core/src/sandbox/policy.rs` (`Lo
 | `sandbox.persona-hosts` | bool | `false`: a persona's own hosts reach no chat |
 | `sandbox.opt-out` | bool | `false`: forbids a person's opt-out in a project whose sandbox is on — no chat there starts without the sandbox from the new-chat picker or a block's Notice. It does not turn the sandbox on in a project that has not, and it does not hold a system with no sandbox backend |
 | `sandbox.write-grants` | bool | `false`: no folder is granted to a chat, from a block's Allow or Settings |
+| `sandbox.vault-grants` | bool | `false`: no persona's chats use a vault the vault registry does not tag for that persona. A refused vault's Notice offers no Allow, and one already allowed on this machine opens nothing while the lock stands (#1430) |
 
 Absent keys and `true` lock nothing. **It is read only when no one but an administrator could
 have written it**: a regular file, never a link, owned by root, in a folder owned by root, and
@@ -4584,8 +4586,12 @@ down rather than read off the code.
   machine (#1341), the only ones of that file that grant anything; `writes_mine` — the
   folders you let every chat of this project write on this machine from a block's Notice
   (#1342), each as the kernel names it, judged again at every start and dropped once it no
-  longer passes or no longer resolves to itself; `granted` — each grant made on this
-  machine that lasts past one chat (`{"what": "host"|"write", "target", "level": "you"|"project", "at", "chat"?}`), what
+  longer passes or no longer resolves to itself; `vaults_mine` — the vaults you let a
+  persona's chats use in this project on this machine although the vault registry does not tag
+  them for that persona (`[{"vault", "persona"}]`, #1430), from a refused vault's Notice: read by
+  the app at every brokered `secret exec`, so an Allow or a Revoke needs no restart, and never
+  written into `vaults.json`; `granted` — each grant made on this
+  machine that lasts past one chat (`{"what": "host"|"write"|"vault", "target", "level": "you"|"project", "at", "chat"?}`; a vault's `target` is `<vault> for <persona>`), what
   Settings › Sandbox › Granted says of who granted it and when (#1348); `grantable` — the
   folders you listed in Settings › Sandbox as ones chats may be granted (D-1342-10), each whole,
   added to the allowlist a write grant must be inside, each as the kernel named it when listed,

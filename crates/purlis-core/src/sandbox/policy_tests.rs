@@ -230,6 +230,8 @@ fn true_and_absent_lock_nothing() {
     assert!(!under.forbids_persona_hosts());
     assert!(!under.forbids_opt_out());
     assert!(!under.forbids_write_grants());
+    assert!(!under.forbids_vault_grants());
+    assert_eq!(under.vault_grants_refused(), None);
     assert!(!under.fixes_presets());
     assert_eq!(under.allowed_hosts(), None);
 }
@@ -250,6 +252,7 @@ fn a_policy_this_version_cannot_read_is_refused_and_locks_everything() {
         assert!(under.refused_because().is_some(), "{text}");
         assert!(under.forbids_opt_out(), "{text}");
         assert!(under.forbids_write_grants(), "{text}");
+        assert!(under.forbids_vault_grants(), "{text}");
         assert!(under.forbids_personal_hosts(), "{text}");
         assert!(under.forbids_persona_hosts(), "{text}");
         assert_eq!(under.allowed_hosts(), Some(&[][..]), "{text}");
@@ -460,4 +463,20 @@ fn under_a_refused_policy_file_the_presets_stay_and_no_forge_host_is_reached() {
         !reached.iter().any(|one| one == "git.corp.example"),
         "{reached:?}"
     );
+}
+
+#[test]
+fn vault_grants_is_a_lock_of_its_own() {
+    let under = locks(r#"{"owner": "IT", "sandbox": {"vault-grants": false}}"#);
+    assert!(under.forbids_vault_grants());
+    assert!(!under.forbids_write_grants(), "a folder is another lock's");
+    assert!(!under.forbids_persona_hosts(), "and so is a persona's host");
+    assert_eq!(
+        under.vault_grants_refused().as_deref(),
+        Some(
+            "Policy forbids allowing a persona a vault it is not tagged for. Locked by policy, \
+             set by IT in /etc/purlis/policy.json."
+        )
+    );
+    assert!(!locks(r#"{"sandbox": {"write-grants": false}}"#).forbids_vault_grants());
 }
