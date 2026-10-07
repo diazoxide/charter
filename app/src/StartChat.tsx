@@ -79,6 +79,12 @@ const NO_PERSONA = "";
  * arrow is down too late for a single press here; `Choice` hears it first, and why is written
  * there. A pick here starts nothing — Start does — so it needs no button of its own.
  * "moves between harnesses with the arrow keys" goes red if `Choice` stops picking on arrows.
+ *
+ * **Picking a persona picks its own profile** (#1445). A persona's definition may name the
+ * profile its chats start on, and its row says so; picking that persona moves the harness row
+ * there, and picking one that names none moves it back to the default. **A harness the person
+ * picked is never moved**: once they have touched the Harness row, or something asked for a
+ * harness (`prefer`), picking a persona changes the persona and nothing else.
  */
 export function StartChat({
   options,
@@ -144,14 +150,6 @@ export function StartChat({
   onOpenSettings?: (group: string) => void;
   onCancel: () => void;
 }) {
-  const [profile, setProfile] = useState<string | undefined>(() => {
-    const ofKind = options.profiles.filter((p) => prefer !== undefined && p.kind === prefer);
-    return (
-      (ofKind.find((p) => p.is_default) ?? ofKind[0])?.name ??
-      options.profiles.find((p) => p.is_default)?.name ??
-      options.profiles[0]?.name
-    );
-  });
   // Only a persona there is a row for. The core already filters `[persona] default`
   // against the personas the plane has, so this should be unreachable from the app — but
   // the alternative, if it ever arrives, is a chat started on a persona the operator can
@@ -159,6 +157,40 @@ export function StartChat({
   const [persona, setPersona] = useState<string | null>(
     options.persona !== null && options.personas.includes(options.persona) ? options.persona : null,
   );
+  // A persona's own profile (#1445), where its definition names one the project offers and
+  // the picker has a row for it.
+  const ownProfile = (who: string | null): string | undefined => {
+    const own = who === null ? undefined : options.persona_profiles[who];
+    return options.profiles.some((p) => p.name === own) ? own : undefined;
+  };
+  // A harness something already asked for (`prefer`), where there is a row of that kind.
+  const [preferred] = useState<string | undefined>(() => {
+    const ofKind = options.profiles.filter((p) => prefer !== undefined && p.kind === prefer);
+    return (ofKind.find((p) => p.is_default) ?? ofKind[0])?.name;
+  });
+  // The row the picker is on when no persona's own profile moves it: the default.
+  const [resting] = useState<string | undefined>(
+    () =>
+      preferred ?? options.profiles.find((p) => p.is_default)?.name ?? options.profiles[0]?.name,
+  );
+  const [profile, setProfile] = useState<string | undefined>(
+    // A harness something already asked for wins; then the picked persona's own profile.
+    () => preferred ?? ownProfile(persona) ?? resting,
+  );
+  // Whether the harness row is somebody's choice already: the person picked one here, or
+  // something asked for a harness. After that a persona never moves it.
+  const [harnessChosen, setHarnessChosen] = useState(preferred !== undefined);
+  const pickProfile = (name: string) => {
+    setHarnessChosen(true);
+    setProfile(name);
+  };
+  // Picking a persona moves the harness row to that persona's own profile, and to the row it
+  // rests on for a persona that names none, so no harness is left over from a persona that is
+  // no longer picked. It picks a row and starts nothing. A harness the person chose stays.
+  const pickPersona = (who: string | null) => {
+    setPersona(who);
+    if (!harnessChosen) setProfile(ownProfile(who) ?? resting);
+  };
   // Off, which is the app as it has always behaved: a pane's footer is blank unless
   // this chat asks for it (ADR 0029). Not remembered between chats on purpose —
   // there is no plane-wide or machine-wide setting for it, and a box that silently stayed
@@ -268,7 +300,7 @@ export function StartChat({
                   says: <ProfileMeta row={row} />,
                 }))}
                 value={profile}
-                onValueChange={setProfile}
+                onValueChange={pickProfile}
               />
             )}
           />
@@ -285,15 +317,22 @@ export function StartChat({
                 kind="radio"
                 options={[
                   { value: NO_PERSONA, label: "none" },
-                  ...options.personas.map((who) => ({
-                    value: who,
-                    label: who,
-                    mark: <PersonaMark persona={who} />,
-                    says: who === options.persona ? "plane default" : undefined,
-                  })),
+                  ...options.personas.map((who) => {
+                    const own = ownProfile(who);
+                    const says = [
+                      who === options.persona ? "plane default" : undefined,
+                      own === undefined ? undefined : `its profile is ${own}`,
+                    ].filter((word) => word !== undefined);
+                    return {
+                      value: who,
+                      label: who,
+                      mark: <PersonaMark persona={who} />,
+                      says: says.length === 0 ? undefined : says.join(" · "),
+                    };
+                  }),
                 ]}
                 value={persona ?? NO_PERSONA}
-                onValueChange={(value) => setPersona(value === NO_PERSONA ? null : value)}
+                onValueChange={(value) => pickPersona(value === NO_PERSONA ? null : value)}
               />
             )}
           />

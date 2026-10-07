@@ -76,6 +76,7 @@ function doing(): Doing & { calls: string[] } {
     removeVault: note("removeVault"),
     createPersona: note("createPersona"),
     removePersona: note("removePersona"),
+    setPersonaProfile: note("setPersonaProfile"),
     editPersona: vi.fn(async (persona: string) => {
       calls.push(`editPersona:${persona}`);
       return { ok: true as const };
@@ -1315,6 +1316,7 @@ describe("carrying out a row", () => {
         "removeVault:ops",
         "createPersona",
         "editPersona:steward",
+        "setPersonaProfile:steward",
         "removePersona:steward",
         "closeTodo:alpha,20260302-091400-review",
         "forgetTodo:alpha,20260302-091400-review",
@@ -1840,6 +1842,8 @@ describe("the palette at fifty chats", () => {
     // And two more per persona (SI-3): edit its persona.md, and delete it.
     expect(offers.filter((row) => row.id.startsWith("persona.edit:"))).toHaveLength(8);
     expect(offers.filter((row) => row.id.startsWith("persona.remove:"))).toHaveLength(8);
+    // And its profile (#1445): the harness profile its chats start on.
+    expect(offers.filter((row) => row.id.startsWith("persona.profile:"))).toHaveLength(8);
     // Two rows per clone (charter-app#174, the second half): a new tab in it and the pick.
     // Ten clones is twenty rows, on the shape above; `narrow` is held to the same rank with
     // them and without them two tests up.
@@ -1879,8 +1883,9 @@ describe("the palette at fifty chats", () => {
     // 592 since KN-4: the archive of the focused workspace's journal, of each of the 8
     // personas' stores and of the shared store.
     // 593 since SE-23: Your settings…, one row.
+    // 601 since #1445: Set <persona>'s profile…, one row per persona.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(593);
+    expect(offers).toHaveLength(601);
   });
 
   /**

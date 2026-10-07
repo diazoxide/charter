@@ -995,6 +995,10 @@ struct StartOptions {
     personas: Vec<String>,
     /// The plane's `[persona] default`, which is the persona row the picker starts on.
     persona: Option<String>,
+    /// Each persona's own profile, by the persona's name, where its definition names one the
+    /// project offers (#1445): the harness row the picker moves to when that persona is
+    /// picked. The person can still pick another.
+    persona_profiles: std::collections::BTreeMap<String, String>,
     /// Set when git would carry `charter.local.toml`: every declared profile is refused
     /// until it is fixed, and this is the one fix for that state.
     ignore_fix: Option<String>,
@@ -1035,6 +1039,22 @@ fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
     let on_disk = purlis_core::workspaces::Plane::open(root);
     // Every harness the project has, read once for every row (HP-19).
     let cards = purlis_core::harness_card::read(root);
+    let personas = on_disk.personas().map_err(|err| err.to_string())?;
+    let offered = purlis_core::personaprofile::offers_of(
+        root,
+        &set,
+        &purlis_core::harness_declaration::read(root),
+    );
+    let persona_profiles = personas
+        .iter()
+        .filter_map(|who| {
+            let named = purlis_core::personaprofile::named_by(root, who);
+            Some((
+                who.clone(),
+                purlis_core::personaprofile::preselected(&named, &offered)?,
+            ))
+        })
+        .collect();
     Ok(StartOptions {
         profiles: set
             .profiles()
@@ -1071,7 +1091,8 @@ fn start_options_in(root: &std::path::Path) -> Result<StartOptions, String> {
                 )
             })
             .collect(),
-        personas: on_disk.personas().map_err(|err| err.to_string())?,
+        personas,
+        persona_profiles,
         // Only a persona this plane HAS. `[persona] default` is a committed line that
         // nothing checks, so it can name a deleted persona or `_shared` — and preselecting
         // one the picker does not draw means the operator presses Start and is refused over
@@ -2952,6 +2973,35 @@ mod tests {
 
         assert!(options.ignore_fix.is_some(), "git would carry the file");
         assert_eq!(options.ignore_fix_id, None);
+    }
+
+    #[test]
+    fn the_picker_is_told_each_personas_own_profile_where_the_project_offers_it() {
+        // #1445: picking a persona moves the harness row to its own profile.
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::write(plane.path().join(purlis_core::plane::MANIFEST), "").expect("written");
+        for (name, line) in [
+            ("ops", "profile: codex\n"),
+            ("qa", ""),
+            ("rogue", "profile: sh -c evil\n"),
+            ("old", "model: sonnet\n"),
+        ] {
+            let dir = plane.path().join("personas").join(name);
+            std::fs::create_dir_all(&dir).expect("a persona");
+            std::fs::write(
+                dir.join("persona.md"),
+                format!("---\nname: {name}\n{line}---\n"),
+            )
+            .expect("a definition");
+        }
+
+        let options = start_options_in(plane.path()).expect("read");
+
+        assert_eq!(
+            options.persona_profiles,
+            std::collections::BTreeMap::from([("ops".to_owned(), "codex".to_owned())]),
+            "only a profile the project offers is a row to move to"
+        );
     }
 
     #[test]

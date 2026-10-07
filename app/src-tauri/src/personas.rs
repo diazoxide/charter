@@ -234,6 +234,76 @@ pub fn persona_edit(
         .map_err(|e| format!("the system did not open {}: {e}", file.display()))
 }
 
+/// A persona's profile, as the persona view's control draws it (#1445).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct PersonaProfile {
+    /// The profile the definition names with `profile:`, as written, or none. It is shown
+    /// even where the project does not offer it, so the control can say so.
+    pub named: Option<String>,
+    /// The persona it inherits that profile from (`extends:`), where the line is not its own.
+    /// Picking none then writes `profile: none` in its own definition.
+    pub inherited_from: Option<String>,
+    /// Every profile the project offers on this machine, by name: what may be picked.
+    pub offered: Vec<String>,
+}
+
+/// The profile a persona's chats start on, and the project's profiles it may be set to.
+///
+/// Off the window's thread: reading the profiles asks git whether the local file would travel.
+#[tauri::command]
+#[specta::specta]
+pub async fn persona_profile(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+) -> Result<PersonaProfile, String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window("reading the persona's profile", move || {
+        profile_in(held.root(), &name)
+    })
+    .await
+}
+
+fn profile_in(root: &Path, name: &str) -> Result<PersonaProfile, String> {
+    use purlis_core::personaprofile;
+    if let Some(refused) = purlis_core::personas::name_refusal(root, name) {
+        return Err(refused);
+    }
+    let named = personaprofile::named_by(root, name);
+    Ok(PersonaProfile {
+        named: named.profile,
+        inherited_from: named.inherited_from,
+        offered: personaprofile::offers(root)
+            .into_iter()
+            .map(|offer| offer.name)
+            .collect(),
+    })
+}
+
+/// Set the profile a persona's chats start on, or name none: one `profile:` line in the
+/// persona's own definition (`purlis_core::personaprofile::set`). None removes the line, or
+/// writes `profile: none` where the persona would otherwise inherit one.
+///
+/// The core refuses a profile the project does not offer on this machine. The window sends a
+/// name it listed; a name it did not is refused all the same, because the line is read back as
+/// what a chat starts on.
+#[tauri::command]
+#[specta::specta]
+pub async fn persona_set_profile(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+    profile: Option<String>,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window(WRITING, move || {
+        let set = purlis_core::personaprofile::set(held.root(), &name, profile.as_deref());
+        held.wrote(&["personas".to_owned()]);
+        set
+    })
+    .await
+}
+
 /// The file that defines `name`, when it is one charter would read: a name a persona can have,
 /// a definition that is there, and no link on the way out of the plane. A definition that does
 /// not load is still returned — it is the one most in need of an editor.
@@ -350,6 +420,42 @@ mod tests {
         remove_in(dir.path(), "qa").unwrap();
 
         assert!(!active.exists());
+    }
+
+    #[test]
+    fn a_personas_profile_is_read_and_set_among_the_profiles_the_project_offers() {
+        let dir = plane();
+        create_in(dir.path(), "qa", None, Some("tests"), None).unwrap();
+
+        let before = profile_in(dir.path(), "qa").unwrap();
+        assert_eq!(before.named, None);
+        assert!(
+            before.offered.iter().any(|name| name == "codex"),
+            "the built-ins are offered: {:?}",
+            before.offered
+        );
+
+        purlis_core::personaprofile::set(dir.path(), "qa", Some("codex")).unwrap();
+        let after = profile_in(dir.path(), "qa").unwrap();
+        assert_eq!(after.named.as_deref(), Some("codex"));
+
+        let refused =
+            purlis_core::personaprofile::set(dir.path(), "qa", Some("sh -c evil")).unwrap_err();
+        assert!(refused.contains("does not offer"), "{refused}");
+        assert_eq!(
+            profile_in(dir.path(), "qa").unwrap().named.as_deref(),
+            Some("codex")
+        );
+
+        // A child is told whose profile it has, and none on it means none (M2).
+        create_in(dir.path(), "junior", None, None, Some("qa")).unwrap();
+        let inherited = profile_in(dir.path(), "junior").unwrap();
+        assert_eq!(inherited.named.as_deref(), Some("codex"));
+        assert_eq!(inherited.inherited_from.as_deref(), Some("qa"));
+        purlis_core::personaprofile::set(dir.path(), "junior", None).unwrap();
+        let out = profile_in(dir.path(), "junior").unwrap();
+        assert_eq!((out.named, out.inherited_from), (None, None));
+        assert!(profile_in(dir.path(), "nobody").is_err());
     }
 
     #[test]

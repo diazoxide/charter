@@ -269,6 +269,9 @@ export type Does =
   /** Opens a persona's `persona.md` in whatever the system opens a `.md` file with. charter
    *  has no editor of its own for one, and the core finds the file from the name. */
   | { verb: "editPersona"; persona: string }
+  /** Asks which profile one persona's chats start on (#1445). It writes nothing by itself: the
+   *  dialog lists the project's profiles, and `persona_set_profile` refuses any other. */
+  | { verb: "setPersonaProfile"; persona: string }
   /** Asks to delete one persona. It deletes nothing by itself: the dialog says what goes, and
    *  `persona_remove` refuses one another persona still extends or uses. */
   | { verb: "removePersona"; persona: string }
@@ -654,6 +657,8 @@ export type Doing = {
   /** Hands the persona's definition to the system's editor. The core can refuse — a persona
    *  deleted meanwhile — so it answers a `Ran`. */
   editPersona: (persona: string) => Promise<Ran>;
+  /** Opens the profile dialog for one persona. Nothing is written until it is answered. */
+  setPersonaProfile: (persona: string) => void;
   /** Opens the delete dialog for one persona. Nothing is deleted until it is answered. */
   removePersona: (persona: string) => void;
   /** Each answers a `Ran`: the core can refuse, and what it did is a sentence the operator is
@@ -1431,6 +1436,15 @@ export function catalogue(now: Now): Offer[] {
         ),
         note: "Opens it in your editor — whatever your system opens a .md file with.",
       },
+      {
+        ...can(
+          `persona.profile:${persona}`,
+          `Set ${persona}'s profile…`,
+          { verb: "setPersonaProfile", persona },
+          persona,
+        ),
+        note: "The harness profile its chats start on: one of the project's profiles, or none.",
+      },
     );
   }
 
@@ -2130,6 +2144,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "editPersona":
       return doing.editPersona(does.persona);
+    case "setPersonaProfile":
+      doing.setPersonaProfile(does.persona);
+      return DID;
     case "removePersona":
       doing.removePersona(does.persona);
       return DID;
@@ -2681,7 +2698,12 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       // **Curation is a group of its own**: the "Curate ▸" submenu (ADR 0061), which
       // `Menus.tsx` draws from `curateSubjectOf` and `curateRows` rather than from this list.
       return {
-        above: [`persona.show:${what.persona}`, `persona.edit:${what.persona}`, "persona.create"],
+        above: [
+          `persona.show:${what.persona}`,
+          `persona.edit:${what.persona}`,
+          `persona.profile:${what.persona}`,
+          "persona.create",
+        ],
         below: [`persona.remove:${what.persona}`],
       };
     case "vault":

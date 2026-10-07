@@ -1254,6 +1254,7 @@ function App() {
       // No plane, no personas and no workspace: every row these answer is unavailable.
       createPersona: () => undefined,
       removePersona: () => undefined,
+      setPersonaProfile: () => undefined,
       editPersona: async () => nowhere(),
       closeTodo: async () => nowhere(),
       forgetTodo: async () => nowhere(),

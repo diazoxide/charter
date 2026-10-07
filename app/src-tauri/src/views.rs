@@ -969,6 +969,45 @@ mod tests {
             .expect("a Vault fact")
     }
 
+    /// #1445: the persona view says which profile the persona's chats start on.
+    #[test]
+    fn the_persona_view_shows_the_personas_profile() {
+        let plane = tempfile::tempdir().expect("a plane");
+        let state = plane.path().join(".charter");
+        persona_on(plane.path(), "ops", "---\nrole: Ops\nprofile: codex\n---\n");
+        persona_on(plane.path(), "qa", "---\nrole: QA\n---\n");
+        persona_on(
+            plane.path(),
+            "rogue",
+            "---\nrole: R\nprofile: sh -c evil\n---\n",
+        );
+        let profile = |name: &str| {
+            let ViewAnswer::Answered { blocks, .. } =
+                built_in(plane.path(), &state, "persona", name).expect("an answer")
+            else {
+                panic!("the persona view was not answered");
+            };
+            blocks
+                .iter()
+                .filter_map(|block| match block {
+                    PanelBlock::Facts { facts } => Some(facts),
+                    _ => None,
+                })
+                .flatten()
+                .find(|fact| fact.label == "Profile")
+                .map(|fact| fact.value.clone())
+                .expect("a Profile fact")
+        };
+
+        assert_eq!(profile("ops"), "codex");
+        assert!(profile("qa").starts_with("none named"), "{}", profile("qa"));
+        assert_eq!(
+            profile("rogue"),
+            "'sh -c evil', which this machine does not offer, so a chat handed to it starts on \
+             the asking chat's profile"
+        );
+    }
+
     fn persona_on(root: &std::path::Path, name: &str, definition: &str) {
         let dir = root.join("personas").join(name);
         std::fs::create_dir_all(&dir).expect("a persona");
