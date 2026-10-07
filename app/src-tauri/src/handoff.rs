@@ -7093,17 +7093,16 @@ mod tests {
         purlis_core::sandbox::local::grant_dispatch(&plane.root, "steward", "devops")
             .expect("the person allowed it on this machine");
         let (said, told) = across(&held);
-        match &said {
-            Answer::Dispatched { .. } => assert_eq!(
-                told.expect("the window is told").workspace.as_deref(),
-                Some("beta")
-            ),
-            Answer::No { why } => assert_eq!(
-                why,
-                &purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned()).say()
-            ),
-            other => panic!("{other:?}"),
-        }
+        // This project has no sandbox, so that rule is the one that answers now (D-T61-6):
+        // the crossing rule has let it by, and nothing starts.
+        assert_eq!(
+            said,
+            Answer::No {
+                why: purlis_core::dispatchunattended::Refusal::Unsandboxed("devops".to_owned())
+                    .say()
+            }
+        );
+        assert!(told.is_none());
     }
 
     #[test]
