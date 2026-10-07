@@ -33,6 +33,7 @@ pub mod dispatchgrant;
 pub mod dispatchguard;
 pub mod dispatchlimits;
 pub mod dispatchrecord;
+pub mod dispatchunattended;
 pub mod docsrc;
 pub mod doctor;
 pub mod engine;
