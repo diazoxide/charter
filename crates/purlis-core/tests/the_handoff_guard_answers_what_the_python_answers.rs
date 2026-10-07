@@ -13,6 +13,18 @@
 //!
 //! This replays the stage-6 half of that recording — A7 and the seven readers under it.
 //!
+//! # Where the recording stopped being the Python's (#1444)
+//!
+//! A handoff became a dispatch, and its consent the dispatch grant, so A7 no longer protects
+//! the harness's permission prompt. The readers' rows (`atsr`, `da`, `dh`, `ih`, `ssh7`,
+//! `a7seg`, `hs7`, `hl7`) are the Python's still. The verdict's rows (`hr`, `hrd`) were moved
+//! on purpose on the rows that hold a handoff, as `fixtures/corpora/README.md` records: the
+//! unattended arm is gone, a spelling this guard reads word for word is no longer refused for
+//! being one the host's rule did not match, and every sentence that named the prompt was
+//! rewritten. `a7tbl` is left as it was recorded and is read in part: its tables are the
+//! guard's still, and the count and the sentences it also holds were the Python's, which the
+//! guard no longer says. The sentences are pinned by `hrd`, on every row that refuses.
+//!
 //! # This one needs nothing on disk
 //!
 //! Unlike the golden rule's replay, which needs a `charter.toml` for the forge list, and unlike
@@ -122,15 +134,12 @@ fn refusal(
     )
 }
 
-/// The `a7tbl` answer, built from the module's own constants rather than from a copy.
-fn tables(cmd: &str) -> Value {
-    let texts = [
-        handoffguard::HANDOFF_SUBAGENT,
-        handoffguard::HANDOFF_UNATTENDED,
-        handoffguard::HANDOFF_SPELLING,
-        handoffguard::HANDOFF_SHELL_STRING,
-        handoffguard::HANDOFF_SOURCE,
-    ];
+/// The tables in the `a7tbl` answer, built from the module's own constants rather than from a
+/// copy: the marks that make a word one the shell rewrites, the shells a string is run by, the
+/// redirections that read, and the harnesses whose `agent_id` was measured. The two entries in
+/// front of them in a recorded row, a count of the Python's sentences and two of them, are not
+/// read ([`TABLES_FROM`]).
+fn tables() -> Value {
     let mut marks: Vec<char> = handoffguard::SPELLING_MARKS.chars().collect();
     marks.sort_unstable();
     let mut shells: Vec<&str> = shellwrap::STRING_SHELLS.to_vec();
@@ -139,15 +148,11 @@ fn tables(cmd: &str) -> Value {
     reads.sort_unstable();
     let mut measured: Vec<&str> = handoffguard::MEASURED_SUBAGENT_HARNESSES.to_vec();
     measured.sort_unstable();
-    json!([
-        texts.len(),
-        rotation(cmd, &texts, 2),
-        marks.iter().collect::<String>(),
-        shells,
-        reads,
-        measured,
-    ])
+    json!([marks.iter().collect::<String>(), shells, reads, measured,])
 }
+
+/// Where the tables start in a recorded `a7tbl`: after the sentence count and the sentences.
+const TABLES_FROM: usize = 2;
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
@@ -171,7 +176,11 @@ fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
                 ));
             }
         };
-        check("a7tbl", &row["a7tbl"], tables(cmd));
+        let recorded_tables = row["a7tbl"]
+            .as_array()
+            .map(|all| Value::Array(all.iter().skip(TABLES_FROM).cloned().collect()))
+            .unwrap_or(Value::Null);
+        check("a7tbl", &recorded_tables, tables());
         check(
             "atsr",
             &row["atsr"],
@@ -304,8 +313,9 @@ fn the_recording_still_covers_the_rules() {
         allowed.len()
     );
 
-    // The four measured spellings the host's `Bash(charter handoff *)` rule does not match,
-    // each of which ran with no prompt on Claude Code 2.1.268.
+    // The four spellings the host's retired `Bash(charter handoff *)` rule did not match. Each
+    // is a handoff this guard reads word for word, so since #1444 each goes through to the
+    // app, which decides it as it decides any dispatch.
     for cmd in [
         "python3 -m charter handoff beta <<'BRIEF'\nx\nBRIEF",
         "/usr/local/bin/charter handoff beta <<'BRIEF'\nx\nBRIEF",
@@ -313,12 +323,18 @@ fn the_recording_still_covers_the_rules() {
         "charter $'handoff' beta <<'BRIEF'\nx\nBRIEF",
     ] {
         has(cmd);
-        assert_eq!(
-            refusal(cmd, PROBE_CALLERS[0]).map(|(r, _)| r),
-            Some(handoffguard::REASON_SPELLING),
-            "{cmd:?}",
-        );
+        assert_eq!(refusal(cmd, PROBE_CALLERS[0]), None, "{cmd:?}");
     }
+
+    // ...against one it recognises and cannot read as a command of its own: a blank between
+    // the two words that is not one to the shell. (The frozen fuzz subset holds the globs and
+    // the expansions, which the wide test above replays.)
+    let no_break = "charter\u{a0}handoff beta <<'BRIEF'\nx\nBRIEF";
+    has(no_break);
+    assert_eq!(
+        refusal(no_break, PROBE_CALLERS[0]).map(|(r, _)| r),
+        Some(handoffguard::REASON_SPELLING),
+    );
 
     // A string a shell runs, and a heredoc body it runs — the two halves of the same fact, and
     // the second is the one whose default used to be the OPPOSITE of the leak guard's.
@@ -356,7 +372,7 @@ fn the_recording_still_covers_the_rules() {
         .collect();
     for what in [
         "a here-string (<<<)",
-        "a file (<), which the prompt shows as a path rather than as the brief",
+        "a file (<), whose text this call does not show",
         "a pipe",
         "no heredoc at all",
         "more than one heredoc, and the shell sends purlis only the last",
@@ -370,8 +386,9 @@ fn the_recording_still_covers_the_rules() {
         );
     }
 
-    // The three arms in front of the spelling, and the ORDER they are asked in. `hr`'s six
-    // callers are what make that visible: the same command, six payloads, six answers.
+    // Who is asking. `hr`'s six callers are what make it visible: the same command, six
+    // payloads, six answers. Only a sub-agent on a measured harness is refused; a run with
+    // its prompts off is answered as any other, because the app is what weighs that now.
     let canonical = rows
         .iter()
         .find(|r| r["cmd"] == json!("charter handoff beta <<'BRIEF'\nship it\nBRIEF"))
@@ -381,17 +398,17 @@ fn the_recording_still_covers_the_rules() {
         json!([
             // attended, main conversation: through.
             Value::Null,
-            // unattended: refused, and nothing about the spelling was asked.
-            handoffguard::REASON_UNATTENDED,
-            // a sub-agent on a MEASURED harness: refused, before the unattended check.
+            // unattended: through too. The app answers a chat nobody is at.
+            Value::Null,
+            // a sub-agent on a MEASURED harness: refused.
             handoffguard::REASON_SUBAGENT,
             // ...and on one nobody measured, an `agent_id` means nothing.
             Value::Null,
-            // no harness word at all: the same, and the unattended arm then answers.
-            handoffguard::REASON_UNATTENDED,
+            // no harness word at all: the same.
+            Value::Null,
             // an EMPTY `agent_id` is the main conversation, not a sub-agent.
             Value::Null,
         ]),
-        "the order of A7's first three arms is not what the oracle recorded",
+        "who A7 refuses is not what the recording holds",
     );
 }

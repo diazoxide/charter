@@ -721,9 +721,9 @@ fn read_line(line: &str) -> Option<(Line, Option<String>)> {
 ///
 /// **This is the one verb on this socket that makes something happen in the world**, and it is
 /// why the two lines below are a handshake rather than a single message. A report moves a
-/// chat that already exists; an open makes one, with a first message the operator approved,
-/// running with their authority. See [`OpenChat`] for what the ticket does and does not
-/// protect against.
+/// chat that already exists; an open makes one, whose first message is a brief another chat
+/// wrote and nobody approved (#1444): what may start is the app's decision, never a word of
+/// the request. See [`OpenChat`] for what the ticket does and does not protect against.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ask {
@@ -935,7 +935,9 @@ pub struct ReportBack {
 /// the persona is one it defines, and `message` is the stamped first message a chat may be
 /// started on. The app asks the questions only it can answer — is this a chat I started, is
 /// its harness one that takes a first message, is the workspace's directory there — and
-/// refuses rather than guessing.
+/// refuses rather than guessing. **And it decides the handoff, as it decides any dispatch**
+/// (#1444): a handoff is a dispatch in handoff mode, so the app answers [`Answer::Opened`],
+/// [`Answer::NeedsGrant`] where the person is being asked for the pair, or [`Answer::No`].
 ///
 /// # The ticket, and exactly what it is worth
 ///
@@ -948,18 +950,19 @@ pub struct ReportBack {
 /// itself travels, and which `charter handoff`'s credential refusal already calls readable by
 /// any local process), not a file, not the transcript — so nothing that can read those can
 /// produce one. And because a ticket belongs to the one connection it was minted on, and the app
-/// forgets it the moment it is spent or the deadline passes, one approved `charter handoff`
+/// forgets it the moment it is spent or the deadline passes, one `charter handoff`
 /// opens at most one chat.
 ///
-/// **What it does not buy, plainly.** It does not authenticate the *approval*. A process
-/// already inside the chat's own process tree has the socket path and the chat number in its
-/// environment, so it can run this same two-line exchange — or simply exec `charter handoff`
-/// itself, which is the same command the operator's prompt stands in front of. charter cannot
-/// tell that process from the invocation the operator approved, because the consent lives in
-/// the harness's permission prompt and nothing inside the process tree witnesses it: no hook
-/// fires between the operator's yes and the command running, and anything a hook could say
-/// would arrive on this same socket, where the same process can say it too. ADR 0024 concedes
-/// exactly this for *moving* a chat, and this is the same concession for opening one.
+/// **What it does not buy, plainly.** It does not say which process in the chat asked. A
+/// process already inside the chat's own process tree has the socket path and the chat number
+/// in its environment, so it can run this same two-line exchange — or simply exec
+/// `charter handoff` itself. charter cannot tell that process from the chat's own turn: a helper
+/// sub-agent is refused by the tool hook where the hook can tell one made the call, and that is
+/// advice it meets, not a boundary. So **what consents to a handoff is never the request**: it
+/// is the app's own decision, from its own record of the asking chat and the dispatch grants
+/// the person made (`dispatchdecision`), and a grant for a pair covers whatever in that chat's
+/// tree asks in its name. ADR 0024 concedes exactly this for *moving* a chat, and this is the
+/// same concession for opening one.
 ///
 /// **Why that is acceptable, and it is the whole of the justification.** Opening a chat with
 /// an arbitrary first message and the operator's authority is *already* within reach of any
@@ -4139,7 +4142,7 @@ mod tests {
 
     #[test]
     fn a_second_mint_for_a_chat_stands_beside_the_first_and_never_replaces_it() {
-        // Replacing would let a second process cancel the handoff the operator approved,
+        // Replacing would let a second process cancel the handoff the chat is making,
         // silently. Each run of a command has its own ticket, on its own connection.
         let tickets = Tickets::default();
         let now = std::time::Instant::now();

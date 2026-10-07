@@ -1916,35 +1916,167 @@ fn a_doctor_a_test_names_never_reads_this_machines_harness_config() {
 
 // ---- ask rules and handoff gate (#364) -----------------------------------------------------
 
+/// A handoff's consent is the dispatch grant (#1444), so a project with no harness rule for
+/// one is as it should be, and the row says what consents instead.
 #[test]
-fn a_plane_with_no_handoff_rule_is_told_the_command_that_puts_it_back() {
+fn a_plane_with_no_handoff_rule_is_fine_and_is_told_what_consents_to_a_handoff() {
     let (_d, root) = plane("schema = 1\n");
+    let r = one(&root, "handoff gate");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "consent is the dispatch grant, which purlis asks you for; no harness rule is needed"
+    );
+    assert_eq!(r.fix, None, "{r:?}");
+}
+
+/// The rule an older `init` wrote is still asked about by each harness that reads it, so the
+/// row warns, names the files and offers the fix that removes exactly that rule.
+#[test]
+fn the_handoff_rule_an_older_init_wrote_is_warned_about_with_the_fix_that_removes_it() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        r#"{"permissions": {"ask": ["Bash(charter handoff *)", "Bash(purlis handoff *)", "Bash(terraform apply *)"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("opencode.json"),
+        r#"{"permission": {"bash": {"charter handoff *": "ask"}}}"#,
+    )
+    .unwrap();
+
     let r = one(&root, "handoff gate");
     assert_eq!(r.status, Status::Warn, "{r:?}");
     assert_eq!(
         r.detail,
-        "no ask rule for `charter handoff` under claude-code, opencode"
+        "the retired ask rule for a handoff is still in .claude/settings.json (Bash(charter handoff \
+         *), Bash(purlis handoff *)); opencode.json (charter handoff *)"
     );
-    assert!(r.hint.contains("`purlis guard handoff` adds it"), "{r:?}");
+    assert!(
+        r.hint.contains("`purlis doctor --fix handoff-rule`"),
+        "{r:?}"
+    );
+    assert_eq!(r.fix, Some(fix::FixId::HandoffRule), "{r:?}");
 
-    let rule = crate::guardcmd::as_rule(crate::guardcmd::HANDOFF_PATTERN).unwrap();
-    let (said, code) = crate::guardcmd::report(&root, &rule, crate::guardcmd::Bucket::Ask, false);
-    assert_eq!(code, 0, "{said}");
+    // The fix removes that rule and nothing else, and the row is then fine.
+    let fixed = fix::apply(&root, fix::FixId::HandoffRule);
+    assert_eq!(
+        fixed.lines()[..2],
+        [
+            "✓ .claude/settings.json: removed Bash(charter handoff *), Bash(purlis handoff *) — the ask \
+             rule `purlis init` wrote for a handoff.",
+            "✓ opencode.json: removed charter handoff * — the ask rule `purlis init` wrote for a handoff.",
+        ],
+        "{fixed:?}"
+    );
+    assert!(fixed.complete(), "{fixed:?}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
+        r#"{"permissions": {"ask": ["Bash(terraform apply *)"]}}"#
+    );
     let r = one(&root, "handoff gate");
     assert_eq!(r.status, Status::Ok, "{r:?}");
-    assert!(
-        r.detail
-            .starts_with("asks first under claude-code, opencode"),
-        "{r:?}"
+    assert_eq!(r.fix, None, "{r:?}");
+    // Applied again, it has nothing to do and says so.
+    assert_eq!(
+        fix::apply(&root, fix::FixId::HandoffRule).lines(),
+        ["✓ no handoff ask rule that `purlis init` wrote is in this project — nothing to do."]
     );
 }
 
+/// A rule about a handoff that is not the one `init` wrote is a person's own: the row is fine,
+/// names it, and offers no fix; the fix, asked for anyway, leaves it and says so.
 #[test]
-fn a_handoff_gate_that_cannot_read_a_file_does_not_call_the_rule_missing() {
+fn a_handoff_rule_a_person_wrote_is_named_and_is_no_warning() {
     let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    let theirs = r#"{"permissions": {"deny": ["Bash(purlis handoff *)"]}}"#;
+    std::fs::write(root.join(".claude/settings.json"), theirs).unwrap();
+    // And the person's own machine-local file, which no fix writes.
+    let local = r#"{"permissions": {"ask": ["Bash(purlis handoff *)"]}}"#;
+    std::fs::write(root.join(".claude/settings.local.json"), local).unwrap();
+
+    let r = one(&root, "handoff gate");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(r.fix, None, "{r:?}");
+    assert!(
+        r.detail.contains(
+            "your own rule(s) stay, and your harness decides by them: .claude/settings.json \
+             (deny: Bash(purlis handoff *)); .claude/settings.local.json (ask: Bash(purlis handoff *))"
+        ),
+        "{r:?}"
+    );
+
+    let fixed = fix::apply(&root, fix::FixId::HandoffRule);
+    let said = fixed.lines().join("\n");
+    assert!(said.contains("nothing to do"), "{said}");
+    assert!(
+        said.contains(".claude/settings.json: left deny: Bash(purlis handoff *)"),
+        "{said}"
+    );
+    assert!(
+        said.contains(".claude/settings.local.json: left ask: Bash(purlis handoff *)"),
+        "{said}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
+        theirs
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".claude/settings.local.json")).unwrap(),
+        local
+    );
+}
+
+/// Both files or neither: one purlis cannot read stops the row from guessing and the fix from
+/// writing the other.
+#[test]
+fn a_handoff_gate_that_cannot_read_a_file_says_so_and_its_fix_writes_nothing() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    let rule = r#"{"permissions": {"ask": ["Bash(purlis handoff *)"]}}"#;
+    std::fs::write(root.join(".claude/settings.json"), rule).unwrap();
     std::fs::write(root.join("opencode.json"), "{broken").unwrap();
     let r = one(&root, "handoff gate");
     assert!(r.detail.starts_with("not checked ("), "{r:?}");
+    assert_eq!(r.fix, None, "{r:?}");
+
+    let fixed = fix::apply(&root, fix::FixId::HandoffRule);
+    assert!(matches!(fixed, fix::Fixed::Refused(_)), "{fixed:?}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
+        rule
+    );
+}
+
+/// What the fix says, from what it found: pure, so it is read here without a project.
+#[test]
+fn the_handoff_rule_fix_says_what_it_removed_what_it_left_and_what_is_still_to_do() {
+    use crate::scaffold::settings::RetiredIn;
+    let said = fix::handoff_rule_said(&RetiredIn {
+        removed: vec![(
+            ".claude/settings.json",
+            vec!["Bash(purlis handoff *)".to_owned()],
+        )],
+        left: vec![("opencode.json", vec!["deny: charter handoff *".to_owned()])],
+    });
+    assert_eq!(
+        said,
+        [
+            "✓ .claude/settings.json: removed Bash(purlis handoff *) — the ask rule `purlis init` \
+             wrote for a handoff.",
+            "• opencode.json: left deny: charter handoff * — not the rule `purlis init` wrote, so it \
+             is yours and it stays. Your harness still decides a handoff by it.",
+            "• Consent to a handoff is the dispatch grant now: you are asked once for a pair of \
+             personas, and a chat handing off to its own persona asks nothing.",
+            "• Nothing was committed. A workspace's generated settings drop the rule when a chat \
+             next starts there, or now with `purlis workspace reinit --all`. A teammate on an \
+             older purlis is still asked by this rule and by nothing else, so commit the change \
+             once they have updated.",
+        ]
+    );
 }
 
 #[test]
@@ -2050,8 +2182,9 @@ fn a_report_rule_check_that_cannot_read_a_file_does_not_call_the_rule_missing() 
     assert!(!root.join(".claude/settings.json").exists());
 }
 
+/// A list that is not a list holds no rule a harness reads, so none of purlis's is in it.
 #[test]
-fn a_handoff_gate_reads_a_file_the_writer_would_refuse_as_not_checked() {
+fn a_handoff_gate_finds_no_rule_in_a_list_that_is_not_one() {
     let (_d, root) = plane("schema = 1\n");
     std::fs::create_dir_all(root.join(".claude")).unwrap();
     std::fs::write(
@@ -2060,24 +2193,19 @@ fn a_handoff_gate_reads_a_file_the_writer_would_refuse_as_not_checked() {
     )
     .unwrap();
     let r = one(&root, "handoff gate");
-    assert!(r.detail.starts_with("not checked ("), "{r:?}");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
 }
 
+/// The row reads the project's own files, so it says the same wherever the doctor is run.
 #[test]
-fn outside_the_plane_root_and_its_workspaces_no_command_is_named() {
+fn the_handoff_gate_says_the_same_from_any_folder_of_the_project() {
     let (_d, root) = plane("schema = 1\n");
-    std::fs::create_dir_all(root.join("docs")).unwrap();
-    let rows = Doctor::at(&root, &root.join("docs"), true, true).run();
-    let r = row(&rows, "handoff gate");
-    assert_eq!(r.status, Status::Warn, "{r:?}");
-    assert!(r.hint.contains("No purlis command writes"), "{r:?}");
-    std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
-    let rows = Doctor::at(&root, &root.join("workspaces/alpha"), true, true).run();
-    assert!(
-        row(&rows, "handoff gate")
-            .hint
-            .contains("purlis workspace reinit --all")
-    );
+    let at_the_root = one(&root, "handoff gate");
+    for below in ["docs", "workspaces/alpha"] {
+        std::fs::create_dir_all(root.join(below)).unwrap();
+        let rows = Doctor::at(&root, &root.join(below), true, true).run();
+        assert_eq!(row(&rows, "handoff gate"), at_the_root, "{below}");
+    }
 }
 
 // ---- #449: a path or a git value cannot forge or overdraw a row ------------------------------

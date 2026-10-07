@@ -328,8 +328,9 @@ fn rename_plane_is_one_commit_with_exactly_the_renames() {
     assert_eq!(
         doc["permissions"]["ask"],
         serde_json::json!([
+            // The retired handoff ask is kept and given no twin (#1444): purlis writes
+            // that rule nowhere now.
             "Bash(charter handoff *)",
-            "Bash(purlis handoff *)",
             "Bash(charter report *--yes*)",
             "Bash(purlis report *--yes*)",
             "Bash(charter *todo*promote*)",
@@ -469,7 +470,13 @@ fn the_purlis_spelling_is_let_through_once_the_project_carries_its_rules() {
     let report = "purlis report bug --yes 0123";
     let promote = "purlis ws todo promote 1";
 
-    assert!(handoffguard::handoff_refusal_in(handoff, caller, &root, &[&root]).is_some());
+    // A handoff waits on no rule of the host's (#1444): its consent is the dispatch grant,
+    // so its `purlis` spelling is read before the rename as after it.
+    assert_eq!(handoffguard::handoff_refusal(handoff, caller), None);
+    assert_eq!(
+        purlis_core::consentspelling::refusal(handoff, &root, &[&root]),
+        None
+    );
     for cmd in [report, promote] {
         assert!(
             purlis_core::consentspelling::refusal(cmd, &root, &[&root]).is_some(),
@@ -479,10 +486,7 @@ fn the_purlis_spelling_is_let_through_once_the_project_carries_its_rules() {
 
     ran(&fix::apply(&root, FixId::RenamePlane));
 
-    assert_eq!(
-        handoffguard::handoff_refusal_in(handoff, caller, &root, &[&root]),
-        None
-    );
+    assert_eq!(handoffguard::handoff_refusal(handoff, caller), None);
     for cmd in [report, promote, handoff] {
         assert_eq!(
             purlis_core::consentspelling::refusal(cmd, &root, &[&root]),
@@ -529,14 +533,21 @@ fn the_purlis_spelling_is_let_through_once_the_project_carries_its_rules() {
             "{cmd}"
         );
     }
+    // A handoff purlis reads word for word is the app's to decide, however it is spelt…
     for cmd in [
         "'purlis' handoff beta <<'BRIEF'\nx\nBRIEF",
         "purlis  handoff beta <<'BRIEF'\nx\nBRIEF",
+    ] {
+        assert_eq!(handoffguard::handoff_refusal(cmd, caller), None, "{cmd}");
+    }
+    // …and one inside a string a shell runs, or whose brief the shell would change, is
+    // still refused.
+    for cmd in [
         "bash -c 'purlis handoff beta'",
         "purlis handoff beta <<BRIEF\nx\nBRIEF",
     ] {
         assert!(
-            handoffguard::handoff_refusal_in(cmd, caller, &root, &[&root]).is_some(),
+            handoffguard::handoff_refusal(cmd, caller).is_some(),
             "{cmd}"
         );
     }
@@ -563,14 +574,10 @@ fn a_purlis_rule_in_one_harness_only_is_not_enough() {
         harness: Some("claude-code"),
         permission_mode: None,
     };
-    assert!(
-        handoffguard::handoff_refusal_in(
-            "purlis handoff beta <<'BRIEF'\nx\nBRIEF",
-            caller,
-            &root,
-            &[&root]
-        )
-        .is_some()
+    // Not a handoff, which waits on no rule (#1444).
+    assert_eq!(
+        handoffguard::handoff_refusal("purlis handoff beta <<'BRIEF'\nx\nBRIEF", caller),
+        None
     );
 }
 
@@ -602,9 +609,10 @@ fn a_layer_without_the_twin_still_refuses_the_new_spelling_there() {
         None
     );
     assert!(purlis_core::consentspelling::refusal(REPORT, &root, &[&ws]).is_some());
-    assert!(handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &[&ws]).is_some());
+    // A handoff is read the same in every layer: no rule of the host's consents to it.
+    assert_eq!(handoffguard::handoff_refusal(HANDOFF, caller()), None);
     assert_eq!(
-        handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &[&root]),
+        purlis_core::consentspelling::refusal(HANDOFF, &root, &[&ws]),
         None
     );
 
@@ -613,10 +621,6 @@ fn a_layer_without_the_twin_still_refuses_the_new_spelling_there() {
     std::fs::write(ws.join(".claude/settings.json"), twinned).unwrap();
     assert_eq!(
         purlis_core::consentspelling::refusal(REPORT, &root, &[&ws]),
-        None
-    );
-    assert_eq!(
-        handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &[&ws]),
         None
     );
 
@@ -707,7 +711,11 @@ fn the_session_folder_is_asked_as_well_as_the_cwd() {
     std::fs::write(ws.join(".claude/settings.json"), SETTINGS).unwrap();
 
     assert!(purlis_core::consentspelling::refusal(REPORT, &root, &[&ws, &root]).is_some());
-    assert!(handoffguard::handoff_refusal_in(HANDOFF, caller(), &root, &[&ws, &root]).is_some());
+    assert_eq!(
+        purlis_core::consentspelling::refusal(HANDOFF, &root, &[]),
+        None,
+        "a handoff waits on no rule, so no folder has to carry one"
+    );
     assert!(purlis_core::consentspelling::refusal(REPORT, &root, &[]).is_some());
     let none = Path::new("");
     assert!(purlis_core::consentspelling::refusal(REPORT, &root, &[none, none]).is_some());

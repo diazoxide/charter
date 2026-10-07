@@ -23,21 +23,20 @@
 //! ([`crate::start::grants_persona`]). **Fixed at the start**: a chat's sandbox is compiled as it
 //! starts, so a persona switched mid-chat changes its grants only at its next start.
 //!
-//! **A handoff never launders them** (D-1362-5). A chat that hands its brief to a persona whose
-//! hosts reach past its own's opens a chat that holds the *asking* chat's grants, read from the
-//! app's own record of that chat and never from the request ([`held_unless_within`]), until the
-//! person allows its own on its tab — and the asking chat's grants are the ones it runs with, so
-//! a second handoff from a held chat stays held. A **Resume** of a session record holds the
-//! default persona's grants when the record's persona reaches past them (D-1362-6), since a
-//! record's `persona:` is something a chat can write. A handoff to a persona whose hosts the
-//! asking chat already reaches, and a chat the person starts from the window, hold their own.
+//! **A chat never widens what it reaches on its own say.** A **Resume** of a session record
+//! holds the default persona's grants when the record's persona reaches past them (D-1362-6,
+//! [`held_unless_within`]), since a record's `persona:` is something a chat can write, until
+//! the person allows its own on its tab. A chat the person starts from the window holds its
+//! own. A handoff used to be held the same way on the asking chat's grants (D-1362-5); since a
+//! handoff became a dispatch (#1444) it is not, and a chat still held from before stays held,
+//! and is refused a dispatch of either kind, until the person allows it.
 //!
 //! **A dispatch is not held** (#1437, spec #1434). A persona chat started by a dispatch that a
 //! dispatch grant covers holds its own persona's grants from its first command
 //! ([`crate::dispatchgrant::grants_for_a_dispatched_chat`]): the grant is the person's consent
 //! to the pair, given before anything started, so nothing is left to allow on the new chat's
-//! tab. Without a grant the dispatch does not start at all. The hold above stays for the
-//! handoff command until that is converted to a dispatch (#1444).
+//! tab. Without a grant the dispatch does not start at all. **A handoff is a dispatch**
+//! (#1444), decided and started the same way, so this holds for it too.
 //!
 //! **Policy** (#1343) can forbid persona grants: [`super::hosts::Locks`] is asked of every
 //! persona host. The vault-backed tools a persona runs (`tools = { kubectl = … }`, brokered

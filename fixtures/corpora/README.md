@@ -184,6 +184,35 @@ same way: inside `"$( … )"` each runs a reader moved into the vault folder (`e
 guard refuses there as it refuses the same command unquoted. `lr` is the only key that moved. `tests/a_substitution_is_read_wherever_the_shell_runs_it.rs` checks the new
 reading against bash and zsh.
 
+**And where a handoff became a dispatch (#1444).** The frozen Python's A7 kept the harness's
+permission prompt in front of a handoff: it refused an unattended run, and every spelling the
+host's `ask` rule did not match. Consent to a handoff is the dispatch grant now, which the app
+asks the person for, so those two arms are gone and every sentence that named the prompt was
+rewritten. Two keys moved, `hr` and `hrd`, on rows that hold a handoff, and no reader's key
+did:
+
+- `a7tbl` did **not** move, on any row. It still holds what the Python recorded: a count of
+  its five sentences, two of them, and four tables. The replay reads the tables and no longer
+  the count or the sentences, which the guard does not say any more; `hrd` pins the sentences
+  it does say, on every row that refuses.
+- `hr` on the 293 rows that hold a handoff (45 curated, 248 generated): the two callers with
+  `bypassPermissions` are answered as the attended caller is, where they were answered
+  `handoff-unattended`.
+- `hr` and `hrd` on the 111 rows that were refused as `handoff-spelling` (curated rows 124 and
+  493 to 504 but 501, and 99 generated rows). 40 are now allowed: each is a handoff the guard
+  reads word for word (`python3 -m`, a path, a `VAR=` prefix or a wrapper, a quoted or escaped
+  word, two spaces, a line continuation, **or a handoff inside a group `{ …; }`**, which was
+  a spelling refusal and is newly read through, as a subshell and a loop body are) with a
+  quoted heredoc. 45 are now refused as
+  `handoff-brief-source`, which the spelling refusal used to answer first. 26 are still
+  `handoff-spelling`, with its new sentence: a glob, an expansion or a no-break space where a
+  word should be, or a handoff inside a backtick substitution.
+- `hrd` on the other refused rows: the same reason, in the rewritten sentence.
+
+Every row but the 111 was moved by rule from its recorded answer and then compared with what
+the guard answers. The 111 took the guard's answer: the 40 and the 26 were read one by one,
+and the 45 by the source each one names.
+
 ## The session recording
 
 Re-record with:

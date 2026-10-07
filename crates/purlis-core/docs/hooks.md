@@ -383,20 +383,33 @@ rule while one who reads a bare refusal files an issue.
   asserts that, so if one is ever added the guard is told rather than quietly
   under-reading. Ungated on there being a control plane, for the reason above.
 
-- **A handoff the prompt cannot stand in front of.** A handoff's brief becomes a new chat's
-  first message and runs with your authority, so its consent is your harness's own permission
-  prompt: the `ask` rule for `purlis handoff *` that `purlis init` writes (see
-  [handoff.md](handoff.md), *The prompt is the consent*). This guard refuses the handoffs it can
-  recognise that the prompt would not stand in front of. Each refusal needs a fact no command
-  pattern can see.
+- **A handoff purlis can read, from the chat itself.** A handoff is a dispatch, and what
+  consents to one is the dispatch grant, which the app asks you for (see
+  [handoff.md](handoff.md), *A handoff is a dispatch*). No harness prompt is part of it, so
+  this guard protects none. It refuses what only a tool hook can know or read.
 
-  | Refused | Why the prompt cannot cover it |
+  | Refused | Why |
   | --- | --- |
-  | a call from a **sub-agent**: the payload carries `agent_id` | You are talking to the parent chat, and what the sub-agent found goes back there anyway. Measured on Claude Code 2.1.268 and codex-cli 0.147.0: a sub-agent's Bash call carries `agent_id` and a main-conversation call does not. A harness nobody has measured is not read this way. |
-  | an **unattended run**: `permission_mode: bypassPermissions` | Nobody is there to answer the prompt. The refusal names `purlis ws todo` as the way to keep the work. |
-  | a **spelling** of `purlis handoff …` it can recognise as other than the exact one: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted or escaped; a word that still reads `purlis` or `handoff` once its quoting, expansion and glob characters are removed (`$'handoff'`, `${x:-handoff}`, `{handoff,}`), or that `handoff` matches as a glob (`hando?f`); a gap other than one ASCII space before or after `handoff`, a line continuation included | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to purlis, `purlis 'handoff'`, `purlis $'handoff'`, `purlis {handoff,}` and `purlis hando?f` ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted `purlis`, two spaces and a tab were matched there and are refused anyway, so a model has one spelling to follow. The first two words are judged as written, never as a shell would rewrite them — which is also why a brace split inside a word (`{hand,}off`) and a parameter default split across one (`hand${x:-}off`) are not recognised; the first of those ran with no prompt too. An ANSI-C word is the exception, because the shared reader decodes it the way the shell does: `purlis $'\x68andoff'` is `purlis handoff` spelled another way, and is refused as one. |
-  | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'`, `bash -c '…'` or a `bash <<'EOF'` body ran with no prompt. The refusal says to run it directly. Which heredoc bodies a shell runs is the same answer the leak guard uses, so a brief is never one of them. |
-  | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before purlis reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
+  | a call from a **sub-agent**: the payload carries `agent_id` | A handoff starts a chat you can see, open and stop, for the chat that asks, and a sub-agent is not a chat: what it found goes back to its chat, which hands it off. Measured on Claude Code 2.1.268 and codex-cli 0.147.0: a sub-agent's Bash call carries `agent_id` and a main-conversation call does not. A harness nobody has measured is not read this way. |
+  | a handoff it **cannot read as a command of its own**: a word that reads `purlis` or `handoff` only once the shell has expanded it (`${x:-handoff}`, `{handoff,}`), or that `handoff` matches as a glob (`hando?f`); a no-break space between the two words; a handoff inside a command substitution | purlis reads a command's words and is not a shell, so it cannot see which brief this hands off. A spelling it does read word for word is not refused: a path to purlis, `python3 -m charter`, a `FOO=1` prefix, an `env` wrapper, a quoted or escaped word, two spaces, a line continuation. |
+  | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | purlis looks one level in and no deeper, so it cannot read the brief there or tell a helper sub-agent's handoff from the chat's own. The refusal says to run it directly. Which heredoc bodies a shell runs is the same answer the leak guard uses, so a brief is never one of them. |
+  | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The new chat is sent exactly the text written in the call, and the dispatch record keeps the same. An unquoted heredoc expands before purlis reads it, a file's text is not in the call, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
+
+  **What it no longer refuses.** An unattended run (`permission_mode: bypassPermissions`):
+  whether anybody answers a chat's prompts is the app's own mark on that chat, weighed where
+  the handoff is decided ([handoff.md](handoff.md), *A dispatch from an unattended chat*).
+  And a spelling for being other than the one a harness rule matched: no rule consents to a
+  handoff now. An operator's own `deny` on the handoff glob is still held under every
+  spelling, by the rule backstop below; the `ask` `purlis init` used to write is not.
+
+  **What it asks about and does not refuse: a rider.** A Claude Code chat the app starts is
+  handed an `allow` for `purlis dispatch …` and `purlis handoff …`. Where a call runs one
+  of them and any other command (a compound, a pipe, a line before or after the heredoc,
+  a substitution, a second dispatch), the hook answers `permissionDecision: "ask"` for the
+  call and names the other command; where it cannot read the call, it asks. Alone in its
+  call, a dispatch or a handoff is answered with nothing. This is purlis's own wall, built
+  because whether Claude Code asks about the second command of such a call has not been
+  measured. On Codex and opencode no allow is handed, so nothing is asked.
 
   **Text that only mentions a handoff is not one.** A heredoc body a reader takes (`cat > f
   <<'EOF'`), a quoted argument (`grep 'purlis handoff' docs`), an `echo`'s words, and the
@@ -427,7 +440,7 @@ rule while one who reads a bare refusal files an issue.
 
   That scan does **not honour `#` comments**: a `'` or `"` inside one still opens a quote, so
   `echo #' && bash <<'ZZ'` reads the rest of the line as quoted, the real opener is never seen,
-  and the handoff in that body runs with no prompt.
+  and neither is the handoff in that body.
 
   An **ANSI-C word** (`$'don\'t'`) is read correctly by that scan, and the shared reader
   decodes it too, as the shell does. A7's own mis-reading of `$'` inside `"…"` erased real
@@ -441,15 +454,15 @@ rule while one who reads a bare refusal files an issue.
   to `bash` and is read as commands.
 
   Gated on a control plane, unlike the two substitution guards above: this is a policy about a
-  plane's chats, not a fact about the shell. **What it does not reach:** Codex has no
-  command-pattern permissions, so an attended Codex chat's handoff runs without a prompt, and
-  `codex exec --approve-for-me` reports `permission_mode: default`, so it is not refused as
-  unattended. `purlis doctor` does not check the handoff gate yet, so nothing names that gap
-  on a plane but this page.
+  plane's chats, not a fact about the shell. **Codex** is refused the same handoffs and no
+  more: its `codex exec` reports `permission_mode: bypassPermissions` for nearly every run,
+  which this guard used to refuse outright and no longer reads. `purlis doctor`'s
+  `handoff gate` row says whether the ask rule an older `purlis init` wrote is still in the
+  project, and `purlis doctor --fix handoff-rule` removes it.
 
-  **What it does not see, on any harness.** It refuses the spellings of a handoff it can
-  recognise, so a chat working in good faith keeps the prompt in front of its handoff; it reads a
-  command's words and is not a shell. A handoff run by an interpreter (`python3 -c`, `node -e`, or
+  **What it does not see, on any harness.** It refuses the shapes of a handoff it can
+  recognise and cannot read; it reads a command's words and is not a shell, and a handoff that
+  gets past it still reaches the app's decision. A handoff run by an interpreter (`python3 -c`, `node -e`, or
   `os.system` inside a `python3 - <<'PY'` body),
   through a variable, from a script file, behind an expansion that does not leave the word whole
   (`{hand,}off`, `hand${x:-}off`), or more than one string deep is not seen.
@@ -653,12 +666,12 @@ Some guards name a narrower move first, and it is usually the one you want:
   transport, which is what most denials of it are actually asking for.
 - **Plane-root history wipe** — `purlis save`. The guard is measuring commits that exist
   nowhere else; push them and it stops firing, on that command and every other one.
-- **A handoff the prompt cannot stand in front of** — spell it `purlis handoff <workspace>
-  <<'BRIEF'`, from the chat the operator is talking to, attended. Three of its four refusals
-  have that as the fix, and the fourth (a sub-agent's call) is answered by returning what the
-  sub-agent found to the parent chat, which can propose the handoff itself. Your own terminal
-  is the override here too, and it does something different: outside the app, the command
-  prints what to run rather than opening a chat ([handoff.md](handoff.md)).
+- **A handoff purlis cannot read** — spell it
+  `purlis handoff --name "<task>" <workspace> <<'BRIEF'`, at the start of its own command,
+  from the chat itself. A sub-agent's call is answered by returning
+  what the sub-agent found to its chat, which can hand it off. Your own terminal is the
+  override here too, and it does something different: outside the app, the command opens
+  nothing and says to open purlis ([handoff.md](handoff.md)).
 
 **If a guard is wrong about you *every time*, that is not an override problem.** It means
 purlis is holding a policy your organisation does not — an org that mandates signed

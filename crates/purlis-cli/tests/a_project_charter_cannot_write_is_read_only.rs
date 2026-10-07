@@ -512,12 +512,12 @@ fn harness_list_only_reads_a_read_only_project() {
 
 #[test]
 fn guard_list_only_reads_a_read_only_project() {
-    only_reads(&["guard", "list"], "charter handoff");
+    only_reads(&["guard", "list"], "charter report");
 }
 
 #[test]
 fn bare_guard_lists_and_only_reads_a_read_only_project() {
-    only_reads(&["guard"], "charter handoff");
+    only_reads(&["guard"], "charter report");
 }
 
 #[test]

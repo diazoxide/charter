@@ -160,7 +160,8 @@ fn a_templates_guard_defaults_are_ask_rules_in_every_harness_that_holds_them() {
     for rule in [
         "Bash(twine upload *)",
         "Bash(uv publish *)",
-        "Bash(charter handoff *)",
+        // Beside the rules `init` wrote. A handoff is not one of them (#1444).
+        "Bash(charter report *--yes*)",
     ] {
         assert!(
             asks.as_array().expect("a list").iter().any(|r| r == rule),
