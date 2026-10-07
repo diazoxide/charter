@@ -59,6 +59,22 @@ struct OnDisk {
     /// registry, whose shared half is committed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     vaults_mine: Vec<VaultGrant>,
+    /// The dispatch grants you made for every chat of this project on this machine (#1437):
+    /// the only place a dispatch grant of yours is kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dispatch_mine: Vec<DispatchPair>,
+    /// The project's dispatch grants as this machine last showed them to the person (#1437),
+    /// each as [`crate::dispatchgrant::Pair`] is displayed; absent before the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dispatch_seen: Option<Vec<String>>,
+}
+
+/// One dispatch grant of yours, as the file keeps it: chats running as `asking` may dispatch
+/// to `target`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct DispatchPair {
+    asking: String,
+    target: String,
 }
 
 /// One vault you let one persona's chats use on this machine (#1430), beside whatever the vault
@@ -427,6 +443,33 @@ pub fn grant_vault(root: &Path, vault: &str, persona: &str) -> io::Result<()> {
     })
 }
 
+// ---- your dispatch grants, and the project's as you were told of them (#1437) ----------------
+
+/// The dispatch grants you made for every chat of the project at `root` on this machine, each
+/// as asking persona and target persona. [`crate::dispatchgrant::yours`] reads them as pairs.
+pub fn granted_dispatch(root: &Path) -> Vec<(String, String)> {
+    read(root)
+        .dispatch_mine
+        .into_iter()
+        .map(|pair| (pair.asking, pair.target))
+        .collect()
+}
+
+/// Lets every chat of the project at `root` that runs as `asking` dispatch to `target`, on
+/// this machine: the grant Notice's Allow, never a chat (a sandboxed chat cannot write this
+/// file).
+pub fn grant_dispatch(root: &Path, asking: &str, target: &str) -> io::Result<()> {
+    let pair = DispatchPair {
+        asking: asking.to_owned(),
+        target: target.to_owned(),
+    };
+    change(root, |held| {
+        if !held.dispatch_mine.contains(&pair) {
+            held.dispatch_mine.push(pair);
+        }
+    })
+}
+
 /// Takes `vault` off what `persona`'s chats may use here: Settings' Revoke. The next brokered
 /// run reads it, so nothing restarts.
 pub fn revoke_vault(root: &Path, vault: &str, persona: &str) -> io::Result<()> {
@@ -440,6 +483,30 @@ pub fn revoke_vault(root: &Path, vault: &str, persona: &str) -> io::Result<()> {
         held.granted
             .retain(|made| !(made.what == VAULT && made.target == target));
     })
+}
+
+/// Takes that grant back: Settings' Revoke. Answers whether there was one.
+pub fn revoke_dispatch(root: &Path, asking: &str, target: &str) -> io::Result<bool> {
+    let mut was = false;
+    change(root, |held| {
+        let before = held.dispatch_mine.len();
+        held.dispatch_mine
+            .retain(|pair| !(pair.asking == asking && pair.target == target));
+        was = held.dispatch_mine.len() != before;
+    })?;
+    Ok(was)
+}
+
+/// The project's dispatch grants as this machine last told the person of them; `None` before
+/// the first.
+pub fn dispatch_seen(root: &Path) -> Option<Vec<String>> {
+    read(root).dispatch_seen
+}
+
+/// Records that the person was told of `shown`, the project's dispatch grants as the Notice
+/// showed them.
+pub fn acknowledge_dispatch(root: &Path, shown: &[String]) -> io::Result<()> {
+    change(root, |held| held.dispatch_seen = Some(shown.to_vec()))
 }
 
 // ---- the opt-out count -----------------------------------------------------------------------

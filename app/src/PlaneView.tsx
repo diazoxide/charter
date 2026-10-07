@@ -148,6 +148,7 @@ import { SandboxBlockNotice } from "./SandboxBlockNotice";
 import { VaultRefusedNotice } from "./VaultRefusedNotice";
 import { PersonaGrantsNotice } from "./PersonaGrantsNotice";
 import { PersonaMarks, ReloadPersonaMarks, usePersonaMarks } from "./PersonaMark";
+import { DispatchGrantNotice } from "./DispatchGrantNotice";
 import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { useDismissals } from "./dismissals";
 import { inSlots, SIDES, useArrangement } from "./regions";
@@ -232,6 +233,7 @@ import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import { SandboxOffer } from "./SandboxOffer";
 import { ProjectHostsNotice } from "./ProjectHostsNotice";
+import { ProjectDispatchNotice } from "./ProjectDispatchNotice";
 import type {
   ExtensionCommand,
   ExtensionView,
@@ -5134,6 +5136,11 @@ export const PlaneView = memo(function PlaneView({
           plane={plane}
           onReview={() => openSettingsAt({ group: "project.sandbox" })}
         />
+        {/* **The project's dispatch grants changed** (#1437): told once to each teammate. */}
+        <ProjectDispatchNotice
+          plane={plane}
+          onReview={() => openSettingsAt({ group: "project.dispatch" })}
+        />
         {/* The doctor's findings that stand as Notices, each with its fix (#1250). */}
         <DoctorNotices
           doctor={doctor}
@@ -6283,6 +6290,8 @@ function PaneFrame({
           running={running}
           onRestart={onRestart}
         />
+        {/* A dispatch to another persona that no grant covers (#1437): asked once, here. */}
+        <DispatchGrantNotice plane={plane} session={session} />
         {newest !== undefined && (
           <SandboxBlockNotice
             key={`${newest.operation}:${newest.kind}:${newest.ours ? "ours" : "chat"}:${newest.target ?? ""}`}

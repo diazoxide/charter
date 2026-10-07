@@ -425,6 +425,40 @@ export const commands = {
 	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
 	 */
 	dispatchLimits: (plane: PlaneId) => typedError<DispatchLimits, string>(__TAURI_INVOKE("dispatch_limits", { plane })),
+	/**  The dispatches of chat `session` waiting on the person, for the Notice on its tab. */
+	dispatchGrantsNeeded: (plane: PlaneId, session: number) => typedError<DispatchPending[], string>(__TAURI_INVOKE("dispatch_grants_needed", { plane, session })),
+	/**
+	 *  **Allow** on a dispatch's Notice, at `level`: the pair is the app's record of the held
+	 *  dispatch `id`, never the window's word. Audited, then kept where that level keeps it, and
+	 *  the dispatch starts.
+	 */
+	allowDispatch: (plane: PlaneId, id: number, level: GrantLevel) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("allow_dispatch", { plane, id, level })),
+	/**
+	 *  **Keep blocked** on a dispatch's Notice: nothing is granted, and the dispatch does not
+	 *  start. Answers whether it was still waiting.
+	 */
+	keepDispatchBlocked: (plane: PlaneId, id: number) => typedError<boolean, string>(__TAURI_INVOKE("keep_dispatch_blocked", { plane, id })),
+	/**
+	 *  Every dispatch grant in force here, what policy locks, and the teammate's one-time change:
+	 *  for Settings' list and the project's Notice.
+	 */
+	dispatchGrants: (plane: PlaneId) => typedError<DispatchGrants, string>(__TAURI_INVOKE("dispatch_grants", { plane })),
+	/**
+	 *  **Revoke** on Settings' list of dispatch grants: the grant called `id` is audited and taken
+	 *  out, so the next dispatch across its pair asks again. Answers the list as it is now.
+	 */
+	revokeDispatchGrant: (plane: PlaneId, id: string) => typedError<DispatchGrants, string>(__TAURI_INVOKE("revoke_dispatch_grant", { plane, id })),
+	/**
+	 *  The person read the Notice of the project's dispatch grants as it showed them, `shown`: it
+	 *  is not shown again until they change from that. Answers what is still to tell, if anything.
+	 */
+	acknowledgeDispatchGrants: (plane: PlaneId, shown: string[]) => typedError<{
+	/**  Each as `asking -> target`. */
+	added: string[],
+	removed: string[],
+	/**  The whole list now: what the Notice sends back once it is read. */
+	now: string[],
+} | null, string>(__TAURI_INVOKE("acknowledge_dispatch_grants", { plane, shown })),
 	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
@@ -2314,6 +2348,60 @@ export type Curations = {
 	cannot: string | null,
 };
 
+/**  What allowing a dispatch answered: the sentence the Notice says. */
+export type DispatchAllowed = {
+	said: string,
+};
+
+/**  One dispatch grant, as Settings lists it. */
+export type DispatchGrant = {
+	/**  What Revoke is sent by. */
+	id: string,
+	/**  The asking persona; null for a grant made for a chat on no persona. */
+	asking: string | null,
+	target: string,
+	level: GrantLevel,
+	/**
+	 *  Who committed it, for one the project carries; null for one you granted, or one the
+	 *  project's file holds that is not committed yet.
+	 */
+	by: string | null,
+	/**  When, in seconds since 1970, where that is known. */
+	at: number | null,
+	/**  The chat it was allowed from, where that is known. */
+	chat: string | null,
+	/**  Why a policy locks it out, where one does: it covers nothing while it is locked. */
+	locked: string | null,
+};
+
+/**
+ *  Everything Settings shows of dispatch grants: the grants, what policy locks, and the
+ *  teammate's one-time change.
+ */
+export type DispatchGrants = {
+	grants: DispatchGrant[],
+	/**  Where policy forbids every dispatch: its sentence, naming who set it. */
+	all_locked: string | null,
+	/**  The pairs policy locks. */
+	locked_pairs: DispatchLock[],
+	/**  "Locked by policy, set by <who> in <file>.", where a policy locks anything of dispatch. */
+	locked_by: string | null,
+	/**
+	 *  How the project's grants changed since this machine last told the person; null when
+	 *  nothing did.
+	 */
+	changed: DispatchGrantsChanged | null,
+};
+
+/**  The project's dispatch grants as they changed since this machine last told the person. */
+export type DispatchGrantsChanged = {
+	/**  Each as `asking -> target`. */
+	added: string[],
+	removed: string[],
+	/**  The whole list now: what the Notice sends back once it is read. */
+	now: string[],
+};
+
 /**  One limit, as a column of the table. */
 export type DispatchLimit = {
 	/**  The key it is written as: `running-per-chat`. */
@@ -2356,6 +2444,38 @@ export type DispatchLimits = {
 	refused: string[],
 	/**  Why this machine's file is not read, where git would carry it. */
 	local_left_out: string | null,
+};
+
+/**  A pair policy locks, as Settings shows it locked. */
+export type DispatchLock = {
+	asking: string,
+	target: string,
+};
+
+/**  A dispatch that needs the person, as the Notice on the asking chat's tab shows it. */
+export type DispatchPending = {
+	plane: PlaneId,
+	/**  What Allow and Keep blocked are sent by. */
+	id: number,
+	/**  The asking chat. */
+	session: number,
+	/**  The asking chat's name, as its tab shows it. */
+	chat: string,
+	/**  The persona the asking chat runs as; null for a chat on no persona. */
+	asking: string | null,
+	/**  The persona it wants to dispatch to. */
+	target: string,
+	/**
+	 *  The first brief, **as the chat wrote it**: never purlis's words, and drawn apart from
+	 *  them, as plain text.
+	 */
+	brief: string,
+	/**  Whether the brief was longer than the Notice shows and is cut. */
+	brief_cut: boolean,
+	/**  The levels Allow is offered at. Empty where policy locks it. */
+	levels: GrantLevel[],
+	/**  Where policy locks it: the policy's sentence, naming who set it. No Allow is offered. */
+	locked: string | null,
 };
 
 /**  One row: what one level of one file sets. */

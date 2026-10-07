@@ -239,6 +239,9 @@ pub struct Held {
     brokered: purlis_core::brokered::Rate,
     /// The vaults each chat was refused for its persona, until the person answers (#1430).
     vault_refusals: crate::vaultroute::Refusals,
+    /// The dispatches waiting on the person, and the dispatch grants made for one chat
+    /// (#1437).
+    dispatch_grants: crate::dispatchgrants::Store,
     /// This plane, once it is in its `Arc`: what a program's end writes the record through.
     me: Arc<std::sync::OnceLock<std::sync::Weak<Held>>>,
 }
@@ -408,6 +411,16 @@ impl Held {
     /// The vaults each chat was refused for its persona, for the Notice on its tab (#1430).
     pub fn vault_refusals(&self) -> &crate::vaultroute::Refusals {
         &self.vault_refusals
+    }
+
+    /// The dispatches waiting on the person, and the grants made for one chat (#1437).
+    pub fn dispatch_grants(&self) -> &crate::dispatchgrants::Store {
+        &self.dispatch_grants
+    }
+
+    /// This project, as the window names it.
+    pub fn plane_id(&self) -> &PlaneId {
+        &self.id
     }
 
     /// Tells the window chat `session`'s smart close is at `phase`.
@@ -1986,6 +1999,7 @@ impl Planes {
             smart: Arc::clone(&self.smart),
             brokered: purlis_core::brokered::Rate::default(),
             vault_refusals: crate::vaultroute::Refusals::default(),
+            dispatch_grants: crate::dispatchgrants::Store::default(),
             me,
         }
     }

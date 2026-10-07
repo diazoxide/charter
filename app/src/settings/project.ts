@@ -577,9 +577,9 @@ function declaredGroups(read: ProjectRead): SettingsGroup[] {
           ),
         ]
       : []),
-    // Dispatch (#1439): the limits, the grants' place and the policy's locks. It reads the core
+    // Dispatch (#1439, #1437): the limits, the grants and the policy's locks. It reads the core
     // on its own, as the Granted list does.
-    ...(read.plane !== undefined ? [dispatchGroup(read.plane)] : []),
+    ...(read.plane !== undefined ? [dispatchGroup(read.plane, read.shared.file)] : []),
     {
       id: "project.forges",
       label: "Forges",
