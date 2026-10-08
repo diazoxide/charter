@@ -98,7 +98,8 @@ export type NoticeProps = WayOut & {
  * A session's tab shows one of its chats at a time, and every chat that lives in the tab says
  * what it has to say on that tab's pane: nothing that waits for the person may be off screen.
  * So a Notice of a chat that is not on screen says whose it is before its sentence, `steward
- * 4:` or `talk, a task of steward 4:`, and has **Go to it**, which switches the tab to that
+ * 4:` or, for a task, its whole path, `deep (a task of steward 4 › talk):` (#1508), and has
+ * **Go to it**, which switches the tab to that
  * chat. Its ways out act on its own chat, as they always did: the Notice is that chat's, drawn
  * here. Nothing is provided for the chat on screen, whose Notices read as they always have.
  */

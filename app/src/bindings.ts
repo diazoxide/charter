@@ -379,6 +379,14 @@ export const commands = {
 	 *  (`restart_chat`).
 	 */
 	allowSandboxBlock: (plane: PlaneId, session: number, what: GrantWhat, target: string, level: GrantLevel) => typedError<Allowed, string>(__TAURI_INVOKE("allow_sandbox_block", { plane, session, what, target, level })),
+	/**
+	 *  **Allow on the one question for several tasks of chat `session`** (#1508, V100-57): every
+	 *  chat of `tasks` is a task below `session` by the app's own record, each is judged on its
+	 *  own, and the answer is kept for each task alone (`chat`), or once for every chat of the
+	 *  project on this machine (`you`) or for everyone in it (`project`), with each task owed a
+	 *  restart. The window then restarts each once its turn has ended (`restart_chat`).
+	 */
+	allowSandboxBlockForTasks: (plane: PlaneId, session: number, tasks: number[], what: GrantWhat, target: string, level: GrantLevel) => typedError<Allowed, string>(__TAURI_INVOKE("allow_sandbox_block_for_tasks", { plane, session, tasks, what, target, level })),
 	/**  Every grant in force here, for Settings' Granted list (#1348). */
 	sandboxGrants: (plane: PlaneId) => typedError<SandboxGrant[], string>(__TAURI_INVOKE("sandbox_grants", { plane })),
 	/**

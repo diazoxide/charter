@@ -717,3 +717,24 @@ each harness in a running app.
 
 Not covered: a chat in case B commits from a chat started in the branch folder, since the app
 uses the folder it recorded and takes none from the ask.
+
+## Amended (2026-10-09, #1508): a task's block, and one answer for several tasks
+
+The operator's ruling V100-57 (2026-10-08) adds to the amendment of 2026-10-06 (#1342):
+
+1. **A permission given to a session does not reach its tasks**, and one given to a task does
+   not reach its session or its siblings. "This chat" is kept under the one chat's own id, and a
+   task is a chat of its own, so a task starts with none of its session's.
+2. **A task's block is asked on its session's tab**, named by its whole path (`deep (a task of
+   steward 4 › talk)`), read from purlis's own record of who started whom and never from what a
+   chat says of itself.
+3. **Several tasks of one session blocked on the same host, or on writing the same folder, are
+   asked about in one Notice**, and its one answer applies to each task it lists and to no other
+   chat. **Allow for these tasks** is each task's own "this chat" grant, judged against that
+   task's own folder; **Always allow** is kept once, as §1 keeps it, and every task listed
+   restarts to take it; **Keep blocked** answers each task listed. The app grants only to chats
+   its record puts below that session, and refuses the answer whole otherwise. Every task is
+   judged before anything is kept, so one that cannot be allowed allows none.
+4. **An answer is to what was shown.** A task blocked after the question was drawn joins it
+   visibly, and an answer pressed just after that grants nothing and says why; once answered,
+   a task blocked later is asked in a new question.

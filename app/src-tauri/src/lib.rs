@@ -73,6 +73,7 @@ mod settings;
 mod slowstart;
 mod smartclose;
 mod stopping;
+mod taskblocks;
 mod thismachine;
 mod todos;
 mod updates;

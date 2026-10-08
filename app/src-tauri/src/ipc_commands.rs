@@ -59,6 +59,7 @@ macro_rules! app_commands {
                 sandboxing::sandbox_block_report,
                 sandboxing::file_sandbox_block_report,
                 sandboxing::allow_sandbox_block,
+                taskblocks::allow_sandbox_block_for_tasks,
                 sandboxing::sandbox_grants,
                 sandboxing::revoke_sandbox_grant,
                 sandboxing::owed_restarts,
