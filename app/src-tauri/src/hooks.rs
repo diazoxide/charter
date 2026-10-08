@@ -2089,6 +2089,7 @@ mod tests {
         let said = |path: &str| Touching {
             chat: 3,
             touching: path.to_owned(),
+            wrote: false,
         };
 
         assert_eq!(
@@ -2181,6 +2182,7 @@ mod tests {
             &purlis_core::hookwire::Touching {
                 chat: 3,
                 touching: file.clone(),
+                wrote: false,
             },
         )
         .expect("told");

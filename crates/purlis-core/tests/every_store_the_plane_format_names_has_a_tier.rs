@@ -555,6 +555,7 @@ fn a_chat_touches_a_file(run: &Path) {
     let touching = Touching {
         chat: 2,
         touching: file.clone(),
+        wrote: false,
     };
 
     // No app listening: the tool call is spooled, the touch is lost.

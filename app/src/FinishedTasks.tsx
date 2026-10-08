@@ -177,7 +177,7 @@ function FinishedRow({
             aria-label={`${task.branch === null ? "Changes" : "Review changes"} of ${task.name}`}
             title={
               task.branch === null
-                ? "Opens the files this task changed, and no other task's."
+                ? "Opens the files this task's edit tools wrote that are still uncommitted. Edits made by a shell command, and what it committed, are not listed."
                 : "Opens what its own branch changed, with Merge and Discard."
             }
             onClick={() => onChanges(task)}
@@ -221,7 +221,7 @@ function FinishedRow({
                   type="button"
                   className="report-changed-link"
                   tabIndex={0}
-                  title="Opens the files this task changed"
+                  title="Opens what purlis can tell this task changed"
                   onClick={() => onChanges(task)}
                 >
                   Changed:

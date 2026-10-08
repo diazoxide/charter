@@ -1513,6 +1513,11 @@ pub struct Touching {
     pub chat: u32,
     /// The path the tool was given, as the harness spelled it.
     pub touching: String,
+    /// Whether the tool was one that writes the file ([`crate::touching::writes`]): what a
+    /// task's Changes tab keeps (#1511). Absent from a line an older hook sent, and read as a
+    /// read then: a path only read is never listed as a change.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wrote: bool,
 }
 
 /// What hears a [`Touching`]. Nothing is answered: the hook does not wait for it.
@@ -5232,6 +5237,7 @@ mod tests {
         let touching = Touching {
             chat: 4,
             touching: "/w/branch/src/a.rs".to_owned(),
+            wrote: false,
         };
         let line = serde_json::to_string(&touching).unwrap();
         assert!(
@@ -5352,6 +5358,7 @@ mod tests {
         let touching = Touching {
             chat: 4,
             touching: "/w/branch/CANARY-touched.rs".to_owned(),
+            wrote: false,
         };
         assert!(touch(&path, Some(&ChatToken::from("t")), &touching).is_err());
         let mut written = Vec::new();

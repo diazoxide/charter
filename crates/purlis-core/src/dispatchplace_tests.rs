@@ -788,10 +788,19 @@ fn a_merge_that_is_refused_says_why_and_that_nothing_was_merged() {
     }
     // The repo's own settings stand in the way: the broker's refusal, in the window's words.
     let route = NotMerged::Route(NotDone::Repo("sets `filter.x.clean`".to_owned()));
-    assert!(
-        route
-            .in_window("api", branch)
-            .starts_with("purlis will not run git in api for this"),
+    assert_eq!(
+        route.in_window("api", branch),
+        "purlis will not run git in api for a merge: the repo's own git settings name a program, \
+         which git would run outside any sandbox. Merge it in your own terminal, or take that \
+         setting out of the repo. Nothing was merged."
+    );
+    // A folder that git cannot read is the route's sentence, as a discard says it.
+    let unread = NotMerged::Route(NotDone::Git(
+        "the folder is not the one purlis cut".to_owned(),
+    ));
+    assert_eq!(
+        unread.in_window("api", branch),
+        "the folder is not the one purlis cut"
     );
 }
 

@@ -62,6 +62,18 @@ pub fn of_tool(payload: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The file tools of [`FILE_TOOLS`] that write the file they name, rather than read it.
+pub const WRITE_TOOLS: [&str; 3] = ["Write", "Edit", "MultiEdit"];
+
+/// Whether the file tool of `payload` is one that writes ([`WRITE_TOOLS`]): what a task's
+/// Changes tab keeps of the paths its tools named (#1511). A read or a search is not a change.
+pub fn writes(payload: &Value) -> bool {
+    payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .is_some_and(|tool| WRITE_TOOLS.contains(&tool))
+}
+
 /// `said`, as a path inside `folder` written with `/`, or `None` when it is not one.
 ///
 /// An absolute path must lie under `folder` (as given, or as the file system resolves it); a
@@ -172,6 +184,23 @@ mod tests {
         }
         let grep = json!({"tool_name": "Grep", "tool_input": {"pattern": "x", "path": "/w/src"}});
         assert_eq!(of_tool(&grep).as_deref(), Some("/w/src"));
+    }
+
+    #[test]
+    fn only_a_tool_that_writes_the_file_is_said_to_have_written_it() {
+        for tool in ["Write", "Edit", "MultiEdit"] {
+            let payload = json!({"tool_name": tool, "tool_input": {"file_path": "/w/a.rs"}});
+            assert!(writes(&payload), "{tool}");
+        }
+        for payload in [
+            json!({"tool_name": "Read", "tool_input": {"file_path": "/w/a.rs"}}),
+            json!({"tool_name": "Grep", "tool_input": {"path": "/w"}}),
+            json!({"tool_name": "Bash", "tool_input": {"command": "sed -i s/a/b/ a.rs"}}),
+            json!({"tool_input": {"file_path": "/w/a.rs"}}),
+        ] {
+            assert!(!writes(&payload), "{payload}");
+        }
+        assert!(WRITE_TOOLS.iter().all(|tool| FILE_TOOLS.contains(tool)));
     }
 
     #[test]

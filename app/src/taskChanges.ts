@@ -58,7 +58,12 @@ export function ownSaid(own: OwnBranch): string {
 
 /** What the tab says above a task's files, where it worked in a folder other chats work in. */
 export const SHARED_SAID =
-  "It worked in a folder other chats work in. Listed are the files its own tools named that git finds changed there, and nothing else of that folder's.";
+  "It worked in a folder other chats work in. Listed are the files its own edit tools wrote that are still uncommitted there. Not listed: edits made by a shell command, changes it already committed, and anything from before the app was last started. A file someone else also changed since is listed whole.";
+
+/** What the tab says where git found more changes in a shared folder than it lists. */
+export function pastTheCap(more: number): string {
+  return `git found ${more} more changes in this folder than it lists, so a file this task wrote may be among them and not shown.`;
+}
 
 /** How many files a task's changes list, across every place. */
 export function filesIn(changes: TaskChanges): number {

@@ -20,6 +20,7 @@ import {
   mergeBlocked,
   mergeSays,
   ownSaid,
+  pastTheCap,
   placeOf,
   placeSaid,
   SHARED_SAID,
@@ -193,18 +194,23 @@ export function TaskChangesTab({
         </p>
       )}
       {read.unknown === null && filesIn(read) === 0 && (
-        <p className="none">No changed file to show.</p>
+        <p className="none">
+          {own === null
+            ? "No uncommitted file its edit tools wrote is listed here."
+            : "No changed file to show."}
+        </p>
       )}
       {read.places.map((place) => (
         <Place
           key={`${place.workspace}/${place.repo}/${place.piece ?? ""}`}
           place={place}
+          shared={own === null}
           onOpenView={onOpenView}
         />
       ))}
       {read.more && (
         <p className="honest">
-          Its tools named more files than are kept: only the first are listed.
+          Its edit tools wrote more files than are kept: only the first are listed.
         </p>
       )}
       {read.elsewhere.length > 0 && (
@@ -255,9 +261,12 @@ export function TaskChangesTab({
 /** The files a task changed in one repo's folder or one branch's: each opens its comparison. */
 function Place({
   place,
+  shared,
   onOpenView,
 }: {
   place: ChangedIn;
+  /** Whether it is a folder other chats work in: then `more` may hide a file of the task's. */
+  shared: boolean;
   onOpenView: (view: ViewRef, title: string) => void;
 }) {
   const where = placeOf(place);
@@ -287,12 +296,17 @@ function Place({
             {file.from !== null && <span className="none"> from {file.from}</span>}
             {file.uncommitted && <span className="none"> · not committed</span>}
             {file.also.length > 0 && (
-              <span className="honest"> · also named by {file.also.join(", ")}</span>
+              <span className="honest"> · also written by {file.also.join(", ")}</span>
             )}
           </li>
         ))}
       </ul>
-      {place.more > 0 && <p className="none">{`… and ${place.more} more`}</p>}
+      {place.more > 0 &&
+        (shared ? (
+          <p className="honest">{pastTheCap(place.more)}</p>
+        ) : (
+          <p className="none">{`… and ${place.more} more`}</p>
+        ))}
     </section>
   );
 }

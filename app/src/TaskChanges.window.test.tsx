@@ -246,11 +246,33 @@ describe("what a task changed", () => {
     const tab = await openChangesOf("Changes of tidy the docs");
 
     expect(within(tab).getByRole("button", { name: "docs/guide.md" })).toBeInTheDocument();
-    expect(tab).toHaveTextContent("also named by fix the queue");
+    expect(tab).toHaveTextContent("also written by fix the queue");
+    // What it cannot see is said, not left for the person to assume.
+    expect(tab).toHaveTextContent(
+      "Not listed: edits made by a shell command, changes it already committed",
+    );
     expect(tab).toHaveTextContent("not committed");
     // Nothing to merge or discard: it had no branch of its own.
     expect(within(tab).queryByRole("button", { name: "Merge…" })).toBeNull();
     expect(within(tab).queryByRole("button", { name: "Discard branch…" })).toBeNull();
+  });
+
+  it("says a file of the task's may be missing where the shared folder is past git's cap", async () => {
+    const was = CHANGES[BESIDE.id];
+    CHANGES[BESIDE.id] = { ...was, places: [{ ...was.places[0], more: 12 }] };
+    try {
+      core();
+      render(<App />);
+
+      const tab = await openChangesOf("Changes of tidy the docs");
+
+      expect(tab).toHaveTextContent(
+        "git found 12 more changes in this folder than it lists, so a file this task wrote may be among them and not shown.",
+      );
+      expect(tab).not.toHaveTextContent("… and 12 more");
+    } finally {
+      CHANGES[BESIDE.id] = was;
+    }
   });
 
   it("opens the same tab from the report's line about what changed", async () => {

@@ -9,19 +9,21 @@
 //!
 //! - **The list** ([`task_changes`]). A task on a branch of its own: what that branch changed
 //!   against the branch it was cut from, which is the task's alone. A task that worked in a
-//!   folder other chats work in: the files its own file tools named ([`Touched`], in memory
-//!   only) that git also finds changed there, each marked where a sibling named it too. Where
-//!   purlis holds no such list (the app was started again, or the harness reports no file
-//!   tool) it says so, and never shows the folder's changes as the task's.
+//!   folder other chats work in: the files its own edit tools wrote ([`Touched`], in memory
+//!   only) that git still finds uncommitted there, each marked where a sibling wrote it too. It
+//!   cannot see a shell command's edits, the task's own commits there, or anything after a
+//!   restart, and the tab says so. Where purlis holds no such list it says that too.
 //! - **Merge** ([`task_branch_merge_question`], [`task_branch_merge`]). The person's act, in
 //!   two steps: the question reads what would land, and the answer hands it back, so what is
 //!   merged is what they were shown or nothing is. A fast-forward or a refusal that says why.
 //!   Refused while the task still runs or a chat stands in the folder.
 //! - **Discard** is `crate::dispatches`' (#1453), asked the same way.
 //!
-//! **Only the person merges or discards.** Both are commands of the window alone
+//! **Only the person has purlis merge or discard.** Both are commands of the window alone
 //! (`purlis_session_protocol::ui::WINDOW_ONLY`): no link serves them, and no line on the hook
-//! channel names either. A chat may ask for a merge in words; nothing it sends performs one.
+//! channel names either. A chat may ask for a merge in words; nothing it sends to purlis
+//! performs one. (A chat started without the sandbox runs as the person, and can run git in
+//! the clone itself; a sandboxed one cannot.)
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
@@ -35,7 +37,7 @@ use purlis_core::taskchanges::{self as core, Paths, Working};
 use crate::piecefiles::{ChangeMark, FileChange};
 use crate::planes::{Held, PlaneId, Planes};
 
-/// The files each task's file tools named while this app has been running
+/// The files each task's edit tools wrote while this app has been running
 /// (`purlis_core::taskchanges::Touched`): in memory only, and never written (D-86a).
 #[derive(Default)]
 pub struct Touched(Mutex<core::Touched>);
@@ -57,11 +59,13 @@ impl Touched {
     }
 }
 
-/// A file tool of chat `touching.chat` named a path: kept for a chat a dispatch started,
-/// once it is confined to that chat's own folder, as a path of the project. The chat's word,
-/// so it marks nothing by itself: the Changes tab lists only the ones git also finds changed.
+/// A file tool of chat `touching.chat` named a path: kept for a chat a dispatch started where
+/// the tool writes ([`core::keeps`]), once it is confined to that chat's own folder, as a path
+/// of the project. The chat's word, so it marks nothing by itself: the Changes tab lists only
+/// the ones git also finds changed.
 pub(crate) fn touched(held: &Held, touching: &purlis_core::hookwire::Touching) {
-    if held.chats().handed_from(touching.chat).is_none() {
+    // Only what an edit tool wrote: a file a task read is not its change.
+    if !core::keeps(touching) || held.chats().handed_from(touching.chat).is_none() {
         return;
     }
     let Some(at) = held.chats().chat_at(touching.chat) else {
@@ -91,8 +95,8 @@ pub(crate) struct TaskFile {
     /// Where a renamed file came from: a name to show, never a path to open.
     pub from: Option<String>,
     pub uncommitted: bool,
-    /// The other tasks of the same chat whose tools named this file too, by name: its change
-    /// may be theirs in part.
+    /// The other tasks of the same chat whose edit tools wrote this file too, by name: its
+    /// change may be theirs in part. Another chat's or the person's edits are not marked.
     pub also: Vec<String>,
 }
 
@@ -106,7 +110,8 @@ pub(crate) struct ChangedIn {
     /// What the changes are counted against; `null` when against the last commit.
     pub base: Option<String>,
     pub files: Vec<TaskFile>,
-    /// How many changes past those are not listed.
+    /// How many changes git found past the most it lists. Of a task in a shared folder, a file
+    /// of its own past them is not listed.
     pub more: u32,
     /// Why purlis could not read what changed there, where it could not.
     pub unread: Option<String>,
@@ -139,10 +144,10 @@ pub(crate) struct TaskChanges {
     pub own: Option<OwnBranch>,
     /// The files it changed, by where they are.
     pub places: Vec<ChangedIn>,
-    /// Paths its tools named that lie in no repo, relative to the project: purlis has nothing
-    /// to compare them against, so they are named and not said to have changed.
+    /// Paths its edit tools wrote that lie in no repo, relative to the project: purlis has
+    /// nothing to compare them against, so they are named and not said to have changed.
     pub elsewhere: Vec<String>,
-    /// Whether its tools named more files than purlis kept.
+    /// Whether its edit tools wrote more files than purlis kept.
     pub more: bool,
     /// What its report says changed, in the task's own words.
     pub said: Option<String>,
@@ -153,9 +158,10 @@ pub(crate) struct TaskChanges {
 /// What a shared-folder task's tab says where purlis holds no list of its files.
 const NOT_KEPT: &str = "purlis cannot say which files this task changed. It worked in a folder \
                         other chats work in, where what tells tasks apart is the files each \
-                        one's own tools named. Those are kept in memory only: none is \
-                        held for this task, because the app was started again since it ran, \
-                        its harness reports no file tool, or it named no file.";
+                        one's own edit tools wrote. Those are kept in memory only, and none is \
+                        held for this task: the app was started again since it ran, more than \
+                        64 tasks were heard from since, its harness reports no file tool, or it \
+                        wrote no file with one (a shell command's edits are not seen).";
 
 /// The task's name: the one its dispatch gave it, else its chat's.
 fn name_of(record: &Record) -> String {
@@ -269,8 +275,8 @@ fn siblings(held: &Held, record: &Record) -> Vec<(String, Paths)> {
         .collect()
 }
 
-/// What a task that worked in a folder other chats work in changed: the files its own tools
-/// named that git finds changed there, and nothing else of that folder's.
+/// What a task that worked in a folder other chats work in changed: the files its own edit
+/// tools wrote that git still finds uncommitted there, and nothing else of that folder's.
 fn of_a_shared_folder(held: &Held, record: &Record, changes: &mut TaskChanges) {
     let kept = record
         .worker
@@ -313,8 +319,9 @@ fn of_a_shared_folder(held: &Held, record: &Record, changes: &mut TaskChanges) {
                 uncommitted: change.uncommitted,
             })
         });
-        // Listed in a place is what this task named there, never the count of the rest.
-        changes.places.push(ChangedIn { more: 0, ..place });
+        // Listed in a place is what this task wrote there. `more` stays git's count past its
+        // cap: a file of this task's past it is not listed, and the tab says so.
+        changes.places.push(place);
     }
 }
 
@@ -345,9 +352,10 @@ pub(crate) fn changes_of(held: &Held, id: &str) -> Result<TaskChanges, String> {
 
 /// What the task of dispatch `id` changed, and no other task's (#1511): for a task on a
 /// branch of its own, everything that branch holds against the branch it was cut from; for a
-/// task that worked in a folder other chats work in, the files its own tools named that git
-/// finds changed there, each marked where another task of the same chat named it too. Where
-/// purlis cannot say which files were the task's, it says so and lists none.
+/// task that worked in a folder other chats work in, the files its own edit tools wrote that
+/// git still finds uncommitted there, each marked where another task of the same chat wrote it
+/// too: not a shell command's edits, and not what the task committed there. Where purlis cannot
+/// say which files were the task's, it says so and lists none.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn task_changes(
@@ -640,6 +648,14 @@ mod tests {
             ["workspaces/alpha/api/a.rs"]
         );
         assert_eq!(touched.of("nobody"), None);
+    }
+
+    #[test]
+    fn the_cannot_tell_sentence_names_the_number_of_tasks_kept() {
+        assert!(
+            NOT_KEPT.contains(&format!("more than {} tasks", core::CHATS_KEPT)),
+            "{NOT_KEPT}"
+        );
     }
 
     #[test]

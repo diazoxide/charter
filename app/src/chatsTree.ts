@@ -30,7 +30,7 @@ export type ListedChat = {
   /** Whether it has a tab. A task has none until its row is clicked. */
   tab: boolean;
   /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
-   *  it, in a folder of its own, and nothing merges it. */
+   *  it, in a folder of its own, and only the person merges it (#1511). */
   branch: string | null;
   // And what its state is derived from beside the board's word (`RowFacts`): its record as a
   // task and its harness's name.

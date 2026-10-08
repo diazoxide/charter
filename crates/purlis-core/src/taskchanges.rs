@@ -9,13 +9,18 @@
 //! it.
 //!
 //! **A task that worked in a folder other chats work in too** cannot be told from them by git:
-//! a changed file there is whoever's. What tells tasks apart is which files each one's own file
-//! tools named while it ran ([`Touched`]), the same paths the explorer marks for a few seconds
-//! ([`crate::touching`]). Those are kept **in memory only** (D-86a): nothing here writes one,
-//! so the list is gone when the app is started again, and the window says so instead of
-//! showing the folder's changes as the task's. A path a task's tools named is the task's own
-//! word, so it is never shown as a change on that word alone: the window lists the ones git
-//! also finds changed, and marks one that another task of the same chat named too.
+//! a changed file there is whoever's. What sets a task's files apart is which files its own
+//! **edit tools wrote** while it ran ([`keeps`], [`Touched`]): the touching hook's line, which
+//! says whether its tool writes. A file it only read is never one of them. Those are kept **in
+//! memory only** (D-86a): nothing here writes one, so the list is gone when the app is started
+//! again, and the window says so. A path is the task's own word, so it is listed only where git
+//! also finds it changed, and marked where another task of the same chat wrote it too.
+//!
+//! **What this cannot see, and the window says so:** a change made by a shell command (a
+//! formatter, `sed`, a script), which no file tool names; a change the task already committed
+//! in that folder, which git no longer reports as changed there; a file another chat changed
+//! after this task wrote it; and anything after the app was started again, or of a task
+//! forgotten because more than [`CHATS_KEPT`] tasks were heard from since.
 //!
 //! **Two tasks in one folder are warned about when the second starts** ([`sharing`],
 //! [`shared`]): there are no file locks (V100-68), so the warning is what the person and the
@@ -74,6 +79,13 @@ impl Touched {
     pub fn of(&self, chat: &str) -> Option<&Paths> {
         self.by_chat.get(chat)
     }
+}
+
+/// Whether a task's Changes list keeps the path on `touching`: only a path an edit tool wrote
+/// ([`crate::touching::writes`]). A file a task only read or searched is not its change, and a
+/// line from an older hook, which says neither, is read as a read.
+pub fn keeps(touching: &crate::hookwire::Touching) -> bool {
+    touching.wrote
 }
 
 /// `touched`, a path inside `folder` as [`crate::touching::confine`] answers it, as a path
@@ -359,6 +371,25 @@ mod tests {
             said.ends_with("ask for one on a branch of its own."),
             "{said}"
         );
+    }
+
+    #[test]
+    fn a_file_a_task_only_read_is_not_kept_as_its_change() {
+        let line = |wrote: bool| crate::hookwire::Touching {
+            chat: 3,
+            touching: "/w/src/lib.rs".to_owned(),
+            wrote,
+        };
+
+        assert!(keeps(&line(true)));
+        assert!(!keeps(&line(false)));
+        // A line from a hook that predates the flag says nothing of writing: a read.
+        let older: crate::hookwire::Touching =
+            serde_json::from_str(r#"{"chat":3,"touching":"/w/src/lib.rs"}"#).unwrap();
+        assert!(!keeps(&older));
+        // And a write is said on the line, so the app can tell.
+        let said = serde_json::to_string(&line(true)).unwrap();
+        assert!(said.contains(r#""wrote":true"#), "{said}");
     }
 
     #[test]

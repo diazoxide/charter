@@ -1033,3 +1033,27 @@ fn a_merge_is_refused_by_the_broker_where_the_repo_s_own_config_names_a_program(
     );
     assert_eq!(main_at(&f), before, "no git ran for the merge");
 }
+
+#[test]
+fn a_merge_lands_the_commit_it_was_given_and_not_the_branch_s_newer_one() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("api");
+    let cut = cut(&f, "check the queue");
+    f.commit(&cut.path, "shown");
+    let shown = branch_at(&f, &cut.branch);
+    // A commit lands on the branch after the person was shown it.
+    f.commit(&cut.path, "not-shown");
+    assert_ne!(branch_at(&f, &cut.branch), shown);
+
+    let merged = worktree::merge_at(&f.plane, &f.ws, &f.repo, &cut.piece, Some(&shown))
+        .expect("the shown commit fast-forwards");
+
+    assert_eq!(merged.now, shown);
+    assert_eq!(
+        main_at(&f),
+        shown,
+        "main is at the shown commit, and no further"
+    );
+    assert!(f.clone.join("shown").is_file());
+    assert!(!f.clone.join("not-shown").exists());
+}

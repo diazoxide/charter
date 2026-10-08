@@ -903,7 +903,7 @@ const Row = memo(function Row({
                 {ownBranch !== null && (
                   <span
                     className="own-branch"
-                    title="A branch of its own, which nothing merges for it"
+                    title="A branch of its own, which only you merge, from the task's Changes"
                   >
                     {ownBranch}
                   </span>

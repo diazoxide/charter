@@ -1533,7 +1533,11 @@ fn tell_the_host_about_the_tool_call(
         let _ = hookwire::touch(
             std::path::Path::new(&socket),
             token.as_ref(),
-            &hookwire::Touching { chat, touching },
+            &hookwire::Touching {
+                chat,
+                touching,
+                wrote: purlis_core::touching::writes(&data),
+            },
         );
     }
 }

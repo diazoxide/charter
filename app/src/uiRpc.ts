@@ -867,9 +867,10 @@ export const commands = {
 	/**
 	 *  What the task of dispatch `id` changed, and no other task's (#1511): for a task on a
 	 *  branch of its own, everything that branch holds against the branch it was cut from; for a
-	 *  task that worked in a folder other chats work in, the files its own tools named that git
-	 *  finds changed there, each marked where another task of the same chat named it too. Where
-	 *  purlis cannot say which files were the task's, it says so and lists none.
+	 *  task that worked in a folder other chats work in, the files its own edit tools wrote that
+	 *  git still finds uncommitted there, each marked where another task of the same chat wrote it
+	 *  too: not a shell command's edits, and not what the task committed there. Where purlis cannot
+	 *  say which files were the task's, it says so and lists none.
 	 */
 	taskChanges: (plane: PlaneId, id: string) => typedError<TaskChanges, string>(__TAURI_INVOKE("task_changes", { plane, id })),
 	/**
@@ -2370,7 +2371,10 @@ export type ChangedIn = {
 	/**  What the changes are counted against; `null` when against the last commit. */
 	base: string | null,
 	files: TaskFile[],
-	/**  How many changes past those are not listed. */
+	/**
+	 *  How many changes git found past the most it lists. Of a task in a shared folder, a file
+	 *  of its own past them is not listed.
+	 */
 	more: number,
 	/**  Why purlis could not read what changed there, where it could not. */
 	unread: string | null,
@@ -5923,11 +5927,11 @@ export type TaskChanges = {
 	/**  The files it changed, by where they are. */
 	places: ChangedIn[],
 	/**
-	 *  Paths its tools named that lie in no repo, relative to the project: purlis has nothing
-	 *  to compare them against, so they are named and not said to have changed.
+	 *  Paths its edit tools wrote that lie in no repo, relative to the project: purlis has
+	 *  nothing to compare them against, so they are named and not said to have changed.
 	 */
 	elsewhere: string[],
-	/**  Whether its tools named more files than purlis kept. */
+	/**  Whether its edit tools wrote more files than purlis kept. */
 	more: boolean,
 	/**  What its report says changed, in the task's own words. */
 	said: string | null,
@@ -5944,8 +5948,8 @@ export type TaskFile = {
 	from: string | null,
 	uncommitted: boolean,
 	/**
-	 *  The other tasks of the same chat whose tools named this file too, by name: its change
-	 *  may be theirs in part.
+	 *  The other tasks of the same chat whose edit tools wrote this file too, by name: its
+	 *  change may be theirs in part. Another chat's or the person's edits are not marked.
 	 */
 	also: string[],
 };
