@@ -50,7 +50,7 @@ describe("filtering the Settings tab by name", () => {
     render(<SettingsTab />);
 
     expect(box()).toHaveValue("");
-    expect(inNav()).toEqual(["Text", "Editor", "This machine"]);
+    expect(inNav()).toEqual(["Text", "Editor", "Chats list", "This machine"]);
     expect(box().compareDocumentPosition(nav()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -125,7 +125,7 @@ describe("filtering the Settings tab by name", () => {
     expect(inNav()).toEqual(["Editor"]);
     await userEvent.clear(box());
 
-    expect(inNav()).toEqual(["Text", "Editor", "This machine"]);
+    expect(inNav()).toEqual(["Text", "Editor", "Chats list", "This machine"]);
     expect(group("Editor")).toHaveAttribute("aria-current", "true");
     expect(count()).toHaveTextContent(/^$/);
   });
@@ -136,7 +136,7 @@ describe("filtering the Settings tab by name", () => {
     await userEvent.type(box(), "zzz{Escape}");
 
     expect(box()).toHaveValue("");
-    expect(inNav()).toEqual(["Text", "Editor", "This machine"]);
+    expect(inNav()).toEqual(["Text", "Editor", "Chats list", "This machine"]);
   });
 });
 

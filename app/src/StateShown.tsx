@@ -20,7 +20,7 @@ import { property } from "./theme/theme";
  * triangle, not two more rings a few pixels apart. `dot` is the same circle filled
  * (`.shown-state [data-shape="dot"]`), since an outline that small is no mark at all.
  */
-const SHAPES: Readonly<Record<ShownShape, LucideIcon>> = {
+export const SHAPES: Readonly<Record<ShownShape, LucideIcon>> = {
   ring: Circle,
   hand: Hand,
   question: MessageCircleQuestion,
