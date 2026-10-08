@@ -262,6 +262,7 @@ import { stateClock } from "./stateClock";
 import { TASK_KEY_ROW, taskKeyOf } from "./taskKeys";
 import { usePretendTasks } from "./e2eTasks";
 import { BriefButton, BriefOpener, BriefPanel, type BriefAsk, type OpenBrief } from "./Brief";
+import { activityTitle, activityView } from "./activity";
 import { PaneCrumbs } from "./PaneCrumbs";
 import { ChipExplained, type ChipToExplain } from "./ChipExplained";
 import {
@@ -6018,6 +6019,14 @@ export const PlaneView = memo(function PlaneView({
   );
   /** What a tab's chats used, for its menu (#1500): read only as the window asks. */
   const usedFromChip = useCallback((ask: UsedAsk) => readUsed(plane, "menu", ask), [plane]);
+  /** Opens a session's Activity from its tab's menu (#1495): the view the catalogue's
+   *  `tab.activity` row opens, named as the chat is now. One function for the window's life. */
+  const activityNow = useRef<(session: number) => void>(() => undefined);
+  useEffect(() => {
+    activityNow.current = (session) =>
+      showView(activityView(session), activityTitle(nameOfNow.current(session)));
+  });
+  const activityFromChip = useCallback((session: number) => activityNow.current(session), []);
 
   /**
    * **A tab on the strip was pressed.** One that is behind comes forward, on whatever it was
@@ -6815,6 +6824,7 @@ export const PlaneView = memo(function PlaneView({
                               used={usedFromChip}
                               limits={runningOfTab.get(id)}
                               stopAll={stopAllOf}
+                              onActivity={activityFromChip}
                             />
                             <FreshMark
                               id={freshMarkOf(id)}
@@ -7725,17 +7735,17 @@ function Lent({
   return (
     <ChatsHere.Provider value={chats}>
       <TasksBelowLent below={tasksBelow}>
-  <DoingsHere.Provider value={doings}>
-        <ReferenceChats.Provider value={references}>
-          <PersonaMarks.Provider value={personas.marks}>
-            <ReloadPersonaMarks.Provider value={personas.reload}>
-              <AskPersonaOpener value={askPersona}>
-                <BriefOpener value={brief}>{children}</BriefOpener>
-              </AskPersonaOpener>
-            </ReloadPersonaMarks.Provider>
-          </PersonaMarks.Provider>
-        </ReferenceChats.Provider>
-  </DoingsHere.Provider>
+        <DoingsHere.Provider value={doings}>
+          <ReferenceChats.Provider value={references}>
+            <PersonaMarks.Provider value={personas.marks}>
+              <ReloadPersonaMarks.Provider value={personas.reload}>
+                <AskPersonaOpener value={askPersona}>
+                  <BriefOpener value={brief}>{children}</BriefOpener>
+                </AskPersonaOpener>
+              </ReloadPersonaMarks.Provider>
+            </PersonaMarks.Provider>
+          </ReferenceChats.Provider>
+        </DoingsHere.Provider>
       </TasksBelowLent>
     </ChatsHere.Provider>
   );

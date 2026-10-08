@@ -1875,6 +1875,21 @@ button.show-more:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* What an open task is doing (#1493), after how long: one dim line that is cut short, and
+   nothing at all, not even the gap, while nothing is said of it. */
+.tasks-menu-row .doing {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9em;
+}
+
+.tasks-menu-row .doing:empty {
+  display: none;
+}
+
 .tasks-menu-fold,
 .tasks-menu-end {
   color: var(--text-secondary);

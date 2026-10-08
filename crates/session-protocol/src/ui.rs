@@ -113,9 +113,11 @@ pub struct Server {
 /// start and restart nothing. They are served to a `local-ui` peer of the same build, and
 /// whether they join this list awaits a ruling.
 ///
-/// **And every command that reads back what a task was sent** (#1494): `task_brief`. A brief
-/// is whatever the work held, and the store it is read from is kept from the project's chats,
-/// so the read is held to the window's own IPC too.
+/// **And every command that reads back what one chat said to another, or was sent**: what a
+/// task was sent (`task_brief`, #1494), what a session and its tasks said to each other
+/// (`activity`, #1495), and the question a task is paused on (`task_question`, #1496). Each
+/// reads words a chat wrote, from a store kept from the project's chats, about a session the
+/// caller names; no link can say which chat is asking, so none is served on one.
 ///
 /// `answer_task_question` answers, as the person, a question a task put to its asking chat
 /// (#1496). What it sends reaches a chat marked as the person's own words, so it is held to
@@ -156,8 +158,10 @@ pub const WINDOW_ONLY: &[&str] = &[
     "restart_chat",
     "start_chat_fresh",
     "ask_chat_restart",
-    // Reads what a task was sent.
+    // Reads what a chat was sent or said to another.
     "task_brief",
+    "activity",
+    "task_question",
     // Answers as the person.
     "answer_task_question",
 ];

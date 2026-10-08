@@ -459,16 +459,18 @@ describe("moving a task to a tab of its own", () => {
     // the line, which would have shown the task in this tab.
     menu = await open();
     const places = [...lineOf(menu, "talk").querySelectorAll<HTMLElement>(".tasks-menu-place")];
+    // Then its Brief (#1494), which reads and moves nothing.
     expect(places.map((one) => one.dataset.says)).toEqual([
       "Move talk to its own tab",
       "Open talk beside its session",
+      "Brief of talk",
     ]);
     // sweep is in its own tab: its line offers the way back, and not a second tab.
     expect(
       [...lineOf(menu, "sweep").querySelectorAll<HTMLElement>(".tasks-menu-place")].map(
         (one) => one.dataset.says,
       ),
-    ).toEqual(["Open sweep beside its session", "Send sweep back into this tab"]);
+    ).toEqual(["Open sweep beside its session", "Send sweep back into this tab", "Brief of sweep"]);
     // The session's own chat has none: it is its tab.
     expect(lineOf(menu, "steward 1").querySelector(".tasks-menu-place")).toBeNull();
     press(places[1]);
@@ -630,8 +632,13 @@ describe("opening a task beside its session", () => {
     const menu = await screen.findByRole("menu", { name: /^Tasks of steward 1/ });
     const names = within(menu)
       .getAllByRole("menuitem")
-      // Less the one line that opens the ways to end a task (#1488), which is no chat's.
-      .filter((item) => !item.classList.contains("tasks-menu-end"))
+      // Less the line that opens the ways to end a task (#1488) and the session's Activity
+      // (#1495), which are no chat's.
+      .filter(
+        (item) =>
+          !item.classList.contains("tasks-menu-end") &&
+          !item.classList.contains("tasks-menu-activity"),
+      )
       .map((item) => item.querySelector(".name")?.textContent);
     expect(names).toEqual(["steward 1", "talk", "deep", "sweep", "probe"]);
     expect(within(menu).getByText(", beside it")).toBeTruthy();
