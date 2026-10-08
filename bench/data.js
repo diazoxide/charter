@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791432289705,
+  "lastUpdate": 1791433706068,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3402,6 +3402,48 @@ window.BENCHMARK_DATA = {
             "value": 103.56867700000001,
             "unit": "ms",
             "extra": "median of 5 runs: 102.025, 102.306, 103.569, 103.831, 104.532 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "1a086ba68815cf4367196e72c492be43346c71d1",
+          "message": "worktree: a sandboxed chat in a branch folder commits through the app\n\nA linked worktree keeps its index, its HEAD and its objects in its clone's\n`.git`, outside what a sandboxed chat may write, so `git add` and `git\ncommit` are refused there. By the operator's ruling (V99h) the worktree's git\ndirectory is not opened to the chat: purlis brokers the commit.\n\n`purlis worktree commit -m <message> [--all | <path>…]` sends the app an ask\nover the chat's hook socket that names the message and what to stage, and\nnothing else. The app commits in the folder it recorded the chat as standing\nin, on the branch that folder is on, with the repository's identity or the\nperson's and the chat's trailers (ADR 0074). Every git call is held to the\nchecked git directory wherever in the folder the chat stands, reads no\nglobal or system config, and runs no hook. A repository whose config names a\nprogram, has a config of the worktree's own, borrows objects or signs its\ncommits is refused. What was staged is read back: another repository inside\nthe folder, a change to `.gitmodules`, a name that differs from another only\nby case, and a file its attributes mark for a content filter are unstaged\nand refused. purlis's own scan runs in the app. It only commits.\n\nOne commit runs in a branch folder at a time, by its own deadlines. The app\nnotes what it staged in the worktree's git directory, so a commit it was\nstopped in the middle of is unstaged by the next ask.\n\nA dispatched task's own worktree is such a folder, and the chat started in\nit is now told the command where it was told it could not commit.\n\nADR 0067 is amended with the measurement the ticket asked for and the\ndecision. A chat started in a branch folder is told the command. The ticket\nstays open: no linked worktree has been measured under a sandbox's denial.\n\nDecided in implementation:\n- D-1055-1: a plain clone already commits inside the sandbox, by named\n  denials. The same recipe for a worktree was not taken (ADR 0067's note).\n- D-1055-2: the repository's own hooks do not run for a brokered commit; the\n  answer names each one that is there.\n- D-1055-3: the command is `purlis worktree commit`; `--all` is every change\n  to a tracked file, and a new file is named by path.\n- D-1055-7: no approval, and no pre-allow on Claude Code yet: the rule that\n  asks about a pre-allowed command sharing its call is not on main.\n- D-1055-8: the folder is the one the app recorded for the chat, so a chat\n  standing above a branch folder does not commit in it.\n- D-1055-9: staged changes the app did not stage are refused, so what is\n  committed is exactly what the ask named, and a refusal can put the index\n  back.\n- D-1055-10: the repository's own `user.name` and `user.email` win over the\n  person's global ones, as they do for git.\n- D-1055-11: a repository that signs its commits is refused: a signer is a\n  program and may prompt.\n- D-1055-13: a file marked for a content filter is refused, not committed\n  unfiltered: the person's filters are in the config this commit does not\n  read.\n\nTests: the ask's shape and the path rules are pure; the git half runs\nagainst real git on a worktree whose git data is kept beside it; the tests\non purlis's own layout write under a `.git`, so CI is their first run.\n\nRefs #1055\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-08T08:26:52+04:00",
+          "tree_id": "757dc9c755910f8a181e06dfaf330e619f1bed54",
+          "url": "https://github.com/purlis/purlis/commit/1a086ba68815cf4367196e72c492be43346c71d1"
+        },
+        "date": 1791433704879,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5309984999999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.493, 0.507, 0.531, 0.549, 0.549 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.117109499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.515, 16.589, 17.117, 17.214, 17.343 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.508757,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.008, 103.317, 104.509, 104.531, 106.128 ms"
           }
         ]
       }
