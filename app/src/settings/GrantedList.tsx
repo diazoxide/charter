@@ -29,7 +29,9 @@ export function grantSaid(one: SandboxGrant): string {
       ? `Reach ${one.target}`
       : one.what === "vault"
         ? `Use vault ${one.target} as ${one.persona ?? "a persona"}`
-        : `Write ${one.target} and everything in it`;
+        : one.what === "persona-hosts"
+          ? `Chats as ${one.persona ?? "a persona"} reach ${one.target}`
+          : `Write ${one.target} and everything in it`;
   const by =
     one.level !== "project"
       ? "granted by you"
@@ -45,6 +47,7 @@ export function grantSaid(one: SandboxGrant): string {
 function revoked(one: SandboxGrant): string {
   if (one.what === "host") return `reaching ${one.target}`;
   if (one.what === "vault") return `using vault ${one.target} as ${one.persona ?? "a persona"}`;
+  if (one.what === "persona-hosts") return `${one.persona ?? "a persona"}'s hosts`;
   return `writing ${one.target}`;
 }
 

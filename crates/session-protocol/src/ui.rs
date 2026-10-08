@@ -105,6 +105,10 @@ pub struct Server {
 /// - **it starts a chat again**: `restart_chat_without_sandbox`, `restart_chat`,
 ///   `start_chat_fresh`, `ask_chat_restart`.
 ///
+/// - **it lets a persona's committed hosts reach past this machine's sandbox** (#1362):
+///   `allow_persona_hosts`, which the person at this machine's window allows as it was shown
+///   there.
+///
 /// None is served on a link. A command added later that does one of these belongs here.
 ///
 /// **What this rule does not cover.** The other commands that act as the person (an answer
@@ -144,6 +148,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "restart_chat",
     "start_chat_fresh",
     "ask_chat_restart",
+    // Widens what a persona's chats reach on this machine.
+    "allow_persona_hosts",
 ];
 
 /// The commands that take a vault's sign-in from the person and use it (#1527, ADR 0052 as

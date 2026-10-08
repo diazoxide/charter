@@ -13,9 +13,19 @@
 //! own persona's charter (spec #1330, amended 2026-10-06), so a grant written there would be a
 //! grant a chat could write itself. `charter.toml` at the project root is a later-code name no
 //! chat writes ([`super::PLANTED`]), a brokered write refuses any change under `[sandbox]`
-//! ([`super::changes_a_sandbox_key`]), and every teammate is told once when a persona's hosts
-//! change ([`super::local::hosts_changed`]), exactly as for the project's own hosts. Each entry
-//! goes through [`Host::parse`], so it is refused for everything a project's host is.
+//! ([`super::changes_a_sandbox_key`]). Each entry goes through [`Host::parse`], so it is refused
+//! for everything a project's host is: a private address is one exact address with an optional
+//! exact port, and no wildcard or range ever names addresses.
+//!
+//! **Allowed on each machine, bound to what was shown** (D-1362-7). A persona's hosts are
+//! committed, so a teammate can change them; and they are the hosts that reach past the
+//! presets into private networks. So, unlike the project's own hosts, which apply and are told
+//! once, a persona's reach nothing on a machine until the person there allows them on the
+//! arrival Notice ([`shown`]). The Allow is kept with the [`digest`] of the list the Notice
+//! showed ([`super::local::allow_persona_hosts`]), and checked against the list as it is when
+//! it is pressed ([`shown_now`]). A list that changes in any way after it was allowed grants
+//! nothing until it is allowed again ([`in_force_here`]): never a part of it, never the old
+//! one.
 //!
 //! **A chat running as that persona gets them** ([`super::Compiled::of`], at the
 //! [`super::hosts::Level::Persona`] level); a chat on another persona does not, and a chat that
@@ -43,8 +53,10 @@
 //! `purlis secret exec`) are the next slice of #1362 and are not read yet.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use super::hosts::{self, Host};
+use super::policy::Locks;
 
 /// The key in `[sandbox]` that holds each persona's grants.
 pub const KEY: &str = "personas";
@@ -148,4 +160,142 @@ pub fn held_unless_within(
     (!within).then(|| crate::reopen::HeldGrants {
         persona: trusted.map(str::to_owned),
     })
+}
+
+// ---- allowed on this machine, bound to what was shown (#1362, D-1362-7) ----------------------
+
+/// **The digest an Allow of a persona's hosts is bound to**: SHA-256 over the hosts as the
+/// sandbox spells them, sorted and once each, so order is no change and any other change is.
+pub fn digest(hosts: &[Host]) -> String {
+    use sha2::Digest;
+    let mut spelled: Vec<String> = hosts.iter().map(ToString::to_string).collect();
+    spelled.sort();
+    spelled.dedup();
+    let text = format!("purlis persona hosts 1\n{}", spelled.join("\n"));
+    crate::extension::hex(&sha2::Sha256::digest(text.as_bytes()))
+}
+
+/// `grants`' hosts as a chat would reach them under `locks`: none a policy locks out (#1343),
+/// so the Notice never asks for a host no chat would reach.
+fn reached(grants: &Grants, locks: &Locks) -> Vec<Host> {
+    grants
+        .hosts
+        .iter()
+        .filter(|host| {
+            locks
+                .refuses(&hosts::Granted {
+                    host: (*host).clone(),
+                    level: hosts::Level::Persona,
+                })
+                .is_none()
+        })
+        .cloned()
+        .collect()
+}
+
+/// **The hosts a chat running as `persona` holds on this machine**, in the project at `root`:
+/// its persona's hosts under `locks`, all of them where the person here allowed exactly this
+/// list ([`digest`]), and none otherwise. Nothing for a chat on no persona, or on one the
+/// project grants nothing. A record that cannot be read allows nothing.
+pub fn in_force_here(
+    root: &Path,
+    personas: &BTreeMap<String, Grants>,
+    persona: Option<&str>,
+    locks: &Locks,
+) -> Vec<Host> {
+    let (Some(name), Some(grants)) = (persona, of(personas, persona)) else {
+        return Vec::new();
+    };
+    let hosts = reached(grants, locks);
+    if hosts.is_empty() || !allowed_here(root, name, &hosts) {
+        return Vec::new();
+    }
+    hosts
+}
+
+/// Whether the person allowed exactly `hosts` for `persona` in the project at `root`.
+fn allowed_here(root: &Path, persona: &str, hosts: &[Host]) -> bool {
+    let now = digest(hosts);
+    super::local::allowed_persona_hosts(root)
+        .iter()
+        .any(|(allowed, was)| allowed == persona && *was == now)
+}
+
+/// One persona's hosts as the arrival Notice and Settings show them on this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    pub persona: String,
+    /// Its hosts as the project's file lists them.
+    pub listed: Vec<Host>,
+    /// Those a chat would reach, the ones an Allow allows: none a policy locks out. Empty
+    /// where a policy forbids persona hosts, and then nothing is asked.
+    pub hosts: Vec<Host>,
+    /// What an Allow of exactly this list is bound to ([`digest`]).
+    pub digest: String,
+    /// Whether the person allowed exactly this list here.
+    pub allowed: bool,
+}
+
+/// **Each persona's hosts in the project at `root`**, as this machine would grant them, and
+/// whether the person here allowed them: the arrival Notice asks for each one not allowed that
+/// has a host a chat would reach (none where a policy forbids persona hosts, #1343). None where
+/// the project's chats are not sandboxed, and none for a persona that lists no host.
+pub fn shown(root: &Path) -> Vec<Shown> {
+    shown_in(root, &super::Plane::read(root), &Locks::of(root))
+}
+
+/// [`shown`], for the project at `root` read as `plane`, under `locks`.
+pub fn shown_in(root: &Path, plane: &super::Plane, locks: &Locks) -> Vec<Shown> {
+    let Some(policy) = plane.in_force(locks) else {
+        return Vec::new();
+    };
+    policy
+        .personas
+        .iter()
+        .filter(|(_, grants)| !grants.hosts.is_empty())
+        .map(|(persona, grants)| {
+            let hosts = reached(grants, locks);
+            Shown {
+                persona: persona.clone(),
+                listed: grants.hosts.clone(),
+                digest: digest(&hosts),
+                allowed: !hosts.is_empty() && allowed_here(root, persona, &hosts),
+                hosts,
+            }
+        })
+        .collect()
+}
+
+/// **What an Allow of `persona`'s hosts allows**, where `digest` is the digest of the list as
+/// it stands now: the list the window showed is the list kept. Refused, with a sentence, where
+/// the persona has no hosts here or they changed after they were shown.
+pub fn shown_now(root: &Path, persona: &str, digest: &str) -> Result<Shown, String> {
+    pick(shown(root), persona, digest)
+}
+
+/// [`shown_now`] among `shown`, each persona's hosts as they stand now.
+pub fn pick(shown: Vec<Shown>, persona: &str, digest: &str) -> Result<Shown, String> {
+    let now = shown
+        .into_iter()
+        .find(|one| one.persona == persona && !one.hosts.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "purlis allowed nothing: chats as {persona} have no hosts of their own in this                  project now."
+            )
+        })?;
+    if now.digest != digest {
+        return Err(format!(
+            "purlis allowed nothing: {persona}'s hosts changed after they were shown. Look at              them again."
+        ));
+    }
+    Ok(now)
+}
+
+/// Tests' stand-in for a person who allowed every persona's hosts in `policy`, as listed, at
+/// `root`.
+#[cfg(test)]
+pub(crate) fn allow_every_as_listed(root: &Path, policy: &super::Policy) {
+    for (persona, grants) in &policy.personas {
+        super::local::allow_persona_hosts(root, persona, &digest(&grants.hosts)).expect("kept");
+    }
 }

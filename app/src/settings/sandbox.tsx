@@ -302,8 +302,10 @@ export function sandboxNotes(shared: Shown, sandbox: SandboxState | undefined): 
           (one) =>
             `A chat as ${one.persona} reaches none of its own hosts (${listed(one.hosts)}). ${lockedBy}`,
         )
-      : (sandbox?.persona_hosts ?? []).map(
-          (one) => `A chat as ${one.persona} also reaches ${listed(one.hosts)}.`,
+      : (sandbox?.persona_hosts ?? []).map((one) =>
+          one.allowed
+            ? `A chat as ${one.persona} also reaches ${listed(one.reached)}.`
+            : `A chat as ${one.persona} reaches ${listed(one.hosts)} only once you allow them on this machine, on the project's notice.`,
         )),
     ...(allowedHosts !== null
       ? [

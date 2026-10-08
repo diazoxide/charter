@@ -2259,6 +2259,8 @@ mod tests {
         // The persona a start compiles its grants for, exactly as `start::ready` picks it.
         let persona =
             crate::start::grants_persona(start.held.as_ref(), start.persona.as_deref(), || None);
+        // A machine where the person allowed every persona's hosts (D-1362-7).
+        crate::sandbox::persona::allow_every_as_listed(root.path(), &policy);
         Compiled::granted(
             &policy,
             &plane,

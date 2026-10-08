@@ -331,6 +331,13 @@ export const commands = {
 	 */
 	acknowledgeProjectHosts: (plane: PlaneId, shown: string[]) => typedError<SandboxState, string>(__TAURI_INVOKE("acknowledge_project_hosts", { plane, shown })),
 	/**
+	 *  **Allow** on a persona's hosts' Notice (#1362, D-1362-7): the person lets chats running as
+	 *  `persona` reach its committed hosts on this machine, exactly as the Notice showed them,
+	 *  `digest`. A list that changed since it was shown is refused, and nothing is kept. The window's
+	 *  alone (`WINDOW_ONLY`): no link and no chat makes it.
+	 */
+	allowPersonaHosts: (plane: PlaneId, persona: string, digest: string) => typedError<SandboxState, string>(__TAURI_INVOKE("allow_persona_hosts", { plane, persona, digest })),
+	/**
 	 *  Whether chat `session` holds the asking chat's persona grants instead of its own, and whose
 	 *  (#1362): `null` for a chat that holds its own.
 	 */
@@ -3488,7 +3495,12 @@ export type GrantWhat =
  *  persona (#1430). Granted from a refused vault's Notice (`crate::vaultroute`), never from
  *  a block's Allow.
  */
-"vault";
+"vault" | 
+/**
+ *  A persona's committed hosts, which you allowed on this machine (#1362). Allowed from
+ *  their own Notice (`allow_persona_hosts`), never from a block's Allow.
+ */
+"persona-hosts";
 
 /**  The folders chats may be granted, and those just dropped from the list. */
 export type GrantableFolders = {
@@ -4563,10 +4575,26 @@ export type PersonaChatState =
 /**  Its program ended before it reported, and the chat that asked was told it failed. */
 "ended";
 
-/**  The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`). */
+/**
+ *  The hosts one persona's chats reach besides the project's (`[sandbox.personas.<name>]`),
+ *  and whether the person allowed them on this machine (#1362, D-1362-7).
+ */
 export type PersonaHosts = {
 	persona: string,
+	/**  Each as the project's file lists it. */
 	hosts: string[],
+	/**
+	 *  Those a chat would reach, which an Allow allows: none an administrator's policy locks
+	 *  out. Empty where policy forbids persona hosts, and then nothing is asked.
+	 */
+	reached: string[],
+	/**  What an Allow of exactly this list sends back (`allow_persona_hosts`). */
+	digest: string,
+	/**
+	 *  Whether the person allowed exactly this list here. Until then no chat reaches them, and
+	 *  the project view's Notice asks.
+	 */
+	allowed: boolean,
 };
 
 /**
@@ -5451,9 +5479,9 @@ export type SandboxGrant = {
 	/**  What Revoke is sent by. */
 	id: string,
 	what: GrantWhat,
-	/**  The host, the folder, or the vault's name. */
+	/**  The host, the folder, the vault's name, or a persona's hosts. */
 	target: string,
-	/**  For a vault, the persona whose chats may use it. */
+	/**  For a vault, the persona whose chats may use it; for a persona's hosts, that persona. */
 	persona: string | null,
 	level: GrantLevel,
 	/**

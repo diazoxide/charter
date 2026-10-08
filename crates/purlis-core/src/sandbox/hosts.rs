@@ -19,7 +19,8 @@
 //! machine's: `[sandbox] hosts` in `charter.local.toml`, read only while git leaves that file
 //! alone ([`crate::settings::layer_text`]). A **Persona**'s hosts (#1362) are a third level:
 //! `[sandbox.personas.<name>] hosts` in the committed file, granted only to a chat running as
-//! that persona ([`super::persona`]).
+//! that persona, and only once the person on this machine allowed the list as it stands
+//! ([`super::persona::in_force_here`], D-1362-7).
 //!
 //! **No chat writes either list.** Both files are later-code names a sandboxed chat never writes
 //! ([`super::PLANTED`]): that denial is the boundary today. [`super::changes_a_sandbox_key`] is

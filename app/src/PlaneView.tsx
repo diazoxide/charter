@@ -305,6 +305,7 @@ import {
 } from "./AskPersona";
 import { SandboxOffer } from "./SandboxOffer";
 import { ProjectHostsNotice } from "./ProjectHostsNotice";
+import { PersonaHostsNotice } from "./PersonaHostsNotice";
 import { ProjectDispatchNotice } from "./ProjectDispatchNotice";
 import type {
   ExtensionCommand,
@@ -6883,6 +6884,8 @@ export const PlaneView = memo(function PlaneView({
           plane={plane}
           onReview={() => openSettingsAt({ group: "project.sandbox" })}
         />
+        {/* **A persona's hosts wait for you** (#1362): asked on each machine, never told. */}
+        <PersonaHostsNotice plane={plane} />
         {/* **The project's dispatch grants changed** (#1437): told once to each teammate. */}
         <ProjectDispatchNotice
           plane={plane}

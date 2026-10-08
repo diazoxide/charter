@@ -4475,6 +4475,16 @@ pub(crate) mod tests {
             );
         };
         devops_reaches("\"ops.example\"");
+        // The person here allowed devops's hosts as they were first committed (D-1362-7).
+        purlis_core::sandbox::local::allow_persona_hosts(
+            plane.path(),
+            "devops",
+            &purlis_core::sandbox::persona::digest(&[purlis_core::sandbox::hosts::Host::parse(
+                "ops.example",
+            )
+            .expect("a host")]),
+        )
+        .expect("kept");
         let compiled_as = |persona: Option<&str>| {
             let decided = purlis_core::sandbox::decide_granted(
                 Harness::ClaudeCode,

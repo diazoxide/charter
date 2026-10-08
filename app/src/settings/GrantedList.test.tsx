@@ -210,6 +210,40 @@ describe("the Granted list", () => {
     ).toBeVisible();
   });
 
+  it("lists a persona's hosts you allowed, credited to the persona, and revokes them (#1362)", async () => {
+    const DEVOPS: SandboxGrant = {
+      id: "you\u001fpersona-hosts\u001fdevops",
+      what: "persona-hosts",
+      target: "10.100.39.145:6443, *.internal.example",
+      persona: "devops",
+      level: "you",
+      by: null,
+      at: null,
+      chat: null,
+      locked: null,
+    };
+    expect(grantSaid(DEVOPS)).toBe(
+      "Chats as devops reach 10.100.39.145:6443, *.internal.example · Me on this machine · granted by you",
+    );
+    const asked: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      asked.push({ cmd, args });
+      if (cmd === "sandbox_grants") return [DEVOPS];
+      if (cmd === "revoke_sandbox_grant") return [];
+      return null;
+    });
+    render(<Granted />);
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Revoke devops's hosts" }));
+    await waitFor(() =>
+      expect(asked).toContainEqual({
+        cmd: "revoke_sandbox_grant",
+        args: { plane: PLANE, id: DEVOPS.id },
+      }),
+    );
+  });
+
   it("names a grant with no time as it is", () => {
     expect(grantSaid(MINE)).toBe(
       "Write /opt/cache and everything in it · Me on this machine · granted by you",

@@ -34,6 +34,8 @@ fn policy() -> Policy {
 /// The project compiled for a chat running as `persona` with `chat`'s grants, under `under`.
 fn compiled(under: &Locks, persona: Option<&str>, chat: &Grants) -> Compiled {
     let root = tempfile::tempdir().expect("a project");
+    // A machine where the person allowed devops's hosts as listed (D-1362-7).
+    super::super::persona::allow_every_as_listed(root.path(), &policy());
     TEST_LOCKS.with(|locks| *locks.borrow_mut() = under.clone());
     let compiled = Compiled::granted(
         &policy(),
@@ -967,10 +969,10 @@ fn the_hosts_changed_notice_names_no_host_policy_locks_out() {
             "build.corp.example",
             "pastebin.example",
             "git.corp.example",
-            "10.0.0.5:6443 for devops chats"
         ]
     );
-    // A hosts list holds the project's own and its forges'; a persona's are forbidden apart.
+    // A hosts list holds the project's own and its forges'. A persona's are never told here:
+    // they are asked for apart (D-1362-7).
     assert_eq!(
         plane.granted_hosts(&locks(
             r#"{"sandbox": {"hosts": ["*.corp.example"], "persona-hosts": false}}"#
@@ -980,11 +982,7 @@ fn the_hosts_changed_notice_names_no_host_policy_locks_out() {
     // A forge's host reaches nothing while policy turns the forge preset off.
     assert_eq!(
         plane.granted_hosts(&locks(r#"{"sandbox": {"presets": ["model-providers"]}}"#)),
-        [
-            "api.example.com",
-            "build.corp.example",
-            "10.0.0.5:6443 for devops chats"
-        ]
+        ["api.example.com", "build.corp.example"]
     );
     // In a project that has not turned the sandbox on, nothing is told until policy requires it.
     let off = Plane::of(Some("[sandbox]\nhosts = [\"api.example.com\"]\n"));

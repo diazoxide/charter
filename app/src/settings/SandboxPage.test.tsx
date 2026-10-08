@@ -381,7 +381,20 @@ describe("Settings › Project › Sandbox", () => {
     core({
       sandbox: state({
         persona_hosts: [
-          { persona: "devops", hosts: ["10.0.0.5:6443", "charter.toml.example.com"] },
+          {
+            persona: "devops",
+            hosts: ["10.0.0.5:6443", "charter.toml.example.com"],
+            reached: ["10.0.0.5:6443", "charter.toml.example.com"],
+            digest: "d1",
+            allowed: true,
+          },
+          {
+            persona: "qa",
+            hosts: ["qa.example"],
+            reached: ["qa.example"],
+            digest: "d2",
+            allowed: false,
+          },
         ],
       }),
       sharedName: "purlis.toml",
@@ -393,6 +406,10 @@ describe("Settings › Project › Sandbox", () => {
       expect(page).toHaveTextContent(
         "A chat as devops also reaches 10.0.0.5:6443 and charter.toml.example.com.",
       ),
+    );
+    // #1362, D-1362-7: a persona's hosts reach nothing here until they are allowed.
+    expect(page).toHaveTextContent(
+      "A chat as qa reaches qa.example only once you allow them on this machine, on the project's notice.",
     );
     expect(page).toHaveTextContent(
       "A chat that names no persona reaches its default persona's hosts. A chat opened by a handoff may hold the asking chat's hosts, and a Resume the default persona's, until you allow its own on its tab.",
@@ -610,7 +627,9 @@ describe("values an administrator's policy locks (#1343)", () => {
   it("says which hosts policy allows, and that a persona's own are locked out", async () => {
     core({
       sandbox: state({
-        persona_hosts: [{ persona: "devops", hosts: ["10.0.0.5:6443"] }],
+        persona_hosts: [
+          { persona: "devops", hosts: ["10.0.0.5:6443"], reached: [], digest: "d", allowed: false },
+        ],
         policy: policy({ hosts: ["*.corp.example"], persona_hosts: true }),
       }),
     });

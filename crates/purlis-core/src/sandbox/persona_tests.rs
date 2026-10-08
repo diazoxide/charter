@@ -18,17 +18,32 @@ fn machine() -> Machine {
     }
 }
 
-/// What a chat at `root` running as `persona` reaches, compiled from `text`.
+/// What a chat running as `persona` reaches, compiled from `text`, on a machine where the
+/// person allowed every persona's hosts as `text` lists them (D-1362-7).
 fn reached(text: &str, persona: Option<&str>) -> Vec<String> {
     let root = tempfile::tempdir().expect("a project");
+    super::persona::allow_every_as_listed(root.path(), &policy(text));
+    compiled_at(root.path(), text, persona)
+}
+
+/// What a chat at `root` running as `persona` reaches, compiled from `text`, with whatever the
+/// person at `root` allowed.
+fn compiled_at(root: &std::path::Path, text: &str, persona: Option<&str>) -> Vec<String> {
     Compiled::of(
         &policy(text),
         &Plane::of(Some(text)),
-        root.path(),
+        root,
         &machine(),
         persona,
     )
     .hosts
+}
+
+/// The person at `root` allows `persona`'s hosts as `hosts` lists them.
+fn allow(root: &std::path::Path, persona: &str, hosts: &[&str]) {
+    let hosts: Vec<Host> = hosts.iter().map(|one| Host::parse(one).unwrap()).collect();
+    super::local::allow_persona_hosts(root, persona, &super::persona::digest(&hosts))
+        .expect("kept");
 }
 
 #[test]
@@ -137,15 +152,167 @@ fn policy_can_forbid_persona_hosts_and_leaves_the_project_s() {
 }
 
 #[test]
-fn a_change_to_a_persona_s_hosts_is_told_naming_whose_chats_reach_it() {
+fn a_persona_s_hosts_are_not_told_with_the_project_s_since_they_are_asked_for() {
+    // D-1362-7: the project's hosts apply and are told; a persona's are asked for apart.
     assert_eq!(
         Plane::of(Some(
             "[sandbox]\nmode = \"on\"\nhosts = [\"a.example\"]\n\
              [sandbox.personas.devops]\nhosts = [\"10.100.39.145:6443\"]\n"
         ))
         .granted_hosts(&crate::sandbox::policy::Locks::none()),
-        ["a.example", "10.100.39.145:6443 for devops chats"]
+        ["a.example"]
     );
+}
+
+// ---- allowed on each machine, bound to what was shown (D-1362-7) ----------------------------
+
+#[test]
+fn a_persona_s_committed_hosts_reach_nothing_until_the_person_here_allows_them() {
+    let root = tempfile::tempdir().expect("a project");
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("devops")),
+        Vec::<String>::new(),
+        "a teammate's commit alone widens nothing"
+    );
+    allow(
+        root.path(),
+        "devops",
+        &["10.100.39.145:6443", "*.internal.example"],
+    );
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("devops")),
+        ["10.100.39.145:6443", "*.internal.example"]
+    );
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("qa")),
+        Vec::<String>::new(),
+        "an Allow for devops grants another persona nothing"
+    );
+}
+
+#[test]
+fn an_allow_is_bound_to_the_list_it_was_shown_and_a_changed_list_waits_for_a_new_one() {
+    let root = tempfile::tempdir().expect("a project");
+    allow(root.path(), "devops", &["10.100.39.145:6443"]);
+    // A host added after the Allow: nothing of the list is granted, the old part included.
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("devops")),
+        Vec::<String>::new()
+    );
+    // A host taken away is a change too.
+    allow(
+        root.path(),
+        "devops",
+        &["10.100.39.145:6443", "*.internal.example", "c.example"],
+    );
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("devops")),
+        Vec::<String>::new()
+    );
+    // The order a list is written in is no change.
+    allow(
+        root.path(),
+        "devops",
+        &["*.internal.example", "10.100.39.145:6443"],
+    );
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("devops")),
+        ["10.100.39.145:6443", "*.internal.example"]
+    );
+    // A Revoke takes it back.
+    assert!(super::local::revoke_persona_hosts(root.path(), "devops").expect("kept"));
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("devops")),
+        Vec::<String>::new()
+    );
+    assert!(!super::local::revoke_persona_hosts(root.path(), "devops").expect("kept"));
+}
+
+#[test]
+fn the_digest_is_of_the_hosts_as_spelled_and_not_their_order() {
+    let hosts =
+        |list: &[&str]| -> Vec<Host> { list.iter().map(|one| Host::parse(one).unwrap()).collect() };
+    let digest = super::persona::digest;
+    assert_eq!(
+        digest(&hosts(&["a.example", "10.0.0.5:6443"])),
+        digest(&hosts(&["10.0.0.5:6443", "A.Example."]))
+    );
+    assert_ne!(
+        digest(&hosts(&["a.example", "10.0.0.5:6443"])),
+        digest(&hosts(&["a.example", "10.0.0.5:6444"]))
+    );
+    assert_ne!(digest(&hosts(&["a.example"])), digest(&[]));
+    assert_eq!(digest(&[]).len(), 64);
+}
+
+#[test]
+fn an_allow_is_kept_only_for_the_list_as_it_stands_when_it_is_pressed() {
+    use super::persona::{Shown, pick};
+    let devops = |digest: &str| Shown {
+        persona: "devops".to_owned(),
+        listed: vec![Host::parse("10.0.0.5:6443").unwrap()],
+        hosts: vec![Host::parse("10.0.0.5:6443").unwrap()],
+        digest: digest.to_owned(),
+        allowed: false,
+    };
+    assert_eq!(
+        pick(vec![devops("now")], "devops", "now").map(|one| one.persona),
+        Ok("devops".to_owned())
+    );
+    let changed = pick(vec![devops("now")], "devops", "shown").expect_err("changed since");
+    assert!(
+        changed.contains("changed after they were shown"),
+        "{changed}"
+    );
+    let none = pick(vec![devops("now")], "qa", "now").expect_err("no hosts");
+    assert!(none.contains("have no hosts of their own"), "{none}");
+    // A persona whose every host policy locks out has nothing to allow.
+    let locked = Shown {
+        hosts: Vec::new(),
+        ..devops("now")
+    };
+    assert!(pick(vec![locked], "devops", "now").is_err());
+}
+
+#[test]
+fn the_notice_asks_only_for_hosts_a_chat_would_reach_and_nothing_where_policy_forbids_them() {
+    let root = tempfile::tempdir().expect("a project");
+    let plane = Plane::of(Some(DEVOPS));
+    let shown = super::persona::shown_in(root.path(), &plane, &Locks::none());
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].hosts, shown[0].listed);
+    assert!(!shown[0].allowed);
+    let forbidden = Locks::parse(
+        r#"{"sandbox": {"persona-hosts": false}}"#,
+        std::path::Path::new("/etc/purlis/policy.json"),
+    );
+    let locked = super::persona::shown_in(root.path(), &plane, &forbidden);
+    assert_eq!(locked[0].hosts, Vec::<Host>::new());
+    assert_eq!(locked[0].listed.len(), 2, "still said, as locked out");
+    // An Allow made before the policy opens nothing while it stands.
+    super::persona::allow_every_as_listed(root.path(), &policy(DEVOPS));
+    assert!(!super::persona::shown_in(root.path(), &plane, &forbidden)[0].allowed);
+    assert!(super::persona::shown_in(root.path(), &plane, &Locks::none())[0].allowed);
+    // Not sandboxed: nothing to ask.
+    assert!(super::persona::shown_in(root.path(), &Plane::of(None), &Locks::none()).is_empty());
+}
+
+#[test]
+fn a_private_address_is_taken_only_as_one_exact_address_and_port() {
+    let said = Plane::of(Some(
+        "[sandbox]\nmode = \"on\"\n[sandbox.personas.devops]\nhosts = [\"10.0.0.5:6443\", \
+         \"[fd12::5]:443\", \"10.0.0.0/8\", \"10.0.0.*\", \"*.0.0.10\", \"*.10\", \
+         \"10.0.0.5:6000-7000\", \"10.0.0.5:*\", \"0x0a.0.0.5\"]\n",
+    ))
+    .said();
+    assert_eq!(
+        said.policy.expect("on").personas["devops"].hosts,
+        [
+            Host::parse("10.0.0.5:6443").unwrap(),
+            Host::parse("[fd12::5]:443").unwrap()
+        ]
+    );
+    assert_eq!(said.refused.len(), 7, "{:?}", said.refused);
 }
 
 #[test]
