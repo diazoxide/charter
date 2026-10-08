@@ -568,11 +568,19 @@ tickets start from:
 | 5 | The caps' initial values | Replaced by the limits of change 4 |
 | 6 | AC-11's lineage exclusion | Accepted as written. AC-11 itself is out of the first version |
 
-## Amended (2026-10-08): a task ends at its report
+## Amended (2026-10-08): a task ends at its report, and who may dispatch to whom
 
-The operator's rulings V100-1, V100-8, V100-9 and V100-10 (spec #1483, built in #1485) replace
-one line of *Amended and accepted (2026-10-07)*: "A persona chat stays open after it reports,
-marked as reported, until the person or its asking chat closes it."
+The operator ruled on these on 2026-10-08, in the grill that is spec #1483 (rulings V100-1 to
+V100-76). This is the one amendment of that day: each ticket recorded its part as it was
+built, and the trains that carried them joined the parts here. Items 1 and 2 came with train
+62 (#1485), items 3 to 17 with train 64 (#1502 to #1507, #1509). **Where two items once said
+different things, what stands here is the later ruling**, and the item says so. Where this
+section and the changes above differ, this section holds; everything else in this record
+stands.
+
+**1. A task ends at its report (V100-1, V100-8, V100-9, V100-10).** #1485 builds it. This
+replaces one line of *Amended and accepted (2026-10-07)*: "A persona chat stays open after it
+reports, marked as reported, until the person or its asking chat closes it."
 
 - **A task's program ends when it reports.** The report is delivered to the asking chat first,
   and purlis then ends the program, under the lock that already orders a report against an
@@ -585,10 +593,11 @@ marked as reported, until the person or its asking chat closes it."
 - **Reopen** resumes a finished task's conversation as an ordinary chat with a tab. It is no
   longer a task: it sends no second report, and the asking chat is not told.
 
-Everything else in this record stands. A handoff's chat is not a task and is not ended by its
-report.
 
-### Rulings added in review (2026-10-08, delegated to the dispatcher; the operator is told)
+A handoff's chat is not a task and is not ended by its report. **A finished task reopened is
+started on the profile its dispatch chose, and is held to item 16 as that dispatch was.**
+
+**2. Rulings added in review of item 1** (delegated to the dispatcher; the operator is told).
 
 - **A task that is working again is never ended mid-turn.** A key of the person's in its pane
   after the report, or a Smart close of it beginning, stands the end down for good. The bound
@@ -605,17 +614,12 @@ report.
 - **A task that had reported when the app quit is not started again.** At the next launch it
   is a finished row, read from its record.
 
-## Amended (2026-10-08): a grant is one-way, "any persona", and the two ways to say no
 
-The operator ruled on these on 2026-10-08, in the grill that is the spec of #1483 (rulings
-V100-20 to V100-23, V100-25 and V100-28). #1503 builds 1 to 5 and #1502 builds 6 to 8, and
-each records its own here. Where this section and
-change 3 above differ, this section holds; everything else of change 3 stands.
-
-**1. A grant is one-way (V100-22).** A grant from one persona to another allows nothing the
+**3. A grant is one-way (V100-22).** A grant from one persona to another allows nothing the
 other way. A report back needs none. A new task the other way is its own pair.
 
-**2. A grant may be for any persona (V100-23).** Change 3 says a grant "names the pair". It may
+
+**4. A grant may be for any persona (V100-23).** Change 3 says a grant "names the pair". It may
 now also name only who dispatches: *chats running as this persona may dispatch to any persona*.
 
 - It is made on purpose, in Settings, at two of the three levels: me on this machine, and
@@ -625,18 +629,23 @@ now also name only who dispatches: *chats running as this persona may dispatch t
   pair still offers that pair at the three levels.
 - It covers a persona added later.
 - A teammate's, arriving by a pull, covers nothing on a machine until someone there allows it
-  in Settings. The acceptance is kept apart from the acknowledgement of pairs, and is dropped
-  when the project's file is read and no longer holds the grant.
+  in Settings. The Notice that says it arrived tells of it and may decline it, and never
+  accepts it (item 14). The acceptance is kept apart from the acknowledgement of pairs, and is
+  dropped as a pair's is: where a commit took the grant out, never where the file on disk
+  merely lacks it (item 14).
+- It may be limited to one workspace, as a pair may (item 13).
 - Policy locks hold under it, and so does the loop rule.
 - **For an unattended chat it counts in that chat's own workspace only.** Such a chat starts a
   chat as another persona in another workspace only under a grant that names the pair.
 
-**3. Keep blocked holds for the chat's life (V100-25).** The same chat asking across the same
+
+**5. Keep blocked holds for the chat's life (V100-25).** The same chat asking across the same
 pair again is refused at once with the person's no, and they are not asked twice. A new chat is
 asked. It is the app's memory, gone with the chat, and it stands in for the question only: a
 grant the person makes afterwards covers that chat like any other.
 
-**4. Never for this pair (V100-25).** The Notice has a fifth answer. It is the person's, on
+
+**6. Never for this pair (V100-25).** The Notice has a fifth answer. It is the person's, on
 their machine, never committed, and it is the one deny among the records of dispatch.
 
 - While it stands, no chat running as that persona is asked or allowed to dispatch to that
@@ -655,17 +664,85 @@ their machine, never committed, and it is the one deny among the records of disp
   person is asked and told why, an unattended chat is refused, and a write refuses rather than
   replace what it could not read.
 
-**5. The audit** gains a never and its lifting beside a grant and its revoke; a grant for any
-persona is a grant whose target is `*`.
 
-**6. One table in Settings (V100-24).** Settings › Project › Dispatch lists each persona and
+**7. The audit.** Beside a grant and its revoke the event log gains a never and its lifting
+(#1503), **Not on my machine** and **Give back** (#1504), and an Allow that started one
+dispatch and kept no grant (#1505). A grant for any persona is a grant whose target is `*`.
+A grant purlis set aside is a revoke by the host, never by a person. Every one says the
+workspace it holds in, and null for any (#1505); one made on a refusal kept while nobody was
+there says where it came from (#1507).
+
+**8. A persona may say what it wants, and that is never a grant (V100-20).** A persona's
+definition may carry `wants`, the personas it usually works with.
+
+- Nothing that decides a dispatch reads it: not the grant, the rule for an unattended chat,
+  the limits or the loop rule. The list of who may dispatch to whom stays in the project's
+  file and the machine's record.
+- A chat can write persona definitions, so the line is an offer a chat may have written. Only
+  a finished persona of the project is offered: never the persona itself, a name purlis keeps
+  for itself or "any persona"; at most six; in alphabetical order.
+
+
+**9. One answer may make several grants (V100-21).** Change 3 says the Notice "offers the
+three levels" for the pair; an answer was one pair. It still offers the pair at the three
+levels, and under the answers it now offers one box for each wanted persona that nothing
+answers for yet.
+
+- **A box is never ticked for the person.** An Allow keeps the asked pair and each ticked one
+  at the level pressed. Each is a grant that names its pair, audited as its own, listed and
+  revoked on its own.
+- Keep blocked and Never for this pair are about the asked pair only.
+- Not offered: a pair a grant covers, one the person said never to, one policy locks, one the
+  person kept blocked in that chat (item 5: they are not asked twice, by a box either),
+  one with a question of its own waiting (its brief is shown there), and any while the record
+  of nevers does not read.
+- **The answer is held to the question as it was shown.** The app builds the boxes and what
+  each persona works with from the project's files, never from the request. The window sends
+  back a digest of all of it. The files are read again at the answer: only a name still
+  offered is granted, and where the question reads differently now nothing is granted or
+  audited, the asked pair included, and the person is shown it again with no box ticked.
+- No box makes "any persona" (item 4 holds).
+- **Every ticked pair is kept with the answer's own workspace condition** (item 13): in the
+  workspace the task works in for the narrower Allow, in any workspace for the wider one, and
+  each audit says which. A box is offered where the pair needs a grant for a task in that
+  workspace, so one granted only for another workspace is still a box. No box is offered
+  where the task's workspace is not there yet: an Allow there keeps no grant.
+
+
+**10. The question says what the target works with (V100-28).** For the persona asked about,
+and for each box's persona, in purlis's words and from records no chat writes:
+
+- the names of the vaults its chats are handed: the ones the vault registry tags for it and
+  the ones the person let it use on this machine. Not the `vault:` line of its own file;
+- the hosts the project's file declares for it;
+- **the personas it may itself dispatch to**, from the grants in force for it: named ones, or
+  "any persona", and nothing where there is none. The dispatcher added this in review of
+  #1502, extending V100-28's sentence, and it is flagged for the operator: work handed to a
+  persona can go on from it without a further question;
+- a grant that holds in one workspace only is said with that workspace ("qa in runners",
+  "any persona in runners"): it is reach all the same;
+- each list is clipped to three with "and n more", and the digest covers the whole;
+- **where the project's sandbox is off it says so of vaults and hosts alike**, since no list
+  of either holds a chat there;
+- never a secret's name or value. Allowing a dispatch does not allow the use of a secret:
+  that consent is unchanged, and the question says so.
+
+**The same words, from the one function, are said wherever a yes reaches a persona**: on the
+Notice that says a teammate's grant arrived (item 14), where a digest of them is part of what
+an answer is held to, and on a refusal kept while nobody was there (item 15).
+
+
+**11. One table in Settings (V100-24).** Settings › Project › Dispatch lists each persona and
 whom it may dispatch to, with where every grant comes from (this chat, me on this machine, the
 project) and the action for that source, and it is the one place "any persona" is set and
 cleared. Taking a grant back stops new dispatches only: a task already running is left as it
 is. A project grant can be removed for everyone, which edits the committed file, or stopped on
-one machine (**Not on my machine**), which does not. #1504 builds it.
+one machine (**Not on my machine**), which does not. #1504 builds it. Under a
+persona's name the table says what its definition wants (item 8), as a note that grants
+nothing, and each grant's row says which workspace it holds in (item 13).
 
-**7. A persona that goes away, and a persona of that name there again (V100-61).** A grant is
+
+**12. A persona that goes away, and a persona of that name there again (V100-61).** A grant is
 kept by name, so a name that changes hands must not carry what the person allowed the persona
 that had it. Two rules, as #1504 builds them:
 
@@ -696,7 +773,8 @@ decided here. Nor is any of this a boundary against a chat: a chat that may writ
 project's `personas/` can edit a persona in place. **purlis has no persona rename**: a persona
 whose folder is moved is, to these rules, one that went away and another that appeared.
 
-**8. A grant holds in one workspace, or in any (V100-27).** A grant carries one condition and
+
+**13. A grant holds in one workspace, or in any (V100-27).** A grant carries one condition and
 no other. #1505 builds it.
 
 - **The workspace is the one the task works in**, never the one the asking chat is in: the
@@ -716,7 +794,7 @@ no other. #1505 builds it.
   blocked is not limited: it is per chat and persona, in every workspace.
 - **"Any persona" may be limited the same way. A never is not**: it holds in every workspace.
   A refusal that stopped at a workspace's edge would be walked around by naming another place.
-  The chain rule of change 4 and the loop rule are as they were.
+  The chain rule of item 6 and the loop rule are as they were.
 - **A limited grant never reads as an unlimited one.** Each level spells it apart from the
   grants that hold everywhere: a table in the project's list (`{ to = "devops", in =
   "runners" }`), and keys of their own on the machine. A build that does not know the
@@ -726,7 +804,10 @@ no other. #1505 builds it.
   accepted for all, nor the reverse, and a teammate widening a grant is told as a new grant.
 - **A chat nobody is at crosses into another workspace** only under a grant that names the
   pair and covers the workspace it crosses into: one that holds in any workspace, or one
-  limited to that workspace. "Any persona" still does not count there.
+  limited to that workspace. "Any persona" still does not count there, **for a handoff that
+  moves the work into another workspace as another persona as for a task** (the dispatcher's
+  ruling in review of train 64, flagged for the operator). A crossing refused is kept for the
+  person as item 15 keeps a refusal.
 - **A workspace that goes away.** A limited grant counts only while a workspace of its name
   is there. A workspace made later under the name of one that was seen gone inherits no
   grant: the grant is shown as covering nothing, with Remove, and the person may count it
@@ -756,59 +837,8 @@ no other. #1505 builds it.
   has.
 - **The audit says the workspace** of every grant, revoke and decline, and null for any.
 
-Still open, and not decided here: telling a teammate's "any persona", and a teammate's grant
-limited to one workspace, on the one-time Notice (#1506).
 
-**6. A persona may say what it wants, and that is never a grant (V100-20).** A persona's
-definition may carry `wants`, the personas it usually works with.
-
-- Nothing that decides a dispatch reads it: not the grant, the rule for an unattended chat,
-  the limits or the loop rule. The list of who may dispatch to whom stays in the project's
-  file and the machine's record.
-- A chat can write persona definitions, so the line is an offer a chat may have written. Only
-  a finished persona of the project is offered: never the persona itself, a name purlis keeps
-  for itself or "any persona"; at most six; in alphabetical order.
-
-**7. One answer may make several grants (V100-21).** Change 3 says the Notice "offers the
-three levels" for the pair; an answer was one pair. It still offers the pair at the three
-levels, and under the answers it now offers one box for each wanted persona that nothing
-answers for yet.
-
-- **A box is never ticked for the person.** An Allow keeps the asked pair and each ticked one
-  at the level pressed. Each is a grant that names its pair, audited as its own, listed and
-  revoked on its own.
-- Keep blocked and Never for this pair are about the asked pair only.
-- Not offered: a pair a grant covers, one the person said never to, one policy locks, one the
-  person kept blocked in that chat (amendment 3: they are not asked twice, by a box either),
-  one with a question of its own waiting (its brief is shown there), and any while the record
-  of nevers does not read.
-- **The answer is held to the question as it was shown.** The app builds the boxes and what
-  each persona works with from the project's files, never from the request. The window sends
-  back a digest of all of it. The files are read again at the answer: only a name still
-  offered is granted, and where the question reads differently now nothing is granted or
-  audited, the asked pair included, and the person is shown it again with no box ticked.
-- No box makes "any persona" (amendment 2 holds).
-
-**8. The question says what the target works with (V100-28).** For the persona asked about,
-and for each box's persona, in purlis's words and from records no chat writes:
-
-- the names of the vaults its chats are handed: the ones the vault registry tags for it and
-  the ones the person let it use on this machine. Not the `vault:` line of its own file;
-- the hosts the project's file declares for it;
-- **the personas it may itself dispatch to**, from the grants in force for it: named ones, or
-  "any persona", and nothing where there is none. The dispatcher added this in review of
-  #1502, extending V100-28's sentence, and it is flagged for the operator: work handed to a
-  persona can go on from it without a further question;
-- each list is clipped to three with "and n more", and the digest covers the whole;
-- **where the project's sandbox is off it says so of vaults and hosts alike**, since no list
-  of either holds a chat there;
-- never a secret's name or value. Allowing a dispatch does not allow the use of a secret:
-  that consent is unchanged, and the question says so.
-
-Still open, and not decided here: telling a teammate's "any persona" on the one-time Notice
-(#1506), and what a persona removed and made again under the same name inherits (V100-61).
-
-**8. A teammate's grant is shown when it arrives (V100-62).** #1506 builds it.
+**14. A teammate's grant is shown when it arrives (V100-62).** #1506 builds it.
 
 - When the project's file comes to hold a grant the person has neither accepted nor declined,
   the window says so once, at its own level and not on a chat's tab: after a pull, a branch
@@ -816,7 +846,7 @@ Still open, and not decided here: telling a teammate's "any persona" on the one-
   one Notice. Until it is answered nothing listed is in force for that person.
 - **Named pairs** take **Accept** and **Not on my machine**, with a way to decide each in
   Settings.
-- **"Any persona" is told, and never accepted, on a Notice.** Item 2 and V100-23 stand as
+- **"Any persona" is told, and never accepted, on a Notice.** Item 4 and V100-23 stand as
   written: it is made and accepted in Settings only. The Notice says it in its own sentence,
   with where it is accepted, and offers for it only Not on my machine and the way to
   Settings. The command behind the Notice refuses to accept one whatever it is sent.
@@ -827,10 +857,19 @@ Still open, and not decided here: telling a teammate's "any persona" on the one-
   putting the Notice away answers nothing. The question on the tab of a chat that needs the
   pair stays as the fallback, says the same thing, and takes the same two answers.
 - **An answer is for what was shown.** Only a grant still exactly as it was listed is
-  answered; where the list moved, the person is told and shown it as it is.
+  answered; where the list moved, the person is told and shown it as it is. What the target
+  works with is said beside each pair (item 10) and is part of how a grant is listed, so a
+  yes that comes after the target gained a vault, a host or an onward grant answers nothing.
+- **A grant limited to one workspace is not told here yet.** It waits in Settings with its
+  own Accept (item 13).
 - A grant naming a persona the checkout does not define is said to cover nothing and is not
-  accepted. An accepted grant counts only while both its personas exist (item 7), and one
+  accepted. An accepted grant counts only while both its personas exist (item 12), and one
   naming a name that changed hands waits again on this Notice, saying so.
+- **A grant limited to one workspace is bound the same way** (item 13): accepted on this
+  machine, it is dropped where a commit took it out and asks for a new yes, it is in force for
+  nobody while the history cannot be asked, and a branch without it drops nothing. What was
+  accepted for a name whose grants are set aside (item 12) is bound too, so a Give back never
+  restores a grant a commit took out meanwhile.
 - **A yes is bound to what it accepted, by the project's history.** A file that was changed
   and changed back reads the same, so the acceptances are kept with the commit they were last
   checked through. An acceptance is dropped where a commit since then **took the grant out**:
@@ -853,7 +892,8 @@ Still open, and not decided here: telling a teammate's "any persona" on the one-
   at its first check and not asked again; an older build that rewrites the record strips the
   binding, and the next check binds afresh.
 
-### Added 2026-10-08 (#1507): a refusal with nobody there reaches the person afterwards (V100-29)
+
+**15. A refusal with nobody there reaches the person afterwards (V100-29).** #1507 builds it.
 
 A chat nobody is at still dispatches under standing grants only, and is still refused at once
 where none covers the pair: no question is put to it, nothing is held, and no Notice is raised.
@@ -865,8 +905,16 @@ needs-you list says "`<persona>` wanted `<persona>` while you were away", with *
 - **Allow from now on is the person's own standing grant for that one pair**, for them on this
   machine, audited as theirs with where it came from. It is the only level offered there:
   never the project's, never "any persona". It starts nothing; the dispatch that was refused
-  is gone. Its reach is that grant's, and the item says it before the press: every workspace,
-  a chat nobody is at, and onward through the target's own grants.
+  is gone.
+- **It is limited to the workspace the refused task would have worked in** (item 13), which
+  the entry keeps from the app's own record of the dispatch: never the asking chat's, where
+  the two differ. A refusal at the project's root has no workspace to limit a grant to, so
+  there the grant holds in any workspace, and the item says so. For a name that is no
+  workspace of the project by the press, nothing is recorded and nothing is kept. An entry
+  is answered, and settled by a grant made elsewhere, for its own workspace alone.
+- Its reach is that grant's, and the item says it before the press: where it holds, that a
+  chat nobody is at may use it too, and what the target works with, in the question's own
+  words (item 10).
 - **Dismiss holds.** The entry is kept and marked; a chat asking on is counted and not
   listed, and is not told whether its refusal was listed. It is listed again only by a refusal
   seven days or more later. **Never for this pair** is the store's never.
@@ -879,3 +927,29 @@ needs-you list says "`<persona>` wanted `<persona>` while you were away", with *
   first refused, the window draws the list it was opened on until it closes, and the keyboard
   arrives on Dismiss.
 - The list and its answers are the window's alone: served on no link, named by no hook line.
+
+**16. A chat names only a profile the project lists for the target persona (V100-60).**
+#1509 builds it; the project's format (`[dispatch.profiles]`) and the refusals are written in
+`docs/plane-format.md` and `crates/purlis-core/docs/handoff.md`. A chat a dispatch started is
+held to it, and to the rule that a dispatched chat never runs with its harness's prompts off,
+each time it is started again: at a relaunch, a restart, and a Reopen of its finished task.
+The loop rule holds under every grant, "any persona" included.
+
+**17. The commands of who may dispatch to whom are the window's alone** (the dispatcher's
+ruling as train 64 was joined, for the operator to confirm). Allow, Keep blocked and Never on
+a dispatch's Notice (every answer of the person's, the one that keeps nothing included), the
+commands of Settings' table, the answers to a teammate's grant arriving and to a refusal kept
+while nobody was there, and the reads of what stands, what waits, and those two lists, are
+served to the person's own window over its own channel and on no link, whatever scope a link
+holds. The link's client is generated without them.
+
+Still open, and not decided here:
+
+- telling a teammate's grant limited to one workspace, and a narrowing of one, on the Notice
+  of item 14, with a recorded decline;
+- an identity for a persona and for a workspace beside its name, which is what closes the
+  limits items 12 and 13 state;
+- a history rewritten so that no commit this machine has took a grant out (item 14);
+- a task's request named with its whole path, and one question for several tasks at the same
+  block (V100-56, V100-57; #1508), and boxes filtered by a never above the asking chat
+  (#1521): neither is in train 64.

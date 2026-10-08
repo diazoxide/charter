@@ -1,6 +1,8 @@
 //! Where several pairs in one answer (#1502) meet a grant limited to one workspace (#1505):
 //! every ticked pair is kept with the same workspace condition as the answer pressed, and a
-//! box is offered only where a tick could be kept as a grant. Driven at [`Store`].
+//! box is offered only where a tick could be kept as a grant. Driven at [`Store`]. And where
+//! a persona's `wants` meets Settings' table (#1504): the table is told it, and it grants
+//! nothing there either.
 
 use super::*;
 
@@ -384,4 +386,134 @@ fn a_pair_kept_blocked_in_the_chat_is_no_box_there_whichever_workspace_the_next_
         Some("web"),
     ));
     assert_eq!(boxes(&shown(&world, &store, id)), ["docs"]);
+}
+
+#[test]
+fn settings_table_is_told_what_each_persona_wants_and_nothing_is_in_force_by_it() {
+    let world = wanting();
+    // A line that offers nothing is not told: itself, a name that is no persona, the star.
+    define(world.root(), "qa", "wants: [qa, ghost, *]\n");
+    let (store, _) = store();
+
+    let standing = standing_read(world.root(), &store);
+
+    assert_eq!(
+        standing.wants,
+        [DispatchWants {
+            persona: "steward".to_owned(),
+            wants: vec!["devops".to_owned(), "qa".to_owned(), "docs".to_owned()],
+        }]
+    );
+    // Told, and no more: nothing is granted, listed as a grant, or in force by it.
+    assert!(world.listed(&store).is_empty());
+    assert!(standing.any.is_empty());
+    assert!(world.audited().is_empty());
+    assert!(is_held(&ask(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        "qa",
+        Some("runners")
+    )));
+}
+
+// ---- the train's review: a box never undoes a decline, and an answer is held to all it said --
+
+/// [`wanting`], with the project's file granting steward the pairs `targets`.
+fn wanting_with_project(targets: &[&str]) -> World {
+    let world = wanting();
+    let list: Vec<String> = targets.iter().map(|one| format!("\"{one}\"")).collect();
+    std::fs::write(
+        purlis_core::names::manifest(world.root()),
+        format!(
+            "schema = 1\n\n[dispatch.grants]\nsteward = [{}]\n",
+            list.join(", ")
+        ),
+    )
+    .expect("the project's file");
+    world
+}
+
+#[test]
+fn a_pair_declined_on_this_machine_is_no_box_and_a_forced_tick_does_not_accept_it() {
+    let world = wanting_with_project(&["qa"]);
+    dispatchgrant::decline(world.root(), "steward", "qa").expect("Not on my machine");
+    let (store, _) = store();
+    let id = pending_of(&ask(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        "devops",
+        Some("runners"),
+    ));
+    let told = shown(&world, &store, id);
+    assert_eq!(boxes(&told), ["docs"], "qa was declined here");
+
+    // A tick sent for it all the same, at the project's level, keeps nothing of it.
+    let also = names(&["qa"]);
+    let said = world
+        .on(|ground| store.allow_with(ground, id, Level::Project, &ticked(&also, &told.shown)))
+        .expect("the asked pair is allowed");
+    assert!(
+        said.ends_with("Not allowed, since the question no longer offers it: qa."),
+        "{said}"
+    );
+    assert!(
+        dispatchgrant::declined(world.root()).contains(&"steward -> qa".to_owned()),
+        "still declined"
+    );
+    assert!(
+        !granted(&world).iter().any(|(target, ..)| target == "qa"),
+        "nothing was audited for it"
+    );
+}
+
+#[test]
+fn an_answer_is_held_to_whether_the_workspace_was_there_and_to_the_answers_offered() {
+    // Drawn while the workspace was not there: one answer, which keeps nothing.
+    let world = wanting();
+    let (store, _) = store();
+    let id = pending_of(&ask(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        "devops",
+        Some("fresh"),
+    ));
+    let told = shown(&world, &store, id);
+    assert!(told.works_in_missing);
+    // It is made before the press: the question reads differently, so nothing is kept.
+    std::fs::create_dir_all(world.root().join("workspaces/fresh")).expect("made");
+    assert_eq!(
+        world.on(|ground| store.allow_with(ground, id, Level::Chat, &ticked(&[], &told.shown))),
+        Err(CHANGED.to_owned())
+    );
+    assert!(granted(&world).is_empty());
+
+    // An answer the question does not offer is refused whatever the window sends: here the
+    // project's level for a pair this machine declined.
+    let world = wanting_with_project(&["devops"]);
+    dispatchgrant::decline(world.root(), "steward", "devops").expect("Not on my machine");
+    let (store, _) = super::store();
+    let id = pending_of(&ask(
+        &world,
+        &store,
+        chat(3, Some("steward")),
+        "devops",
+        Some("runners"),
+    ));
+    let told = shown(&world, &store, id);
+    assert!(!told.levels.contains(&GrantLevel::Project));
+    assert_eq!(
+        world.on(|ground| {
+            store.allow_with(ground, id, Level::Project, &ticked(&[], &told.shown))
+        }),
+        Err(
+            "That answer is not one this question offers, so nothing was allowed. Read it \
+             again, then answer."
+                .to_owned()
+        )
+    );
+    assert!(granted(&world).is_empty());
+    assert!(dispatchgrant::declined(world.root()).contains(&"steward -> devops".to_owned()));
 }

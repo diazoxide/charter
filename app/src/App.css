@@ -1386,8 +1386,15 @@ button.show-more:focus-visible {
 
    **One box: the line, and under it what a way out opened** (#1481). The box has the border and
    the ground, so the two read as one thing and the terminal never shows between them. */
+/* **Never taller than the pane** (#1483's dispatch question in a short pane): the box may
+   shrink in the stack (`flex` and `min-height: 0`), the line and its answers never do, and
+   what a way out opened under them gives way first, its brief before anything else, then by
+   scrolling. Every answer stays whole and reachable, and nothing is drawn over another. */
 .notice-pane-box {
-  flex: none;
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
   min-width: 0;
   max-width: 100%;
   font-size: 0.78rem;
@@ -1407,6 +1414,7 @@ button.show-more:focus-visible {
    beside it only when all of it fits unwrapped; when it does not, the sentence takes the whole
    row and wraps there, and the ways out go under it, on as many rows as they need. */
 .notice-pane {
+  flex: none;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1436,12 +1444,47 @@ button.show-more:focus-visible {
 /* **What a way out opened, under the line and at its width.** `min-width: 0` and the `pre`
    rule: a long line of a draft scrolls inside its own box and never widens the Notice. */
 .notice-under-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
   min-width: 0;
+  overflow-y: auto;
   padding: 0 0.45rem 0.35rem;
 }
 
 .notice-under-pane > * {
+  flex: none;
   max-width: 100%;
+}
+
+/* What gives way first: an opened report, and inside it its scrolling draft (the brief),
+   down to a few lines. */
+.notice-under-pane > .block-report {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.notice-under-pane > .block-report > * {
+  flex: none;
+}
+
+.notice-under-pane > .block-report > .block-report-draft,
+.notice-under-pane > .block-report > section {
+  flex: 0 1 auto;
+  min-height: 3.5em;
+}
+
+.notice-under-pane > .block-report > section {
+  display: flex;
+  flex-direction: column;
+}
+
+.notice-under-pane > .block-report > section > .block-report-draft {
+  flex: 0 1 auto;
+  min-height: 3.5em;
 }
 
 .notice-under-pane pre {

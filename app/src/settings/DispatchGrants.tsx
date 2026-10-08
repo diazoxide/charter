@@ -30,6 +30,7 @@ const NOTHING_STANDS: DispatchStanding = {
   kept_blocked: [],
   dormant: [],
   returned: [],
+  wants: [],
   back: [],
   workspaces: [],
 };
@@ -74,12 +75,21 @@ interface Changes {
 }
 
 /**
- * **What a persona says it wants to dispatch to.** A persona's definition gains a `wants` list
- * that grants nothing (#1502). It is not read here yet: this is the one place the table shows
- * it, under the persona's name, once `dispatch_standing` carries it.
+ * **What a persona says it wants to dispatch to** (#1502): the `wants` line of its definition,
+ * as the core reads it (`DispatchStanding.wants`), under the persona's name. The one place the
+ * table shows it. **It grants nothing**, and the sentence says so: a name here is in force
+ * only where a row below says who granted it.
  */
-function wantsOf(): ReactNode {
-  return null;
+function wantsOf(wants: readonly string[] | undefined): ReactNode {
+  if (wants === undefined || wants.length === 0) return null;
+  return (
+    <span className="granted-note dispatch-wants">
+      {" "}
+      Its definition says it wants to dispatch to {wants.join(", ")}. That grants nothing: it only
+      offers {wants.length === 1 ? "that persona as a box" : "those personas as boxes"} when one of
+      its chats first asks you.
+    </span>
+  );
 }
 
 /** What a command answered, as a press needs it. */
@@ -1061,7 +1071,8 @@ export function DispatchGrantsList({
                             {buttons(heading, [giveBack(persona)])}
                           </>
                         )}
-                        {here && wantsOf()}
+                        {here &&
+                          wantsOf(standing.wants.find((one) => one.persona === persona)?.wants)}
                       </th>
                     </tr>
                     {question(heading)}

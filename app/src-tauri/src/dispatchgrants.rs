@@ -661,10 +661,21 @@ impl Store {
             dispatchwants::also(root, asking, &held.target, &grants, locks)
         };
         let waiting = lock(&self.pending).clone();
+        // A pair whose project grant the person said "Not on my machine" to is no box: a
+        // tick at the project's level would accept it by another name. Settings is where
+        // that is taken back.
+        let declined = dispatchgrant::declined(root);
+        let not_declined = |wanted: &str| {
+            !asking.is_some_and(|asking| {
+                dispatchgrant::project_grant_said(asking, wanted)
+                    .is_some_and(|said| declined.contains(&said))
+            })
+        };
         Offer {
             target: Access::at(root, locks, &held.target),
             also: wanted
                 .iter()
+                .filter(|wanted| not_declined(wanted))
                 .filter(|wanted| !self.is_kept_blocked(&held.asking, wanted))
                 .filter(|wanted| {
                     !waiting.iter().any(|one| {
@@ -695,7 +706,7 @@ impl Store {
         }
         let offer = self.offer(root, locks, held);
         shown.works_with = offer.target.said();
-        shown.shown = offer.stamp();
+        shown.shown = stamp_of(&offer, &shown);
         shown.also = offer
             .also
             .iter()
@@ -884,9 +895,12 @@ impl Store {
             ));
         }
         // The question as it reads now, from the files as they are now: what the person saw
-        // is held to it, and so is every box.
+        // is held to it, and so is every box. **All of what it said**: the access lines and
+        // the boxes, the answers offered, where it is already allowed, whether the list of
+        // nevers reads, and whether the workspace is there.
         let offer = self.offer(ground.root, ground.locks, &held);
-        if ticked.shown.is_some_and(|shown| shown != offer.stamp()) {
+        let now = self.told(&unplaced(ground.root), ground.root, ground.locks, &held);
+        if ticked.shown.is_some_and(|shown| shown != now.shown) {
             return Err(CHANGED.to_owned());
         }
         let mut wanted: Vec<&str> = Vec::new();
@@ -929,6 +943,22 @@ impl Store {
             ),
         };
         let asked = kept_for(&held.target)?;
+        // **Only an answer the question offers is taken**, whatever the window sends: not the
+        // project's level for a pair the person said "Not on my machine" to, nor any level
+        // where policy locks it. Where the workspace is not there yet the question offers one
+        // answer under one name, and whichever is pressed keeps nothing (below).
+        let offered = match level {
+            Level::Chat => GrantLevel::Chat,
+            Level::You => GrantLevel::You,
+            Level::Project => GrantLevel::Project,
+        };
+        if !now.works_in_missing && !now.levels.contains(&offered) {
+            return Err(
+                "That answer is not one this question offers, so nothing was allowed. Read it \
+                 again, then answer."
+                    .to_owned(),
+            );
+        }
         let also: Vec<(&str, Kept)> = wanted
             .iter()
             .map(|target| kept_for(target).map(|kept| (*target, kept)))
@@ -1635,6 +1665,38 @@ fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
     }
 }
 
+/// A project's id where none is at hand, for a [`DispatchPending`] read for its digest alone:
+/// the digest never reads it, and no command is ever given it.
+fn unplaced(root: &Path) -> PlaneId {
+    serde_json::from_value(serde_json::Value::String(root.display().to_string()))
+        .expect("a project's id is its root, spelled")
+}
+
+/// **The digest of everything a dispatch's question says beyond who asks and the brief**: what
+/// the target and each box's persona work with ([`Offer::stamp`]), and the facts the Notice
+/// draws its answers from: the answers offered, whether the workspace is there yet, whether
+/// the list of nevers reads, and where the pair is already allowed. An Allow sends it back,
+/// and one for a question that reads differently now grants nothing.
+fn stamp_of(offer: &Offer, told: &DispatchPending) -> String {
+    let levels: Vec<&str> = told
+        .levels
+        .iter()
+        .map(|level| match level {
+            GrantLevel::Chat => "chat",
+            GrantLevel::You => "you",
+            GrantLevel::Project => "project",
+        })
+        .collect();
+    format!(
+        "{}\u{1e}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        offer.stamp(),
+        levels.join(","),
+        told.works_in_missing,
+        told.never_unread.as_deref().unwrap_or_default(),
+        told.allowed_in.join(",")
+    )
+}
+
 /// One persona a dispatch's Notice offers beside the one asked about (#1502).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct DispatchAlso {
@@ -1940,7 +2002,7 @@ pub fn never_dispatch(
 /// decided under. `off_the_main_thread`'s test asks each and holds them to it, which is the
 /// list's one reader.
 #[cfg(test)]
-pub const SETTLES: [&str; 8] = [
+pub const SETTLES: [&str; 10] = [
     "dispatch_arrival",
     "answer_dispatch_arrival",
     "dispatch_gone_told",
@@ -1949,6 +2011,8 @@ pub const SETTLES: [&str; 8] = [
     "accept_project_dispatch",
     "allow_dispatch_to_any",
     "set_dispatch_workspace",
+    "accept_project_dispatch_in",
+    "give_back_dispatch",
 ];
 
 /// The ground a window command of `held`'s project stands on.
@@ -2045,6 +2109,18 @@ pub struct DispatchStanding {
     /// The project's workspaces now, sorted: what a grant's workspace can be set to (#1505).
     /// Empty where they could not be listed.
     pub workspaces: Vec<String>,
+    /// What each persona's definition says it wants to dispatch to (#1502), for the personas
+    /// that say anything the question would offer: the table shows it under the persona's
+    /// name. **It grants nothing, and nothing here is in force by it.**
+    pub wants: Vec<DispatchWants>,
+}
+
+/// What one persona's definition says it wants to dispatch to (#1502): the names its line
+/// offers, as [`purlis_core::dispatchwants::of`] reads it, in the order written.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchWants {
+    pub persona: String,
+    pub wants: Vec<String>,
 }
 
 /// What stands in the project at `root`.
@@ -2120,6 +2196,17 @@ fn standing_of(root: &Path) -> DispatchStanding {
     workspaces.retain(|name| seen.is_there(name));
     workspaces.sort();
     let state = purlis_core::dispatchdormant::state(root, &[]).unwrap_or_default();
+    let personas = purlis_core::dispatchdormant::personas_of(root);
+    // Read from each definition as it is now, by the reader the question's boxes come from.
+    let wants = personas
+        .iter()
+        .flatten()
+        .map(|persona| DispatchWants {
+            wants: dispatchwants::of(root, persona).personas,
+            persona: persona.clone(),
+        })
+        .filter(|one| !one.wants.is_empty())
+        .collect();
     DispatchStanding {
         nevers: dispatchgrant::nevers(root)
             .into_iter()
@@ -2136,11 +2223,12 @@ fn standing_of(root: &Path) -> DispatchStanding {
                 was: one.was,
             })
             .collect(),
-        personas: purlis_core::dispatchdormant::personas_of(root),
+        personas,
         kept_blocked: Vec::new(),
         returned: state.returned,
         back: state.back,
         workspaces,
+        wants,
     }
 }
 
@@ -2563,21 +2651,26 @@ pub async fn accept_project_dispatch(
 /// `name`, which has the name of a persona that was seen gone. What was set aside for it is
 /// in force again, and what was held back while it waited counts again. Refused while the
 /// name is no persona. Recorded first. Answers what stands now.
+// On a blocking thread ([`SETTLES`]): what was accepted for the name is settled against the
+// project's history before it is given back.
 #[tauri::command]
 #[specta::specta]
-pub fn give_back_dispatch(
+pub async fn give_back_dispatch(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     name: String,
 ) -> Result<DispatchStanding, String> {
     let held = planes.held(&plane)?;
-    let root = held.root();
-    with_ground(&held, |ground| {
-        give_back(root, &name, ground.audit)?;
-        held.dispatch_grants().start_what_is_covered(ground);
-        Ok::<(), String>(())
-    })?;
-    Ok(standing_read(root, held.dispatch_grants()))
+    crate::off_the_window("giving the grants back", move || {
+        let root = held.root();
+        with_ground(&held, |ground| {
+            give_back(root, &name, ground.audit)?;
+            held.dispatch_grants().start_what_is_covered(ground);
+            Ok::<(), String>(())
+        })?;
+        Ok(standing_read(root, held.dispatch_grants()))
+    })
+    .await
 }
 
 /// **Remove** on a grant Settings shows set aside (#1504): that one entry is taken out for
@@ -2902,9 +2995,10 @@ pub async fn set_dispatch_workspace(
 /// **Accept** on Settings' table, for a grant of the project's limited to one workspace
 /// (#1505): this machine follows it from now on, for work in `workspace` only. Audited first.
 /// Answers what stands now.
+// On a blocking thread ([`SETTLES`]): an acceptance is bound to the project's history.
 #[tauri::command]
 #[specta::specta]
-pub fn accept_project_dispatch_in(
+pub async fn accept_project_dispatch_in(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     asking: String,
@@ -2912,18 +3006,21 @@ pub fn accept_project_dispatch_in(
     workspace: String,
 ) -> Result<DispatchStanding, String> {
     let held = planes.held(&plane)?;
-    let root = held.root();
-    let one = dispatchwithin::Limited::new(&asking, &target, &workspace)?;
-    let personas = purlis_core::dispatchdormant::personas_of(root).unwrap_or_default();
-    with_ground(&held, |ground| {
-        accept_in(
-            held.dispatch_grants(),
-            ground,
-            &|name| personas.iter().any(|one| one == name),
-            &one,
-        )
-    })?;
-    Ok(standing_read(root, held.dispatch_grants()))
+    crate::off_the_window("accepting the project's dispatch grant", move || {
+        let root = held.root();
+        let one = dispatchwithin::Limited::new(&asking, &target, &workspace)?;
+        let personas = purlis_core::dispatchdormant::personas_of(root).unwrap_or_default();
+        with_ground(&held, |ground| {
+            accept_in(
+                held.dispatch_grants(),
+                ground,
+                &|name| personas.iter().any(|one| one == name),
+                &one,
+            )
+        })?;
+        Ok(standing_read(root, held.dispatch_grants()))
+    })
+    .await
 }
 
 /// **Not on my machine** on Settings' table, for a grant of the project's limited to one

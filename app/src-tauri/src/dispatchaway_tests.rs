@@ -172,6 +172,11 @@ fn one(asking: &str, target: &str, times: u32) -> (String, String, Option<String
     )
 }
 
+/// The list as the window reads it now.
+fn listed_now(world: &World) -> Vec<AwayRefusal> {
+    world.on(listed)
+}
+
 fn say_never(root: &Path, asking: &str, target: &str) {
     dispatchgrant::never(root, &Pair::new(asking, target).expect("a pair")).expect("said");
 }
@@ -198,6 +203,8 @@ fn a_refusal_for_lack_of_a_grant_is_kept_once_a_pair_with_a_count() {
             workspace: Some("ide".to_owned()),
             latest: 1_800_000_000,
             times: 3,
+            nowhere: None,
+            shown: listed_now(&world)[0].shown.clone(),
             allows: "Allow from now on lets steward chats dispatch to devops without asking, \
                      for work in ide only: this one pair, for you on this machine. A chat \
                      nobody is at may use it too. devops works with its own access: any vault \
@@ -331,7 +338,7 @@ fn allow_from_now_on_writes_the_person_s_grant_for_that_pair_and_audits_it_as_th
     world.asks(Some("steward"), "qa", SANDBOXED);
 
     let said = world
-        .on(|on| allow(on, "steward", "devops", Some("ide")))
+        .on(|on| allow(on, "steward", "devops", Some("ide"), None))
         .expect("allowed");
 
     assert_eq!(
@@ -418,7 +425,7 @@ fn an_allow_for_a_refusal_at_the_project_s_root_holds_in_any_workspace_and_says_
     );
 
     let said = world
-        .on(|on| allow(on, "steward", "devops", None))
+        .on(|on| allow(on, "steward", "devops", None, None))
         .expect("allowed");
 
     assert_eq!(
@@ -453,7 +460,7 @@ fn an_allow_for_a_workspace_that_is_not_there_now_keeps_nothing_and_audits_nothi
     assert_eq!(world.pairs().len(), 1);
 
     assert_eq!(
-        world.on(|on| allow(on, "steward", "devops", Some("old"))),
+        world.on(|on| allow(on, "steward", "devops", Some("old"), None)),
         Err(purlis_core::dispatchwithin::not_there_said("old"))
     );
 
@@ -479,7 +486,7 @@ fn allow_takes_the_item_of_the_workspace_it_grants_for_and_at_the_root_the_pair_
     assert_eq!(world.pairs().len(), 3);
     // A grant for web answers what was refused in web, and nothing refused elsewhere.
     world
-        .on(|on| allow(on, "steward", "devops", Some("web")))
+        .on(|on| allow(on, "steward", "devops", Some("web"), None))
         .expect("allowed");
     assert_eq!(
         world
@@ -492,7 +499,7 @@ fn allow_takes_the_item_of_the_workspace_it_grants_for_and_at_the_root_the_pair_
     // The refusal at the root is answered by a grant that holds in any workspace: it covers
     // the one in ide too, so both go.
     world
-        .on(|on| allow(on, "steward", "devops", None))
+        .on(|on| allow(on, "steward", "devops", None, None))
         .expect("allowed");
     assert!(world.pairs().is_empty());
     assert_eq!(world.within(), [Some("web".to_owned()), None]);
@@ -514,7 +521,9 @@ fn allow_grants_only_a_pair_that_is_listed_and_never_a_wider_one() {
         ("steward", "steward", Some("ide")),
     ] {
         assert!(
-            world.on(|on| allow(on, asking, target, workspace)).is_err(),
+            world
+                .on(|on| allow(on, asking, target, workspace, None))
+                .is_err(),
             "{asking} to {target} in {workspace:?}"
         );
     }
@@ -528,7 +537,11 @@ fn allow_grants_only_a_pair_that_is_listed_and_never_a_wider_one() {
     )
     .expect("written");
     assert!(world.on(listed).is_empty());
-    assert!(world.on(|on| allow(on, "steward", "*", None)).is_err());
+    assert!(
+        world
+            .on(|on| allow(on, "steward", "*", None, None))
+            .is_err()
+    );
 
     assert!(world.audited().is_empty());
     assert!(dispatchgrant::yours(world.root()).is_empty());
@@ -543,7 +556,7 @@ fn an_allow_the_event_log_does_not_take_grants_nothing_and_leaves_the_item() {
     };
     world.asks(Some("steward"), "devops", SANDBOXED);
     assert_eq!(
-        world.on(|on| allow(on, "steward", "devops", Some("ide"))),
+        world.on(|on| allow(on, "steward", "devops", Some("ide"), None)),
         Err("the event log is not open".to_owned())
     );
     assert!(dispatchgrant::yours(world.root()).is_empty());
@@ -783,7 +796,7 @@ fn an_allow_pressed_across_a_never_said_since_the_list_was_drawn_grants_nothing(
     say_never(world.root(), "steward", "devops");
 
     assert_eq!(
-        world.on(|on| allow(on, "steward", "devops", Some("ide"))),
+        world.on(|on| allow(on, "steward", "devops", Some("ide"), None)),
         Err(
             "You said never to steward chats dispatching to devops on this machine, so nothing \
              was allowed. Lift it in Settings › Project › Dispatch first."
@@ -830,7 +843,7 @@ fn a_pair_a_policy_locks_a_grant_covers_or_a_persona_that_is_gone_is_dropped_too
     world.asks(Some("steward"), "devops", SANDBOXED);
     world.personas = Some(vec!["steward", "qa"]);
     assert_eq!(
-        world.on(|on| allow(on, "steward", "devops", Some("ide"))),
+        world.on(|on| allow(on, "steward", "devops", Some("ide"), None)),
         Err("This project has no persona named devops, so nothing was allowed.".to_owned())
     );
     assert!(world.pairs().is_empty());
@@ -847,7 +860,7 @@ fn while_the_record_of_nevers_does_not_read_nothing_is_offered_allowed_or_droppe
     assert!(world.on(listed).is_empty());
     assert!(
         world
-            .on(|on| allow(on, "steward", "devops", Some("ide")))
+            .on(|on| allow(on, "steward", "devops", Some("ide"), None))
             .is_err()
     );
     assert!(world.audited().is_empty());
@@ -866,7 +879,13 @@ fn an_item_is_gone_thirty_days_after_its_last_refusal_and_cannot_be_allowed_then
     assert!(world.at(later, listed).is_empty());
     assert!(
         world
-            .at(later, |on| allow(on, "steward", "devops", Some("ide")))
+            .at(later, |on| allow(
+                on,
+                "steward",
+                "devops",
+                Some("ide"),
+                None
+            ))
             .is_err()
     );
     assert!(world.audited().is_empty());
@@ -884,7 +903,7 @@ fn where_the_project_s_personas_could_not_be_read_nothing_is_offered_and_nothing
     assert!(world.on(listed).is_empty());
     assert_eq!(world.on(shown), Shown::default());
     assert_eq!(
-        world.on(|on| allow(on, "steward", "devops", Some("ide"))),
+        world.on(|on| allow(on, "steward", "devops", Some("ide"), None)),
         Err(
             "purlis could not read this project's personas just now, so nothing was changed. \
              Try again."
@@ -954,4 +973,62 @@ fn the_chat_s_sentence_is_the_refusal_as_it_was_with_one_clause_added() {
              are back."
         )
     );
+}
+
+// ---- held to what the item said (the train's review, M3 and F5) -------------------------------
+
+#[test]
+fn an_allow_after_what_the_target_works_with_changed_grants_nothing_and_the_item_is_read_again() {
+    let world = World::new();
+    world.asks(Some("steward"), "devops", SANDBOXED);
+    let item = listed_now(&world).remove(0);
+
+    // Between the look and the press, devops comes to dispatch onward to qa.
+    sandbox::local::grant_dispatch(world.root(), "devops", "qa").expect("granted");
+
+    assert_eq!(
+        world.on(|on| allow(on, "steward", "devops", Some("ide"), Some(&item.shown))),
+        Err(CHANGED_AWAY.to_owned())
+    );
+    assert!(world.audited().is_empty(), "nothing audited");
+    assert!(
+        sandbox::local::dispatch_mine_in(world.root()).is_empty(),
+        "nothing kept"
+    );
+
+    // Read again, it says the new reach, and that is what an Allow is held to.
+    let now = listed_now(&world).remove(0);
+    assert_ne!(now.shown, item.shown);
+    assert!(
+        now.allows.contains("may itself dispatch to qa"),
+        "{}",
+        now.allows
+    );
+    world
+        .on(|on| allow(on, "steward", "devops", Some("ide"), Some(&now.shown)))
+        .expect("allowed");
+    assert_eq!(world.audited().len(), 1);
+}
+
+#[test]
+fn an_item_whose_workspace_is_gone_says_so_before_the_press_and_its_digest_moves() {
+    let world = World::new();
+    std::fs::create_dir_all(world.root().join("workspaces/old")).expect("a workspace");
+    world.asks_in(NOW, Some("steward"), "devops", SANDBOXED, Some("old"));
+    let before = listed_now(&world).remove(0);
+    assert_eq!(before.nowhere, None);
+
+    std::fs::remove_dir_all(world.root().join("workspaces/old")).expect("removed");
+    let item = listed_now(&world).remove(0);
+
+    let why = purlis_core::dispatchwithin::not_there_said("old");
+    assert_eq!(item.nowhere.as_deref(), Some(why.as_str()));
+    assert!(item.allows.starts_with(&why), "{}", item.allows);
+    assert!(item.allows.contains("keeps nothing"), "{}", item.allows);
+    // A press drawn before it went is held to the item as it was.
+    assert_eq!(
+        world.on(|on| allow(on, "steward", "devops", Some("old"), Some(&before.shown))),
+        Err(CHANGED_AWAY.to_owned())
+    );
+    assert!(world.audited().is_empty());
 }

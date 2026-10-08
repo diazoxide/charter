@@ -229,11 +229,16 @@ fn what_is_not_a_pair_of_two_personas_is_not_kept() {
 }
 
 #[test]
-fn a_workspace_s_name_purlis_would_not_draw_is_not_kept() {
+fn a_refusal_from_a_workspace_whose_name_purlis_would_not_draw_is_not_kept_at_all() {
+    // Kept as no workspace it would read as the project's root, whose Allow holds in any
+    // workspace: the narrower answer is to keep nothing (the train's review, F6).
     let project = tempfile::tempdir().expect("a project");
     let root = project.path();
-    keep(root, "qa", "devops", Some("ide\u{202E}"), 1_002).expect("written");
-    assert_eq!(list(root, 1_002)[0].workspace, None);
+    assert_eq!(
+        keep(root, "qa", "devops", Some("ide\u{202E}"), 1_002).expect("answered"),
+        Kept::NotAPair
+    );
+    assert!(list(root, 1_002).is_empty());
 }
 
 #[test]

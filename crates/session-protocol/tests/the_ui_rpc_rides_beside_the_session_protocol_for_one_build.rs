@@ -129,6 +129,78 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
 }
 
 #[tokio::test]
+async fn no_standing_dispatch_grant_is_made_changed_or_taken_back_on_any_link() {
+    // Spec #1483, train 64: every command that makes, widens, accepts, declines or takes back
+    // a standing dispatch grant, every answer to a dispatch's question (Keep blocked too: it
+    // is the person's answer), the reads of what stands and what waits, and the lists a
+    // person answers from, are the window's over
+    // Tauri's IPC alone, even when a host is built with every command. Named here one by one,
+    // so taking one off the list fails this test and not only a generated file's diff.
+    const STANDING: [&str; 25] = [
+        "dispatch_grants_needed",
+        "dispatch_standing",
+        "dispatch_grants",
+        "allow_dispatch",
+        "allow_dispatch_anywhere",
+        "keep_dispatch_blocked",
+        "never_dispatch",
+        "lift_dispatch_never",
+        "allow_dispatch_to_any",
+        "revoke_dispatch_to_any",
+        "revoke_dispatch_grant",
+        "accept_project_dispatch",
+        "decline_project_dispatch",
+        "accept_project_dispatch_in",
+        "decline_project_dispatch_in",
+        "set_dispatch_workspace",
+        "give_back_dispatch",
+        "remove_dormant_dispatch",
+        "dispatch_arrival",
+        "answer_dispatch_arrival",
+        "dispatch_gone_told",
+        "dispatch_away",
+        "allow_dispatch_away",
+        "dismiss_dispatch_away",
+        "never_dispatch_away",
+    ];
+    assert_eq!(ui::STANDING_DISPATCH, STANDING);
+    let commands = Commands::default();
+    let (a, b) = duplex(64 * 1024);
+    let (client, served) = tokio::join!(
+        link::connect(
+            a,
+            session::speaks(),
+            Scope::LocalUi,
+            HELD.of(Scope::LocalUi)
+        ),
+        link::serve_any(b, session::speaks(), &HELD)
+    );
+    let ui = ui::Server::new(
+        BUILD,
+        STANDING.into_iter().chain(["rename_chat"]),
+        commands.clone(),
+    );
+    tokio::spawn(session::serve(served.unwrap(), Sessions, Some(ui)));
+    let client = Client::new(client.unwrap()).0;
+    let ui = client.ui(BUILD).await.unwrap();
+
+    for command in STANDING {
+        let refused = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            ui.call(
+                command,
+                json!({"plane": 1, "id": 1, "level": "project", "asking": "steward", "target": "devops"}),
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{command} was answered"))
+        .unwrap();
+        assert!(refused.is_err(), "{command}: {refused:?}");
+    }
+    assert!(commands.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_refusal_kept_while_nobody_was_there_is_read_and_answered_on_no_link() {
     // #1507: the list and its three answers (one a standing grant in one press) are the
     // window's over Tauri's IPC alone, even when a host is built with every command.

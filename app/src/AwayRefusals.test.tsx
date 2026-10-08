@@ -39,6 +39,8 @@ const refusal = (over: Partial<AwayRefusal> = {}): AwayRefusal => ({
   latest: NOW - 7200,
   times: 3,
   allows: ALLOWS,
+  nowhere: null,
+  shown: "away-s0",
   ...over,
 });
 
@@ -102,10 +104,13 @@ describe("what the item says", () => {
   });
 
   it("has no place for a chat's words: an item is two personas, a workspace, a count and a time", () => {
+    // `allows`, `nowhere` and `shown` are the core's own sentences and digest of them.
     expect(Object.keys(refusal()).sort()).toEqual([
       "allows",
       "asking",
       "latest",
+      "nowhere",
+      "shown",
       "target",
       "times",
       "workspace",
@@ -168,6 +173,25 @@ describe("a dispatch refused while nobody was there, in the title bar's list", (
       ALLOW,
       "Allow from now on: steward chats dispatch to devops, for you on this machine, in any workspace",
     ]);
+  });
+
+  it("says on the button that Allow keeps nothing where the item's workspace is gone", async () => {
+    const gone = item({
+      workspace: "old",
+      nowhere: "old is not a workspace of this project now, so purlis keeps no grant for it.",
+      allows:
+        "old is not a workspace of this project now, so purlis keeps no grant for it. So Allow from now on keeps nothing for this item; put it away with Dismiss.",
+    });
+    render(<NeedsYouMenu quiet={[]} items={[]} away={[gone]} onPress={() => {}} />);
+    await userEvent.click(hand());
+
+    const group = await screen.findByRole("group", { name: /^steward wanted devops/ });
+    expect(group).toHaveTextContent("So Allow from now on keeps nothing for this item");
+    expect(
+      within(group).getByRole("menuitem", {
+        name: "Allow from now on: steward chats dispatch to devops, for you on this machine, which keeps nothing: old is not a workspace of this project now",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("answers with each of the three, each for its own item", async () => {
@@ -457,7 +481,7 @@ describe("the list, read from the core and answered through it", () => {
       expect(screen.getByRole("status")).toHaveTextContent("said: Allowed for me on this machine."),
     );
     expect(asked.filter((one) => one.cmd === "allow_dispatch_away").map((one) => one.args)).toEqual(
-      [{ plane: PLANE, asking: "steward", target: "devops", workspace: "ide" }],
+      [{ plane: PLANE, asking: "steward", target: "devops", workspace: "ide", shown: "away-s0" }],
     );
     // No level and no wildcard is the window's to send.
     expect(asked.some((one) => /allow_dispatch$|allow_dispatch_to_any/.test(one.cmd))).toBe(false);

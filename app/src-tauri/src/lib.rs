@@ -3630,6 +3630,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_command_that_changes_a_standing_dispatch_grant_is_the_window_s_alone() {
+        // Spec #1483, train 64: the person's consent to who may dispatch to whom is given and
+        // withdrawn in their own window. Each such command is one of the window's (so the
+        // list names no command that does not exist), and the link's client carries none.
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        let client = ui_rpc_client();
+        for command in purlis_session_protocol::ui::STANDING_DISPATCH {
+            assert!(bindings.contains(&format!("(\"{command}\"")), "{command}");
+            assert!(!client.contains(&format!("(\"{command}\"")), "{command}");
+        }
+        // And every command of the grant store and of the refusals kept while nobody was
+        // there is on that list: the reads of what stands and what waits too, and Keep
+        // blocked, which keeps nothing past the chat and is the person's answer.
+        let served: [&str; 0] = [];
+        // Each command's path as the one list writes it, every segment followed by `::`.
+        macro_rules! command_paths {
+            (
+                value_free: [$($($free:ident)::+),* $(,)?],
+                vault_values: [$($($value:ident)::+),* $(,)?] $(,)?
+            ) => {
+                (
+                    &[$(concat!($(stringify!($free), "::"),+)),*] as &[&str],
+                    &[$(concat!($(stringify!($value), "::"),+)),*] as &[&str],
+                )
+            };
+        }
+        let (value_free, vault_values) = app_commands!(command_paths);
+        let mut seen = 0;
+        for path in value_free.iter().chain(vault_values) {
+            let Some(command) = path
+                .strip_prefix("dispatchgrants::")
+                .or_else(|| path.strip_prefix("dispatchaway::"))
+                .and_then(|rest| rest.strip_suffix("::"))
+            else {
+                continue;
+            };
+            seen += 1;
+            assert_eq!(
+                purlis_session_protocol::ui::STANDING_DISPATCH.contains(&command),
+                !served.contains(&command),
+                "{command}"
+            );
+        }
+        assert_eq!(
+            seen,
+            purlis_session_protocol::ui::STANDING_DISPATCH.len() + served.len(),
+            "every command of the two modules was looked at"
+        );
+    }
+
     /// The window's commands that take a channel: `watch_session`, the one that streams a
     /// terminal to a pane.
     const TAKES_A_CHANNEL: &[&str] = &["watch_session"];

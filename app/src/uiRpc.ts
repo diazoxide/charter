@@ -426,142 +426,6 @@ export const commands = {
 	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
 	 */
 	dispatchLimits: (plane: PlaneId) => typedError<DispatchLimits, string>(__TAURI_INVOKE("dispatch_limits", { plane })),
-	/**  The dispatches of chat `session` waiting on the person, for the Notice on its tab. */
-	dispatchGrantsNeeded: (plane: PlaneId, session: number) => typedError<DispatchPending[], string>(__TAURI_INVOKE("dispatch_grants_needed", { plane, session })),
-	/**
-	 *  **Allow** on a dispatch's Notice, at `level`: the pair is the app's record of the held
-	 *  dispatch `id`, never the window's word. Audited, then kept where that level keeps it, and
-	 *  the dispatch starts.
-	 * 
-	 *  `also` is the wanted personas whose boxes the person ticked (#1502): each the question
-	 *  still offers is kept at the same level and with the same workspace condition as the asked
-	 *  pair (#1505), as its own audited grant. `shown` is the digest the
-	 *  Notice was told; where the question reads differently now, nothing is allowed and the
-	 *  Notice reads it again.
-	 */
-	allowDispatch: (plane: PlaneId, id: number, level: GrantLevel, also: string[], shown: string) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("allow_dispatch", { plane, id, level, also, shown })),
-	/**
-	 *  **Keep blocked** on a dispatch's Notice: nothing is granted, and the dispatch does not
-	 *  start. Answers whether it was still waiting.
-	 */
-	keepDispatchBlocked: (plane: PlaneId, id: number) => typedError<boolean, string>(__TAURI_INVOKE("keep_dispatch_blocked", { plane, id })),
-	/**
-	 *  **Never for this pair** on a dispatch's Notice (#1503): the pair is the app's record of the
-	 *  held dispatch `id`, never the window's word. Audited, then kept for the person on this
-	 *  machine; the dispatch does not start, and no chat of that persona is asked for that target
-	 *  again until it is lifted ([`lift_dispatch_never`]).
-	 */
-	neverDispatch: (plane: PlaneId, id: number) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("never_dispatch", { plane, id })),
-	/**
-	 *  What stands beside the named dispatch grants here: the pairs you said never to, and the
-	 *  personas whose chats may dispatch to any persona. For Settings' list.
-	 */
-	dispatchStanding: (plane: PlaneId) => typedError<DispatchStanding, string>(__TAURI_INVOKE("dispatch_standing", { plane })),
-	/**
-	 *  **Lift** on Settings' list of the pairs you said never to: audited, then taken out, so the
-	 *  next dispatch across the pair is covered by whatever grant stands, or asks. Answers what
-	 *  stands now.
-	 */
-	liftDispatchNever: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("lift_dispatch_never", { plane, asking, target })),
-	/**
-	 *  **Any persona**, from Settings: chats running as `asking` may dispatch to every persona of
-	 *  the project, one added later included, for you on this machine or for everyone in the
-	 *  project. Audited, then kept; a dispatch waiting on the person that it covers starts.
-	 *  Answers what stands now.
-	 */
-	allowDispatchToAny: (plane: PlaneId, asking: string, level: GrantLevel) => typedError<DispatchStanding, string>(__TAURI_INVOKE("allow_dispatch_to_any", { plane, asking, level })),
-	/**
-	 *  **Revoke** on Settings' list of any-persona grants: audited, then taken out. Answers what
-	 *  stands now.
-	 */
-	revokeDispatchToAny: (plane: PlaneId, asking: string, level: GrantLevel) => typedError<DispatchStanding, string>(__TAURI_INVOKE("revoke_dispatch_to_any", { plane, asking, level })),
-	/**
-	 *  **Accept** on Settings' table (#1504): this machine follows one grant of the project's from
-	 *  now on, a pair or any persona (`target` is `*`), a teammate's that was waiting or one
-	 *  declined here. Audited first; a dispatch waiting on the person that it covers starts.
-	 *  Answers what stands now.
-	 */
-	acceptProjectDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("accept_project_dispatch", { plane, asking, target })),
-	/**
-	 *  **Not on my machine** on Settings' table (#1504): this machine stops following one grant of
-	 *  the project's, a pair or any persona (`target` is `*`). The committed file is not changed,
-	 *  so teammates keep it. Audited first. Answers what stands now.
-	 */
-	declineProjectDispatch: (plane: PlaneId, asking: string, target: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("decline_project_dispatch", { plane, asking, target })),
-	/**
-	 *  **Give back** on Settings' table (#1504): the person's one acknowledgement for the persona
-	 *  `name`, which has the name of a persona that was seen gone. What was set aside for it is
-	 *  in force again, and what was held back while it waited counts again. Refused while the
-	 *  name is no persona. Recorded first. Answers what stands now.
-	 */
-	giveBackDispatch: (plane: PlaneId, name: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("give_back_dispatch", { plane, name })),
-	/**
-	 *  **Remove** on a grant Settings shows set aside (#1504): that one entry is taken out for
-	 *  good, the one set aside as "any persona" where `any`, else the pair. It was in force for
-	 *  no chat, so nothing changes for any. Answers what stands now.
-	 */
-	removeDormantDispatch: (plane: PlaneId, asking: string, target: string, any: boolean) => typedError<DispatchStanding, string>(__TAURI_INVOKE("remove_dormant_dispatch", { plane, asking, target, any })),
-	/**
-	 *  **Allow, in any workspace**, on a dispatch's Notice, at `level`: the explicit wider choice
-	 *  (#1505). [`allow_dispatch`] is the narrower one, which holds in the workspace the task
-	 *  works in. The pair and the workspace are the app's record of the held dispatch `id`, never
-	 *  the window's word. Audited, then kept, and the dispatch starts.
-	 * 
-	 *  `also` and `shown` are [`allow_dispatch`]'s (#1502): each ticked persona the question still
-	 *  offers is kept at the same level **and in any workspace too**, as the asked pair is.
-	 */
-	allowDispatchAnywhere: (plane: PlaneId, id: number, level: GrantLevel, also: string[], shown: string) => typedError<DispatchAllowed, string>(__TAURI_INVOKE("allow_dispatch_anywhere", { plane, id, level, also, shown })),
-	/**
-	 *  **Changes which workspace a grant holds in**, on Settings' table (#1505): the grant of
-	 *  `asking` to `target` (`*`: any persona) at `level` (`you` or `project`), which holds in
-	 *  `from` now (null: any workspace), is set to hold in `to` (null: any workspace). Narrowing
-	 *  and widening alike are the person's confirmed press; a project grant's change edits the
-	 *  committed file. Setting a grant to the workspace it names already confirms it for the
-	 *  workspace of that name that is there now. Audited first. Answers what stands now.
-	 */
-	setDispatchWorkspace: (plane: PlaneId, asking: string, target: string, level: GrantLevel, from: string | null, to: string | null) => typedError<DispatchStanding, string>(__TAURI_INVOKE("set_dispatch_workspace", { plane, asking, target, level, from, to })),
-	/**
-	 *  **Accept** on Settings' table, for a grant of the project's limited to one workspace
-	 *  (#1505): this machine follows it from now on, for work in `workspace` only. Audited first.
-	 *  Answers what stands now.
-	 */
-	acceptProjectDispatchIn: (plane: PlaneId, asking: string, target: string, workspace: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("accept_project_dispatch_in", { plane, asking, target, workspace })),
-	/**
-	 *  **Not on my machine** on Settings' table, for a grant of the project's limited to one
-	 *  workspace (#1505). The committed file is not changed. Audited first. Answers what stands
-	 *  now.
-	 */
-	declineProjectDispatchIn: (plane: PlaneId, asking: string, target: string, workspace: string) => typedError<DispatchStanding, string>(__TAURI_INVOKE("decline_project_dispatch_in", { plane, asking, target, workspace })),
-	/**  Every dispatch grant in force here, and what policy locks: for Settings' list. */
-	dispatchGrants: (plane: PlaneId) => typedError<DispatchGrants, string>(__TAURI_INVOKE("dispatch_grants", { plane })),
-	/**
-	 *  **Revoke** on Settings' list of dispatch grants: the grant called `id` is audited and taken
-	 *  out, so the next dispatch across its pair asks again. Answers the list as it is now.
-	 */
-	revokeDispatchGrant: (plane: PlaneId, id: string) => typedError<DispatchGrants, string>(__TAURI_INVOKE("revoke_dispatch_grant", { plane, id })),
-	/**
-	 *  What the project's dispatch grants ask of the person now (#1506): the grants its file
-	 *  holds that nobody on this machine has accepted or declined, and the ones accepted here
-	 *  that a commit took away. For the Notice the window shows when a teammate's grant arrives.
-	 */
-	dispatchArrival: (plane: PlaneId) => typedError<DispatchArrival, string>(__TAURI_INVOKE("dispatch_arrival", { plane })),
-	/**
-	 *  **Accept** (`accepted`) or **Not on my machine** on the Notice that says a teammate's
-	 *  grant arrived (#1506): `shown` is the ids of the grants to answer, and `listed` the ids
-	 *  of everything the Notice listed. Only a grant still exactly as shown is answered; each is
-	 *  audited first. An accepted pair is in force on this
-	 *  machine from now on and every dispatch waiting on it starts; a declined grant covers
-	 *  nothing here, is not told again, and is changed in Settings. **"Any persona" is never
-	 *  accepted here**: a list naming one is refused. Answers what waits now, and the sentence to
-	 *  say where the list had moved.
-	 */
-	answerDispatchArrival: (plane: PlaneId, accepted: boolean, shown: string[], listed: string[]) => typedError<DispatchArrivalAnswered, string>(__TAURI_INVOKE("answer_dispatch_arrival", { plane, accepted, shown, listed })),
-	/**
-	 *  The person read that the project took away `shown`, grants they had accepted (#1506), by
-	 *  the ids [`DispatchArrival::gone`] gave: each is told once. Nothing is granted or declined.
-	 *  Answers what waits now.
-	 */
-	dispatchGoneTold: (plane: PlaneId, shown: string[]) => typedError<DispatchArrival, string>(__TAURI_INVOKE("dispatch_gone_told", { plane, shown })),
 	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
@@ -2287,6 +2151,17 @@ export type AwayRefusal = {
 	times: number,
 	/**  Exactly what **Allow from now on** allows, for whom, and what it makes reachable. */
 	allows: string,
+	/**
+	 *  Where the workspace the refused task would have worked in is not one of the project's
+	 *  now: the sentence saying so. Allow from now on keeps nothing for such an item.
+	 */
+	nowhere: string | null,
+	/**
+	 *  **What the item said, as a digest**: the pair, the level, the workspace, whether it is
+	 *  there, and what the target works with. Allow from now on sends it back, and one sent
+	 *  for an item that reads differently now grants nothing ([`CHANGED_AWAY`]).
+	 */
+	shown: string,
 };
 
 /**  What a block's Notice offers (#1342). */
@@ -3117,6 +2992,21 @@ export type DispatchStanding = {
 	 *  Empty where they could not be listed.
 	 */
 	workspaces: string[],
+	/**
+	 *  What each persona's definition says it wants to dispatch to (#1502), for the personas
+	 *  that say anything the question would offer: the table shows it under the persona's
+	 *  name. **It grants nothing, and nothing here is in force by it.**
+	 */
+	wants: DispatchWants[],
+};
+
+/**
+ *  What one persona's definition says it wants to dispatch to (#1502): the names its line
+ *  offers, as [`purlis_core::dispatchwants::of`] reads it, in the order written.
+ */
+export type DispatchWants = {
+	persona: string,
+	wants: string[],
 };
 
 /**  What the Dispatches tab is handed. */

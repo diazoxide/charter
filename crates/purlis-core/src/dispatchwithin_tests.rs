@@ -1206,24 +1206,27 @@ fn accepting_a_pair_for_every_workspace_does_not_accept_it_for_one_nor_the_rever
 }
 
 #[test]
-fn an_acceptance_does_not_outlive_the_limited_grant_it_accepted() {
+fn a_limited_grant_absent_from_the_file_on_disk_covers_nothing_and_is_not_dropped() {
+    // Bound to the project's history as a pair is (#1506, the train's review M1): a grant
+    // merely absent from the file on disk is not in force, and a branch switched back finds
+    // it accepted. A commit that took it out is the settling's to see
+    // (`dispatcharrival_tests.rs`).
     let text = "[dispatch.grants]\nsteward = [{ to = \"devops\", in = \"runners\" }]\n";
     let dir = with_file(&["runners"], text);
     let root = dir.path();
     let one = limited("steward", "devops", "runners");
     accept(root, &one).expect("accepted");
-    // The file drops it, a dispatch is judged, and the file holds it again.
-    std::fs::write(crate::names::manifest(root), "schema = 1\n").expect("a pull");
+    std::fs::write(crate::names::manifest(root), "schema = 1\n").expect("another branch");
     assert_eq!(
         asked(root, "steward", "devops", Some("runners")),
         Covers::NeedsGrant
     );
-    std::fs::write(crate::names::manifest(root), text).expect("a pull");
+    std::fs::write(crate::names::manifest(root), text).expect("switched back");
     assert_eq!(
         asked(root, "steward", "devops", Some("runners")),
-        Covers::NeedsGrant
+        Covers::Covered
     );
-    assert_eq!(unaccepted(root), [one]);
+    assert!(unaccepted(root).is_empty());
 }
 
 #[test]

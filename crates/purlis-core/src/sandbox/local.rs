@@ -1159,6 +1159,22 @@ pub struct DispatchBound {
     pub at: Option<String>,
     /// The grants whose acceptance was dropped, with why.
     pub gone: Vec<Gone>,
+    /// The project's grants limited to one workspace accepted here (#1505), each as
+    /// [`crate::dispatchwithin::Limited`] is displayed: bound to the history as pairs are.
+    pub seen_in: Vec<String>,
+    /// What was accepted of the project's grants for a name whose grants are set aside
+    /// (#1504): bound too, so a Give back never restores one a commit took out meanwhile.
+    pub aside: Vec<String>,
+}
+
+/// A limited grant of the project's as [`DispatchBound::seen_in`] spells it.
+fn limited_said(one: &DispatchIn) -> String {
+    let target = if one.any {
+        crate::dispatchgrant::ANY
+    } else {
+        one.target.as_str()
+    };
+    format!("{} -> {target} in {}", one.asking, one.workspace)
 }
 
 /// What this machine keeps of the project's grants in the project at `root`.
@@ -1170,6 +1186,12 @@ pub fn dispatch_bound(root: &Path) -> DispatchBound {
         declined: held.dispatch_declined,
         at: held.dispatch_seen_at,
         gone: held.dispatch_gone,
+        seen_in: held.dispatch_seen_in.iter().map(limited_said).collect(),
+        aside: held
+            .dispatch_accepted_aside
+            .iter()
+            .map(|one| one.said.clone())
+            .collect(),
     }
 }
 
@@ -1239,6 +1261,17 @@ pub fn settle_dispatch(root: &Path, settled: &DispatchSettled) -> io::Result<()>
                     }
                 }
             }
+            // A grant limited to one workspace, and one set aside for a name that changed
+            // hands, are dropped the same way.
+            let (in_before, aside_before) = (
+                held.dispatch_seen_in.len(),
+                held.dispatch_accepted_aside.len(),
+            );
+            held.dispatch_seen_in
+                .retain(|one| limited_said(one) != *said);
+            held.dispatch_accepted_aside.retain(|one| one.said != *said);
+            was |= held.dispatch_seen_in.len() != in_before
+                || held.dispatch_accepted_aside.len() != aside_before;
             if was {
                 held.dispatch_gone.retain(|one| one.said != *said);
                 held.dispatch_gone.push(gone.clone());
@@ -1251,7 +1284,9 @@ pub fn settle_dispatch(root: &Path, settled: &DispatchSettled) -> io::Result<()>
             .as_ref()
             .is_some_and(|seen| !seen.is_empty())
             || !held.dispatch_any_seen.is_empty()
-            || !held.dispatch_declined.is_empty();
+            || !held.dispatch_declined.is_empty()
+            || !held.dispatch_seen_in.is_empty()
+            || !held.dispatch_accepted_aside.is_empty();
         held.dispatch_seen_at = settled.at.clone().filter(|_| bound);
     })
 }

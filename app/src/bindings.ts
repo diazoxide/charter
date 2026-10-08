@@ -570,10 +570,11 @@ export const commands = {
 	 *  **Allow from now on** on a needs-you item: chats running as `asking` may dispatch to
 	 *  `target`, for you on this machine, for work in `workspace`, the one the refused task would
 	 *  have worked in (null, the project's root: in any workspace). One named pair the list
-	 *  holds for that workspace, audited as yours before it is kept; it starts nothing. Answers
-	 *  the sentence to say and the list as it is now.
+	 *  holds for that workspace, audited as yours before it is kept; it starts nothing. `shown`
+	 *  is the item's digest as the window drew it: an item that reads differently now grants
+	 *  nothing. Answers the sentence to say and the list as it is now.
 	 */
-	allowDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null) => typedError<AwayAnswered, string>(__TAURI_INVOKE("allow_dispatch_away", { plane, asking, target, workspace })),
+	allowDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null, shown: string) => typedError<AwayAnswered, string>(__TAURI_INVOKE("allow_dispatch_away", { plane, asking, target, workspace, shown })),
 	/**
 	 *  **Dismiss** on a needs-you item: it is put away and nothing is granted. Further refusals
 	 *  for it are counted and not listed, until one comes a week or more later. Answers the list
@@ -2325,6 +2326,17 @@ export type AwayRefusal = {
 	times: number,
 	/**  Exactly what **Allow from now on** allows, for whom, and what it makes reachable. */
 	allows: string,
+	/**
+	 *  Where the workspace the refused task would have worked in is not one of the project's
+	 *  now: the sentence saying so. Allow from now on keeps nothing for such an item.
+	 */
+	nowhere: string | null,
+	/**
+	 *  **What the item said, as a digest**: the pair, the level, the workspace, whether it is
+	 *  there, and what the target works with. Allow from now on sends it back, and one sent
+	 *  for an item that reads differently now grants nothing ([`CHANGED_AWAY`]).
+	 */
+	shown: string,
 };
 
 /**  What a block's Notice offers (#1342). */
@@ -3155,6 +3167,21 @@ export type DispatchStanding = {
 	 *  Empty where they could not be listed.
 	 */
 	workspaces: string[],
+	/**
+	 *  What each persona's definition says it wants to dispatch to (#1502), for the personas
+	 *  that say anything the question would offer: the table shows it under the persona's
+	 *  name. **It grants nothing, and nothing here is in force by it.**
+	 */
+	wants: DispatchWants[],
+};
+
+/**
+ *  What one persona's definition says it wants to dispatch to (#1502): the names its line
+ *  offers, as [`purlis_core::dispatchwants::of`] reads it, in the order written.
+ */
+export type DispatchWants = {
+	persona: string,
+	wants: string[],
 };
 
 /**  What the Dispatches tab is handed. */

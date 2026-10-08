@@ -701,6 +701,79 @@ fn onward_reach_is_only_what_a_dispatch_would_be_covered_for() {
     assert_eq!(Onward::of("devops", &any, &Locks::none()), Onward::Any);
 }
 
+#[test]
+fn onward_reach_for_work_in_one_workspace_is_said_with_that_workspace() {
+    // Where #1502's words meet #1505's condition: a grant limited to a workspace is reach
+    // too, and leaving it out would say "nobody" of a persona that may dispatch onward.
+    use crate::dispatchwithin::Limited;
+    use crate::sandbox::grant::Level;
+    let limited = |target: &str, workspace: &str| {
+        Limited::new("devops", target, workspace).expect("a limited grant")
+    };
+    let grants = InForce {
+        you: vec![pair("devops", "qa")],
+        limited: vec![
+            (Level::You, limited("researcher", "runners")),
+            (Level::Project, limited("*", "web")),
+            // Already said as one that holds everywhere: not said a second time.
+            (Level::You, limited("qa", "runners")),
+            // Another persona's is not this one's reach.
+            (
+                Level::You,
+                Limited::new("steward", "prod", "runners").expect("a limited grant"),
+            ),
+        ],
+        ..InForce::default()
+    };
+    assert_eq!(
+        Onward::of("devops", &grants, &Locks::none()),
+        Onward::Named(vec![
+            "any persona in web".to_owned(),
+            "qa".to_owned(),
+            "researcher in runners".to_owned(),
+        ])
+    );
+    // A never takes a limited pair away as it takes any other, and an unread record all.
+    let refused = InForce {
+        never: vec![("devops".to_owned(), "researcher".to_owned())],
+        ..grants.clone()
+    };
+    assert_eq!(
+        Onward::of("devops", &refused, &Locks::none()),
+        Onward::Named(vec!["any persona in web".to_owned(), "qa".to_owned()])
+    );
+    let unread = InForce {
+        never_unread: true,
+        ..grants.clone()
+    };
+    assert_eq!(
+        Onward::of("devops", &unread, &Locks::none()),
+        Onward::Named(vec![])
+    );
+    // And it is part of what an answer is held to.
+    let project = with_vaults();
+    let ctx = Ctx::new(project.path(), Env::of(&[]));
+    let stamp = |grants: &InForce| {
+        Offer {
+            target: Access::of(&ctx, &sandbox(SANDBOXED), &Locks::none(), grants, "devops"),
+            also: Vec::new(),
+        }
+        .stamp()
+    };
+    let without = InForce {
+        limited: Vec::new(),
+        ..grants.clone()
+    };
+    assert_ne!(stamp(&grants), stamp(&without));
+    assert!(
+        Access::of(&ctx, &sandbox(SANDBOXED), &Locks::none(), &grants, "devops")
+            .said()
+            .ends_with(
+                ", and may itself dispatch to any persona in web, qa, researcher in runners."
+            ),
+    );
+}
+
 // ---- what was shown is what is answered ---------------------------------------------------------
 
 #[test]

@@ -5169,6 +5169,14 @@ mod tests {
             r#"{"dispatch_mine_in":[{"asking":"steward","target":"devops","workspace":"runners","seen":0}]}"#,
             r#"{"dispatch_seen_in":[{"asking":"steward","target":"*","any":true,"workspace":"runners","seen":0}]}"#,
             r#"{"dispatch_workspaces":[{"name":"runners","gone":0}]}"#,
+            // Train 64, where the tickets meet: the wider Allow with boxes ticked, an Allow on
+            // a refusal kept while nobody was there with the workspace it is limited to, and
+            // the window-only list's own name.
+            r#"{"allow_dispatch_anywhere":{"chat":4,"id":1,"level":"you","also":["qa"],"shown":"0f"}}"#,
+            r#"{"chat":4,"allow_dispatch_away":{"asking":"steward","target":"devops","workspace":"runners"},"token":"t"}"#,
+            r#"{"allow_dispatch_away":{"chat":4,"asking":"steward","target":"devops","workspace":null}}"#,
+            r#"{"never_dispatch_away":{"chat":4,"asking":"steward","target":"devops","workspace":"runners"}}"#,
+            r#"{"window_only":["allow_dispatch"]}"#,
         ];
         for line in forged {
             assert!(read_line(line).is_none(), "read as a line: {line}");
