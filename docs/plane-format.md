@@ -3371,6 +3371,19 @@ chat-name rule or holds a backtick or an asterisk (either would break out of how
 quoted above the message), or a `text` that breaks the report rule, drops the file. What is
 handed over is quoted as data, under a sentence that says which chat's words follow.
 
+**No file here says the person said something** (#1496). The person may answer, in the purlis
+window, a question a task put to its asking chat. That answer, and the word to the asking chat
+that the person answered, are kept in the app's memory and handed to each chat by the app
+itself, on the hook channel (to the task's waiting `purlis dispatch ask`, or to the chat's
+`userpromptsubmit` hook when it asks): they are written to no file in `said-<n>/`. A message
+file has no field for the person's mark. One that carries such a field is read without it,
+as the chat's message its `kind` and `from` make it, under the sentence that says it is not
+the person's word; and one whose `kind` claims it is dropped. So is one whose `from` reads
+like the app's own words for who spoke (the person, "you", purlis, and look-alike spellings:
+`dispatchtalk::reads_as_a_mark`): the app writes a chat that really has such a name as
+`chat '<name>'`, so a file that says it is from "The person" is not one the app left. So a file a chat manages to
+write into this folder cannot make its own text arrive as the person's.
+
 ---
 
 ### `~/.config/charter/reporting-consent` (outside the plane)
@@ -5058,7 +5071,19 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   dispatch ran. `at` is when the app took it (UTC, as `started`); `kind` is `"follow_up"` or
   `"answer"`, which the asking chat sent, or `"note"` or `"question"`, which the persona chat
   sent: **the kind says which of the record's two chats said it**, so a line names no chat;
-  `text` is the message as it was sent. It is appended in the write that counts the message
+  `text` is the message as it was sent. **One message is neither chat's** (#1496): an answer
+  the person gave in the purlis window, to a question the persona chat put to its asking
+  chat, has `"by": "person"` beside its `"kind": "answer"`, and the Activity tab then says
+  "you" answered. `by` is absent on every message a chat sent, `"person"` is its only value,
+  and a record with any other value there is not read as a record. It is written by the app
+  where it takes the person's answer from the window (`dispatchrecord::said_by`), and by
+  nothing a chat can ask for: no command, hook or tool of a chat's carries it. Such an answer
+  may also have `"unread": true`: the task ended (it reported, or its chat ended) before any
+  turn of it was handed the answer, so the Activity tab says the answer was never read and
+  does not show it as one the task worked from. The app writes it as the dispatch ends
+  (`dispatchrecord::answer_unread`), from what it still held for the task; absent otherwise.
+  The number the app gives each question (what an answer is for) is in the app's memory only
+  and is not written here. It is appended in the write that counts the message
   (`messages`), by the app, where it has already left the message for its reader. The message
   itself waits under `handbacks/said-<chat>/` only until that chat reads it, which is why a
   copy is kept here: the Activity tab is read afterwards. **Only what one chat sent another
@@ -5079,7 +5104,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   has not ended keeps its words. `talk` is read back under the record's own check
   (`dispatchrecord::sound`): a record whose `talk` holds text purlis will not draw, more
   than 500 messages, or more than 256 KiB of their text is counted and never shown. **The
-  one writer of `talk` is `dispatchrecord::said`.**
+  one writer of `talk` is `dispatchrecord::said`** (`said_by`, for the person's answer, is
+  the same write).
 - **In a chat's Activity tab** (#1495): one timeline for a chat, oldest first, of every task
   it dispatched and every task under those (`mode` `"task"`; a handoff is on none). A record
   gives it the dispatch (`started`, `brief`, and `asker.by_person` for a task the person

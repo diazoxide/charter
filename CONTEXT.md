@@ -557,10 +557,19 @@ kept for the workspace when the asking chat is gone.
 _Avoid_: reply, result (for a handoff), handback (in UI text)
 
 **Activity** (of a chat):
-One read-only timeline of what a chat and its tasks said to each other through purlis, and the
-tasks of its tasks: each brief, follow-up, progress note, question, answer and report, oldest
-first. It holds what the chats sent each other, never either chat's conversation.
+One timeline of what a chat and its tasks said to each other through purlis, and the tasks of
+its tasks: each brief, follow-up, progress note, question, answer and report, oldest first. It
+holds what the chats sent each other, never either chat's conversation. It is read-only but
+for one thing: the person may answer there a question a task is waiting on (see **The person's
+answer**).
 _Avoid_: log, history, transcript (it is none), feed
+
+**The person's answer** (to a task's question):
+An answer the person types in the purlis window to a question a task put to its asking chat,
+in that chat's place. The task is handed it marked as the person's and carries on; the asking
+chat is told the person answered and does not answer again. Only the window can give one: no
+chat's command, hook or file can make text arrive as the person's.
+_Avoid_: override, reply as the chat, operator answer (in UI text: "you")
 
 **Lineage** (of a chat):
 Everything descended from one chat the person started: that chat, the chats it dispatched, and

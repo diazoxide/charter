@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Activity as ActivityMark, LoaderCircle, TriangleAlert } from "lucide-react";
+import { AnswerQuestion } from "./AnswerQuestion";
 import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
 import { commands, type ActivityHeard, type ActivityLine, type PlaneId } from "./bindings";
 import {
   ACTIVITY_HEARD,
   alsoSaid,
+  answerable,
   clipped,
+  closedWhy,
   EXPIRED_SAID,
   heard,
   lineKey,
@@ -30,11 +33,19 @@ type Said = { read?: Read; closed?: true; trouble?: string };
  * and time (UTC, as the Dispatches tab says them), what kind of line it is, who said it to whom,
  * and what was said.
  *
- * **Read-only.** Nothing here is typed into, and nothing here sends anything.
+ * **Read-only, but for one thing: a question a task is waiting on can be answered here**
+ * (#1496, V100-46). A question its task is still paused on has an Answer control, which opens
+ * a small form under the line ({@link AnswerQuestion}). The task is handed the answer as the
+ * person's, and the asking chat is told. A question that has been answered, by that chat or by
+ * the person, and one whose task has reported or ended, offers none. **A form that is open
+ * stays open**: where its question closes while the person types, it says why and keeps what
+ * they typed.
  *
  * **Who said a line is who said it.** A task the person dispatched from a chat's tab is "you,
- * from" that chat (V100-70). An ending purlis recorded in a task's place (stopped, ended without
- * a report) is purlis's, for that task.
+ * from" that chat (V100-70), and an answer the person gave is "you" (#1496). An ending purlis
+ * recorded in a task's place (stopped, ended without a report) is purlis's, for that task.
+ * Those words are the app's to say: the core hands a chat's name over with "(a chat)" after it
+ * where the name reads like one of them, so a name cannot pass for the mark.
  *
  * **A line opens the chat it came from**: the chat's name is the control. The press asks the core
  * which session that chat has now, so it reaches a chat that was restarted since the timeline
@@ -72,6 +83,25 @@ export function ActivityTab({
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   /** The chats a press found closed, by key: named in plain text from then on. */
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  /** The question being answered: its line, and the session its task has now. */
+  const [answering, setAnswering] = useState<{ key: string; session: number }>();
+  /** The questions answered from this tab, by {@link lineKey}: each offers Answer no more,
+   *  whether or not the record kept the answer's words for a line to say so. */
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
+  /** Each line's controls, by {@link lineKey}, while they are drawn: Answer, and its chat. */
+  const answerControls = useRef(new Map<string, HTMLButtonElement>());
+  const chatControls = useRef(new Map<string, HTMLButtonElement>());
+  /** The question whose form was just put away: where the keyboard goes back to. Its Answer
+   *  control where that is still drawn (the form was cancelled), else its line's chat. */
+  const backTo = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (answering !== undefined || backTo.current === undefined) return;
+    const key = backTo.current;
+    backTo.current = undefined;
+    (answerControls.current.get(key) ?? chatControls.current.get(key))?.focus();
+  }, [answering]);
+  /** The questions whose chat a press could not find, by {@link lineKey}, and why. */
+  const [unfound, setUnfound] = useState<ReadonlyMap<string, string>>(new Map());
 
   useEffect(() => {
     if (session === undefined) return;
@@ -124,6 +154,28 @@ export function ActivityTab({
 
   const lines = said?.read?.timeline.lines;
   const also = useMemo(() => namedByOthers(lines ?? []), [lines]);
+  const toAnswer = useMemo(() => answerable(lines ?? []), [lines]);
+
+  /** Answer was pressed on a question: the session its task has now is asked for. */
+  const answer = async (line: ActivityLine) => {
+    const key = lineKey(line);
+    const now = await commands
+      .activityChat(plane, line.from_key)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (now.status === "error") {
+      // Said on the line, and Answer stays to be pressed again.
+      setUnfound((was) => new Map(was).set(key, now.error));
+      return;
+    }
+    setUnfound((was) => {
+      if (!was.has(key)) return was;
+      const less = new Map(was);
+      less.delete(key);
+      return less;
+    });
+    if (now.data !== null) setAnswering({ key, session: now.data });
+    else setGone((was) => new Set(was).add(line.from_key));
+  };
 
   /** A line's chat was pressed: the session it has now is asked for, and shown. */
   const show = async (line: ActivityLine) => {
@@ -215,6 +267,10 @@ export function ActivityTab({
                 className="vault-secret"
                 // #190: WebKit leaves a control out of the tab sequence without `tabIndex`.
                 tabIndex={0}
+                ref={(node) => {
+                  if (node === null) chatControls.current.delete(key);
+                  else chatControls.current.set(key, node);
+                }}
                 aria-label={`Show chat ${line.from}`}
                 title="Show its chat"
                 onClick={() => void show(line)}
@@ -242,9 +298,17 @@ export function ActivityTab({
               </span>
               <span className="activity-who">
                 {/* purlis's own line, for a task; the person's own brief, from a chat's tab;
-                    else the chat's. */}
-                {line.by_purlis ? "purlis, for " : line.by_person ? "you, from " : ""}
-                {chat}
+                    the person's own answer, in that chat's place; else the chat's. */}
+                {line.by_person && line.kind === "answer" ? (
+                  <strong className="activity-you" title="You answered this in the purlis window">
+                    you
+                  </strong>
+                ) : (
+                  <>
+                    {line.by_purlis ? "purlis, for " : line.by_person ? "you, from " : ""}
+                    {chat}
+                  </>
+                )}
                 {` → ${line.to}`}
               </span>
               {line.unkept !== null ? (
@@ -275,6 +339,69 @@ export function ActivityTab({
                 >
                   {full ? "Show less" : "Show all"}
                 </button>
+              )}
+              {/* An answer the person gave that the task never had (#1496): it ended first. */}
+              {line.unread && (
+                <p className="activity-text activity-absent" data-testid="activity-unread">
+                  {`${line.to} ended before it was handed this answer.`}
+                </p>
+              )}
+              {/* The form (#1496), **for as long as it is open**: where its question closes
+                  while the person types, it says why and keeps their text. */}
+              {answering?.key === key ? (
+                <AnswerQuestion
+                  plane={plane}
+                  session={answering.session}
+                  task={line.from}
+                  number={line.asks ?? 0}
+                  question={line.text}
+                  closed={toAnswer.has(key) ? undefined : closedWhy(line, lines ?? [])}
+                  onDone={() => {
+                    // Answer is gone from the line, so the keyboard goes to its chat.
+                    backTo.current = key;
+                    setAnswered((was) => new Set(was).add(key));
+                    setAnswering(undefined);
+                  }}
+                  onCancel={() => {
+                    // Answer is drawn again in the form's place where the question is still
+                    // open, and the keyboard goes back to it; else to the line's chat.
+                    backTo.current = key;
+                    setAnswering(undefined);
+                  }}
+                />
+              ) : (
+                /* A question its task is still paused on: the person may answer it, while
+                   its chat is open. */
+                toAnswer.has(key) &&
+                !answered.has(key) &&
+                line.from_session !== null &&
+                !gone.has(line.from_key) && (
+                  <button
+                    type="button"
+                    className="panel-view activity-answer"
+                    ref={(node) => {
+                      if (node === null) answerControls.current.delete(key);
+                      else answerControls.current.set(key, node);
+                    }}
+                    tabIndex={0}
+                    aria-label={`Answer ${line.from}'s question`}
+                    title={`${line.from} is paused until this is answered. Your answer reaches it marked as yours.`}
+                    onClick={() => void answer(line)}
+                  >
+                    Answer
+                  </button>
+                )
+              )}
+              {unfound.has(key) && (
+                <p className="activity-text answer-refused" role="alert">
+                  {`purlis could not find the chat of ${line.from}, so nothing was opened to answer in: ${unfound.get(key) ?? ""}`}
+                </p>
+              )}
+              {/* Said once the answer is taken, for whoever cannot see the control go. */}
+              {answered.has(key) && (
+                <p className="activity-text activity-absent" role="status">
+                  {`Your answer was sent to ${line.from}.`}
+                </p>
               )}
               {line.files.length > 0 &&
                 (also.get(line.dispatch) ?? []).map((one) => (

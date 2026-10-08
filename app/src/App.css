@@ -6432,6 +6432,69 @@ h2.sidebar-title .node-icon {
   font: inherit;
 }
 
+/* The person's own answer (#1496): "you", in the place a chat's name stands, and not a control. */
+.activity-you {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Answer, on a question its task is still paused on (#1496), and the form it opens: the
+   question, a box, Send and Cancel. Mounted by other surfaces too, so the form sets its own
+   width and the Activity line only places it. */
+.activity-answer,
+.activity-line > .answer-question {
+  grid-column: 3;
+  justify-self: start;
+}
+
+.activity-line > .answer-question {
+  justify-self: stretch;
+}
+
+.answer-question {
+  display: grid;
+  gap: 0.35rem;
+  max-width: 44rem;
+  margin: 0.25rem 0;
+  padding: 0.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--surface-raised);
+}
+
+/* The task's own words, as text: line breaks kept, a long word broken. */
+.answer-asked {
+  margin: 0;
+  padding-inline-start: 0.5rem;
+  border-inline-start: 2px solid var(--border-subtle);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answer-text {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.answer-refused {
+  margin: 0;
+  color: var(--state-failed);
+  overflow-wrap: anywhere;
+}
+
+.answer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.answer-how {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 /* A file another task's report also names (V100-68): a warning's mark and the sentence. */
 .activity-shared {
   display: flex;

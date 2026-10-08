@@ -151,6 +151,8 @@ macro_rules! app_commands {
                 taskbrief::task_brief,
                 activity::activity,
                 activity::activity_chat,
+                dispatched::task_question,
+                dispatched::answer_task_question,
                 resume_session,
                 autosave::plane_fetch,
                 saving::plane_saving,

@@ -3788,6 +3788,18 @@ mod tests {
         assert!(!ui_rpc_client().contains("(\"task_brief\""));
     }
 
+    #[test]
+    fn the_person_s_answer_to_a_task_is_the_window_s_alone_and_never_in_the_link_s_client() {
+        // #1496: what `answer_task_question` sends reaches a chat marked as the person's own
+        // words, so it is held to what `answer_ask` is: Tauri's IPC, and no second route.
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        assert!(
+            bindings.contains("(\"answer_task_question\""),
+            "the window answers"
+        );
+        assert!(!ui_rpc_client().contains("(\"answer_task_question\""));
+    }
+
     /// The window's commands that take a channel: `watch_session`, the one that streams a
     /// terminal to a pane.
     const TAKES_A_CHANNEL: &[&str] = &["watch_session"];

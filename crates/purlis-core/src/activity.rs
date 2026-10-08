@@ -132,12 +132,17 @@ pub struct Line {
     /// What was said: the brief, the message, or the report's text. Empty for a message
     /// whose words are no longer kept ([`Line::expired`]), and for [`Kind::Unkept`].
     pub text: String,
-    /// **The person dispatched the task themselves**, from the asking chat's tab (V100-70):
-    /// set on the dispatch's own line, whose words are then theirs and not that chat's.
+    /// **The person said it, and not the chat it is `from`.** On the dispatch's own line: the
+    /// person dispatched the task themselves, from the asking chat's tab (V100-70). On an
+    /// answer: the person answered the task's question in the purlis window (#1496), in the
+    /// asking chat's place. The words are theirs either way.
     pub by_person: bool,
     /// **purlis wrote this line, and not the task**: the ending it recorded in a chat's place
     /// (ended without a report, stopped by the person), and [`Kind::Unkept`].
     pub by_purlis: bool,
+    /// An answer the person gave that the task was never handed: it ended first
+    /// ([`dispatchrecord::Said::unread`]).
+    pub unread: bool,
     /// A message whose words were kept and are not any more
     /// ([`dispatchrecord::expire_talk`]).
     pub expired: bool,
@@ -213,6 +218,7 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
             text: text.to_owned(),
             by_person: false,
             by_purlis: false,
+            unread: false,
             expired: false,
             unkept: None,
             outcome: None,
@@ -228,6 +234,9 @@ pub fn lines_of(record: &Record, depth: u32) -> Vec<Line> {
     }];
     for said in &record.talk {
         lines.push(Line {
+            // The person's answer, which the record says is theirs (#1496).
+            by_person: said.by == Some(dispatchrecord::By::Person),
+            unread: said.unread,
             // A message is never taken empty: one with no words had them, and they are gone.
             expired: said.text.is_empty(),
             ..line(lines.len(), &said.at, Kind::of(said.kind), &said.text)

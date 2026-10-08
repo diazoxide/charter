@@ -666,6 +666,22 @@ purlis dispatch answer <chat> "<text>"      # the asking chat, to that question
   as the result of a `wait` on that task, or on its next turn, and the list shows the task as
   `asking this chat a question`. One question at a time, and a task's report closes its
   question: an answer after it is refused.
+- **You can answer that question yourself.** In the asking chat's Activity tab, a question its
+  task is still waiting on has *Answer*: a small form with the question, a box, *Send* and
+  *Cancel*. The task is handed your answer under a sentence that says the person answered,
+  quoted as data, and carries on. It answers that question and nothing else: it approves
+  nothing purlis or the harness would ask you for. The asking chat is told on its next turn
+  that you answered, with the question and your answer, and its own `purlis dispatch answer`
+  for that question is refused from then on, saying you already answered. A question is
+  answered once, and one send is final: if the asking chat answers first, you are told so,
+  your text stays in the form, and nothing of yours is sent; to add to an answer you sent,
+  type in the task's own tab. An answer is for the question it was written under: if the
+  task has asked another since, even in the same words, it is refused and not delivered to
+  the new one. Your text is sent whole or not at all (4,096 bytes; line breaks and tabs, no
+  other control character and no invisible one, and a refused character is named with where
+  it is), and it is not counted against the pair's messages a minute. If the task ends
+  before it has read your answer, the Activity tab says so on the answer. Only the purlis window can send an answer as yours: no command, hook or file of a
+  chat's can.
 - **A question for you is not asked this way.** A task that needs you asks in its own tab:
   its harness's prompt, or purlis's `ask_operator` tool. `purlis dispatch answer` answers only
   a question the task asked the asking chat. Where there is none, it is refused, whatever the
