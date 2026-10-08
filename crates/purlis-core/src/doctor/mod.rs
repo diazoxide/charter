@@ -498,6 +498,7 @@ impl Doctor {
         rows.push(deferred::row("vaults", deferred::VAULTS));
         rows.push(deferred::row("vault registry", deferred::VAULTS));
         rows.extend(vaults::vault_files(self));
+        rows.extend(vaults::provider_programs(self));
         rows.push(config::version_lock(self));
         rows.extend(sandbox::sandbox(self));
         rows.extend(sandbox::blocks(self));

@@ -4,8 +4,18 @@
 //!
 //! The deferred `vault registry` row stays as it is: this looks at where each file is, not at
 //! the vaults or the credentials they hold.
+//!
+//! The `<program> for vaults` rows (#1516): for each program a registered vault's provider runs
+//! (`op`, `vault`), whether purlis finds it and by which route. Printed only for a project with
+//! such a vault. The lookup is the providers' own ([`Ctx::program`]), asked of this process's
+//! environment: the Doctor the app opens answers for the app, which is what resolves a
+//! sandboxed chat's `secret exec`.
+
+use std::collections::BTreeMap;
 
 use super::{Doctor, Row};
+use crate::secrets::program::Route;
+use crate::secrets::registry::{self, Vault};
 use crate::secrets::vaultcmd::Misplaced;
 use crate::secrets::{Ctx, Env};
 
@@ -66,6 +76,101 @@ fn said(m: &Misplaced) -> String {
         crate::personas::one_line(&m.name),
         super::short_path(&m.file)
     )
+}
+
+/// One row for each program a registered vault's provider runs, in the programs' order, for
+/// the project `d` answers for. None for the preflight a chat's start runs: verifying a pinned
+/// `op` runs a program, and a chat's start waits on the preflight.
+pub(super) fn provider_programs(d: &Doctor) -> Vec<Row> {
+    if !d.has_plane || d.preflight {
+        return Vec::new();
+    }
+    program_rows(&Ctx::new(&d.root, Env::from_process()))
+}
+
+/// [`provider_programs`] for the project `ctx` names. A registry purlis cannot read is `purlis
+/// vault list`'s to report, and gives no row here.
+pub(super) fn program_rows(ctx: &Ctx) -> Vec<Row> {
+    let Ok(doc) = registry::load_registry(ctx) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
+    names.sort();
+    let mut users: BTreeMap<&'static str, Vec<Vault>> = BTreeMap::new();
+    for name in names {
+        let Ok(vault) = registry::vault_in(&doc, &name) else {
+            continue;
+        };
+        for program in crate::secrets::program::needed_by(ctx, &vault) {
+            users.entry(program).or_default().push(vault.clone());
+        }
+    }
+    users
+        .iter()
+        .map(|(program, vaults)| program_row(ctx, program, vaults))
+        .collect()
+}
+
+/// The row for `program`, which `vaults` are read through. Names and paths, never a value.
+fn program_row(ctx: &Ctx, program: &str, vaults: &[Vault]) -> Row {
+    let name = format!("{program} for vaults");
+    let shown =
+        |path: &std::path::Path| crate::shown::readable(&path.display().to_string(), usize::MAX);
+    let mut said: Vec<String> = Vec::new();
+    let mut hints: Vec<String> = Vec::new();
+    // A vault whose token purlis keeps runs the `op` pinned with it and no other; the rest run
+    // the one the lookup finds.
+    let mut looked_up: Vec<String> = Vec::new();
+    for vault in vaults {
+        let label = format!("'{}'", crate::personas::one_line(&vault.name));
+        let pin = match program {
+            "op" => crate::secrets::identity::pinned_op(ctx, vault),
+            _ => Ok(None),
+        };
+        match pin {
+            Ok(None) => looked_up.push(label),
+            Ok(Some(path)) => said.push(format!(
+                "{label} runs the one pinned when its token was stored, {}",
+                shown(&path)
+            )),
+            Err(e) => {
+                said.push(format!("{label} has no pinned {program} it can run"));
+                hints.push(e.message);
+            }
+        }
+    }
+    if !looked_up.is_empty() {
+        let used = format!("Used by {}", looked_up.join(", "));
+        match ctx.program(program) {
+            Ok(found) => said.insert(
+                0,
+                format!(
+                    "{}, found {}. {used}",
+                    shown(&found.path),
+                    match found.route {
+                        Route::Always => "in a directory purlis always searches",
+                        Route::Path =>
+                            "on PATH only, so a purlis started with another PATH does not find it",
+                    }
+                ),
+            ),
+            Err(not) => {
+                said.insert(0, format!("not found. {used}"));
+                hints.insert(
+                    0,
+                    format!(
+                        "Install {program}, then run `purlis doctor` again. {}",
+                        ctx.looked_in(&not)
+                    ),
+                );
+            }
+        }
+    }
+    if hints.is_empty() {
+        Row::ok(&name, said.join("; "))
+    } else {
+        Row::warn(&name, said.join("; "), hints.join(" "))
+    }
 }
 
 #[cfg(test)]
@@ -139,5 +244,126 @@ mod tests {
         let plane = Plane::new(&[]);
         plane.plain("home", json!({"K": "v"}));
         assert_eq!(row_for(&plane.ctx), None);
+    }
+
+    // ---- `<program> for vaults` (#1516) ---------------------------------------------------
+
+    /// A project with a 1Password vault `prod` and a plain-file one, read by a process whose
+    /// `PATH` is `path` and whose home is `home`.
+    fn on_1password(path: &str, home: &std::path::Path) -> Plane {
+        let plane = Plane::new(&[("PATH", path), ("HOME", &home.to_string_lossy())]);
+        plane.plain("files", json!({"K": "never-printed-1516"}));
+        plane.register("prod", "1password", json!({"op-vault": "Prod"}), None);
+        plane
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_providers_program_is_named_with_where_it_was_found_and_by_which_route() {
+        let home = tempfile::tempdir().unwrap();
+        let local = home.path().join(".local/bin");
+        std::fs::create_dir_all(&local).unwrap();
+        stand_in::program(&local, "op", "#!/bin/sh\n");
+        let plane = on_1password("/usr/bin:/bin", home.path());
+
+        let rows = program_rows(&plane.ctx);
+
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, "op for vaults");
+        assert_eq!(rows[0].status, super::super::Status::Ok);
+        assert_eq!(
+            rows[0].detail,
+            format!(
+                "{}, found in a directory purlis always searches. Used by 'prod'",
+                local.join("op").display()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_found_only_on_this_processs_path_says_another_purlis_does_not_find_it() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        stand_in::program(bin.path(), "op", "#!/bin/sh\n");
+        let plane = on_1password(&bin.path().to_string_lossy(), home.path());
+
+        let rows = program_rows(&plane.ctx);
+
+        assert_eq!(rows[0].status, super::super::Status::Ok);
+        assert_eq!(
+            rows[0].detail,
+            format!(
+                "{}, found on PATH only, so a purlis started with another PATH does not find \
+                 it. Used by 'prod'",
+                bin.path().join("op").display()
+            )
+        );
+    }
+
+    #[test]
+    fn a_program_that_is_not_found_warns_with_every_directory_searched() {
+        let home = tempfile::tempdir().unwrap();
+        let plane = on_1password("/usr/bin:/bin", home.path());
+
+        let rows = program_rows(&plane.ctx);
+
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].status, super::super::Status::Warn);
+        assert_eq!(rows[0].detail, "not found. Used by 'prod'");
+        assert!(
+            rows[0].hint.starts_with(
+                "Install op, then run `purlis doctor` again. It looked in: /usr/bin, /bin, "
+            ),
+            "{}",
+            rows[0].hint
+        );
+        let local = home.path().join(".local/bin").display().to_string();
+        assert!(
+            rows[0]
+                .hint
+                .ends_with(&format!("put a link to it in {local}.")),
+            "{}",
+            rows[0].hint
+        );
+    }
+
+    #[test]
+    fn a_reference_vault_is_asked_for_each_program_its_references_resolve_through() {
+        let home = tempfile::tempdir().unwrap();
+        let plane = on_1password("/usr/bin:/bin", home.path());
+        let file = plane.ctx.vaults_dir().join("refs.json");
+        std::fs::write(
+            &file,
+            json!({"A": "op://Eng/item/field", "B": "vault://secret/data/x#y"}).to_string(),
+        )
+        .unwrap();
+        plane.register(
+            "refs",
+            "reference",
+            json!({"file": file.to_string_lossy()}),
+            None,
+        );
+
+        let rows = program_rows(&plane.ctx);
+
+        let said: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|row| (row.name.as_str(), row.detail.as_str()))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("op for vaults", "not found. Used by 'prod', 'refs'"),
+                ("vault for vaults", "not found. Used by 'refs'"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_project_with_no_vault_read_through_a_program_gets_no_row() {
+        let plane = Plane::new(&[("PATH", "/usr/bin:/bin")]);
+        plane.plain("files", json!({"K": "never-printed-1516"}));
+        assert_eq!(program_rows(&plane.ctx), Vec::new());
     }
 }

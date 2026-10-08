@@ -385,18 +385,18 @@ fn new_id() -> Result<String, VaultError> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// `op` as the operator's own PATH resolves it now, absolute, with its Team id — the trusted
+/// `op` as the one lookup finds it now ([`Ctx::program`]), absolute, with its Team id — the trusted
 /// resolution recorded at move/put time. `("", "")` when `op` is not on PATH here: the record is
 /// still written (the token is stored), and [`pinned_op`] then refuses every read until the token
 /// is put again from a shell where the real `op` is found, rather than resolving it from the
 /// caller's PATH. Best effort here, strict there.
 fn resolve_op_now(ctx: &Ctx) -> (String, String) {
-    match ctx.which("op") {
-        Some(path) => {
-            let team = op_team_id(&path).unwrap_or_default();
-            (path.display().to_string(), team)
+    match ctx.program("op") {
+        Ok(found) => {
+            let team = op_team_id(&found.path).unwrap_or_default();
+            (found.path.display().to_string(), team)
         }
-        None => (String::new(), String::new()),
+        Err(_) => (String::new(), String::new()),
     }
 }
 

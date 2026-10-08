@@ -163,6 +163,18 @@ fn cli_of(scheme: &str) -> &'static str {
     }
 }
 
+/// The CLIs `vault`'s references resolve through, sorted and each once: what `purlis doctor`
+/// looks for. None for a file that cannot be read, which `health` reports.
+pub fn clis(ctx: &Ctx, vault: &Vault) -> Vec<&'static str> {
+    let Ok(data) = plain_file::load(ctx, vault, "reference") else {
+        return Vec::new();
+    };
+    let mut clis: Vec<&'static str> = data.values().filter_map(scheme_of).map(cli_of).collect();
+    clis.sort();
+    clis.dedup();
+    clis
+}
+
 /// `keys`: the reference names, sorted.
 pub fn keys(ctx: &Ctx, vault: &Vault) -> Result<Vec<String>, VaultError> {
     let mut keys: Vec<String> = plain_file::load(ctx, vault, "reference")?
@@ -212,14 +224,16 @@ pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
                 super::keyring::STORE_NAME
             )));
         }
-        None => {
-            if ctx.which(cli).is_none() {
+        None => match ctx.program(cli) {
+            Ok(found) => argv[0] = found.path.display().to_string(),
+            Err(not) => {
                 return Err(VaultError::new(format!(
-                    "'{key}' needs the '{cli}' CLI to resolve it — it is not on PATH. Install it \
-                     and authenticate, then retry."
+                    "'{key}' needs the '{cli}' CLI to resolve it, and purlis could not find it. \
+                     Install it and authenticate, then retry. {}",
+                    ctx.looked_in(&not)
                 )));
             }
-        }
+        },
     }
     let overlay = super::env_overlay(ctx, vault)?;
     let identity = super::identity_note(vault);
@@ -368,7 +382,7 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
     let missing: Vec<&'static str> = needed
         .iter()
         .copied()
-        .filter(|s| ctx.which(cli_of(s)).is_none())
+        .filter(|s| ctx.program(cli_of(s)).is_err())
         .collect();
     let n = data.len();
     let unsupported = data.values().filter(|v| scheme_of(v).is_none()).count();

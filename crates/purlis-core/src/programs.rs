@@ -146,17 +146,23 @@ impl NotFound {
     /// path is shown whole.
     pub fn said(&self) -> String {
         let program = crate::shown::readable(&self.program, usize::MAX);
-        let looked: Vec<String> = self
-            .looked
-            .iter()
-            .map(|d| crate::shown::readable(&d.display().to_string(), usize::MAX))
-            .collect();
         format!(
             "purlis could not find a program called {program}. Put it on PATH, or name it by \
              its absolute path in charter.local.toml (command = \
              [\"/full/path/to/{program}\"]). It looked in: {}",
-            looked.join(", ")
+            self.looked_in()
         )
+    }
+
+    /// Every directory that was searched, in order, each whole and readable, joined by commas:
+    /// what follows "It looked in:" in [`Self::said`] and in a provider's refusal
+    /// ([`crate::secrets::program`]).
+    pub fn looked_in(&self) -> String {
+        self.looked
+            .iter()
+            .map(|d| crate::shown::readable(&d.display().to_string(), usize::MAX))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
