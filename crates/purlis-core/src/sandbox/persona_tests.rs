@@ -42,7 +42,7 @@ fn compiled_at(root: &std::path::Path, text: &str, persona: Option<&str>) -> Vec
 /// The person at `root` allows `persona`'s hosts as `hosts` lists them.
 fn allow(root: &std::path::Path, persona: &str, hosts: &[&str]) {
     let hosts: Vec<Host> = hosts.iter().map(|one| Host::parse(one).unwrap()).collect();
-    super::local::allow_persona_hosts(root, persona, &super::persona::digest(&hosts))
+    super::local::allow_persona_hosts(root, persona, &super::persona::digest(&hosts, false))
         .expect("kept");
 }
 
@@ -232,7 +232,7 @@ fn an_allow_is_bound_to_the_list_it_was_shown_and_a_changed_list_waits_for_a_new
 fn the_digest_is_of_the_hosts_as_spelled_and_not_their_order() {
     let hosts =
         |list: &[&str]| -> Vec<Host> { list.iter().map(|one| Host::parse(one).unwrap()).collect() };
-    let digest = super::persona::digest;
+    let digest = |list: &[Host]| super::persona::digest(list, false);
     assert_eq!(
         digest(&hosts(&["a.example", "10.0.0.5:6443"])),
         digest(&hosts(&["10.0.0.5:6443", "A.Example."]))
@@ -243,17 +243,23 @@ fn the_digest_is_of_the_hosts_as_spelled_and_not_their_order() {
     );
     assert_ne!(digest(&hosts(&["a.example"])), digest(&[]));
     assert_eq!(digest(&[]).len(), 64);
+    // Being the default persona is part of what is allowed (D-1362-12).
+    assert_ne!(
+        super::persona::digest(&hosts(&["a.example"]), true),
+        digest(&hosts(&["a.example"]))
+    );
 }
 
 #[test]
 fn an_allow_is_kept_only_for_the_list_as_it_stands_when_it_is_pressed() {
-    use super::persona::{Shown, pick};
+    use super::persona::{Shown, Standing, pick};
     let devops = |digest: &str| Shown {
         persona: "devops".to_owned(),
         listed: vec![Host::parse("10.0.0.5:6443").unwrap()],
         hosts: vec![Host::parse("10.0.0.5:6443").unwrap()],
+        default: false,
         digest: digest.to_owned(),
-        allowed: false,
+        standing: Standing::NotAllowed,
     };
     assert_eq!(
         pick(vec![devops("now")], "devops", "now").map(|one| one.persona),
@@ -281,7 +287,7 @@ fn the_notice_asks_only_for_hosts_a_chat_would_reach_and_nothing_where_policy_fo
     let shown = super::persona::shown_in(root.path(), &plane, &Locks::none());
     assert_eq!(shown.len(), 1);
     assert_eq!(shown[0].hosts, shown[0].listed);
-    assert!(!shown[0].allowed);
+    assert!(!shown[0].allowed());
     let forbidden = Locks::parse(
         r#"{"sandbox": {"persona-hosts": false}}"#,
         std::path::Path::new("/etc/purlis/policy.json"),
@@ -291,10 +297,87 @@ fn the_notice_asks_only_for_hosts_a_chat_would_reach_and_nothing_where_policy_fo
     assert_eq!(locked[0].listed.len(), 2, "still said, as locked out");
     // An Allow made before the policy opens nothing while it stands.
     super::persona::allow_every_as_listed(root.path(), &policy(DEVOPS));
-    assert!(!super::persona::shown_in(root.path(), &plane, &forbidden)[0].allowed);
-    assert!(super::persona::shown_in(root.path(), &plane, &Locks::none())[0].allowed);
+    assert!(!super::persona::shown_in(root.path(), &plane, &forbidden)[0].allowed());
+    // The policy, not the list, changed: lifted, the Allow is in force again.
+    assert!(super::persona::shown_in(root.path(), &plane, &Locks::none())[0].allowed());
     // Not sandboxed: nothing to ask.
     assert!(super::persona::shown_in(root.path(), &Plane::of(None), &Locks::none()).is_empty());
+}
+
+#[test]
+fn an_allow_whose_list_changed_never_returns_to_force_even_when_the_list_comes_back() {
+    use super::persona::{Standing, shown_in};
+    let root = tempfile::tempdir().expect("a project");
+    let first = "[sandbox]\nmode = \"on\"\negress = []\n[sandbox.personas.devops]\n\
+                 hosts = [\"10.0.0.5:6443\"]\n";
+    allow(root.path(), "devops", &["10.0.0.5:6443"]);
+    assert_eq!(
+        compiled_at(root.path(), first, Some("devops")),
+        ["10.0.0.5:6443"]
+    );
+    // A teammate widens the list: it is seen as changed, and grants nothing.
+    let wider = "[sandbox]\nmode = \"on\"\negress = []\n[sandbox.personas.devops]\n\
+                 hosts = [\"10.0.0.5:6443\", \"10.0.0.6:22\"]\n";
+    assert_eq!(
+        compiled_at(root.path(), wider, Some("devops")),
+        Vec::<String>::new()
+    );
+    // Back to the list that was allowed: still nothing until it is allowed anew.
+    assert_eq!(
+        compiled_at(root.path(), first, Some("devops")),
+        Vec::<String>::new()
+    );
+    let shown = shown_in(root.path(), &Plane::of(Some(first)), &Locks::none());
+    assert_eq!(shown[0].standing, Standing::Waiting);
+    assert!(!shown[0].allowed());
+    // A new Allow puts it back in force.
+    allow(root.path(), "devops", &["10.0.0.5:6443"]);
+    assert_eq!(
+        compiled_at(root.path(), first, Some("devops")),
+        ["10.0.0.5:6443"]
+    );
+}
+
+/// M1 of the #1362 review: a persona that becomes the project's default reaches every chat that
+/// names no persona, so an Allow made while it was not grants nothing until it is asked again.
+#[test]
+fn an_allow_is_bound_to_whether_the_persona_is_the_default() {
+    use super::persona::{digest, shown_in};
+    let root = tempfile::tempdir().expect("a project");
+    let hosts = [
+        Host::parse("10.100.39.145:6443").unwrap(),
+        Host::parse("*.internal.example").unwrap(),
+    ];
+    super::local::allow_persona_hosts(root.path(), "devops", &digest(&hosts, false)).expect("kept");
+    assert_eq!(compiled_at(root.path(), DEVOPS, Some("devops")).len(), 2);
+    // A teammate makes devops the default persona.
+    std::fs::write(
+        crate::names::manifest(root.path()),
+        "[persona]\ndefault = \"devops\"\n",
+    )
+    .expect("the project file");
+    assert!(super::persona::is_default(root.path(), "devops"));
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("devops")),
+        Vec::<String>::new(),
+        "an Allow for devops chats is not one for every chat that names no persona"
+    );
+    let shown = shown_in(root.path(), &Plane::of(Some(DEVOPS)), &Locks::none());
+    assert!(shown[0].default);
+    assert!(!shown[0].allowed());
+    // Allowed again as the default's, it reaches.
+    super::local::allow_persona_hosts(root.path(), "devops", &digest(&hosts, true)).expect("kept");
+    assert_eq!(compiled_at(root.path(), DEVOPS, Some("devops")).len(), 2);
+    // And no longer the default: asked again.
+    std::fs::write(
+        crate::names::manifest(root.path()),
+        "[persona]\ndefault = \"qa\"\n",
+    )
+    .expect("the project file");
+    assert_eq!(
+        compiled_at(root.path(), DEVOPS, Some("devops")),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

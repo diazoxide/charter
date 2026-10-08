@@ -386,6 +386,23 @@ fn a_project_with_no_hosts_or_no_sandbox_tells_nothing() {
     );
 }
 
+/// Fold-in a of the #1362 review: an older purlis told a persona's hosts with the project's, as
+/// `<host> for <persona> chats`. Such an entry is no project host taken away.
+#[test]
+fn a_persona_host_an_older_purlis_told_is_not_said_to_be_taken_away() {
+    let project = a_project(HOSTS);
+    acknowledge_hosts(
+        project.path(),
+        &[
+            "10.100.39.145:6443".to_owned(),
+            "a.example".to_owned(),
+            "10.0.0.5:6443 for devops chats".to_owned(),
+        ],
+    )
+    .expect("kept");
+    assert_eq!(hosts_changed(project.path()), None);
+}
+
 #[test]
 fn reordering_the_hosts_is_no_change() {
     let project = a_project(HOSTS);

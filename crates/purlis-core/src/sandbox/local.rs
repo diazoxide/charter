@@ -74,12 +74,15 @@ struct OnDisk {
     persona_hosts_mine: Vec<PersonaHostsAllowed>,
 }
 
-/// One persona whose hosts you allowed on this machine (#1362): its name, and the digest of the
-/// list the Notice showed you.
+/// One persona whose hosts you allowed on this machine (#1362): its name, the digest of what
+/// the Notice showed you, and whether that has been seen to change since — after which it
+/// grants nothing, even should the list come back (D-1362-13).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct PersonaHostsAllowed {
-    persona: String,
-    digest: String,
+pub struct PersonaHostsAllowed {
+    pub persona: String,
+    pub digest: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub changed: bool,
 }
 
 /// What a [`Made`] record and the audit call your Allow of a persona's hosts (#1362).
@@ -306,7 +309,15 @@ pub fn hosts_changed(root: &Path) -> Option<HostsChange> {
     let locks = super::policy::Locks::of(root);
     plane.in_force(&locks)?;
     let now = plane.granted_hosts(&locks);
-    let seen = read(root).hosts_seen.unwrap_or_default();
+    // A host never holds a space: an entry that does is an older purlis's `<host> for <persona>
+    // chats`, from before a persona's hosts were asked for apart (D-1362-7), and is no host of
+    // the project's to say was taken away.
+    let seen: Vec<String> = read(root)
+        .hosts_seen
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|one| !one.contains(' '))
+        .collect();
     let added: Vec<String> = now
         .iter()
         .filter(|one| !seen.contains(one))
@@ -462,13 +473,21 @@ pub fn grant_vault(root: &Path, vault: &str, persona: &str) -> io::Result<()> {
 // ---- the persona hosts you allowed here (#1362) ----------------------------------------------
 
 /// Each persona whose hosts you allowed in the project at `root` on this machine, with the
-/// digest of the list you allowed. A file that cannot be read allows nothing.
-pub fn allowed_persona_hosts(root: &Path) -> Vec<(String, String)> {
-    read(root)
-        .persona_hosts_mine
-        .into_iter()
-        .map(|one| (one.persona, one.digest))
-        .collect()
+/// digest of what you allowed. A file that cannot be read allows nothing.
+pub fn allowed_persona_hosts(root: &Path) -> Vec<PersonaHostsAllowed> {
+    read(root).persona_hosts_mine
+}
+
+/// Marks your Allow of `persona`'s hosts as one whose list has changed since: it grants
+/// nothing from now on, and stays listed, with Revoke, until it is allowed anew or revoked.
+pub fn persona_hosts_changed(root: &Path, persona: &str) -> io::Result<()> {
+    change(root, |held| {
+        for one in &mut held.persona_hosts_mine {
+            if one.persona == persona {
+                one.changed = true;
+            }
+        }
+    })
 }
 
 /// Records that you allowed `persona`'s hosts as the list whose digest is `digest`, replacing
@@ -481,6 +500,7 @@ pub fn allow_persona_hosts(root: &Path, persona: &str, digest: &str) -> io::Resu
         held.persona_hosts_mine.push(PersonaHostsAllowed {
             persona: persona.to_owned(),
             digest: digest.to_owned(),
+            changed: false,
         });
     })
 }

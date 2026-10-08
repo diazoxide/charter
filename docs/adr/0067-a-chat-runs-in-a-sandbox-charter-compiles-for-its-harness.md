@@ -105,8 +105,10 @@ teammate" above becomes "asked on each machine" for the Persona level. A persona
 committed settings a teammate can change, and they are the hosts that reach past the presets
 into private networks, so a pull alone never widens what a chat reaches. The project view
 shows each persona's list as a chat would reach it, and Allow keeps the digest of exactly that
-list on this machine. A list that changes in any way after it was allowed grants none of it
-until it is allowed again; never a part, never the old one. The Allow is the window's alone,
+list on this machine, and of whether the persona is the project's default (whose hosts then
+reach every chat that names no persona; the Allow says so). A list or default-ness that changes
+in any way after it was allowed grants none of it until it is allowed again; never a part,
+never the old one, and not even when it later changes back. Settings has the same Allow. The Allow is the window's alone,
 audited, listed in Settings' Granted list credited to the persona, and revocable there. The
 project's own hosts keep the rule above: they apply and are told.
 

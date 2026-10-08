@@ -319,6 +319,11 @@ export const commands = {
 	 *  policy and who set it. Allowing them would reach nothing, so the Notice offers no Allow.
 	 */
 	locked: string | null,
+	/**
+	 *  Whether the persona's hosts also wait for the person's Allow on this machine (D-1362-7):
+	 *  lifting the hold alone then reaches none of them.
+	 */
+	waits_here: boolean,
 } | null, string>(__TAURI_INVOKE("persona_grants_held", { plane, session })),
 	/**
 	 *  The person allowed chat `session` its own persona's grants from its tab's Notice (#1362):
@@ -736,6 +741,11 @@ export const commands = {
 	 *  policy and who set it. No chat as this persona reaches them, Resume or not.
 	 */
 	persona_hosts_locked: string | null,
+	/**
+	 *  Whether the persona's hosts also wait for the person's Allow on this machine (#1362,
+	 *  D-1362-7): until then no chat as this persona reaches them, Resume or not.
+	 */
+	persona_hosts_wait: boolean,
 	/**
 	 *  The dispatches the record's chat made before it wrote it (#1452), in the order it made
 	 *  them: persona, task and outcome, from this machine's dispatch records. Empty for none,
@@ -3237,6 +3247,11 @@ export type GrantsHeld = {
 	 *  policy and who set it. Allowing them would reach nothing, so the Notice offers no Allow.
 	 */
 	locked: string | null,
+	/**
+	 *  Whether the persona's hosts also wait for the person's Allow on this machine (D-1362-7):
+	 *  lifting the hold alone then reaches none of them.
+	 */
+	waits_here: boolean,
 };
 
 /**  What became of a reference handed to a chat. */
@@ -4298,6 +4313,16 @@ export type PersonaHosts = {
 	 *  the project view's Notice asks.
 	 */
 	allowed: boolean,
+	/**
+	 *  Whether it is the project's default persona, so its hosts reach every chat that names
+	 *  no persona too: part of what an Allow is of (D-1362-12).
+	 */
+	default: boolean,
+	/**
+	 *  Whether an Allow was kept here and the list, or its default-ness, has changed since: it
+	 *  grants nothing, and the Notice asks anew (D-1362-13).
+	 */
+	waiting: boolean,
 };
 
 /**
@@ -5201,6 +5226,16 @@ export type SandboxGrant = {
 	 *  writes nothing while the policy stands. The list marks it "Locked by policy".
 	 */
 	locked: string | null,
+	/**
+	 *  For a persona's hosts you allowed whose list has changed since: why it grants nothing.
+	 *  It stays listed, with Revoke, and never returns to force unless allowed anew.
+	 */
+	waiting: string | null,
+	/**
+	 *  For a persona's hosts: the persona is the project's default, so they reach every chat
+	 *  that names no persona too.
+	 */
+	for_no_persona: boolean,
 };
 
 /**
@@ -5427,6 +5462,11 @@ export type SessionRecordView = {
 	 *  policy and who set it. No chat as this persona reaches them, Resume or not.
 	 */
 	persona_hosts_locked: string | null,
+	/**
+	 *  Whether the persona's hosts also wait for the person's Allow on this machine (#1362,
+	 *  D-1362-7): until then no chat as this persona reaches them, Resume or not.
+	 */
+	persona_hosts_wait: boolean,
 	/**
 	 *  The dispatches the record's chat made before it wrote it (#1452), in the order it made
 	 *  them: persona, task and outcome, from this machine's dispatch records. Empty for none,

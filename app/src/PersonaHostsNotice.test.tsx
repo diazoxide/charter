@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { PersonaHostsNotice } from "./PersonaHostsNotice";
+import { inTheWindow } from "./personaHostsAllow";
 import type { PersonaHosts, SandboxState } from "./bindings";
 
 /**
@@ -23,6 +24,8 @@ const DEVOPS: PersonaHosts = {
   reached: ["10.100.39.145:6443", "*.internal.example"],
   digest: "d1",
   allowed: false,
+  default: false,
+  waiting: false,
 };
 
 const QUIET: SandboxState = {
@@ -66,6 +69,51 @@ describe("a persona's hosts Notice", () => {
       "The project's settings let chats as devops reach 10.100.39.145:6443 and *.internal.example.",
     );
     expect(notice).toHaveTextContent("no chat here reaches these hosts until you allow them");
+    expect(notice).toHaveTextContent(
+      "Chats started after you allow them reach them; a chat already running takes them when it restarts.",
+    );
+  });
+
+  it("says the default persona's hosts reach every chat that names no persona, and allows that", async () => {
+    const asked = core({ ...QUIET, persona_hosts: [{ ...DEVOPS, default: true }] });
+    render(<PersonaHostsNotice plane={PLANE} />);
+
+    const notice = await screen.findByRole("status", { name: NAME });
+    expect(notice).toHaveTextContent(
+      "let chats as devops, and every chat that names no persona (devops is this project's default persona), reach",
+    );
+    await userEvent.setup().click(
+      await screen.findByRole("button", {
+        name: "Allow for devops chats and chats that name no persona",
+      }),
+    );
+    await waitFor(() =>
+      expect(asked).toContainEqual({
+        cmd: "allow_persona_hosts",
+        args: { plane: PLANE, persona: "devops", digest: "d1" },
+      }),
+    );
+  });
+
+  it("says an Allow whose list changed since reaches nothing until it is allowed again", async () => {
+    core({ ...QUIET, persona_hosts: [{ ...DEVOPS, waiting: true }] });
+    render(<PersonaHostsNotice plane={PLANE} />);
+
+    const notice = await screen.findByRole("status", { name: NAME });
+    expect(notice).toHaveTextContent(
+      "You allowed devops's hosts on this machine, and they have changed since, so no chat reaches any of them until you allow them again.",
+    );
+  });
+
+  it("offers no Allow on a link, whose client has no window-only call", async () => {
+    core(WAITING);
+    render(<PersonaHostsNotice plane={PLANE} canAllow={false} />);
+
+    const notice = await screen.findByRole("status", { name: NAME });
+    expect(notice).toHaveTextContent("Allow them from purlis's own window on this machine.");
+    expect(screen.queryByRole("button", { name: /Allow/ })).toBeNull();
+    expect(inTheWindow({ allowPersonaHosts: () => null }, "allowPersonaHosts")).toBe(true);
+    expect(inTheWindow({}, "allowPersonaHosts")).toBe(false);
   });
 
   it("sends back the digest of the list it showed, and is gone once allowed", async () => {

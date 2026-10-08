@@ -85,9 +85,12 @@ export function SessionRecordTab({ plane, path }: { plane: PlaneId; path: string
                   ? "none of its own"
                   : record.persona_hosts_locked !== null
                     ? `${record.persona_hosts.join(", ")}; no chat as this persona reaches them. ${record.persona_hosts_locked}`
-                    : record.resume_holds
-                      ? `${record.persona_hosts.join(", ")}; Resume holds them back until you allow them on the new chat's tab`
-                      : record.persona_hosts.join(", "),
+                    : record.persona_hosts_wait
+                      ? // #1362, D-1362-7: no chat as this persona reaches them on this machine yet.
+                        `${record.persona_hosts.join(", ")}; no chat as this persona reaches them until you allow them on this machine, on the project's notice or in Settings › Sandbox${record.resume_holds ? ", and a Resume then holds them back until you also allow them on the new chat's tab" : ""}`
+                      : record.resume_holds
+                        ? `${record.persona_hosts.join(", ")}; Resume holds them back until you allow them on the new chat's tab`
+                        : record.persona_hosts.join(", "),
             },
             { label: "Harness", value: row.harness ?? "not recorded" },
             {

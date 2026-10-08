@@ -30,7 +30,7 @@ export function grantSaid(one: SandboxGrant): string {
       : one.what === "vault"
         ? `Use vault ${one.target} as ${one.persona ?? "a persona"}`
         : one.what === "persona-hosts"
-          ? `Chats as ${one.persona ?? "a persona"} reach ${one.target}`
+          ? `Chats as ${one.persona ?? "a persona"}${one.for_no_persona ? " and every chat that names no persona" : ""} reach ${one.target}`
           : `Write ${one.target} and everything in it`;
   const by =
     one.level !== "project"
@@ -111,6 +111,11 @@ function GrantedRows({ plane, file, ids }: { plane: PlaneId; file: string; ids: 
               <span>{grantSaid(one)}</span>
               {one.level === "project" && one.locked === null && (
                 <span className="granted-note">Revoking it edits the committed {file}.</span>
+              )}
+              {one.waiting !== null && (
+                // An Allow whose list changed since (#1362, D-1362-13): kept only to be revoked or
+                // allowed anew, never in force again by itself.
+                <span className="granted-note"> Not in force: {one.waiting}.</span>
               )}
               {one.locked !== null ? (
                 // Kept, and not in force (#1423): the core's sentence ends "Locked by policy",

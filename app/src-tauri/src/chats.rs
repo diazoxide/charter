@@ -4476,15 +4476,18 @@ pub(crate) mod tests {
         };
         devops_reaches("\"ops.example\"");
         // The person here allowed devops's hosts as they were first committed (D-1362-7).
-        purlis_core::sandbox::local::allow_persona_hosts(
-            plane.path(),
-            "devops",
-            &purlis_core::sandbox::persona::digest(&[purlis_core::sandbox::hosts::Host::parse(
-                "ops.example",
+        let allow_devops = || {
+            purlis_core::sandbox::local::allow_persona_hosts(
+                plane.path(),
+                "devops",
+                &purlis_core::sandbox::persona::digest(
+                    &[purlis_core::sandbox::hosts::Host::parse("ops.example").expect("a host")],
+                    false,
+                ),
             )
-            .expect("a host")]),
-        )
-        .expect("kept");
+            .expect("kept");
+        };
+        allow_devops();
         let compiled_as = |persona: Option<&str>| {
             let decided = purlis_core::sandbox::decide_granted(
                 Harness::ClaudeCode,
@@ -4542,7 +4545,11 @@ pub(crate) mod tests {
 
         devops_reaches("\"ops.example\", \"more.example\"");
         assert_eq!(older(&chats).expect("behind").sessions(), [7]);
+        // Back to the list that was allowed: the Allow was seen to change, so it grants nothing
+        // until it is allowed anew (D-1362-13), and the chat is still behind until then.
         devops_reaches("\"ops.example\"");
+        assert_eq!(older(&chats).expect("behind").sessions(), [7]);
+        allow_devops();
         assert_eq!(older(&chats), None);
 
         // A handed-off chat holds the asking chat's persona grants (here, no persona's)

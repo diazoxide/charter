@@ -24,6 +24,8 @@ const CHAT: SandboxGrant = {
   at: 1_790_000_000,
   chat: "claude 4",
   locked: null,
+  waiting: null,
+  for_no_persona: false,
 };
 const MINE: SandboxGrant = {
   id: "you\u001fwrite\u001f/opt/cache",
@@ -35,6 +37,8 @@ const MINE: SandboxGrant = {
   at: null,
   chat: null,
   locked: null,
+  waiting: null,
+  for_no_persona: false,
 };
 const PROJECT: SandboxGrant = {
   id: "project\u001fhost\u001f10.0.0.5:6443",
@@ -47,6 +51,8 @@ const PROJECT: SandboxGrant = {
   chat: null,
   locked:
     "10.0.0.5:6443 is not a host policy allows. Locked by policy, set by IT in /etc/purlis/policy.json.",
+  waiting: null,
+  for_no_persona: false,
 };
 
 afterEach(() => {
@@ -184,6 +190,8 @@ describe("the Granted list", () => {
       at: null,
       chat: "steward 1",
       locked: null,
+      waiting: null,
+      for_no_persona: false,
     };
     expect(grantSaid(VAULT)).toBe(
       "Use vault devops as steward · Me on this machine · granted by you, from steward 1",
@@ -221,7 +229,12 @@ describe("the Granted list", () => {
       at: null,
       chat: null,
       locked: null,
+      waiting: null,
+      for_no_persona: false,
     };
+    expect(grantSaid({ ...DEVOPS, for_no_persona: true })).toBe(
+      "Chats as devops and every chat that names no persona reach 10.100.39.145:6443, *.internal.example · Me on this machine · granted by you",
+    );
     expect(grantSaid(DEVOPS)).toBe(
       "Chats as devops reach 10.100.39.145:6443, *.internal.example · Me on this machine · granted by you",
     );
@@ -242,6 +255,29 @@ describe("the Granted list", () => {
         args: { plane: PLANE, id: DEVOPS.id },
       }),
     );
+  });
+
+  it("lists an Allow whose list changed as not in force, with Revoke (#1362)", async () => {
+    const WAITING: SandboxGrant = {
+      id: "you\u001fpersona-hosts\u001fdevops",
+      what: "persona-hosts",
+      target: "10.100.39.145:6443",
+      persona: "devops",
+      level: "you",
+      by: null,
+      at: null,
+      chat: null,
+      locked: null,
+      waiting:
+        "waiting: the list changed since you allowed it, so it reaches nothing until you allow it again",
+      for_no_persona: false,
+    };
+    mockIPC((cmd) => (cmd === "sandbox_grants" ? [WAITING] : null));
+    render(<Granted />);
+    expect(
+      await screen.findByText(/Not in force: waiting: the list changed since you allowed it/),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Revoke devops's hosts" })).toBeVisible();
   });
 
   it("names a grant with no time as it is", () => {

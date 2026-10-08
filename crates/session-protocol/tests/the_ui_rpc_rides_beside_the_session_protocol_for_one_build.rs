@@ -157,11 +157,13 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         "restart_chat",
         "start_chat_fresh",
         "ask_chat_restart",
+        // Widens what a persona's chats reach on this machine (#1362).
+        "allow_persona_hosts",
     ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
     // And the list is exactly that rule's: nothing else is kept from a link by it.
-    assert_eq!(ui::WINDOW_ONLY.len(), 29);
+    assert_eq!(ui::WINDOW_ONLY.len(), 30);
 }
 
 #[tokio::test]

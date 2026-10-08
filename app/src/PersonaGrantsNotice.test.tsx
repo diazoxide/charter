@@ -30,7 +30,7 @@ function core(held: GrantsHeld | null) {
 
 describe("the persona grants Notice", () => {
   it("says which chat opened it and whose hosts it cannot reach yet", async () => {
-    core({ from: "steward 3", persona: "devops", locked: null });
+    core({ from: "steward 3", persona: "devops", locked: null, waits_here: false });
     render(
       <PersonaGrantsNotice
         plane={PLANE}
@@ -50,7 +50,7 @@ describe("the persona grants Notice", () => {
   it("offers no Allow where policy forbids a persona's own hosts, and says who set it (#1343)", async () => {
     const locked =
       "Policy forbids a persona's own hosts. Locked by policy, set by Platform team in /etc/purlis/policy.json.";
-    const asked = core({ from: "steward 3", persona: "devops", locked });
+    const asked = core({ from: "steward 3", persona: "devops", locked, waits_here: false });
     render(
       <PersonaGrantsNotice
         plane={PLANE}
@@ -85,7 +85,7 @@ describe("the persona grants Notice", () => {
   });
 
   it("says when a Resume, not a handoff, started it", async () => {
-    core({ from: null, persona: "devops", locked: null });
+    core({ from: null, persona: "devops", locked: null, waits_here: false });
     render(
       <PersonaGrantsNotice
         plane={PLANE}
@@ -103,7 +103,7 @@ describe("the persona grants Notice", () => {
 
   it("asks for its restart on Restart now, and says a chat mid-turn waits for the turn", async () => {
     // The wait is the window's: one restart, whoever asked for it (`RestartChat.window.test`).
-    core({ from: "steward 3", persona: "devops", locked: null });
+    core({ from: "steward 3", persona: "devops", locked: null, waits_here: false });
     const onRestart = vi.fn();
     const notice = (owed: boolean) => (
       <PersonaGrantsNotice
@@ -129,7 +129,7 @@ describe("the persona grants Notice", () => {
 
   it("asks again on Restart now after a restart that was refused", async () => {
     // S8: the Notice once remembered that it had asked, and its button went dead for good.
-    core({ from: "steward 3", persona: "devops", locked: null });
+    core({ from: "steward 3", persona: "devops", locked: null, waits_here: false });
     const onRestart = vi.fn();
     const notice = (owed: boolean) => (
       <PersonaGrantsNotice
@@ -157,7 +157,7 @@ describe("the persona grants Notice", () => {
   });
 
   it("allows them on Allow, from the chat's next start", async () => {
-    const asked = core({ from: "steward 3", persona: "devops", locked: null });
+    const asked = core({ from: "steward 3", persona: "devops", locked: null, waits_here: false });
     render(
       <PersonaGrantsNotice
         plane={PLANE}
@@ -179,8 +179,32 @@ describe("the persona grants Notice", () => {
     });
   });
 
+  it("says the persona's hosts also wait for this machine's Allow, before and after Allow (#1362)", async () => {
+    core({ from: "steward 3", persona: "devops", locked: null, waits_here: true });
+    render(
+      <PersonaGrantsNotice
+        plane={PLANE}
+        session={7}
+        running={false}
+        owed={false}
+        onRestart={() => {}}
+      />,
+    );
+
+    expect(await screen.findByRole("status", { name: "Persona's hosts held" })).toHaveTextContent(
+      "devops's hosts also wait for your Allow on this machine, on the project's notice or in Settings › Sandbox",
+    );
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Allow" }));
+    const after = await screen.findByRole("status", { name: "Persona's hosts allowed" });
+    expect(after).toHaveTextContent("Allowed for this chat.");
+    expect(after).toHaveTextContent(
+      "until then this chat reaches none of them, even after it restarts",
+    );
+    expect(after).not.toHaveTextContent("from its next start");
+  });
+
   it("keeps holding on Keep, and allows nothing", async () => {
-    const asked = core({ from: "steward 3", persona: "devops", locked: null });
+    const asked = core({ from: "steward 3", persona: "devops", locked: null, waits_here: false });
     render(
       <PersonaGrantsNotice
         plane={PLANE}
