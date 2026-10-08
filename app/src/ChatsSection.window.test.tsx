@@ -146,6 +146,12 @@ function core(open: (OpenChat & { workspace: string })[]) {
       if (one?.from) one.from = { ...one.from, tab: true };
       return null;
     }
+    if (cmd === "tab_shows") {
+      // The record keeps what a session's tab shows on that session's own entry (#1486).
+      const one = open.find((chat) => chat.session === a.session);
+      if (one) one.shows = (a.shown as number | null) ?? null;
+      return null;
+    }
     if (cmd === "stopping_chats") return [];
     if (cmd === "plane_sidebar")
       return {
@@ -488,12 +494,14 @@ describe("a task chat", () => {
     await waitFor(() => expect(shape(tree)).toHaveLength(7));
     await userEvent.click(row(tree, "devops 4"));
     await waitFor(() => expect(screen.getByTestId("pane").textContent).toBe("session 4"));
-    // The record of which chat is in front is the core's: it was told the task is.
-    expect(asked.filter((one) => one.cmd === "chat_in_front").at(-1)?.args).toEqual({
-      plane: PLANE,
-      session: 4,
-    });
-    for (const one of open) one.in_front = one.session === 4;
+    // What the tab shows is the record's, on the session's own entry: the core was told.
+    await waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "tab_shows").at(-1)?.args).toEqual({
+        plane: PLANE,
+        session: 1,
+        shown: 4,
+      }),
+    );
     first.unmount();
     forgetThisLaunch();
 
@@ -685,7 +693,7 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
     expect(shape(tree)).toHaveLength(4);
   });
 
-  it("counts a chat with no tab on the tab of the workspace it works in", async () => {
+  it("counts a task on the workspace of the tab it lives in, not the one it works in", async () => {
     const { move } = core(threeDeep());
     render(<App />);
     const tree = await section();
@@ -693,15 +701,13 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
 
     move(3, "waiting", 10, [3]);
 
-    // Beta is neither pinned nor in front, so its tab is behind the strip's show-more button,
-    // which counts it. Brought forward, its own tab does.
-    const more = await screen.findByRole("button", {
-      name: /the strip is not showing, where 1 chat needs you$/,
-    });
-    await userEvent.click(more);
-    const beta = await screen.findByRole("menuitem", { name: /beta/ });
-    expect(within(beta).getByLabelText("1 chats need you in beta")).toBeTruthy();
-    expect(screen.queryByLabelText(/need you in alpha/)).toBeNull();
+    // Chat 3 works in beta and is a task of drop commons, whose tab is on alpha's strip: that
+    // tab wears it, so alpha's workspace tab counts it and beta's, which holds no tab, does not.
+    expect(await screen.findByLabelText("1 chats need you in alpha")).toBeTruthy();
+    expect(screen.queryByLabelText(/need you in beta/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /the strip is not showing, where 1 chat needs you$/ }),
+    ).toBeNull();
   });
 
   it("goes to a task from the title bar's list, inside its asker's tab", async () => {

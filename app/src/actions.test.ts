@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   aim,
   catalogue,
+  paneCloseOf,
   catalogued,
   curateRows,
   curateSubjectOf,
@@ -45,6 +46,7 @@ import {
   openPreview,
   openView,
   selectTab,
+  panesOf,
   splitFocusedPane,
   switchTabTo,
   viewKey,
@@ -398,7 +400,7 @@ describe("the one list of actions", () => {
     const tabs = switchTabTo(openTab(noTabs(), 7, "3", "steward"), 9, (session) =>
       session === 9 ? 7 : undefined,
     );
-    const offers = catalogue(now({ tabs }));
+    const offers = catalogue(now({ tabs, nameOf: () => "steward 3" }));
 
     expect(by(offers, "pane.close")?.available).toBe(false);
     expect(by(offers, "pane.close")?.reason).toBe(
@@ -408,6 +410,26 @@ describe("the one list of actions", () => {
     expect(by(offers, "tab.close:1")?.title).toBe("End chat steward 3");
     expect(by(offers, "tab.close:1")?.available).toBe(true);
     expect(by(offers, "tab.close:1")?.does).toEqual({ verb: "closeTab", tab: 1, ends: true });
+  });
+
+  it("decides a pane's close for that pane: the one beside a pane showing a task still closes", () => {
+    // Chat 7's tab is split with chat 8 beside it, and chat 8's pane shows its task 9.
+    const split = splitFocusedPane(openTab(noTabs(), 7, "3", "steward"), "row", 8);
+    const tabs = switchTabTo(split, 9, (session) => (session === 9 ? 8 : undefined));
+    const [first, second] = panesOf(tabs, 1);
+    const names = (session: number) => (session === 8 ? "devops 8" : "steward 3");
+
+    // The pane in focus shows the task: the catalogue's row is that pane's, and names ITS chat.
+    expect(by(catalogue(now({ tabs, nameOf: names })), "pane.close")?.reason).toBe(
+      "This pane shows a task of devops 8. Go back to devops 8 to end its chat, or close the tab.",
+    );
+    expect(paneCloseOf(tabs, second.pane, names).available).toBe(false);
+    // The other pane shows its own chat, and its close is its own.
+    expect(paneCloseOf(tabs, first.pane, names)).toMatchObject({
+      available: true,
+      title: "End this pane's chat",
+      does: { verb: "closePane", ends: true },
+    });
   });
 
   it("says on letting go of a project what goes with it and what does not", () => {

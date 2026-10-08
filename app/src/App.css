@@ -1183,13 +1183,16 @@ button.show-more:focus-visible {
    pushed off: the gauge and the harness's name are cut at their right edge, and the breadcrumb
    shrinks by its own rule, below.
 
-   **The line ends before the pane's own controls** (the two splits, in the other corner): a
-   name in the path is a thing to press, and one drawn under a control that appears on hover
-   would be pressed through it. The room is the controls' width, kept whether they are drawn
-   or not, so the line does not move when the pointer comes over. */
+   **The line ends before the pane's own controls**, in the other corner: a name in the path is
+   a thing to press, and one drawn under a control that appears on hover would be pressed
+   through it. The room is the width the controls drawn in this pane have, which they measure
+   and say (`--pane-controls`, `PaneDoing`): two for a pane showing a task, three otherwise,
+   and whatever a later control makes it. The figure here is three controls' width, for the
+   frame before they have said theirs. Kept whether the controls are drawn or not, so the line
+   does not move when the pointer comes over. */
 .pane-chips:has(.pane-crumbs) {
-  max-width: calc(100% - 4.25rem);
-  margin-right: 4.25rem;
+  max-width: calc(100% - var(--pane-controls, 5.5rem) - 0.5rem);
+  margin-right: calc(var(--pane-controls, 5.5rem) + 0.5rem);
   overflow: hidden;
 }
 
@@ -1198,18 +1201,24 @@ button.show-more:focus-visible {
   overflow: hidden;
 }
 
-/* **What gives way inside the breadcrumb, in order, and what never does.**
+/* **What gives way inside the breadcrumb, in order.**
 
-   - The names in the middle of the path first: they shrink a hundred times faster than the
-     two ends, each down to an ellipsis.
-   - Then the two ends, the session's name and the task's, down to an ellipsis each.
-   - Then the workspace, to a few letters.
-   - **The state word never** (`.shown-state` is `flex: none`, and the breadcrumb's least
-     width is its content's, which is the state and the least of each name).
+   - `in <workspace>` first, to nothing: it is in the tooltip.
+   - Then the names in the middle of the path: they shrink a hundred times faster than the two
+     ends, each down to an ellipsis.
+   - Then the session's name, down to an ellipsis, and only then the task's own, which
+     shrinks twenty times slower: the chat on screen is the name kept longest.
+   - **The state word last of all.** It does not shrink (`.shown-state` is `flex: none`), and
+     the breadcrumb's least width is the state and the least of each name.
 
-   Past that, in a pane too narrow for even those, the path is cut from its START
-   (`justify-content: flex-end` under `overflow: hidden`): the task on screen is the name
-   kept, with its state. The whole path is the breadcrumb's tooltip at any width. */
+   **How far that holds.** With the longest state there is ("ended without a report") the
+   breadcrumb's least width is about 14rem, and the line also holds the gauge and the harness's
+   name, cut to their padding. In a pane narrower than about 24rem the line cannot hold that,
+   and what is cut is its END: first the gauge and the harness's name, then, under about 20rem,
+   the end of the state word. A pane that narrow shows about thirty columns of terminal. Past
+   the names' least widths the path is cut from its START (`justify-content: flex-end` under
+   `overflow: hidden`), so the task on screen is the name kept. The whole path is the
+   breadcrumb's tooltip at any width. */
 .pane-crumbs {
   display: flex;
   flex: 0 1 auto;
@@ -1262,8 +1271,10 @@ button.show-more:focus-visible {
   text-decoration: underline;
 }
 
-/* The chat on screen: the one name in the path that is not a way to somewhere else. */
+/* The chat on screen: the one name in the path that is not a way to somewhere else, and the
+   one that gives way last. */
 .pane-crumbs .crumb.shown {
+  flex-shrink: 0.05;
   color: var(--text-primary);
 }
 
@@ -1273,15 +1284,67 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
-/* `in <workspace>`: beside the task's name, and cut after the path is. */
+/* `in <workspace>`: beside the task's name, and the first thing to go. */
 .pane-crumbs .crumb-where {
-  flex: 0 1 auto;
-  min-width: 3.5em;
+  flex: 0 1000 auto;
+  min-width: 0;
   max-width: 14em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: pre;
   color: var(--text-muted);
+}
+
+/* **Words for a screen reader and for nobody else**: what a drawn separator stands for. Clipped
+   to nothing rather than hidden, so it is read where it stands. */
+.hidden-words {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* **Whose a pane's Notice is**, where it is a chat's that is not the one on screen (#1486,
+   `NoticeOf`): the first words of its sentence, in the sentence's own colour and its weight
+   up, so it is read before what the Notice asks. */
+.notice-whose {
+  font-weight: 600;
+}
+
+/* **A pane whose tab shows a task that is not there to be drawn** (#1486, `TaskAway.tsx`): in
+   the terminal's place and on its surface, under the pane's top line, which still says the
+   path. A sentence, how it ended, and the way back. Nothing here is a terminal, so nothing
+   typed reaches a chat. */
+.task-away {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
+  height: 100%;
+  padding: 2.4rem 1rem 1rem;
+  overflow: auto;
+  color: var(--text-primary);
+  background: var(--terminal-background);
+}
+
+.task-away p {
+  margin: 0 0 0.3rem;
+  max-width: 40rem;
+}
+
+.task-away-ways {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.task-away-report {
+  max-width: 100%;
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 /* **A tab that shows a task says so** (#1486, V100-35): `steward 4 › talk`, the task's name
@@ -2414,14 +2477,12 @@ h2.sidebar-title .node-icon {
 
 .explorer .started-chat .elsewhere,
 .chats-section .workspace,
-.chats-section .from,
-.chats-section .no-tab {
+.chats-section .from {
   color: var(--text-muted);
   font-size: 0.9em;
 }
 
-.explorer .started-chat .elsewhere,
-.chats-section .no-tab {
+.explorer .started-chat .elsewhere {
   padding: 0 0.3rem;
   border: 1px solid var(--border-subtle);
   border-radius: 2px;

@@ -152,6 +152,20 @@ pub struct Chat {
     /// [`Self::has_tab`] is the one answer. `false` is every record written before this field
     /// — not a format change, for [`Self::pinned`]'s reason.
     pub tab_opened: bool,
+    /// The chat this chat's tab shows in place of it, by that chat's [`Self::number`], where the
+    /// person switched the tab to one (#1486): a task below this chat, at any depth.
+    ///
+    /// **The window's state, kept for it**: the core holds who asked whom, and which of those
+    /// chats a session's tab shows is the person's arrangement, like a pin. Kept on the
+    /// session's own entry so it goes with the session, and by number, as [`HandedFrom::chat`]
+    /// names a chat: the number outlives a relaunch, and a chat started again under a new one
+    /// is followed where its number is.
+    ///
+    /// **Never trusted to name a task of this chat.** The window shows it only where the chat
+    /// it names is open and below this one, and shows the session's own chat otherwise. `None`
+    /// is every record written before this field, and every tab that shows its own chat — not
+    /// a format change, for [`Self::pinned`]'s reason.
+    pub shows: Option<u32>,
     /// The workspace this chat's directory was renamed away from, where a rename left it with
     /// no conversation its harness can find (charter#367, D10).
     ///
@@ -1293,6 +1307,11 @@ struct ChatOnDisk {
     /// they do, so a project with no task chat writes the record it always wrote.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     tab_opened: bool,
+    /// The chat this chat's tab shows in place of it, by number — see [`Chat::shows`]. Absent
+    /// (zero) while the tab shows its own chat, so a project where no tab was switched to a
+    /// task writes the record it always wrote.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    shows: u32,
     /// The workspace a rename moved this chat away from, or absent — see
     /// [`Chat::renamed_from`]. A value that is not a workspace name reads as absent.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1447,6 +1466,7 @@ impl From<&Record> for OnDisk {
                         serde_json::Value::String(held.persona.clone().unwrap_or_default())
                     }),
                     tab_opened: chat.tab_opened,
+                    shows: chat.shows.unwrap_or_default(),
                     renamed_from: chat.renamed_from.clone().unwrap_or_default(),
                     sandbox: if chat.unsandboxed {
                         SANDBOX_OFF.to_owned()
@@ -1517,6 +1537,8 @@ impl From<ChatOnDisk> for Chat {
                     .map(str::to_owned),
             }),
             tab_opened: chat.tab_opened,
+            // Zero is "its own chat", as it is "this record does not say" for `number`.
+            shows: (chat.shows > 0).then_some(chat.shows),
             renamed_from: Some(chat.renamed_from)
                 .filter(|name| crate::contain::workspace_name_ok(name)),
             unsandboxed: chat.sandbox == SANDBOX_OFF,
@@ -3372,6 +3394,32 @@ pub(crate) mod tests {
         assert_eq!(back[0].from, Some(task));
         assert!(!back[0].has_tab(), "listed, and on no strip");
         assert!(back[1].has_tab(), "the tab the person opened comes back");
+    }
+
+    #[test]
+    fn what_a_sessions_tab_shows_comes_back_and_a_tab_on_its_own_chat_writes_nothing_of_it() {
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![
+                Chat {
+                    number: Some(4),
+                    shows: Some(9),
+                    ..claude("4", None)
+                },
+                Chat {
+                    number: Some(5),
+                    ..claude("5", None)
+                },
+            ],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches(r#""shows""#).count(), 1, "{text}");
+        let back = read(plane.path()).chats;
+        assert_eq!(back[0].shows, Some(9));
+        assert_eq!(back[1].shows, None);
     }
 
     #[test]

@@ -74,6 +74,30 @@ export function shownOf(task: Pick<FinishedTask, "outcome">): Shown | undefined 
   });
 }
 
+/**
+ * The core's own word for how a task ended, where it says more than its state's word does
+ * (`blocked`, `closed by the person`): what a row draws beside the state. Nothing where the
+ * state's word is the core's.
+ */
+export function qualifierOf(task: Pick<FinishedTask, "outcome">): string | undefined {
+  return task.outcome === shownOf(task)?.word ? undefined : task.outcome;
+}
+
+/**
+ * **The finished row of the task called `name` that chat `asker` asked for** (#1486's ended
+ * view reads it), or nothing. A finished row names its task and the chat that asked and not
+ * the number its chat had, so it is found by those two; where two of a chat's finished tasks
+ * have one name, nothing says which is meant, and none is answered.
+ */
+export function finishedOf(
+  finished: ReadonlyMap<number, readonly FinishedTask[]>,
+  asker: number,
+  name: string,
+): FinishedTask | undefined {
+  const named = (finished.get(asker) ?? []).filter((task) => task.name === name);
+  return named.length === 1 ? named[0] : undefined;
+}
+
 const NONE: readonly FinishedTask[] = [];
 
 /**

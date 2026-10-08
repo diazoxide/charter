@@ -6,5 +6,5 @@
   you. A chat whose parent has closed stays at the top and says where it came from. Pressing a
   row brings that chat forward. In the explorer, a chat that started one in another workspace
   shows it under its row, with a badge naming that workspace. A handoff opens as a tab, as
-  before. A chat started as a task is listed with no tab until you press its row, which opens
-  an ordinary tab, and that tab comes back after a reload or a relaunch (#1447).
+  before. A chat started as a task is listed with no tab of its own; pressing its row shows it
+  inside the tab of the session that asked for it (#1447, #1486).

@@ -570,6 +570,11 @@ struct OpenChat {
     harness: Option<String>,
     /// Whether it is the chat to show: at a launch, the one that was in front at the quit.
     in_front: bool,
+    /// The chat its tab shows in place of it, by session, where the person switched the tab
+    /// to a task below it (#1486). The window shows it only where that chat is open and below
+    /// this one.
+    #[specta(optional)]
+    shows: Option<u32>,
     /// The conversation it was resumed by, where it was. The UI says which happened.
     resumed: Option<String>,
     /// Why it is a new chat rather than the one it was, where it is.
@@ -1994,6 +1999,20 @@ fn open_chat_tab(
     planes.held(&plane)?.chats().open_tab(session)
 }
 
+/// Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with none
+/// (#1486): the record keeps it on that chat's entry, so a reloaded window and the next launch
+/// put each tab back on the chat it showed.
+#[tauri::command]
+#[specta::specta]
+fn tab_shows(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    shown: Option<u32>,
+) -> Result<(), String> {
+    planes.held(&plane)?.chats().tab_shows(session, shown)
+}
+
 /// The order the chat strip draws this project's chats in, by session, so the record lists
 /// them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
 ///
@@ -2085,6 +2104,7 @@ impl From<chats::Open> for OpenChat {
             profile: open.profile,
             persona: open.persona,
             in_front: open.in_front,
+            shows: open.shows,
             pinned: open.pinned,
             label: open.label,
             from: open
