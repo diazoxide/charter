@@ -74,7 +74,7 @@ pub const TOOLS: [Tool; 10] = [
     Tool {
         dir: "pnpm-store",
         // pnpm 10 reads `pnpm_config_`, pnpm 9 and older the `npm_config_` spelling. Spelled in
-        // two halves: the commit scan reads `npm_` and sixteen more characters as a token (#1364).
+        // two halves: a commit scan from before #1364 read these names as an npm token.
         vars: &["pnpm_config_store_dir", concat!("npm", "_config_store_dir")],
     },
     Tool {
