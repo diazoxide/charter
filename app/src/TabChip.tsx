@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
+  FileText,
   Hand,
   Minus,
   PanelRight,
@@ -27,6 +28,8 @@ import {
 import type { Offer } from "./actions";
 import { backId, besideId, ownTabId } from "./actions";
 import { onAMac } from "./tabKeys";
+import { briefTitle, useOpenBrief, type BriefAsk } from "./Brief";
+import { ChatDoingLine } from "./ChatRowActivity";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect } from "./chatState";
 import { sinceSaid } from "./chatsList";
@@ -114,6 +117,9 @@ type Props = {
    * it is not drawn.
    */
   stopAll?: (session: number) => Offer | undefined;
+  /** Opens the Activity of chat `session`, the tab's own (#1495): what it and its tasks said
+   *  to each other. Left out, the menu has no Activity line. */
+  onActivity?: (session: number) => void;
 };
 
 /** Where a task's line in a tab's menu offers to move it (#1489). */
@@ -203,6 +209,7 @@ function sameChip(was: Props, now: Props): boolean {
     was.ends === now.ends &&
     was.onPress === now.onPress &&
     was.stopAll === now.stopAll &&
+    was.onActivity === now.onActivity &&
     sameRows(was.rows, now.rows) &&
     sameEnded(was.ended, now.ended) &&
     sameNeeds(was.needs, now.needs)
@@ -265,11 +272,14 @@ function Chip({
   ends,
   onPress,
   stopAll,
+  onActivity,
 }: Props) {
   // One reading of the store for the chip and its menu: each row's state, redrawn only when
   // one of them changes.
   const kinds = useChatsSelect(useChatsHere(), (states) => kindsOf(states, rows), sameList);
   const counts = countsOf(rows, kinds, ended);
+  // The Brief panel of a task (#1494), where the window has one to open.
+  const openBrief = useOpenBrief();
   const [open, setOpen] = useState(false);
   const [unfolded, setUnfolded] = useState(false);
   /** The ended lines whose reports are open, by the line's key. */
@@ -427,7 +437,8 @@ function Chip({
             ? [{ key: one.key, offers: ends(one.row.session) }]
             : [],
         );
-  /** Stop all tasks of the tab's own session, where its catalogue row can run (#1498). */
+  /** The tab's own session: whose tasks Stop all ends (#1498) and whose Activity this menu
+   *  opens (#1495). */
   const own = rows.find((row) => row.level === 1)?.session;
   const all =
     stopAll === undefined || onPress === undefined || own === undefined ? undefined : stopAll(own);
@@ -441,6 +452,16 @@ function Chip({
       tokens={tokensSaid(tokensOfLine(figures, one))}
       reportOpen={reports.has(one.key)}
       onPick={pick}
+      onBrief={
+        openBrief === undefined
+          ? undefined
+          : (ask) => {
+              // The panel takes the keyboard: the menu is done.
+              picked.current = true;
+              hide();
+              openBrief(ask);
+            }
+      }
       onPlace={
         onPlace === undefined
           ? undefined
@@ -697,6 +718,23 @@ function Chip({
                   </Menu.Portal>
                 </Menu.Sub>
               )}
+              {own !== undefined && onActivity !== undefined && (
+                /* **The session's Activity** (#1495, V100-44): what its chat and its tasks
+                   said to each other, in a tab of its own. It only reads. */
+                <Menu.Item
+                  className="tasks-menu-row tasks-menu-activity"
+                  textValue="Activity"
+                  onPointerMove={quiet ? keepsNoKeyboard : undefined}
+                  onPointerLeave={quiet ? keepsNoKeyboard : undefined}
+                  onSelect={() => {
+                    picked.current = true;
+                    onActivity(own);
+                  }}
+                >
+                  <span className="name">Activity</span>
+                  <span className="where">what its chats said to each other</span>
+                </Menu.Item>
+              )}
               {finished.length > 0 && (
                 <Menu.Item
                   className="tasks-menu-row tasks-menu-fold"
@@ -792,6 +830,7 @@ function TaskLine({
   tokens,
   reportOpen,
   onPick,
+  onBrief,
   onPlace,
 }: {
   line: Line;
@@ -803,10 +842,24 @@ function TaskLine({
   reportOpen: boolean;
   /** Answers whether the menu is done with: it went to a chat. */
   onPick: (line: Line) => boolean;
+  /** Opens the Brief panel of the line's task (#1494). */
+  onBrief?: (ask: BriefAsk) => void;
   /** Moves the line's task, where it is an open task and the menu was handed the way. */
   onPlace?: (session: number, where: Place) => void;
 }) {
   const { row } = line;
+  // **Its Brief** (#1494): an open task by its chat, an ended one by its dispatch record while
+  // it has a finished row. A session's own chat was sent nothing.
+  const brief: BriefAsk | undefined =
+    onBrief === undefined
+      ? undefined
+      : row !== undefined
+        ? row.mode === "task"
+          ? { chat: row.session, name: line.name }
+          : undefined
+        : line.key.startsWith(FINISHED_KEY)
+          ? { dispatch: line.key.slice(FINISHED_KEY.length), name: line.name }
+          : undefined;
   // **Where a task is drawn, from its own line** (#1489, V100-38): an open task only. The
   // session's own chat is its tab, and an ended task is nowhere.
   const moves = onPlace !== undefined && row !== undefined && row.mode === "task" ? row : undefined;
@@ -884,6 +937,18 @@ function TaskLine({
         )}
         {line.qualifier !== undefined && <span className="where"> {line.qualifier}</span>}
         {row !== undefined && <Since clock={clock} session={row.session} />}
+        {/* What it is doing (#1493): one dim line, cut short; nothing while it is not
+            working. It reads its own chat, so this line is not drawn again for it. */}
+        {row !== undefined && (
+          <span className="doing">
+            <ChatDoingLine session={row.session} />
+          </span>
+        )}
+        {brief !== undefined && moves === undefined && (
+          <span className="tasks-menu-places" aria-hidden="true">
+            <BriefPlace ask={brief} onBrief={onBrief} />
+          </span>
+        )}
         {moves !== undefined && onPlace !== undefined && (
           /* **The pointer's way to move a task from its line** (#1489), drawn at the line's
              end while the pointer is on it: to a tab of its own and beside its session, or
@@ -918,6 +983,8 @@ function TaskLine({
                 <Minus />
               </PlaceButton>
             )}
+            {/* Last: it reads, where the others move the task (#1494). */}
+            {brief !== undefined && <BriefPlace ask={brief} onBrief={onBrief} />}
           </span>
         )}
       </Menu.Item>
@@ -936,6 +1003,29 @@ function TaskLine({
   );
 }
 
+/** The key of an ended task's line that has a finished row: `finished:<dispatch id>`. */
+const FINISHED_KEY = "finished:";
+
+/** The Brief button at the end of a task's line (#1494): the pointer's way to it from here;
+ *  the keyboard's is the task's row menu, its finished row and the palette. */
+function BriefPlace({ ask, onBrief }: { ask: BriefAsk; onBrief?: (ask: BriefAsk) => void }) {
+  if (onBrief === undefined) return null;
+  return (
+    <PlaceButton
+      says={briefTitle(ask.name)}
+      // The keyboard's way to the same panel, since this button is the pointer's alone.
+      also={
+        "chat" in ask
+          ? "also in its row's menu in the Chats list"
+          : "also on its finished row in the Chats list"
+      }
+      onPress={() => onBrief(ask)}
+    >
+      <FileText />
+    </PlaceButton>
+  );
+}
+
 /**
  * One of the buttons at the end of a task's line. Its press is its own: it never reaches the
  * line, which would go to the task (Radix's item presses itself on a click and on a pointer
@@ -944,6 +1034,7 @@ function TaskLine({
 function PlaceButton({
   says,
   keys,
+  also,
   onPress,
   children,
 }: {
@@ -951,6 +1042,8 @@ function PlaceButton({
   /** The line's own key for the same thing, said in the tooltip: where the keyboard's way to
    *  it is learned. None for a move the line has no key for. */
   keys?: string;
+  /** Where else the same thing is, for a button with no key on its line. */
+  also?: string;
   onPress: () => void;
   children: ReactNode;
 }) {
@@ -960,7 +1053,13 @@ function PlaceButton({
       type="button"
       className="tasks-menu-place"
       tabIndex={-1}
-      title={keys === undefined ? says : `${says} (${keys} on its line)`}
+      title={
+        keys !== undefined
+          ? `${says} (${keys} on its line)`
+          : also !== undefined
+            ? `${says} (${also})`
+            : says
+      }
       data-says={says}
       onPointerDown={own}
       onPointerUp={own}

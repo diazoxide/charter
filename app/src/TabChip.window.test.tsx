@@ -167,6 +167,8 @@ function core(open: Listed[], finished: FinishedTask[] = []) {
       return null;
     }
     if (cmd === "dispatch_grants_needed") return [];
+    // The Brief panel's read (#1494): this core holds no dispatch records.
+    if (cmd === "task_brief") throw "This project holds no record of that task.";
     if (cmd === "vault_refusals") return [];
     if (cmd === "owed_restarts") return [];
     if (cmd === "finished_tasks") return [...finished];
@@ -227,6 +229,7 @@ function core(open: Listed[], finished: FinishedTask[] = []) {
     asked,
     open,
     rowsChanged,
+    said,
     /** Task `session` reported `outcome` to the chat that asked, and the core says so. */
     reported: async (session: number, outcome: string) => {
       const one = open.find((chat) => chat.session === session);
@@ -334,7 +337,12 @@ const menus = () =>
 const lines = () =>
   within(menu() as HTMLElement)
     .getAllByRole("menuitem")
-    .filter((item) => !item.classList.contains("tasks-menu-end"))
+    // The lines that are no chat's: the ways to end a task, and the session's Activity.
+    .filter(
+      (item) =>
+        !item.classList.contains("tasks-menu-end") &&
+        !item.classList.contains("tasks-menu-activity"),
+    )
     .map((item) => item.textContent?.replace(/\s+/g, " ").trim());
 
 const line = (name: string) => {
@@ -585,8 +593,9 @@ describe("the menu a chip opens", () => {
     const levels = within(menu() as HTMLElement)
       .getAllByRole("menuitem")
       .map((item) => item.getAttribute("data-level"));
-    // The last is the line that opens the ways to end a task: no chat's, and at no level.
-    expect(levels).toEqual(["1", "2", "3", "2", "2", null]);
+    // The last two are the line that opens the ways to end a task and the session's Activity
+    // (#1495): no chat's, and at no level.
+    expect(levels).toEqual(["1", "2", "3", "2", "2", null, null]);
     // Each wears its persona's mark, and the chat the tab shows now is marked.
     expect(line("steward 1").hasAttribute("data-current")).toBe(true);
     expect(line("talk").hasAttribute("data-current")).toBe(false);
@@ -686,6 +695,56 @@ describe("the menu a chip opens", () => {
     press(theChip("steward 1"));
 
     expect(line("sweep").hasAttribute("data-current")).toBe(true);
+  });
+});
+
+describe("what the menu says of the work (#1493, #1494, #1495)", () => {
+  it("says on a working task's line what it is doing, and nothing on a line that is not", async () => {
+    const { move, said } = await drawn(withTasks());
+    await move(4, "running", 1);
+    await said("chat-doing", {
+      plane: PLANE,
+      session: 4,
+      sequence: 1,
+      doing: { kind: "command", name: "cargo", count: 0, over: false },
+    });
+
+    press(theChip("steward 1"));
+
+    await waitFor(() =>
+      expect(line("talk").querySelector(".doing .chat-doing")?.textContent).toBe("running cargo"),
+    );
+    // One line, and out of what a screen reader is told of the line: its name says it.
+    expect(line("talk").querySelector(".chat-doing")?.getAttribute("aria-hidden")).toBe("true");
+    expect(line("sweep").querySelector(".chat-doing")).toBeNull();
+  });
+
+  it("opens a task's Brief from the end of its line, and the session's own has none", async () => {
+    await drawn(withTasks());
+    press(theChip("steward 1"));
+
+    expect(line("steward 1").querySelector('[data-says^="Brief of"]')).toBeNull();
+    const brief = line("talk").querySelector<HTMLElement>('[data-says="Brief of talk"]');
+    expect(brief).not.toBeNull();
+    // The pointer's button names the keyboard's way to the same panel.
+    expect(brief?.title).toBe("Brief of talk (also in its row's menu in the Chats list)");
+    press(brief as HTMLElement);
+
+    expect(await screen.findByRole("dialog", { name: /Brief of talk/ })).toBeTruthy();
+    expect(menu()).toBeNull();
+  });
+
+  it("opens the session's Activity in a tab of its own", async () => {
+    await drawn(withTasks());
+    press(theChip("steward 1"));
+
+    const activity = within(menu() as HTMLElement)
+      .getAllByRole("menuitem")
+      .find((item) => item.classList.contains("tasks-menu-activity"));
+    expect(activity?.querySelector(".name")?.textContent).toBe("Activity");
+    await userEvent.click(activity as HTMLElement);
+
+    expect(await within(strip()).findByRole("tab", { name: /Activity · steward 1/ })).toBeTruthy();
   });
 });
 

@@ -790,24 +790,6 @@ export const commands = {
 	 */
 	clearFinishedTasks: (plane: PlaneId, ids: string[]) => typedError<number, string>(__TAURI_INVOKE("clear_finished_tasks", { plane, ids })),
 	/**
-	 *  One chat's Activity (#1495): what it and its tasks said to each other, and the tasks of
-	 *  its tasks, as one timeline, oldest first. Read-only. `null` for a chat that is not open.
-	 *  On a blocking thread, as it reads every dispatch record.
-	 */
-	activity: (plane: PlaneId, session: number) => typedError<{
-	/**  The chat, by the name the person sees it under. */
-	name: string,
-	/**  Which chat it is ([`ActivityLine::from_key`]): what a line heard later is matched to. */
-	key: string,
-	/**  Oldest first. */
-	lines: ActivityLine[],
-	/**
-	 *  How many of this chat's tasks, and of the tasks under them, are not listed because
-	 *  purlis will not draw their records.
-	 */
-	undrawn: number,
-} | null, string>(__TAURI_INVOKE("activity", { plane, session })),
-	/**
 	 *  **The session the chat a line names has now** (#1495): `key` is the line's `from_key`, a
 	 *  chat's id or `#<number>`. `null` where that chat is not open.
 	 * 
@@ -816,25 +798,6 @@ export const commands = {
 	 *  closed has none.
 	 */
 	activityChat: (plane: PlaneId, key: string) => typedError<number | null, string>(__TAURI_INVOKE("activity_chat", { plane, key })),
-	/**
-	 *  **The question a task is paused on, for the window to show before the person answers it**
-	 *  (#1496): chat `session`'s question to its asking chat. `null` where there is none to
-	 *  answer: the chat is no task, has reported or ended, or asks nothing now.
-	 */
-	taskQuestion: (plane: PlaneId, session: number) => typedError<{
-	/**  The task, by the name the person sees it under. */
-	task: string,
-	/**  The chat it asked, by its name. */
-	asked: string,
-	/**
-	 *  **The question's number**: what an answer is for (`answer_task_question`). The app
-	 *  numbers each question as it is asked, so a later question in the same words is
-	 *  another question.
-	 */
-	number: number,
-	/**  What it asked, **as text**: a chat's own words, never drawn as markup. */
-	question: string,
-} | null, string>(__TAURI_INVOKE("task_question", { plane, session })),
 	/**
 	 *  The window came back into focus: fetch the plane's target branch, unless it was fetched a
 	 *  moment ago. Answers at once; what the fetch finds reaches the window as a plane change.

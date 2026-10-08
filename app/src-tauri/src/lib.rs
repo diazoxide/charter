@@ -3808,6 +3808,19 @@ mod tests {
     }
 
     #[test]
+    fn what_chats_said_to_each_other_is_read_by_the_window_alone_and_never_in_the_link_s_client() {
+        // A session's Activity (#1495) and the question a task is paused on (#1496) are words
+        // chats wrote, read by a session the caller names: Tauri's IPC, and no second route.
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        let client = ui_rpc_client();
+        for command in ["activity", "task_question"] {
+            let called = format!("(\"{command}\"");
+            assert!(bindings.contains(&called), "the window reads it: {command}");
+            assert!(!client.contains(&called), "served on a link: {command}");
+        }
+    }
+
+    #[test]
     fn the_person_s_answer_to_a_task_is_the_window_s_alone_and_never_in_the_link_s_client() {
         // #1496: what `answer_task_question` sends reaches a chat marked as the person's own
         // words, so it is held to what `answer_ask` is: Tauri's IPC, and no second route.
