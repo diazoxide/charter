@@ -274,7 +274,12 @@ BRIEF
   starts. A Notice on the asking chat's tab says who wants to dispatch to whom and shows the
   brief, and the command says `held for the person` and exits 0: the dispatch is accepted and
   waiting, not refused. **Allow** starts it then, on the brief you read, and it is judged
-  against the limits again at that moment. **Keep blocked** starts nothing and makes no grant.
+  against the limits again at that moment. **Keep blocked** starts nothing and makes no grant,
+  and holds for that chat's life: the same chat dispatching across the same pair again is
+  refused at once with your no, and you are not asked twice; a new chat is asked. **Never for
+  this pair** is kept for you on this machine: no chat of that persona is asked or allowed for
+  that persona again, nor any chat working below one, until you lift it in Settings › Project ›
+  Dispatch.
   Either way the asking chat is told on its next turn, the way it is told a report; and if
   that chat was started again before you answered, the question went with its old run, so it
   is told that the task was not started and to dispatch it again. A second

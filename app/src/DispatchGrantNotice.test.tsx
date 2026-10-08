@@ -7,8 +7,9 @@ import type { DispatchPending, GrantLevel } from "./bindings";
 
 /**
  * The Notice for a dispatch to another persona that no grant covers (#1437): who wants to
- * dispatch to whom, the first brief as the chat wrote it, and Allow at each level or Keep
- * blocked. A pair policy locks says who locked it and offers no Allow.
+ * dispatch to whom, the first brief as the chat wrote it, and Allow at each level, Keep
+ * blocked or Never for this pair (#1503). A pair policy locks says who locked it and offers no
+ * Allow.
  */
 
 afterEach(() => {
@@ -31,6 +32,7 @@ const WAITING: DispatchPending = {
   brief_lines: 2,
   levels: ["chat", "you", "project"],
   locked: null,
+  never_unread: null,
 };
 
 /** A core holding `waiting` for the chat, which records what the window sends. */
@@ -45,6 +47,11 @@ function core(waiting: DispatchPending[], refuse?: string) {
       const { id, level } = args as { id: number; level: GrantLevel };
       held = held.filter((one) => one.id !== id);
       return { said: `Allowed at ${level}.` };
+    }
+    if (cmd === "never_dispatch") {
+      if (refuse !== undefined) throw refuse;
+      held = held.filter((one) => one.id !== (args as { id: number }).id);
+      return { said: "No steward chat dispatches to devops on this machine from now on." };
     }
     if (cmd === "keep_dispatch_blocked") {
       held = held.filter((one) => one.id !== (args as { id: number }).id);
@@ -133,6 +140,83 @@ describe("the dispatch grant Notice", () => {
     expect(sent(asked, "allow_dispatch")).toEqual([]);
   });
 
+  it("Never for this pair sends the held dispatch and nothing of the pair, and says what stands", async () => {
+    const asked = core([WAITING]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Never for this pair" }));
+
+    await waitFor(() => expect(sent(asked, "never_dispatch")).toEqual([{ plane: PLANE, id: 7 }]));
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(notice).toHaveTextContent(
+      "No steward chat dispatches to devops on this machine from now on.",
+    );
+    // Nothing was allowed, and the question is gone.
+    expect(sent(asked, "allow_dispatch")).toEqual([]);
+    expect(sent(asked, "keep_dispatch_blocked")).toEqual([]);
+    expect(screen.queryByRole("button", { name: /^Allow|^Keep blocked|^Never/ })).toBeNull();
+  });
+
+  it("offers the five answers in the order they read, and none that grants any persona", async () => {
+    core([WAITING]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    const answers = within(notice)
+      .getAllByRole("button")
+      .map((one) => one.textContent)
+      .filter((label) => label !== "Dismiss");
+    expect(answers).toEqual([
+      "Allow for this chat",
+      "Allow for me on this machine",
+      "Allow for everyone in this project",
+      "Keep blocked",
+      "Never for this pair",
+    ]);
+  });
+
+  it("offers no Never to a chat on no persona, which has no pair", async () => {
+    core([{ ...WAITING, asking: null, levels: ["chat"] }]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    await screen.findByRole("button", { name: "Keep blocked" });
+    expect(screen.queryByRole("button", { name: "Never for this pair" })).toBeNull();
+  });
+
+  it("says the core's refusal of a Never and keeps asking", async () => {
+    core([WAITING], "purlis's event log is not open on this machine, so nothing was changed");
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Never for this pair" }));
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    await waitFor(() =>
+      expect(notice).toHaveTextContent(
+        "purlis's event log is not open on this machine, so nothing was changed",
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Never for this pair" })).toBeInTheDocument();
+  });
+
+  it("says why it asks about a pair already granted when the list of nevers does not read", async () => {
+    const unread =
+      "purlis could not read the list of pairs you said never to (.purlis/app/dispatch-never.json in this project), so it changed nothing there and no dispatch grant counts until it reads. Fix that file, or delete it to say never to nothing.";
+    core([{ ...WAITING, never_unread: unread }]);
+    render(<DispatchGrantNotice plane={PLANE} session={SESSION} />);
+
+    const notice = await screen.findByRole("status", { name: "Dispatch to devops" });
+    expect(notice).toHaveTextContent(
+      `${unread} Allowing here starts this one dispatch, and the next one asks again.`,
+    );
+    // Still a question the person can answer.
+    expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep blocked" })).toBeInTheDocument();
+  });
+
   it("says who locked a pair policy locks, and offers no Allow", async () => {
     const locked =
       "Policy forbids steward chats dispatching to devops. Locked by policy, set by IT in /etc/purlis/policy.json.";
@@ -145,6 +229,7 @@ describe("the dispatch grant Notice", () => {
     );
     expect(screen.queryByRole("button", { name: /^Allow/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Keep blocked" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Never for this pair" })).toBeNull();
 
     await userEvent.setup().click(within(notice).getByRole("button", { name: "Dismiss" }));
     await waitFor(() =>

@@ -43,6 +43,34 @@ fn document(text: &str) -> Result<toml_edit::DocumentMut, String> {
 /// none, the target added last to the asking persona's list, and every other line kept. The
 /// same text where it is granted already.
 pub fn with(text: &str, pair: &Pair) -> Result<String, String> {
+    with_target(text, &pair.asking, &pair.target)
+}
+
+/// **`text` with `asking` granted any persona** (#1503): `"*"` added to its list, as [`with`]
+/// adds a target. Settings' explicit grant, and nothing a Notice's answer writes.
+pub fn with_any(text: &str, asking: &str) -> Result<String, String> {
+    with_target(text, &any_asking(asking)?, crate::dispatchgrant::ANY)
+}
+
+/// **`text` without `asking`'s grant of any persona**: as [`without`] takes a target out.
+pub fn without_any(text: &str, asking: &str) -> Result<String, String> {
+    without_target(text, &any_asking(asking)?, crate::dispatchgrant::ANY)
+}
+
+/// `asking` as a persona's name, or why "any persona" is not kept for it.
+fn any_asking(asking: &str) -> Result<String, String> {
+    if crate::personas::valid_name(asking) {
+        Ok(asking.to_owned())
+    } else {
+        Err(format!(
+            "{} is not a persona's name, so purlis keeps no dispatch grant for it.",
+            crate::shown::short(asking)
+        ))
+    }
+}
+
+/// [`with`], for a target as the file spells it.
+fn with_target(text: &str, asking: &str, target: &str) -> Result<String, String> {
     let mut doc = document(text)?;
     let dispatch = doc.entry(TABLE).or_insert_with(|| {
         let mut table = toml_edit::Table::new();
@@ -60,16 +88,13 @@ pub fn with(text: &str, pair: &Pair) -> Result<String, String> {
         .as_table_like_mut()
         .ok_or_else(|| not_editable(&format!("{TABLE}.{KEY}")))?;
     let targets = grants
-        .entry(&pair.asking)
+        .entry(asking)
         .or_insert(toml_edit::value(toml_edit::Array::new()));
     let targets = targets
         .as_array_mut()
-        .ok_or_else(|| not_editable(&format!("{TABLE}.{KEY}.{}", pair.asking)))?;
-    if !targets
-        .iter()
-        .any(|one| one.as_str() == Some(pair.target.as_str()))
-    {
-        targets.push(pair.target.as_str());
+        .ok_or_else(|| not_editable(&format!("{TABLE}.{KEY}.{asking}")))?;
+    if !targets.iter().any(|one| one.as_str() == Some(target)) {
+        targets.push(target);
         targets.fmt();
     }
     Ok(doc.to_string())
@@ -79,6 +104,11 @@ pub fn with(text: &str, pair: &Pair) -> Result<String, String> {
 /// list, the persona's key with its last target, and the tables once they are empty. The same
 /// text where it was not granted.
 pub fn without(text: &str, pair: &Pair) -> Result<String, String> {
+    without_target(text, &pair.asking, &pair.target)
+}
+
+/// [`without`], for a target as the file spells it.
+fn without_target(text: &str, asking: &str, target: &str) -> Result<String, String> {
     let mut doc = document(text)?;
     let Some(dispatch) = doc.get_mut(TABLE) else {
         return Ok(text.to_owned());
@@ -92,20 +122,20 @@ pub fn without(text: &str, pair: &Pair) -> Result<String, String> {
     let grants = grants
         .as_table_like_mut()
         .ok_or_else(|| not_editable(&format!("{TABLE}.{KEY}")))?;
-    let Some(targets) = grants.get_mut(&pair.asking) else {
+    let Some(targets) = grants.get_mut(asking) else {
         return Ok(text.to_owned());
     };
     let targets = targets
         .as_array_mut()
-        .ok_or_else(|| not_editable(&format!("{TABLE}.{KEY}.{}", pair.asking)))?;
+        .ok_or_else(|| not_editable(&format!("{TABLE}.{KEY}.{asking}")))?;
     let before = targets.len();
-    targets.retain(|one| one.as_str() != Some(pair.target.as_str()));
+    targets.retain(|one| one.as_str() != Some(target));
     if targets.len() == before {
         return Ok(text.to_owned());
     }
     targets.fmt();
     if targets.is_empty() {
-        grants.remove(&pair.asking);
+        grants.remove(asking);
     }
     if grants.is_empty() {
         dispatch.remove(KEY);
@@ -167,6 +197,34 @@ pub fn revoke(root: &Path, pair: &Pair) -> Result<(), String> {
     write(root, |text| without(text, pair))?;
     // Best effort: a pair left acknowledged covers nothing once the file lacks it.
     let _ = crate::dispatchgrant::forget_pair(root, pair);
+    Ok(())
+}
+
+/// **Whether [`grant_any`] for `asking` would be written**, asked before it is audited.
+pub fn can_grant_any(root: &Path, asking: &str) -> Result<(), String> {
+    with_any(&on_disk(root)?, asking).map(|_| ())
+}
+
+/// **Lets `asking`'s chats dispatch to any persona, for everyone in the project at `root`**
+/// (#1503): Settings' explicit grant. Where the file holds it already (a teammate's) nothing
+/// is written. Either way it is accepted on this machine, so it is in force here.
+pub fn grant_any(root: &Path, asking: &str) -> Result<(), String> {
+    write(root, |text| with_any(text, asking))?;
+    crate::sandbox::local::acknowledge_dispatch_any(root, asking).map_err(|why| {
+        format!(
+            "The grant is in {}, and purlis could not record it as allowed on this machine \
+             ({}), so it covers nothing here yet. Allow it again.",
+            Which::Shared.file(),
+            crate::shown::short(&why.to_string())
+        )
+    })
+}
+
+/// **Revokes the project's grant of any persona for `asking`**: Settings' Revoke.
+pub fn revoke_any(root: &Path, asking: &str) -> Result<(), String> {
+    write(root, |text| without_any(text, asking))?;
+    // Best effort: an acceptance left behind covers nothing once the file lacks the grant.
+    let _ = crate::sandbox::local::forget_dispatch_any(root, asking);
     Ok(())
 }
 

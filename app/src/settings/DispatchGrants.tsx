@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { commands, type DispatchGrant, type DispatchGrants, type PlaneId } from "../bindings";
+import {
+  commands,
+  type DispatchGrant,
+  type DispatchGrants,
+  type DispatchNever,
+  type DispatchStanding,
+  type PlaneId,
+} from "../bindings";
 import { Notice } from "../Notice";
 import type { RowIds } from "./components";
 
@@ -18,6 +25,9 @@ const NONE: DispatchGrants = {
   locked_by: null,
   changed: null,
 };
+
+/** Nothing said never, and nothing granted for any persona. */
+const NOTHING_STANDS: DispatchStanding = { nevers: [], any: [], nevers_unread: null };
 
 /** When, as the list says it: the day and time, or nothing where it is not known. */
 function when(at: number | null): string {
@@ -55,6 +65,12 @@ export function dispatchGrantSaid(one: DispatchGrant): string {
  * What an administrator's policy locks is drawn locked, with who set it: a lock on all dispatch,
  * each locked pair, and any grant a lock now holds, which offers no Revoke.
  *
+ * **The pairs you said never to are listed under the grants, each with Lift** (#1503): a never
+ * is said on a dispatch's Notice, and this is where it is taken back. Lifting it goes through
+ * the core, which audits it; what then covers the pair is whatever grant stands, and with none
+ * the next dispatch asks. Where the list of nevers does not read, the core's sentence saying so
+ * is drawn in its place. The table of every grant with where it comes from replaces this row.
+ *
  * A component a Settings page mounts: Settings › Project › Dispatch, and today the Granted page.
  */
 export function DispatchGrantsList({
@@ -73,6 +89,7 @@ export function DispatchGrantsList({
 }) {
   const [held, setHeld] = useState<DispatchGrants>();
   const [said, setSaid] = useState<string>();
+  const [standing, setStanding] = useState<DispatchStanding>(NOTHING_STANDS);
 
   const read = useCallback(() => {
     void commands
@@ -84,8 +101,26 @@ export function DispatchGrantsList({
       .catch((err: unknown) =>
         setSaid(`purlis could not list the dispatch grants: ${String(err)}`),
       );
+    void commands
+      .dispatchStanding(plane)
+      .then((done) => {
+        if (done.status === "ok") setStanding(done.data ?? NOTHING_STANDS);
+      })
+      // A list that cannot be read here lists nothing; the core still holds every never.
+      .catch(() => {});
   }, [plane]);
   useEffect(read, [read]);
+
+  const lift = (one: DispatchNever) => {
+    setSaid(undefined);
+    void commands
+      .liftDispatchNever(plane, one.asking, one.target)
+      .then((done) => {
+        if (done.status === "error") setSaid(done.error);
+        else setStanding(done.data ?? NOTHING_STANDS);
+      })
+      .catch((err: unknown) => setSaid(`purlis could not lift it: ${String(err)}`));
+  };
 
   const revoke = (one: DispatchGrant) => {
     setSaid(undefined);
@@ -127,6 +162,32 @@ export function DispatchGrantsList({
                       Revoke
                     </button>
                   )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {standing.nevers_unread !== null && (
+            <p className="granted-locked">{standing.nevers_unread}</p>
+          )}
+          {standing.nevers.length > 0 && (
+            <ul className="granted-list" aria-label="Never">
+              {standing.nevers.map((one) => (
+                <li key={`${one.asking}\u001f${one.target}`}>
+                  <span>
+                    {one.asking} chats never dispatch to {one.target} · Me on this machine · said by
+                    you
+                  </span>
+                  <span className="granted-note">
+                    No grant covers it, and no {one.asking} chat is asked, until you lift it.
+                  </span>
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    aria-label={`Lift never for ${one.asking} dispatching to ${one.target}`}
+                    onClick={() => lift(one)}
+                  >
+                    Lift
+                  </button>
                 </li>
               ))}
             </ul>

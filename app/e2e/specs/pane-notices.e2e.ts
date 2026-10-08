@@ -28,6 +28,16 @@ import { endChat, pressAndStart, pressOnly } from "../opening.js";
 const SENTENCE =
   "This chat runs as steward, and vault devops is tagged for devops, so purlis did not open it. This chat has already asked devops: answer that above.";
 const WAYS = ["Allow steward to use this vault", "Dispatch to devops…", "Keep blocked"];
+/** The dispatch grant Notice's own sentence and its five answers (#1503), in the order drawn. */
+const ASKS =
+  "This chat runs as steward and wants to dispatch to devops. Nothing starts until you answer. Allowing it lets steward chats ask devops for anything devops can do, without asking you again.";
+const FIVE_WAYS = [
+  "Allow for this chat",
+  "Allow for me on this machine",
+  "Allow for everyone in this project",
+  "Keep blocked",
+  "Never for this pair",
+];
 /** A brief of 46 lines, some of them far longer than any pane is wide. */
 const BRIEF = Array.from({ length: 46 }, (_, line) =>
   line % 5 === 0
@@ -380,6 +390,51 @@ describe("a Notice in a pane's corner", () => {
       expect(notice.background).not.toMatch(/rgba\(.*,\s*0\)|transparent/);
     });
   }
+
+  it("fits the dispatch question's five answers in a narrow pane, each whole and none over another", async () => {
+    await windowIs(1024, 768);
+    expect(await raise(0, { sentence: ASKS, ways: FIVE_WAYS, opened: BRIEF })).toBe(true);
+
+    const seen = await measured(0);
+    const [notice] = seen.notices;
+    const frame = seen.frame as Box;
+    expect(seen.notices).toHaveLength(1);
+    check("the pane is not a narrow one", frame.width, "below", 40 * seen.rem);
+    inside(notice.box, frame, "the Notice in its pane");
+
+    // All five, in the order they are answered, under the sentence and inside the Notice.
+    const says = notice.says as Box;
+    expect(notice.buttons.map((one) => one.label)).toEqual(FIVE_WAYS);
+    for (const button of notice.buttons) {
+      inside(button.box, notice.box, `"${button.label}" in the Notice`);
+      check(
+        `"${button.label}" is beside the sentence`,
+        (button.box as Box).top,
+        "atLeast",
+        says.bottom - 1,
+      );
+      check(
+        `"${button.label}" is broken over more than two lines`,
+        (button.box as Box).height,
+        "atMost",
+        button.line * 2 + button.chrome + 4,
+      );
+      expect((button.box as Box).height).toBeGreaterThanOrEqual(button.line - 2);
+    }
+    for (const [index, one] of notice.buttons.entries())
+      for (const other of notice.buttons.slice(index + 1))
+        check(
+          `${one.label} / ${other.label}`,
+          overlap(one.box as Box, other.box as Box),
+          "is",
+          false,
+        );
+
+    // The brief is still under all five, never pushed beside them or out of the pane.
+    const [under, line] = [notice.under as Box, notice.line as Box];
+    expect(under.top).toBeGreaterThanOrEqual(line.bottom - 1);
+    inside(notice.pre, under, "the brief's box under the line");
+  });
 
   it("stacks several in one pane, and scrolls them inside the pane when they are taller than it", async () => {
     await windowIs(1024, 768);

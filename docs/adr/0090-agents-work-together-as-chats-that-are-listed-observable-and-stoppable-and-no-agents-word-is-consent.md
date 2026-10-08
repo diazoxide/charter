@@ -604,3 +604,58 @@ report.
   says. It stays a row of its own.
 - **A task that had reported when the app quit is not started again.** At the next launch it
   is a finished row, read from its record.
+
+## Amended (2026-10-08): a grant is one-way, "any persona", and the two ways to say no
+
+The operator ruled on these on 2026-10-08, in the grill that is the spec of #1483 (rulings
+V100-22, V100-23 and V100-25). #1503 builds them and records them here. Where this section and
+change 3 above differ, this section holds; everything else of change 3 stands.
+
+**1. A grant is one-way (V100-22).** A grant from one persona to another allows nothing the
+other way. A report back needs none. A new task the other way is its own pair.
+
+**2. A grant may be for any persona (V100-23).** Change 3 says a grant "names the pair". It may
+now also name only who dispatches: *chats running as this persona may dispatch to any persona*.
+
+- It is made on purpose, in Settings, at two of the three levels: me on this machine, and
+  everyone in this project (`"*"` in the persona's list of `[dispatch.grants]`). Never for one
+  chat.
+- **The Notice never offers it, and no answer to a Notice makes one.** The first dispatch of a
+  pair still offers that pair at the three levels.
+- It covers a persona added later.
+- A teammate's, arriving by a pull, covers nothing on a machine until someone there allows it
+  in Settings. The acceptance is kept apart from the acknowledgement of pairs, and is dropped
+  when the project's file is read and no longer holds the grant.
+- Policy locks hold under it, and so does the loop rule.
+- **For an unattended chat it counts in that chat's own workspace only.** Such a chat starts a
+  chat as another persona in another workspace only under a grant that names the pair.
+
+**3. Keep blocked holds for the chat's life (V100-25).** The same chat asking across the same
+pair again is refused at once with the person's no, and they are not asked twice. A new chat is
+asked. It is the app's memory, gone with the chat, and it stands in for the question only: a
+grant the person makes afterwards covers that chat like any other.
+
+**4. Never for this pair (V100-25).** The Notice has a fifth answer. It is the person's, on
+their machine, never committed, and it is the one deny among the records of dispatch.
+
+- While it stands, no chat running as that persona is asked or allowed to dispatch to that
+  target. No grant covers the pair: not one for a chat, not the person's, not the project's,
+  not "any persona". Only a policy lock is said before it. Nothing in the project's file lifts
+  it; the person does, in Settings.
+- **It holds down a chain.** A chat with a chat of the refused persona anywhere above it in its
+  lineage is refused that target too. This is a fail-closed reading the dispatcher chose in
+  review, flagged for the operator: without it, work the refused persona asked for reaches the
+  target through a third persona, and "any persona" on the persona in the middle makes that
+  need no grant naming the target.
+- **The person's own dispatch from a chat's tab is not held to it.** It is their rule for
+  chats, as a grant is.
+- **It is kept in a file of its own and fails closed.** A record that is there and does not
+  read is never "no nevers": no grant covers any pair of two personas until it reads, the
+  person is asked and told why, an unattended chat is refused, and a write refuses rather than
+  replace what it could not read.
+
+**5. The audit** gains a never and its lifting beside a grant and its revoke; a grant for any
+persona is a grant whose target is `*`.
+
+Still open, and not decided here: telling a teammate's "any persona" on the one-time Notice
+(#1506), and what a persona removed and made again under the same name inherits (V100-61).

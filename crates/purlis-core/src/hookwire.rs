@@ -5112,6 +5112,16 @@ mod tests {
             r#"{"chat":4,"allow_dispatch":{"id":1,"level":"chat"},"token":"t"}"#,
             r#"{"revoke_dispatch_grant":{"chat":4,"id":"you\u001fsteward\u001fdevops"}}"#,
             r#"{"keep_dispatch_blocked":{"chat":4,"id":1}}"#,
+            // #1503: never, its lifting, and "any persona", by each window command's name.
+            r#"{"never_dispatch":{"chat":4,"id":1}}"#,
+            r#"{"chat":4,"never_dispatch":{"id":1},"token":"t"}"#,
+            r#"{"lift_dispatch_never":{"chat":4,"asking":"steward","target":"devops"}}"#,
+            r#"{"allow_dispatch_to_any":{"chat":4,"asking":"steward","level":"project"}}"#,
+            r#"{"chat":4,"allow_dispatch_to_any":{"asking":"steward","level":"you"},"token":"t"}"#,
+            r#"{"revoke_dispatch_to_any":{"chat":4,"asking":"steward","level":"you"}}"#,
+            r#"{"dispatch_standing":{"chat":4}}"#,
+            r#"{"dispatch_never":[{"asking":"steward","target":"devops"}]}"#,
+            r#"{"dispatch_any":["steward"]}"#,
             r#"{"grant":{"chat":4,"what":"dispatch","target":"steward -> devops","level":"project"}}"#,
         ];
         for line in forged {

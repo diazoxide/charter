@@ -2052,7 +2052,7 @@ pub fn answered(
             // waits on its tab.
             Ok(Dispatched::Held { pending, .. }) => {
                 held.held_dispatches().take(pending);
-                held.dispatch_grants().keep_blocked(pending);
+                held.dispatch_grants().withdraw(pending);
                 (
                     Answered::NotStarted,
                     format!(
@@ -2510,11 +2510,12 @@ fn said_to_the_person(why: &dispatchdecision::Refused) -> String {
             short(persona)
         ),
         // Never the person's: a helper is not a tab, a held chat's tab may ask, the person's
-        // ask always names a persona, and it sends no message between chats. Said as the chat
-        // is told, should one arise.
+        // ask always names a persona, it sends no message between chats, and their own
+        // dispatch is not held to their never. Said as the chat is told, should one arise.
         Refused::Helper
         | Refused::Held
         | Refused::NoPersonaNamed
+        | Refused::Never(_)
         | Refused::Limit(Limit::TooManyMessages { .. }) => why.say(),
     }
 }
@@ -7619,7 +7620,7 @@ mod tests {
         assert_eq!(told[0].from, "check the cluster");
         assert_eq!(told[0].summary, "steward to devops");
         assert_eq!(held.chats().open_now().len(), before, "nothing started");
-        // No grant was made: the next ask across the pair asks the person again.
+        // No grant was made.
         let (again, _) = dispatch(
             &held,
             &id,
@@ -7628,14 +7629,15 @@ mod tests {
             Some("devops"),
             "check the cluster",
         );
+        // The person's no holds for this chat's life (#1503): it is refused at once, and no
+        // second question is raised.
         assert_eq!(
             again,
-            Answer::NeedsGrant {
-                from: Some("steward".to_owned()),
-                to: "devops".to_owned(),
-                waiting: None,
+            Answer::No {
+                why: crate::dispatchgrants::kept_blocked_said("devops")
             }
         );
+        assert!(held.dispatch_grants().waiting(asking).is_empty());
     }
 
     #[test]

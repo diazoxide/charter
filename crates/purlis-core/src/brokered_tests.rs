@@ -260,6 +260,19 @@ fn no_brokered_write_creates_widens_or_revokes_a_dispatch_grant() {
             Some(granted),
             "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\"]\nqa = [\"devops\"]\n",
         ),
+        // Widened to any persona (#1503), beside a pair or in its place.
+        (
+            Some(granted),
+            "schema = 1\n\n[dispatch.grants]\nsteward = [\"devops\", \"*\"]\n",
+        ),
+        (
+            Some(granted),
+            "schema = 1\n\n[dispatch.grants]\nsteward = [\"*\"]\n",
+        ),
+        (
+            Some("schema = 1\n"),
+            "schema = 1\n\n[dispatch.grants]\nsteward = [\"*\"]\n",
+        ),
         // Revoked.
         (Some(granted), "schema = 1\n"),
         (

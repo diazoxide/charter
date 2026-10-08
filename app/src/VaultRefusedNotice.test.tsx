@@ -47,6 +47,7 @@ const HELD: DispatchPending = {
   brief_lines: 1,
   levels: ["chat", "you", "project"],
   locked: null,
+  never_unread: null,
 };
 
 /** A core holding `held` for chat 7, answering each press as the app does. `dispatches` are
