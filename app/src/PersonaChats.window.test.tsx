@@ -162,7 +162,7 @@ describe("closing a chat with chats at work below it", () => {
     expect(within(question).getByRole("radio", { name: "Keep them running" })).toBeChecked();
     expect(within(question).getByRole("radio", { name: "Stop them" })).not.toBeChecked();
     expect(question).toHaveTextContent(
-      "They go on working. A persona chat's report goes to this chat's workspace, where the next chat to start reads it.",
+      "They go on working. A task's report goes to this chat's workspace, where the next chat to start reads it.",
     );
     // One dialog, and nothing done by asking.
     expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
@@ -243,7 +243,7 @@ describe("closing a chat with chats at work below it", () => {
 });
 
 describe("closing a chat with nothing at work below it", () => {
-  it("asks nothing about them, and says which reported persona chats close with it", async () => {
+  it("asks nothing about them, and says which reported tasks close with it", async () => {
     const { asking, asked } = await closingTheStewardChat(
       below(
         [
@@ -265,7 +265,7 @@ describe("closing a chat with nothing at work below it", () => {
     expect(within(asking).queryByRole("group")).toBeNull();
     expect(within(asking).queryByRole("radio")).toBeNull();
     expect(asking).toHaveTextContent(
-      "1 reported persona chat closes with it, each once its session record is written: check prod.",
+      "1 reported task closes with it, each once its session record is written: check prod.",
     );
     await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(asked("close_session")).toEqual([{ plane: PLANE, session: 4 }]));

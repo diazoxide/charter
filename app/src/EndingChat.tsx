@@ -213,18 +213,16 @@ export function RUNNING_SAYS(running: readonly string[]): string {
 
 /** What keeping them does, said under the choice. */
 export const KEEP_SAYS =
-  "They go on working. A persona chat's report goes to this chat's workspace, where the next chat to start reads it.";
+  "They go on working. A task's report goes to this chat's workspace, where the next chat to start reads it.";
 
 /** What stopping them does, said under the choice. */
 export const STOP_SAYS =
   "They are stopped now, and so are the chats they started: each gets one short turn to write what it did, then ends. There is no undo.";
 
-/** What the dialog says of the reported persona chats that close with a closing chat. */
+/** What the dialog says of the reported tasks that close with a closing chat. */
 export function CLOSING_SAYS(closing: readonly string[]): string {
   const count =
-    closing.length === 1
-      ? "1 reported persona chat closes"
-      : `${closing.length} reported persona chats close`;
+    closing.length === 1 ? "1 reported task closes" : `${closing.length} reported tasks close`;
   return `${count} with it, each once its session record is written: ${closing.join(", ")}.`;
 }
 

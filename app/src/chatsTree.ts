@@ -8,6 +8,7 @@
  */
 import type { OpenChat } from "./bindings";
 import { isShell } from "./chatState";
+import { rowFactsOf, type RowFacts } from "./shownState";
 
 /** One running chat, as the Chats section lists it. */
 export type ListedChat = {
@@ -26,12 +27,14 @@ export type ListedChat = {
   mode: "handoff" | "task" | null;
   /** That chat's name as the person saw it then: what is said once it has closed. */
   from: string | null;
-  /** Whether it has a tab. A task chat has none until its row is clicked. */
+  /** Whether it has a tab. A task has none until its row is clicked. */
   tab: boolean;
   /** The branch of its own a task works on, where its dispatch gave it one (#1453): purlis cut
    *  it, in a folder of its own, and nothing merges it. */
   branch: string | null;
-};
+  // And what its state is derived from beside the board's word (`RowFacts`): its record as a
+  // task and its harness's name.
+} & RowFacts;
 
 /**
  * **The branch of its own a task chat works on**, read from where it stands: a folder purlis
@@ -73,6 +76,7 @@ export function listedChat(
     from: chat.from?.name ?? null,
     tab,
     branch: ownBranch(chat),
+    ...rowFactsOf(chat),
   };
 }
 

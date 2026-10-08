@@ -236,9 +236,9 @@ describe("the explorer", () => {
   // What is already running where
   // ---------------------------------------------------------------------------------------
 
-  it("draws no state mark on a shell tab's chat, and `unknown` on a harness's", () => {
-    // A shell's terminal icon already says what it is; a broken-ring `unknown` beside it read as a
-    // spinner. A harness that has reported nothing yet still says so.
+  it("draws no state on a shell tab's chat, and what is not known on a harness's", () => {
+    // A shell's terminal icon already says what it is; a broken ring beside it read as a
+    // spinner. A harness that has reported nothing yet still says so (#1484).
     draw({
       chats: [
         chat(1, "shell 1", `${CUT}/one`, { harness: null, profile: null }),
@@ -249,7 +249,8 @@ describe("the explorer", () => {
     const mark = (name: string) =>
       screen.getByRole("treeitem", { name: new RegExp(name) }).querySelector("[data-state]");
     expect(mark("shell 1")).toBeNull();
-    expect(mark("ide.2")).toHaveAttribute("data-state", "unknown");
+    expect(mark("ide.2")).toHaveAttribute("data-state", "unheard");
+    expect(mark("ide.2")).toHaveTextContent("running (no detail from claude)");
   });
 
   it("draws a shell tab's state once a harness in it reports one", () => {
@@ -269,7 +270,7 @@ describe("the explorer", () => {
 
     expect(
       screen.getByRole("treeitem", { name: /shell 1/ }).querySelector("[data-state]"),
-    ).toHaveAttribute("data-state", "waiting");
+    ).toHaveAttribute("data-state", "needs-you");
   });
 
   it("shows the chats working in a worktree under that worktree", () => {
@@ -322,13 +323,13 @@ describe("the explorer", () => {
     });
     draw({ chats: [chat(1, "ide.1", `${CUT}/one`), chat(2, "ide.2", `${CUT}/one`)], states });
 
-    const children = screen.getByRole("list", { name: "Sub-agents of ide.1" });
+    const children = screen.getByRole("list", { name: "Helpers of ide.1" });
     const rows = within(children).getAllByRole("listitem");
     // Long enough to tell two ids apart that differ late, and the whole id on hover.
     expect(rows.map((row) => row.textContent)).toEqual([
-      "sub-agent a1b2c3d4e5f6a7b8…",
-      "sub-agent thread-1",
-      "sub-agent thread-10",
+      "helper a1b2c3d4e5f6a7b8…",
+      "helper thread-1",
+      "helper thread-10",
     ]);
     expect(rows.map((row) => row.querySelector(".agent")?.getAttribute("title"))).toEqual([
       "a1b2c3d4e5f6a7b8c9d0",
@@ -340,12 +341,12 @@ describe("the explorer", () => {
     ).toEqual(["failed", "done", "running"]);
     // The chat's row is described by them, so a screen reader on it hears what it spawned.
     expect(screen.getByRole("treeitem", { name: /ide\.1/ })).toHaveAccessibleDescription(
-      /sub-agent thread-10/,
+      /helper thread-10/,
     );
     expect(screen.getByRole("treeitem", { name: /ide\.2/ })).not.toHaveAccessibleDescription(
       /sub-agent/,
     );
-    expect(screen.queryByRole("list", { name: "Sub-agents of ide.2" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Helpers of ide.2" })).toBeNull();
     // Not rows of the tree: a child agent is drawn under its chat, and the chat is what the
     // arrows stop on and what a press brings forward.
     expect(screen.queryByRole("treeitem", { name: /sub-agent/ })).toBeNull();
@@ -394,7 +395,8 @@ describe("the explorer", () => {
     expect(Number(task.getAttribute("aria-level"))).toBe(
       Number(asking.getAttribute("aria-level")) + 1,
     );
-    expect(task.querySelector("[data-state]")).toHaveAttribute("data-state", "running");
+    expect(task.querySelector("[data-state]")).toHaveAttribute("data-state", "working");
+    expect(task.querySelector("[data-state]")).toHaveTextContent("working");
     // The handoff is a sibling of the chat it came from.
     const handoff = screen.getByRole("treeitem", { name: /moved on/ });
     expect(handoff.getAttribute("aria-level")).toBe(asking.getAttribute("aria-level"));

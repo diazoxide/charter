@@ -252,7 +252,7 @@ model source, device, sandbox and harness level stay the same. A chat has one or
 after another. A new one begins when the chat starts, on `/clear`, when the app reopens it, when
 it wakes, when it starts again without its conversation, or when any of those attributes
 changes. Compaction keeps the run. A **child run** is a sub-agent or teammate the harness
-spawns, with the run it came from as its parent. The run is who an action is attributed to (W8's
+spawns, with the run it came from as its parent: a **helper**, as the app shows it. The run is who an action is attributed to (W8's
 "agent run"), and budgets add up over a chat's runs (ADRs 0066, 0073).
 _Avoid_: session (that is the process), conversation (that is the harness's), turn
 
@@ -480,9 +480,22 @@ the person's word. The person can dispatch too.
 _Avoid_: spawn, delegate, delegation, sub-agent (that is the harness's child run)
 
 **Task** (of a dispatch):
-A dispatch that expects a **report**: work done for the asking chat. Its persona chat is listed
-under the asking chat, never hidden, and gets a tab when the person opens it.
-_Avoid_: job, todo (that is the workspace's), work item
+A dispatch that expects a **report**, and the chat it starts: work done for the asking chat. It
+is listed under the asking chat, never hidden, and gets a tab when the person opens it. "Task"
+is the word in every sentence the app shows for that chat. Its row says its state in a word
+beside a mark with a shape of its own, the same in every list: working, needs you,
+`asking <chat>`, done, failed, cancelled, or ended without a report. A chat at rest that is
+not asking for the person reads idle, and one whose harness sends nothing reads
+`running (no detail from <harness>)`.
+_Avoid_: job, todo (that is the workspace's), work item, task chat, sub-chat, persona chat (in a
+shown sentence, where a task is meant)
+
+**Helper** (of a chat):
+A sub-agent or child its harness spawns inside a chat: the harness's own, a **child run** of the
+chat's run. It carries the chat's persona, sandbox and asks, is never a chat or a persona, and
+may not dispatch. "Helper" is the word the app shows for it.
+_Avoid_: sub-agent (in a shown sentence: that is the harness's word), child agent, sub-chat, task
+(that is a chat a dispatch started)
 
 **Handoff**:
 A dispatch where the work moves: the persona chat takes it from there, and the asking chat does
@@ -495,7 +508,8 @@ _Avoid_: dispatcher, caller, parent (a parent run is a harness's child run's)
 
 **Persona chat**:
 The chat a dispatch starts, running as one persona for its whole life. It is told who asked,
-and it works under its own persona's charter and guards.
+and it works under its own persona's charter and guards. One a task started is shown as a
+**task**; "persona chat" is the model's word, and the app's sentences do not say it for one.
 _Avoid_: sub-agent, worker, child (unqualified: a child run is the harness's)
 
 **Report**:

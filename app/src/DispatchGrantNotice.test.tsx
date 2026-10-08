@@ -68,7 +68,7 @@ describe("the dispatch grant Notice", () => {
     // What the grant reaches is said before the person answers (V98d): a chat's helper
     // sub-agents ask as the chat, so the grant is theirs to use too.
     expect(notice).toHaveTextContent(
-      "The grant covers the helper sub-agents those chats run too: what one of them asks is asked as its chat.",
+      "The grant covers the helpers those chats run too: what one of them asks is asked as its chat.",
     );
     const brief = screen.getByRole("region", { name: "Brief from the chat" });
     expect(brief.textContent).toBe("Check why the prod deploy is red.\nReport what you find.");
