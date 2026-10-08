@@ -65,6 +65,7 @@ mod planewatch;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod portal;
 mod references;
+mod restored;
 mod sandboxing;
 mod saving;
 mod searchfiles;
@@ -927,7 +928,12 @@ fn resume_session(
             held.followed(instead_of, started);
             started
         }
-        None => held.chats().start_ready(&chat, &resumed.ready, size)?,
+        // The reports of the tasks the chat this record is of asked for, kept because it had
+        // closed, are handed to the chat that resumes it (#1513, V100-64). Not on a start
+        // again after a failed resume: that chat was handed them already.
+        None => restored::resuming(&held, &path, || {
+            held.chats().start_ready(&chat, &resumed.ready, size)
+        })?,
     };
     let open = held
         .chats()
@@ -1642,7 +1648,10 @@ async fn retry_chat_that_did_not_start(
 ) -> Result<OpenChat, String> {
     let held = planes.held(&plane)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let session = held.chats().retry(&id, Size { columns, rows })?;
+        // Reports kept for it while it was not open are handed to it once it starts (#1513).
+        let session = restored::retrying(&held, &id, || {
+            held.chats().retry(&id, Size { columns, rows })
+        })?;
         drawn(&held, session)
     })
     .await

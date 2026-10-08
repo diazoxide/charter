@@ -35,7 +35,7 @@ import {
   type Rank,
 } from "./chatsList";
 import { useChatsListPrefs } from "./chatsListPrefs";
-import { needing, parentsIn, unfolded, type ChatRow } from "./chatsTree";
+import { cameFromSaid, needing, parentsIn, unfolded, type ChatRow } from "./chatsTree";
 import { FinishedTasks } from "./FinishedTasks";
 import type { TaskFacts } from "./shownState";
 import { Menued } from "./Menus";
@@ -795,7 +795,7 @@ const Row = memo(function Row({
   const [changed] = useState(() => clock.missed(session));
   const counts = summary === null ? [] : countsOf(summary);
   const ownBranch = branch === null ? null : `own branch ${branch}`;
-  const cameFrom = from === null ? null : `from ${from}`;
+  const cameFrom = from === null ? null : cameFromSaid(from, task);
   /** What the second line says that does not change by itself: one line's tooltip. */
   const second = [elsewhere ? workspace : null, ownBranch, cameFrom].filter(
     (one): one is string => one !== null,

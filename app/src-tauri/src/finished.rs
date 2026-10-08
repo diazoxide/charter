@@ -576,6 +576,7 @@ mod tests {
             cleared: false,
             ended_by: None,
             kept_open: false,
+            undelivered: None,
         }
     }
 

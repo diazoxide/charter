@@ -48,6 +48,14 @@ export function ownBranch(chat: OpenChat): string | null {
   return at?.[1] ?? null;
 }
 
+/**
+ * What a row at the top says of the closed chat it came from: a task was asked by it (V100-64,
+ * #1513), and the work a handoff moved came from it.
+ */
+export function cameFromSaid(from: string, task: boolean): string {
+  return task ? `asked by ${from} (closed)` : `from ${from}`;
+}
+
 /** A listed chat at its place in the tree. */
 export type ChatRow = ListedChat & {
   /** 1 at the top. */

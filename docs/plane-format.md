@@ -4958,7 +4958,7 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   does the report of a task the person started from a tab (`asker.by_person`: it is their
   conversation, and they close it), nor one that reached no chat because the asking chat had
   gone. Those chats stay open as the chats they are, and are finished rows once they are
-  closed. Four more keys, all absent from a record written before them:
+  closed. Five more keys, all absent from a record written before them:
   - `conversation` — the conversation the persona chat was in when the dispatch ended: **the
     id that chat's own harness reported**, as the board follows it, and only where the harness
     reported none, the id the app started the chat on. Never a value a line on the hook
@@ -4983,6 +4983,18 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   - `kept_open` — `true` once the person took the task's chat over after it reported: a key
     of theirs in its pane, or a Smart close of it beginning. purlis does not end such a chat,
     then or at the next launch.
+  - `undelivered` — `{"kept"?}`, set where a task's report reached no chat because the chat
+    that asked had gone (#1513, V100-64): the report was kept for that chat's workspace, or it
+    waited for that chat's next turn and the chat closed first. `kept` names the file it is
+    kept in, as `workspace-<ws>/<file>.json` or `plane-root/<file>.json` under
+    `<state>/handbacks/`, and nothing else is read as one: absent where it was kept in no file
+    (a task that ended at a launch with its asking chat not open). **When the chat that asked
+    comes back** (a launch that puts it back, **Retry now** on it, or **Resume** from the
+    session record its `asker.session_record` names) the report is taken back from that file
+    before the chat starts and left for its next turn once it has, and the key is removed in
+    the same write that claims it, so one report reaches it once. Written by the app, as the
+    report is kept. Never set for a task the person started from a tab, whose report is theirs
+    (D-1443-9).
 
   **A finished task's row** is every record with `mode: "task"` and a `report`, not `cleared`,
   whose `asker.id` is the id of a chat the app has open and whose `worker.id` is not, oldest
@@ -4998,6 +5010,23 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   cleared. **A reported task's own finished rows go when purlis ends it**: it is their asking
   chat, and it has closed. `purlis dispatch list` lists the same records after the asking
   chat's open tasks, until the row is cleared or that chat closes.
+
+  **A task that had not reported when the app quit is brought back** (#1513, V100-63), under
+  its asking chat, by the lineage on its own entry in `app/reopen.json` (`from`), and on its
+  conversation, with one sentence of purlis's as its first message telling it to carry on,
+  never its brief. purlis tells it so only where this store agrees: a running `task` record
+  that owes a report, whose `worker.id` is that chat's and whose `asker.id` is the chat the
+  entry names as the one that asked. **One that cannot be brought back has ended by itself**:
+  a task with no conversation to resume is not started at all (a fresh chat would need its
+  brief a second time), and one whose start is refused leaves the list of chats that did not
+  start. Either way its record ends as `ended_by: "unreported"`, with a report text that says
+  purlis was restarted and why, its `conversation` kept for a Reopen, and the chat that asked
+  is told in the words a task whose program ended is told, once. After the put-back, a running
+  record whose chat neither came back nor waits to start has ended the same way, and where it
+  was a task owing a report to a chat, it is marked `undelivered`. **A brief is not dispatched
+  a second time**: a chat started again since it dispatched a task (its current run's id is a
+  later ULID than the record's `id`) that sends the same brief to the same persona, while that
+  task's chat is open and its record running, is refused with the task's number.
 - **Its own worktree** (#1453): a dispatch asked for with `--in worktree`, or to a persona
   whose definition says `dispatch-isolation: worktree`, gives its persona chat a worktree the
   **app** cuts, by the brokered route (ADR 0067 §2), off the clone the asking chat works in.

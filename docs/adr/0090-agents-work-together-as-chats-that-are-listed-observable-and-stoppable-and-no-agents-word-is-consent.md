@@ -604,3 +604,29 @@ report.
   says. It stays a row of its own.
 - **A task that had reported when the app quit is not started again.** At the next launch it
   is a finished row, read from its record.
+
+## Amended (2026-10-09): tasks across a restart, and a task whose asker has gone
+
+The operator's rulings V100-63 and V100-64 (spec #1483, built in #1513).
+
+- **A task that had not reported when the app quit comes back under the chat that asked**, on
+  its conversation, by the lineage its own entry in the record of open chats already keeps. It
+  is told one fixed sentence of purlis's to carry on, never its brief, and only where the
+  app's own dispatch record of it agrees that it is that chat's running task.
+- **One that cannot come back has ended by itself.** A task with no conversation to resume is
+  not started (a fresh chat would need its brief again), and one whose start is refused is
+  not left to be retried as a task. Its record ends as "ended without a report", keeps its
+  conversation for a Reopen, and the chat that asked is told once.
+- **Nothing is dispatched twice.** Besides the brief never being sent again, a chat started
+  again since it dispatched a task, which sends the same brief to the same persona while that
+  task still works, is refused with the task's number.
+- **A task whose asking chat has gone works on to its report**, as a top-level row that says
+  "asked by <chat> (closed)". Its report is kept on its dispatch record, where the person reads
+  it, and for the workspace, as before. When the chat that asked comes back (a launch, Retry
+  now, or Resume from its session record) it is handed every such report once, and the copy
+  kept for the workspace is taken back first. A report it never read before it closed is
+  handled the same way. A task the person started from a tab is not: its report is theirs.
+
+Not decided here: whether a task whose asker has gone should end at its report as other tasks
+do. It stays open and asks for the person, as #1448 had it, until Past tasks (#1510) gives its
+report a place in the window.

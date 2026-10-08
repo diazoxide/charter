@@ -2585,12 +2585,26 @@ impl Chats {
         }
     }
 
-    /// Puts a record back: one session per chat it holds, resumed where it can be.
+    /// [`Self::put_back_telling`], telling no chat anything: what the tests put a record back
+    /// with. A launch puts one back through `restored::put_back`.
+    #[cfg(test)]
+    pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
+        self.put_back_telling(record, size, &|_| None)
+    }
+
+    /// Puts a record back: one session per chat it holds, resumed where it can be, with `told`
+    /// as a chat's first message where it answers one: a sentence of purlis's, last on its line,
+    /// as a restart tells one. A task still owing its report is told to carry on (#1513).
     ///
     /// A chat whose program cannot be started is left out and the rest still open — a
     /// relaunch that failed whole because one harness had been uninstalled would be worse
     /// than one that came back short.
-    pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
+    pub fn put_back_telling(
+        &self,
+        record: &Record,
+        size: Size,
+        told: &dyn Fn(&Chat) -> Option<&'static str>,
+    ) -> Vec<Open> {
         self.putting_back.store(true, Ordering::SeqCst);
         // Before a single chat starts, so that a number the record spent on a chat it no
         // longer holds — one the operator closed before quitting — is not dealt again to a
@@ -2649,7 +2663,7 @@ impl Chats {
         let mut front = None;
         let mut opened: Vec<u32> = Vec::new();
         for (chat, why) in starting {
-            match self.start_recorded(chat, size, *why) {
+            match self.start_recorded_told(chat, size, *why, told(chat), None) {
                 Ok(session) => {
                     if chat.active {
                         front = Some(session);
@@ -2736,7 +2750,7 @@ impl Chats {
     /// **By id**, because a name says less than it seems to: a split's chat takes its tab's
     /// name and tab numbers start again at every launch, so two waiting chats can share one,
     /// and a Forget meant for the second must never drop the first (NO-3 review). Every waiting
-    /// chat has an id: [`Self::put_back`] mints one before it tries a chat that had none.
+    /// chat has an id: [`Self::put_back_telling`] mints one before it tries a chat that had none.
     pub fn would_not_start(&self) -> Vec<NotStarted> {
         lock(&self.would_not_start)
             .iter()
@@ -2791,7 +2805,7 @@ impl Chats {
     /// its id.
     ///
     /// The one way such a chat leaves it. It is kept on purpose otherwise, so that a directory
-    /// that moved, or a harness mid-reinstall, does not delete it ([`Self::put_back`]).
+    /// that moved, or a harness mid-reinstall, does not delete it ([`Self::put_back_telling`]).
     pub fn forget(&self, id: &str) -> Result<(), String> {
         {
             let mut waiting = lock(&self.would_not_start);

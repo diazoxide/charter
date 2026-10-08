@@ -288,6 +288,66 @@ pub fn took(root: &Path, file: &Path) {
     }
 }
 
+/// **The name a report kept for a place is known by** (#1513): its folder under the reports'
+/// folder and its file, `workspace-<ws>/<file>.json` or `plane-root/<file>.json`. `None` for a
+/// file that is not one [`leave_at`] kept for a place: a report waiting for a chat has no
+/// such name, because it is that chat's to read and nobody's to take back.
+pub fn kept_name(root: &Path, file: &Path) -> Option<String> {
+    let inside = file.strip_prefix(dir(root)).ok()?;
+    let name = inside.to_str()?;
+    a_kept_name(name).then(|| name.to_owned())
+}
+
+/// Whether `name` is one [`kept_name`] gives: a place's folder, then a file named as
+/// [`leave_at`] names one, and nothing else. **It is read back from a record on disk**, so it
+/// is held to this shape before it is joined to a path: no separator but the one, nothing
+/// that climbs, and never a chat's folder.
+pub fn a_kept_name(name: &str) -> bool {
+    let Some((folder, file)) = name.split_once('/') else {
+        return false;
+    };
+    let a_place = folder == PLANE_ROOT_DIR
+        || folder
+            .strip_prefix("workspace-")
+            .is_some_and(crate::contain::workspace_name_ok);
+    let Some((stamp, id)) = file
+        .strip_suffix(".json")
+        .and_then(|stem| stem.split_once('-'))
+    else {
+        return false;
+    };
+    a_place
+        && stamp.len() == 24
+        && stamp.bytes().all(|byte| byte.is_ascii_digit())
+        && id.len() == 32
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// Takes back the report kept for a place under `name` ([`kept_name`]), where it still waits
+/// there: answers whether it did. One a chat that started in that place has read is gone, and
+/// that is `false`. A name that is not a kept report's takes nothing.
+pub fn withdraw(root: &Path, name: &str) -> bool {
+    if !a_kept_name(name) {
+        return false;
+    }
+    let file = dir(root).join(name);
+    // Never through a link: the folder is one other programs of the person's can write.
+    let plain = std::fs::symlink_metadata(&file).is_ok_and(|found| found.file_type().is_file())
+        && file
+            .parent()
+            .and_then(|folder| std::fs::symlink_metadata(folder).ok())
+            .is_some_and(|found| found.file_type().is_dir());
+    if !plain || std::fs::remove_file(&file).is_err() {
+        return false;
+    }
+    if let Some(folder) = file.parent() {
+        let _ = std::fs::remove_dir(folder);
+    }
+    true
+}
+
 /// Takes every report waiting for `whose`, oldest first. Each is gone from disk once taken,
 /// so a report reaches one turn and not every turn after it.
 ///
@@ -328,11 +388,22 @@ pub fn take(root: &Path, whose: For<'_>) -> Vec<Handback> {
 /// is closing and nothing will ever prompt it again. Answers what it moved, oldest first: each
 /// is a report that now has nowhere to go but its workspace (#1448).
 pub fn orphan(root: &Path, chat: u32) -> Vec<Handback> {
-    let waiting = take(root, For::Chat(chat));
-    for report in &waiting {
-        let _ = leave(root, For::Place(&report.to_workspace), report);
-    }
-    waiting
+    orphan_kept(root, chat)
+        .into_iter()
+        .map(|(report, _)| report)
+        .collect()
+}
+
+/// [`orphan`], answering beside each report the file it is now kept in for its workspace,
+/// where it could be kept there (#1513): what a dispatch's record names it by.
+pub fn orphan_kept(root: &Path, chat: u32) -> Vec<(Handback, Option<PathBuf>)> {
+    take(root, For::Chat(chat))
+        .into_iter()
+        .map(|report| {
+            let kept = leave_at(root, For::Place(&report.to_workspace), &report).ok();
+            (report, kept)
+        })
+        .collect()
 }
 
 /// Moves every report waiting for chat `old` to chat `new`: the same chat, started again under

@@ -35,6 +35,7 @@ pub mod dispatchguard;
 pub mod dispatchlimits;
 pub mod dispatchplace;
 pub mod dispatchrecord;
+pub mod dispatchrestart;
 pub mod dispatchtalk;
 pub mod dispatchunattended;
 pub mod docsrc;

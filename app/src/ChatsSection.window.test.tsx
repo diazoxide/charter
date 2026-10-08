@@ -399,6 +399,18 @@ describe("the Chats section", () => {
     expect(row(tree, "steward 9").querySelector(".from")).toBeNull();
   });
 
+  it("says a task whose asking chat has closed was asked by that chat, closed", async () => {
+    // V100-64 (#1513): a task works on after the chat that asked closed, at the top.
+    core([chat(1, "alpha"), chat(8, "alpha", { from: by(7, "task", "steward 7") })]);
+    render(<App />);
+    const tree = await section();
+
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 steward 8"]));
+    expect(row(tree, "steward 8").querySelector(".from")?.textContent).toBe(
+      "asked by steward 7 (closed)",
+    );
+  });
+
   it("marks the chat that needs you, and takes the mark off when it stops asking", async () => {
     const { move } = core([chat(1, "alpha"), chat(2, "alpha")]);
     render(<App />);

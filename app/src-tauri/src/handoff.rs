@@ -399,9 +399,7 @@ fn report_under(
                     Some(purlis_core::handoff::report_summary(changed).map_err(|bad| bad.say())?)
                 }
             },
-            record: held
-                .chats()
-                .last_record(chat)
+            record: crate::restored::its_session_record(held, chat)
                 .and_then(|path| handback::record_path(&path)),
             by_person: from.by_person,
             unreported: false,
@@ -551,6 +549,11 @@ pub(crate) fn deliver(
     };
     let kept = handback::leave_at(held.root(), whose, &report)
         .map_err(|why| format!("the report could not be kept ({why})"))?;
+    // **Kept for a workspace because the chat that asked has gone**: a task's record says so,
+    // and the report is handed to that chat if the person reopens it (#1513, V100-64).
+    if !parent_open && from.mode == Mode::Task {
+        crate::restored::kept_for_its_asker(held, chat, &kept);
+    }
     // A command waiting on this task has its report now (#1441); the asking chat is told it
     // landed once the lock is let go, by whoever holds it ([`report_it`], and the end of a
     // program). Only a file left for the chat itself is one a
@@ -605,9 +608,7 @@ pub fn unreported(held: &Held, chat: u32, _deciding: &Deciding<'_>) {
     let Some(from) = held.chats().owed_task_report(chat) else {
         return;
     };
-    let record = held
-        .chats()
-        .last_record(chat)
+    let record = crate::restored::its_session_record(held, chat)
         .and_then(|path| handback::record_path(&path));
     let text = handback::UNREPORTED;
     // What the app says in a chat's place names the branch it cut for it, as that chat's own
@@ -674,9 +675,7 @@ pub(crate) fn operator_stopped(
             wrote,
             task,
             by_person: task && from.by_person,
-            record: held
-                .chats()
-                .last_record(chat)
+            record: crate::restored::its_session_record(held, chat)
                 .and_then(|path| handback::record_path(&path)),
         };
         if let Err(why) = deliver(held, chat, &from, String::new(), None, Some(stopped)) {
@@ -1643,6 +1642,12 @@ fn dispatch_it(
     // measured again because these bytes are about to become a harness's argv.
     if let Some(bad) = handoff::bad_message(&message) {
         return Err(bad.say());
+    }
+    // **A brief is not dispatched a second time across a restart** (#1513): a chat started
+    // again since it dispatched a task, which sends the same brief to the same persona while
+    // that task still works, is told it is running.
+    if wanted.by == By::Chat && wanted.moved.is_none() {
+        crate::restored::refuse_twice(held, from, &asking, pair.to.as_deref(), &wanted.brief)?;
     }
     let attended = attendance(held, from, &asking, &on.launch.0);
     // **A chat nobody is at makes no workspace** (D-1444-13): its handoff goes into one that
@@ -11334,4 +11339,7 @@ mod tests {
 
     /// A task ends at its report, stays as a finished row, and can be reopened (#1485).
     mod ends_at_report;
+
+    /// Tasks across a restart, and a task whose asking chat has gone (#1513).
+    mod across_restart;
 }
