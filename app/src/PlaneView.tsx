@@ -167,6 +167,7 @@ import {
   focusPane,
   noTabs,
   chatNameOf,
+  chatInFrontOf,
   chatOf,
   contentsOf,
   findView,
@@ -846,8 +847,9 @@ export const PlaneView = memo(function PlaneView({
   const now = useRef(tabs);
   const change = useCallback(
     (how: (tabs: Tabs) => Tabs): Tabs => {
-      const next = how(now.current);
-      const wasInFront = now.current.inFront;
+      const was = now.current;
+      const next = how(was);
+      const wasInFront = was.inFront;
       now.current = next;
       setTabs(next);
       // The core records which chat was in front, so it is told whenever that changes — and
@@ -855,10 +857,14 @@ export const PlaneView = memo(function PlaneView({
       // "chat 3 is in front" belongs to a plane, and every plane numbers its chats from one.
       // **The tab's own chat**, whatever the tab shows: which of its chats a tab shows is told
       // apart, per tab (`tab_shows`, below).
-      if (next.inFront !== wasInFront) {
-        // A tab showing a view has no chat of its own, so nothing is in front as far as the
-        // record of chats is concerned; the view tab says it is in front itself (`windowViews`).
-        const chat = next.inFront === undefined ? undefined : chatOf(next, next.inFront);
+      // A tab of views only has no chat, so nothing is in front as far as the record of chats
+      // is concerned; the view tab says it is in front itself (`windowViews`). A chat beside a
+      // view in a tab that opened on it is in front (`chatInFrontOf`), and is said again when
+      // it is started there or closed, though the tab in front is the same.
+      const chatIn = (tabs: Tabs) =>
+        tabs.inFront === undefined ? undefined : chatInFrontOf(tabs, tabs.inFront);
+      const chat = chatIn(next);
+      if (next.inFront !== wasInFront || chat !== chatIn(was)) {
         void commands.chatInFront(plane, chat ?? null).catch(() => undefined);
       }
       return next;

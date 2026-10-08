@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  chatInFrontOf,
+  chatOf,
   closeChat,
   closeFocusedPane,
   focusedChat,
@@ -9,6 +11,7 @@ import {
   layoutShown,
   noTabs,
   openTab,
+  openView,
   panesOf,
   replaceSession,
   restoreShown,
@@ -24,6 +27,7 @@ import {
   type AskedBy,
   type FiledIn,
   type Tabs,
+  type ViewRef,
 } from "./tabs";
 
 /**
@@ -353,5 +357,26 @@ describe("what the tabs showed, put back", () => {
     const tabs = twoSessions();
     expect(restoreShown(tabs, [], askedBy)).toBe(tabs);
     expect(restoreShown(tabs, [1, 2], askedBy)).toBe(tabs);
+  });
+});
+
+describe("the chat a tab puts in front of the person", () => {
+  const CARD: ViewRef = { from: null, view: "persona", key: "steward" };
+
+  it("is the tab's own chat, and in a tab that opened on a view, the chat beside it", () => {
+    // A chat's own tab: its chat.
+    const chats = twoSessions();
+    expect(chatInFrontOf(chats, tabOf(chats, 2))).toBe(2);
+
+    // A view's tab, split to start chat 1 beside it: still the view's tab, with no chat of
+    // its own, and chat 1 is the one in front of the person.
+    const viewed = openView(noTabs(), CARD, "steward", "alpha");
+    const tab = viewed.order[0];
+    const split = splitFocusedPane(viewed, "row", 1);
+    expect(chatOf(split, tab)).toBeUndefined();
+    expect(chatInFrontOf(split, tab)).toBe(1);
+
+    // A tab of views only has none.
+    expect(chatInFrontOf(viewed, tab)).toBeUndefined();
   });
 });

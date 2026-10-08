@@ -601,6 +601,16 @@ export function chatOf(tabs: Tabs, id: number): number | undefined {
 }
 
 /**
+ * **The chat a tab puts in front of the person**: its own chat ({@link chatOf}), or, in a tab
+ * whose first pane is a view, the first chat beside it. What the core is told is in front, so
+ * that a task such a chat shows is one the person is taken to be looking at (#1486). Nothing
+ * for a tab of views only.
+ */
+export function chatInFrontOf(tabs: Tabs, id: number): number | undefined {
+  return chatOf(tabs, id) ?? panesOf(tabs, id)[0]?.session;
+}
+
+/**
  * The name a new chat started beside this tab's panes is given: the name of the first chat in
  * it, or nothing when it has none — a view's tab split to start a chat starts one with a name of
  * its own, not the view's title.
