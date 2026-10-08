@@ -1229,6 +1229,7 @@ function App() {
       createWorkspace: () => undefined,
       removeWorkspace: () => undefined,
       showChat: () => undefined,
+      showTabTasks: () => undefined,
       // The queue is a project's, and there is no project here to have one.
       ignoreNeedsYou: async () => nowhere(),
       cancelSmartClose: async () => nowhere(),

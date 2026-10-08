@@ -227,7 +227,18 @@ import {
   type Tabs,
   type ViewRef,
 } from "./tabs";
-import { askedByOf, chatsOfPane, crumbsOf, hiddenNeeding, type Crumbs } from "./tabChats";
+import {
+  askedByOf,
+  chatsOfPane,
+  chatsOfTabs,
+  crumbsOf,
+  hiddenNeeding,
+  type Crumbs,
+} from "./tabChats";
+import { TabTasks, useSinceClock } from "./TabChip";
+import type { Ended, Needing } from "./tabTasks";
+import { TASK_KEY_ROW, taskKeyOf, taskKeySaid } from "./taskKeys";
+import { usePretendTasks } from "./e2eTasks";
 import { PaneCrumbs } from "./PaneCrumbs";
 import { giveKeyboardTo } from "./paneKeyboard";
 import { endedState, TaskAway, type Away } from "./TaskAway";
@@ -287,6 +298,7 @@ import {
   chatsTree,
   listedChat,
   startedElsewhere,
+  type ChatRow,
   type ListedChat,
 } from "./chatsTree";
 import { stopAnswer, stopSays, stopTitle, useStopping, type StopAsked } from "./stopping";
@@ -472,6 +484,14 @@ export const PlaneView = memo(function PlaneView({
   // A chat's own state is not one of them: its tab, its explorer row and its pane read that
   // themselves, so a chat that only went from running to waiting redraws those and not this.
   const needsYou = useChatsSelect(chats, (states) => states.needsYou);
+  /** The tab whose task menu the keyboard asked for, and a count of the asks (#1487): its
+   *  chip opens when the count changes, so being drawn is never being asked. */
+  const [tasksAsked, setTasksAsked] = useState<{ tab: number; count: number }>();
+  const showTabTasks = useCallback(
+    (tab: number) => setTasksAsked((was) => ({ tab, count: (was?.count ?? 0) + 1 })),
+    [],
+  );
+  const pretended = usePretendTasks();
   const reports = useChatsSelect(chats, (states) => states.reports);
   const refusals = useChatsSelect(chats, (states) => states.refusals);
   const needs = useChatsSelect(chats, (states) => states.needs);
@@ -4363,6 +4383,7 @@ export const PlaneView = memo(function PlaneView({
       createWorkspace,
       removeWorkspace,
       showChat,
+      showTabTasks,
       ignoreNeedsYou,
       cancelSmartClose,
       dismissStopped: (session: number) => stoppedFor(session, undefined),
@@ -4453,6 +4474,7 @@ export const PlaneView = memo(function PlaneView({
       runAction,
       sendKey,
       showChat,
+      showTabTasks,
       showView,
       split,
       stoppedFor,
@@ -4528,8 +4550,14 @@ export const PlaneView = memo(function PlaneView({
     return [
       ...sidebar.workspaces.flatMap((ws) => ws.chats.map((chat) => one(chat, ws.name))),
       ...sidebar.unfiled.map((chat) => one(chat, ROOT_WORD)),
+      // Tasks a scenario spec pretends a session has (`e2eTasks.ts`): none in a shipped build.
+      ...pretended.map(({ chat, workspace }) => one(chat, workspace)),
     ].sort((a, b) => a.session - b.session);
-  }, [nameOfListed, sidebar, tabs]);
+  }, [nameOfListed, pretended, sidebar, tabs]);
+  /** How long each chat has been in its state, as this window saw it: a tab's menu says it. */
+  const sinceClock = useSinceClock(chats, listedChats);
+  /** The chats of each tab, as its chip counts them and its menu lists them (#1487). */
+  const chatsByTab = useMemo(() => chatsOfTabs(tabs, listedChats), [listedChats, tabs]);
   useEffect(() => {
     chatsListed.current = listedChats;
   }, [listedChats]);
@@ -4692,14 +4720,64 @@ export const PlaneView = memo(function PlaneView({
       new Map(
         tabs.order.map((id) => [
           id,
-          hiddenNeeding(tabs, id, askedBy, waitingForYou).flatMap((session) => {
+          hiddenNeeding(tabs, id, askedBy, waitingForYou).flatMap((session): Needing[] => {
             const chat = chatsByNumber.get(session);
-            return chat === undefined ? [] : [shownName(tabs, chat)];
+            return chat === undefined ? [] : [{ session, name: shownName(tabs, chat) }];
           }),
         ]),
       ),
     [askedBy, chatsByNumber, tabs, waitingForYou],
   );
+  /**
+   * **Each tab's tasks that have ended and that it still shows** (#1487): a task that ended is
+   * not in the list of open chats, and its tab stays on it until the person goes back
+   * (`shownLive`, `TaskAway`), so the tab's menu has a line for it, said as its pane says it.
+   */
+  const endedByTab = useMemo(() => {
+    const ended = new Map<number, Ended[]>();
+    if (sidebar === undefined) return ended;
+    const open = (session: number) => chatsByNumber.has(session);
+    for (const id of tabs.order) {
+      if (tabs.byId[id].shows === undefined) continue;
+      const gone = shownLive(tabs, id, askedBy, open).flatMap((one): Ended[] => {
+        if (one.live || one.session === one.own || open(one.session)) return [];
+        const last = recalled.get(`${id}:${one.pane}:${one.session}`);
+        const shown = last === undefined ? undefined : endedState(last);
+        if (last === undefined || shown === undefined) return [];
+        const task = last.path[last.path.length - 1];
+        return [
+          {
+            key: `ended:${one.session}`,
+            session: one.session,
+            asker: last.path[last.path.length - 2]?.session ?? one.own,
+            name: task.name,
+            persona: task.persona,
+            shown,
+          },
+        ];
+      });
+      if (gone.length > 0) ended.set(id, gone);
+    }
+    return ended;
+  }, [askedBy, chatsByNumber, recalled, sidebar, tabs]);
+  /** Goes to a chat from a tab's chip or its menu (#1487): the tab is switched to it, and its
+   *  terminal takes the keyboard whether or not the tab was already on it. */
+  //
+  // **The same function for the window's life**: `showChat` is made again whenever the list of
+  // chats is read, and a chip handed a new function is a chip drawn again, on every tab, for
+  // one task's move (SC-3). So the chips hold this, and this reads the one that is current.
+  const showChatNow = useRef(showChat);
+  useEffect(() => {
+    showChatNow.current = showChat;
+  }, [showChat]);
+  const showFromChip = useCallback(
+    (session: number) => {
+      showChatNow.current(session);
+      giveKeyboardTo(plane, session);
+    },
+    [plane],
+  );
+
   /** The task tab `id` shows in place of its session's own chat, by name (#1486): what its
    *  label says after the session's name. Nothing while it shows its own chat. */
   const taskNameOf = (id: number) => {
@@ -5145,6 +5223,8 @@ export const PlaneView = memo(function PlaneView({
   const backSoon = useRef<number | undefined>(undefined);
   const draggedAt = useRef(0);
   const dragging = useRef(false);
+  /** Whether a tab is being carried along the strip: no task menu opens under a drag (#1487). */
+  const isDragging = useCallback(() => dragging.current, []);
   const notGoingBack = useCallback(() => {
     window.clearTimeout(backSoon.current);
     backSoon.current = undefined;
@@ -5191,6 +5271,29 @@ export const PlaneView = memo(function PlaneView({
       // A held key is not a second press: one shell for one press.
       if (e.repeat) return;
       press(offer);
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [by, inFront, press]);
+
+  /**
+   * **The keys for the chats inside the tab in front** (`taskKeys.ts`, #1487): its task menu,
+   * the next and the previous chat in it, and back to its session's own chat. Each presses the
+   * catalogue's row, as the palette would. Claimed on the window, capture-phase, by the
+   * project in front, as the shell's key is. **The key is the window's whether or not its row
+   * can run**: none of the four is a byte to a terminal, so nothing is kept from a chat, and a
+   * key that did something on one tab and reached the program on the next would be worse.
+   */
+  useEffect(() => {
+    if (!inFront) return;
+    const key = (e: KeyboardEvent) => {
+      const which = taskKeyOf(e, onAMac());
+      if (which === undefined) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      const offer = by(TASK_KEY_ROW[which]);
+      if (offer?.available) press(offer);
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
@@ -5813,6 +5916,18 @@ export const PlaneView = memo(function PlaneView({
                                     if (sortable.isDragging) return;
                                     closeOnDelete(event, by(`tab.close:${id}`), press);
                                     renameOnF2(event, by(`tab.rename:${id}`), press);
+                                    // **Down on a tab with tasks opens their menu** (#1487),
+                                    // as Down opens the menu under an item of a menu bar. The
+                                    // strip runs across, so Down was nothing's.
+                                    if (
+                                      event.key === "ArrowDown" &&
+                                      !(event.altKey || event.ctrlKey || event.metaKey) &&
+                                      !event.shiftKey &&
+                                      (chatsByTab.get(id) ?? NO_ROWS).some((row) => row.level > 1)
+                                    ) {
+                                      event.preventDefault();
+                                      showTabTasks(id);
+                                    }
                                   }}
                                   // The catalogue's row, not a second copy of it. The tab already in front
                                   // has a row that says so and cannot run — a tab is never disabled, because
@@ -5841,7 +5956,6 @@ export const PlaneView = memo(function PlaneView({
                                     shells={shells}
                                     wrapping={wrapping}
                                     task={taskNameOf(id)}
-                                    needs={hiddenByTab.get(id)}
                                     pin={
                                       <Pin
                                         held={isPinned(id)}
@@ -5852,6 +5966,25 @@ export const PlaneView = memo(function PlaneView({
                                 </button>
                               </RovingFocusGroup.Item>
                             )}
+                            {/* **The chip of the session's tasks** (#1487): their counts, the
+                                hand where one waits off screen, and the menu to switch
+                                between them. Beside the tab's button: a button holds no
+                                button. Nothing for a tab with no tasks. */}
+                            <TabTasks
+                              name={tabs.byId[id].name}
+                              rows={chatsByTab.get(id) ?? NO_ROWS}
+                              ended={endedByTab.get(id) ?? NO_ENDED}
+                              current={
+                                shownIn(tabs, id).find((one) => one.pane === tabs.byId[id].focused)
+                                  ?.session ?? chatShownBy(tabs, id)
+                              }
+                              needs={hiddenByTab.get(id) ?? NO_NEEDS}
+                              asked={tasksAsked?.tab === id ? tasksAsked.count : 0}
+                              keySaid={taskKeySaid("menu", onAMac())}
+                              clock={sinceClock}
+                              dragging={isDragging}
+                              onShow={showFromChip}
+                            />
                             <FreshMark
                               id={freshMarkOf(id)}
                               offer={by(`tab.fresh:${id}`)}
@@ -5894,7 +6027,7 @@ export const PlaneView = memo(function PlaneView({
                   shells={shells}
                   wrapping={wrapping}
                   task={taskNameOf(id)}
-                  needs={hiddenByTab.get(id)}
+                  needs={hiddenByTab.get(id)?.map((chat) => chat.name)}
                 />
               ),
             }))}
@@ -7062,6 +7195,11 @@ function whoOf(persona: string | null, harness: string | null | undefined): stri
 
 /** Where a chat in no workspace works, in the words its handoff note uses (`plane root`). */
 const ROOT_WORD = "plane root";
+
+/** What a tab with no tasks hands its chip, the same lists every time. */
+const NO_ROWS: readonly ChatRow[] = [];
+const NO_ENDED: readonly Ended[] = [];
+const NO_NEEDS: readonly Needing[] = [];
 
 /**
  * **The chat tab `id` shows** (#1486): the task its session's tab is switched to, and otherwise

@@ -363,8 +363,16 @@ const crumbs = () => screen.queryByRole("navigation", { name: "Chat path" });
 /** The pane that says a task it shows is not there to be drawn, where there is one. */
 const away = () => screen.queryByTestId("task-away");
 
-/** The hand a tab wears for a chat of its own that is waiting and is not on screen. */
-const handOn = (name: string) => within(tab(name)).queryByRole("img", { name: /needs? you$/ });
+/** The hand a tab wears for a chat of its own that is waiting and is not on screen: a button
+ *  on the tab's chip, beside the tab's own button (#1487), which goes to that chat. */
+const handOn = (name: string) =>
+  within(tab(name).closest(".tab") as HTMLElement).queryByRole("button", { name: /needs? you\./ });
+
+/** What that hand says is waiting. */
+const handSays = (name: string) =>
+  handOn(name)
+    ?.getAttribute("aria-label")
+    ?.replace(/\. Go to .*$/, "");
 
 /** A Notice on the pane, by its accessible name. */
 const notice = (name: string | RegExp) => screen.queryByRole("status", { name });
@@ -955,7 +963,7 @@ describe("a task that needs you and is not on screen", () => {
 
     await move(5, "waiting", 10, [5]);
 
-    expect(within(tab("steward 1")).getByRole("img", { name: "sweep needs you" })).toBeTruthy();
+    expect(handSays("steward 1")).toBe("sweep needs you");
     expect(handOn("steward 2")).toBeNull();
     // Nothing moved: the session's own chat is still what is on screen.
     expect(onScreen()).toEqual([1]);
@@ -972,7 +980,7 @@ describe("a task that needs you and is not on screen", () => {
     await userEvent.click(tab("steward 2"));
     await waitFor(() => expect(onScreen()).toEqual([2]));
 
-    expect(within(tab("steward 1")).getByRole("img", { name: "talk needs you" })).toBeTruthy();
+    expect(handSays("steward 1")).toBe("talk needs you");
     // And the tab's own state mark is still the session's, not the task's.
     expect(within(tab("steward 1")).queryByRole("img", { name: "waiting on you" })).toBeNull();
   });
@@ -984,7 +992,7 @@ describe("a task that needs you and is not on screen", () => {
 
     await move(1, "waiting", 10, [1]);
 
-    expect(within(tab("steward 1")).getByRole("img", { name: "steward 1 needs you" })).toBeTruthy();
+    expect(handSays("steward 1")).toBe("steward 1 needs you");
   });
 
   it("is gone to from the title bar's list, which switches the tab to that task", async () => {
@@ -1035,7 +1043,7 @@ describe("a task that needs you and is not on screen", () => {
     await move(6, "waiting", 10, [6]);
 
     // probe works in beta, and is a task of steward 1 in alpha: that tab, on alpha's strip.
-    expect(within(tab("steward 1")).getByRole("img", { name: "probe needs you" })).toBeTruthy();
+    expect(handSays("steward 1")).toBe("probe needs you");
     // And alpha's tab on the workspace strip counts it, where beta's has no tab that wears it.
     expect(screen.getByLabelText("1 chats need you in alpha")).toBeTruthy();
     expect(screen.queryByLabelText(/need you in beta/)).toBeNull();
@@ -1141,7 +1149,7 @@ describe("a Notice of a chat that is not the one its tab shows", () => {
     await block(1);
 
     const said = await screen.findByRole("status", { name: "steward 1: Sandbox block" });
-    expect(within(tab("steward 1")).getByRole("img", { name: "steward 1 needs you" })).toBeTruthy();
+    expect(handSays("steward 1")).toBe("steward 1 needs you");
     await userEvent.click(within(said).getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(notice(/Sandbox block$/)).toBeNull());
     expect(handOn("steward 1")).toBeNull();
@@ -1154,21 +1162,13 @@ describe("a Notice of a chat that is not the one its tab shows", () => {
 
     // A held dispatch is not in the core's needs-you queue: the tab is what says it.
     await holdDispatch(1);
-    await waitFor(() =>
-      expect(
-        within(tab("steward 1")).getByRole("img", { name: "steward 1 needs you" }),
-      ).toBeTruthy(),
-    );
+    await waitFor(() => expect(handSays("steward 1")).toBe("steward 1 needs you"));
     // And a task's refusal, on a tab that is behind and whose pane is not drawn at all.
     await userEvent.click(tab("steward 2"));
     await waitFor(() => expect(onScreen()).toEqual([2]));
     await refuseVault(5);
     await waitFor(() =>
-      expect(
-        within(tab("steward 1")).getByRole("img", {
-          name: /^(steward 1|sweep|talk) and \d more need you$/,
-        }),
-      ).toBeTruthy(),
+      expect(handSays("steward 1")).toMatch(/^(steward 1|sweep|talk) and \d more need you$/),
     );
 
     // Answered where it is drawn: the hand for it goes.
@@ -1176,9 +1176,7 @@ describe("a Notice of a chat that is not the one its tab shows", () => {
     await waitFor(() => expect(onScreen()).toEqual([1]));
     const held = await screen.findByRole("status", { name: "Dispatch to devops" });
     await userEvent.click(within(held).getByRole("button", { name: "Keep blocked" }));
-    await waitFor(() =>
-      expect(within(tab("steward 1")).getByRole("img", { name: "sweep needs you" })).toBeTruthy(),
-    );
+    await waitFor(() => expect(handSays("steward 1")).toBe("sweep needs you"));
   });
 
   it("does not carry what one chat's Notice was answered under another chat when the tab is switched", async () => {

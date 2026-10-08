@@ -245,8 +245,10 @@ export function TabMarks({
   /** The task the tab shows in place of its session's own chat, by name (#1486): the label
    *  says it after the session's name, dimmer. Nothing while the tab shows its own chat. */
   task?: string;
-  /** The tab's tasks that need you and are not on screen in it, by name, longest waiting
-   *  first (#1486): the tab wears the hand for them. */
+  /** The tab's chats that need you and are not on screen in it, by name, longest waiting
+   *  first (#1486): the hand, where the tab is a row of the menu of what the strip has no
+   *  room for. **Left out on the strip** (#1487): there the hand is on the tab's chip, beside
+   *  the tab, and is pressed (`TabChip.tsx`). */
   needs?: readonly string[];
   /** The persona the tab's chat runs as, when it runs as one: its mark is the tab's. */
   persona?: string | null;
@@ -308,9 +310,10 @@ export function TabMarks({
         </>
       )}
       {/* **A chat of this tab is waiting for you and is not on screen** (#1486, V100-37): the
-          hand, as a row of the Chats list wears it. A mark and no button: the tab's button is
-          the tab, and the ways to that chat are its row, the hand above it, the title bar's
-          list and, with the tab in front, its Notice on the pane. */}
+          hand, as a row of the Chats list wears it. A mark and no button here: this is inside
+          a button, the tab's own or a row of the show-more menu. On the strip the hand is the
+          chip's and goes to that chat (#1487); from the menu the way is to bring the tab
+          forward, and its chip is there. */}
       {needs.length > 0 && (
         <span
           className="needs-you-mark"

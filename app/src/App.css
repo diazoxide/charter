@@ -1371,6 +1371,220 @@ button.show-more:focus-visible {
   flex: none;
 }
 
+/* **The chip a session's tab wears for its tasks** (#1487, V100-32): the hand where a chat
+   of the tab waits off screen, then the counts, each with its state's shape. Beside the tab's
+   button, inside the tab's cell.
+
+   **A tab's width is its share of the strip, with or without a chip** (`fits.ts`): the chip
+   takes its room from the name, never from the strip, so a tab with no tasks is the size it
+   was and the arithmetic of what fits is untouched.
+
+   **What gives way, in order, as a tab narrows**:
+   1. the name, to an ellipsis, as a tab's name always has, down to a floor of `2rem` for the
+      tab's button (its mark and the start of its name);
+   2. then the counts, whole and from the end: finished first, then failed, so the count of
+      what is still working is the last one standing;
+   3. where the tab also wears the hand, the counts go together and the hand stays: a chat
+      waiting for the person is said before a number is.
+   Nothing is cut through: a count that does not fit wraps onto a second line, and the chip
+   is one line tall and shows no second. */
+.tabs .tab > .tab-tasks {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0 0.15rem;
+  align-content: flex-start;
+  align-items: center;
+  align-self: center;
+  min-width: min-content;
+  height: 1.35rem;
+  overflow: hidden;
+}
+
+/* The name gives way a thousand times sooner than the chip, and stops at its floor. */
+.tabs .tab:has(> .tab-tasks) > [role="tab"] {
+  flex-shrink: 1000;
+  min-width: 2rem;
+  padding-inline-end: 0.3rem;
+}
+
+.tabs .tab-tasks button {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 1.35rem;
+  padding: 0 0.3rem;
+  border: 0;
+  border-radius: 0.7rem;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.85em;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* The counts are themselves one line that wraps: what does not fit is not drawn. */
+.tabs .tab-tasks button.tab-tasks-counts {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0 0.4rem;
+  align-content: flex-start;
+  min-width: min-content;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabs .tab-tasks button:hover,
+.tabs .tab-tasks[data-open] button.tab-tasks-counts {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.tabs .tab-tasks button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.tab-tasks-counts .count {
+  display: inline-flex;
+  flex: none;
+  gap: 0.15rem;
+  align-items: center;
+  height: 1.35rem;
+}
+
+.tab-tasks-counts .count svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.tabs .tab-tasks button.tab-tasks-hand {
+  padding: 0 0.15rem;
+}
+
+/* **The menu a chip opens** (#1487, V100-33): the chats that live in the tab, the session's
+   own first and its tasks under who asked for them. The show-more menu's surface. A row is
+   one line: its name gives way to an ellipsis, and its state word is never cut
+   (`.shown-state` does not shrink). */
+.tasks-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 16rem;
+  max-width: min(30rem, 90vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 0.3rem;
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: 0 0.5rem 1.5rem var(--overlay-shadow);
+  z-index: 10;
+}
+
+.tasks-menu-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.25rem 0.45rem;
+  border-radius: 4px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  cursor: pointer;
+  /* Radix gives a menu item its own roving focus and no outline of its own. */
+  outline: none;
+}
+
+/* The row the keyboard is on, and the row under the pointer: a menu that a rest opened took
+   no keyboard, so there the pointer's row is said by the hover alone. */
+.tasks-menu-row[data-highlighted],
+.tasks-menu-row:hover:not([data-disabled]) {
+  background: var(--tab-active);
+}
+
+.tasks-menu-row[data-disabled] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* A task stands one step in from the chat that asked for it (V100-41). */
+.tasks-menu-row[data-level="2"] {
+  padding-inline-start: 1.35rem;
+}
+
+.tasks-menu-row[data-level="3"] {
+  padding-inline-start: 2.25rem;
+}
+
+.tasks-menu-row[data-level="4"] {
+  padding-inline-start: 3.15rem;
+}
+
+.tasks-menu-row[data-level="5"] {
+  padding-inline-start: 4.05rem;
+}
+
+.tasks-menu-row[data-level="6"] {
+  padding-inline-start: 4.95rem;
+}
+
+/* The mark of the chat the tab shows now, and the same width left empty on every other row,
+   so names line up. */
+.tasks-menu-row .now {
+  display: inline-flex;
+  flex: none;
+  width: 0.8rem;
+}
+
+.tasks-menu-row .now svg,
+.tasks-menu-fold > svg {
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.tasks-menu-row .name {
+  flex: 1 1 auto;
+  min-width: 3ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tasks-menu-row[aria-current="true"] .name {
+  font-weight: 600;
+}
+
+.tasks-menu-row .where,
+.tasks-menu-row .since {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+.tasks-menu-row .since {
+  min-width: 2.2em;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.tasks-menu-fold {
+  color: var(--text-secondary);
+}
+
+/* The menu's last line, for what binds and what was used (#1498, #1500). */
+.tasks-menu-foot {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-top: 0.2rem;
+  padding: 0.35rem 0.45rem 0.15rem;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
 /* **A Notice in a pane's corner** (`Notice` with `at="pane"`), first for a harness started by
    hand in a shell tab (ADR 0062): in the pane's top-left
    corner, over the terminal and taking no row, for the gauge's reason — a pane does not change

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ListedChat } from "./chatsTree";
-import { askedByOf, chatsOfPane, chatsOfTab, crumbsOf, hiddenNeeding } from "./tabChats";
+import {
+  askedByOf,
+  chatsOfPane,
+  chatsOfTab,
+  chatsOfTabs,
+  crumbsOf,
+  hiddenNeeding,
+} from "./tabChats";
 import { homeOf, noTabs, openTab, panesOf, selectTab, switchTabTo, type Tabs } from "./tabs";
 
 /** A listed chat: `parent` is the chat that started it, as a task unless said otherwise. */
@@ -58,6 +65,20 @@ function tabOf(all: Tabs, session: number): number {
 const askedBy = askedByOf(chats);
 
 describe("the chats of a tab, as a tree", () => {
+  it("lists every tab's chats in one walk exactly as it lists each tab's", () => {
+    const all = switchTabTo(tabs(), 6, askedBy);
+    const every = chatsOfTabs(all, chats);
+
+    expect([...every.keys()]).toEqual(all.order);
+    for (const id of all.order) expect(every.get(id)).toEqual(chatsOfTab(all, id, chats));
+    expect(every.get(tabOf(all, 1))?.map((row) => `${row.level} ${row.name}`)).toEqual([
+      "1 steward 1",
+      "2 talk",
+      "3 probe",
+      "2 sweep",
+    ]);
+  });
+
   it("is the session's own chat and every task below it, nested by who asked", () => {
     const all = tabs();
     expect(chatsOfTab(all, tabOf(all, 1), chats).map((row) => `${row.level} ${row.name}`)).toEqual([

@@ -958,6 +958,32 @@ chat has the keyboard, `Ctrl+Shift+F` stays its find bar, and everywhere else in
 opens a Search tab. It is a capture listener on the window, held by the project in front, as the
 new-shell key is.
 
+**The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`): `⌘⇧`
+on a Mac and `Ctrl+Shift` elsewhere, with `J` for the tab's task menu, `]` and `[` for the next
+and the previous chat in the tab, and `H` for the session's own chat. xterm.js 6.0.0 sends
+nothing for a `⌘` chord, and encodes `Ctrl` with a letter, `[` or `]` only when Shift is not
+held (`common/input/Keyboard.ts`: the branch is `ctrlKey && !shiftKey`, and with Shift held
+only `_` and `@` are turned into anything). So none of the four was ever a byte, and plain
+`Ctrl+J` (newline), `Ctrl+H` (backspace), `Ctrl+[` (Escape) and `Ctrl+]` still reach the shell.
+`⌘H` alone stays the system's Hide: Shift is part of each chord. The brackets are read by where
+the key is as well as by what it types, since Shift makes them `{` and `}` on one layout and
+something else on another. They are one capture listener on the window, held by the project in
+front, and each presses its catalogue row (`tasks.menu`, `tasks.next`, `tasks.previous`,
+`tasks.own`), which the palette lists with its key. **The key is the window's whether or not
+its row can run**: on a tab with no tasks it does nothing and reaches no program, so the same
+chord never means two things from one tab to the next. `⌘⇧]` and `⌘⇧[` move between the chats
+of ONE tab; no key moves between the tabs of the strip yet, and one that does should not take
+these.
+
+**A menu that opens under a resting pointer takes no keyboard** (#1487, `TabChip.tsx`). The
+task menu on a tab's chip is Radix's dropdown menu, opened three ways: a press, the key above,
+and the pointer resting on the chip. Radix moves the focus into a menu as it opens and onto
+each row the pointer crosses, which is right for the first two and would take the keyboard out
+of a terminal for the third. So a rest-opened menu refuses both (the menu's `onOpenAutoFocus`,
+and each row's pointer handlers), the stylesheet's hover says which row the pointer is on, and
+an Escape that closes it stops there instead of also reaching the chat. However it was opened,
+a menu closed without a pick puts the keyboard back where it was before it opened.
+
 **Shift+Enter in a harness's pane is the harness's newline** (SI-4, `Harness::newline`). A
 terminal has no Shift+Enter: xterm.js 6.0.0 sends a bare CR for it, the byte Enter sends, so every
 harness submitted on it. The pane sends the harness's own newline instead — ESC CR for all three,
