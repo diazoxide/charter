@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791500755506,
+  "lastUpdate": 1791502418278,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -3780,6 +3780,48 @@ window.BENCHMARK_DATA = {
             "value": 103.12326850000001,
             "unit": "ms",
             "extra": "median of 5 runs: 102.609, 102.807, 103.123, 103.399, 103.415 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "7b48cac1007caeedd17ddaab9e617934600c21eb",
+          "message": "Only main saves a Rust cache\n\nThe repository's Actions caches held 12 GB against GitHub's 10 GB limit on\n2026-10-08: each pull request saved its own 0.8 to 1.2 GB Rust caches, and they\npushed main's out. The run on main after #1541 restored nothing and took 1289 s\nwhere the warm one before it took 914 s. With save-if, main saves and a pull\nrequest restores main's cache and saves none, as rust-cache's README advises.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4EJSYV68AZG1SWR231JAEZE\nPurlis-Persona: steward",
+          "timestamp": "2026-10-09T03:30:20+04:00",
+          "tree_id": "1f996784336313db6ce34760e2e83362990d985c",
+          "url": "https://github.com/purlis/purlis/commit/7b48cac1007caeedd17ddaab9e617934600c21eb"
+        },
+        "date": 1791502417520,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.493039,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.488, 0.491, 0.493, 0.508, 0.513 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.075015,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.541, 16.807, 17.075, 17.088, 17.131 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.899193,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.403, 103.847, 103.899, 105.534, 106.429 ms"
           }
         ]
       }
