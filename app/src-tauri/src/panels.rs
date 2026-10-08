@@ -1117,6 +1117,12 @@ pub(crate) fn persona_view(
                     &purlis_core::personaprofile::offers_shown(root),
                 ),
             ));
+            // The profiles its dispatched chats may start on (#1522): the project's
+            // `[dispatch.profiles]` as it holds this persona, read-only, beside its own.
+            facts.push(fact(
+                "Tasks start on",
+                purlis_core::dispatchprofiles::line(root, name),
+            ));
             if shown.lineage.len() > 1 {
                 facts.push(fact("Inherits", shown.lineage.join(" → ")));
             }

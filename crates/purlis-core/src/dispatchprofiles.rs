@@ -100,13 +100,25 @@ impl Listed {
     /// list for every persona (`"*"`). `None` where there is none of these, so every profile
     /// the project offers may be chosen.
     pub fn for_chain(&self, chain: &[String]) -> Option<Vec<String>> {
+        self.held_by(chain).map(|(_, list)| list)
+    }
+
+    /// [`Listed::for_chain`], with whose list it is.
+    fn held_by(&self, chain: &[String]) -> Option<(Whose, Vec<String>)> {
         if self.unreadable {
-            return Some(Vec::new());
+            return Some((Whose::Unreadable, Vec::new()));
         }
         chain
             .iter()
-            .find_map(|who| self.personas.get(who).cloned())
-            .or_else(|| self.every.clone())
+            .enumerate()
+            .find_map(|(at, who)| {
+                let list = self.personas.get(who)?.clone();
+                Some(match at {
+                    0 => (Whose::Own, list),
+                    _ => (Whose::Extended(who.clone()), list),
+                })
+            })
+            .or_else(|| self.every.clone().map(|list| (Whose::Every, list)))
     }
 
     /// What a project file that is there and could not be read at all lists: nothing, for
@@ -121,6 +133,64 @@ impl Listed {
             ],
             ..Self::default()
         }
+    }
+}
+
+/// Whose list holds a persona.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Whose {
+    /// Its own.
+    Own,
+    /// That of the persona it extends, nearest first.
+    Extended(String),
+    /// The list for every persona, `"*"`.
+    Every,
+    /// None could be read: nothing is listed.
+    Unreadable,
+}
+
+/// **What the persona view says of the profiles `persona`'s dispatched chats may start on**,
+/// in one line, read-only (#1522): `[dispatch.profiles]` as it holds that persona, whose list
+/// it is, and the rule every such chat is held to besides, a profile that asks.
+pub fn line(root: &Path, persona: &str) -> String {
+    let mut chain = crate::personas::lineage(root, persona);
+    if chain.is_empty() {
+        chain.push(persona.to_owned());
+    }
+    line_of(&listed_in(root), &chain)
+}
+
+/// [`line`], of what the project file lists and the persona's `extends:` chain.
+fn line_of(listed: &Listed, chain: &[String]) -> String {
+    let Some((whose, list)) = listed.held_by(chain) else {
+        return "any profile the project offers that is marked as asking: the project lists \
+                none for it under [dispatch.profiles]"
+            .to_owned();
+    };
+    let from = match whose {
+        Whose::Own => "listed for it under [dispatch.profiles]".to_owned(),
+        Whose::Extended(parent) => format!(
+            "listed under [dispatch.profiles] for {}, which it extends",
+            crate::shown::short(&parent)
+        ),
+        Whose::Every => "listed for every persona under [dispatch.profiles]".to_owned(),
+        Whose::Unreadable => {
+            return "none: the project's file cannot be read, so no chat is dispatched to it \
+                    until it is fixed"
+                .to_owned();
+        }
+    };
+    let names: Vec<String> = list
+        .iter()
+        .map(|name| format!("'{}'", crate::shown::short(name)))
+        .collect();
+    match names.split_last() {
+        None => format!("none, {from}, so no chat is dispatched to it"),
+        Some((only, [])) => format!("only {only}, {from}, where it is marked as asking"),
+        Some((last, rest)) => format!(
+            "{} or {last}, {from}, where it is marked as asking",
+            rest.join(", ")
+        ),
     }
 }
 
@@ -883,6 +953,48 @@ mod tests {
         let pattern = listed(Some("[dispatch.profiles]\n\"dev*\" = [\"work\"]\n"));
         assert_eq!(pattern.for_chain(&chain(&["devops"])), None);
         assert_eq!(pattern.refused.len(), 1);
+    }
+
+    #[test]
+    fn the_persona_view_says_which_profiles_its_dispatched_chats_start_on_and_whose_list_it_is() {
+        let chain = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let read = listed(Some(
+            "[dispatch.profiles]\ndevops = [\"work\", \"codex\", \"cx\"]\nqa = [\"work\"]\n\
+             own = []\n",
+        ));
+        assert_eq!(
+            line_of(&read, &chain(&["devops"])),
+            "'work', 'codex' or 'cx', listed for it under [dispatch.profiles], where it is \
+             marked as asking"
+        );
+        assert_eq!(
+            line_of(&read, &chain(&["qa2", "qa"])),
+            "only 'work', listed under [dispatch.profiles] for qa, which it extends, where it \
+             is marked as asking"
+        );
+        assert_eq!(
+            line_of(&read, &chain(&["own"])),
+            "none, listed for it under [dispatch.profiles], so no chat is dispatched to it"
+        );
+        assert_eq!(
+            line_of(&read, &chain(&["steward"])),
+            "any profile the project offers that is marked as asking: the project lists none \
+             for it under [dispatch.profiles]"
+        );
+        let every = listed(Some("[dispatch.profiles]\n\"*\" = [\"work\"]\n"));
+        assert_eq!(
+            line_of(&every, &chain(&["steward"])),
+            "only 'work', listed for every persona under [dispatch.profiles], where it is \
+             marked as asking"
+        );
+        let broken = listed(Some("<<<<<<< ours\n"));
+        assert_eq!(
+            line_of(&broken, &chain(&["steward"])),
+            "none: the project's file cannot be read, so no chat is dispatched to it until it \
+             is fixed"
+        );
     }
 
     #[test]

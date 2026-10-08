@@ -1008,6 +1008,48 @@ mod tests {
         );
     }
 
+    /// #1522: beside its profile, the persona view says which profiles the project lists for
+    /// the chats dispatched to it, read-only.
+    #[test]
+    fn the_persona_view_shows_the_profiles_its_tasks_start_on() {
+        let plane = tempfile::tempdir().expect("a plane");
+        let state = plane.path().join(".charter");
+        persona_on(plane.path(), "ops", "---\nrole: Ops\n---\n");
+        persona_on(plane.path(), "qa", "---\nrole: QA\n---\n");
+        std::fs::write(
+            purlis_core::names::manifest(plane.path()),
+            "[dispatch.profiles]\nops = [\"work\"]\n",
+        )
+        .expect("the manifest");
+        let tasks = |name: &str| {
+            let ViewAnswer::Answered { blocks, .. } =
+                built_in(plane.path(), &state, "persona", name).expect("an answer")
+            else {
+                panic!("the persona view was not answered");
+            };
+            blocks
+                .iter()
+                .filter_map(|block| match block {
+                    PanelBlock::Facts { facts } => Some(facts),
+                    _ => None,
+                })
+                .flatten()
+                .find(|fact| fact.label == "Tasks start on")
+                .map(|fact| fact.value.clone())
+                .expect("a Tasks start on fact")
+        };
+
+        assert_eq!(
+            tasks("ops"),
+            "only 'work', listed for it under [dispatch.profiles], where it is marked as asking"
+        );
+        assert!(
+            tasks("qa").starts_with("any profile the project offers"),
+            "{}",
+            tasks("qa")
+        );
+    }
+
     fn persona_on(root: &std::path::Path, name: &str, definition: &str) {
         let dir = root.join("personas").join(name);
         std::fs::create_dir_all(&dir).expect("a persona");
