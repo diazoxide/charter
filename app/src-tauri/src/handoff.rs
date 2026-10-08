@@ -3876,6 +3876,7 @@ mod tests {
                     unreported: false,
                     outcome: None,
                     asking: None,
+                    by_person: None,
                 }),
                 workspace: Some("alpha".to_owned()),
                 persona: None,
@@ -4703,6 +4704,7 @@ mod tests {
                 unreported: false,
                 outcome: None,
                 asking: None,
+                by_person: None,
             })
         );
         assert!(first_message_of(&plane).contains("⟨handoff from platform steward · workspace"));
@@ -5589,6 +5591,7 @@ mod tests {
                 unreported: false,
                 outcome: None,
                 asking: None,
+                by_person: None,
             })
         );
         // Its lineage is on its own record: who asked, that it is a task, and what it owes.
@@ -9760,9 +9763,18 @@ mod tests {
             },
         ] {
             let said = format!("{what:?}");
-            assert_eq!(asks(&held, &id, steward, what), not_yours(theirs), "{said}");
+            // In words that say whose it is (#1492, V100-70), and nothing else happens.
+            assert_eq!(
+                asks(&held, &id, steward, what),
+                Answer::No {
+                    why: purlis_core::dispatched::asked_by_the_person(theirs)
+                },
+                "{said}"
+            );
         }
         assert!(!held.tasks().ledger().cancelling(theirs));
+        // The window is told the same of it: its row and its breadcrumb say whose it is.
+        assert_eq!(listed_from(&held, theirs).by_person, Some(true));
         // Nor does the task send that chat anything before its report.
         for what in [
             What::Note {

@@ -21,6 +21,7 @@ import type {
   VaultRefused,
 } from "./bindings";
 import type { State } from "./chatState";
+import { setChatsListPrefs } from "./chatsListPrefs";
 import { forgetKeyboard } from "./paneKeyboard";
 import { REFERENCE_TYPE } from "./references";
 import { forgetThisLaunch } from "./regions";
@@ -212,6 +213,12 @@ function core(open: Listed[]) {
     if (cmd === "allow_refused_vault" || cmd === "keep_vault_blocked") {
       refusals.set(a.session as number, []);
       return { said: cmd === "allow_refused_vault" ? "Allowed." : "Kept blocked." };
+    }
+    // The core holds the name it is given and answers it: the chat's label from then on.
+    if (cmd === "rename_chat") {
+      const one = open.find((chat) => chat.session === a.session);
+      if (one) one.label = a.label as string;
+      return a.label;
     }
     if (cmd === "reference_into_chat") return { kind: "typed", text: "@src/main.rs" };
     if (cmd === "ask_chat_restart") return null;
@@ -1337,5 +1344,220 @@ describe("closing, while a tab shows a task", () => {
     expect(ending).toEqual([]);
     // The splits are the pane's still.
     expect(screen.getAllByRole("button", { name: /^Split/ })).toHaveLength(2);
+  });
+});
+
+/** The chat `asker` handed its work off to: a session of its own, with a tab. */
+const handoffFrom = (asker: number, more: Partial<Lineage> = {}): Lineage => ({
+  ...taskOf(asker),
+  task: false,
+  tab: true,
+  ...more,
+});
+
+/** The rows of the list as `level name`, top to bottom. */
+const levels = (tree: HTMLElement) =>
+  rows(tree).map(
+    (one) => `${one.getAttribute("aria-level")} ${one.querySelector(".session")?.textContent}`,
+  );
+
+/** The name of the tab in front. */
+const inFront = () =>
+  within(strip())
+    .getAllByRole("tab")
+    .find((one) => one.getAttribute("aria-selected") === "true")
+    ?.querySelector(".tab-name")?.textContent;
+
+describe("a handoff is a session of its own (#1492, V100-69)", () => {
+  /** steward 1 asked talk (4) for a task, and handed work off to drop commons (3). */
+  const moved = () => [
+    chat(1, "alpha"),
+    chat(3, "alpha", { label: "drop commons", from: handoffFrom(1) }),
+    chat(4, "alpha", { persona: "devops", label: "talk", from: taskOf(1) }),
+  ];
+
+  /** Where the row of `name` says its chat's work went. */
+  const went = (tree: HTMLElement, name: string) =>
+    row(tree, name).querySelector<HTMLElement>(".handed-off");
+
+  it("has its own tab with a close, and its own row at the top, under no chat", async () => {
+    const { tree, asked } = await drawn(moved());
+
+    expect(tabNames()).toEqual(["steward 1", "drop commons"]);
+    const close = tab("drop commons").closest(".tab")?.querySelector("button.closer");
+    expect(close?.getAttribute("aria-label")).toBe("End chat drop commons");
+    // The task is under the chat that asked; the handoff is beside it.
+    expect(levels(tree)).toEqual(["1 steward 1", "2 talk", "1 drop commons"]);
+    expect(onScreen()).toEqual([1]);
+
+    // Pressing its row brings its own tab forward. Nothing is shown inside steward 1's tab.
+    await userEvent.click(row(tree, "drop commons").querySelector(".session") as HTMLElement);
+
+    await waitFor(() => expect(onScreen()).toEqual([3]));
+    expect(inFront()).toBe("drop commons");
+    expect(tabNames()).toEqual(["steward 1", "drop commons"]);
+    expect(crumbs()).toBeNull();
+    expect(commandsOf(asked, "open_chat_tab")).toEqual([]);
+    expect(commandsOf(asked, "tab_shows").filter((one) => one.shown === 3)).toEqual([]);
+
+    // And a task of the chat it came from still opens in that chat's tab, not in this one.
+    await userEvent.click(row(tree, "talk").querySelector(".session") as HTMLElement);
+    await waitFor(() => expect(onScreen()).toEqual([4]));
+    expect(inFront()).toBe("steward 1");
+    expect(crumbsSay()).toContain("steward 1 › talk");
+  });
+
+  it("is in nobody's counts: it folds under no row and raises no hand but its own", async () => {
+    const { tree, move } = await drawn([
+      chat(1, "alpha"),
+      chat(3, "alpha", { label: "drop commons", from: handoffFrom(1) }),
+    ]);
+    // Nothing is under the chat it came from: that row has nothing to fold or to sum up.
+    expect(row(tree, "steward 1").getAttribute("aria-expanded")).toBeNull();
+    expect(row(tree, "steward 1").closest("li")?.querySelector("button.twist")).toBeNull();
+    expect(row(tree, "steward 1").querySelector(".below-summary")).toBeNull();
+
+    await move(3, "waiting", 10, [3]);
+
+    expect(within(row(tree, "drop commons")).getByText("needs you")).toBeTruthy();
+    // The chat it came from is not waiting for anybody, on its row or on its tab.
+    expect(row(tree, "steward 1").closest("li")?.querySelector("button.rolled-up")).toBeNull();
+    expect(row(tree, "steward 1").getAttribute("aria-description")).toBeNull();
+    expect(handOn("steward 1")).toBeNull();
+    // Nor does that chat's tab offer it as one of its own chats.
+    expect(within(tab("steward 1")).queryByText(/drop commons/)).toBeNull();
+  });
+
+  it("is named on the row of the chat it came from, which names that chat on its own", async () => {
+    const { tree } = await drawn([
+      ...moved(),
+      chat(5, "alpha", { label: "release notes", from: handoffFrom(1) }),
+    ]);
+
+    // The newest first, and how many more: on the second line, the state's word untouched.
+    const said = went(tree, "steward 1");
+    expect(said?.textContent).toBe("handed off to release notes and 1 more");
+    expect(said?.closest(".line.two")).not.toBeNull();
+    expect(row(tree, "steward 1").querySelector(".line.one .shown-state")).not.toBeNull();
+    // Each handed-off chat says where it came from, and hands nothing off itself.
+    expect(row(tree, "drop commons").querySelector(".from")?.textContent).toBe("from steward 1");
+    expect(row(tree, "release notes").querySelector(".from")?.textContent).toBe("from steward 1");
+    expect(went(tree, "drop commons")).toBeNull();
+    // A task says nothing of the kind: it is under the chat that asked.
+    expect(row(tree, "talk").querySelector(".from")).toBeNull();
+  });
+
+  it("goes to that chat when the words are pressed, and to its own chat anywhere else", async () => {
+    const { tree } = await drawn([
+      ...moved(),
+      chat(5, "alpha", { label: "release notes", from: handoffFrom(1) }),
+    ]);
+
+    await userEvent.click(went(tree, "steward 1") as HTMLElement);
+
+    await waitFor(() => expect(onScreen()).toEqual([5]));
+    expect(inFront()).toBe("release notes");
+    expect(tabNames()).toEqual(["steward 1", "drop commons", "release notes"]);
+
+    // The rest of the row is the row's own chat, as it was.
+    await userEvent.click(row(tree, "steward 1").querySelector(".session") as HTMLElement);
+    await waitFor(() => expect(onScreen()).toEqual([1]));
+    expect(inFront()).toBe("steward 1");
+  });
+
+  it("gives the place to what the chat is doing while it works, and the row keeps its second line", async () => {
+    const { tree, move } = await drawn(moved());
+    expect(went(tree, "steward 1")?.textContent).toBe("handed off to drop commons");
+
+    await move(1, "running", 10);
+
+    expect(within(row(tree, "steward 1")).getByText("working")).toBeTruthy();
+    expect(went(tree, "steward 1")).toBeNull();
+    // The line is there with or without the words, so the row is as tall as it was.
+    expect(row(tree, "steward 1").querySelector(".line.two")).not.toBeNull();
+    // Where it came from is always said.
+    expect(row(tree, "drop commons").querySelector(".from")?.textContent).toBe("from steward 1");
+
+    await move(1, "waiting", 11);
+
+    expect(went(tree, "steward 1")?.textContent).toBe("handed off to drop commons");
+  });
+
+  it("follows a rename of either chat", async () => {
+    const { tree } = await drawn(moved());
+    /** Renames the chat called `was`, on its tab, as a person does. */
+    const rename = async (was: string, to: string) => {
+      await userEvent.dblClick(tab(was));
+      await within(strip()).findByRole("textbox", { name: /^Rename chat/ });
+      await userEvent.keyboard(`{Control>}a{/Control}${to}{Enter}`);
+      await waitFor(() => expect(tabNames()).toContain(to));
+    };
+
+    await rename("drop commons", "ship it");
+    await waitFor(() => expect(went(tree, "steward 1")?.textContent).toBe("handed off to ship it"));
+
+    await rename("steward 1", "lead");
+    await waitFor(() =>
+      expect(row(tree, "ship it").querySelector(".from")?.textContent).toBe("from lead"),
+    );
+    expect(went(tree, "lead")?.textContent).toBe("handed off to ship it");
+  });
+
+  it("says where the work went in the row's tooltip, on one line", async () => {
+    act(() => setChatsListPrefs({ lines: 1 }));
+    const { tree } = await drawn(moved());
+
+    expect(row(tree, "steward 1").querySelector(".line.two")).toBeNull();
+    expect(row(tree, "steward 1").getAttribute("title")).toBe("handed off to drop commons · alpha");
+    expect(row(tree, "drop commons").getAttribute("title")).toBe("alpha · from steward 1");
+  });
+});
+
+describe("a chat the person asked for from a tab (#1492, V100-70)", () => {
+  /** In steward 1's tab the person asked devops (talk, 4); steward 1 dispatched sweep (5). */
+  const asked = () => [
+    chat(1, "alpha"),
+    chat(2, "alpha"),
+    chat(4, "alpha", { persona: "devops", label: "talk", from: taskOf(1, { by_person: true }) }),
+    chat(5, "alpha", { persona: "devops", label: "sweep", from: taskOf(1) }),
+  ];
+
+  it("is a task of that session, nested under it and marked as the person's on its row", async () => {
+    const { tree } = await drawn(asked());
+
+    expect(levels(tree)).toEqual(["1 steward 1", "2 talk", "2 sweep", "1 steward 2"]);
+    expect(tabNames()).toEqual(["steward 1", "steward 2"]);
+    const mark = row(tree, "talk").querySelector(".by-you");
+    expect(mark?.textContent).toBe("asked by you");
+    // On the second line: the state's word has the first line to itself, as on any row.
+    expect(mark?.closest(".line.two")).not.toBeNull();
+    expect(row(tree, "talk").querySelector(".line.one .shown-state")).not.toBeNull();
+    // A task the chat dispatched itself, and the session's own chat, are not marked.
+    expect(row(tree, "sweep").querySelector(".by-you")).toBeNull();
+    expect(row(tree, "steward 1").querySelector(".by-you")).toBeNull();
+  });
+
+  it("opens inside that session's tab, and its breadcrumb says whose it is after its state", async () => {
+    const { tree } = await drawn(asked());
+
+    await userEvent.click(row(tree, "talk"));
+
+    await waitFor(() => expect(onScreen()).toEqual([4]));
+    expect(tabNames()).toEqual(["steward 1", "steward 2"]);
+    expect(inFront()).toBe("steward 1");
+    expect(crumbsSay()).toBe("steward 1 › talk · running (no detail from claude) · asked by you");
+
+    await userEvent.click(row(tree, "sweep"));
+
+    await waitFor(() => expect(onScreen()).toEqual([5]));
+    expect(crumbsSay()).toBe("steward 1 › sweep · running (no detail from claude)");
+  });
+
+  it("says so in the row's tooltip, on one line", async () => {
+    act(() => setChatsListPrefs({ lines: 1 }));
+    const { tree } = await drawn(asked());
+
+    expect(row(tree, "talk").getAttribute("title")).toBe("asked by you");
+    expect(row(tree, "sweep").getAttribute("title")).toBeNull();
   });
 });

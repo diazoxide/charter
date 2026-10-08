@@ -38,7 +38,7 @@ import type {
 } from "./bindings";
 import { DISPATCHES_TITLE, DISPATCHES_VIEW } from "./dispatches";
 import { backSaid } from "./chatState";
-import { startedBy, type ListedChat } from "./chatsTree";
+import { tasksOf, type ListedChat } from "./chatsTree";
 import { MAIN } from "./here";
 import {
   DRAFT,
@@ -2504,7 +2504,8 @@ export function stoppedRows(
  * **They end chats, so they are last among a menu's rows**, under its line, as `End chat` is.
  */
 export function stopRows(listed: readonly ListedChat[], stopping: readonly number[]): Offer[] {
-  const started = startedBy(listed);
+  // What is below a chat is the tasks it asked for: a handoff is a session of its own (#1492).
+  const started = tasksOf(listed);
   return listed.flatMap((chat) => {
     const { session, name } = chat;
     const below = `Stop chat ${name} and everything below it`;

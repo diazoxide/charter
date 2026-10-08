@@ -64,6 +64,41 @@ describe("a pane's breadcrumb", () => {
     expect(screen.getByRole("navigation").textContent).toBe("steward 4 › talk in beta · done");
   });
 
+  it("says a task the person asked for is theirs, after its state, and in its tooltip", () => {
+    // #1492, V100-70. Only the chat shown says it: the path is not whose each chat was.
+    const theirs = [path[0], { ...path[1], byYou: true }];
+    render(<PaneCrumbs crumbs={{ path: theirs, elsewhere: null }} onShow={() => undefined} />);
+    const crumbs = screen.getByRole("navigation", { name: "Chat path" });
+    expect(crumbs.textContent).toBe("steward 4 › talk · done · asked by you");
+    expect(crumbs.getAttribute("title")).toBe("steward 4 › talk, asked by you");
+    // After the state, in a box of its own that gives way before the state does (`App.css`).
+    expect(crumbs.lastElementChild?.className).toBe("crumb-by");
+    expect(crumbs.querySelector(".shown-state")?.nextElementSibling?.className).toBe("crumb-by");
+    cleanup();
+
+    // And where the state is handed in, for a task that has ended.
+    render(
+      <PaneCrumbs
+        crumbs={{ path: theirs, elsewhere: null }}
+        onShow={() => undefined}
+        state={<span>failed</span>}
+      />,
+    );
+    expect(screen.getByRole("navigation").textContent).toBe(
+      "steward 4 › talk · failed · asked by you",
+    );
+    cleanup();
+
+    // A task under it that its own chat dispatched says nothing of the kind.
+    render(
+      <PaneCrumbs
+        crumbs={{ path: [...theirs, path[2]], elsewhere: null }}
+        onShow={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("navigation").textContent).toBe("steward 4 › talk › deep · done");
+  });
+
   it("goes to each chat before the last, and the last is where the person is", async () => {
     const shown = vi.fn();
     render(<PaneCrumbs crumbs={{ path, elsewhere: null }} onShow={shown} />);

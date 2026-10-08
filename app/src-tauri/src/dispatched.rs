@@ -358,9 +358,11 @@ pub fn answer(held: &Held, asked: &Asked, connection: u64) -> Answer {
         What::AwaitAnswer { .. } => await_answer(&held.weak(), asked, connection),
         What::Read { of } => {
             // A closed task's report is read from the app's memory, and waits in no file.
-            if owned(held, asker, *of).is_err() && held.tasks().ledger().gone(asker, *of).is_none()
+            // And a task the person asked for from this chat's tab is refused as theirs.
+            if let Err(why) = owned(held, asker, *of)
+                && held.tasks().ledger().gone(asker, *of).is_none()
             {
-                return no(dispatched::not_yours(*of));
+                return no(why);
             }
             let files = held.tasks().ledger().read(*of);
             for file in files {
