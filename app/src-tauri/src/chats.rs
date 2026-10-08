@@ -1886,6 +1886,21 @@ impl Chats {
         *lock(&self.front)
     }
 
+    /// **The chat the person is looking at**, or none: the chat in front, or the chat its tab
+    /// shows in place of it, where the tab was switched to one ([`Self::tab_shows`], #1486).
+    /// A tab is its session's, so "in front" names the session's own chat whatever its pane
+    /// draws; this is the chat on screen.
+    ///
+    /// The one answer for both things that turn on it: a reported task is not ended under the
+    /// person reading it (#1485), and no notification is sent about the chat already on
+    /// screen. The session's own chat, while its tab shows a task, is not the one looked at.
+    /// Whether the window has the keyboard is not asked here.
+    pub fn looked_at(&self) -> Option<u32> {
+        let front = self.front()?;
+        let shown = lock(&self.open).get(&front).and_then(|one| one.chat.shows);
+        Some(shown.unwrap_or(front))
+    }
+
     /// Pins or unpins one chat, and writes the record so the pin outlives the app.
     ///
     /// **A chat charter does not have open cannot be pinned**, and the answer says so rather
@@ -1932,9 +1947,12 @@ impl Chats {
     /// `None` (#1486): the record keeps it, so a reloaded window and the next launch put each
     /// tab back on the chat it showed. Written only when it changes, for [`Self::pin`]'s reason.
     ///
-    /// **What is kept is the window's word and nothing is decided by it**: the core starts,
-    /// ends and allows nothing by this number, and the window shows it only where the chat it
-    /// names is open and below this one. A chat is never said to show itself.
+    /// **What is kept is the window's word, and it says only where the person is looking**
+    /// ([`Self::looked_at`]): the core starts and allows nothing by this number. A reported
+    /// task's end, already due, is held while this says the person is reading it, and no
+    /// notification is sent about a chat this says is on screen. The window shows it only
+    /// where the chat it names is open and below this one. A chat is never said to show
+    /// itself.
     pub fn tab_shows(&self, session: u32, shown: Option<u32>) -> Result<(), String> {
         let shown = shown.filter(|other| *other != session);
         let mut open = lock(&self.open);
