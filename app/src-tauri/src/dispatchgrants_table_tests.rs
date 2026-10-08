@@ -30,7 +30,7 @@ pub(super) fn world_with(personas: &[&str], grants: &str) -> World {
     world
 }
 
-fn file(world: &World) -> String {
+pub(super) fn file(world: &World) -> String {
     std::fs::read_to_string(purlis_core::names::manifest(world.root())).expect("the file")
 }
 
@@ -40,7 +40,7 @@ pub(super) fn known(world: &World) -> impl Fn(&str) -> bool {
 }
 
 /// The kinds audited, with who and what, in order.
-fn kinds(world: &World) -> Vec<(&'static str, String, String, &'static str)> {
+pub(super) fn kinds(world: &World) -> Vec<(&'static str, String, String, &'static str)> {
     world
         .audited()
         .into_iter()
@@ -48,7 +48,7 @@ fn kinds(world: &World) -> Vec<(&'static str, String, String, &'static str)> {
         .collect()
 }
 
-fn audit(
+pub(super) fn audit(
     kind: &'static str,
     asking: &str,
     target: &str,
@@ -288,9 +288,14 @@ fn not_on_my_machine_is_audited_leaves_the_committed_file_and_is_undone_by_accep
         .find(|one| one.asking.as_deref() == Some("steward"))
         .expect("still listed");
     assert!(row.waiting && row.declined);
+    // Declined here is not told as arrived again; what nobody answered still is.
     assert_eq!(
-        changed_of(world.root()).map(|one| one.added),
-        Some(vec!["qa -> devops".to_owned()])
+        arrival_of(world.root())
+            .waiting
+            .iter()
+            .map(|one| format!("{} -> {}", one.asking, one.target))
+            .collect::<Vec<_>>(),
+        ["steward -> *", "qa -> devops"]
     );
     pending_of(&world.request(&store, chat(3, Some("steward")), "devops", BRIEF));
     assert_eq!(
@@ -499,8 +504,8 @@ fn reading_the_table_while_a_persona_is_away_moves_nothing_and_drops_nothing() {
     assert_eq!(world.listed(&store), listed);
     assert_eq!(dispatchgrant::any_yours(world.root()), ["devops"]);
     assert_eq!(
-        changed_of(world.root()),
-        None,
+        arrival_of(world.root()).waiting,
+        [],
         "nothing accepted here was forgotten"
     );
     assert_eq!(
@@ -593,7 +598,7 @@ fn another_persona_under_a_name_seen_gone_is_set_aside_as_a_dispatch_is_judged_a
         Some("steward 4"),
         "with the chat it came from"
     );
-    assert_eq!(changed_of(world.root()), None);
+    assert_eq!(arrival_of(world.root()).waiting, []);
 }
 
 #[test]

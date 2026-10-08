@@ -528,7 +528,6 @@ describe("Settings › Project › Dispatch", () => {
       all_locked: null,
       locked_pairs: [{ asking: "qa", target: "devops" }],
       locked_by: "Locked by policy, set by IT in /etc/purlis/policy.json.",
-      changed: null,
     };
     // After `core`, so this is the one the window asks.
     mockIPC((cmd) => (cmd === "dispatch_grants" ? grants : undefined));
@@ -566,7 +565,6 @@ describe("Settings › Project › Dispatch", () => {
           all_locked: all,
           locked_pairs: [{ asking: "steward", target: "devops" }],
           locked_by: "Locked by policy, set by IT in /etc/purlis/policy.json.",
-          changed: null,
         };
       return undefined;
     });

@@ -30,13 +30,14 @@
 //!   Notice. The caller keeps the brief it will send.
 //! - **A held dispatch whose chat closes is dropped**, and the [`Store::answers_with`] listener
 //!   is not told: there is no chat left to tell.
-//! - On Allow, and when the person allows a teammate's committed pair on the project's Notice,
-//!   every held dispatch the grant covers is handed to the listener, which starts it.
+//! - On Allow, and when the person accepts a teammate's committed grant on the Notice that
+//!   says it arrived, every held dispatch the grant covers is handed to the listener, which
+//!   starts it.
 //!
 //! # What a chat cannot do
 //!
 //! **Nothing a chat sends creates, widens or revokes a grant.** A grant is made by
-//! [`allow_dispatch`] or [`acknowledge_dispatch_grants`], window commands a person's press
+//! [`allow_dispatch`] or [`answer_dispatch_arrival`], window commands a person's press
 //! sends, and by nothing on the hook socket: a request carries a target and a brief, and
 //! neither is read for anything but the Notice. **The brief is a chat's text**: it is shown
 //! inert and capped ([`purlis_core::dispatchgrant::shown_brief`]), apart from purlis's own
@@ -64,8 +65,39 @@
 //! person is asked, told why, and their Allow starts the one dispatch they read.
 //!
 //! **Any persona** ([`allow_dispatch_to_any`]) is granted from Settings and from nowhere else.
-//! No answer to a Notice makes one: [`Store::allow`] keeps the one pair the held dispatch
-//! names, whose target is a persona's name, and the project's Notice accepts pairs only.
+//! **No answer to a Notice makes or accepts one** (V100-23): [`Store::allow`] keeps the one
+//! pair the held dispatch names, whose target is a persona's name, and the Notice that says a
+//! teammate's grant arrived tells of a project's "any persona" and declines it, and never
+//! accepts it ([`answer_dispatch_arrival`] refuses that in the command itself).
+//!
+//! # A teammate's grant, when it arrives (#1506)
+//!
+//! A commit by anyone who can push to the project can add a grant to its file. It is in force
+//! on this machine for nobody until the person here accepts it. [`dispatch_arrival`] is what
+//! waits: the window says it once, at its own level and not on a chat's tab, when the project
+//! opens and each time the watcher says the project moved. **Accept** (named pairs only) and
+//! **Not on my machine** answer what was listed ([`answer_dispatch_arrival`]): **only what is
+//! still exactly as it was shown** is answered, and where the list moved meanwhile the person
+//! is told and shown the list as it is. Putting the Notice away answers nothing. A grant that
+//! names a persona this checkout does not define is said to, and is never accepted.
+//! **Accepting is this machine's act everywhere**: it records the acceptance and never goes
+//! through the writer of the committed file.
+//!
+//! **This machine's yes is bound to what it accepted** ([`purlis_core::dispatcharrival`]): a
+//! grant a commit takes out of the project's file is no longer accepted here, and one taken
+//! out and put back, even with nothing read in between, waits for a new yes and says why.
+//! What a commit took away is told once and asks nothing ([`dispatch_gone_told`]). A grant
+//! the file on disk does not hold is not in force, and nothing is dropped or told for that
+//! alone, so a branch switched away and back moves nothing.
+//!
+//! **Where git runs, and under which lock a decision reads.** Settling the acceptances reads
+//! git's history, one settling per project at a time. It runs on a blocking thread for the
+//! window's reads and answers, on a thread of its own after the watcher's event
+//! ([`project_moved`]), and in the dispatch path **before** the lock a dispatch is decided
+//! under is taken (`handoff`). Under that lock, and everywhere else the grants in force are
+//! read ([`Store::in_force`]), nothing runs git: the read goes by the last settling's
+//! verdict, held under `dispatcharrival`'s own lock for the length of a copy. No table read
+//! and no watcher event settles on the thread that asked.
 //!
 //! # The table in Settings (#1504)
 //!
@@ -1276,43 +1308,40 @@ impl Store {
             })
     }
 
-    /// **The person allowed `shown` on the project's Notice** (D-1437-R1): each pair of it the
-    /// committed file holds and this machine had not acknowledged is audited as a grant for
-    /// everyone, then in force here, and every held dispatch it covers is handed on. A pair
-    /// the file does not hold is nothing. What the file no longer holds is taken off what was
-    /// acknowledged, so its going is told once.
+    /// **The person accepted `shown`, pairs of the project's** (D-1437-R1): each pair of it
+    /// the committed file holds and this machine had not acknowledged is audited as a grant
+    /// for everyone, then in force here, and every held dispatch it covers is handed on. A
+    /// pair the file does not hold is nothing.
     pub fn acknowledge(&self, ground: &Ground<'_>, shown: &[String]) -> Result<(), String> {
         for pair in dispatchgrant::unacknowledged(ground.root) {
             if !shown.contains(&pair.to_string()) {
                 continue;
             }
-            (ground.audit)(
-                None,
-                &dispatchgrant::Audited {
-                    act: dispatchgrant::Act::Grant,
-                    asking: Some(&pair.asking),
-                    target: &pair.target,
-                    level: Level::Project,
-                    workspace: None,
-                },
-            )?;
-            dispatchgrant::acknowledge_pair(ground.root, &pair)
-                .map_err(|why| format!("purlis could not record it as allowed: {why}"))?;
-        }
-        let committed: Vec<String> = dispatchgrant::committed_at(ground.root)
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        if let Some(seen) = sandbox::local::dispatch_seen(ground.root) {
-            let kept: Vec<String> = seen
-                .iter()
-                .filter(|one| committed.contains(one))
-                .cloned()
-                .collect();
-            if kept != seen {
-                dispatchgrant::acknowledge(ground.root, &kept)
-                    .map_err(|why| format!("purlis could not record what was read: {why}"))?;
-            }
+            let audited = dispatchgrant::Audited {
+                act: dispatchgrant::Act::Grant,
+                asking: Some(&pair.asking),
+                target: &pair.target,
+                level: Level::Project,
+                workspace: None,
+            };
+            (ground.audit)(None, &audited)?;
+            dispatchgrant::acknowledge_pair(ground.root, &pair).map_err(|why| {
+                // Recorded as taken back, so the log never ends on an acceptance that is
+                // not there (the project's history could not be asked, or the file moved).
+                if let Err(unsaid) = (ground.audit)(
+                    None,
+                    &dispatchgrant::Audited {
+                        act: dispatchgrant::Act::Revoke,
+                        ..audited
+                    },
+                ) {
+                    tracing::warn!(
+                        "purlis: an acceptance that was not kept is still recorded as made \
+                         ({unsaid})"
+                    );
+                }
+                format!("purlis could not record it as allowed: {why}")
+            })?;
         }
         self.start_what_is_covered(ground);
         Ok(())
@@ -1545,7 +1574,13 @@ fn told(plane: &PlaneId, root: &Path, held: &Pending) -> DispatchPending {
         }
         if held.asking.persona.is_some() {
             levels.push(GrantLevel::You);
-            if purlis_core::names::has_manifest(root) {
+            // Not for a pair the person said "Not on my machine" to: Settings is where that
+            // is taken back, and this question does not undo it by another name.
+            let declined = held.asking.persona.as_deref().is_some_and(|asking| {
+                dispatchgrant::project_grant_said(asking, &held.target)
+                    .is_some_and(|said| dispatchgrant::declined(root).contains(&said))
+            });
+            if purlis_core::names::has_manifest(root) && !declined {
                 levels.push(GrantLevel::Project);
             }
         }
@@ -1835,9 +1870,11 @@ pub struct DispatchAllowed {
 /// pair (#1505), as its own audited grant. `shown` is the digest the
 /// Notice was told; where the question reads differently now, nothing is allowed and the
 /// Notice reads it again.
+// On a blocking thread ([`SETTLES`]): an Allow for everyone ends in this machine's acceptance
+// of the project's grant, which settles against git's history.
 #[tauri::command]
 #[specta::specta]
-pub fn allow_dispatch(
+pub async fn allow_dispatch(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     id: u32,
@@ -1846,26 +1883,25 @@ pub fn allow_dispatch(
     shown: String,
 ) -> Result<DispatchAllowed, String> {
     let held = planes.held(&plane)?;
-    let root = held.root();
-    let locks = sandbox::policy::Locks::of(root);
-    held.dispatch_grants()
-        .allow_with(
-            &Ground {
-                root,
-                locks: &locks,
-                is_open: &|session| held.chats().recorded_chat(session).is_some(),
-                sandboxed: &|session| held.chats().confines_of(session).is_some(),
-                audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
-                at: now_secs(),
-            },
-            id,
-            level.into(),
-            &Ticked {
-                also: &also,
-                shown: Some(&shown),
-            },
-        )
-        .map(|said| DispatchAllowed { said })
+    crate::off_the_window("allowing the dispatch", move || {
+        let allowed = with_ground(&held, |ground| {
+            held.dispatch_grants().allow_with(
+                ground,
+                id,
+                level.into(),
+                &Ticked {
+                    also: &also,
+                    shown: Some(&shown),
+                },
+            )
+        })
+        .map(|said| DispatchAllowed { said });
+        // An Allow for everyone answers a grant of the project's that was waiting, where it
+        // was.
+        arrival_moved(&plane);
+        allowed
+    })
+    .await
 }
 
 /// **Keep blocked** on a dispatch's Notice: nothing is granted, and the dispatch does not
@@ -1895,6 +1931,25 @@ pub fn never_dispatch(
     with_ground(&held, |ground| held.dispatch_grants().never(ground, id))
         .map(|said| DispatchAllowed { said })
 }
+
+/// **The window commands that may settle this machine's acceptances against git's history**
+/// (#1506): the three of the arrival Notice, and every command that can end in an acceptance
+/// of a grant of the project's. Each is `async` and does its work on a blocking thread, so a
+/// slow history never holds the thread that draws the window; each is bounded by the
+/// settling's own deadline ([`purlis_core::dispatcharrival`]) and takes no lock a dispatch is
+/// decided under. `off_the_main_thread`'s test asks each and holds them to it, which is the
+/// list's one reader.
+#[cfg(test)]
+pub const SETTLES: [&str; 8] = [
+    "dispatch_arrival",
+    "answer_dispatch_arrival",
+    "dispatch_gone_told",
+    "allow_dispatch",
+    "allow_dispatch_anywhere",
+    "accept_project_dispatch",
+    "allow_dispatch_to_any",
+    "set_dispatch_workspace",
+];
 
 /// The ground a window command of `held`'s project stands on.
 fn with_ground<T>(held: &crate::planes::Held, with: impl FnOnce(&Ground<'_>) -> T) -> T {
@@ -2395,31 +2450,37 @@ pub fn lift_dispatch_never(
 /// the project, one added later included, for you on this machine or for everyone in the
 /// project. Audited, then kept; a dispatch waiting on the person that it covers starts.
 /// Answers what stands now.
+// On a blocking thread ([`SETTLES`]): for everyone in the project it ends in this machine's
+// acceptance, which settles against git's history.
 #[tauri::command]
 #[specta::specta]
-pub fn allow_dispatch_to_any(
+pub async fn allow_dispatch_to_any(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     asking: String,
     level: GrantLevel,
 ) -> Result<DispatchStanding, String> {
     let held = planes.held(&plane)?;
-    let root = held.root();
-    let personas = purlis_core::workspaces::Plane::open(root.to_path_buf())
-        .personas()
-        .unwrap_or_default();
-    with_ground(&held, |ground| {
-        allow_any(
-            root,
-            &|name| personas.iter().any(|one| one == name),
-            &asking,
-            level.into(),
-            ground.audit,
-        )?;
-        held.dispatch_grants().start_what_is_covered(ground);
-        Ok::<(), String>(())
-    })?;
-    Ok(standing_read(root, held.dispatch_grants()))
+    crate::off_the_window("allowing any persona", move || {
+        let root = held.root();
+        let personas = purlis_core::workspaces::Plane::open(root.to_path_buf())
+            .personas()
+            .unwrap_or_default();
+        with_ground(&held, |ground| {
+            allow_any(
+                root,
+                &|name| personas.iter().any(|one| one == name),
+                &asking,
+                level.into(),
+                ground.audit,
+            )?;
+            held.dispatch_grants().start_what_is_covered(ground);
+            Ok::<(), String>(())
+        })?;
+        arrival_moved(&plane);
+        Ok(standing_read(root, held.dispatch_grants()))
+    })
+    .await
 }
 
 /// **Revoke** on Settings' list of any-persona grants: audited, then taken out. Answers what
@@ -2438,6 +2499,7 @@ pub fn revoke_dispatch_to_any(
         held.hooks().record_dispatch_grant(root, number, audited)
     })?;
     held.dispatch_grants().drop_once(Some(&asking), None);
+    arrival_moved(&plane);
     Ok(standing_read(root, held.dispatch_grants()))
 }
 
@@ -2461,6 +2523,7 @@ pub fn decline_project_dispatch(
         Some(&asking),
         (target != dispatchgrant::ANY).then_some(target.as_str()),
     );
+    arrival_moved(&plane);
     Ok(standing_read(root, held.dispatch_grants()))
 }
 
@@ -2468,27 +2531,32 @@ pub fn decline_project_dispatch(
 /// now on, a pair or any persona (`target` is `*`), a teammate's that was waiting or one
 /// declined here. Audited first; a dispatch waiting on the person that it covers starts.
 /// Answers what stands now.
+// On a blocking thread ([`SETTLES`]): accepting settles against git's history.
 #[tauri::command]
 #[specta::specta]
-pub fn accept_project_dispatch(
+pub async fn accept_project_dispatch(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     asking: String,
     target: String,
 ) -> Result<DispatchStanding, String> {
     let held = planes.held(&plane)?;
-    let root = held.root();
-    let personas = purlis_core::dispatchdormant::personas_of(root).unwrap_or_default();
-    with_ground(&held, |ground| {
-        accept(
-            held.dispatch_grants(),
-            ground,
-            &|name| personas.iter().any(|one| one == name),
-            &asking,
-            &target,
-        )
-    })?;
-    Ok(standing_read(root, held.dispatch_grants()))
+    crate::off_the_window("accepting the project's dispatch grant", move || {
+        let root = held.root();
+        let personas = purlis_core::dispatchdormant::personas_of(root).unwrap_or_default();
+        with_ground(&held, |ground| {
+            accept(
+                held.dispatch_grants(),
+                ground,
+                &|name| personas.iter().any(|one| one == name),
+                &asking,
+                &target,
+            )
+        })?;
+        arrival_moved(&plane);
+        Ok(standing_read(root, held.dispatch_grants()))
+    })
+    .await
 }
 
 /// **Give back** on Settings' table (#1504): the person's one acknowledgement for the persona
@@ -2541,9 +2609,10 @@ pub fn remove_dormant_dispatch(
 ///
 /// `also` and `shown` are [`allow_dispatch`]'s (#1502): each ticked persona the question still
 /// offers is kept at the same level **and in any workspace too**, as the asked pair is.
+// On a blocking thread ([`SETTLES`]), as [`allow_dispatch`] is and for its reason.
 #[tauri::command]
 #[specta::specta]
-pub fn allow_dispatch_anywhere(
+pub async fn allow_dispatch_anywhere(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     id: u32,
@@ -2552,18 +2621,25 @@ pub fn allow_dispatch_anywhere(
     shown: String,
 ) -> Result<DispatchAllowed, String> {
     let held = planes.held(&plane)?;
-    with_ground(&held, |ground| {
-        held.dispatch_grants().allow_anywhere_with(
-            ground,
-            id,
-            level.into(),
-            &Ticked {
-                also: &also,
-                shown: Some(&shown),
-            },
-        )
+    crate::off_the_window("allowing the dispatch", move || {
+        let allowed = with_ground(&held, |ground| {
+            held.dispatch_grants().allow_anywhere_with(
+                ground,
+                id,
+                level.into(),
+                &Ticked {
+                    also: &also,
+                    shown: Some(&shown),
+                },
+            )
+        })
+        .map(|said| DispatchAllowed { said });
+        // An Allow for everyone answers a grant of the project's that was waiting (#1506),
+        // the wider Allow as the narrower one does.
+        arrival_moved(&plane);
+        allowed
     })
-    .map(|said| DispatchAllowed { said })
+    .await
 }
 
 /// **Sets where the grant of `asking` to `target` (`*`: any persona) holds**, at `level`
@@ -2787,9 +2863,11 @@ fn decline_in(root: &Path, one: &dispatchwithin::Limited, audit: Audit<'_>) -> R
 /// and widening alike are the person's confirmed press; a project grant's change edits the
 /// committed file. Setting a grant to the workspace it names already confirms it for the
 /// workspace of that name that is there now. Audited first. Answers what stands now.
+// On a blocking thread ([`SETTLES`]): widening a project grant to any workspace ends in this
+// machine's acceptance of the pair, which settles against git's history.
 #[tauri::command]
 #[specta::specta]
-pub fn set_dispatch_workspace(
+pub async fn set_dispatch_workspace(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     asking: String,
@@ -2800,20 +2878,25 @@ pub fn set_dispatch_workspace(
 ) -> Result<DispatchStanding, String> {
     use dispatchwithin::Within;
     let held = planes.held(&plane)?;
-    let root = held.root();
-    let personas = purlis_core::dispatchdormant::personas_of(root).unwrap_or_default();
-    with_ground(&held, |ground| {
-        set_workspace(
-            held.dispatch_grants(),
-            ground,
-            &|name| personas.iter().any(|one| one == name),
-            &asking,
-            &target,
-            level.into(),
-            (&Within::of(from.as_deref()), &Within::of(to.as_deref())),
-        )
-    })?;
-    Ok(standing_read(root, held.dispatch_grants()))
+    crate::off_the_window("changing where the dispatch grant holds", move || {
+        let root = held.root();
+        let personas = purlis_core::dispatchdormant::personas_of(root).unwrap_or_default();
+        with_ground(&held, |ground| {
+            set_workspace(
+                held.dispatch_grants(),
+                ground,
+                &|name| personas.iter().any(|one| one == name),
+                &asking,
+                &target,
+                level.into(),
+                (&Within::of(from.as_deref()), &Within::of(to.as_deref())),
+            )
+        })?;
+        // A project grant widened to any workspace answers one that was waiting.
+        arrival_moved(&plane);
+        Ok(standing_read(root, held.dispatch_grants()))
+    })
+    .await
 }
 
 /// **Accept** on Settings' table, for a grant of the project's limited to one workspace
@@ -2908,18 +2991,7 @@ pub struct DispatchLock {
     pub target: String,
 }
 
-/// The project's dispatch grants as they changed since this machine last told the person.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
-pub struct DispatchGrantsChanged {
-    /// Each as `asking -> target`.
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
-    /// The whole list now: what the Notice sends back once it is read.
-    pub now: Vec<String>,
-}
-
-/// Everything Settings shows of dispatch grants: the grants, what policy locks, and the
-/// teammate's one-time change.
+/// Everything Settings shows of dispatch grants: the grants, and what policy locks.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct DispatchGrants {
     pub grants: Vec<DispatchGrant>,
@@ -2929,9 +3001,6 @@ pub struct DispatchGrants {
     pub locked_pairs: Vec<DispatchLock>,
     /// "Locked by policy, set by <who> in <file>.", where a policy locks anything of dispatch.
     pub locked_by: Option<String>,
-    /// How the project's grants changed since this machine last told the person; null when
-    /// nothing did.
-    pub changed: Option<DispatchGrantsChanged>,
 }
 
 /// Who last committed the line granting `pair` in the project's committed file, and when: the
@@ -3220,16 +3289,7 @@ fn state_of(root: &Path, store: &Store, open: &dyn Fn(&str) -> bool) -> Dispatch
             })
             .collect(),
         locked_by: locks_dispatch.then(|| locks.locked_by()),
-        changed: changed_of(root),
     }
-}
-
-fn changed_of(root: &Path) -> Option<DispatchGrantsChanged> {
-    dispatchgrant::changed(root).map(|change| DispatchGrantsChanged {
-        added: change.added,
-        removed: change.removed,
-        now: change.now,
-    })
 }
 
 /// The ids of the chats `held` has open.
@@ -3241,8 +3301,7 @@ fn open_ids(held: &crate::planes::Held) -> std::collections::HashSet<String> {
         .collect()
 }
 
-/// Every dispatch grant in force here, what policy locks, and the teammate's one-time change:
-/// for Settings' list and the project's Notice.
+/// Every dispatch grant in force here, and what policy locks: for Settings' list.
 #[tauri::command]
 #[specta::specta]
 pub fn dispatch_grants(
@@ -3270,38 +3329,405 @@ pub fn revoke_dispatch_grant(
     revoke(root, held.dispatch_grants(), &id, &|number, audited| {
         held.hooks().record_dispatch_grant(root, number, audited)
     })?;
+    arrival_moved(&plane);
     let open = open_ids(&held);
     Ok(state_of(root, held.dispatch_grants(), &|id| {
         open.contains(id)
     }))
 }
 
-/// **Allow** on the Notice of the project's dispatch grants (D-1437-R1): `shown` is the pairs
-/// the person allowed, as the Notice showed them, all of them or one. Each the committed file
-/// holds is audited and is in force on this machine from now on; what the file no longer
-/// holds is read. Answers what is still to tell, if anything.
+// ---- a teammate's grant, when it arrives (#1506) ---------------------------------------------
+
+/// The event the window is sent when what waits of the project's grants may have moved: an
+/// answer was given, here or in Settings, or a settling after the watcher's event finished.
+/// Its payload is a [`DispatchArrivalMoved`].
+pub const ARRIVAL: &str = "dispatch-arrival";
+
+/// What [`ARRIVAL`] carries.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchArrivalMoved {
+    pub plane: PlaneId,
+}
+
+/// Told each time what waits of a project's grants may have moved, for the window.
+pub type ArrivalTeller = Arc<dyn Fn(DispatchArrivalMoved) + Send + Sync + 'static>;
+
+static ARRIVAL_TELL: OnceLock<ArrivalTeller> = OnceLock::new();
+
+/// Sends every such move to `tell` from now on: the window, once, as the app starts.
+pub fn telling_arrival(tell: ArrivalTeller) {
+    let _ = ARRIVAL_TELL.set(tell);
+}
+
+/// Says that what waits of `plane`'s grants may have moved.
+fn arrival_moved(plane: &PlaneId) {
+    if let Some(tell) = ARRIVAL_TELL.get() {
+        tell(DispatchArrivalMoved {
+            plane: plane.clone(),
+        });
+    }
+}
+
+/// Whether a change the watcher told of may be one this machine's acceptances are settled
+/// for: the project's own file, or a burst the watcher could not place. A pull that moves the
+/// checkout and leaves that file as it was is caught where a dispatch is decided and where
+/// the window reads what waits, which both settle.
+pub fn concerns_grants(what: Option<&[purlis_core::planechange::Change]>) -> bool {
+    what.is_none_or(|changes| {
+        changes
+            .iter()
+            .any(|one| one.kind == purlis_core::planechange::Kind::Project)
+    })
+}
+
+/// **The watcher said the project at `root` moved on disk** (a pull, a branch switched, a
+/// hand's edit). **Nothing is settled on the watcher's thread, and the window is told of the
+/// change first**: where the change may be the project's file, the acceptances are settled
+/// against git's history on a thread of its own ([`purlis_core::dispatcharrival::settle`],
+/// one settling per project at a time), and the window is then told to read what waits again.
+/// A grant merely absent from the file on disk drops nothing.
+pub fn project_moved(
+    plane: &PlaneId,
+    root: &Path,
+    what: Option<&[purlis_core::planechange::Change]>,
+) {
+    if !concerns_grants(what) {
+        return;
+    }
+    let (plane, root) = (plane.clone(), root.to_path_buf());
+    let settled = std::thread::Builder::new()
+        .name("dispatch-settle".to_owned())
+        .spawn(move || {
+            purlis_core::dispatcharrival::settle(&root);
+            arrival_moved(&plane);
+        });
+    if let Err(why) = settled {
+        // Not settled now: the next dispatch and the next read of what waits both settle.
+        tracing::warn!("purlis: the project's dispatch grants were not settled ({why})");
+    }
+}
+
+/// Why a grant the person accepted before waits for a yes again.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "why", rename_all = "camelCase")]
+pub enum DispatchAgain {
+    /// A commit of the project's history took it out, and the file holds it again.
+    TakenOut,
+    /// purlis could not read the project's history since it was accepted.
+    Unread,
+    /// The persona `name` was not in the project for a time, and one of that name is.
+    Persona { name: String },
+}
+
+/// One grant of the project's waiting for the person's answer, as the Notice lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchArrived {
+    /// What an answer is sent by: the grant exactly as it is shown here. One that is shown
+    /// another way by the time the answer comes is not answered. **Everything the Notice
+    /// shows of a grant belongs in it.**
+    pub id: String,
+    /// The persona whose chats it lets dispatch.
+    pub asking: String,
+    /// The persona they may dispatch to; `*` where `any`.
+    pub target: String,
+    /// Whether it is "any persona": every persona of the project, ones added later included.
+    /// **The Notice tells of it and may decline it. It is accepted in Settings only.**
+    pub any: bool,
+    /// A name in it that is no persona of the project as it is checked out here. It can be
+    /// used by nothing, and Accept leaves it out.
+    pub undefined: Option<String>,
+    /// Why it is asked again, where the person accepted it before.
+    pub again: Option<DispatchAgain>,
+    /// **What the target persona works with**, in the words the dispatch question says it
+    /// (#1502, [`purlis_core::dispatchwants::Access::said`]): its vaults, its hosts, and what
+    /// it may itself dispatch to. It is what a yes to the pair reaches, so the Notice says it
+    /// beside the pair, and it is part of `id`. Null for "any persona", which names no one
+    /// persona, and for a grant naming a persona the project does not define.
+    pub works_with: Option<String>,
+}
+
+/// One grant the person had accepted that the project took away, as the Notice says it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchGone {
+    /// What "told" is sent by.
+    pub id: String,
+    pub asking: String,
+    /// The persona's name; `*` where `any`.
+    pub target: String,
+    pub any: bool,
+}
+
+/// What the project's dispatch grants ask of the person now.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchArrival {
+    /// The grants waiting for an answer, "any persona" first. None is in force here.
+    pub waiting: Vec<DispatchArrived>,
+    /// The grants accepted here that a commit took out of the project's file: said once,
+    /// asking nothing.
+    pub gone: Vec<DispatchGone>,
+    /// Whether the project's git history could not be asked just now. While it cannot, no
+    /// grant of the project's that was accepted here counts, and nothing can be accepted.
+    pub unread: bool,
+}
+
+/// What an answer to the arrival Notice did.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct DispatchArrivalAnswered {
+    /// Where the list was no longer as it was shown: the sentence saying so, and what was
+    /// answered all the same. Null where everything shown was answered as shown.
+    pub said: Option<String>,
+    /// What waits now.
+    pub arrival: DispatchArrival,
+}
+
+/// **What the target of the waiting grant `one` works with**, read from the project at `root`
+/// as it is now under `locks` (#1502's one function for those words, [`Access::at`]): what
+/// the arrival Notice says beside the pair. None for "any persona" and for a grant naming a
+/// persona the project does not define, which nothing can use.
+fn arrived_access(
+    root: &Path,
+    locks: &sandbox::policy::Locks,
+    one: &purlis_core::dispatcharrival::Arrived,
+) -> Option<Access> {
+    (one.target != dispatchgrant::ANY && one.undefined.is_none())
+        .then(|| Access::at(root, locks, &one.target))
+}
+
+/// `one` exactly as it is shown: the grant, whether it can be used, why it is asked again,
+/// **and what its target works with** (`works_with`, as a digest of all of it, what the
+/// sentence clips included: [`Offer::stamp`]). So a yes sent after the target gained a vault,
+/// a host or a persona it may itself dispatch to is a yes to a grant that is no longer as it
+/// was shown, and answers nothing.
+fn arrived_id(one: &purlis_core::dispatcharrival::Arrived, works_with: Option<&Access>) -> String {
+    use purlis_core::dispatcharrival::Again;
+    let again = match &one.again {
+        None => String::new(),
+        Some(Again::TakenOut) => "taken-out".to_owned(),
+        Some(Again::Unread) => "unread".to_owned(),
+        Some(Again::Persona(name)) => format!("persona {name}"),
+    };
+    let access = works_with.map_or_else(String::new, |access| {
+        Offer {
+            target: access.clone(),
+            also: Vec::new(),
+        }
+        .stamp()
+    });
+    format!(
+        "{}{SEP}{}{SEP}{again}{SEP}{access}",
+        one.said(),
+        one.undefined.as_deref().unwrap_or_default(),
+    )
+}
+
+/// The id of the waiting grant `one` as the project at `root` stands now.
+fn arrived_id_at(
+    root: &Path,
+    locks: &sandbox::policy::Locks,
+    one: &purlis_core::dispatcharrival::Arrived,
+) -> String {
+    arrived_id(one, arrived_access(root, locks, one).as_ref())
+}
+
+/// `arrival` as the window is told it, in the project at `root`.
+fn arrival_told(root: &Path, arrival: purlis_core::dispatcharrival::Arrival) -> DispatchArrival {
+    use purlis_core::dispatcharrival::Again;
+    let locks = sandbox::policy::Locks::of(root);
+    DispatchArrival {
+        waiting: arrival
+            .waiting
+            .into_iter()
+            .map(|one| (arrived_access(root, &locks, &one), one))
+            .map(|(access, one)| DispatchArrived {
+                id: arrived_id(&one, access.as_ref()),
+                works_with: access.as_ref().map(Access::said),
+                any: one.target == dispatchgrant::ANY,
+                asking: one.asking,
+                target: one.target,
+                undefined: one.undefined,
+                again: one.again.map(|why| match why {
+                    Again::TakenOut => DispatchAgain::TakenOut,
+                    Again::Unread => DispatchAgain::Unread,
+                    Again::Persona(name) => DispatchAgain::Persona { name },
+                }),
+            })
+            .collect(),
+        gone: arrival
+            .gone
+            .into_iter()
+            .filter_map(|said| {
+                let (asking, target) = said.split_once(" -> ")?;
+                Some(DispatchGone {
+                    asking: asking.to_owned(),
+                    target: target.to_owned(),
+                    any: target == dispatchgrant::ANY,
+                    id: said.clone(),
+                })
+            })
+            .collect(),
+        unread: arrival.unread,
+    }
+}
+
+/// What waits in the project at `root`, as the window is told it. **Settles first, which
+/// runs git**: for a blocking thread, never the one that pumps the window.
+fn arrival_of(root: &Path) -> DispatchArrival {
+    arrival_told(root, purlis_core::dispatcharrival::arrival(root))
+}
+
+/// What accepting "any persona" from a Notice is refused with.
+pub const ANY_IS_SETTINGS: &str = "Any persona is accepted in Settings \u{203a} Project \u{203a} \
+     Dispatch, and never from a Notice. Nothing was accepted.";
+
+/// **Accept, or Not on my machine, for `shown`**: grants the arrival Notice listed, each by
+/// the id it was shown under. `listed` is every id the Notice listed, answered or not (Accept
+/// answers the named pairs of a list that also tells of "any persona"): what waits now and
+/// was not listed is what arrived since.
+///
+/// - The records are first brought up to what the project's personas are now, as before any
+///   judged dispatch, and the list is read again. **Only a grant still exactly as it was
+///   shown is answered**: one that left the project's file, or now reads another way, is
+///   nothing, and one that arrived since is not answered by a press that never showed it.
+///   What its target works with is part of how it reads ([`arrived_id`]).
+/// - **Accept never takes "any persona"** (V100-23): a list that names one is refused whole,
+///   here in the command, before anything is audited. Not on my machine may decline it.
+/// - Accept leaves out a grant naming a persona the project does not define.
+/// - Each answer is audited before it takes effect, as Settings' own are ([`accept`],
+///   [`decline`]), and an acceptance is this machine's record only: nothing here writes the
+///   project's file.
+///
+/// Answers the sentence to say where the list had moved.
+fn answer_arrival(
+    store: &Store,
+    ground: &Ground<'_>,
+    known: &dyn Fn(&str) -> bool,
+    accepted: bool,
+    shown: &[String],
+    listed: &[String],
+) -> Result<Option<String>, String> {
+    bring_up_to_date(ground.root, store, ground.audit);
+    let now = purlis_core::dispatcharrival::arrival(ground.root).waiting;
+    let unseen = now
+        .iter()
+        .filter(|one| {
+            let id = arrived_id_at(ground.root, ground.locks, one);
+            !shown.contains(&id) && !listed.contains(&id)
+        })
+        .count();
+    let listed: Vec<_> = now
+        .iter()
+        .filter(|one| shown.contains(&arrived_id_at(ground.root, ground.locks, one)))
+        .collect();
+    if accepted && listed.iter().any(|one| one.target == dispatchgrant::ANY) {
+        return Err(ANY_IS_SETTINGS.to_owned());
+    }
+    let mut answered = 0;
+    for one in &listed {
+        if accepted {
+            if one.undefined.is_some() {
+                continue;
+            }
+            accept(store, ground, known, &one.asking, &one.target)?;
+        } else {
+            decline(ground.root, &one.asking, &one.target, ground.audit)?;
+        }
+        answered += 1;
+    }
+    let moved = listed.len() != shown.len() || unseen > 0;
+    let did = if accepted { "accepted" } else { "declined" };
+    Ok(moved.then(|| {
+        if answered == 0 {
+            format!(
+                "Nothing was {did}: the project's dispatch grants changed after this was \
+                 shown. This is what waits now."
+            )
+        } else {
+            format!(
+                "The project's dispatch grants changed after this was shown, so only what was \
+                 still as shown was {did}. This is what waits now."
+            )
+        }
+    }))
+}
+
+/// What the project's dispatch grants ask of the person now (#1506): the grants its file
+/// holds that nobody on this machine has accepted or declined, and the ones accepted here
+/// that a commit took away. For the Notice the window shows when a teammate's grant arrives.
+// On a blocking thread: it settles this machine's acceptances against git's history first.
 #[tauri::command]
 #[specta::specta]
-pub fn acknowledge_dispatch_grants(
+pub async fn dispatch_arrival(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<DispatchArrival, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window("reading the project's dispatch grants", move || {
+        Ok(arrival_of(&root))
+    })
+    .await
+}
+
+/// **Accept** (`accepted`) or **Not on my machine** on the Notice that says a teammate's
+/// grant arrived (#1506): `shown` is the ids of the grants to answer, and `listed` the ids
+/// of everything the Notice listed. Only a grant still exactly as shown is answered; each is
+/// audited first. An accepted pair is in force on this
+/// machine from now on and every dispatch waiting on it starts; a declined grant covers
+/// nothing here, is not told again, and is changed in Settings. **"Any persona" is never
+/// accepted here**: a list naming one is refused. Answers what waits now, and the sentence to
+/// say where the list had moved.
+// On a blocking thread: accepting settles against git's history.
+#[tauri::command]
+#[specta::specta]
+pub async fn answer_dispatch_arrival(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    accepted: bool,
+    shown: Vec<String>,
+    listed: Vec<String>,
+) -> Result<DispatchArrivalAnswered, String> {
+    let held = planes.held(&plane)?;
+    crate::off_the_window("answering the project's dispatch grants", move || {
+        let root = held.root();
+        let personas = purlis_core::dispatchdormant::personas_of(root).unwrap_or_default();
+        let said = with_ground(&held, |ground| {
+            answer_arrival(
+                held.dispatch_grants(),
+                ground,
+                &|name| personas.iter().any(|one| one == name),
+                accepted,
+                &shown,
+                &listed,
+            )
+        });
+        // Told whatever came of it: an answer refused half way may have answered some.
+        arrival_moved(&plane);
+        Ok(DispatchArrivalAnswered {
+            said: said?,
+            arrival: arrival_of(root),
+        })
+    })
+    .await
+}
+
+/// The person read that the project took away `shown`, grants they had accepted (#1506), by
+/// the ids [`DispatchArrival::gone`] gave: each is told once. Nothing is granted or declined.
+/// Answers what waits now.
+// On a blocking thread: what waits is read after a settling.
+#[tauri::command]
+#[specta::specta]
+pub async fn dispatch_gone_told(
     planes: tauri::State<'_, Planes>,
     plane: PlaneId,
     shown: Vec<String>,
-) -> Result<Option<DispatchGrantsChanged>, String> {
-    let held = planes.held(&plane)?;
-    let root = held.root();
-    let locks = sandbox::policy::Locks::of(root);
-    held.dispatch_grants().acknowledge(
-        &Ground {
-            root,
-            locks: &locks,
-            is_open: &|session| held.chats().recorded_chat(session).is_some(),
-            sandboxed: &|session| held.chats().confines_of(session).is_some(),
-            audit: &|number, audited| held.hooks().record_dispatch_grant(root, number, audited),
-            at: now_secs(),
-        },
-        &shown,
-    )?;
-    Ok(changed_of(root))
+) -> Result<DispatchArrival, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    crate::off_the_window("recording what was read", move || {
+        purlis_core::dispatcharrival::told_gone(&root, &shown)
+            .map_err(|why| format!("purlis could not record that it was read: {why}"))?;
+        arrival_moved(&plane);
+        Ok(arrival_of(&root))
+    })
+    .await
 }
 
 #[cfg(test)]

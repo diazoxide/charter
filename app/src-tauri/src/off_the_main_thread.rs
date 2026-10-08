@@ -261,6 +261,91 @@ mod tests {
     }
 
     #[test]
+    fn every_dispatch_command_that_may_settle_against_git_answers_off_the_thread_that_asked() {
+        // #1506, joined on train 64: a command that can end in this machine's acceptance of a
+        // grant of the project's settles against git's history, which may take seconds. Each
+        // refuses here (no dispatch 7 waits, and steward is no persona of this project), and
+        // where the refusal is given is the point: inside the work, on a blocking thread.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let planes = Planes::telling(std::sync::Arc::new(|_| {}), crate::Shipped::default(), None);
+        let plane = planes.open(dir.path());
+        let app = mock_builder()
+            .manage(planes)
+            .invoke_handler(tauri::generate_handler![
+                crate::dispatchgrants::dispatch_arrival,
+                crate::dispatchgrants::answer_dispatch_arrival,
+                crate::dispatchgrants::dispatch_gone_told,
+                crate::dispatchgrants::allow_dispatch,
+                crate::dispatchgrants::allow_dispatch_anywhere,
+                crate::dispatchgrants::accept_project_dispatch,
+                crate::dispatchgrants::allow_dispatch_to_any,
+                crate::dispatchgrants::set_dispatch_workspace,
+                crate::dispatchgrants::keep_dispatch_blocked,
+            ])
+            .build(tauri_context!(test = true))
+            .expect("the app builds");
+        tauri::WebviewWindowBuilder::new(&app, WINDOW, tauri::WebviewUrl::default())
+            .build()
+            .expect("the main window");
+        let asking = std::thread::current().id();
+        let allow = json!({
+            "plane": plane, "id": 7, "level": "project", "also": [], "shown": "",
+        });
+        let asked = [
+            ("dispatch_arrival", json!({ "plane": plane })),
+            (
+                "answer_dispatch_arrival",
+                json!({ "plane": plane, "accepted": true, "shown": [], "listed": [] }),
+            ),
+            ("dispatch_gone_told", json!({ "plane": plane, "shown": [] })),
+            ("allow_dispatch", allow.clone()),
+            ("allow_dispatch_anywhere", allow),
+            (
+                "accept_project_dispatch",
+                json!({ "plane": plane, "asking": "steward", "target": "devops" }),
+            ),
+            (
+                "allow_dispatch_to_any",
+                json!({ "plane": plane, "asking": "steward", "level": "project" }),
+            ),
+            (
+                "set_dispatch_workspace",
+                json!({
+                    "plane": plane, "asking": "steward", "target": "devops",
+                    "level": "project", "from": null, "to": "runners",
+                }),
+            ),
+        ];
+        // The list the grant store keeps of them is the one asked here.
+        assert_eq!(
+            asked
+                .iter()
+                .map(|(command, _)| *command)
+                .collect::<Vec<_>>(),
+            crate::dispatchgrants::SETTLES
+        );
+
+        let on_the_asking_thread: Vec<&str> = asked
+            .into_iter()
+            .filter(|(command, args)| ask(&app, command, args.clone()).answered_on == asking)
+            .map(|(command, _)| command)
+            .collect();
+        assert!(
+            on_the_asking_thread.is_empty(),
+            "answered on the thread that asked, which in the app is the window's: \
+             {on_the_asking_thread:?}"
+        );
+        // And the check can tell: a synchronous command of the same store answers where it
+        // was asked.
+        let kept = ask(
+            &app,
+            "keep_dispatch_blocked",
+            json!({ "plane": plane, "id": 7 }),
+        );
+        assert_eq!(kept.answered_on, asking);
+    }
+
+    #[test]
     fn a_terminals_resize_and_unwatch_answer_on_the_thread_that_asked_so_they_keep_their_order() {
         // #891: a pane's resize must land before the watch after it, and Tauri keeps that order
         // only for synchronous commands. Both refuse here, as there is no session 7; where the

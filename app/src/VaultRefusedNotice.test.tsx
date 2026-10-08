@@ -32,7 +32,8 @@ const DEVOPS: VaultRefused = {
 };
 
 /** What only reads: the refusals, and the dispatches this chat has held for the person. */
-const READS = ["vault_refusals", "dispatch_grants_needed"];
+// What waits of the project's grants is read beside them (#1506): a read, never a press.
+const READS = ["vault_refusals", "dispatch_grants_needed", "dispatch_arrival"];
 
 /** A dispatch chat 7 asked of devops, held for the person. */
 const HELD: DispatchPending = {

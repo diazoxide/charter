@@ -55,7 +55,6 @@ const state = (over: Partial<DispatchGrants> = {}): DispatchGrants => ({
   all_locked: null,
   locked_pairs: [],
   locked_by: null,
-  changed: null,
   ...over,
 });
 

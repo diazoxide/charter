@@ -19,7 +19,6 @@ const NONE: DispatchGrants = {
   all_locked: null,
   locked_pairs: [],
   locked_by: null,
-  changed: null,
 };
 
 /** Nothing said never, nothing granted for any persona, nothing set aside. */

@@ -2866,6 +2866,19 @@ pub fn run() {
                     );
                 })
             });
+            // What waits of a project's dispatch grants moved: the window reads it again, at
+            // its own level and on each chat's tab that asks about one of them (#1506).
+            dispatchgrants::telling_arrival({
+                let window = app.handle().clone();
+                std::sync::Arc::new(move |moved: dispatchgrants::DispatchArrivalMoved| {
+                    windows::emit_for_plane(
+                        &window,
+                        &moved.plane.clone(),
+                        dispatchgrants::ARRIVAL,
+                        &moved,
+                    );
+                })
+            });
             // The registry is managed BEFORE a plane is opened, because opening one starts
             // programs, and a program that dies at once tells the board, which tells the
             // window, which asks this registry what the chat is called.
