@@ -1113,7 +1113,11 @@ fn a_process_below_a_chats_program_is_inside_it_whatever_its_environment_says() 
     // The variables cleared in front of the command: the project's record of its open chats
     // still names the program this process runs below.
     let set = Set::new("unused");
-    assert!(!in_a_chat(&set.ctx), "a terminal of the person's");
+    assert_eq!(
+        in_a_chat(&set.ctx),
+        Where::Outside,
+        "a terminal of the person's"
+    );
     let chat = |pid: u32| crate::reopen::Chat {
         program: "/bin/zsh".into(),
         name: "chat 3".into(),
@@ -1128,7 +1132,7 @@ fn a_process_below_a_chats_program_is_inside_it_whatever_its_environment_says() 
     };
     crate::reopen::write(set.tmp.path(), &record(std::process::id())).unwrap();
 
-    assert!(in_a_chat(&set.ctx));
+    assert_eq!(in_a_chat(&set.ctx), Where::Inside);
     let mut rec = Rec {
         stdin: GOOD.into(),
         ..Default::default()
@@ -1139,7 +1143,7 @@ fn a_process_below_a_chats_program_is_inside_it_whatever_its_environment_says() 
 
     // A program that is no ancestor of this process, and `init`, vouch for nothing.
     crate::reopen::write(set.tmp.path(), &record(1)).unwrap();
-    assert!(!in_a_chat(&set.ctx));
+    assert_eq!(in_a_chat(&set.ctx), Where::Outside);
 }
 
 #[test]
@@ -1178,4 +1182,341 @@ fn a_sign_in_never_prints_its_token_in_debug() {
         format!("{:?}", request("team", GOOD)).matches(GOOD).count(),
         0
     );
+}
+
+// ---- #1527 review: the chat check fails closed ------------------------------------------
+
+/// A project whose record of open chats names one chat, its program `pid`.
+fn with_a_chat(set: &Set, pid: u32) {
+    let record = crate::reopen::Record {
+        chats: vec![crate::reopen::Chat {
+            program: "/bin/zsh".into(),
+            name: "chat 3".into(),
+            number: Some(3),
+            pid: Some(pid),
+            ..Default::default()
+        }],
+        dealt: 3,
+        ..Default::default()
+    };
+    crate::reopen::write(set.tmp.path(), &record).unwrap();
+}
+
+#[test]
+fn a_process_in_a_chats_session_is_inside_it_though_its_parent_has_gone() {
+    // Process 70's parent is launchd now (it was started by the chat, then left it), and its
+    // session is still the chat's: every chat's program leads its own session.
+    let set = Set::new("unused");
+    with_a_chat(&set, 30);
+    let parents = |pid: u32| match pid {
+        70 => Some(1),
+        _ => None,
+    };
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(30)),
+        Where::Inside
+    );
+    assert_eq!(
+        in_a_chat_with(&set.ctx, 70, parents, |_| Ok(70)),
+        Where::Outside,
+        "its own session, and launchd above it"
+    );
+}
+
+#[test]
+fn where_purlis_cannot_tell_it_says_so_and_takes_no_token() {
+    let set = Set::new("unused");
+    with_a_chat(&set, 30);
+    // A parent that cannot be read, or a session that cannot be.
+    assert!(matches!(
+        in_a_chat_with(&set.ctx, 70, |_| None, |_| Ok(70)),
+        Where::Unsure(_)
+    ));
+    assert!(matches!(
+        in_a_chat_with(
+            &set.ctx,
+            70,
+            |_| Some(1),
+            |_| Err(std::io::Error::other("gone"))
+        ),
+        Where::Unsure(_)
+    ));
+
+    // A record of open chats that is not one this purlis can read.
+    let record = crate::reopen::path(set.tmp.path());
+    std::fs::write(&record, "not a record").unwrap();
+    let Where::Unsure(why) = in_a_chat(&set.ctx) else {
+        panic!("a garbled record was read as no chats");
+    };
+    let mut rec = Rec {
+        stdin: GOOD.into(),
+        ..Default::default()
+    };
+    assert_eq!(vaultcmd::add(&set.ctx, &add_request("team"), &mut rec), 1);
+    assert!(
+        rec.said()
+            .contains("cannot tell whether this runs inside a chat"),
+        "{}",
+        rec.said()
+    );
+    assert!(rec.said().contains(&why));
+    assert_eq!(rec.stdin, GOOD, "nothing was read");
+    assert_eq!(set.args(), "", "no program was run");
+
+    // One that cannot be read at all.
+    std::fs::remove_file(&record).unwrap();
+    std::fs::create_dir_all(&record).unwrap();
+    assert!(matches!(in_a_chat(&set.ctx), Where::Unsure(_)));
+}
+
+// ---- #1527 review: alike is the whole binding, and the digest what was shown -------------
+
+#[test]
+fn a_vault_that_binds_the_variable_to_another_target_is_not_offered() {
+    let set = several();
+    let config = json!({"op-vault": "Odd", "env": {"OP_CONNECT_TOKEN": "OP_TEAM_TOKEN"}});
+    registry::add_vault(
+        &set.ctx,
+        "odd",
+        "1password",
+        config.as_object().unwrap().clone(),
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let names: Vec<String> = alike_of(&set.ctx, "team")
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert_eq!(names, ["both", "edge", "pulled"]);
+}
+
+#[test]
+fn a_token_stored_for_a_ticked_vault_after_it_was_shown_is_not_replaced() {
+    let set = several();
+    let listed = alike_of(&set.ctx, "team");
+    let ticks = [tick(&listed, "edge")];
+    // From its own tab, after the list was shown: "has no token yet" is no longer true.
+    let edge = registry::vault(&set.ctx, "edge").unwrap();
+    identity::put_in_keyring(&set.ctx, &edge, OTHER).unwrap();
+
+    let marked = change(&set.ctx, "team", &SignIn::Token(GOOD.into()), None, &ticks).unwrap();
+
+    assert_eq!(marked.skipped, [("edge".to_string(), NotMarked::Changed)]);
+    let bare = set.bare();
+    let edge = registry::vault(&bare, "edge").unwrap();
+    assert_eq!(
+        env_overlay(&bare, &edge).unwrap(),
+        [("OP_SERVICE_ACCOUNT_TOKEN".to_string(), OTHER.to_string())]
+    );
+}
+
+// ---- #1527 review: what a failed create leaves ------------------------------------------
+
+#[test]
+fn a_forced_create_that_fails_keeps_the_old_record_and_its_token() {
+    let set = Set::new("unused");
+    create(&set.ctx, &request("team", GOOD)).unwrap();
+    let local_before = std::fs::read_to_string(set.ctx.local_registry()).unwrap();
+    let items_before = set.items();
+    // The committed half tags it for a persona the new registration does not say.
+    std::fs::create_dir_all(set.tmp.path().join("personas/intruder")).unwrap();
+    set.commit(json!({"team": {"provider": "1password", "persona": "intruder", "config": {}}}));
+    let mut again = request("team", OTHER);
+    again.force = true;
+
+    assert!(create(&set.ctx, &again).is_err());
+
+    assert_eq!(
+        std::fs::read_to_string(set.ctx.local_registry()).unwrap(),
+        local_before
+    );
+    assert_eq!(
+        set.items(),
+        items_before,
+        "the old item is kept, the new one gone"
+    );
+    let bare = set.bare();
+    let vault = registry::vault(&bare, "team").unwrap();
+    assert_eq!(
+        env_overlay(&bare, &vault).unwrap(),
+        [("OP_SERVICE_ACCOUNT_TOKEN".to_string(), GOOD.to_string())]
+    );
+}
+
+#[test]
+fn a_create_whose_local_write_fails_after_the_token_was_stored_leaves_neither() {
+    use std::os::unix::fs::PermissionsExt;
+    let set = Set::new("unused");
+    bound(&set, "older", "Ops", "OP_TEAM_TOKEN");
+    let half = set.ctx.local_registry();
+    let was = std::fs::read_to_string(&half).unwrap();
+    // This machine's half can be read and not replaced: a file made read-only is the
+    // person's to open up again.
+    std::fs::set_permissions(&half, std::fs::Permissions::from_mode(0o400)).unwrap();
+
+    let refused = create(&set.ctx, &request("team", GOOD));
+    std::fs::set_permissions(&half, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let refused = refused.unwrap_err();
+    assert!(!refused.message.contains(GOOD), "{}", refused.message);
+    assert!(
+        set.items().is_empty(),
+        "the token stored first was deleted again"
+    );
+    assert_eq!(std::fs::read_to_string(&half).unwrap(), was);
+    assert!(registry::vault(&set.ctx, "team").is_err());
+}
+
+// ---- #1527 review: the command a missing token's sentence prints -------------------------
+
+#[test]
+fn the_printed_command_gives_a_registered_vault_its_token_and_drops_nothing() {
+    let set = Set::new("unused");
+    let mut first = request("team", GOOD);
+    first.place.op_item = Some("deploy-keys".into());
+    first.place.account = Some("acme.1password.eu".into());
+    create(&set.ctx, &first).unwrap();
+    // Tagged for a persona on this machine alone: the tag a registration again would drop.
+    let mut local = registry::load_local(&set.ctx).unwrap();
+    local["vaults"]["team"]["persona"] = json!("devops");
+    registry::save_local(&set.ctx, &local).unwrap();
+    let config_before = set.local()["vaults"]["team"]["config"].clone();
+    // The token is gone from this machine, and the sentence says how to give it again.
+    std::fs::remove_file(set.ctx.state.join(keyring::STUB_FILE)).unwrap();
+    let vault = registry::vault(&set.ctx, "team").unwrap();
+    let said = env_overlay(&set.ctx, &vault).unwrap_err().message;
+    let printed = token_again("team");
+    assert!(said.contains(&printed), "{said}");
+    assert_eq!(
+        printed,
+        "purlis vault add team --provider 1password --token-stdin"
+    );
+
+    // Exactly what that command asks for, as `purlis-cli` parses it (its own test holds the
+    // parse): the name, the provider and the flag, and nothing else.
+    let request = AddRequest {
+        name: "team".into(),
+        provider: "1password".into(),
+        token_stdin: true,
+        ..Default::default()
+    };
+    let mut rec = Rec {
+        stdin: format!("{OTHER}\n"),
+        ..Default::default()
+    };
+    assert_eq!(
+        vaultcmd::add(&set.ctx, &request, &mut rec),
+        0,
+        "{}",
+        rec.said()
+    );
+
+    assert!(rec.said().contains("Its other settings are as they were"));
+    let config_after = &set.local()["vaults"]["team"]["config"];
+    for key in ["op-vault", "op-item", "account", "token"] {
+        assert_eq!(config_after[key], config_before[key], "{key}");
+    }
+    assert_eq!(set.local()["vaults"]["team"]["persona"], "devops");
+    let bare = set.bare();
+    let vault = registry::vault(&bare, "team").unwrap();
+    assert_eq!(
+        env_overlay(&bare, &vault).unwrap(),
+        [("OP_SERVICE_ACCOUNT_TOKEN".to_string(), OTHER.to_string())]
+    );
+    // Tested where its items already are.
+    assert!(
+        set.args()
+            .ends_with("item list --vault Engineering --format json --account acme.1password.eu\n"),
+        "{}",
+        set.args()
+    );
+}
+
+#[test]
+fn the_printed_command_converts_a_vault_bound_to_a_variable_too() {
+    let set = Set::new("unused");
+    bound(&set, "team", "Engineering", "OP_TEAM_TOKEN");
+    let mut rec = Rec {
+        stdin: GOOD.into(),
+        ..Default::default()
+    };
+    let request = AddRequest {
+        name: "team".into(),
+        provider: "1password".into(),
+        token_stdin: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        vaultcmd::add(&set.ctx, &request, &mut rec),
+        0,
+        "{}",
+        rec.said()
+    );
+    let bare = set.bare();
+    let vault = registry::vault(&bare, "team").unwrap();
+    assert_eq!(
+        env_overlay(&bare, &vault).unwrap(),
+        [("OP_SERVICE_ACCOUNT_TOKEN".to_string(), GOOD.to_string())]
+    );
+}
+
+#[test]
+fn a_setting_given_beside_the_token_of_a_registered_vault_is_refused_not_taken() {
+    let set = Set::new("unused");
+    create(&set.ctx, &request("team", GOOD)).unwrap();
+    let before = std::fs::read_to_string(set.ctx.local_registry()).unwrap();
+    let mut other_vault = add_request("team");
+    other_vault.op_vault = Some("Ops".into());
+    let mut same_vault = add_request("team");
+    same_vault.op_vault = Some("Engineering".into());
+
+    let mut rec = Rec {
+        stdin: OTHER.into(),
+        ..Default::default()
+    };
+    assert_eq!(vaultcmd::add(&set.ctx, &other_vault, &mut rec), 1);
+    assert!(
+        rec.said().contains("--op-vault would change it too"),
+        "{}",
+        rec.said()
+    );
+    assert_eq!(rec.stdin, OTHER, "nothing was read");
+    assert_eq!(
+        std::fs::read_to_string(set.ctx.local_registry()).unwrap(),
+        before
+    );
+
+    // The setting it already has is no change.
+    let mut rec = Rec {
+        stdin: OTHER.into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        vaultcmd::add(&set.ctx, &same_vault, &mut rec),
+        0,
+        "{}",
+        rec.said()
+    );
+}
+
+#[test]
+fn a_listing_that_fails_for_a_reason_purlis_does_not_know_says_the_listing_failed() {
+    let set = Set::new("something nobody has seen");
+    let failed = op_vaults(&set.ctx, &SignIn::Token(BAD.into()), None).unwrap_err();
+    assert_eq!(failed.kind, Kind::Other);
+    assert!(
+        failed.why.starts_with("purlis could not list"),
+        "{}",
+        failed.why
+    );
+    assert!(
+        !failed.why.contains("The test did not pass"),
+        "{}",
+        failed.why
+    );
+    let refused = Set::new("401: Unauthorized");
+    let failed = op_vaults(&refused.ctx, &SignIn::Token(BAD.into()), None).unwrap_err();
+    assert_eq!(failed.kind, Kind::SignIn);
 }

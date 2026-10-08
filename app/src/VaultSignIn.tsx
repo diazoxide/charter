@@ -85,7 +85,15 @@ export function VaultSignIn({
   const [opVault, setOpVault] = useState("");
   const [opItem, setOpItem] = useState("");
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
-  const [tested, setTested] = useState<SetupTested>();
+  /** The last test's answer, and the name it was for: a test of a new vault checked its
+   *  default item, `charter-<name>`, so it says nothing once the name has changed. */
+  const [testedAs, setTestedAs] = useState<{ name: string; said: SetupTested }>();
+  const tested =
+    testedAs !== undefined && (existing || testedAs.name === name.trim())
+      ? testedAs.said
+      : undefined;
+  const setTested = (said: SetupTested | undefined) =>
+    setTestedAs(said === undefined ? undefined : { name: name.trim(), said });
   const [trouble, setTrouble] = useState<string>();
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLInputElement>(null);
@@ -200,9 +208,12 @@ export function VaultSignIn({
     onDone(answer.data);
   };
 
+  /** The sign-in was refused already, while its vaults were listed: there is nothing to test
+   *  or store with it, and the person is told so then, not after typing a vault's name. */
+  const refusedAtSignIn = begun?.listing?.kind === "sign-in";
   const named = existing || (name.trim() !== "" && nameTrouble === undefined);
   const placed = existing || opVault.trim() !== "";
-  const ready = begun !== undefined && named && placed && !busy;
+  const ready = begun !== undefined && !refusedAtSignIn && named && placed && !busy;
   const pinned = account !== "" ? account : address.trim();
 
   return (
@@ -335,7 +346,13 @@ export function VaultSignIn({
         </p>
       )}
 
-      {begun !== undefined && !existing && (
+      {begun?.listing && refusedAtSignIn && (
+        <p className="trouble" role="alert">
+          {begun.listing.why}
+        </p>
+      )}
+
+      {begun !== undefined && !existing && !refusedAtSignIn && (
         <>
           {begun.op_vaults.length > 0 ? (
             <SettingRow
@@ -360,7 +377,9 @@ export function VaultSignIn({
               label="1Password vault"
               help={
                 begun.listing
-                  ? `purlis could not list this sign-in's vaults, so type the name. ${begun.listing.why}`
+                  ? begun.listing.kind === "other"
+                    ? begun.listing.why
+                    : `${begun.listing.why} Type the vault's name to go on.`
                   : "This sign-in lists no vault, so type the name."
               }
               control={(ids) => (
@@ -399,7 +418,7 @@ export function VaultSignIn({
         </>
       )}
 
-      {begun !== undefined && begun.alike.length > 0 && (
+      {begun !== undefined && !refusedAtSignIn && begun.alike.length > 0 && (
         <SettingRow
           label="Also use this token for"
           grouped
@@ -451,7 +470,7 @@ export function VaultSignIn({
       )}
 
       <SettingActions>
-        {begun !== undefined && (
+        {begun !== undefined && !refusedAtSignIn && (
           <button type="button" tabIndex={0} disabled={!ready} onClick={() => void test()}>
             {tested === undefined ? "Test" : "Test again"}
           </button>

@@ -261,7 +261,7 @@ describe("setting up how a 1Password vault signs in", () => {
     const typed = within(dialog).getByLabelText("1Password vault");
     expect(typed.tagName).toBe("INPUT");
     expect(typed).toHaveAccessibleDescription(
-      "purlis could not list this sign-in's vaults, so type the name. purlis could not reach 1Password.",
+      "purlis could not reach 1Password. Type the vault's name to go on.",
     );
   });
 
@@ -510,5 +510,54 @@ describe("setting up how a 1Password vault signs in", () => {
       "Engineering",
     );
     expect(within(dialog).getByRole("button", { name: "Test" })).toBeDisabled();
+  });
+
+  it("asks for the test again when the new vault's name changes after it passed", async () => {
+    // The test checked the item the name gives by default, `charter-<name>`.
+    const asked = core({ vault_setup_begin: begun(), vault_setup_test: passed() });
+    const { dialog } = draw();
+    await giveTheToken(dialog);
+    await userEvent.selectOptions(within(dialog).getByLabelText("1Password vault"), "Engineering");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await within(dialog).findByRole("button", { name: "Create vault" });
+
+    await userEvent.type(within(dialog).getByLabelText("Name"), "-2");
+
+    expect(within(dialog).queryByRole("button", { name: /Create/ })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Test" })).toBeEnabled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(asked.at(-1)?.args.vault).toBe("team-2"));
+  });
+
+  it("says a sign-in refused while its vaults were listed, and asks for no vault", async () => {
+    const asked = core({
+      vault_setup_begin: begun({
+        op_vaults: [],
+        listing: { kind: "sign-in", why: "1Password refused the sign-in with this token." },
+      }),
+    });
+    const { dialog } = draw();
+    await giveTheToken(dialog);
+
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "1Password refused the sign-in with this token.",
+    );
+    expect(within(dialog).queryByLabelText("1Password vault")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /Test/ })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /Create/ })).not.toBeInTheDocument();
+    // The way on is another token.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Give another token" }));
+    expect(asked.at(-1)?.cmd).toBe("vault_setup_cancel");
+    expect(within(dialog).getByLabelText("Service-account token")).toBeInTheDocument();
+  });
+
+  it("says a listing that failed otherwise in its own words, and has the name typed", async () => {
+    const why =
+      "purlis could not list the 1Password vaults this sign-in can see (op exit 1), and did not recognise why.";
+    core({ vault_setup_begin: begun({ op_vaults: [], listing: { kind: "other", why } }) });
+    const { dialog } = draw();
+    await giveTheToken(dialog);
+    expect(within(dialog).getByLabelText("1Password vault")).toHaveAccessibleDescription(why);
   });
 });

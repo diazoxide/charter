@@ -551,17 +551,15 @@ fn identity_unset(
 
 /// [`identity_unset`] for a vault that declares a token kept in the keyring and read through no
 /// variable (#1527): there is no export to name, so the ways out are the vault's tab and, in a
-/// terminal, the set-up again with the token on standard input.
+/// terminal, `--token-stdin` on the vault as it is ([`setup::token_again`]), which keeps
+/// every other setting.
 fn kept_token_missing(
     ctx: &Ctx,
     vault: &registry::Vault,
     target: &str,
     keyring: Option<VaultError>,
 ) -> VaultError {
-    let again = format!(
-        "purlis vault add {} --provider {} --token-stdin --force",
-        vault.name, vault.provider
-    );
+    let again = setup::token_again(&vault.name);
     if identity::in_keyring(ctx, vault) {
         let why = keyring.map_or_else(
             || format!("{} holds none for it", keyring::STORE_NAME),
@@ -570,7 +568,7 @@ fn kept_token_missing(
         return VaultError::new(format!(
             "vault '{}' is read with a service-account token purlis keeps in {}, but {why}. \
              purlis will not fall back to an ambient ${target}.\n  Paste the token again in \
-             this vault's tab in the app. In a terminal, with the vault's other settings: {again}",
+             this vault's tab in the app. Or, in a terminal of your own: {again}",
             vault.name,
             keyring::STORE_NAME
         ));
@@ -579,8 +577,8 @@ fn kept_token_missing(
         "vault '{}' is read with a service-account token purlis keeps in {}, and this machine \
          has none for it. purlis will not fall back to an ambient ${target}: that would read \
          this vault under an identity it does not declare.\n  Put the token in: open this \
-         vault's tab in the app and paste it into the box there. In a terminal, with the \
-         vault's other settings: {again}",
+         vault's tab in the app and paste it into the box there. Or, in a terminal of your \
+         own: {again}",
         vault.name,
         keyring::STORE_NAME
     ))

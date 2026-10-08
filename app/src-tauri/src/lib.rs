@@ -2417,6 +2417,7 @@ fn without_channel_commands(bindings: &str) -> String {
         let command = lines[pair[0]..pair[1]].concat();
         let window_only = purlis_session_protocol::ui::WINDOW_ONLY
             .iter()
+            .chain(purlis_session_protocol::ui::WINDOW_ONLY_CREDENTIALS)
             .any(|name| command.contains(&format!("(\"{name}\"")));
         if !command.contains("Channel<") && !window_only {
             out.push_str(&command);
@@ -2652,9 +2653,18 @@ pub fn run() {
                     {
                         searches.forget(window.label());
                     }
+                    // And a vault set-up it began lets go of its token (#1527).
+                    vaults::window_gone(window, window.label());
                     windows::destroyed(window);
                 }
                 _ => {}
+            }
+        })
+        // A page that reloads begins again with nothing: a vault set-up its last load began
+        // lets go of its token, since that page will never send the cancel (#1527).
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                vaults::window_gone(webview, webview.label());
             }
         })
         .setup(|app| {
@@ -3544,7 +3554,7 @@ mod tests {
                     !called,
                     "`{command}` takes a channel, which a view carries instead"
                 );
-            } else if purlis_session_protocol::ui::WINDOW_ONLY.contains(command) {
+            } else if purlis_session_protocol::ui::window_only(command) {
                 assert!(!called, "`{command}` is the window's alone (HP-6)");
             } else {
                 assert!(

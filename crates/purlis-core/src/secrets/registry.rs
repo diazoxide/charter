@@ -134,8 +134,14 @@ pub fn usable_vaults(half: &Map<String, Value>) -> Map<String, Value> {
 pub fn load_registry(ctx: &Ctx) -> Result<Map<String, Value>, VaultError> {
     let shared = load_shared(ctx)?;
     let local = load_local(ctx)?;
-    let mut merged: Map<String, Value> = usable_vaults(&shared);
-    for (name, entry) in usable_vaults(&local) {
+    Ok(merged(&shared, &local))
+}
+
+/// The registry two halves already read make: shared as the base, local layered over it per
+/// FIELD. What [`load_registry`] answers, for a caller that needs the halves too, from one read.
+pub fn merged(shared: &Map<String, Value>, local: &Map<String, Value>) -> Map<String, Value> {
+    let mut merged: Map<String, Value> = usable_vaults(shared);
+    for (name, entry) in usable_vaults(local) {
         let Some(base) = merged.get_mut(&name).and_then(Value::as_object_mut) else {
             merged.insert(name, entry);
             continue;
@@ -157,7 +163,7 @@ pub fn load_registry(ctx: &Ctx) -> Result<Map<String, Value>, VaultError> {
     }
     let mut doc = Map::new();
     doc.insert("vaults".into(), Value::Object(merged));
-    Ok(doc)
+    doc
 }
 
 /// `vaults(doc)`: the merged registry's vault entries.
@@ -224,6 +230,21 @@ pub fn vaults_for_persona(doc: &Map<String, Value>, persona: &str) -> Vec<String
         .collect();
     out.sort();
     out
+}
+
+/// Where `name` is registered in the two halves already read: `shared`, `local` or `both`.
+pub fn scope_in(shared: &Map<String, Value>, local: &Map<String, Value>, name: &str) -> String {
+    let has = |half: &Map<String, Value>| {
+        half.get("vaults")
+            .and_then(Value::as_object)
+            .is_some_and(|v| v.contains_key(name))
+    };
+    match (has(shared), has(local)) {
+        (true, true) => "both",
+        (true, false) => "shared",
+        _ => "local",
+    }
+    .to_string()
 }
 
 /// `scope_of`: `shared`, `local` or `both` — where `name` is registered.

@@ -144,11 +144,18 @@ fn file_owner(ctx: &Ctx, file: &str, name: &str) -> Option<String> {
 
 /// `vault add --token-stdin` (#1527): the token from a prompt on a terminal, or from standard
 /// input, never from an argument or a variable. Tested first ([`setup::test`]); a test that
-/// does not pass registers nothing. Then the vault and its keyring record in one step
-/// ([`setup::create`]).
+/// does not pass stores nothing.
 ///
-/// **Refused inside a chat before anything is read** ([`setup::in_a_chat`]): a chat is never
-/// the one supplying a vault's token.
+/// - **A new vault** is registered with its keyring record in one step ([`setup::create`]),
+///   and so is one `--force` registers again.
+/// - **A 1Password vault that is registered already** keeps every setting it has and is given
+///   the token ([`setup::change`]): the command a missing token's sentence prints
+///   ([`setup::token_again`]) works as printed, wherever the vault is registered, and drops
+///   nothing. A setting given that differs from the vault's is refused rather than taken as a
+///   change: changing those is a registration again, with `--force`.
+///
+/// **Refused inside a chat before anything is read** ([`setup::in_a_chat`]), and wherever
+/// purlis cannot tell: a chat is never the one supplying a vault's token.
 fn add_with_a_token(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
     use super::setup;
     let refuse = |io: &mut dyn Io, why: String| {
@@ -172,8 +179,21 @@ fn add_with_a_token(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
             ),
         );
     }
-    if setup::in_a_chat(ctx) {
-        return refuse(io, setup::NOT_FROM_A_CHAT.into());
+    match setup::in_a_chat(ctx) {
+        setup::Where::Outside => {}
+        setup::Where::Inside => return refuse(io, setup::NOT_FROM_A_CHAT.into()),
+        setup::Where::Unsure(why) => return refuse(io, setup::could_not_tell(&why)),
+    }
+    if !registry::name_ok(&req.name) {
+        return refuse(io, registry::name_refusal(&req.name));
+    }
+    let existing = if req.force {
+        None
+    } else {
+        registry::vault(ctx, &req.name).ok()
+    };
+    if let Some(vault) = existing {
+        return token_for_a_registered_vault(ctx, req, &vault, io);
     }
     let Some(op_vault) = req.op_vault.as_deref().filter(|v| !v.is_empty()) else {
         return refuse(
@@ -186,49 +206,14 @@ fn add_with_a_token(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
             ),
         );
     };
-    if !registry::name_ok(&req.name) {
-        return refuse(io, registry::name_refusal(&req.name));
-    }
-    let given = if io.stdin_is_terminal() {
-        io.read_hidden(&format!(
-            "Service-account token for vault '{}' (not shown): ",
-            req.name
-        ))
-    } else {
-        io.read_stdin()
-    };
-    let token = match setup::clean_token(&given) {
-        Ok(token) => token,
-        Err(e) => return refuse(io, e.message),
-    };
-    drop(given);
     let place = setup::Place {
         op_vault: op_vault.to_owned(),
         op_item: req.op_item.clone(),
         account: req.account.clone(),
     };
-    let sign_in = setup::SignIn::Token(token);
-    let tested = match setup::test(ctx, &req.name, &sign_in, &place) {
-        Ok(tested) => tested,
-        Err(failed) => {
-            io.say(Say::Err(failed.why));
-            io.say(Say::Info(
-                "  Nothing was registered and no token was stored.".into(),
-            ));
-            return 1;
-        }
+    let Some(sign_in) = token_tested(ctx, &req.name, &place, io) else {
+        return 1;
     };
-    io.say(Say::Ok(format!(
-        "Signed in to 1Password: {} item(s) in vault '{}'; item '{}' {}.",
-        tested.items,
-        crate::personas::one_line(op_vault),
-        crate::personas::one_line(&tested.item),
-        if tested.item_there {
-            "is there"
-        } else {
-            "will be made with the first secret"
-        }
-    )));
     let made = setup::create(
         ctx,
         &setup::Request {
@@ -258,6 +243,137 @@ fn add_with_a_token(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
     io.say(Say::Info(format!(
         "  add secrets with: purlis secret set {} <key> --stdin",
         req.name
+    )));
+    0
+}
+
+/// The token read (a hidden prompt at a terminal, standard input otherwise), cleaned and
+/// tested against `place`; `None` once the refusal has been said. Nothing is stored here.
+fn token_tested(
+    ctx: &Ctx,
+    name: &str,
+    place: &super::setup::Place,
+    io: &mut dyn Io,
+) -> Option<super::setup::SignIn> {
+    use super::setup;
+    let given = if io.stdin_is_terminal() {
+        io.read_hidden(&format!(
+            "Service-account token for vault '{name}' (not shown): "
+        ))
+    } else {
+        io.read_stdin()
+    };
+    let token = match setup::clean_token(&given) {
+        Ok(token) => token,
+        Err(e) => {
+            io.say(Say::Err(e.message));
+            return None;
+        }
+    };
+    drop(given);
+    let sign_in = setup::SignIn::Token(token);
+    match setup::test(ctx, name, &sign_in, place) {
+        Ok(tested) => {
+            io.say(Say::Ok(format!(
+                "Signed in to 1Password: {} item(s) in vault '{}'; item '{}' {}.",
+                tested.items,
+                crate::personas::one_line(&place.op_vault),
+                crate::personas::one_line(&tested.item),
+                if tested.item_there {
+                    "is there"
+                } else {
+                    "will be made with the first secret"
+                }
+            )));
+            Some(sign_in)
+        }
+        Err(failed) => {
+            io.say(Say::Err(failed.why));
+            io.say(Say::Info(
+                "  Nothing was registered and no token was stored.".into(),
+            ));
+            None
+        }
+    }
+}
+
+/// A setting given on the command line, trimmed, or `None` for none.
+fn given(v: &Option<String>) -> Option<&str> {
+    v.as_deref().map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// `--token-stdin` for a vault registered already: its token, and nothing else of it, changes
+/// ([`super::setup::change`]). A setting given beside it that differs from the vault's is
+/// refused, since taking it would be a registration again, which `--force` asks for.
+fn token_for_a_registered_vault(
+    ctx: &Ctx,
+    req: &AddRequest,
+    vault: &Vault,
+    io: &mut dyn Io,
+) -> i32 {
+    use super::setup;
+    let refuse = |io: &mut dyn Io, why: String| {
+        io.say(Say::Err(why));
+        1
+    };
+    if vault.provider != "1password" {
+        return refuse(
+            io,
+            format!(
+                "vault '{}' is a {} vault, and --token-stdin gives a 1Password one its token. To \
+                 make it a 1Password vault, register it again: purlis vault add {} --provider \
+                 1password --op-vault <NAME> --token-stdin --force (its secrets are not moved).",
+                req.name, vault.provider, req.name
+            ),
+        );
+    }
+    let (op_vault, op_item) = match (onepassword::op_vault(vault), onepassword::op_item(vault)) {
+        (Ok(v), Ok(i)) => (v, i),
+        (Err(e), _) | (_, Err(e)) => return refuse(io, e.message),
+    };
+    let account = super::config_str(&vault.config, "account")
+        .map(|a| a.trim().to_owned())
+        .filter(|a| !a.is_empty());
+    let differs = [
+        ("--op-vault", given(&req.op_vault), Some(op_vault.as_str())),
+        ("--op-item", given(&req.op_item), Some(op_item.as_str())),
+        ("--account", given(&req.account), account.as_deref()),
+        ("--persona", given(&req.persona), vault.persona.as_deref()),
+    ]
+    .into_iter()
+    .filter(|(_, asked, has)| asked.is_some() && asked != has)
+    .map(|(flag, _, _)| flag)
+    .chain(req.share.then_some("--share"))
+    .collect::<Vec<_>>();
+    if !differs.is_empty() {
+        return refuse(
+            io,
+            format!(
+                "vault '{}' is registered already, and --token-stdin on it changes only its \
+                 token: {} would change it too. Leave {} out to keep the vault as it is, or \
+                 register it again with --force to change it.",
+                req.name,
+                differs.join(", "),
+                if differs.len() == 1 { "it" } else { "them" }
+            ),
+        );
+    }
+    let place = setup::Place {
+        op_vault,
+        op_item: Some(op_item),
+        account,
+    };
+    let Some(sign_in) = token_tested(ctx, &req.name, &place, io) else {
+        return 1;
+    };
+    if let Err(e) = setup::change(ctx, &req.name, &sign_in, None, &[]) {
+        return refuse(io, e.message);
+    }
+    io.say(Say::Ok(format!(
+        "Stored the token of vault '{}' in {}. Its other settings are as they were, and no \
+         variable is needed.",
+        req.name,
+        super::keyring::STORE_NAME
     )));
     0
 }
