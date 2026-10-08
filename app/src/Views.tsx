@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  Activity,
   Archive,
   Brain,
   ChartColumn,
@@ -78,6 +79,8 @@ import { pieceDiffOf, pieceOf } from "./pieceViews";
 import { SEARCH, isSearch } from "./contentSearch";
 import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW, sessionTitle, sessionView } from "./sessions";
+import { ActivityTab } from "./ActivityTab";
+import { ACTIVITY_VIEW, activitySession, isActivity } from "./activity";
 import { DispatchesTab } from "./DispatchesTab";
 import { DISPATCHES_VIEW, isDispatches } from "./dispatches";
 import {
@@ -245,6 +248,8 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   [SESSION_VIEW]: History,
   /** The project's dispatches (#1452). */
   [DISPATCHES_VIEW.view]: Send,
+  /** One chat's Activity (#1495). */
+  [ACTIVITY_VIEW]: Activity,
   [MEMORY_VIEW]: Brain,
   /** One todo (#1214), drawn as the Todos panel marks one. */
   [TODO_VIEW]: CircleDashed,
@@ -533,6 +538,24 @@ export function ViewPane({
               })
             }
             onOpenRecord={(path, title) => onOpenView(sessionView(path), sessionTitle(title))}
+          />
+        ) : isActivity(view) ? (
+          /* One chat's Activity (#1495): what it and its tasks said to each other, read from
+             the app's own records and followed while it is open. A line opens its chat through
+             the catalogue's verb, as a dispatch's row does. Keyed by the chat. */
+          <ActivityTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            session={activitySession(view)}
+            onShowChat={(session) =>
+              onPress?.({
+                id: `activity.chat:${session}`,
+                title: "Show its chat",
+                available: true,
+                reason: "",
+                does: { verb: "showChat", session },
+              })
+            }
           />
         ) : isSession(view) ? (
           /* A session record (SI-8d): read-only Markdown the window renders from the core's

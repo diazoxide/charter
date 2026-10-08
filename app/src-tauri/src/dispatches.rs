@@ -45,7 +45,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
-use purlis_core::dispatchrecord::{self, ChatRef, Ending, Event, Opening, Outcome, Record};
+use purlis_core::dispatchrecord::{self, ChatRef, Ending, Event, Opening, Outcome, Record, Taken};
 
 use crate::planes::Held;
 
@@ -109,8 +109,10 @@ pub(crate) fn opened(held: &Held, id: Option<String>, opening: Opening) {
         Some(id) => dispatchrecord::open_as(held.root(), id, opening, now),
         None => dispatchrecord::open(held.root(), opening, now),
     };
-    if let Err(why) = written {
-        tracing::warn!("purlis: a dispatch's record was not written ({why})");
+    match written {
+        // An open Activity tab hears of the dispatch as it starts (#1495).
+        Ok(record) => crate::activity::dispatched(held, &record),
+        Err(why) => tracing::warn!("purlis: a dispatch's record was not written ({why})"),
     }
 }
 
@@ -212,12 +214,24 @@ pub(crate) fn note(held: &Held, session: u32, event: Event) {
     }
 }
 
-/// The app took a message between persona chat `task` and the chat that asked for it: a
-/// follow-up, a progress note, a question or an answer. Its dispatch counts one more. Called
-/// only once the message is kept, with the app's own record of which chat is the task: no
+/// The app took `said`, a message between persona chat `task` and the chat that asked for it:
+/// a follow-up, a progress note, a question or an answer. Its dispatch counts one more, and
+/// keeps the message's text for the session's Activity (#1495), in one write. Called only once
+/// the message is left for its reader, with the app's own record of which chat is the task: no
 /// line names a record.
-pub(crate) fn message(held: &Held, task: u32) {
-    note(held, task, Event::Message);
+pub(crate) fn message(held: &Held, task: u32, said: &purlis_core::dispatchtalk::Message) {
+    let Some(record) = running_for(held, task) else {
+        return;
+    };
+    let now = chrono::Utc::now();
+    match dispatchrecord::said(held.root(), &record.id, said.kind, &said.text, now) {
+        Ok(Taken::Kept(kept)) => crate::activity::said(held, &kept),
+        // Counted, and past what a record keeps the text of: the tab is told how many, and
+        // none of the message's words.
+        Ok(Taken::Counted(counted)) => crate::activity::unkept(held, &counted),
+        Ok(Taken::Nothing) => {}
+        Err(why) => tracing::warn!("purlis: a dispatch's record was not updated ({why})"),
+    }
 }
 
 /// The app accepted chat `session`'s report: its dispatch ends with it. `outcome` and `text`
@@ -422,10 +436,11 @@ fn close(
     by: Option<dispatchrecord::EndedBy>,
     way: Option<dispatchrecord::EndedWay>,
 ) {
-    if let Err(why) =
-        dispatchrecord::close_as(held.root(), &record.id, ending, by, way, chrono::Utc::now())
-    {
-        tracing::warn!("purlis: a dispatch's record was not closed ({why})");
+    match dispatchrecord::close_as(held.root(), &record.id, ending, by, way, chrono::Utc::now()) {
+        // An open Activity tab hears of the report it ended with (#1495).
+        Ok(true) => crate::activity::ended(held, &record.id),
+        Ok(false) => {}
+        Err(why) => tracing::warn!("purlis: a dispatch's record was not closed ({why})"),
     }
 }
 
@@ -1006,6 +1021,7 @@ mod tests {
             report: None,
             needed_you: 2,
             messages: 0,
+            talk: Vec::new(),
             usage: None,
             conversation: None,
             cleared: false,

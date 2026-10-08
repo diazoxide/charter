@@ -120,7 +120,14 @@ fn a_finished_dispatch_s_record_holds_every_field() {
     let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
     note(&root, &opened.id, Event::NeededYou).unwrap();
     note(&root, &opened.id, Event::NeededYou).unwrap();
-    note(&root, &opened.id, Event::Message).unwrap();
+    said(
+        &root,
+        &opened.id,
+        crate::dispatchtalk::Kind::Note,
+        "Two of three pods ready.",
+        at("2026-10-07T12:02:00Z"),
+    )
+    .unwrap();
 
     let closed = close(
         &root,

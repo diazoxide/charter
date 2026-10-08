@@ -1,3 +1,4 @@
+import { activityView, isActivity } from "./activity";
 import { archiveTitle } from "./memories";
 
 /**
@@ -1105,27 +1106,49 @@ export function panesOf(tabs: Tabs, id: number): { pane: number; session: number
  * chat started again in a new session. Its tab, its place on the strip, its split and the
  * pane's focus all stay as they were; every other pane is left alone. Answers `tabs` itself
  * when no pane shows `from`.
+ *
+ * **Its Activity tab goes with it** (#1495): that view is keyed by the chat's number, which is
+ * all the window knows a chat by, so one open on `from` is about `to` from here on. It would
+ * otherwise say the chat is not open, of a chat that is.
  */
 export function replaceSession(tabs: Tabs, from: number, to: number): Tabs {
-  for (const id of tabs.order) {
-    const tab = tabs.byId[id];
+  const moved = activityFollows(tabs, from, to);
+  for (const id of moved.order) {
+    const tab = moved.byId[id];
     const found = contents(tab.layout).find(
       ({ content }) => content.kind === "session" && content.session === from,
     );
     if (!found || found.content.kind !== "session") continue;
     const content: Content = { ...found.content, session: to };
     const layout = replace(tab.layout, found.pane, (pane) => ({ ...pane, content }));
-    return { ...tabs, byId: { ...tabs.byId, [id]: { ...tab, layout } } };
+    return { ...moved, byId: { ...moved.byId, [id]: { ...tab, layout } } };
   }
   // A task shown in its session's tab, started again: the tab shows the new one (#1486).
-  for (const id of tabs.order) {
-    const tab = tabs.byId[id];
+  for (const id of moved.order) {
+    const tab = moved.byId[id];
     const at = Object.entries(tab.shows ?? {}).find(([, shown]) => shown === from);
     if (at === undefined) continue;
     const kept = showing(tab, { ...tab.shows, [Number(at[0])]: to });
-    return { ...tabs, byId: { ...tabs.byId, [id]: kept } };
+    return { ...moved, byId: { ...moved.byId, [id]: kept } };
   }
-  return tabs;
+  return moved;
+}
+
+/** `tabs` with every Activity view of chat `from` about chat `to`; `tabs` itself where none is. */
+function activityFollows(tabs: Tabs, from: number, to: number): Tabs {
+  const was = activityView(from);
+  let byId = tabs.byId;
+  for (const id of tabs.order) {
+    let layout = byId[id].layout;
+    for (const { pane, content } of contents(layout)) {
+      if (content.kind !== "view" || !isActivity(content.view) || content.view.key !== was.key)
+        continue;
+      const now: Content = { ...content, view: activityView(to) };
+      layout = replace(layout, pane, (found) => ({ ...found, content: now }));
+    }
+    if (layout !== byId[id].layout) byId = { ...byId, [id]: { ...byId[id], layout } };
+  }
+  return byId === tabs.byId ? tabs : { ...tabs, byId };
 }
 
 /** The sessions with a pane on screen: the only ones a terminal is drawing. */

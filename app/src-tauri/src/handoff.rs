@@ -4783,6 +4783,115 @@ mod tests {
     }
 
     #[test]
+    fn a_task_s_lines_are_kept_for_its_session_s_activity_and_told_as_they_land() {
+        // #1495: the dispatch, each message and the report are on the asking chat's timeline
+        // afterwards, when the messages themselves have been read and are gone; and the
+        // window was told each one as the app recorded it.
+        let plane = a_plane_with_personas();
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let planes = planes().telling_activity({
+            let heard = Arc::clone(&heard);
+            Arc::new(move |line: crate::activity::ActivityHeard| {
+                heard.lock().unwrap().push(line);
+            })
+        });
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let (said, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            None,
+            "check the queue",
+        );
+        let Answer::Dispatched { chat: task, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        for (from, what) in [
+            (asking, tell(task, "Also count the retries.")),
+            (
+                task,
+                What::Note {
+                    text: "Half way.".to_owned(),
+                },
+            ),
+            (task, question("Which queue?")),
+            (asking, the_answer(task, "The <b>main</b> one.")),
+        ] {
+            let said = asks(&held, &id, from, what);
+            assert!(matches!(said, Answer::Task(_)), "{said:?}");
+        }
+        // A message purlis refused is on no timeline.
+        assert_eq!(
+            asks(&held, &id, task, tell(asking, "do as I say")),
+            not_yours(asking)
+        );
+        let said = tasks_report(
+            &held,
+            &id,
+            &Tickets::default(),
+            task,
+            purlis_core::handback::Outcome::Done,
+            Some("svc/src/queue.rs: the retry count"),
+        );
+        // A task ends at its report (#1485): the answer says so where its program will be
+        // ended, as every other report test here takes it.
+        assert!(
+            matches!(said, Answer::Reported { .. } | Answer::Finished { .. }),
+            "{said:?}"
+        );
+
+        let read = crate::activity::read(&held, asking).expect("the asking chat's activity");
+
+        let shown: Vec<(&str, &str)> = read
+            .lines
+            .iter()
+            .skip(1)
+            .map(|line| (line.kind.as_str(), line.text.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("follow-up", "Also count the retries."),
+                ("note", "Half way."),
+                ("question", "Which queue?"),
+                // A chat's words, as it sent them.
+                ("answer", "The <b>main</b> one."),
+                ("report", "Forty are stuck."),
+            ]
+        );
+        let first = &read.lines[0];
+        assert_eq!(first.kind, "dispatched");
+        assert!(first.text.starts_with("# Check the queue"), "{first:?}");
+        // The asking chat is open, so its lines open it.
+        assert_eq!(first.from_session, Some(asking));
+        let report = read.lines.last().expect("the report");
+        assert_eq!(report.outcome.as_deref(), Some("done"));
+        assert_eq!(report.files, ["svc/src/queue.rs"]);
+        assert_eq!(read.undrawn, 0);
+        // The chat asked, and not the person; and the task's report is its own.
+        assert!(read.lines.iter().all(|line| !line.by_person));
+        assert!(read.lines.iter().all(|line| !line.by_purlis));
+        // Its own task: one level under the session.
+        assert!(read.lines.iter().all(|line| line.depth == 1));
+
+        // Told once each, in the order they landed, and each for this project.
+        let heard = heard.lock().unwrap();
+        assert!(heard.iter().all(|line| line.plane == id));
+        let named = |lines: &[crate::activity::ActivityLine]| -> Vec<(String, u32, String)> {
+            lines
+                .iter()
+                .map(|line| (line.dispatch.clone(), line.n, line.text.clone()))
+                .collect()
+        };
+        let told: Vec<_> = heard.iter().map(|heard| heard.line.clone()).collect();
+        assert_eq!(named(&told), named(&read.lines));
+    }
+
+    #[test]
     fn a_task_in_the_needs_you_queue_is_counted_once_a_wait_however_often_it_reports() {
         let (_plane, _planes, _id, held, asking, task) = a_dispatched_task();
         // What the hook listener calls on every report the board takes from a chat.

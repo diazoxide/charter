@@ -623,6 +623,7 @@ mod tests {
             }),
             needed_you: 0,
             messages: 0,
+            talk: Vec::new(),
             usage: None,
             conversation: Some("9f2c-the-conversation".to_owned()),
             cleared: false,
