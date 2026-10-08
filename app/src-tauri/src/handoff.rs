@@ -369,15 +369,17 @@ fn report_under(
     }
     // **Which kind of report it is, is this app's record of how the chat was started**, never
     // what the line says. A handoff's report is its summary, whatever else the line carried.
-    // A task's says how it ended, and one that does not is not a task's report.
+    // A task's says how it ended, and one that does not is not a task's report. That holds for
+    // a chat an older build opened by a handoff that asked for a report, too, which is read as
+    // a task (#1519): its `purlis handoff report` is answered with the command that sends it.
     let task = match (from.mode, task) {
         (Mode::Handoff, _) => None,
         (Mode::Task, Some(said)) => Some(said),
         (Mode::Task, None) => {
             return Err(format!(
-                "this chat was dispatched as a task, and a task's report says how it ended. \
+                "this chat owes '{}' a task's report, and a task's report says how it ended. \
                  Send it with `purlis dispatch report --outcome done \"<what you did and \
-                 found>\"`, or --outcome blocked or failed; '{}' is waiting on it",
+                 found>\"`, or --outcome blocked or failed",
                 from.name
             ));
         }
@@ -11334,4 +11336,7 @@ mod tests {
 
     /// A task ends at its report, stays as a finished row, and can be reopened (#1485).
     mod ends_at_report;
+
+    /// A chat an older build opened owing a report is its asker's task after an update (#1519).
+    mod older_reporting_handoff;
 }

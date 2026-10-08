@@ -994,12 +994,45 @@ pub fn settle(
 /// [`settle`] as the app runs it when it opens a project, before any chat starts: the chats
 /// still open are the ones the reopen record ([`crate::reopen`]) brings back. A record that
 /// cannot be read says nothing about which chats are gone, so nothing is ended.
+///
+/// First, a handoff an older build opened that still owes its report is made the task it now
+/// is ([`older_owing_handoffs_are_tasks`]), so one whose chat is gone ends as a task that did
+/// not report, and one whose chat comes back ends as a task when it reports.
 pub fn settle_on_open(root: &Path, now: chrono::DateTime<chrono::Utc>) -> usize {
+    older_owing_handoffs_are_tasks(root);
     let Ok(reopen) = crate::reopen::read_strictly(root) else {
         return 0;
     };
     let live = reopen.as_ref().map(Live::of).unwrap_or_default();
     settle(root, |worker| live.iter().any(|chat| chat.is(worker)), now)
+}
+
+/// **Every running dispatch an older build opened as a handoff that asked for a report is a
+/// task from now on** (#1519): its record says so, as the reopen record does of its chat
+/// (`reopen`'s older-handoff reading). Before #1515 that was how a chat that needed an answer
+/// started another; since, every such ask is a task, and nothing this build opens has this
+/// shape. So its report ends it as a task's does, and it is a finished row under the chat
+/// that asked. Only the mode changes: who asked, where it works and what it owes are as they
+/// were. A handoff that asked for nothing, and one that has ended, are left as they are. How
+/// many changed.
+pub fn older_owing_handoffs_are_tasks(root: &Path) -> usize {
+    fn owing(record: &Record) -> bool {
+        record.mode == Mode::Handoff && record.report_owed && record.running()
+    }
+    list(root)
+        .into_iter()
+        .filter(owing)
+        .filter(|record| {
+            change(root, &record.id, |record| {
+                let older = owing(record);
+                if older {
+                    record.mode = Mode::Task;
+                }
+                older
+            })
+            .unwrap_or(false)
+        })
+        .count()
 }
 
 /// How `record`'s dispatch ends when its persona chat goes without reporting: failed, saying

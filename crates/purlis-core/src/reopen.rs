@@ -1406,18 +1406,50 @@ impl From<&HandedFrom> for FromOnDisk {
 }
 
 impl FromOnDisk {
+    /// **Whether this is a chat an older build opened by a handoff that asked for a report,
+    /// and that has not sent it** (#1519): no `mode`, and `report` is `owed`.
+    ///
+    /// Before #1515 that was how a chat that needed an answer started another, and the report
+    /// it owes reached the asking chat with nothing to make that chat read it: no line was
+    /// typed into it, and its `purlis dispatch` commands did not know the chat. Since #1515
+    /// every such ask is a task, and nothing this build writes has this shape: so a chat that
+    /// still owes its report is read as what it now is, **the task of the chat that asked**.
+    /// Its report wakes that chat, it is listed and waited on, and an end without a report is
+    /// reported for. It keeps the tab it was opened with ([`Chat::tab_opened`]).
+    ///
+    /// **Never wider than it was.** Its report still goes only to the chat the record names,
+    /// it holds the grants it held ([`Chat::held`]), and only that chat may steer it. A handoff
+    /// that asked for nothing, or has sent its one report, is the handoff it was. The next
+    /// write of the record writes it in the newer shape.
+    fn owed_by_an_older_handoff(&self) -> bool {
+        self.mode.is_empty() && Owed::of(&self.report) == Owed::Due
+    }
+
     /// Held to what the app would have written: a number a chat can have, a name [`label`]
     /// takes, a workspace name that can be one. Anything else reads as no handoff at all — the
     /// note is drawn, and the pairing is what a report is checked against.
+    ///
+    /// **A handoff an older build opened owing a report reads as a task** (#1519): see
+    /// [`Self::owed_by_an_older_handoff`].
     fn sound(self) -> Option<HandedFrom> {
+        let older = self.owed_by_an_older_handoff();
         Some(HandedFrom {
             chat: (self.chat > 0).then_some(self.chat)?,
             name: label(&self.name).ok().flatten()?,
             workspace: crate::active::Place::read(&self.workspace)?,
             report: Owed::of(&self.report),
-            mode: Mode::of(&self.mode),
+            mode: if older {
+                Mode::Task
+            } else {
+                Mode::of(&self.mode)
+            },
             // Held to the ceiling: a depth no chain can have never reads as a shallower one.
-            depth: self.depth.min(crate::dispatchdecision::DEEPEST),
+            // A task is one dispatch deep at least, so an older record with no depth is not
+            // read as the chat the person started.
+            depth: self
+                .depth
+                .max(u32::from(older))
+                .min(crate::dispatchdecision::DEEPEST),
             // Held to the one shape an id is minted in: anything else names no lineage.
             root: a_ulid(&self.root),
             by_person: self.by == BY_PERSON,
@@ -1529,6 +1561,13 @@ impl From<ChatOnDisk> for Chat {
             // a number no chat here holds costs at most a gap in the counting.
             number: (chat.number > 0).then_some(chat.number),
             label: label(&chat.label).ok().flatten(),
+            // A handoff an older build opened owing a report keeps the tab it was opened
+            // with: it is read as a task, and a task has a tab where the person opened one.
+            tab_opened: chat.tab_opened
+                || chat
+                    .from
+                    .as_ref()
+                    .is_some_and(FromOnDisk::owed_by_an_older_handoff),
             from: chat.from.and_then(FromOnDisk::sound),
             held: chat.held.map(|value| HeldGrants {
                 persona: value
@@ -1536,7 +1575,6 @@ impl From<ChatOnDisk> for Chat {
                     .filter(|persona| crate::personas::valid_name(persona))
                     .map(str::to_owned),
             }),
-            tab_opened: chat.tab_opened,
             // Zero is "its own chat", as it is "this record does not say" for `number`.
             shows: (chat.shows > 0).then_some(chat.shows),
             renamed_from: Some(chat.renamed_from)
@@ -3367,6 +3405,15 @@ pub(crate) mod tests {
         }
     }
 
+    /// A handoff as this build writes one: it moved the work, and asked for no report. One that
+    /// asked for a report is an older build's, and is read as a task (#1519).
+    fn a_handoff() -> HandedFrom {
+        HandedFrom {
+            report: Owed::Nothing,
+            ..handed()
+        }
+    }
+
     // ----- a task chat is listed without a tab until the person opens it (#1447) ----------
 
     #[test]
@@ -3428,7 +3475,7 @@ pub(crate) mod tests {
         let record = Record {
             chats: vec![
                 Chat {
-                    from: Some(handed()),
+                    from: Some(a_handoff()),
                     ..claude("3", None)
                 },
                 claude("4", None),
@@ -3494,7 +3541,7 @@ pub(crate) mod tests {
                     ..claude("3", None)
                 },
                 Chat {
-                    from: Some(handed()),
+                    from: Some(a_handoff()),
                     ..claude("4", None)
                 },
             ],
@@ -3504,7 +3551,7 @@ pub(crate) mod tests {
 
         let back = read(plane.path());
         assert_eq!(back.chats[0].from, Some(task));
-        assert_eq!(back.chats[1].from, Some(handed()));
+        assert_eq!(back.chats[1].from, Some(a_handoff()));
         let text = std::fs::read_to_string(path(plane.path())).unwrap();
         assert_eq!(text.matches("\"mode\"").count(), 1, "{text}");
         assert_eq!(text.matches("\"depth\"").count(), 1, "{text}");
@@ -3529,7 +3576,7 @@ pub(crate) mod tests {
                     ..claude("3", None)
                 },
                 Chat {
-                    from: Some(handed()),
+                    from: Some(a_handoff()),
                     ..claude("4", None)
                 },
             ],
@@ -3539,7 +3586,7 @@ pub(crate) mod tests {
 
         let back = read(plane.path());
         assert_eq!(back.chats[0].from, Some(below));
-        assert_eq!(back.chats[1].from, Some(handed()));
+        assert_eq!(back.chats[1].from, Some(a_handoff()));
         let text = std::fs::read_to_string(path(plane.path())).unwrap();
         assert_eq!(text.matches("\"root\"").count(), 1, "{text}");
     }
@@ -3591,7 +3638,7 @@ pub(crate) mod tests {
                     ..claude("3", None)
                 },
                 Chat {
-                    from: Some(handed()),
+                    from: Some(a_handoff()),
                     ..claude("4", None)
                 },
             ],
@@ -3601,7 +3648,7 @@ pub(crate) mod tests {
 
         let back = read(plane.path());
         assert_eq!(back.chats[0].from, Some(asked));
-        assert_eq!(back.chats[1].from, Some(handed()));
+        assert_eq!(back.chats[1].from, Some(a_handoff()));
         let text = std::fs::read_to_string(path(plane.path())).unwrap();
         assert_eq!(text.matches("\"by\"").count(), 1, "{text}");
     }
@@ -3632,14 +3679,14 @@ pub(crate) mod tests {
         let plane = tempfile::tempdir().unwrap();
         let record = Record {
             chats: vec![Chat {
-                from: Some(handed()),
+                from: Some(a_handoff()),
                 ..claude("3", None)
             }],
             ..Default::default()
         };
         write(plane.path(), &record).unwrap();
 
-        assert_eq!(read(plane.path()).chats[0].from, Some(handed()));
+        assert_eq!(read(plane.path()).chats[0].from, Some(a_handoff()));
     }
 
     #[test]
@@ -3727,7 +3774,7 @@ pub(crate) mod tests {
         let plane = tempfile::tempdir().unwrap();
         let from_root = HandedFrom {
             workspace: crate::active::Place::PlaneRoot,
-            ..handed()
+            ..a_handoff()
         };
         let record = Record {
             chats: vec![Chat {
@@ -3741,6 +3788,83 @@ pub(crate) mod tests {
         let text = std::fs::read_to_string(path(plane.path())).unwrap();
         assert!(text.contains(r#""workspace": "plane root""#), "{text}");
         assert_eq!(read(plane.path()).chats[0].from, Some(from_root));
+    }
+
+    /// #1519: a chat an older build opened by a handoff that asked for a report still owes it
+    /// after an update, and is read as the task of the chat that asked: its report wakes that
+    /// chat, it is listed and waited on, and an end without a report is reported for. It keeps
+    /// the tab it always had, and it is never read as wider than it was.
+    #[test]
+    fn a_handoff_an_older_build_opened_owing_a_report_reads_as_the_task_of_the_chat_that_asked() {
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(path(plane.path()).parent().unwrap()).unwrap();
+        // What the older build wrote: no `mode`, a report owed, and no depth for a record
+        // written before depths were kept.
+        let older = r#"{"chat":16,"name":"steward 3","workspace":"ops","report":"owed"}"#;
+        std::fs::write(
+            path(plane.path()),
+            format!(
+                r#"{{"version":1,"at":0,"chats":[{{"program":"claude","name":"3","number":17,"from":{older}}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let back = read(plane.path()).chats.remove(0);
+
+        let from = back.from.clone().expect("it reads");
+        assert_eq!(
+            (from.chat, from.mode, from.report, from.by_person),
+            (16, Mode::Task, Owed::Due, false)
+        );
+        // A chat a dispatch started is one dispatch deep at least: never shallower than it is.
+        assert_eq!(from.depth, 1);
+        assert!(back.has_tab(), "it keeps the tab the older build gave it");
+        // The chat that asked owns it as it owns any task; no other chat does.
+        assert!(crate::dispatched::owned(16, 17, Some(&from)).is_ok());
+        assert!(crate::dispatched::owned(15, 17, Some(&from)).is_err());
+
+        // Written again, it is the newer shape, and reads back the same.
+        let record = Record {
+            chats: vec![back.clone()],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert!(text.contains(r#""mode": "task""#), "{text}");
+        assert_eq!(read(plane.path()).chats[0], back);
+    }
+
+    #[test]
+    fn a_handoff_an_older_build_opened_that_owes_nothing_now_is_the_handoff_it_was() {
+        // Fire-and-forget, or its one report already sent: nothing is owed, so nothing is a
+        // task, and a chat that reported is never read as owing again.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(path(plane.path()).parent().unwrap()).unwrap();
+        for (report, owed) in [("", Owed::Nothing), ("sent", Owed::Sent)] {
+            let older = format!(
+                r#"{{"chat":16,"name":"steward 3","workspace":"ops","report":"{report}"}}"#
+            );
+            std::fs::write(
+                path(plane.path()),
+                format!(
+                    r#"{{"version":1,"at":0,"chats":[{{"program":"claude","name":"3","from":{older}}}]}}"#
+                ),
+            )
+            .unwrap();
+
+            let back = read(plane.path()).chats.remove(0);
+
+            let from = back.from.clone().expect("it reads");
+            assert_eq!(
+                (from.mode, from.report, from.depth),
+                (Mode::Handoff, owed, 0)
+            );
+            assert!(back.has_tab(), "{report}");
+            assert!(
+                crate::dispatched::owned(16, 3, Some(&from)).is_err(),
+                "{report}"
+            );
+        }
     }
 
     #[test]

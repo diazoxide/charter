@@ -1448,3 +1448,75 @@ fn a_chat_the_person_took_over_is_marked_on_its_record_once() {
     assert!(!serde_json::to_string(&task).unwrap().contains("kept_open"));
     assert!(!serde_json::to_string(&task).unwrap().contains("ended_by"));
 }
+
+/// #1519: a handoff an older build opened, which asked for a report and has not sent it, is a
+/// task from the next launch on: its report ends it as a task's does, and it is a finished row
+/// under the chat that asked. A handoff that asked for nothing, or has ended, is as it was.
+#[test]
+fn a_running_handoff_an_older_build_opened_owing_a_report_is_a_task_from_the_next_launch() {
+    let (_d, root) = project();
+    // What the older build wrote: a handoff that asked for a report, still running.
+    let owed = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    let asked_nothing = open(
+        &root,
+        Opening {
+            report_owed: false,
+            ..a_handoff()
+        },
+        at("2026-10-07T12:00:01Z"),
+    )
+    .unwrap();
+    let ended = open(&root, a_handoff(), at("2026-10-07T12:00:02Z")).unwrap();
+    close(
+        &root,
+        &ended.id,
+        Ending {
+            report: Some(done("Sent before the update.")),
+            usage: None,
+        },
+        at("2026-10-07T12:30:00Z"),
+    )
+    .unwrap();
+    // Its persona chat comes back at this launch.
+    reopening(&root, devops().chat, devops().id.as_deref().unwrap());
+
+    settle_on_open(&root, at("2026-10-08T09:00:00Z"));
+
+    let mode = |id: &str| read(&root, id).map(|record| record.mode);
+    assert_eq!(mode(&owed.id), Some(Mode::Task));
+    assert_eq!(mode(&asked_nothing.id), Some(Mode::Handoff));
+    assert_eq!(mode(&ended.id), Some(Mode::Handoff));
+    assert!(
+        read(&root, &owed.id).unwrap().running(),
+        "its chat came back"
+    );
+
+    close(
+        &root,
+        &owed.id,
+        Ending {
+            report: Some(done("Healthy: 3 of 3 pods ready.")),
+            usage: None,
+        },
+        at("2026-10-08T09:10:00Z"),
+    )
+    .unwrap();
+    let record = read(&root, &owed.id).unwrap();
+    assert_eq!(Finished::of(&record), Some(Finished::Done));
+    assert_eq!(Finished::of(&read(&root, &ended.id).unwrap()), None);
+}
+
+#[test]
+fn a_handoff_an_older_build_opened_whose_chat_is_gone_ends_as_a_task_that_did_not_report() {
+    let (_d, root) = project();
+    let owed = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+
+    assert_eq!(settle_on_open(&root, at("2026-10-08T09:00:00Z")), 1);
+
+    let record = read(&root, &owed.id).unwrap();
+    assert_eq!(
+        Finished::of(&record),
+        Some(Finished::EndedWithoutAReport),
+        "{record:?}"
+    );
+}
