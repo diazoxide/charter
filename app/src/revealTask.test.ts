@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chatsTree, type ListedChat } from "./chatsTree";
-import { finishedRowOf, rowsAbove } from "./revealTask";
+import { chatRowOf, finishedRowOf, rowsAbove } from "./revealTask";
 
 /** Bringing a failed task's finished row into view (#1491). */
 
@@ -64,5 +64,19 @@ describe("a finished row, found by what the list says of itself", () => {
     expect(finishedRowOf(list(), "steward 1", "check the queue")).toBeNull();
     expect(finishedRowOf(list(), "steward 3", "check prod")).toBeNull();
     expect(finishedRowOf(null, "steward 1", "check prod")).toBeNull();
+  });
+});
+
+describe("a chat's own row, found by its number (#1490)", () => {
+  it("is the row of the tree that carries it, and no other element that does", () => {
+    const section = document.createElement("section");
+    section.innerHTML = `
+      <div data-session="7">a pane</div>
+      <button role="treeitem" data-session="7">steward 7</button>
+      <button role="treeitem" data-session="70">steward 70</button>`;
+
+    expect(chatRowOf(section, 7)?.textContent).toBe("steward 7");
+    expect(chatRowOf(section, 8)).toBeNull();
+    expect(chatRowOf(null, 7)).toBeNull();
   });
 });

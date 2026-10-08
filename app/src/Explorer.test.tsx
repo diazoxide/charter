@@ -325,7 +325,7 @@ describe("the explorer", () => {
 
     // A row of the tree, folded: what unfolds it and what it then lists is
     // `Explorer.tasks.test.tsx`'s.
-    const count = screen.getByRole("treeitem", { name: "3 helpers of ide.1" });
+    const count = screen.getByRole("treeitem", { name: "3 helpers of ide.1, 1 working, 1 failed" });
     expect(count).toHaveAttribute("aria-expanded", "false");
     // The chat's row is described by it, so a screen reader on it hears how many it spawned.
     expect(screen.getByRole("treeitem", { name: /^ide\.1/ })).toHaveAccessibleDescription(
@@ -383,8 +383,10 @@ describe("the explorer", () => {
     const handoff = screen.getByRole("treeitem", { name: /moved on/ });
     expect(handoff.getAttribute("aria-level")).toBe(asking.getAttribute("aria-level"));
     expect(asking.closest("li")).not.toContainElement(handoff);
-    // Nothing is counted: every chat here has its row.
-    expect(screen.queryByRole("treeitem", { name: /\d tasks?/ })).toBeNull();
+    // It is still one of the session's tasks, and the session's line counts it.
+    expect(asking.closest("li")).toContainElement(
+      screen.getByRole("treeitem", { name: "1 task · 1 working" }),
+    );
   });
 
   it("lists a task whose asking chat is not at this spot beside the other chats", () => {

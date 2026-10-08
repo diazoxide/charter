@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { FinishedTask } from "./bindings";
 import { moved, nothingKnown, type ChatStates, type State } from "./chatState";
 import type { ListedChat } from "./chatsTree";
 import {
-  countTasks,
-  countsSaid,
-  endedUnder,
+  belowOf,
+  countParts,
   firstNeeding,
   helperShown,
+  helpersCountOf,
+  helpersCountSaid,
   helpersOf,
   helpersSaid,
   housed,
@@ -15,6 +15,8 @@ import {
   shortIds,
   tasksSaid,
 } from "./explorerTasks";
+import { totalOf } from "./taskBuckets";
+import { taskCountOf } from "./taskCounts";
 
 function listed(session: number, on: Partial<ListedChat> = {}): ListedChat {
   return {
@@ -39,25 +41,6 @@ function listed(session: number, on: Partial<ListedChat> = {}): ListedChat {
 /** A task of `asker` with no tab of its own. */
 const task = (session: number, asker: number, on: Partial<ListedChat> = {}) =>
   listed(session, { parent: asker, mode: "task", tab: false, report: "owed", ...on });
-
-function finished(asker: number, how: FinishedTask["how"]): FinishedTask {
-  return {
-    id: `${asker}-${how}`,
-    asker,
-    name: how,
-    persona: null,
-    how,
-    outcome: how,
-    folds: how === "done" || how === "cancelled",
-    report: "",
-    changed: null,
-    ended: null,
-    place: "",
-    branch: null,
-    reopens: false,
-    not_reopened: null,
-  };
-}
 
 /** What the board says of each chat, and who is in the queue. */
 function board(states: Record<number, State>, queue: number[] = []): ChatStates {
@@ -119,49 +102,33 @@ describe("which chats live inside another chat's tab", () => {
   });
 });
 
-describe("the count of a session's tasks", () => {
-  it("says how many work, need you, are done and failed, by the state each row would say", () => {
-    const open = [
+describe("what a tasks line says", () => {
+  it("counts a set of tasks working at a place by the one count, each in one bucket", () => {
+    const tasks = [
       task(2, 1),
-      task(3, 1),
+      task(3, 1, { asking: "steward 1" }),
       task(4, 1),
-      task(5, 1, { report: "sent", outcome: "done" }),
+      task(5, 1, { report: "sent", outcome: "cancelled" }),
       task(6, 1, { report: "failed" }),
-      // Idle: in the total, and in no state the line names.
-      task(7, 1),
     ];
-    const states = board(
-      { 2: "running", 3: "running", 4: "waiting", 5: "waiting", 6: "done", 7: "waiting" },
-      [4],
-    );
+    const states = board({ 2: "running", 3: "running", 4: "waiting", 5: "waiting", 6: "done" });
 
-    const counts = countTasks(states, open, [finished(1, "done"), finished(1, "blocked")]);
+    const count = taskCountOf(states, belowOf(tasks));
 
-    expect(counts).toEqual({ total: 8, working: 2, needsYou: 1, done: 2, failed: 2 });
-    expect(countsSaid(counts).map((one) => one.said)).toEqual([
-      "2 working",
-      "1 needs you",
-      "2 done",
-      "2 failed",
-    ]);
+    expect(count).toEqual({ working: 2, waiting: 1, done: 1, failed: 1 });
+    expect(totalOf(count)).toBe(5);
   });
 
-  it("says nothing of a state no task is in", () => {
-    const counts = countTasks(board({ 2: "running" }), [task(2, 1)]);
-
-    expect(countsSaid(counts).map((one) => one.said)).toEqual(["1 working"]);
-    expect(tasksSaid(counts.total)).toBe("1 task");
+  it("says each part in the session row's words, with the mark of its state", () => {
+    expect(countParts({ working: 2, waiting: 1, done: 3, failed: 1 })).toEqual([
+      { bucket: "working", said: "2 working", shape: "ring", token: "state.running" },
+      { bucket: "waiting", said: "1 waiting", shape: "pause", token: "text.muted" },
+      { bucket: "done", said: "3 done", shape: "tick", token: "text.muted" },
+      { bucket: "failed", said: "1 failed", shape: "cross", token: "state.failed" },
+    ]);
+    expect(countParts({ working: 0, waiting: 0, done: 0, failed: 0 })).toEqual([]);
+    expect(tasksSaid(1)).toBe("1 task");
     expect(tasksSaid(5)).toBe("5 tasks");
-  });
-
-  it("counts the finished tasks of the session and of each task inside its tab", () => {
-    const by = new Map([
-      [1, [finished(1, "done")]],
-      [2, [finished(2, "failed")]],
-      [9, [finished(9, "done")]],
-    ]);
-
-    expect(endedUnder(by, 1, [task(2, 1)]).map((one) => one.id)).toEqual(["1-done", "2-failed"]);
   });
 
   it("names the task that has needed you longest", () => {
@@ -207,6 +174,33 @@ describe("a chat's helpers", () => {
     expect(
       sameHelpers(helpersOf(two, [1], new Set()), helpersOf(nothingKnown, [1], new Set())),
     ).toBe(false);
+  });
+
+  it("are counted by how they stand: an ended one stays in the total and out of the working", () => {
+    const states = moved(nothingKnown, {
+      plane: "/p",
+      session: 1,
+      state: "running",
+      needs_you: false,
+      queue: [],
+      moved_at: 1,
+      reports: [],
+      refusals: [],
+      sequence: 1,
+      children: [
+        { agent: "a", state: "running" },
+        { agent: "b", state: "done" },
+        { agent: "c", state: "failed" },
+        { agent: "d", state: "done" },
+      ],
+    });
+
+    const count = helpersCountOf(states, 1);
+
+    expect(count).toEqual({ total: 4, working: 1, failed: 1 });
+    expect(helpersCountSaid(count)).toBe("4 helpers · 1 working · 1 failed");
+    expect(helpersCountSaid({ total: 40, working: 0, failed: 0 })).toBe("40 helpers");
+    expect(helpersCountOf(states, 2)).toEqual({ total: 0, working: 0, failed: 0 });
   });
 
   it("are counted in the singular and the plural", () => {

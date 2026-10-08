@@ -60,7 +60,8 @@ import {
   helpersId,
   tasksNeedId,
 } from "./ExplorerChats";
-import { endedUnder, helpersOf, housed, sameHelpers, shortIds, type Housed } from "./explorerTasks";
+import { belowOf, helpersOf, housed, sameHelpers, shortIds, type Housed } from "./explorerTasks";
+import { tasksBelowOf, type TasksBelow } from "./taskCounts";
 import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
@@ -76,6 +77,9 @@ const NO_TASKS: readonly ListedChat[] = [];
 
 /** Nothing is asked to be revealed, for an explorer drawn on its own. */
 const NOT_REVEALED = () => undefined;
+
+/** What a press on a line for the tasks working at a place does, in words. */
+const SHOWS_THEM = "Show them in the Chats list";
 
 /** No chat is named: what an explorer drawn on its own, in a test, is given. */
 const NO_NAME = () => undefined;
@@ -197,16 +201,22 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  * section above this region's explorer (`ChatsSection.tsx`) is the one tree of who asked whom,
  * and listing the same tasks here was reading them twice. In their place:
  *
- * - **one line under the session**, `5 tasks 2 working 3 done`, for every task living in its
- *   tab, wherever each works, and the finished ones until they are cleared. A press goes to
- *   that session's row in the Chats list and unfolds it;
- * - **one line under the workspace**, `2 tasks from other workspaces`, for the tasks working
- *   here that a chat of another workspace asked for, which no session's line here counts;
+ * - **one line under the session**, `5 tasks · 3 working · 1 waiting · 1 done`: the tasks
+ *   below it, wherever each works, and the finished ones until they are cleared, counted and
+ *   said as its row in the Chats list and its tab count and say them (`taskCounts.ts`). A
+ *   press goes to that session's row in the Chats list and unfolds it;
+ * - **one line under a branch**, `1 task in this branch · 1 working`, for the tasks working in
+ *   it whose session has no row under it: a task on a branch of its own is the common case,
+ *   and the branch's row must still answer "is anything already running here". The branch's
+ *   cockpit says the same line;
+ * - **one line under the workspace**, `2 tasks from other places`, for the tasks working here
+ *   that a chat with no row here asked for (another workspace's, or the project root's),
+ *   which no session's line here counts;
  * - **the hand on the session's row** while a task of it needs you, which goes to that task:
  *   the roll-up the Chats list's rows have (#1448), since the task has no row here to wear it.
  *
- * **A chat's harness helpers are a count on its row**, `3 helpers`, folded until pressed, and
- * then a row each, `helper <short id>` with its state as the harness reports it. The fold is
+ * **A chat's harness helpers are a count on its row**, `3 helpers · 1 working`, folded until
+ * pressed, and then a row each, `helper <short id>` with its state as the harness reports it. The fold is
  * each chat's own and lasts as long as the window does.
  *
  * All of these are rows of the tree, with their levels and set sizes, and each reads its own
@@ -238,7 +248,8 @@ export function Explorer({
   onReadAgain,
   listed,
   finished = NONE_FINISHED,
-  onRevealChat = NOT_REVEALED,
+  below,
+  onRevealChats = NOT_REVEALED,
   nameOf = NO_NAME,
 }: {
   /** The project, for reading a branch's folders. Without one no folder is read. */
@@ -280,9 +291,13 @@ export function Explorer({
   /** Each chat's finished tasks, by its number (#1485): counted on its line with the tasks
    *  still running. */
   finished?: ReadonlyMap<number, readonly FinishedTask[]>;
-  /** A tasks line was pressed: show that chat's row in the Chats list, unfolded, with the
-   *  keyboard on it. */
-  onRevealChat?: (session: number) => void;
+  /** Each chat's tasks as its row in the Chats list counts them (`tasksBelowOf`), by its
+   *  number: what a session's line here counts, so the two say the same. Left out, it is
+   *  worked out from `listed` and `finished` by the same function. */
+  below?: ReadonlyMap<number, TasksBelow>;
+  /** A tasks line was pressed: show these chats' rows in the Chats list, each unfolded, with
+   *  the keyboard on the first. */
+  onRevealChats?: (sessions: readonly number[]) => void;
   /** What a chat of the project is called now, by its number, whichever workspace it works
    *  in (#1484): a task that is asking the chat that dispatched it names that chat as its own
    *  row does. Nothing for a chat that has closed. */
@@ -313,6 +328,10 @@ export function Explorer({
     [chats, listed, workspace],
   );
   const house = useMemo(() => housed(project), [project]);
+  const counted = useMemo(
+    () => below ?? tasksBelowOf(project, finished),
+    [below, project, finished],
+  );
   const rows = useMemo(
     () => chats.filter((chat) => !house.hostOf.has(chat.session)),
     [chats, house],
@@ -391,7 +410,15 @@ export function Explorer({
   const scope =
     cockpit === undefined ? chats : within === undefined ? [] : chats.filter(underOf(within));
   const drawnChats = cockpit === undefined ? rows : rows.filter((chat) => scope.includes(chat));
-  const of = chatsOf(scope, drawnChats, project, house, finished, helpers);
+  const of = chatsOf(
+    scope,
+    drawnChats,
+    project,
+    house,
+    counted,
+    helpers,
+    cockpit === undefined && workspace !== undefined ? piecesOf(state) : [],
+  );
   const tree =
     cockpit === undefined || workspace === undefined
       ? treeOf(workspace, state, drawnChats, folded, files, of)
@@ -558,23 +585,24 @@ export function Explorer({
     nameOf,
     wrapping,
     onShow: onShowChat,
-    onReveal: onRevealChat,
+    onReveal: onRevealChats,
     onFoldHelpers: foldHelpers,
     treeitem,
     isDrawn,
   };
-  /** The one line for the tasks working in this tree whose session has no row in it. */
-  const fromElsewhere = (where: string) =>
-    of.elsewhere.length > 0 && (
+  /** One line for a set of tasks working at a place whose session has no row there. */
+  const placeLine = (id: string, tasks: readonly ListedChat[] | undefined, where: string) =>
+    tasks !== undefined &&
+    tasks.length > 0 && (
       <ul className="here" role="group">
         <li role="none">
           <TasksLine
-            tasks={of.elsewhere}
+            below={belowOf(tasks)}
             where={where}
-            title="Show them in the Chats list"
-            focusable={isDrawn(ELSEWHERE_ROW)}
-            item={treeitem(ELSEWHERE_ROW)}
-            onPress={() => onRevealChat(of.elsewhere[0].session)}
+            title={SHOWS_THEM}
+            focusable={isDrawn(id)}
+            item={treeitem(id)}
+            onPress={() => onRevealChats(tasks.map((task) => task.session))}
           />
         </li>
       </ul>
@@ -658,7 +686,7 @@ export function Explorer({
           {filterBox}
           <div role="tree" aria-label={`Chats and files of ${name}`} onKeyDown={onTreeKey}>
             <ChatList chats={drawnChats} {...chatRows} />
-            {fromElsewhere("working in this branch")}
+            {placeLine(ELSEWHERE_ROW, of.elsewhere, IN_THIS_BRANCH)}
             <ul className="files" role="group">
               <li role="none" data-testid={`files-${ref.repo}-${ref.piece}`}>
                 {filesOf(ref.repo, ref.piece)}
@@ -707,9 +735,10 @@ export function Explorer({
             </button>
           </RovingFocusGroup.Item>
           <ChatList chats={atTheRoot} {...chatRows} />
-          {/* The tasks working here that a chat of another workspace asked for (#1490): no
-              session's line in this workspace counts them, so the workspace says them once. */}
-          {fromElsewhere("from other workspaces")}
+          {/* The tasks working here that a chat with no row here asked for (#1490): another
+              workspace's, or the project root's. No session's line in this workspace counts
+              them, so the workspace says them once. */}
+          {placeLine(ELSEWHERE_ROW, of.elsewhere, "from other places")}
 
           {clones.length > 0 && (
             // The clones are the workspace row's children, and the wrapper is what lets them be
@@ -849,6 +878,13 @@ export function Explorer({
                               </li>
                             </ul>
                             <ChatList chats={working} {...chatRows} />
+                            {/* The tasks working in this branch whose session has no row
+                                under it (#1490): the branch still says something runs here. */}
+                            {placeLine(
+                              inBranchRow(repo, piece.piece),
+                              of.inBranch.get(inBranchRow(repo, piece.piece)),
+                              IN_THIS_BRANCH,
+                            )}
                           </li>
                         );
                       })}
@@ -962,15 +998,31 @@ function PieceCount({ pieces, refused }: { pieces?: readonly unknown[]; refused?
  * the render and {@link treeOf} both read, so a line drawn is a row the keyboard knows.
  */
 type ChatsOf = {
-  /** The running tasks living inside each drawn chat's tab. */
+  /** The running tasks living inside each drawn chat's tab: what its row's hand answers for. */
   tasks: ReadonlyMap<number, readonly ListedChat[]>;
-  /** The finished tasks counted with them. */
-  ended: ReadonlyMap<number, readonly FinishedTask[]>;
+  /** Each drawn chat's tasks as the one count takes them: what its line counts. */
+  below: ReadonlyMap<number, TasksBelow>;
   /** Each drawn chat that has helpers: their ids while unfolded, nothing while folded. */
   helpers: ReadonlyMap<number, readonly string[] | null>;
-  /** The tasks working in this tree that no drawn chat's line counts. */
+  /** The tasks working in this tree that a chat with no row in it asked for. */
   elsewhere: readonly ListedChat[];
+  /** The tasks working in each branch whose session has no row under that branch, by the
+   *  branch's line ({@link inBranchRow}). */
+  inBranch: ReadonlyMap<string, readonly ListedChat[]>;
 };
+
+/** A branch of the workspace, as the lines for the tasks working in it need it. */
+type InBranch = { id: string; path: string };
+
+/** Every branch the workspace lists, with the id of its line. */
+function piecesOf(state: WorkspaceState): InBranch[] {
+  return (state.panels?.repos ?? []).flatMap((repo) =>
+    (state.pieces[repo] ?? []).map((piece) => ({
+      id: inBranchRow(repo, piece.piece),
+      path: piece.path,
+    })),
+  );
+}
 
 /** {@link ChatsOf} for the chats `drawn`, of the chats `scope` that work in the tree. */
 function chatsOf(
@@ -978,38 +1030,48 @@ function chatsOf(
   drawn: readonly OpenChat[],
   project: readonly ListedChat[],
   house: Housed,
-  finished: ReadonlyMap<number, readonly FinishedTask[]>,
+  counted: ReadonlyMap<number, TasksBelow>,
   helpers: readonly { session: number; agents: readonly string[] | null }[],
+  branches: readonly InBranch[],
 ): ChatsOf {
   const rows = new Set(drawn.map((chat) => chat.session));
   const tasks = new Map<number, readonly ListedChat[]>();
-  const ended = new Map<number, readonly FinishedTask[]>();
+  const below = new Map<number, TasksBelow>();
   for (const session of rows) {
-    const mine = house.tasksOf.get(session) ?? NO_TASKS;
-    const over = endedUnder(finished, session, mine);
-    if (mine.length > 0) tasks.set(session, mine);
-    if (over.length > 0) ended.set(session, over);
+    const mine = house.tasksOf.get(session);
+    if (mine !== undefined) tasks.set(session, mine);
+    const count = counted.get(session);
+    if (count !== undefined) below.set(session, count);
   }
   const byNumber = new Map(project.map((chat) => [chat.session, chat]));
-  const elsewhere = scope.flatMap((chat) => {
-    const host = house.hostOf.get(chat.session);
-    const task = byNumber.get(chat.session);
-    return host === undefined || rows.has(host) || task === undefined ? [] : [task];
-  });
+  /** The tasks among `working` that live in a tab whose chat is not one of `here`. */
+  const hostless = (working: readonly OpenChat[], here: ReadonlySet<number>) =>
+    working.flatMap((chat) => {
+      const host = house.hostOf.get(chat.session);
+      const task = byNumber.get(chat.session);
+      return host === undefined || here.has(host) || task === undefined ? [] : [task];
+    });
+  const inBranch = new Map<string, readonly ListedChat[]>();
+  for (const { id, path } of branches) {
+    const working = scope.filter(underOf(path));
+    const there = hostless(working, new Set(drawn.filter(underOf(path)).map((c) => c.session)));
+    if (there.length > 0) inBranch.set(id, there);
+  }
   return {
     tasks,
-    ended,
+    below,
     helpers: new Map(
       helpers.filter((one) => rows.has(one.session)).map((one) => [one.session, one.agents]),
     ),
-    elsewhere,
+    elsewhere: hostless(scope, rows),
+    inBranch,
   };
 }
 
-/** Whether a drawn chat has a line for its tasks: any running, or any finished and not yet
- *  cleared. */
+/** Whether a drawn chat has a line for its tasks: any running below it, or any finished and
+ *  not yet cleared. */
 function hasTasks(of: ChatsOf, session: number): boolean {
-  return of.tasks.has(session) || of.ended.has(session);
+  return of.below.has(session);
 }
 
 /** The chats with a tab of their own working at a spot, each a button that brings its tab to
@@ -1036,8 +1098,8 @@ function ChatList({
   nameOf: (session: number) => string | undefined;
   wrapping: ReadonlySet<number>;
   onShow: (session: number) => void;
-  /** A tasks line was pressed: its session's row in the Chats list. */
-  onReveal: (session: number) => void;
+  /** A tasks line was pressed: these chats' rows in the Chats list. */
+  onReveal: (sessions: readonly number[]) => void;
   onFoldHelpers: (session: number, open: boolean) => void;
   /** What a row says about its place in the tree. */
   treeitem: (id: string) => TreeItem;
@@ -1050,6 +1112,7 @@ function ChatList({
       {chats.map((chat) => {
         const agents = of.helpers.get(chat.session);
         const tasks = of.tasks.get(chat.session) ?? NO_TASKS;
+        const below = of.below.get(chat.session);
         const short = agents == null ? undefined : shortIds(agents);
         return (
           <li key={chat.session} role="none">
@@ -1141,16 +1204,15 @@ function ChatList({
             )}
             {/* Its tasks, as one line (V100-14): they are listed in the Chats list, which a
                 press goes to. */}
-            {hasTasks(of, chat.session) && (
+            {below !== undefined && (
               <ul className="here" role="group">
                 <li role="none">
                   <TasksLine
-                    tasks={tasks}
-                    ended={of.ended.get(chat.session)}
+                    below={below}
                     title={`Show ${chat.name} and its tasks in the Chats list`}
                     focusable={isDrawn(tasksRow(chat.session))}
                     item={treeitem(tasksRow(chat.session))}
-                    onPress={() => onReveal(chat.session)}
+                    onPress={() => onReveal([chat.session])}
                   />
                 </li>
               </ul>
@@ -1620,6 +1682,10 @@ const helperRow = (session: number, agent: string) => `helper:${session}/${agent
 const tasksRow = (session: number) => `tasks:${session}`;
 /** The one line for the tasks working in the tree whose session has no row in it. */
 const ELSEWHERE_ROW = "tasks-elsewhere";
+/** The line for the tasks working in a branch whose session has no row under it. */
+const inBranchRow = (repo: string, piece: string) => `tasks-in:${repo}/${piece}`;
+/** What that line says after how many, in the workspace's tree and in the branch's cockpit. */
+const IN_THIS_BRANCH = "in this branch";
 /** What starts the fold key of a chat's helpers, so `fold` knows it from a clone's. */
 const HELPERS_FOLD = "helpers:";
 const cloneRow = (repo: string) => `clone:${repo}`;
@@ -1747,6 +1813,9 @@ function treeOf(
         kids: [
           folderNode(workspace, { repo, piece: piece.piece, folder: "" }, "Files", files),
           ...chatNodes(working, of),
+          ...(of.inBranch.has(inBranchRow(repo, piece.piece))
+            ? [tasksNode(inBranchRow(repo, piece.piece))]
+            : []),
         ],
         shows: true,
       };
@@ -1806,18 +1875,24 @@ function chatNodes(here: readonly OpenChat[], of: ChatsOf): TreeNode[] {
         })),
         shows: agents !== null,
       });
-    if (hasTasks(of, chat.session))
-      kids.push({ id: tasksRow(chat.session), name: "tasks", kids: [], shows: true });
+    if (hasTasks(of, chat.session)) kids.push(tasksNode(tasksRow(chat.session)));
     return { id: chatRow(chat.session), name: chat.name, kids, shows: true };
   });
+}
+
+/**
+ * A line for a set of tasks, as a row. **Named `tasks`, and a count of helpers `helpers`, for
+ * type-ahead**: what the row says first is a number that changes under the eye, so the letter
+ * that finds it is its word's, whatever the count is.
+ */
+function tasksNode(id: string): TreeNode {
+  return { id, name: "tasks", kids: [], shows: true };
 }
 
 /** The line for the tasks working in the tree whose session has no row in it, where there
  *  are any. */
 function elsewhereNode(of: ChatsOf): TreeNode[] {
-  return of.elsewhere.length === 0
-    ? []
-    : [{ id: ELSEWHERE_ROW, name: "tasks", kids: [], shows: true }];
+  return of.elsewhere.length === 0 ? [] : [tasksNode(ELSEWHERE_ROW)];
 }
 
 /** `shows` is whether its children are drawn when it is: not in a folded clone or a closed

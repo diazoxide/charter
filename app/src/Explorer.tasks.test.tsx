@@ -197,7 +197,7 @@ type Drawn = {
   listed?: ListedChat[];
   finished?: ReadonlyMap<number, FinishedTask[]>;
   onShowChat?: (session: number) => void;
-  onRevealChat?: (session: number) => void;
+  onRevealChats?: (sessions: readonly number[]) => void;
   focus?: Place;
   on?: ReturnType<typeof board>;
 };
@@ -214,7 +214,7 @@ function explorer(on: Drawn) {
         spot={undefined}
         onPick={() => {}}
         onShowChat={on.onShowChat ?? (() => {})}
-        onRevealChat={on.onRevealChat}
+        onRevealChats={on.onRevealChats}
         offers={new Map()}
         onPress={() => {}}
         onReadAgain={() => {}}
@@ -269,7 +269,57 @@ describe("a session's tasks in the explorer", () => {
     });
 
     // Three still running (one whose program ended owing its report) and two finished.
-    expect(item(/5 tasks/)).toHaveTextContent(/^5 tasks 2 working 2 done 1 failed$/);
+    expect(item(/5 tasks/)).toHaveTextContent(/^5 tasks · 2 working · 2 done · 1 failed$/);
+  });
+
+  it("counts every task in one of four buckets, as the session's row and its tab do", () => {
+    // Two working, one asking the chat that asked for it, one idle, one cancelled.
+    const on = board(
+      move(2, "running", 1),
+      move(3, "running", 2),
+      move(4, "running", 3),
+      move(5, "waiting", 4),
+      move(6, "waiting", 5),
+    );
+    draw({
+      chats: [
+        chat(1, "steward 1", ALPHA),
+        chat(2, "talk", ALPHA, { from: taskOf(1) }),
+        chat(3, "queue", ALPHA, { from: taskOf(1) }),
+        chat(4, "asks", ALPHA, { from: taskOf(1, { asking: true }) }),
+        chat(5, "rests", ALPHA, { from: taskOf(1) }),
+        chat(6, "halted", ALPHA, {
+          from: taskOf(1, { reported: true, outcome: "cancelled" }),
+        }),
+      ],
+      on,
+    });
+
+    expect(item(/5 tasks/)).toHaveTextContent(/^5 tasks · 3 working · 1 waiting · 1 done$/);
+  });
+
+  it("draws each count with the mark its state has on a row, and never mutes a failure", () => {
+    const on = board(move(2, "running", 1), move(3, "failed", 2), move(4, "waiting", 3));
+    draw({
+      chats: FIVE.slice(0, 4),
+      finished: new Map([[1, [finished(1, "18", "done")]]]),
+      on,
+    });
+
+    const parts = [...item(/4 tasks/).querySelectorAll<HTMLElement>(".counted")].map((part) => [
+      part.getAttribute("data-bucket"),
+      part.querySelector(".shape")?.getAttribute("data-shape"),
+    ]);
+    expect(parts).toEqual([
+      ["working", "ring"],
+      ["waiting", "pause"],
+      ["done", "tick"],
+      ["failed", "cross"],
+    ]);
+    // The marks are decoration: the words are the line's text.
+    expect(item(/4 tasks/)).toHaveAccessibleName(
+      "4 tasks · 1 working · 1 waiting · 1 done · 1 failed",
+    );
   });
 
   it("counts the tasks of a task with the session's, at any depth", () => {
@@ -286,16 +336,16 @@ describe("a session's tasks in the explorer", () => {
   });
 
   it("asks for the session in the Chats list when the line is pressed, by pointer or by key", async () => {
-    const onRevealChat = vi.fn();
+    const onRevealChats = vi.fn();
     const onShowChat = vi.fn();
-    draw({ onRevealChat, onShowChat });
+    draw({ onRevealChats, onShowChat });
 
     await userEvent.click(item(/5 tasks/));
-    expect(onRevealChat).toHaveBeenLastCalledWith(1);
+    expect(onRevealChats).toHaveBeenLastCalledWith([1]);
 
     item(/5 tasks/).focus();
     await userEvent.keyboard("{Enter}");
-    expect(onRevealChat).toHaveBeenCalledTimes(2);
+    expect(onRevealChats).toHaveBeenCalledTimes(2);
     // It goes to the list. It opens no chat.
     expect(onShowChat).not.toHaveBeenCalled();
   });
@@ -313,7 +363,10 @@ describe("a session's tasks in the explorer", () => {
     expect(item(/moved out/)).toBeInTheDocument();
     expect(item(/left behind/)).toBeInTheDocument();
     expect(item(/handed on/)).toBeInTheDocument();
-    expect(within(tree()).queryByRole("treeitem", { name: /task/ })).toBeNull();
+    // The task with a tab is still one of the session's, as its row in the Chats list
+    // counts it: the line says so, and a press lands on a session with that row under it.
+    expect(within(tree()).getAllByRole("treeitem", { name: /task/ })).toHaveLength(1);
+    expect(item(/steward 1/).closest("li")).toContainElement(item(/^1 task · 1 working$/));
     // Beside the session, not under it: who asked whom is the Chats list's to say.
     expect(item(/moved out/).getAttribute("aria-level")).toBe(
       item(/steward 1/).getAttribute("aria-level"),
@@ -350,12 +403,13 @@ describe("tasks working here that another workspace's chat asked for", () => {
   ];
 
   it("are one line under the workspace, which goes to them in the Chats list", async () => {
-    const onRevealChat = vi.fn();
+    const onRevealChats = vi.fn();
     const on = board(move(7, "running", 1));
-    draw({ chats: here, listed, onRevealChat, on });
+    draw({ chats: here, listed, onRevealChats, on });
 
-    const line = item(/2 tasks from other workspaces/);
-    expect(line).toHaveTextContent(/1 working/);
+    const line = item(/2 tasks from other places/);
+    // One the board has heard from and one it has not: both are at work.
+    expect(line).toHaveTextContent(/^2 tasks from other places · 2 working$/);
     expect(within(tree()).queryByRole("treeitem", { name: /check prod/ })).toBeNull();
     // A child of the workspace's row, after its chats.
     expect(line.getAttribute("aria-level")).toBe(item(/steward 1/).getAttribute("aria-level"));
@@ -363,13 +417,53 @@ describe("tasks working here that another workspace's chat asked for", () => {
     expect(place(line)).toBe("2 2/3");
 
     await userEvent.click(line);
-    expect(onRevealChat).toHaveBeenLastCalledWith(7);
+    expect(onRevealChats).toHaveBeenLastCalledWith([7, 8]);
   });
 
   it("is not drawn where every task here was asked for here", () => {
     draw();
 
     expect(within(tree()).queryByRole("treeitem", { name: /other workspaces/ })).toBeNull();
+  });
+});
+
+describe("a branch a task works in", () => {
+  const chats = [
+    chat(1, "steward 1", ALPHA),
+    chat(2, "talk", `${CUT}/one`, { from: taskOf(1) }),
+    chat(3, "queue", `${CUT}/one`, { from: taskOf(1) }),
+  ];
+
+  it("says so under its row in the workspace's tree, in the cockpit's words", async () => {
+    const onRevealChats = vi.fn();
+    draw({ chats, on: board(move(2, "running", 1), move(3, "waiting", 2)), onRevealChats });
+
+    const branch = within(tree()).getByRole("treeitem", { name: "one" });
+    const line = item(/2 tasks in this branch/);
+    expect(line).toHaveTextContent(/^2 tasks in this branch · 1 working · 1 waiting$/);
+    // Under the branch, after its files: a child of its row.
+    expect(branch.closest("li")).toContainElement(line);
+    expect(Number(line.getAttribute("aria-level"))).toBe(
+      Number(branch.getAttribute("aria-level")) + 1,
+    );
+    expect(place(line)).toMatch(/ 2\/2$/);
+    // The session's own line still counts them, where the session works.
+    expect(item(/steward 1/).closest("li")).toContainElement(item(/^2 tasks · /));
+
+    await userEvent.click(line);
+    expect(onRevealChats).toHaveBeenLastCalledWith([2, 3]);
+  });
+
+  it("says nothing under a branch whose tasks' session has its row there", () => {
+    draw({
+      chats: [
+        chat(1, "steward 1", `${CUT}/one`),
+        chat(2, "talk", `${CUT}/one`, { from: taskOf(1) }),
+      ],
+    });
+
+    expect(within(tree()).queryByRole("treeitem", { name: /in this branch/ })).toBeNull();
+    expect(item(/^1 task · /)).toBeInTheDocument();
   });
 });
 
@@ -403,7 +497,7 @@ describe("a chat's helpers in the explorer", () => {
     draw({ chats: TWO, on: board(helpers(...THREE)) });
 
     expect(item(/^ide\.1/)).toHaveAccessibleDescription(/3 helpers/);
-    expect(item(/3 helpers/)).toHaveAccessibleName("3 helpers of ide.1");
+    expect(item(/3 helpers/)).toHaveAccessibleName("3 helpers of ide.1, 1 working, 1 failed");
     expect(item(/^ide\.2/)).not.toHaveAccessibleDescription(/helper/);
   });
 
@@ -422,6 +516,35 @@ describe("a chat's helpers in the explorer", () => {
     expect(within(tree()).queryByRole("treeitem", { name: /helper/ })).toBeNull();
   });
 
+  it("says how they stand, since a helper that has ended stays counted", () => {
+    // As the core sends them: an ended helper stays in the list for the conversation's life.
+    const on = board(
+      helpers(["thread-1", "running"], ["thread-2", "running"], ["thread-3", "done"]),
+    );
+    draw({ chats: TWO, on });
+    expect(item(/3 helpers/)).toHaveTextContent(/^3 helpers · 2 working$/);
+
+    on.move(
+      move(1, "running", 9, {
+        children: [
+          { agent: "thread-1", state: "done" },
+          { agent: "thread-2", state: "failed" },
+          { agent: "thread-3", state: "done" },
+        ],
+      }),
+    );
+    // The total stays, the working fall away, and a failure is not behind the fold.
+    expect(item(/3 helpers/)).toHaveTextContent(/^3 helpers · 1 failed$/);
+    expect(item(/3 helpers/)).toHaveAccessibleName("3 helpers of ide.1, 1 failed");
+
+    on.move(
+      move(1, "running", 10, {
+        children: ["thread-1", "thread-2", "thread-3"].map((agent) => ({ agent, state: "done" })),
+      }),
+    );
+    expect(item(/3 helpers/)).toHaveTextContent(/^3 helpers$/);
+  });
+
   it("unfolds on a press to a row per helper, by a short id and its state, and folds again", async () => {
     draw({ chats: TWO, on: board(helpers(...THREE)) });
 
@@ -435,7 +558,9 @@ describe("a chat's helpers in the explorer", () => {
       "helper thread-10 working",
     ]);
     // The whole id is there for whoever needs it.
-    expect(rows[0]).toHaveAttribute("title", "a3882da5acba68a4f00d");
+    expect(rows[0].querySelector(".session")).toHaveAttribute("title", "a3882da5acba68a4f00d");
+    // Not on the row, where a screen reader would read a hash as its description.
+    expect(rows[0]).not.toHaveAccessibleDescription();
     expect(within(tree()).getByRole("group", { name: "Helpers of ide.1" })).toBeInTheDocument();
 
     await userEvent.click(item(/3 helpers/));
@@ -534,7 +659,7 @@ describe("a task that needs you, with its own row gone", () => {
     // Said on the row, where a screen reader is.
     expect(session).toHaveAccessibleDescription(/queue.*needs you/);
     // And counted on the line.
-    expect(item(/5 tasks/)).toHaveTextContent("1 needs you");
+    expect(item(/5 tasks/)).toHaveTextContent("1 waiting");
 
     await userEvent.click(hand as HTMLElement);
     expect(onShowChat).toHaveBeenCalledWith(3);
@@ -573,7 +698,7 @@ describe("a task changing state (SC-3)", () => {
   it("redraws its session's one line, and neither the tree nor another row's state", () => {
     const on = board(move(2, "running", 1));
     draw({ on });
-    expect(item(/5 tasks/)).toHaveTextContent(/^5 tasks 1 working$/);
+    expect(item(/5 tasks/)).toHaveTextContent(/^5 tasks · 5 working$/);
     const before = drawn.tree;
     expect(before).toBeGreaterThan(0);
     drawn.marks.length = 0;
@@ -581,7 +706,7 @@ describe("a task changing state (SC-3)", () => {
     on.move(move(3, "running", 2));
     on.move(move(2, "failed", 3));
 
-    expect(item(/5 tasks/)).toHaveTextContent(/^5 tasks 1 working 1 failed$/);
+    expect(item(/5 tasks/)).toHaveTextContent(/^5 tasks · 4 working · 1 failed$/);
     expect(drawn.tree).toBe(before);
     expect(drawn.marks).toEqual([]);
   });
@@ -611,7 +736,7 @@ describe("a branch's cockpit", () => {
   const focus: Place = { workspace: "alpha", repo: "svc", piece: "one" };
 
   it("lists the chats with a tab that work in the branch, and one line for the tasks there", async () => {
-    const onRevealChat = vi.fn();
+    const onRevealChats = vi.fn();
     draw({
       chats: [
         chat(1, "steward 1", ALPHA),
@@ -620,7 +745,7 @@ describe("a branch's cockpit", () => {
         chat(4, "lint", `${CUT}/one`, { from: taskOf(3) }),
       ],
       focus,
-      onRevealChat,
+      onRevealChats,
     });
 
     const cockpit = screen.getByRole("tree", { name: "Chats and files of one" });
@@ -629,12 +754,12 @@ describe("a branch's cockpit", () => {
       .map((row) => row.textContent?.trim());
     expect(names).toEqual([
       expect.stringContaining("ide.3"),
-      "1 task",
-      "1 task working in this branch",
+      "1 task · 1 working",
+      "1 task in this branch · 1 working",
       "Files",
     ]);
 
     await userEvent.click(within(cockpit).getByRole("treeitem", { name: /in this branch/ }));
-    expect(onRevealChat).toHaveBeenLastCalledWith(2);
+    expect(onRevealChats).toHaveBeenLastCalledWith([2]);
   });
 });

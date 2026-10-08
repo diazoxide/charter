@@ -583,7 +583,7 @@ describe("a chat moving, with fifty chats listed", () => {
     expect(within(row(tree, "steward 31")).getByText("working")).toBeTruthy();
     const explorer = screen.getByRole("tree", { name: "Repos and branches" });
     expect(within(explorer).getByRole("treeitem", { name: /49 tasks/ })).toHaveTextContent(
-      /^49 tasks 1 working$/,
+      /^49 tasks · 49 working$/,
     );
   });
 });
@@ -598,7 +598,9 @@ describe("an anonymous helper", () => {
     move(1, "running", 10, [], [{ agent: "thread-7", state: "running" }]);
 
     const explorer = await screen.findByRole("tree", { name: "Repos and branches" });
-    const count = await within(explorer).findByRole("treeitem", { name: "1 helper of steward 1" });
+    const count = await within(explorer).findByRole("treeitem", {
+      name: "1 helper of steward 1, 1 working",
+    });
     expect(within(explorer).queryByText("helper thread-7")).toBeNull();
     await userEvent.click(count);
     const helpers = within(explorer).getByRole("group", { name: "Helpers of steward 1" });
@@ -965,7 +967,10 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     move(16, "running", 11);
 
     const line = await inExplorer(/5 tasks/);
-    expect(line).toHaveTextContent(/^5 tasks 2 working$/);
+    // Two the board has heard are working, and three it has heard nothing from: at work too.
+    expect(line).toHaveTextContent(/^5 tasks · 5 working$/);
+    // The same words the session's own row in the Chats list says of them.
+    expect(screen.getByTestId("task-count-1")).toHaveTextContent(/^5 working$/);
     const explorer = await explorerTree();
     const named = within(explorer)
       .getAllByRole("treeitem")
@@ -989,6 +994,9 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     await waitFor(() => expect(row(tree, "steward 1")).toHaveFocus());
     expect(row(tree, "steward 1")).toHaveAttribute("aria-expanded", "true");
     expect(shape(tree)).toHaveLength(6);
+    // Marked, so a pointer's press that draws no focus ring still shows where it went.
+    expect(row(tree, "steward 1")).toHaveAttribute("data-revealed");
+    expect(row(tree, "devops 17")).not.toHaveAttribute("data-revealed");
     // It went to the list: no chat was opened and no tab added.
     expect(screen.getByTestId("pane").textContent).toBe("session 1");
     expect(tabNames()).toEqual(["steward 1"]);
@@ -1023,6 +1031,10 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     await waitFor(() => expect(row(again, "steward 1")).toHaveFocus());
     expect(filter).toHaveValue("");
     expect(shape(again)).toHaveLength(6);
+    // Said, on the line that is always there, so it is announced.
+    expect(document.querySelector(".chats-said")).toHaveTextContent(
+      "The filter was taken off to show steward 1.",
+    );
   });
 
   it("gives a task asked for from another workspace a way in from the one it works in", async () => {
@@ -1037,13 +1049,83 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     await userEvent.click(within(tree).getByTitle("Fold the chats under devops 2"));
 
     // Alpha's explorer: its own session, and one line for what beta's chat has working here.
-    const line = await inExplorer(/1 task from other workspaces/);
+    const line = await inExplorer(/1 task from other places/);
     expect(within(await explorerTree()).queryByRole("treeitem", { name: /check prod/ })).toBeNull();
     await userEvent.click(line);
 
     // The task's own row, with the row it was folded under opened.
     await waitFor(() => expect(row(tree, "check prod")).toHaveFocus());
     expect(tabNames()).toEqual(["steward 1"]);
+  });
+
+  it("leaves a row that is open by itself to fold by itself afterwards", async () => {
+    const { move } = core(fiveTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(6));
+
+    // The session is open by itself, over tasks that are not over. The reveal sets no fold.
+    await userEvent.click(await inExplorer(/5 tasks/));
+    await waitFor(() => expect(row(tree, "steward 1")).toHaveFocus());
+    act(() => row(tree, "steward 1").blur());
+
+    // Every task's program ends: nothing under the session is live any more.
+    for (const session of [15, 16, 17, 18, 19]) move(session, "done", 20 + session);
+
+    await waitFor(() => expect(row(tree, "steward 1")).toHaveAttribute("aria-expanded", "false"));
+  });
+
+  it("opens the row above every task the line counts", async () => {
+    const { move } = core([
+      chat(1, "alpha"),
+      chat(2, "beta", { persona: "devops" }),
+      chat(3, "alpha", { label: "check prod", from: by(2, "task", "devops 2", "beta") }),
+      chat(4, "beta", { persona: "devops" }),
+      chat(5, "alpha", { label: "check staging", from: by(4, "task", "devops 4", "beta") }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(5));
+    move(3, "running", 10);
+    move(5, "running", 11);
+    await userEvent.click(within(tree).getByTitle("Fold the chats under devops 2"));
+    await userEvent.click(within(tree).getByTitle("Fold the chats under devops 4"));
+    expect(shape(tree)).toHaveLength(3);
+    // Opened again by hand, and then left to itself.
+    await userEvent.click(within(tree).getByTitle("Show the chats under devops 4"));
+
+    await userEvent.click(await inExplorer(/2 tasks from other places/));
+
+    // Both askers are open, and the keyboard is on the first task.
+    await waitFor(() => expect(row(tree, "check prod")).toHaveFocus());
+    expect(shape(tree)).toHaveLength(5);
+  });
+
+  it("says a task's helpers on its own row in the Chats list, since the explorer has no row for it", async () => {
+    const { move } = core(fiveTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(6));
+
+    move(
+      15,
+      "running",
+      10,
+      [],
+      [
+        { agent: "thread-1", state: "running" },
+        { agent: "thread-2", state: "done" },
+        { agent: "thread-3", state: "done" },
+      ],
+    );
+
+    const task = row(tree, "live check talk");
+    expect(task.querySelector(".line.two .helpers")).toHaveTextContent(/^3 helpers · 1 working$/);
+    // Last on the second line, and only on a row that has some.
+    expect(task.querySelector(".line.two")?.lastElementChild).toBe(task.querySelector(".helpers"));
+    expect(row(tree, "live check queue").querySelector(".helpers")).toBeNull();
+    // The explorer says nothing of them: the task has no row there.
+    expect(await explorerTree()).not.toHaveTextContent(/helper/);
   });
 
   it("keeps the hand for a task that needs you on its session's row, and the workspace's count", async () => {
@@ -1060,7 +1142,7 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     const hand = session.closest("li")?.querySelector<HTMLElement>("button.rolled-up");
     expect(hand).toHaveAccessibleName("Go to devops 18, a task of steward 1, which needs you");
     expect(session).toHaveAccessibleDescription(/devops 18.*needs you/);
-    expect(await inExplorer(/5 tasks/)).toHaveTextContent("1 needs you");
+    expect(await inExplorer(/5 tasks/)).toHaveTextContent("1 waiting");
     expect(rolledUp(tree, "steward 1")?.getAttribute("data-leads-to")).toBe("18");
     // Counted once, on the workspace of the tab it lives in, as before.
     expect(await screen.findByLabelText("1 chats need you in alpha")).toBeTruthy();
@@ -1165,7 +1247,8 @@ describe("a chat's state, as a word and a shape (#1484)", () => {
     expect(named).not.toContain("18");
     expect(named).not.toContain("19");
     expect(named).not.toContain("devops 19");
-    expect(named).toContain("1 task");
+    // All three are the session's tasks, tab or no tab, as its row in the Chats list counts.
+    expect(named).toContain("3 tasks");
   });
 
   it("names a task with no tab by its name where the title bar says it cannot tell purlis it is waiting", async () => {

@@ -4757,10 +4757,13 @@ export const PlaneView = memo(function PlaneView({
   /** The explorer's lines ask the Chats list for chats' own rows (#1490): the one line for a
    *  session's tasks for the session's, and a line for the tasks working at a place for each
    *  of theirs. The list opens them and puts the keyboard on the first (`revealTask.ts`). */
-  const revealChat = useCallback(
-    // A chat's own row is not something the list reveals yet: the next commit teaches it.
-    (session: number) =>
-      setRevealed((was) => ({ asker: session, task: "", at: (was?.at ?? 0) + 1 })),
+  const revealChats = useCallback(
+    (sessions: readonly number[]) =>
+      setRevealed((was) =>
+        sessions.length === 0
+          ? was
+          : { asker: sessions[0], also: sessions.slice(1), at: (was?.at ?? 0) + 1 },
+      ),
     [],
   );
 
@@ -6225,7 +6228,8 @@ export const PlaneView = memo(function PlaneView({
                 onReadAgain={rereadPanels}
                 listed={listedChats}
                 finished={finishedTasks}
-                onRevealChat={revealChat}
+                below={tasksBelow}
+                onRevealChats={revealChats}
                 nameOf={nameOfListed}
               />
             </div>

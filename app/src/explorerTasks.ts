@@ -3,17 +3,19 @@
  * V100-14). The Chats list is the one tree of who asked whom; the explorer lists a workspace's
  * chats that have a tab of their own, and says the rest in counts:
  *
- * - a session's tasks are one line under its row, `5 tasks 2 working 3 done`;
- * - a chat's harness helpers are a count on its row, `3 helpers`, which unfolds.
+ * - a session's tasks are one line under its row, `5 tasks · 2 working · 3 done`, counted by
+ *   the one count its row in the Chats list and its tab use (`taskCounts.ts`, `taskBuckets.ts`);
+ * - a chat's harness helpers are a count on its row, `3 helpers · 1 working`, which unfolds.
  *
  * Nothing here is state and nothing here draws: which chats are rows, which are counted and
  * under whom, and what a count says. `ExplorerChats.tsx` draws it and `Explorer.tsx` places it.
  */
-import type { FinishedTask } from "./bindings";
-import { childrenOf, markOf, type ChatStates, type State } from "./chatState";
+import { childrenOf, type ChatStates, type State } from "./chatState";
 import type { ListedChat } from "./chatsTree";
-import { shownOf } from "./finished";
-import { shownState, type Shown, type ShownKind } from "./shownState";
+import { shownState, type Shown, type ShownShape } from "./shownState";
+import { bucketOfKind, bucketsSaid, type TaskBucket, type TaskBuckets } from "./taskBuckets";
+import type { TasksBelow } from "./taskCounts";
+import type { Token } from "./theme/theme";
 
 /** Which of the project's chats are shown inside another chat's tab, and whose. */
 export type Housed = {
@@ -60,109 +62,61 @@ export function housed(listed: readonly ListedChat[]): Housed {
   return { hostOf, tasksOf };
 }
 
-/**
- * The finished tasks counted on a chat's line: its own, and those of each task living inside
- * its tab. They are entries under those chats in the Chats list until they are cleared.
- */
-export function endedUnder(
-  finished: ReadonlyMap<number, readonly FinishedTask[]>,
-  host: number,
-  tasks: readonly ListedChat[],
-): FinishedTask[] {
-  return [host, ...tasks.map((task) => task.session)].flatMap(
-    (session) => finished.get(session) ?? [],
-  );
-}
-
-/** How many tasks there are, and how many of them are in each state the line says. */
-export type TaskCounts = {
-  total: number;
-  working: number;
-  needsYou: number;
-  done: number;
-  failed: number;
-};
-
-/** The states the line counts, each by the kinds of shown state it holds. A task that ended
- *  without a report did not do the work, and is counted with the failed. */
-const COUNTED: Readonly<Partial<Record<ShownKind, keyof Omit<TaskCounts, "total">>>> = {
-  working: "working",
-  "needs-you": "needsYou",
-  done: "done",
-  failed: "failed",
-  unreported: "failed",
-};
-
-/**
- * **How many of these tasks are in each state**, by the one function every row's state comes
- * from (`shownState`): the running ones from what the board says of them now, the finished
- * ones from how they ended. A task in a state the line does not name (idle, asking its asker,
- * cancelled) is in the total only.
- *
- * Written here because no count over a session's tasks exists on this branch; a later one in
- * a module of its own replaces it.
- */
-export function countTasks(
-  states: ChatStates,
-  open: readonly ListedChat[],
-  ended: readonly FinishedTask[] = [],
-): TaskCounts {
-  const counts: TaskCounts = {
-    total: open.length + ended.length,
-    working: 0,
-    needsYou: 0,
-    done: 0,
-    failed: 0,
-  };
-  const count = (shown: Shown | undefined) => {
-    const as = shown === undefined ? undefined : COUNTED[shown.kind];
-    if (as !== undefined) counts[as] += 1;
-  };
-  for (const task of open)
-    count(
-      shownState({
-        board: markOf(states, task.session, task.shell),
-        needsYou: states.needsYou.includes(task.session),
-        task:
-          task.report === null
-            ? null
-            : { report: task.report, outcome: task.outcome, asking: task.asking },
-        harness: task.harness,
-      }),
-    );
-  for (const task of ended) count(shownOf(task));
-  return counts;
-}
-
-/** Whether two counts say the same. */
-export function sameCounts(one: TaskCounts, other: TaskCounts): boolean {
-  return (
-    one.total === other.total &&
-    one.working === other.working &&
-    one.needsYou === other.needsYou &&
-    one.done === other.done &&
-    one.failed === other.failed
-  );
-}
-
 /** `3 tasks`, `1 task`. */
 export function tasksSaid(total: number): string {
   return `${total} ${total === 1 ? "task" : "tasks"}`;
 }
 
-/** What the line says after how many there are, in the state vocabulary: each state that has
- *  any, working first. A state with none is not said. */
-export function countsSaid(counts: TaskCounts): { state: ShownKind; said: string }[] {
-  const said: { state: ShownKind; said: string }[] = [];
-  if (counts.working > 0) said.push({ state: "working", said: `${counts.working} working` });
-  if (counts.needsYou > 0)
-    said.push({
-      state: "needs-you",
-      said: `${counts.needsYou} ${counts.needsYou === 1 ? "needs" : "need"} you`,
-    });
-  if (counts.done > 0) said.push({ state: "done", said: `${counts.done} done` });
-  if (counts.failed > 0) said.push({ state: "failed", said: `${counts.failed} failed` });
-  return said;
+/**
+ * **A set of running tasks as the one count takes them** (`taskCounts.TasksBelow`): what the
+ * line for the tasks working at a place counts. A session's own line is handed the session's
+ * rows as its row in the Chats list has them (`tasksBelowOf`); this is for a set that is no
+ * one session's. Each task's asker is the chat that asked for it, so a task waiting on tasks
+ * of its own that are in the set reads as working, as on its row.
+ */
+export function belowOf(tasks: readonly ListedChat[]): TasksBelow {
+  return {
+    open: tasks.map((task) => ({
+      session: task.session,
+      asker: task.parent ?? task.session,
+      shell: task.shell,
+      direct: false,
+      report: task.report,
+      outcome: task.outcome,
+      asking: task.asking,
+      harness: task.harness,
+    })),
+    finished: [],
+    limit: null,
+  };
+}
+
+/** One part of what a line says after how many: a bucket's count, with the mark its state
+ *  has on a row. */
+export type CountPart = { bucket: TaskBucket; said: string; shape: ShownShape; token: Token };
+
+/** The mark of each bucket: the shape and the colour its state has on a row. */
+const BUCKET_MARKS: Readonly<Record<TaskBucket, Pick<CountPart, "shape" | "token">>> = {
+  working: { shape: "ring", token: "state.running" },
+  waiting: { shape: "pause", token: "text.muted" },
+  done: { shape: "tick", token: "text.muted" },
+  failed: { shape: "cross", token: "state.failed" },
+};
+
+/**
+ * **What a line says of a count, part by part**: the words are `bucketsSaid`'s, the one
+ * sentence a session's row and its tab say too, split where it joins them so each part can be
+ * drawn with its state's mark (a word and a shape, never a colour alone).
+ */
+export function countParts(count: TaskBuckets): CountPart[] {
+  const said = bucketsSaid(count);
+  if (said === undefined) return [];
+  return said.split(" · ").flatMap((part) => {
+    const bucket = (["working", "waiting", "done", "failed"] as const).find((one) =>
+      part.endsWith(` ${one}`),
+    );
+    return bucket === undefined ? [] : [{ bucket, said: part, ...BUCKET_MARKS[bucket] }];
+  });
 }
 
 /** The task among `tasks` that has needed the person longest, or none. */
@@ -177,6 +131,46 @@ export function firstNeeding(
 /** `3 helpers`, `1 helper`. */
 export function helpersSaid(count: number): string {
   return `${count} ${count === 1 ? "helper" : "helpers"}`;
+}
+
+/** How a chat's helpers stand: how many it has had, and how many of them are working and
+ *  have failed now. */
+export type HelpersCount = { total: number; working: number; failed: number };
+
+/**
+ * **A chat's helpers, counted by how they stand.** The core keeps a helper that has ended, so
+ * the total only grows over a conversation: said alone, `40 helpers` would read as forty at
+ * work. Each is put in the bucket a task in its state is in (`bucketOfKind`), and the working
+ * and the failed are said.
+ */
+export function helpersCountOf(states: ChatStates, session: number): HelpersCount {
+  const count = { total: 0, working: 0, failed: 0 };
+  for (const child of childrenOf(states, session)) {
+    count.total += 1;
+    const bucket = bucketOfKind(helperShown(child.state).kind);
+    if (bucket === "working") count.working += 1;
+    else if (bucket === "failed") count.failed += 1;
+  }
+  return count;
+}
+
+/** Whether two counts of helpers say the same. */
+export function sameHelpersCount(one: HelpersCount, other: HelpersCount): boolean {
+  return one.total === other.total && one.working === other.working && one.failed === other.failed;
+}
+
+/** What is said after how many helpers: `2 working`, `1 failed`, each only when there are
+ *  any. Nothing when every one has ended well. */
+export function helpersStand(count: HelpersCount): string[] {
+  return [
+    count.working > 0 ? `${count.working} working` : undefined,
+    count.failed > 0 ? `${count.failed} failed` : undefined,
+  ].filter((part) => part !== undefined);
+}
+
+/** `40 helpers · 2 working · 1 failed`: what a row with no room to unfold them says. */
+export function helpersCountSaid(count: HelpersCount): string {
+  return [helpersSaid(count.total), ...helpersStand(count)].join(" · ");
 }
 
 /** A chat's helpers as the tree needs them: that it has some, and which while unfolded. */

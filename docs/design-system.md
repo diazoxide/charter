@@ -374,6 +374,7 @@ one labelled section at the end of `App.css`.
 | a chat's state mark                        | colour, shape and ring morph, `settle`                   | the state changing, rather than blinking                                                                |
 | a chat that starts waiting on you          | its ring knocks twice, `settle`                          | the one signal this app exists for, arriving                                                            |
 | the same, on a row of a list               | its hand knocks twice, `settle`                          | a row's mark is the hand and has no ring; only on the change, as the ring                               |
+| a row of the Chats list that was asked for | the hovered row's band for a moment, faded in once, `settle` | where a press elsewhere went; the band is there, still, under reduced motion                            |
 
 **Nothing animates because it mounted.** A mark that animates on a change has to tell a change
 from a first draw, and CSS cannot: an animation plays when its element appears. Without that, a
