@@ -1464,6 +1464,27 @@ mod tests {
         assert_eq!(named_by(dir.path(), "nobody").profile, None);
     }
 
+    /// What a dispatch asks of the persona carries the project's list for it and whether it
+    /// denies tools: each read from where it is kept, the project's file and the definition.
+    #[test]
+    fn a_definition_carries_the_project_s_list_for_it_and_its_deny_list() {
+        let dir = tempfile::tempdir().unwrap();
+        a_persona(dir.path(), "ops", "disallowed-tools: Bash\n");
+        a_persona(dir.path(), "qa", "");
+        std::fs::write(
+            crate::names::manifest(dir.path()),
+            "[dispatch.profiles]\nops = [\"work\"]\n\"*\" = [\"codex\"]\n",
+        )
+        .unwrap();
+
+        let ops = named_by(dir.path(), "ops");
+        assert_eq!(ops.listed, Some(vec!["work".to_owned()]));
+        assert!(ops.denies_tools.is_some());
+        let qa = named_by(dir.path(), "qa");
+        assert_eq!(qa.listed, Some(vec!["codex".to_owned()]));
+        assert_eq!(qa.denies_tools, None);
+    }
+
     /// `profile: none` is how a child opts out of the profile it inherits: no profile, and no
     /// `model:` read in its place, so its chats start on the asking chat's.
     #[test]

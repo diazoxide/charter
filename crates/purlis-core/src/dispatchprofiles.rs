@@ -708,6 +708,19 @@ mod tests {
             started_again_refusal(Some("devops"), "codex", on(&asks), None),
             None
         );
+        // Two or three listed are joined as a sentence joins them.
+        for (listed, said) in [
+            (vec!["work", "cx"], "lists 'work' and 'cx' for that persona"),
+            (
+                vec!["work", "cx", "oc"],
+                "lists 'work', 'cx' and 'oc' for that persona",
+            ),
+        ] {
+            let listed: Vec<String> = listed.into_iter().map(str::to_owned).collect();
+            let refused = started_again_refusal(Some("devops"), "codex", on(&asks), Some(&listed))
+                .expect("refused");
+            assert!(refused.contains(said), "{refused}");
+        }
         // A list that holds nothing, or could not be read, starts none.
         let said =
             started_again_refusal(Some("devops"), "work", on(&asks), Some(&[])).expect("refused");
