@@ -248,6 +248,10 @@ pub trait ChatBoard: Send + Sync {
     /// Chat `session`'s report reached the chat that asked for it (#1448): the turn it is in
     /// ends without a needs-you item. Nothing a reader sees changes now.
     fn reported_to_its_asker(&self, session: u32);
+
+    /// The person answered chat `session`'s prompt in the window (HP-6): its turn goes on
+    /// (`state::Chat::answered`). Nothing when no reader would see a difference.
+    fn answered(&self, session: u32) -> Option<Moved>;
 }
 
 /// A session host that runs nothing, for a test of what sits above the seam.

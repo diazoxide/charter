@@ -1312,6 +1312,13 @@ impl ChatBoard for Hooks {
     fn reported_to_its_asker(&self, session: u32) {
         self.board().reported_to_its_asker(session);
     }
+
+    fn answered(&self, session: u32) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .answered(session)
+            .then(|| seen_by(&board, &self.plane, session))
+    }
 }
 
 /// What a reader sees for this chat right now.

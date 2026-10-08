@@ -1034,8 +1034,26 @@ impl Held {
     }
 
     /// Answers chat `session`'s ask `ask` with `option`, as the operator in the window (HP-6).
+    ///
+    /// The chat's turn goes on, and the board says so; and a reported task is looked at again:
+    /// a bound that passed while the ask was open is owed it from now (#1525).
     pub fn answer_ask(&self, session: u32, ask: &str, option: &str) -> Result<(), String> {
-        self.hooks.answer(session, ask, option)
+        self.hooks.answer(session, ask, option)?;
+        if let Some(moved) = self.board().answered(session) {
+            (self.tell)(moved);
+        }
+        crate::dispatched::end_look(self, session, purlis_core::dispatched::Looked::Moved);
+        Ok(())
+    }
+
+    /// Whether chat `session` has a permission ask open in the window's needs-you list.
+    pub fn asks_open_for(&self, session: u32) -> bool {
+        let chat = session.to_string();
+        self.hooks
+            .asks()
+            .pending(std::time::Instant::now())
+            .iter()
+            .any(|raised| raised.chat == chat)
     }
 
     /// Writes the record, ends every session, and stops listening — everything a plane holds

@@ -268,6 +268,9 @@ pub struct Seen {
     pub asking: bool,
     /// Its harness is one purlis has measured its typed line in ([`told_by_a_line`]).
     pub measured: bool,
+    /// A permission ask of its is open in the window's needs-you list (HP-6): its hook holds
+    /// it there until the person answers. Whether or not the harness also said it asked.
+    pub ask_open: bool,
 }
 
 impl Seen {
@@ -293,10 +296,12 @@ impl Seen {
         self.heard && !self.ended && self.waiting && !self.asking
     }
 
-    /// A prompt is in front of the person now: it asked this turn and waits. One it asked and
-    /// that was answered leaves `asking` set until the turn ends, with the chat running.
+    /// A prompt is in front of the person now: an ask of its is open in the window, or it said
+    /// it asked this turn and is waiting on it. A prompt answered in the window puts the chat
+    /// back to running with `asking` kept until the turn ends (`state::Chat::answered`); one
+    /// answered in its pane is a key of the person's, which stands the end down for good.
     fn prompt_showing(self) -> bool {
-        !self.ended && self.asking && self.waiting
+        !self.ended && (self.ask_open || (self.asking && self.waiting))
     }
 }
 
@@ -1456,6 +1461,7 @@ mod tests {
         waiting: false,
         asking: false,
         measured: true,
+        ask_open: false,
     };
     const RUNNING: Seen = Seen {
         running: true,
@@ -2415,6 +2421,7 @@ mod tests {
         waiting: false,
         asking: false,
         measured: false,
+        ask_open: false,
     };
 
     #[test]
@@ -3173,16 +3180,33 @@ mod tests {
         );
     }
 
-    /// Mid-turn, after a prompt it showed was answered: the board says running, and keeps
-    /// `asking` until the turn ends.
-    const ANSWERED: Seen = Seen {
-        running: true,
-        asking: true,
-        ..KNOWN
-    };
+    /// What the app reads of a chat as the board has it ([`Seen`]'s other fields as KNOWN).
+    fn as_the_board_has_it(chat: &crate::state::Chat) -> Seen {
+        use crate::state::State as Board;
+        Seen {
+            running: chat.state() == Board::Running,
+            waiting: chat.state() == Board::Waiting,
+            asking: chat.asking(),
+            ..KNOWN
+        }
+    }
+
+    /// The board's own moves for a reported task that shows a prompt mid-turn, and has it
+    /// answered in the window: what the app reads before and after the answer.
+    fn asked_then_answered() -> (Seen, Seen) {
+        use crate::state::{Chat, Event};
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        chat.reported(Event::Notification);
+        let asked = as_the_board_has_it(&chat);
+        assert!(chat.answered());
+        (asked, as_the_board_has_it(&chat))
+    }
 
     #[test]
     fn a_bound_that_passes_on_a_prompt_is_given_again_once_it_is_answered() {
+        let (asked, answered) = asked_then_answered();
+        assert_eq!(asked, ASKING);
         // The reporting turn shows the person a prompt, and its bound passes while it does:
         // the prompt is theirs to answer, and the bound is owed.
         let mut ledger = reported_task();
@@ -3197,16 +3221,16 @@ mod tests {
         );
         // They answer, and the reporting turn goes on: it is given the bound again, once.
         assert_eq!(
-            ledger.end_step(TASK, ANSWERED, false, Looked::Moved),
+            ledger.end_step(TASK, answered, false, Looked::Moved),
             Ends::Bound
         );
         assert_eq!(
-            ledger.end_step(TASK, ANSWERED, false, Looked::Moved),
+            ledger.end_step(TASK, answered, false, Looked::Moved),
             Ends::Hold
         );
         // The turn hangs after the answer: that bound ends it.
         assert_eq!(
-            ledger.end_step(TASK, ANSWERED, false, Looked::WaitedOut),
+            ledger.end_step(TASK, answered, false, Looked::WaitedOut),
             Ends::End
         );
         assert!(!ledger.ending(TASK));
@@ -3214,7 +3238,7 @@ mod tests {
         // A prompt answered before the bound passes leaves nothing showing when it does.
         let mut ledger = reported_task();
         assert_eq!(
-            ledger.end_step(TASK, ANSWERED, false, Looked::WaitedOut),
+            ledger.end_step(TASK, answered, false, Looked::WaitedOut),
             Ends::End
         );
 
@@ -3226,16 +3250,16 @@ mod tests {
             Ends::Hold
         );
         assert_eq!(
-            ledger.end_step(TASK, ANSWERED, true, Looked::Moved),
+            ledger.end_step(TASK, answered, true, Looked::Moved),
             Ends::Hold
         );
         assert_eq!(ledger.held_back(), [TASK]);
         assert_eq!(
-            ledger.end_step(TASK, ANSWERED, false, Looked::Moved),
+            ledger.end_step(TASK, answered, false, Looked::Moved),
             Ends::Bound
         );
         assert_eq!(
-            ledger.end_step(TASK, ANSWERED, false, Looked::WaitedOut),
+            ledger.end_step(TASK, answered, false, Looked::WaitedOut),
             Ends::End
         );
 
@@ -3288,6 +3312,35 @@ mod tests {
         );
         assert_eq!(
             ledger.end_step(TASK, WAITING, false, Looked::Settled),
+            Ends::End
+        );
+    }
+
+    #[test]
+    fn an_ask_held_open_in_the_window_is_a_prompt_whatever_the_harness_said() {
+        // A permission hook holds its ask for the window, and the harness has said nothing of
+        // it: the board says running. The bound passes: the ask is the person's to answer.
+        let held = Seen {
+            ask_open: true,
+            ..RUNNING
+        };
+        let mut ledger = reported_task();
+        assert_eq!(
+            ledger.end_step(TASK, held, false, Looked::WaitedOut),
+            Ends::Hold
+        );
+        assert!(ledger.ending(TASK));
+        assert_eq!(
+            ledger.end_step(TASK, held, false, Looked::Moved),
+            Ends::Hold
+        );
+        // Answered in the window: the ask goes, and the turn goes on. The bound is given again.
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::Moved),
+            Ends::Bound
+        );
+        assert_eq!(
+            ledger.end_step(TASK, RUNNING, false, Looked::WaitedOut),
             Ends::End
         );
     }

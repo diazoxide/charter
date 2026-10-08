@@ -164,6 +164,66 @@ fn a_task_the_person_has_in_front_is_ended_when_they_move_away_and_not_before() 
 }
 
 #[test]
+fn a_task_whose_prompt_is_answered_in_the_window_is_ended_when_its_turn_then_hangs() {
+    use purlis_core::harness::hooked::Source;
+    let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
+    works(&held, task);
+    reports(&held, &id, task);
+    // Its reporting turn asks for a permission, held for the window by its hook. The harness
+    // says nothing of it: the board still says running.
+    let payload = serde_json::json!({
+        "session_id": "abc",
+        "hook_event_name": "PermissionRequest",
+        "tool_name": "Bash",
+        "tool_input": {"command": "npm test"},
+    });
+    let asked = held
+        .hooks()
+        .asks()
+        .raise(
+            &task.to_string(),
+            Source::ClaudeCode,
+            &payload,
+            Instant::now(),
+        )
+        .expect("the ask is held for the window");
+
+    // Its bound passes while the ask is open: the ask is the person's to answer.
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    assert!(open_chats(&held).contains(&task));
+    assert!(held.tasks().ledger().ending(task));
+
+    // They answer it in the window. The hook is told, and the task is looked at again.
+    held.answer_ask(task, &asked.raised.id.to_string(), "allow")
+        .expect("the window's answer lands");
+    assert!(asked.answered.try_recv().is_ok(), "the hook was told");
+    assert!(!held.asks_open_for(task));
+
+    // The turn then hangs. The bound set again at the answer ends it.
+    crate::dispatched::end_look(&held, task, Looked::WaitedOut);
+    ends_within_moments(&held, task);
+    assert_eq!(finished_under(&held, steward).len(), 1);
+}
+
+#[test]
+fn a_prompt_answered_in_the_window_puts_the_task_s_turn_back_to_running() {
+    let (_plane, _host, _planes, _id, held, _steward, task) = on_the_clock();
+    works(&held, task);
+    the_board_hears(&held, task, Event::Notification);
+    assert_eq!(
+        held.board().glance(task).state,
+        purlis_core::state::State::Waiting
+    );
+
+    // As `answer_ask` tells it once the hook has the answer.
+    assert!(held.board().answered(task).is_some());
+
+    let glance = held.board().glance(task);
+    assert_eq!(glance.state, purlis_core::state::State::Running);
+    assert!(glance.asking, "asking is kept until the turn ends");
+}
+
+#[test]
 fn a_look_that_finds_the_task_held_reads_the_hold_once_more_after_its_answer() {
     let (_plane, _host, _planes, id, held, steward, task) = on_the_clock();
     // They are reading the task as its turn ends: it is held.
