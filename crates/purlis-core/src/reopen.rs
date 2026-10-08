@@ -1411,16 +1411,19 @@ impl FromOnDisk {
     ///
     /// Before #1515 that was how a chat that needed an answer started another, and the report
     /// it owes reached the asking chat with nothing to make that chat read it: no line was
-    /// typed into it, and its `purlis dispatch` commands did not know the chat. Since #1515
-    /// every such ask is a task, and nothing this build writes has this shape: so a chat that
-    /// still owes its report is read as what it now is, **the task of the chat that asked**.
-    /// Its report wakes that chat, it is listed and waited on, and an end without a report is
-    /// reported for. It keeps the tab it was opened with ([`Chat::tab_opened`]).
+    /// typed into it, and its `purlis dispatch` commands did not know the chat. Since #1519 an
+    /// open that asks for a report is dispatched as a task, so no chat this build opens has
+    /// this shape, and a chat that still owes its report is read as what it now is, **the
+    /// task of the chat that asked**. Its report wakes that chat, it is listed and waited on,
+    /// and an end without a report is reported for. It has a tab where it had one
+    /// ([`Chat::tab_opened`]) until it ends at its report, as a task does.
     ///
-    /// **Never wider than it was.** Its report still goes only to the chat the record names,
-    /// it holds the grants it held ([`Chat::held`]), and only that chat may steer it. A handoff
-    /// that asked for nothing, or has sent its one report, is the handoff it was. The next
-    /// write of the record writes it in the newer shape.
+    /// **Its report goes nowhere new, and it holds no new grant**: only to the chat the record
+    /// names, with the grants it held ([`Chat::held`]). **The chat that asked gains a task
+    /// owner's powers over it**, which it had over no handoff: it may tell it, cancel it,
+    /// answer its questions and wait on it, as the ticket asks ("treated as a task of that
+    /// chat"). No other chat may. A handoff that asked for nothing, or has sent its one report,
+    /// is the handoff it was. The next write of the record writes it in the newer shape.
     fn owed_by_an_older_handoff(&self) -> bool {
         self.mode.is_empty() && Owed::of(&self.report) == Owed::Due
     }
@@ -1540,6 +1543,15 @@ fn highest_dealt(record: &Record) -> u32 {
 
 impl From<ChatOnDisk> for Chat {
     fn from(chat: ChatOnDisk) -> Self {
+        // A handoff an older build opened owing a report keeps the tab it was opened with: it
+        // is read as a task, and a task has a tab where the person opened one. Only where its
+        // `from` is sound: a note that does not read is no task, and owes nothing.
+        let older = chat
+            .from
+            .as_ref()
+            .is_some_and(FromOnDisk::owed_by_an_older_handoff);
+        let from = chat.from.and_then(FromOnDisk::sound);
+        let tab_opened = chat.tab_opened || (older && from.is_some());
         Self {
             program: chat.program,
             args: chat.args,
@@ -1561,14 +1573,8 @@ impl From<ChatOnDisk> for Chat {
             // a number no chat here holds costs at most a gap in the counting.
             number: (chat.number > 0).then_some(chat.number),
             label: label(&chat.label).ok().flatten(),
-            // A handoff an older build opened owing a report keeps the tab it was opened
-            // with: it is read as a task, and a task has a tab where the person opened one.
-            tab_opened: chat.tab_opened
-                || chat
-                    .from
-                    .as_ref()
-                    .is_some_and(FromOnDisk::owed_by_an_older_handoff),
-            from: chat.from.and_then(FromOnDisk::sound),
+            tab_opened,
+            from,
             held: chat.held.map(|value| HeldGrants {
                 persona: value
                     .as_str()
@@ -3900,6 +3906,8 @@ pub(crate) mod tests {
 
             assert_eq!(back.chats.len(), 1, "{from}");
             assert_eq!(back.chats[0].from, None, "{from}");
+            // Owing a report in a note that does not read is no task: no tab is marked opened.
+            assert!(!back.chats[0].tab_opened, "{from}");
         }
     }
 

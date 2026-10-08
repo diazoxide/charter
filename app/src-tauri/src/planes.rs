@@ -1463,6 +1463,8 @@ impl Planes {
             tracing::warn!("purlis: reports kept for a renamed workspace were not moved ({why})");
         }
         // And a dispatch whose persona chat that record does not bring back has ended (#1452).
+        // It first makes an older build's handoff that still owes a report the task it now is
+        // (#1519): before any chat is put back, so what puts them back reads the newer shape.
         purlis_core::dispatchrecord::settle_on_open(&root, chrono::Utc::now());
         // Then the worktrees of the dispatches that have ended are looked at, once (#1453):
         // one whose branch is merged, and that no chat coming back stands in, is taken away.

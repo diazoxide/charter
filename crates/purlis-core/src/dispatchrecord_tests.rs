@@ -1477,8 +1477,8 @@ fn a_running_handoff_an_older_build_opened_owing_a_report_is_a_task_from_the_nex
         at("2026-10-07T12:30:00Z"),
     )
     .unwrap();
-    // Its persona chat comes back at this launch.
-    reopening(&root, devops().chat, devops().id.as_deref().unwrap());
+    // Its persona chat comes back at this launch, still owing its report.
+    older_chat_back(&root, crate::reopen::Owed::Due);
 
     settle_on_open(&root, at("2026-10-08T09:00:00Z"));
 
@@ -1519,4 +1519,53 @@ fn a_handoff_an_older_build_opened_whose_chat_is_gone_ends_as_a_task_that_did_no
         Some(Finished::EndedWithoutAReport),
         "{record:?}"
     );
+}
+
+/// Review F6: the older build delivered the report and did not get to end the dispatch record.
+/// The chat's own record says sent, so the dispatch stays the handoff it was, and is never
+/// shown as a task that did not report.
+#[test]
+fn an_older_handoff_whose_chat_says_it_reported_is_not_made_a_task() {
+    let (_d, root) = project();
+    let opened = open(&root, a_handoff(), at("2026-10-07T12:00:00Z")).unwrap();
+    older_chat_back(&root, crate::reopen::Owed::Sent);
+
+    assert_eq!(settle_on_open(&root, at("2026-10-08T09:00:00Z")), 0);
+
+    let record = read(&root, &opened.id).unwrap();
+    assert_eq!(record.mode, Mode::Handoff);
+    assert!(record.running(), "its chat came back");
+    // The same record, its chat still owing: a task.
+    older_chat_back(&root, crate::reopen::Owed::Due);
+    settle_on_open(&root, at("2026-10-08T09:00:00Z"));
+    assert_eq!(read(&root, &opened.id).unwrap().mode, Mode::Task);
+}
+
+/// A reopen record bringing back the `devops` chat an older build handed off from `steward 3`,
+/// whose record says its report is `owed`.
+fn older_chat_back(root: &Path, owed: crate::reopen::Owed) {
+    let record = crate::reopen::Record {
+        chats: vec![crate::reopen::Chat {
+            program: "claude".into(),
+            number: Some(devops().chat),
+            identity: crate::reopen::Identity {
+                id: devops().id,
+                ..Default::default()
+            },
+            from: Some(crate::reopen::HandedFrom {
+                chat: steward().chat,
+                name: steward().name,
+                workspace: crate::active::Place::Workspace("alpha".to_owned()),
+                report: owed,
+                mode: crate::reopen::Mode::Handoff,
+                depth: 1,
+                root: None,
+                by_person: false,
+            }),
+            ..Default::default()
+        }],
+        dealt: devops().chat,
+        ..Default::default()
+    };
+    crate::reopen::write(root, &record).unwrap();
 }
