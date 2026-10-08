@@ -139,6 +139,11 @@ async function drawEnds(pane: number): Promise<boolean> {
       group.append(button);
     }
     crumbs.after(group);
+    // Which of the two are drawn is the app's measure, as a pane's own are (`wholeWays.ts`).
+    const fit = (window as unknown as { purlisE2eFitWays?: (group: HTMLElement) => void })
+      .purlisE2eFitWays;
+    if (fit === undefined) return false;
+    fit(group);
     return true;
   }, pane);
 }

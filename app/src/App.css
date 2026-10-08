@@ -1201,12 +1201,9 @@ button.show-more:focus-visible {
   overflow: hidden;
 }
 
-/* **Where the line also holds the two ways to end the task** (#1488), what it gives up comes
-   in an order: the gauge and the harness's name first, cut at their right edge; then the two
-   ways, each whole or not at all; and the path and its state only after those. A line that
-   is a little short keeps both ways and loses the end of the harness's name. Measured in a
-   real engine, the two ways were the only thing a short line gave up, so a pane of half a
-   1280px window never drew both. */
+/* **Where the line also holds the two ways to end the task** (#1488), the gauge and the
+   harness's name give way first, cut at their right edge, before the breadcrumb's names do.
+   The ways themselves do not shrink: which are drawn is measured (`wholeWays.ts`). */
 .pane-chips:has(.pane-task-ends) > :not(.pane-crumbs):not(.pane-task-ends) {
   flex-shrink: 1000000;
 }
@@ -1252,47 +1249,27 @@ button.show-more:focus-visible {
 /* **The two ways to end the task a pane shows** (#1488), beside its path: words, in the line's
    own quiet colours, and no cross.
 
-   **Each is drawn whole or not at all, never cut mid-word.** The group is one line tall and
-   wraps: a button the line has no room for goes to a second line, which is not drawn. **Also
-   the first one**: a wrapping line never moves its first item down, so the group starts with
-   an item of no width (`::before`), and "Stop" is then the second and wraps like the other.
-   Without it a group narrower than "Stop" drew "Stop" over its own edge, cut.
-
-   The group gives way before the path does (it shrinks a thousand times faster), because the
-   same two rows are on the task's row in the Chats list and in the palette; and after the
-   gauge and the harness's name (above). So the breadcrumb's own thresholds hold as they are
-   once the two are gone.
-
-   **It has two pixels to spare at its end** (`padding-right`). A short line is made up by
-   every thing on it at once, each in proportion to how fast it shrinks times how wide it is:
-   nothing waits for another to be gone. So while the gauge and the harness's name still had
-   all the room the line was short of, the group still gave its share, a thousandth of
-   theirs: under a ninth of a pixel. A wrapping line that is a ninth of a pixel short of its
-   last item wraps it, so "Close now" was never drawn on a line that was short at all, by
-   however little, and every line with a gauge on it is. Measured: "Stop" whole at 34px and
-   no "Close now", in half of a 1280px window with room for both. The group's share stays
-   under one pixel until the gauge and the name are down to their padding (it is at most
-   its own width, about 7rem, over a thousand), so two is spare. */
+   **Each is drawn whole or not at all, never cut mid-word, and the group does not shrink.**
+   Which of them are drawn is measured (`wholeWays.ts`), as the tab strip measures its tabs:
+   a way that does not fit is set aside, below the group's one line, where its clip hides it.
+   So the line gives up the harness's name first, then the breadcrumb's names, then the ways,
+   and the state word last. */
 .pane-task-ends {
+  position: relative;
   display: flex;
-  flex: 0 1000 auto;
-  flex-wrap: wrap;
+  flex: none;
   gap: 0 0.25rem;
   align-items: center;
-  align-content: flex-start;
-  box-sizing: border-box;
   height: 1.25rem;
-  min-width: 0;
-  padding-right: 2px;
   overflow: hidden;
   white-space: nowrap;
 }
 
-.pane-task-ends::before {
-  flex: none;
-  width: 0;
-  height: 1.25rem;
-  content: "";
+.pane-task-ends > [data-away] {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  visibility: hidden;
 }
 
 .pane-task-ends .task-end,
@@ -1334,10 +1311,6 @@ button.show-more:focus-visible {
   min-width: 9rem;
   height: auto;
   overflow: hidden;
-}
-
-.pane-task-ends.asking::before {
-  content: none;
 }
 
 .pane-task-ends.asking .task-end-confirm {
