@@ -94,6 +94,8 @@ import type { Alerts } from "./StatusLine";
 import { TitleBar, useTitleBarRoom } from "./TitleBar";
 import type { Needing, PermissionAsk, Quiet } from "./NeedsYou";
 import { answerAsk, usePermissionAsks } from "./permissionAsks";
+import { useAwayRefusals } from "./dispatchAway";
+import type { AwayItem } from "./AwayRefusals";
 import { useUpdates } from "./Updates";
 import { noTabs, SETTINGS_TAB_TITLE } from "./tabs";
 import { useTextSizes } from "./textSize";
@@ -1597,6 +1599,33 @@ function App() {
     });
   }, []);
 
+  /**
+   * **Every project's dispatches refused while nobody was there** (#1507): items of the same
+   * list, attached to no chat. Allow from now on grants the one pair for the person on this
+   * machine, Never for this pair is their never, and the core's sentence is said for each;
+   * Dismiss says nothing.
+   */
+  const awayRefusals = useAwayRefusals(planes);
+  const away = useMemo<AwayItem[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (awayRefusals.held[plane] ?? []).map((one) => ({
+          ...one,
+          plane,
+          project: calledOn(plane),
+        })),
+      ),
+    [planes, awayRefusals.held],
+  );
+  const answerAway = useCallback(
+    (item: AwayItem, how: "allow" | "dismiss" | "never") => {
+      void awayRefusals[how](item.plane, item).then((answer) => {
+        if (answer !== undefined) setReport({ from: `needs.away.${how}`, ...answer });
+      });
+    },
+    [awayRefusals],
+  );
+
   /** And the chats that can be waiting without saying so, for the faint hand (charter-app#52). */
   const quiet = useMemo<Quiet[]>(
     () =>
@@ -1844,6 +1873,11 @@ function App() {
           onPress: pressNeeding,
           asks,
           onAnswer: answer,
+          away,
+          onAllowAway: (item: AwayItem) => answerAway(item, "allow"),
+          onDismissAway: (item: AwayItem) => answerAway(item, "dismiss"),
+          onNeverAway: (item: AwayItem) => answerAway(item, "never"),
+          onLook: awayRefusals.read,
           onOpen: (ask: PermissionAsk) =>
             pressNeeding(ask.plane, {
               id: `needs.show:${ask.session}`,

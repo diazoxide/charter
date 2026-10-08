@@ -24,6 +24,11 @@
 //!
 //! A chat's own persona needs no grant, and a policy lock refuses, as for any chat.
 //!
+//! **A refusal for lack of a grant is kept for the person to read afterwards** (#1507,
+//! [`crate::dispatchaway`]): an item in the needs-you list, attached to no chat, from which
+//! they may make the standing grant for that pair. It is no Notice on the chat and holds no
+//! dispatch: the answer here is still a refusal, given at once.
+//!
 //! # Only from inside the sandbox
 //!
 //! A standing grant is a file, and what keeps a chat from writing it is the sandbox. A chat

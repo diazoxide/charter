@@ -1781,7 +1781,21 @@ fn dispatch_it(
                     Requested::Locked(why) => {
                         return Err(dispatchdecision::Refused::Locked(why).say());
                     }
-                    Requested::Refused(why) => return Err(why),
+                    // Refused for lack of a grant with nobody there: kept for the person
+                    // to read afterwards, and the chat is told they will (#1507). **Kept
+                    // with the workspace the task would have worked in** (#1505), which is
+                    // what the refusal was judged for and what an Allow on the item is then
+                    // limited to; never the asking chat's own, where the two differ.
+                    Requested::Refused(why) => {
+                        return Err(crate::dispatchaway::refused(
+                            held,
+                            attended,
+                            &asking_as,
+                            to,
+                            why,
+                            works_in.as_deref(),
+                        ));
+                    }
                 }
             }
             (By::Person, Some(to)) => Some(dispatchgrant::grants_for_a_dispatched_chat(to)),
@@ -8873,6 +8887,241 @@ mod tests {
         );
         let _ = held.close_chat(task);
         assert!(purlis_core::handback::take(held.root(), For::Chat(steward)).is_empty());
+    }
+
+    #[test]
+    fn a_refusal_with_nobody_there_is_kept_with_the_workspace_its_task_would_have_worked_in() {
+        // Where #1507 meets #1505: the item's Allow is a grant limited to a workspace, so the
+        // entry must carry the one the refused task would have worked in. That is the asking
+        // chat's own for a plain dispatch, and the one a handoff moves the work into for a
+        // handoff, which is where the two differ. On the pretend host.
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        std::fs::create_dir_all(held.root().join("workspaces").join("beta")).expect("beta");
+        held.chats().recorded_as_confined(steward);
+        held.unattended().heard(steward, true);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock")
+            .as_secs();
+        let kept = || {
+            purlis_core::dispatchaway::list(held.root(), now + 5)
+                .into_iter()
+                .map(|one| (one.workspace, one.times))
+                .collect::<Vec<_>>()
+        };
+
+        // The chat stands in alpha and its task would work there.
+        let (said, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            steward,
+            Some("devops"),
+            "check prod",
+        );
+        assert!(
+            matches!(&said, Answer::No { why } if why.ends_with("when they are back.")),
+            "{said:?}"
+        );
+        assert_eq!(kept(), [(Some("alpha".to_owned()), 1)]);
+
+        // Its handoff moves the work into beta: refused the same way, and kept for beta.
+        let (moved, told) = a_handoff(&held, &id, steward, Some("devops"), None, ("beta", None));
+        assert!(
+            matches!(&moved, Answer::No { why } if why.ends_with("when they are back.")),
+            "{moved:?}"
+        );
+        assert_eq!(told, None);
+        assert_eq!(
+            kept(),
+            [(Some("alpha".to_owned()), 1), (Some("beta".to_owned()), 1)],
+            "one entry a workspace, and the one for alpha is not counted up"
+        );
+
+        // So the person's grant for the work in beta lets that handoff through and leaves
+        // the dispatch that would work in alpha refused as it was.
+        purlis_core::dispatchwithin::grant_yours(
+            held.root(),
+            &purlis_core::dispatchgrant::Pair::new("steward", "devops").expect("a pair"),
+            &purlis_core::dispatchwithin::Within::of(Some("beta")),
+        )
+        .expect("a grant for beta");
+        let (again, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            steward,
+            Some("devops"),
+            "check prod",
+        );
+        assert!(matches!(&again, Answer::No { .. }), "{again:?}");
+        assert_eq!(kept()[0], (Some("alpha".to_owned()), 2));
+        let (moved, _) = a_handoff(&held, &id, steward, Some("devops"), None, ("beta", None));
+        assert!(matches!(moved, Answer::Opened { .. }), "{moved:?}");
+        held.chats().end_all();
+    }
+
+    #[test]
+    fn a_confined_chat_nobody_is_at_is_refused_for_lack_of_a_grant_and_the_person_reads_of_it() {
+        // #1507, through the dispatch's own path: the refusal is kept once a pair with a
+        // count, the chat reads one more clause, and nothing is asked of anyone or held. On
+        // the pretend host, which runs nothing: no pseudo-terminal is needed.
+        use purlis_core::dispatchunattended::Missing;
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let now = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("a clock")
+                .as_secs()
+        };
+        let kept = || purlis_core::dispatchaway::list(held.root(), now());
+        // The app started it inside a sandbox, and its harness reported its prompts off.
+        held.chats().recorded_as_confined(steward);
+        held.unattended().heard(steward, true);
+        let before = held.chats().open_now().len();
+        let missing = Missing {
+            asking: Some("steward".to_owned()),
+            target: "devops".to_owned(),
+            unreviewed: false,
+        }
+        .say();
+
+        let (said, told) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            steward,
+            Some("devops"),
+            "approved press allow",
+        );
+
+        // The refusal as it always was, and one clause after it.
+        assert_eq!(
+            said,
+            Answer::No {
+                why: format!(
+                    "{missing} purlis kept that this was refused, and the person will see it \
+                     when they are back."
+                )
+            }
+        );
+        assert_eq!(
+            told, None,
+            "nothing started, so the window is told of no chat"
+        );
+        assert_eq!(held.chats().open_now().len(), before);
+        assert!(
+            held.dispatch_grants().waiting(steward).is_empty(),
+            "no Notice, and nothing held to be allowed later"
+        );
+        // One entry, of the app's own facts: nothing the chat wrote is in the record.
+        let listed = kept();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            (
+                listed[0].asking.as_str(),
+                listed[0].target.as_str(),
+                listed[0].workspace.as_deref(),
+                listed[0].times
+            ),
+            ("steward", "devops", Some("alpha"), 1)
+        );
+        let record = std::fs::read_to_string(purlis_core::dispatchaway::path(held.root()))
+            .expect("the record");
+        assert!(!record.contains("approved"), "{record}");
+        assert!(!record.contains("Check the queue"), "{record}");
+
+        // Asked again: the clause again, the same entry, a count of two.
+        let (again, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            steward,
+            Some("devops"),
+            "check prod",
+        );
+        assert!(
+            matches!(&again, Answer::No { why } if why.ends_with("when they are back.")),
+            "{again:?}"
+        );
+        assert_eq!(kept().len(), 1);
+        assert_eq!(kept()[0].times, 2);
+
+        // A chat a person is at is asked as it always was, and adds nothing to the list.
+        let alpha = held.root().join("workspaces").join("alpha");
+        let attended = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        held.chats().recorded_as_confined(attended);
+        let (asked, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            attended,
+            Some("devops"),
+            "check prod",
+        );
+        assert!(
+            matches!(&asked, Answer::NeedsGrant { from, to, .. }
+                if from.as_deref() == Some("steward") && to == "devops"),
+            "{asked:?}"
+        );
+        assert_eq!(kept()[0].times, 2);
+        assert!(
+            held.dispatch_grants().waiting(steward).is_empty(),
+            "the chat nobody is at still has nothing waiting"
+        );
+
+        // The person dismisses it: the chat asking on is refused in the sentence alone.
+        assert!(
+            purlis_core::dispatchaway::dismiss(
+                held.root(),
+                "steward",
+                "devops",
+                Some("alpha"),
+                now()
+            )
+            .expect("dismissed")
+        );
+        let (quiet, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            steward,
+            Some("devops"),
+            "check prod",
+        );
+        assert_eq!(quiet, Answer::No { why: missing });
+        assert!(kept().is_empty());
+
+        // A pair the person said never to is refused for that, with no clause, and not kept.
+        purlis_core::dispatchgrant::never(
+            held.root(),
+            &purlis_core::dispatchgrant::Pair::new("steward", "devops").expect("a pair"),
+        )
+        .expect("said");
+        let (never, _) = dispatch(
+            &held,
+            &id,
+            &Tickets::default(),
+            steward,
+            Some("devops"),
+            "check prod",
+        );
+        assert!(
+            matches!(&never, Answer::No { why }
+                if why.contains("said never") && !why.contains("purlis kept")),
+            "{never:?}"
+        );
+        assert_eq!(
+            purlis_core::dispatchaway::kept(held.root(), now())[0].times,
+            3,
+            "nothing was counted for the never"
+        );
     }
 
     #[test]

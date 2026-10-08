@@ -26,6 +26,7 @@ mod changes;
 mod chats;
 mod clipath;
 mod curation;
+mod dispatchaway;
 mod dispatched;
 mod dispatches;
 mod dispatchgrants;
@@ -2879,6 +2880,19 @@ pub fn run() {
                     );
                 })
             });
+            // A dispatch refused while nobody was there: the window lists it in the title
+            // bar's needs-you list (#1507).
+            dispatchaway::telling({
+                let window = app.handle().clone();
+                std::sync::Arc::new(move |changed: dispatchaway::AwayRefusals| {
+                    windows::emit_for_plane(
+                        &window,
+                        &changed.plane.clone(),
+                        dispatchaway::CHANGED,
+                        &changed,
+                    );
+                })
+            });
             // The registry is managed BEFORE a plane is opened, because opening one starts
             // programs, and a program that dies at once tells the board, which tells the
             // window, which asks this registry what the chat is called.
@@ -3593,6 +3607,27 @@ mod tests {
         let bindings = std::fs::read_to_string(BINDINGS).unwrap();
         assert!(bindings.contains("(\"answer_ask\""), "the window answers");
         assert!(!ui_rpc_client().contains("(\"answer_ask\""));
+    }
+
+    #[test]
+    fn a_refusal_kept_while_nobody_was_there_is_the_window_s_alone_to_read_and_answer() {
+        // #1507: a standing grant in one press, offered on a refused chat's word. The window's
+        // Tauri IPC reads the list and answers it; the link's client carries none of the four.
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        let client = ui_rpc_client();
+        for command in [
+            "dispatch_away",
+            "allow_dispatch_away",
+            "dismiss_dispatch_away",
+            "never_dispatch_away",
+        ] {
+            assert!(bindings.contains(&format!("(\"{command}\"")), "{command}");
+            assert!(!client.contains(&format!("(\"{command}\"")), "{command}");
+            assert!(
+                purlis_session_protocol::ui::WINDOW_ONLY.contains(&command),
+                "{command}"
+            );
+        }
     }
 
     /// The window's commands that take a channel: `watch_session`, the one that streams a

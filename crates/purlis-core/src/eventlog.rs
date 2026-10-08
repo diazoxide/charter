@@ -1404,15 +1404,44 @@ impl Recorder {
         number: Option<u32>,
         audited: &crate::dispatchgrant::Audited<'_>,
     ) -> io::Result<Event> {
+        self.dispatch_grant_said(plane, number, audited, None)
+    }
+
+    /// [`Recorder::dispatch_grant`] for a grant or a never the person made somewhere other
+    /// than a chat's Notice or Settings: the same event, whose body also says where, as
+    /// `from` (#1507: `"away"` for one made on a refusal kept while nobody was there,
+    /// [`crate::dispatchaway::AUDITED_FROM`]). So a later reader can tell such a grant from
+    /// one made in Settings.
+    pub fn dispatch_grant_from(
+        &mut self,
+        plane: &Path,
+        number: Option<u32>,
+        audited: &crate::dispatchgrant::Audited<'_>,
+        from: &str,
+    ) -> io::Result<Event> {
+        self.dispatch_grant_said(plane, number, audited, Some(from))
+    }
+
+    fn dispatch_grant_said(
+        &mut self,
+        plane: &Path,
+        number: Option<u32>,
+        audited: &crate::dispatchgrant::Audited<'_>,
+        from: Option<&str>,
+    ) -> io::Result<Event> {
         let who = number
             .map(|number| self.identity(plane, number))
             .transpose()?;
+        let mut body = audited.body();
+        if let (Some(from), Some(fields)) = (from, body.as_object_mut()) {
+            fields.insert("from".to_owned(), from.into());
+        }
         let event = self.log.append(
             who.as_ref().map(|who| who.chat.as_str()),
             who.as_ref().map(|who| who.run.as_str()),
             None,
             audited.kind(),
-            audited.body(),
+            body,
         )?;
         self.log.durable().through(event.seq)?;
         Ok(event)

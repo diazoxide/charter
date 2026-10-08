@@ -129,6 +129,50 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
 }
 
 #[tokio::test]
+async fn a_refusal_kept_while_nobody_was_there_is_read_and_answered_on_no_link() {
+    // #1507: the list and its three answers (one a standing grant in one press) are the
+    // window's over Tauri's IPC alone, even when a host is built with every command.
+    const AWAY: [&str; 4] = [
+        "dispatch_away",
+        "allow_dispatch_away",
+        "dismiss_dispatch_away",
+        "never_dispatch_away",
+    ];
+    let commands = Commands::default();
+    let (a, b) = duplex(64 * 1024);
+    let (client, served) = tokio::join!(
+        link::connect(
+            a,
+            session::speaks(),
+            Scope::LocalUi,
+            HELD.of(Scope::LocalUi)
+        ),
+        link::serve_any(b, session::speaks(), &HELD)
+    );
+    let ui = ui::Server::new(
+        BUILD,
+        AWAY.into_iter().chain(["rename_chat"]),
+        commands.clone(),
+    );
+    tokio::spawn(session::serve(served.unwrap(), Sessions, Some(ui)));
+    let client = Client::new(client.unwrap()).0;
+    let ui = client.ui(BUILD).await.unwrap();
+
+    for command in AWAY {
+        let refused = ui
+            .call(
+                command,
+                json!({"plane": 1, "asking": "steward", "target": "devops", "workspace": null}),
+            )
+            .await
+            .unwrap();
+        assert!(refused.is_err(), "{command}: {refused:?}");
+        assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
+    }
+    assert!(commands.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_window_of_another_build_is_refused_the_ui_rpc_and_keeps_the_session_protocol() {
     let commands = Commands::default();
     let client = linked(Scope::LocalUi, Some(commands.clone())).await;

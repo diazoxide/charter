@@ -39,6 +39,11 @@
 //! shown as reported and decides nothing. It is absent where the harness reports none, and
 //! never a zero.
 //!
+//! **One other file lives in the store**: what was refused while nobody was there
+//! ([`crate::dispatchaway`]), kept here because this is the folder a sandboxed chat can
+//! neither read nor write. It is not a record: its name is no ULID, so nothing below reads,
+//! lists or collects it.
+//!
 //! A record is one JSON object, written whole and private ([`crate::rewrite::replace`]) under
 //! purlis's lock on the directory. A closed record takes no further report: the first
 //! [`close`] is the dispatch's end.
