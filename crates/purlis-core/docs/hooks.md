@@ -395,9 +395,11 @@ rule while one who reads a bare refusal files an issue.
   | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | purlis looks one level in and no deeper, so it cannot read the brief there or tell a helper sub-agent's handoff from the chat's own. The refusal says to run it directly. Which heredoc bodies a shell runs is the same answer the leak guard uses, so a brief is never one of them. |
   | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The new chat is sent exactly the text written in the call, and the dispatch record keeps the same. An unquoted heredoc expands before purlis reads it, a file's text is not in the call, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
 
-  **Asking for its help is not a handoff.** `purlis handoff --help`, or `-h`, with nothing fed
-  to it (no heredoc, here-string, file or pipe, and no live substitution in the call) reads no
-  brief and is not refused for lacking a heredoc. Every refusal above stands in front of it.
+  **Asking for its help is not a handoff.** `purlis handoff --help`, or `-h`, reads no brief
+  and is not refused for lacking a heredoc, where the flag is the bare word right after
+  `handoff`, nothing is fed to the command (no heredoc, here-string, file or pipe, and no live
+  substitution in the call) and the call holds no other handoff. Every refusal above stands
+  in front of it.
 
   **What it no longer refuses.** An unattended run (`permission_mode: bypassPermissions`):
   whether anybody answers a chat's prompts is the app's own mark on that chat, weighed where

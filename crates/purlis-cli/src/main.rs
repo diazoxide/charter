@@ -3734,20 +3734,18 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let code = handoff::handoff(
-            &here,
-            &handoff::Args {
-                workspace: workspace.clone(),
-                create: *create,
-                vision: vision.clone(),
-                persona: persona.clone(),
-                name: name.clone(),
-                report: *report,
-                summary: summary.clone(),
-                now: now.clone(),
-            },
-        );
-        if code == ExitCode::SUCCESS {
+        let args = handoff::Args {
+            workspace: workspace.clone(),
+            create: *create,
+            vision: vision.clone(),
+            persona: persona.clone(),
+            name: name.clone(),
+            report: *report,
+            summary: summary.clone(),
+            now: now.clone(),
+        };
+        let code = handoff::handoff(&here, &args);
+        if code == ExitCode::SUCCESS && args.creates_a_handoff() {
             extensions::tell(
                 here.plane.root(),
                 &ExtensionEvent::HandoffCreated {

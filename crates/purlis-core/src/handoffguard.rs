@@ -658,18 +658,31 @@ pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, S
 /// `-h`, which prints the help and exits before a brief is read (#1515). There is then no
 /// brief whose source could be wrong, so the call is not refused for lacking a heredoc.
 ///
-/// **Only where nothing is fed to it.** The flag is a bare word among the command's own words
-/// after `handoff`, before any `--`; the segment reads nothing (no heredoc, here-string or
+/// **The flag is the bare word right after `handoff`, and nowhere else.** There the program is
+/// sure to receive it as its help flag: it cannot be an option's value, the operand of a
+/// redirection (`handoff beta > -h` is a handoff whose output goes to a file called `-h`), a
+/// word behind a `--` however that is quoted, or text inside a brief. A token that merely
+/// reads `--help` further along is not looked at.
+///
+/// **Only where nothing is fed to it.** The segment reads nothing (no heredoc, here-string or
 /// file) and no pipe feeds it; and the call holds no live substitution, which the shell would
-/// rewrite before purlis reads a word. Anything else is judged as the handoff it may be
-/// ([`brief_source`]): a help flag beside a quoted heredoc passes as that handoff does, and one
-/// beside a file or a pipe is refused as it was.
+/// rewrite before purlis reads a word.
+///
+/// **And only where the call holds no other handoff** ([`holds_one_handoff`]). This guard
+/// judges the first handoff of a call. A real handoff standing first is judged by its brief;
+/// a help ask standing first opens nothing, so letting it through must not be what lets a
+/// second handoff on the same call go unjudged.
+///
+/// Anything else is judged as the handoff it may be ([`brief_source`]): a help flag beside a
+/// quoted heredoc passes as that handoff does, and one beside a file or a pipe is refused as
+/// it was.
 fn asks_for_help(cmd: &str, seg: &[Tok], piped: bool) -> bool {
     if piped
         || seg
             .iter()
             .any(|t| t.is_op(&["<<", "<<<"]) || t.is_op(&REDIRECT_READS))
         || livesub::live_substitution(cmd).is_some()
+        || !holds_one_handoff(cmd)
     {
         return false;
     }
@@ -685,10 +698,33 @@ fn asks_for_help(cmd: &str, seg: &[Tok], piped: bool) -> bool {
     if texts[at..] != words[..] || words.first().is_none_or(|word| word != "handoff") {
         return false;
     }
-    seg[at + 1..]
+    seg.get(at + 1)
+        .is_some_and(|word| word.bare && (word.text == "--help" || word.text == "-h"))
+}
+
+/// Whether `cmd` holds exactly one handoff invocation, in every reading this guard has of one:
+/// one segment that runs a handoff across all its lines ([`runs_handoff`], with the lines read
+/// as the shell joins them), and no line with a handoff behind a shell rewrite, under either
+/// name the command line has. A handoff inside a string a shell runs was refused before this
+/// is asked.
+///
+/// **It errs toward "more than one".** Newlines are segment boundaries here, so a heredoc body
+/// line that begins as a handoff counts; a quoted program name counts as a rewrite; and a call
+/// the reader could only read in part counts as none. Each way the help ask is then judged as
+/// a handoff with no brief, and refused as it always was.
+fn holds_one_handoff(cmd: &str) -> bool {
+    let read = as_the_shell_reads(cmd);
+    let (segments, parsed) = shellseg::segment_argv_parsed(&read);
+    let running = segments
         .iter()
-        .take_while(|word| !(word.bare && word.text == "--"))
-        .any(|word| word.bare && (word.text == "--help" || word.text == "-h"))
+        .filter(|toks| {
+            let (prog, _env, argv) = shellwrap::split_env(toks);
+            runs_handoff(&prog, &argv)
+        })
+        .count();
+    // Both installed names spelt exactly are the command itself here, never a disguise of it.
+    let rewritten = |line: &str| disguised_handoff_spelling(line, &crate::cliname::INSTALLED);
+    parsed && running == 1 && !cmd.split('\n').any(rewritten) && !read.split('\n').any(rewritten)
 }
 
 /// Whether a handoff segment is `purlis handoff report <summary>` — a report back, which
@@ -1255,11 +1291,19 @@ mod tests {
             "purlis handoff -h",
             "charter handoff --help",
             "/usr/local/bin/purlis handoff --help",
-            "purlis handoff beta --help",
-            "purlis handoff --name x --help",
+            "python3 -m purlis handoff --help",
+            "FOO=1 purlis handoff --help",
+            // A wrapper's own argument spelt `handoff` is not the command.
+            "sudo -u handoff purlis handoff --help",
+            // What follows the flag changes nothing: the program prints its help and exits.
+            "purlis handoff --help beta",
             "purlis handoff --help 2>&1",
+            "purlis handoff --help > help.txt",
+            // Beside commands that are no handoff.
             "purlis handoff --help | head -40",
             "cd /tmp && purlis handoff --help",
+            "purlis handoff --help; ls",
+            "git status\npurlis handoff -h",
         ] {
             assert_eq!(refusal(cmd), None, "{cmd:?}");
         }
@@ -1284,22 +1328,132 @@ mod tests {
         assert_eq!(reason("purlis ${x:-handoff} --help"), Some(REASON_SPELLING));
         for cmd in [
             // Something is fed to it: that is a handoff with a brief, whatever else it says.
-            "purlis handoff beta --help < brief.txt",
-            "cat brief.txt | purlis handoff beta --help",
-            "purlis handoff beta --help <<<'x'",
-            "purlis handoff beta --help <<BRIEF\nx\nBRIEF",
+            "purlis handoff --help < brief.txt",
+            "cat brief.txt | purlis handoff --help",
+            "purlis handoff --help <<<'x'",
+            "purlis handoff --help <<BRIEF\nx\nBRIEF",
             // The shell would rewrite the call before purlis reads it.
-            "purlis handoff \"$(cat name)\" --help",
-            // Quoted, it is a value and not the flag; and `--helpful` is no flag purlis has.
-            "purlis handoff beta '--help'",
-            "purlis handoff beta --helpful",
-            // After `--` it is a word, not a flag.
-            "purlis handoff -- --help",
+            "purlis handoff --help \"$(cat name)\"",
+            "purlis handoff --help `cat name`",
         ] {
             assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE), "{cmd:?}");
         }
         // With a quoted heredoc it is judged as any handoff is, and passes as one.
-        assert_eq!(refusal("purlis handoff beta --help <<'B'\nx\nB"), None);
+        assert_eq!(refusal("purlis handoff --help <<'B'\nx\nB"), None);
+    }
+
+    /// The flag is the bare word right after `handoff` and nowhere else (the review's M2). A
+    /// token that reads `--help` anywhere further along is one the program does not receive
+    /// as its help flag, so each of these is a handoff with no brief of its own, and stdin can
+    /// be set outside the segment: refused, as every one of them was before the help arm.
+    #[test]
+    fn a_help_flag_is_only_the_bare_word_right_after_handoff() {
+        for cmd in [
+            // A redirection's operand: the output goes to a file called `-h`.
+            "purlis handoff beta > -h",
+            "purlis handoff beta 2> --help",
+            "purlis handoff beta >> -h",
+            "purlis handoff > -h beta",
+            "purlis handoff 2> --help",
+            // With stdin set outside the handoff's own segment.
+            "{ purlis handoff beta > -h; } < brief.txt",
+            "exec < brief.txt; purlis handoff beta 2> -h",
+            "cat brief.txt | { :; purlis handoff beta > -h; }",
+            // Behind a `--`, however it is written: a word, not a flag.
+            "purlis handoff -- --help",
+            "purlis handoff '--' --help",
+            "purlis handoff \"--\" --help",
+            "purlis handoff \\-- --help",
+            "purlis handoff beta '--' -h",
+            // After another word, or as an option's value: not the word right after.
+            "purlis handoff beta --help",
+            "purlis handoff beta -h",
+            "purlis handoff --name x --help",
+            "purlis handoff --name -h beta",
+            "env X=1 purlis handoff beta handoff --help",
+            // Quoted or escaped, it is not the bare flag; and `--helpful` is no flag at all.
+            "purlis handoff '--help'",
+            "purlis handoff \"-h\"",
+            "purlis handoff \\--help",
+            "purlis handoff --helpful",
+            "purlis handoff -help",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE), "{cmd:?}");
+        }
+        // Inside a brief it is text: the handoff is judged by its heredoc, as ever.
+        assert_eq!(
+            reason("purlis handoff beta <<BRIEF\nrun purlis handoff --help\nBRIEF"),
+            Some(REASON_BRIEF_SOURCE)
+        );
+        assert_eq!(
+            refusal("purlis handoff --name x beta <<'BRIEF'\n--help\n-h\nBRIEF"),
+            None
+        );
+    }
+
+    /// A help ask does not end the reading of the call (the review's M1). This guard judges
+    /// the first handoff of a call; where that one is a help ask and the call holds another
+    /// handoff, the help ask is not let through, so the call is refused as a handoff with no
+    /// brief, exactly as it was before the help arm.
+    #[test]
+    fn a_help_ask_beside_another_handoff_is_refused_as_before() {
+        for cmd in [
+            // On the same line.
+            "purlis handoff --help; purlis handoff beta < brief.txt",
+            "purlis handoff --help && cat brief.txt | purlis handoff beta",
+            "purlis handoff -h || charter handoff beta",
+            "purlis handoff --help; /usr/local/bin/purlis handoff beta < brief.txt",
+            "( purlis handoff --help; purlis handoff beta < brief.txt )",
+            // On a later line.
+            "purlis handoff --help\ncat brief.txt | purlis handoff beta",
+            "purlis handoff --help\npurlis handoff beta < brief.txt",
+            "purlis handoff -h && purlis handoff beta <<BRIEF\n$HOME\nBRIEF",
+            "purlis handoff --help\npurlis handoff beta <<'BRIEF'\nx\nBRIEF",
+            // Joined to the next line by a continuation.
+            "purlis handoff --help; purlis \\\nhandoff beta < brief.txt",
+            // The second one behind a shell rewrite.
+            "purlis handoff --help; purlis ${x:-handoff} beta < brief.txt",
+            "purlis handoff --help\npurlis hando?f beta < brief.txt",
+            "purlis handoff --help; $'purlis' handoff beta < brief.txt",
+            // Two help asks are two handoffs to this reading too: nothing is guessed.
+            "purlis handoff --help; purlis handoff -h",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE), "{cmd:?}");
+        }
+        // The second inside a string a shell runs is refused as that.
+        assert_eq!(
+            reason("purlis handoff --help; bash -c 'purlis handoff beta < brief.txt'"),
+            Some(REASON_SHELL_STRING)
+        );
+        // And the same real handoff with no help ask in front of it is refused the same way,
+        // which is what "as before" means.
+        assert_eq!(
+            reason("ls; purlis handoff beta < brief.txt"),
+            Some(REASON_BRIEF_SOURCE)
+        );
+    }
+
+    /// What the count of handoffs in a call reads: one, and only one, however it is spelt.
+    #[test]
+    fn a_call_holds_one_handoff_only_where_exactly_one_is_read() {
+        for one in [
+            "purlis handoff --help",
+            "charter handoff beta",
+            "ls; /usr/local/bin/purlis handoff beta | head",
+            "git status\npython3 -m purlis handoff -h",
+        ] {
+            assert!(holds_one_handoff(one), "{one:?}");
+        }
+        for not_one in [
+            "ls",
+            "purlis handoff --help; purlis handoff beta",
+            "purlis handoff --help\ncharter handoff beta",
+            "purlis handoff --help; purlis {handoff,} beta",
+            // A call the reader cannot read whole is not counted as one.
+            "purlis handoff --help; echo 'unclosed",
+        ] {
+            assert!(!holds_one_handoff(not_one), "{not_one:?}");
+        }
     }
 
     /// Text that only mentions the command is not the command: a file written from a heredoc

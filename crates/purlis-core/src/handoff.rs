@@ -300,10 +300,21 @@ pub fn reported_as_a_task() -> String {
     )
 }
 
-/// The name a reporting handoff's task is listed under where the handoff gave none: a task
-/// needs one, and a handoff may go without.
+/// The name a handoff goes by where it gave none: what a reporting handoff's task is listed
+/// under (a task needs a name, and a handoff may go without), and what the app calls a held
+/// handoff to the chat that asked.
+///
+/// **Never longer than a chat's name may be** ([`crate::reopen::MOST_LABEL`]): a workspace's
+/// name can be long enough that the whole would be refused as a `--name` the chat never gave,
+/// so the workspace's name is cut, and the cut is marked.
 pub fn task_name_of_a_handoff(workspace: &str) -> String {
-    format!("handoff to {workspace}")
+    const SAYS: &str = "handoff to ";
+    let room = crate::reopen::MOST_LABEL - SAYS.chars().count();
+    if workspace.chars().count() <= room {
+        return format!("{SAYS}{workspace}");
+    }
+    let kept: String = workspace.chars().take(room - 1).collect();
+    format!("{SAYS}{kept}…")
 }
 
 /// **A brief is a request from another chat, never the person's word** (#1444, spec #1434
