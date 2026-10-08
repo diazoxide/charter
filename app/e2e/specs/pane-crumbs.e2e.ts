@@ -19,6 +19,12 @@ import { endChat, pressAndStart } from "../opening.js";
  * elements and classes `PaneCrumbs` draws. `PaneCrumbs.test.tsx` holds the component to that
  * shape and `TaskInTab.window.test.tsx` to where it is drawn; this file holds the stylesheet to
  * what it must look like. A class renamed in one place and not the other fails one of them.
+ *
+ * **Brief is drawn beside it** (#1494): the one small button a pane showing a task has for the
+ * brief the task was sent (`BriefButton`, `.pane-brief`), right after the breadcrumb, as the
+ * window draws it. Every case here is measured with it in the line, so the line's rules hold
+ * with it there: nothing overflows, the state word is whole, and the button is one of the
+ * line's items that give way before the state does.
  */
 
 type Box = {
@@ -106,7 +112,14 @@ async function draw(
       shape.append(document.createElementNS("http://www.w3.org/2000/svg", "svg"));
       shown.append(shape, el("span", "word", state));
       crumbs.append(shown);
-      line.prepend(crumbs);
+      // Brief (`BriefButton`): an icon button, an item of the line and not of the breadcrumb.
+      const brief = el("button", "pane-brief");
+      brief.dataset.drawn = "pane-crumbs.e2e";
+      brief.setAttribute("type", "button");
+      brief.setAttribute("aria-label", `Brief of ${path[path.length - 1]}`);
+      brief.tabIndex = 0;
+      brief.append(document.createElementNS("http://www.w3.org/2000/svg", "svg"));
+      line.prepend(crumbs, brief);
       return true;
     },
     pane,
@@ -138,7 +151,9 @@ async function drawEnds(pane: number): Promise<boolean> {
       button.textContent = words;
       group.append(button);
     }
-    crumbs.after(group);
+    // After Brief, where a pane draws them (#1494).
+    const brief = crumbs.nextElementSibling;
+    (brief?.classList.contains("pane-brief") ? brief : crumbs).after(group);
     // Which of the two are drawn is the app's measure, as a pane's own are (`wholeWays.ts`).
     const fit = (window as unknown as { purlisE2eFitWays?: (group: HTMLElement) => void })
       .purlisE2eFitWays;
@@ -199,6 +214,30 @@ async function lineOf(pane: number) {
       ways: [...line.querySelectorAll<HTMLElement>(".pane-task-ends > *")].map(said),
     };
   }, pane);
+}
+
+/**
+ * Adds one more control to pane `pane`'s own controls, standing for the ones other tickets add
+ * there, and waits until the pane has said the width they now have. Answers how many are drawn.
+ */
+async function oneMoreControl(pane: number): Promise<number> {
+  const drawn = await browser.execute((at: number) => {
+    const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
+      frame.querySelector('[data-testid="pane"]'),
+    );
+    const controls = frames[at]?.querySelector(".pane-corner.at-end > .pane-doing");
+    const like = controls?.querySelector("button");
+    if (!controls || !like) return 0;
+    const more = like.cloneNode(true) as HTMLElement;
+    more.dataset.drawn = "pane-crumbs.e2e";
+    more.setAttribute("aria-label", "A control another ticket adds");
+    controls.append(more);
+    return [...controls.querySelectorAll<HTMLElement>("button")].filter(
+      (button) => button.style.display !== "none",
+    ).length;
+  }, pane);
+  await untilReserved(pane);
+  return drawn;
 }
 
 /** Takes away everything this file drew, and puts back every control it took away. */
@@ -272,7 +311,8 @@ async function measured(pane: number) {
     );
     const frame = frames[at];
     const line = frame?.querySelector(".pane-corner.at-start > .pane-chips");
-    const crumbs = frame?.querySelector('[data-drawn="pane-crumbs.e2e"]');
+    const crumbs = frame?.querySelector('nav[data-drawn="pane-crumbs.e2e"]');
+    const brief = frame?.querySelector<HTMLElement>("button.pane-brief");
     const word = crumbs?.querySelector<HTMLElement>(".shown-state .word");
     return {
       rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
@@ -290,6 +330,13 @@ async function measured(pane: number) {
         (frame as HTMLElement | undefined)?.style.getPropertyValue("--pane-controls") ?? "",
       ),
       crumbs: box(crumbs),
+      // Brief, beside the breadcrumb, and how wide it would be with all the room it wants.
+      brief: box(brief),
+      briefNeeds: brief ? brief.scrollWidth : 0,
+      // Everything of the line after the breadcrumb, in order, and whether each is cut.
+      after: [...(line?.children ?? [])]
+        .filter((one) => one !== crumbs)
+        .map((one) => ({ what: one.className, box: box(one), cut: cut(one) })),
       names: [...(crumbs?.querySelectorAll(".crumb") ?? [])].map((name) => ({
         text: name.textContent ?? "",
         between: name.classList.contains("between"),
@@ -419,6 +466,14 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
     // With room to spare nothing is cut: every name and the state are whole.
     expect(seen.names.map((name) => name.cut)).toEqual([false, false]);
     expect(seen.wordCut).toBe(false);
+    // Brief is whole too: right after the breadcrumb, on its row, no taller than it, and wide
+    // enough to press.
+    const [crumbs, brief] = [seen.crumbs as Box, seen.brief as Box];
+    check("Brief was not drawn", seen.brief !== null, "is", true);
+    check("Brief is before the breadcrumb", brief.left, "atLeast", crumbs.right - 1);
+    check("Brief is cut", brief.width, "atLeast", seen.briefNeeds - 1);
+    check("Brief is too small to press", brief.width, "atLeast", seen.rem);
+    check("Brief is taller than the breadcrumb", brief.height, "atMost", crumbs.height + 1);
   });
 
   // Each narrow pane twice: with the controls a pane showing a task draws (the two splits),
@@ -461,6 +516,16 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
       );
       inside(seen.state, seen.crumbs, "the state in the breadcrumb");
       inside(seen.where, seen.crumbs, "the workspace in the breadcrumb");
+      // Brief is in the line with it, after the breadcrumb and inside the pane. It gives way
+      // before the breadcrumb does (the last case measures that).
+      inside(seen.brief, frame, "Brief in its pane");
+      inside(seen.brief, seen.line, "Brief in the top line");
+      check(
+        "Brief is over the breadcrumb",
+        (seen.brief as Box).left,
+        "atLeast",
+        (seen.crumbs as Box).right - 1,
+      );
 
       // The middle of the path gave way first: every name between the two ends is cut, and
       // each end still shows at least as much as a name between them does.
@@ -597,7 +662,8 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
         confirm.append(button);
       }
       group.append(confirm);
-      crumbs.after(group);
+      const brief = crumbs.nextElementSibling;
+      (brief?.classList.contains("pane-brief") ? brief : crumbs).after(group);
       return true;
     });
     expect(asked).toBe(true);
@@ -635,6 +701,81 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
         button.box.right,
         "atMost",
         (seen.line as Box).right + 1,
+      );
+    }
+    check("the top line wrapped", (seen.line as Box).height, "atMost", seen.rem * 2);
+  });
+
+  // **The state word is the last thing on the line to be cut** (#1494). The hardest line there
+  // is: the longest state a task shows, a long path, Brief and the two word buttons beside
+  // the breadcrumb, and four controls in the pane's corner taking room from the line.
+  it("keeps the longest state whole in a narrow pane with Brief, two word buttons and four pane controls, by cutting everything else first", async () => {
+    await windowIs(1024, 768);
+    expect(await oneMoreControl(1)).toBe(4);
+    expect(
+      await draw(1, {
+        path: LONG_PATH,
+        state: LONGEST_STATE,
+        elsewhere: "release-train",
+      }),
+    ).toBe(true);
+    expect(await drawEnds(1)).toBe(true);
+
+    const seen = await measured(1);
+    const frame = seen.frame as Box;
+    check("the pane is not a narrow one", frame.width, "atMost", 40 * seen.rem);
+
+    // The word is whole, on one line, inside its breadcrumb, which is inside the line.
+    expect(seen.wordCut).toBe(false);
+    check(
+      "the state word is narrower than it needs",
+      (seen.word as Box).width,
+      "atLeast",
+      seen.wordNeeds - 1,
+    );
+    inside(seen.word, seen.state, "the word in its state");
+    inside(seen.state, seen.crumbs, "the state in the breadcrumb");
+    inside(seen.crumbs, seen.line, "the breadcrumb in the top line");
+    inside(seen.line, frame, "the top line in its pane");
+
+    // Nothing after the breadcrumb is drawn over the state, and each of them is in the line.
+    const state = seen.state as Box;
+    for (const one of seen.after) {
+      inside(one.box, seen.line, `${one.what} in the top line`);
+      check(`${one.what} is over the state`, (one.box as Box).left, "atLeast", state.right - 1);
+      check(`${one.what} is over the state`, overlap(one.box as Box, state), "is", false);
+    }
+    // The others gave way first: the path does not fit, so its names are cut, and by then
+    // Brief and the word buttons are cut too. None of them kept room the path went without.
+    check(
+      "the path fits, so nothing was tested",
+      seen.names.some((name) => name.cut),
+      "is",
+      true,
+    );
+    for (const one of seen.after.filter((item) => /pane-brief/.test(item.what)))
+      check(`${one.what} kept its room while the path was cut`, one.cut, "is", true);
+    // The two ways never shrink (#1488): each is drawn whole or set aside (`wholeWays.ts`).
+    const ends = await measuredEnds(1);
+    check("the two ways were not drawn", ends !== null, "is", true);
+    for (const button of ends?.buttons ?? [])
+      if (button.box.top < (ends?.group.bottom ?? 0) - 1)
+        check(`"${button.words}" is cut mid-word`, button.cut, "is", false);
+
+    // The corner's four controls are clear of the line, and the line is still one row.
+    check("the pane draws no controls", seen.controls !== null, "is", true);
+    if (seen.controls !== null) {
+      check(
+        "the line ends under the controls",
+        (seen.line as Box).right,
+        "atMost",
+        seen.controls.left + 1,
+      );
+      check(
+        "the controls are over the breadcrumb",
+        overlap(seen.crumbs as Box, seen.controls),
+        "is",
+        false,
       );
     }
     check("the top line wrapped", (seen.line as Box).height, "atMost", seen.rem * 2);

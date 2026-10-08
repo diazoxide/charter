@@ -74,6 +74,7 @@ mod settings;
 mod slowstart;
 mod smartclose;
 mod stopping;
+mod taskbrief;
 mod thismachine;
 mod todos;
 mod unstarted;
@@ -3764,6 +3765,15 @@ mod tests {
         }
         // Sending a task's tab back to the list ends nothing, and is an ordinary command.
         assert!(client.contains("(\"close_chat_tab\""));
+    }
+
+    #[test]
+    fn a_task_s_brief_is_read_by_the_window_alone_and_never_in_the_link_s_client() {
+        // #1494: a brief is whatever the work held, and the dispatch store is kept from the
+        // project's chats. Reading one back is Tauri's IPC, and no second route.
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        assert!(bindings.contains("(\"task_brief\""), "the window reads it");
+        assert!(!ui_rpc_client().contains("(\"task_brief\""));
     }
 
     /// The window's commands that take a channel: `watch_session`, the one that streams a

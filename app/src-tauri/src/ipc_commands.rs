@@ -148,6 +148,7 @@ macro_rules! app_commands {
                 finished::finished_tasks,
                 finished::clear_finished_tasks,
                 reopen_finished_task,
+                taskbrief::task_brief,
                 resume_session,
                 autosave::plane_fetch,
                 saving::plane_saving,

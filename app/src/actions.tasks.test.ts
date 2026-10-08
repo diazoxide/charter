@@ -3,6 +3,7 @@ import {
   backId,
   BESIDE_ID,
   besideId,
+  briefId,
   catalogue,
   catalogued,
   menuRows,
@@ -198,7 +199,13 @@ describe("where a task is drawn, as rows of the catalogue (#1489, V100-38)", () 
   it("lists the three in a task's menu in the Chats list, above the line", () => {
     const tabs = moveToOwnTab(sessions(), 2, "talk", "devops", null);
     const menu = menuRows({ on: "listed", session: 2 }, rowsOf(tabs));
-    expect(menu.above.map((row) => row.id)).toEqual([ownTabId(2), besideId(2), backId(2)]);
+    // After its Brief (#1494), which reads and moves nothing.
+    expect(menu.above.map((row) => row.id)).toEqual([
+      briefId(2),
+      ownTabId(2),
+      besideId(2),
+      backId(2),
+    ]);
     // A session's row has none of them.
     expect(menuRows({ on: "listed", session: 1 }, rowsOf(tabs)).above).toEqual([]);
   });

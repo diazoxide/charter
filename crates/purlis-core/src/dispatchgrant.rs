@@ -455,23 +455,43 @@ pub fn shown_brief(brief: &str) -> ShownBrief {
     while !brief.is_char_boundary(end) {
         end -= 1;
     }
-    let mut text = String::with_capacity(end);
-    for ch in brief[..end].replace("\r\n", "\n").chars() {
-        match ch {
-            '\n' | '\t' => text.push(ch),
-            '\\' => text.push_str("\\\\"),
-            // The house's one table of what draws as nothing ([`crate::shown`]), never a list
-            // of ranges kept here.
-            _ if crate::shown::invisible(ch) => text.push_str(&crate::shown::escape_char(ch)),
-            _ => text.push(ch),
-        }
-    }
+    let text = inert(&brief[..end]);
     let lines = u32::try_from(text.lines().count()).unwrap_or(u32::MAX);
     ShownBrief {
         text,
         cut: end < brief.len(),
         lines,
     }
+}
+
+/// **`text` written out inertly**: a chat's words, so nothing in them can move the cursor,
+/// change direction or hide what follows. Lines and tabs are kept (a `\r\n` is a line break),
+/// every other character with no glyph is written out as its escape, and a backslash is
+/// doubled so the text cannot spell an escape itself. Nothing is cut: what [`shown_brief`]
+/// shows of a brief before it is sent, and what the window shows of one after
+/// ([`crate::dispatchrecord::brief_sent`]).
+pub fn inert(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.replace("\r\n", "\n").chars() {
+        match ch {
+            '\n' | '\t' => out.push(ch),
+            '\\' => out.push_str("\\\\"),
+            // The house's one table of what draws as nothing ([`crate::shown`]), never a list
+            // of ranges kept here.
+            _ if crate::shown::invisible(ch) => out.push_str(&crate::shown::escape_char(ch)),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Whether `text` holds a character [`inert`] writes out as an escape: one that draws as
+/// nothing, moves the cursor or turns the words around it. A line break (`\n`, `\r\n`) and a
+/// tab are plain text, and are not one.
+pub fn holds_what_draws_as_nothing(text: &str) -> bool {
+    text.replace("\r\n", "\n")
+        .chars()
+        .any(|ch| ch != '\n' && ch != '\t' && crate::shown::invisible(ch))
 }
 
 #[cfg(test)]

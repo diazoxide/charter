@@ -1,6 +1,7 @@
 import { memo, useContext, useState } from "react";
 import { ChevronDown, ChevronRight, SquareTerminal } from "lucide-react";
 import type { FinishedTask } from "./bindings";
+import { briefTitle, useOpenBrief } from "./Brief";
 import { firstLine, foldedOf, qualifierOf, shownOf } from "./finished";
 import { PersonaMark } from "./PersonaMark";
 import { StateShown } from "./StateShown";
@@ -25,8 +26,9 @@ import { WaitingTaskWaysContext } from "./waitingTasks";
  *
  * **A finished task cannot be typed into**: its program has ended. Pressing its row shows its
  * report, in place, **as text**: every word of it is a text node, so nothing a task wrote is
- * ever read as markup. **Reopen** resumes its conversation as an ordinary chat with a tab; it
- * is then no longer a task, and the chat that asked is told nothing.
+ * ever read as markup. **Brief** shows what it was sent, from the same record (#1494).
+ * **Reopen** resumes its conversation as an ordinary chat with a tab; it is then no longer a
+ * task, and the chat that asked is told nothing.
  *
  * Not rows of the tree: there is no chat behind one to bring forward, so the arrows stop on the
  * chats and Tab reaches these, each a button of its own.
@@ -126,6 +128,8 @@ function FinishedRow({
   const waits = task.waits;
   const state = shownOf(task);
   const more = qualifierOf(task);
+  /** Opens the brief it was sent (`Brief.tsx`), where the window around this row has one. */
+  const openBrief = useOpenBrief();
   /** Why Reopen does nothing, where it does nothing: said to a screen reader on the button,
    *  which stays in the Tab order, and in the opened row. A disabled button takes no focus,
    *  so its reason would reach nobody on a keyboard. */
@@ -178,6 +182,19 @@ function FinishedRow({
           {more !== undefined && <span className="outcome">{more}</span>}
           {task.attempts > 1 && <span className="outcome">tried {task.attempts} times</span>}
         </button>
+        {openBrief !== undefined && (
+          <button
+            type="button"
+            className="finished-brief"
+            tabIndex={0}
+            aria-label={briefTitle(task.name)}
+            aria-haspopup="dialog"
+            title="What this task was sent, as it was sent."
+            onClick={() => openBrief({ dispatch: task.id, name: task.name })}
+          >
+            Brief
+          </button>
+        )}
         {/* Still a task (`waits`): the ways out a chat that did not start has, and never
           Reopen or Clear, which are for one that has ended. */}
         {waits !== null && ways !== null && (

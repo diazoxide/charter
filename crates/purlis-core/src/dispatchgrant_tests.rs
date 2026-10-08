@@ -460,6 +460,24 @@ fn a_brief_longer_than_a_first_message_may_be_is_cut_there_and_says_so() {
     assert_eq!(whole.text.len(), MOST_BRIEF_BYTES);
 }
 
+#[test]
+fn a_text_is_written_out_inertly_whole_and_says_whether_it_held_anything_to_write_out() {
+    // Plain text of several lines, markup and all, is what it was: only a backslash doubles.
+    let plain = "# Title\n\t<b>bold</b> [a](b)\r\nnaïve 🚀 שלום";
+    assert!(!holds_what_draws_as_nothing(plain));
+    assert_eq!(inert(plain), "# Title\n\t<b>bold</b> [a](b)\nnaïve 🚀 שלום");
+    // What turns the words around, hides between them or moves the cursor is written out.
+    let odd = "safe\u{202e}evil\u{200b}\u{1b}[2J\r \\u202e";
+    assert!(holds_what_draws_as_nothing(odd));
+    assert_eq!(
+        inert(odd),
+        "safe\\u202eevil\\u200b\\u001b[2J\\u000d \\\\u202e"
+    );
+    // Nothing is cut, however long.
+    let long = "é".repeat(MOST_BRIEF_BYTES);
+    assert_eq!(inert(&long), long);
+}
+
 // ---- what a covered dispatch starts with --------------------------------------------------------
 
 /// A project whose steward reaches one host and whose devops reaches the cluster.
