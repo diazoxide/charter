@@ -28,6 +28,7 @@ function contents(secrets: VaultSecret[], over: Partial<VaultContents> = {}): Va
     count: secrets.length,
     health: { ok: true, detail: `${secrets.length} secret(s) in the system keyring` },
     secrets,
+    refused: null,
     identity: [],
     identity_in_app_env: [],
     ...over,
@@ -614,6 +615,119 @@ describe("a 1Password vault's token", () => {
     expect(
       screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
     ).toBeInTheDocument();
+    noValueAnywhere(PUT);
+  });
+
+  // --- #1526: the token is nowhere, so the contents cannot be read ------------------------ //
+
+  const UNSET =
+    "vault 'ops' is read through $OP_TEAM_TOKEN, which is unset. purlis will not fall back to an ambient $OP_SERVICE_ACCOUNT_TOKEN. Paste the token into the box below: it goes straight into the Keychain.";
+  const PASTE_HERE =
+    "Paste the service-account token for $OP_TEAM_TOKEN here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.";
+
+  /** `team` as the core answers it when its contents could not be read: no secrets, why, and the
+   *  identity it declares all the same. */
+  function unread(held: "unset" | "keyring", refused = UNSET): VaultContents {
+    return contents([], {
+      provider: "1password",
+      health: { ok: false, detail: refused },
+      refused,
+      identity: [{ variable: "OP_TEAM_TOKEN", held }],
+    });
+  }
+
+  it("draws the refusal and the paste box when the token is nowhere, and no empty vault", async () => {
+    core(unread("unset"));
+    draw();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(UNSET);
+    expect(screen.getByText(PASTE_HERE)).toBeInTheDocument();
+    expect(screen.getByLabelText("Token for $OP_TEAM_TOKEN")).toHaveAttribute("type", "password");
+    expect(
+      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
+    ).toBeEnabled();
+    // Nothing that would read as a vault with nothing in it, or offer to write to one.
+    expect(screen.queryByTestId("vault-empty")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /ops/ })).toHaveTextContent("ops · 1password");
+    expect(screen.getByRole("heading", { name: /ops/ })).not.toHaveTextContent("0 secrets");
+  });
+
+  it("stores a token pasted there, then lists the vault's secrets without being asked", async () => {
+    const asked = core(unread("unset"), { vault_identity_put: team("keyring") });
+    const onChanged = draw();
+
+    const box = await screen.findByLabelText("Token for $OP_TEAM_TOKEN");
+    await userEvent.type(box, PUT);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
+    );
+
+    expect(asked.at(-1)).toEqual({
+      cmd: "vault_identity_put",
+      args: { plane: PLANE, vault: "ops", token: PUT },
+    });
+    expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
+    expect(rows()).toEqual([["DEPLOY", "—", "—", ""]]);
+    expect(screen.getByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Stored $OP_TEAM_TOKEN in the Keychain. purlis reads it from there, and no chat is given the token.",
+    );
+    expect(screen.queryByText(/which is unset/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Token for $OP_TEAM_TOKEN")).not.toBeInTheDocument();
+    noValueAnywhere(PUT);
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("stores it on Enter too, and the box is empty from the press on", async () => {
+    const asked = core(unread("unset"), { vault_identity_put: unread("keyring", "op said no") });
+    draw();
+
+    const box = await screen.findByLabelText("Token for $OP_TEAM_TOKEN");
+    await userEvent.type(box, `${PUT}{Enter}`);
+
+    expect(asked.at(-1)?.cmd).toBe("vault_identity_put");
+    noValueAnywhere(PUT);
+  });
+
+  it("keeps the box when the stored token still cannot read the vault, and says why", async () => {
+    // A wrong token, an `op` that is gone: the tab that stored it is the tab that replaces it.
+    core(unread("unset"), {
+      vault_identity_put: unread("keyring", "op could not read vault 'ops': not signed in"),
+    });
+    draw();
+
+    await userEvent.type(await screen.findByLabelText("Token for $OP_TEAM_TOKEN"), PUT);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
+    );
+
+    expect(await screen.findByText(/not signed in/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "purlis reads $OP_TEAM_TOKEN from the Keychain, and could not read the vault with it. Paste the token again to replace it.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Token for $OP_TEAM_TOKEN")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    noValueAnywhere(PUT);
+  });
+
+  it("says why when the core refuses to store it, beside the refusal and the box", async () => {
+    core(unread("unset"), {
+      vault_identity_put: new Error("purlis could not write 'purlis/@identity/ab'"),
+    });
+    draw();
+
+    await userEvent.type(await screen.findByLabelText("Token for $OP_TEAM_TOKEN"), PUT);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
+    );
+
+    expect(await screen.findByText(/could not write/)).toBeInTheDocument();
+    expect(screen.getByText(UNSET)).toBeInTheDocument();
+    expect(screen.getByLabelText("Token for $OP_TEAM_TOKEN")).toBeInTheDocument();
     noValueAnywhere(PUT);
   });
 });

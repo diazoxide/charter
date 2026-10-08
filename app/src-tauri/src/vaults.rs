@@ -226,6 +226,12 @@ pub(crate) struct VaultContents {
     pub count: u32,
     pub health: VaultHealth,
     pub secrets: Vec<VaultSecret>,
+    /// Why the vault's contents could not be read, for a vault read through an identity
+    /// variable; `None` for a vault that was read. `secrets` is then empty and says nothing of
+    /// what the vault holds. Answered rather than refused, because `identity` below is what the
+    /// tab draws the way out from: the box that stores the token (#1526). The core's sentence:
+    /// names, never a value.
+    pub refused: Option<String>,
     /// The identity variables it is read through; empty for a vault that declares none. Said
     /// from the registry's mark and the environment, never by reading the keyring.
     pub identity: Vec<VaultIdentity>,
@@ -251,34 +257,63 @@ fn identity_of(ctx: &Ctx, v: &Vault) -> Vec<VaultIdentity> {
         .collect()
 }
 
-/// One vault's secrets, by name.
-pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
-    let v = cmd::provider(ctx, vault).map_err(message_of)?;
-    let secrets: Vec<VaultSecret> = if v.provider == "keyring" {
-        keyring::listed(ctx, &v)
-            .map_err(message_of)?
+/// The vault's secrets, by name, as its table lists them.
+fn secrets_of(ctx: &Ctx, v: &Vault) -> Result<Vec<VaultSecret>, VaultError> {
+    if v.provider == "keyring" {
+        return Ok(keyring::listed(ctx, v)?
             .into_iter()
             .map(|l| VaultSecret {
                 key: l.key,
                 size: Some(l.size).filter(|s| !s.is_empty()),
                 updated: Some(l.updated).filter(|s| !s.is_empty()),
             })
-            .collect()
-    } else {
-        cmd::keys(ctx, &v)
-            .map_err(message_of)?
-            .into_iter()
-            .map(|key| VaultSecret {
-                key,
-                size: None,
-                updated: None,
-            })
-            .collect()
+            .collect());
+    }
+    Ok(cmd::keys(ctx, v)?
+        .into_iter()
+        .map(|key| VaultSecret {
+            key,
+            size: None,
+            updated: None,
+        })
+        .collect())
+}
+
+/// What the tab of a vault whose identity variable is found nowhere says: the first line of the
+/// core's refusal, which names the vault and the variable, and then the way out the tab itself
+/// draws under it. The core's own second line is written for a terminal, and sends the reader to
+/// this tab.
+fn unset_in_the_tab(refusal: &VaultError) -> String {
+    format!(
+        "{} Paste the token into the box below: it goes straight into the Keychain.",
+        refusal.message.lines().next().unwrap_or_default()
+    )
+}
+
+/// One vault's secrets, by name.
+///
+/// **A vault read through an identity variable is answered even when its contents cannot be
+/// read** (#1526): with [`VaultContents::refused`] saying why, no secrets, and the identity it
+/// declares. Reading such a vault takes its token, so a refusal alone would hide the one thing
+/// the tab needs to offer the way out. A vault that declares no identity is refused as before.
+pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
+    let v = cmd::provider(ctx, vault).map_err(message_of)?;
+    let identity = identity_of(ctx, &v);
+    // Asked before the provider is: a vault whose token is nowhere runs no program at all.
+    let listed = match identity_missing(ctx, &v) {
+        Some(unset) => Err(unset_in_the_tab(&unset)),
+        None => secrets_of(ctx, &v).map_err(message_of),
+    };
+    let (secrets, refused) = match listed {
+        Ok(secrets) => (secrets, None),
+        Err(why) if !identity.is_empty() => (Vec::new(), Some(why)),
+        Err(why) => return Err(why),
     };
     Ok(VaultContents {
         count: counted(secrets.len()),
         health: health(ctx, &v),
-        identity: identity_of(ctx, &v),
+        refused,
+        identity,
         identity_in_app_env: identity::app_env_holds_a_token(ctx, &v),
         name: v.name,
         provider: v.provider,
@@ -1601,13 +1636,135 @@ mod tests {
         let (_dir, ctx) = team(&[]);
 
         // Its keys are `op`'s to list, and `op` is not run under an identity nobody declared.
-        let opened = open(&ctx, "team").unwrap_err();
+        let opened = open(&ctx, "team").unwrap();
+        let refused = opened.refused.as_deref().unwrap_or_default();
         assert!(
-            opened.contains("$OP_TEAM_TOKEN, which is unset"),
-            "{opened}"
+            refused.contains("$OP_TEAM_TOKEN, which is unset"),
+            "{opened:?}"
         );
         let err = move_identity(&ctx, "team").unwrap_err();
         assert!(err.contains("$OP_TEAM_TOKEN"), "{err}");
+    }
+
+    // --- #1526: the identity is answered when the contents cannot be read ------------------ //
+
+    #[test]
+    fn a_vault_whose_token_is_nowhere_still_answers_the_identity_it_declares() {
+        let (dir, ctx) = team(&[]);
+        // An `op` that would betray being run at all.
+        let ran = dir.path().join("op-ran");
+        std::fs::write(
+            dir.path().join("bin/op"),
+            format!("#!/bin/sh\necho ran >> '{}'\nexit 1\n", ran.display()),
+        )
+        .unwrap();
+
+        let opened = open(&ctx, "team").unwrap();
+
+        assert_eq!(
+            identity_of(&opened),
+            [("OP_TEAM_TOKEN", IdentityHeld::Unset)]
+        );
+        assert_eq!(
+            opened.refused.as_deref(),
+            Some(
+                "vault 'team' is read through $OP_TEAM_TOKEN, which is unset. purlis will not \
+                 fall back to an ambient $OP_SERVICE_ACCOUNT_TOKEN: that would read this vault \
+                 under an identity it does not declare, and the failure would look like a \
+                 missing secret rather than a wrong credential. Paste the token into the box \
+                 below: it goes straight into the Keychain."
+            )
+        );
+        assert!(opened.secrets.is_empty() && opened.count == 0, "{opened:?}");
+        assert!(!opened.health.ok, "{opened:?}");
+        assert!(opened.identity_in_app_env.is_empty(), "{opened:?}");
+        assert_eq!(
+            (opened.name.as_str(), opened.provider.as_str()),
+            ("team", "1password")
+        );
+        assert!(!ran.exists(), "op ran under an identity nobody declared");
+    }
+
+    #[test]
+    fn a_token_pasted_for_a_vault_whose_token_was_nowhere_answers_with_its_secrets() {
+        let (_dir, ctx) = team(&[]);
+        assert!(open(&ctx, "team").unwrap().refused.is_some());
+
+        let put = put_identity(&ctx, "team", &SecretValue::from(TOKEN)).unwrap();
+
+        assert_eq!(put.refused, None, "{put:?}");
+        assert_eq!(keys(&put), ["DEPLOY"]);
+        assert_eq!(
+            identity_of(&put),
+            [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
+        );
+        assert!(put.identity_in_app_env.is_empty(), "{put:?}");
+    }
+
+    #[test]
+    fn a_second_vault_read_through_the_same_variable_needs_no_second_paste() {
+        let (_dir, ctx) = team(&[]);
+        let mut config = serde_json::Map::new();
+        config.insert("op-vault".into(), serde_json::json!("Edge"));
+        config.insert(
+            "env".into(),
+            serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
+        );
+        registry::add_vault(&ctx, "edge", "1password", config, None, false, false).unwrap();
+        assert!(open(&ctx, "edge").unwrap().refused.is_some());
+
+        put_identity(&ctx, "team", &SecretValue::from(TOKEN)).unwrap();
+
+        let edge = open(&ctx, "edge").unwrap();
+        assert_eq!(edge.refused, None, "{edge:?}");
+        assert_eq!(
+            identity_of(&edge),
+            [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
+        );
+        assert_eq!(keys(&edge), ["DEPLOY"]);
+    }
+
+    #[test]
+    fn a_stored_token_that_does_not_read_the_vault_still_answers_the_identity() {
+        // A wrong token, or an `op` that fails: the tab that stored the token must be able to
+        // replace it, so this is answered with why and the identity, not refused.
+        let (dir, ctx) = team(&[]);
+        put_identity(&ctx, "team", &SecretValue::from(TOKEN)).unwrap();
+        std::fs::write(
+            dir.path().join("bin/op"),
+            "#!/bin/sh\necho '[ERROR] not signed in' >&2\nexit 1\n",
+        )
+        .unwrap();
+
+        let opened = open(&ctx, "team").unwrap();
+
+        assert!(opened.refused.is_some(), "{opened:?}");
+        assert!(opened.secrets.is_empty(), "{opened:?}");
+        assert_eq!(
+            identity_of(&opened),
+            [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
+        );
+    }
+
+    #[test]
+    fn no_answer_about_a_vault_that_cannot_be_read_carries_the_token() {
+        let (dir, ctx) = team(&[]);
+        let mut answers = vec![wire(&open(&ctx, "team")), wire(&list(&ctx))];
+        answers.push(wire(&put_identity(&ctx, "team", &SecretValue::from(TOKEN))));
+        std::fs::write(dir.path().join("bin/op"), "#!/bin/sh\nexit 1\n").unwrap();
+        answers.push(wire(&open(&ctx, "team")));
+        answers.push(wire(&put_identity(&ctx, "team", &SecretValue::from(TOKEN))));
+        // A keyring that cannot be written: the refusal comes with the token in hand.
+        std::fs::write(ctx.state.join(keyring::STUB_FILE), "not json").unwrap();
+        answers.push(wire(&put_identity(&ctx, "team", &SecretValue::from(TOKEN))));
+        answers.push(wire(&open(&ctx, "team")));
+        answers.extend(traced(&ctx).iter().map(ToString::to_string));
+
+        assert!(answers[0].contains("\"unset\""), "{}", answers[0]);
+        assert!(answers[2].contains("\"keyring\""), "{}", answers[2]);
+        for answer in &answers {
+            assert!(!answer.contains(TOKEN), "{answer}");
+        }
     }
 
     #[test]

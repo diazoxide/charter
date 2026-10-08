@@ -23,6 +23,14 @@
 //!
 //! Everything here reads the record from the **LOCAL half only**. The keyring is this machine's,
 //! and so is every decision that hands a keyring item to a subprocess.
+//!
+//! **One token serves every vault read through the same variable** (#1526). A variable names an
+//! identity, and several vaults are commonly read through one. So the operator's one action
+//! writes a record, and an item of its own, for each vault of the project read the same way
+//! ([`read_alike`]) as the registry stands at that moment. Nothing is shared between them: each
+//! record pins its own vault's binding, and a read still honours only the record of the vault it
+//! reads. No item is ever found by a variable's name, so a vault registered or changed
+//! afterwards is given nothing until the operator stores the token again.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -522,16 +530,62 @@ fn sole_source(vault: &Vault) -> Result<String, VaultError> {
             vault.name
         ))),
         many => Err(VaultError::new(format!(
-            "vault '{}' is read through more than one identity variable ({}); paste each with \
-             the terminal's `purlis vault add`, or move them from a shell that exports them.",
+            "vault '{}' is read through more than one identity variable ({}), and the box stores \
+             one token. Start purlis from a shell that exports them, then move them from this \
+             vault's tab.",
             vault.name,
             many.join(", ")
         ))),
     }
 }
 
+/// Every other vault of the project read the way `vault` is: by the same provider, through
+/// exactly the same identity bindings. What one stored token serves beside `vault` itself
+/// (#1526). Read from the merged registry as it stands now; empty for a vault that declares no
+/// identity, and for a registry that cannot be read.
+pub fn read_alike(ctx: &Ctx, vault: &Vault) -> Vec<Vault> {
+    let env: BTreeMap<String, String> = bindings(vault).into_iter().collect();
+    if env.is_empty() {
+        return Vec::new();
+    }
+    let Ok(doc) = registry::load_registry(ctx) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
+    names.sort();
+    names
+        .iter()
+        .filter(|name| **name != vault.name)
+        .filter_map(|name| registry::vault_in(&doc, name).ok())
+        .filter(|other| {
+            other.provider == vault.provider
+                && bindings(other).into_iter().collect::<BTreeMap<_, _>>() == env
+        })
+        .collect()
+}
+
+/// Keep `tokens` (`(source, token)`) for `vault` and for every vault read alike: an item of its
+/// own for each, and its own pinned record. `vault` first, so a keyring that fails part way has
+/// stored the one the operator asked about. Answers `vault`'s sources.
+fn keep(ctx: &Ctx, vault: &Vault, tokens: &[(String, String)]) -> Result<Vec<String>, VaultError> {
+    let (op_cmd, op_team) = resolve_op_now(ctx);
+    let mut sources = Vec::new();
+    for one in std::iter::once(vault.clone()).chain(read_alike(ctx, vault)) {
+        let mut ids = BTreeMap::new();
+        for (source, token) in tokens {
+            ids.insert(source.clone(), store_token(ctx, source, token)?);
+        }
+        let written = write_record(ctx, &one, ids, &op_cmd, &op_team)?;
+        if one.name == vault.name {
+            sources = written;
+        }
+    }
+    Ok(sources)
+}
+
 /// **The password-box path (#237, #271 review U3).** Store the token the operator pasted for the
-/// vault's one identity variable straight into the keyring, and pin the binding. The token is
+/// vault's one identity variable straight into the keyring, and pin the binding, for this vault
+/// and every vault read alike ([`read_alike`]). The token is
 /// taken here and nowhere else: it never sits in the app's environment, so no chat can read it
 /// from there. `op` is pinned from the environment charter runs in — the operator's, resolved on
 /// the trusted thread that handles the command.
@@ -543,14 +597,12 @@ pub fn put_in_keyring(ctx: &Ctx, vault: &Vault, token: &str) -> Result<Vec<Strin
         ));
     }
     let source = sole_source(vault)?;
-    let (op_cmd, op_team) = resolve_op_now(ctx);
-    let id = store_token(ctx, &source, token)?;
-    let ids = BTreeMap::from([(source, id)]);
-    write_record(ctx, vault, ids, &op_cmd, &op_team)
+    keep(ctx, vault, &[(source, token.to_owned())])
 }
 
 /// **The move-from-environment path.** Read each identity variable the vault declares from this
-/// process's environment, store it, and pin the binding. Refused, with nothing stored, when the
+/// process's environment, store it, and pin the binding, for this vault and every vault read
+/// alike ([`read_alike`]). Refused, with nothing stored, when the
 /// vault declares no identity or any variable is unset — a half-moved identity would read one
 /// token from the keyring and look for the other in an environment about to lose it.
 ///
@@ -584,12 +636,7 @@ pub fn move_to_keyring(ctx: &Ctx, vault: &Vault) -> Result<Vec<String>, VaultErr
             }
         }
     }
-    let (op_cmd, op_team) = resolve_op_now(ctx);
-    let mut ids = BTreeMap::new();
-    for (source, token) in &tokens {
-        ids.insert(source.clone(), store_token(ctx, source, token)?);
-    }
-    write_record(ctx, vault, ids, &op_cmd, &op_team)
+    keep(ctx, vault, &tokens)
 }
 
 /// Whether charter's OWN environment still carries any identity variable of `vault` — the reason

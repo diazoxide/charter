@@ -50,6 +50,13 @@ import { counted } from "./Vaults";
  * no chat carries an `OP_*` variable, so after the move the keyring is where every `charter
  * secret` finds it.
  *
+ * **A vault whose contents could not be read still says whose token it needs** (#1526). Reading
+ * a 1Password vault takes its token, so the tab of a vault whose token is nowhere is the one tab
+ * that must draw the box that stores it: the core answers such a vault with `refused` (why), no
+ * secrets and its identity all the same, and the tab draws the refusal, the box and nothing that
+ * would read as an empty vault. A stored token's answer is the vault read again, so the table
+ * follows by itself.
+ *
  * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
  * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
  * the secrets too.
@@ -213,6 +220,21 @@ export function VaultTab({
 
   const add = () => setAsking({ doing: "add" });
 
+  /** What the last press was answered with: a refusal, or what was done. Under the tools of a
+   *  vault that was read, and under the box of one that was not. */
+  const noted = (
+    <>
+      {note?.trouble && (
+        <p className="trouble" role="alert">
+          {note.said}
+        </p>
+      )}
+      <p className="vault-note" role="status">
+        {note?.trouble ? "" : note?.said}
+      </p>
+    </>
+  );
+
   return (
     <section
       className="view-pane vault-tab"
@@ -224,7 +246,11 @@ export function VaultTab({
           <KeyRound className="tab-mark" aria-hidden="true" />
           {vault}
           {contents && (
-            <span className="panel-from">{` · ${contents.provider} · ${counted(contents.count)}`}</span>
+            <span className="panel-from">
+              {contents.refused === null
+                ? ` · ${contents.provider} · ${counted(contents.count)}`
+                : ` · ${contents.provider}`}
+            </span>
           )}
         </h2>
         {actions}
@@ -235,12 +261,30 @@ export function VaultTab({
             <LoaderCircle className="node-icon spinning" />
             Opening the vault…
           </p>
-        ) : contents === undefined ? (
+        ) : contents === undefined || contents.refused !== null ? (
           // The core's sentence, which names the vault and what to do. An empty table here would
           // read as a vault with nothing in it.
-          <p className="trouble" role="alert">
-            {said.trouble}
-          </p>
+          <>
+            <p className="trouble" role="alert">
+              {contents === undefined ? said.trouble : contents.refused}
+            </p>
+            {/* Not read, and read through a token (#1526): under why, the box that stores the
+                token, which is the way out. No table, no search and no Add: none of them has
+                a vault to act on. */}
+            {contents && (
+              <>
+                <IdentityPanel
+                  identity={contents.identity}
+                  inAppEnv={contents.identity_in_app_env}
+                  unread
+                  busy={moving}
+                  onPut={(token) => void store("put", token)}
+                  onMove={() => void store("move")}
+                />
+                {noted}
+              </>
+            )}
+          </>
         ) : (
           <>
             {!contents.health.ok && (
@@ -251,6 +295,7 @@ export function VaultTab({
             <IdentityPanel
               identity={contents.identity}
               inAppEnv={contents.identity_in_app_env}
+              unread={false}
               busy={moving}
               onPut={(token) => void store("put", token)}
               onMove={() => void store("move")}
@@ -272,14 +317,7 @@ export function VaultTab({
               </button>
             </div>
 
-            {note?.trouble && (
-              <p className="trouble" role="alert">
-                {note.said}
-              </p>
-            )}
-            <p className="vault-note" role="status">
-              {note?.trouble ? "" : note?.said}
-            </p>
+            {noted}
 
             {contents.secrets.length === 0 ? (
               <EmptyState
@@ -383,18 +421,23 @@ function named(identity: VaultIdentity[]): string {
  * launched from a shell that exports it — but it leaves the export in the app's own process, so
  * the note after a move (and this line, while `inAppEnv` is non-empty) says to relaunch.
  *
- * A vault whose token is nowhere says so in its health line above; a vault read through no
- * identity variable shows nothing here.
+ * **A vault that could not be read keeps the box** (`unread`, #1526), wherever its token is: with
+ * the token nowhere the box is the only way to read the vault at all, and with a token in the
+ * Keychain that did not read it, the box is how the token is replaced. The refusal is drawn above
+ * by the tab. A vault read through no identity variable shows nothing here.
  */
 function IdentityPanel({
   identity,
   inAppEnv,
+  unread,
   busy,
   onPut,
   onMove,
 }: {
   identity: VaultIdentity[];
   inAppEnv: string[];
+  /** The vault's contents could not be read: the box is drawn wherever the token is. */
+  unread: boolean;
   busy: boolean;
   onPut: (token: string) => void;
   onMove: () => void;
@@ -409,7 +452,8 @@ function IdentityPanel({
       </span>
     ) : null;
 
-  if (identity.every((one) => one.held === "keyring")) {
+  const inKeychain = identity.every((one) => one.held === "keyring");
+  if (inKeychain && !unread) {
     return (
       <p className="vault-identity">
         {`purlis reads ${named(identity)} from the Keychain.`}
@@ -425,10 +469,15 @@ function IdentityPanel({
   };
 
   const inEnv = identity.some((one) => one.held === "environment");
+  const say = inKeychain
+    ? `purlis reads ${named(identity)} from the Keychain, and could not read the vault with it. Paste the token again to replace it.`
+    : identity.every((one) => one.held === "unset")
+      ? `Paste the service-account token for ${named(identity)} here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.`
+      : `Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and purlis finds it for every command.`;
   return (
     <div className="vault-identity">
       <p>
-        {`Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and purlis finds it for every command.`}
+        {say}
         {stillExported}
       </p>
       <div className="vault-identity-put">

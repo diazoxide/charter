@@ -5944,6 +5944,14 @@ export type VaultContents = {
 	health: VaultHealth,
 	secrets: VaultSecret[],
 	/**
+	 *  Why the vault's contents could not be read, for a vault read through an identity
+	 *  variable; `None` for a vault that was read. `secrets` is then empty and says nothing of
+	 *  what the vault holds. Answered rather than refused, because `identity` below is what the
+	 *  tab draws the way out from: the box that stores the token (#1526). The core's sentence:
+	 *  names, never a value.
+	 */
+	refused: string | null,
+	/**
 	 *  The identity variables it is read through; empty for a vault that declares none. Said
 	 *  from the registry's mark and the environment, never by reading the keyring.
 	 */

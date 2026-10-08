@@ -535,6 +535,7 @@ const VAULT: VaultContents = {
   count: 1,
   health: { ok: true, detail: "reachable" },
   secrets: [{ key: "DB_URL", size: "24 B", updated: "2026-09-20" }],
+  refused: null,
   identity: [],
   identity_in_app_env: [],
 };
