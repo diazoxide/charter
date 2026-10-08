@@ -150,15 +150,15 @@ impl Limit {
     /// One line on what it limits.
     pub fn help(self) -> &'static str {
         match self {
-            Self::RunningPerChat => "The persona chats one chat may have running at once.",
+            Self::RunningPerChat => "The tasks one chat may have running at once.",
             Self::LivePerLineage => {
                 "The chats that may be live at once below one chat you started, itself included."
             }
             Self::Depth => "How many dispatches deep a chain may go. Never above 8.",
             Self::MessagesPerMinute => "The messages one chat may send another in a minute.",
             Self::MayDispatch => {
-                "The persona chats the chats running as this persona may have running at once, \
-                 in the project."
+                "The tasks the chats running as this persona may have running at once, in the \
+                 project."
             }
             Self::MayRunAtOnce => "The chats that may run as this persona at once, in the project.",
         }

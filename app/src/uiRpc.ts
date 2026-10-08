@@ -3390,6 +3390,17 @@ export type HandedFromNote = {
 	 *  that it failed.
 	 */
 	unreported: boolean,
+	/**
+	 *  How it reported, as a task, in its dispatch record's word (`done`, `blocked`, `failed`,
+	 *  `cancelled`, `stopped`): what its row says in place of what its program is doing
+	 *  (#1484). None for a task that has not reported, and where no record says how.
+	 */
+	outcome?: string | null,
+	/**
+	 *  Whether, as a task, it has a question open with the chat that dispatched it, and is
+	 *  paused until that chat answers (#1484): its row says whom it is asking.
+	 */
+	asking?: boolean | null,
 };
 
 /**

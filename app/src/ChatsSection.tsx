@@ -2,9 +2,10 @@ import { memo, useCallback, useMemo, useState, type KeyboardEvent } from "react"
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
 import type { Catalogued, Offer } from "./actions";
-import { ChatStateMark } from "./ChatRows";
+import { ChatShownState } from "./ChatRows";
 import { useChatsHere, useChatsSelect } from "./chatState";
 import { needing, parentsIn, unfolded, type ChatRow } from "./chatsTree";
+import type { TaskFacts } from "./shownState";
 import { Menued } from "./Menus";
 import { PersonaMark } from "./PersonaMark";
 import { useTabStop } from "./roving";
@@ -21,12 +22,15 @@ const NO_OFFERS: Catalogued = new Map();
  * what across all of them, and which chat started which.
  *
  * **A row is a way to the chat.** Pressing one brings its tab forward, on whichever workspace's
- * strip it is. A task chat has no tab: its row says so, and pressing it opens an ordinary tab.
+ * strip it is. A task has no tab: its row says so, and pressing it opens an ordinary tab.
  *
- * **The hand rolls up** (#1448). A chat that needs you wears it on its own row, and so does
- * every row above it, where it is a button that goes to that chat. A row with chats under it
- * folds, and a folded row still wears the hand for what it hides, so a fold never hides a chat
- * that needs you.
+ * **A row says its chat's state in a word beside a mark** (#1484): `ChatShownState`, which the
+ * explorer's rows draw too.
+ *
+ * **The hand rolls up** (#1448). A chat that needs you wears it on its own row, as its state's
+ * mark, and so does every row above it, where it is a button that goes to that chat. A row
+ * with chats under it folds, and a folded row still wears the hand for what it hides, so a
+ * fold never hides a chat that needs you.
  *
  * **A row's menu stops its chat** (#1448): Stop, and Stop with everything below it, from the
  * window's one catalogue, as a tab's menu has them.
@@ -98,6 +102,10 @@ export function ChatsSection({
                   workspace={row.workspace}
                   branch={row.branch}
                   shell={row.shell}
+                  report={row.report}
+                  outcome={row.outcome}
+                  asking={row.asking}
+                  harness={row.harness}
                   level={row.level}
                   posinset={row.posinset}
                   setsize={row.setsize}
@@ -132,6 +140,10 @@ const Row = memo(function Row({
   workspace,
   branch,
   shell,
+  report,
+  outcome,
+  asking,
+  harness,
   level,
   posinset,
   setsize,
@@ -154,6 +166,11 @@ const Row = memo(function Row({
   /** The branch of its own a task works on, where it was given one. */
   branch: string | null;
   shell: boolean;
+  /** What its state is derived from beside the board's word for it (`ChatShownState`). */
+  report: TaskFacts["report"] | null;
+  outcome: string | null;
+  asking: string | null;
+  harness: string | null;
   level: number;
   posinset: number;
   setsize: number;
@@ -237,17 +254,16 @@ const Row = memo(function Row({
                 own branch {branch}
               </span>
             )}
-            <ChatStateMark session={session} shell={shell} />
-            {needs === session && (
-              <span
-                className="needs-you-mark"
-                data-mark="needs-you"
-                role="img"
-                aria-label="needs you"
-              >
-                <Hand aria-hidden="true" />
-              </span>
-            )}
+            {/* Its state, a mark and a word (#1484): the hand of a chat that needs you is
+                this mark, so the row draws no second one. */}
+            <ChatShownState
+              session={session}
+              shell={shell}
+              report={report}
+              outcome={outcome}
+              asking={asking}
+              harness={harness}
+            />
             {from !== null && <span className="from">from {from}</span>}
             {!tab && <span className="no-tab">no tab</span>}
             {stopping && <span className="stopping">Stopping…</span>}

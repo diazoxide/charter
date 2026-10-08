@@ -2963,6 +2963,33 @@ h2.sidebar-title .node-icon {
   border-radius: 2px;
 }
 
+/* **A chat's state on a row: its mark, then its word** (#1484). Each state has a shape of its
+   own, so it is told without its colour, and the word is always there. The colour is the
+   mark's, set on it as the state's token (`StateShown`), and never the word's: a state colour as text does
+   not clear AA on every surface, and the word must be legible whatever a theme does with them.
+   The word never shrinks, so a long name gives way before a state does. */
+.shown-state {
+  display: inline-flex;
+  flex: none;
+  gap: 0.25rem;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.shown-state .shape {
+  display: inline-flex;
+}
+
+.shown-state .shape svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.shown-state .word {
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
 /* **A chat wrapping up** — being smart-closed (ADR 0064): it writes its session record and
    goes. Its name goes muted and its tab gains an amber underline and a mark that breathes
    (`.breathing`, in MOTION below), so it reads as leaving rather than as working. The mark is

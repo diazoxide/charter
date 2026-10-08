@@ -315,8 +315,8 @@ describe("the window's tab order", () => {
       "tab steward two",
       "button New tab",
       // The left region, top to bottom. The project's chats (#1447): ONE stop, the row of the
-      // chat in front, which reads as its name and its workspace.
-      "treeitem steward twoalpha",
+      // chat in front, which reads as its name, its workspace and its state's word (#1484).
+      "treeitem steward twoalpharunning (no detail from Claude Code)",
       // The explorer: ONE stop, its current row.
       "treeitem alphathe workspace itself",
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.

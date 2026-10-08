@@ -552,7 +552,7 @@ export function dispatchGroup(plane: PlaneId, file = "the project's settings fil
   return {
     id: DISPATCH,
     label: "Dispatch",
-    help: "How many persona chats a chat may start, how deep a chain may go and how fast chats may message each other.",
+    help: "How many tasks a chat may start, how deep a chain may go and how fast chats may message each other.",
     settings: [
       {
         id: `${DISPATCH}.limits`,
