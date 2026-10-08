@@ -3077,6 +3077,12 @@ h2.sidebar-title .node-icon {
   font-size: 0.9em;
 }
 
+/* "reported": the ring, filled. An outline this small is no mark. */
+.shown-state [data-shape="dot"] svg {
+  fill: currentcolor;
+  transform: scale(0.6);
+}
+
 /* **A chat wrapping up** — being smart-closed (ADR 0064): it writes its session record and
    goes. Its name goes muted and its tab gains an amber underline and a mark that breathes
    (`.breathing`, in MOTION below), so it reads as leaving rather than as working. The mark is
@@ -5843,6 +5849,18 @@ h2.sidebar-title .node-icon {
 
 .state-waiting.arrived {
   animation: charter-call var(--motion-duration-settle) var(--motion-easing-standard) 2;
+}
+
+/* The same knock on a row of a list (#1484), where the mark is the hand and has no ring to
+   swell: the hand itself does, twice, and only on the change (`StateShown`'s `arrived`). */
+@keyframes charter-knock {
+  50% {
+    transform: scale(1.4);
+  }
+}
+
+.shown-state[data-state="needs-you"].arrived .shape {
+  animation: charter-knock var(--motion-duration-settle) var(--motion-easing-standard) 2;
 }
 
 /* The title bar's save indicator (charter-app#294): the needs-you button's shape, with the
