@@ -999,9 +999,9 @@ fn a_vault_tagged_for_another_persona_is_refused_naming_both_ways_forward() {
         "vault 'ops' is not one persona 'devops' may use, so purlis did not open it (it may use \
          'team'). Two ways forward: ask the operator to press Allow in the notice on this \
          chat's tab, then run the command again (no restart is needed); or, to have 'ops', the \
-         persona the vault is tagged for, do the work, dispatch to it: `purlis handoff <workspace> \
-         --persona ops`. A chat's persona is fixed for its life, so nothing run in this chat \
-         changes which vaults it may use."
+         persona the vault is tagged for, do the work, dispatch to it: `purlis dispatch --to \
+         ops`. A chat's persona is fixed for its life, so nothing run in this chat changes \
+         which vaults it may use."
     );
 }
 
@@ -1158,8 +1158,7 @@ fn policy_can_forbid_the_allow_and_takes_a_grant_already_made_away() {
         why.contains(
             "Policy forbids allowing a persona a vault it is not tagged for. Locked by policy, \
              set by IT in /etc/purlis/policy.json. The way forward: to have 'ops', the persona \
-             the vault is tagged for, do the work, dispatch to it: `purlis handoff <workspace> \
-             --persona ops`."
+             the vault is tagged for, do the work, dispatch to it: `purlis dispatch --to ops`."
         ),
         "{why}"
     );

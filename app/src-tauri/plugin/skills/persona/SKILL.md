@@ -64,6 +64,13 @@ shows who exists.
   BRIEF
   ```
 
+  Work this chat needs an answer from, for its own persona or another, is `purlis dispatch`
+  (with `--in workspace:<name>` when it must run elsewhere). A handoff is fire-and-forget: the
+  person's work moves to a chat they will read themselves. So "dispatch to
+  devops" is `purlis dispatch --to devops`, never `purlis handoff --persona devops`.
+  `purlis dispatch list` shows this chat's tasks, and `wait`, `tell`, `answer` and `cancel`
+  work on one.
+
 - **Partial or ambiguous match:** name the persona you would use and ask before dispatching.
 - **No persona fits:** say so. Offer to create one only when the domain is large enough to
   own. A charter alone, with no credential or tool behind it, loses to a general-purpose

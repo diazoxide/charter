@@ -158,6 +158,10 @@ pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
     // What the retired persona sub-agent left to say (#1451): the servers this chat's persona
     // declares and the chat was not started with, and generated files still in the project.
     parts.extend(retired_notes(ask, selected.name.as_deref()));
+    // The one route for work that reports back (#1515), for a chat that can take it.
+    if let Some(route) = one_route_note(ask.env) {
+        parts.push(route);
+    }
     if let Some(unshared) = uncommitted_memory_nudge(ask.root) {
         parts.push(unshared);
     }
@@ -242,6 +246,20 @@ pub const BRANCH_FOLDER_COMMIT_NOTE: &str = "⬢ **Committing here.** This folde
      in place of `--all` (a new file must be named). purlis stages and commits on this \
      folder's branch, outside the sandbox. It only commits: no amend, reset, rebase, merge \
      or push, and the repository's own hooks are not run.";
+
+/// **What a chat the app started is told about giving work to another chat** (#1515):
+/// [`crate::handoff::ONE_ROUTE`], the sentence the handoff skill, the persona skill, the
+/// handoff page and the command's help say. A skill is read only once a chat reaches for it,
+/// and a chat told "dispatch to devops" reached for the handoff skill; this line is there from
+/// the first turn.
+///
+/// Only for a chat the app started, which is the one place its hook socket is named
+/// ([`crate::hookwire::SOCKET_ENV`]): in a terminal neither command starts a chat.
+fn one_route_note(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    env(crate::hookwire::SOCKET_ENV)
+        .filter(|socket| !socket.is_empty())
+        .map(|_| format!("⬢ **Work for another chat.** {}", crate::handoff::ONE_ROUTE))
+}
 
 /// [`SANDBOXED_NOTE`] for a chat the app started under a sandbox, read through `env`; none for
 /// any other.

@@ -224,7 +224,7 @@ fn create_with_use_inside_a_chat_is_refused_before_anything_is_made() {
         heard.err,
         "✗ This chat runs as 'steward', and a chat's persona is fixed for its life, so --use \
          cannot select 'qa' here and nothing was made. Create it without --use; to have it do \
-         work, dispatch to it: `purlis handoff <workspace> --persona qa`.\n"
+         work, dispatch to it: `purlis dispatch --to qa`.\n"
     );
     assert!(registered.is_empty());
     assert!(!plane.path("personas/qa").exists());

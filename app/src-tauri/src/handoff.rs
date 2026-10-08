@@ -10138,6 +10138,94 @@ mod tests {
         );
     }
 
+    /// #1515: `purlis handoff --report` sends the ask a dispatch sends, into the workspace the
+    /// handoff named and under the name a handoff with none is given. So what it starts is a
+    /// task of the asking chat in every respect: the window is told it is one, it is listed,
+    /// it can be cancelled, its report is a task's and wakes the asking chat as a task's does
+    /// (by its record's mode), and a wait returns it.
+    #[test]
+    fn the_ask_a_reporting_handoff_sends_starts_a_task_that_is_listed_cancelled_and_waited_on() {
+        let plane = a_plane_with_personas();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let alpha = held.root().join("workspaces").join("alpha");
+        let asking = a_chat_as(&held, &plane.root, Some("steward"), &alpha);
+        let tickets = Tickets::default();
+        let name = purlis_core::handoff::task_name_of_a_handoff("alpha");
+        let place = format!("{}alpha", purlis_core::dispatchplace::WORKSPACE);
+
+        let (said, told) = dispatch_in(&held, &id, &tickets, asking, (None, name.as_str()), &place);
+
+        let Answer::Dispatched { chat: task, .. } = said else {
+            panic!("dispatched, not {said:?}")
+        };
+        // The window is told it is a task of the asking chat, and so is its own record: the
+        // mode is what a report's delivery and the asking chat's wake are decided by.
+        let from = told.expect("the window is told").from.expect("who asked");
+        assert!(from.task, "{from:?}");
+        assert_eq!(from.chat, asking);
+        let recorded = held.chats().handed_from(task).expect("its lineage");
+        assert_eq!(
+            (recorded.chat, recorded.mode, recorded.report),
+            (asking, Mode::Task, Owed::Due)
+        );
+        // Listed under the asking chat, by the name a handoff with none is given.
+        let listed = asks(&held, &id, asking, What::List);
+        let Answer::Task(answered) = listed else {
+            panic!("a list, not {listed:?}")
+        };
+        let Answered::Listed { rows } = *answered else {
+            panic!("a list, not {answered:?}")
+        };
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.chat, row.name.as_str()))
+                .collect::<Vec<_>>(),
+            [(task, "handoff to alpha")]
+        );
+        // Cancelled as a task is, and its report then arrives as a cancelled task's.
+        assert_eq!(
+            asks(&held, &id, asking, What::Cancel { of: task }),
+            Answer::Task(Box::new(Answered::Cancelling {
+                of: task,
+                name: name.clone()
+            }))
+        );
+        tasks_report(
+            &held,
+            &id,
+            &tickets,
+            task,
+            purlis_core::handback::Outcome::Done,
+            None,
+        );
+        let waited = asks(
+            &held,
+            &id,
+            asking,
+            What::Wait {
+                of: task,
+                within_secs: 30,
+            },
+        );
+        let Answer::Task(answered) = waited else {
+            panic!("an answer, not {waited:?}")
+        };
+        let Answered::Waited {
+            what: Waited::Reported { report },
+            ..
+        } = *answered
+        else {
+            panic!("the report, not {answered:?}")
+        };
+        assert_eq!(report.summary, "Forty are stuck.");
+        assert_eq!(
+            report.task.as_ref().map(|task| task.outcome),
+            Some(purlis_core::handback::Outcome::Cancelled)
+        );
+    }
+
     #[test]
     fn a_chat_cannot_wait_on_read_or_cancel_a_task_it_did_not_dispatch() {
         // The forged asks: a sibling's task, the chat above, an unrelated chat, no chat at all.

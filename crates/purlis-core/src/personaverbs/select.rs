@@ -240,7 +240,7 @@ fn refuse_in_chat(name: &str, env: Option<&str>, say: Sink) -> u8 {
     say(Say::Info(format!(
         "To use a vault of '{name}' here, run the command that needs it and ask the operator to \
          press Allow in the notice on this chat's tab. To have '{name}' do the work, dispatch \
-         to it: `purlis handoff <workspace> --persona {name}`."
+         to it: `purlis dispatch --to {name}`."
     )));
     1
 }
@@ -252,7 +252,7 @@ pub(super) fn create_use_refusal(name: &str, env: Option<&str>) -> String {
     format!(
         "This chat runs {runs}, and a chat's persona is fixed for its life, so --use cannot \
          select '{name}' here and nothing was made. Create it without --use; to have it do \
-         work, dispatch to it: `purlis handoff <workspace> --persona {name}`."
+         work, dispatch to it: `purlis dispatch --to {name}`."
     )
 }
 
@@ -372,7 +372,7 @@ mod tests {
                 "'steward'.\n",
                 "• To use a vault of 'devops' here, run the command that needs it and ask the ",
                 "operator to press Allow in the notice on this chat's tab. To have 'devops' do ",
-                "the work, dispatch to it: `purlis handoff <workspace> --persona devops`.\n",
+                "the work, dispatch to it: `purlis dispatch --to devops`.\n",
             )
         );
         assert!(!plane.path(".charter/sessions/s-1.persona").exists());

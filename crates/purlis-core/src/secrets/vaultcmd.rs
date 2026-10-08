@@ -421,15 +421,15 @@ pub(crate) fn list_for_a_chat(listing: &super::brokered::Listing, io: &mut dyn I
 /// What `vault list` says under a vault this chat may not use (#1430).
 pub const NOT_ALLOWED_ROUTES: &str = "For a vault marked not allowed: run the command that \
      needs it, and ask the operator to press Allow in the notice on this chat's tab; or, to \
-     have the vault's persona do the work, dispatch to it (`purlis handoff <workspace> --persona \
-     <name>`). A chat's persona is fixed for its life.";
+     have the vault's persona do the work, dispatch to it (`purlis dispatch --to <name>`). A \
+     chat's persona is fixed for its life.";
 
 /// [`NOT_ALLOWED_ROUTES`] where an administrator's policy forbids the Allow: only the dispatch
 /// is named.
 pub const NOT_ALLOWED_ROUTES_LOCKED: &str = "For a vault marked not allowed: policy on this \
      machine forbids allowing it for this chat's persona. To have the vault's persona do the \
-     work, dispatch to it (`purlis handoff <workspace> --persona <name>`). A chat's persona is fixed \
-     for its life.";
+     work, dispatch to it (`purlis dispatch --to <name>`). A chat's persona is fixed for its \
+     life.";
 
 /// The PERSONA cell: the label, marked when it names no persona this plane defines (#1057).
 fn persona_cell(ctx: &Ctx, label: Option<&Value>) -> String {
