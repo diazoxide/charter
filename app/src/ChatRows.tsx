@@ -283,20 +283,31 @@ export function TabMarks({
         persona != null && <PersonaMark persona={persona} className="tab-mark" />
       )}
       <span className="tab-name">{tabs.byId[id].name}</span>
+      {pin}
+      <PlaneUpdatedMark files={chat === undefined ? undefined : updates?.[chat]} />
+      {/* The first pane's session is the tab's own chat. Its own element, so what a tab IS
+          stays separate from what it is DOING — a tab whose text changed every time a turn
+          began would be unreadable, and untestable.
+
+          **Before the task's name, where the tab shows a task** (#1486): the mark is the
+          session's, and beside the session's name it reads as the session's. */}
+      <ChatStateMark session={chat} shell={chat !== undefined && shells.has(chat)} />
       {/* **`steward 4 › talk`, while the tab shows a task** (#1486, V100-35). The tab is the
-          session's, so the session's name stays first and the task's is the dimmer one. */}
+          session's, so the session's name stays first and the task's is the dimmer one. To a
+          screen reader the separator is the words it stands for. */}
       {task !== undefined && (
         <>
           <span className="tab-task-sep" aria-hidden="true">
             {" › "}
           </span>
+          <span className="hidden-words">, showing task </span>
           <span className="tab-task">{task}</span>
         </>
       )}
-      {pin}
-      {/* **A task of this tab needs you and is not on screen** (#1486, V100-37): the hand, as
-          a row of the Chats list wears it. A mark and no button: the tab's button is the tab,
-          and the ways to that task are its row, the hand above it and the title bar's list. */}
+      {/* **A chat of this tab is waiting for you and is not on screen** (#1486, V100-37): the
+          hand, as a row of the Chats list wears it. A mark and no button: the tab's button is
+          the tab, and the ways to that chat are its row, the hand above it, the title bar's
+          list and, with the tab in front, its Notice on the pane. */}
       {needs.length > 0 && (
         <span
           className="needs-you-mark"
@@ -308,11 +319,6 @@ export function TabMarks({
           <Hand aria-hidden="true" />
         </span>
       )}
-      <PlaneUpdatedMark files={chat === undefined ? undefined : updates?.[chat]} />
-      {/* The first pane's session is the tab's own chat. Its own element, so what a tab IS
-          stays separate from what it is DOING — a tab whose text changed every time a turn
-          began would be unreadable, and untestable. */}
-      <ChatStateMark session={chat} shell={chat !== undefined && shells.has(chat)} />
       <WrappingUp held={panesOf(tabs, id).some((one) => wrapping.has(one.session))} />
     </>
   );

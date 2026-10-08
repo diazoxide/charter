@@ -1,42 +1,52 @@
 import { useCallback, useEffect, useReducer, useRef, useSyncExternalStore } from "react";
-import { commands, type DispatchPending, type PlaneId } from "./bindings";
+import { commands, type PlaneId, type VaultRefused } from "./bindings";
 import { listen } from "./here";
 
 /**
- * **The dispatches a chat has asked for that are held for the person** (#1437), read once per
- * chat for everything on its pane that says something about them (#1481):
+ * **The vaults a chat was refused, held for the person** (#1456), read once per chat for
+ * everything in the window that says something about them (#1486):
  *
- * - `DispatchGrantNotice` asks about the first of them;
- * - `VaultRefusedNotice` points to that question, where the chat has already asked the persona
- *   the refused vault is tagged for, and offers no second way to ask it.
+ * - `VaultRefusedNotice` asks about the newest of them, on the pane of the tab the chat lives
+ *   in, whichever chat that tab shows;
+ * - a tab wears the hand for a chat of its own that was refused and is not on screen.
  *
- * Two readers of one answer, so neither can say a dispatch is waiting after the other has seen
- * it answered: the core holds them, this reads them when the first reader mounts and each time
- * the core says one is needed (`dispatch-grant-needed`), and `read` reads them again after a
- * press. A list that cannot be read is no list: nothing starts unasked.
+ * Two readers of one answer, as `dispatchesHeld.ts` has it and for its reason: the hand cannot
+ * stay on a tab after the Notice has been answered. The core holds what was refused; this reads
+ * it when the first reader mounts and each time the core says a chat was refused
+ * (`chat-vault-refused`), and `read` reads it again after a press. A list that cannot be read
+ * shows nothing: the chat's own refusal still names the ways.
  */
 type Held = {
-  waiting: readonly DispatchPending[];
+  refused: readonly VaultRefused[];
+  /** How many times the core has said this chat was refused, since the first reader: a Notice
+   *  that had said what a press answered starts over when it grows. */
+  heard: number;
+  snapshot: { refused: readonly VaultRefused[]; heard: number };
   readers: Set<() => void>;
   stop?: () => void;
   gone: boolean;
 };
 
-const NONE: readonly DispatchPending[] = [];
+const NONE: readonly VaultRefused[] = [];
+const NOTHING = { refused: NONE, heard: 0 };
 const held = new Map<string, Held>();
 const keyOf = (plane: PlaneId, session: number) => `${plane}\u0000${session}`;
 
+function tell(mine: Held) {
+  mine.snapshot = { refused: mine.refused, heard: mine.heard };
+  for (const changed of mine.readers) changed();
+}
+
 function read(plane: PlaneId, session: number) {
   void commands
-    .dispatchGrantsNeeded(plane, session)
+    .vaultRefusals(plane, session)
     .then((answer) => {
       const mine = held.get(keyOf(plane, session));
       if (mine === undefined || answer.status !== "ok") return;
-      // A core that answers nothing holds nothing.
-      mine.waiting = answer.data ?? NONE;
-      for (const changed of mine.readers) changed();
+      // A core that answers nothing (an older one, a test's stand-in) holds none.
+      mine.refused = Array.isArray(answer.data) ? answer.data : NONE;
+      tell(mine);
     })
-    // A chat whose held dispatches cannot be read shows none.
     .catch(() => {});
 }
 
@@ -44,14 +54,22 @@ function subscribe(plane: PlaneId, session: number, changed: () => void): () => 
   const key = keyOf(plane, session);
   let mine = held.get(key);
   if (mine === undefined) {
-    const made: Held = { waiting: NONE, readers: new Set(), gone: false };
+    const made: Held = {
+      refused: NONE,
+      heard: 0,
+      snapshot: NOTHING,
+      readers: new Set(),
+      gone: false,
+    };
     mine = made;
     held.set(key, made);
     read(plane, session);
     void (async () => {
       try {
-        const unlisten = await listen<DispatchPending>("dispatch-grant-needed", (event) => {
+        const unlisten = await listen<VaultRefused>("chat-vault-refused", (event) => {
           if (event.payload.plane !== plane || event.payload.session !== session) return;
+          made.heard += 1;
+          tell(made);
           read(plane, session);
         });
         if (made.gone) unlisten();
@@ -72,27 +90,29 @@ function subscribe(plane: PlaneId, session: number, changed: () => void): () => 
   };
 }
 
-export function useDispatchesHeld(
+/** What chat `session` was refused, how many times the core has said so, and a way to read it
+ *  again after a press. */
+export function useVaultRefusals(
   plane: PlaneId,
   session: number,
-): { waiting: readonly DispatchPending[]; read: () => void } {
-  const key = keyOf(plane, session);
+): { refused: readonly VaultRefused[]; heard: number; read: () => void } {
   const sub = useCallback(
     (changed: () => void) => subscribe(plane, session, changed),
     [plane, session],
   );
-  const waiting = useSyncExternalStore(sub, () => held.get(key)?.waiting ?? NONE);
+  const { refused, heard } = useSyncExternalStore(
+    sub,
+    () => held.get(keyOf(plane, session))?.snapshot ?? NOTHING,
+  );
   const again = useCallback(() => read(plane, session), [plane, session]);
-  return { waiting, read: again };
+  return { refused, heard, read: again };
 }
 
 /**
- * **Which of `sessions` have a dispatch held for the person** (#1486), in the order given:
- * what a tab wears the hand for when the chat is one of its own and is not on screen. One
- * subscription per chat, shared with that chat's Notice, so the hand goes when the Notice is
- * answered.
+ * **Which of `sessions` have a refusal held for the person**, in the order given. One
+ * subscription per chat, shared with that chat's Notice, so the two never disagree.
  */
-export function useHeldAmong(plane: PlaneId, sessions: readonly number[]): readonly number[] {
+export function useRefusedAmong(plane: PlaneId, sessions: readonly number[]): readonly number[] {
   const wanted = sessions.join(",");
   /** Each chat's subscription, kept while the chat stays in the list: a chat joining or
    *  leaving the list reads that chat and no other. */
@@ -119,7 +139,7 @@ export function useHeldAmong(plane: PlaneId, sessions: readonly number[]): reado
         reading.current.set(session, subscribe(plane, session, changed));
   }, [plane, wanted]);
   const having = sessions.filter(
-    (session) => (held.get(keyOf(plane, session))?.waiting.length ?? 0) > 0,
+    (session) => (held.get(keyOf(plane, session))?.refused.length ?? 0) > 0,
   );
   return having.length === 0 ? NO_CHATS : having;
 }

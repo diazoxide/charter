@@ -14,7 +14,9 @@ import {
   restoreShown,
   selectTab,
   showOwn,
+  showOwnIn,
   shownIn,
+  shownLive,
   splitFocusedPane,
   switchTabTo,
   taskShownIn,
@@ -218,14 +220,27 @@ describe("what a tab shows, read", () => {
 });
 
 describe("a shown task that is gone", () => {
-  it("falls back to the session's own chat when the core closes it, and keeps the tab", () => {
+  it("is still what its tab shows when the core closes it: a pane never changes by itself", () => {
     const tabs = twoSessions();
     const shown = switchTabTo(tabs, 4, askedBy);
+
     const after = closeChat(shown, 4, oneWorkspace);
 
-    expect(after.order).toEqual(tabs.order);
-    expect(onScreen(after)).toEqual([1]);
-    expect(taskShownIn(after, tabOf(tabs, 1))).toBeUndefined();
+    expect(after).toBe(shown);
+    expect(taskShownIn(after, tabOf(tabs, 1))).toBe(4);
+  });
+
+  it("goes back to the session's own chat in one pane, when the person leaves it", () => {
+    const split = splitFocusedPane(selectTab(twoSessions(), 1), "row", 3);
+    const asked = lineage({ 4: 1, 8: 3 });
+    const both = switchTabTo(switchTabTo(split, 4, asked), 8, asked);
+    const [first, second] = shownIn(both, both.inFront ?? -1);
+
+    const back = showOwnIn(both, both.inFront ?? -1, first.pane);
+
+    expect(onScreen(back)).toEqual([1, 8]);
+    expect(showOwnIn(back, back.inFront ?? -1, first.pane)).toBe(back);
+    expect(onScreen(showOwnIn(back, back.inFront ?? -1, second.pane))).toEqual([1, 3]);
   });
 
   it("falls back when it is no longer among the open chats", () => {
@@ -267,6 +282,51 @@ describe("a shown task that is gone", () => {
     const shown = switchTabTo(tabs, 4, askedBy);
     const after = closeChat(shown, 1, oneWorkspace);
     expect(after.order).toEqual([tabOf(tabs, 2)]);
+  });
+});
+
+describe("whether a pane can draw the chat it shows", () => {
+  const everyOpen: (session: number) => boolean = () => true;
+  const live = (tabs: Tabs, session: number, asked: AskedBy, open = everyOpen) =>
+    shownLive(tabs, tabOf(tabs, session), asked, open).map((one) => one.live);
+
+  it("can, for its own chat, always", () => {
+    expect(live(twoSessions(), 1, askedBy, () => false)).toEqual([true]);
+  });
+
+  it("can, for a task that is open and below its session", () => {
+    expect(live(switchTabTo(twoSessions(), 6, askedBy), 1, askedBy)).toEqual([true]);
+  });
+
+  it("cannot, for a task that has ended", () => {
+    const shown = switchTabTo(twoSessions(), 4, askedBy);
+    expect(live(shown, 1, askedBy, (session) => session !== 4)).toEqual([false]);
+    // And it is still what the pane shows: nothing was switched.
+    expect(shownLive(shown, tabOf(shown, 1), askedBy, () => false)[0]).toMatchObject({
+      own: 1,
+      session: 4,
+    });
+  });
+
+  it("cannot, for a task of a task whose asker has ended", () => {
+    // 6 was asked for by 4, which is gone from the lineage: nothing says 6 is below 1.
+    const shown = switchTabTo(twoSessions(), 6, askedBy);
+    expect(live(shown, 1, lineage({ 5: 1, 7: 2 }))).toEqual([false]);
+  });
+
+  it("cannot, while the session was started again and the lineage still names the old one", () => {
+    const shown = switchTabTo(twoSessions(), 4, askedBy);
+    // The tabs caught up first: the session is 10 now, and the list still says 4 is 1's.
+    const restarted = replaceSession(shown, 1, 10);
+    expect(live(restarted, 10, askedBy)).toEqual([false]);
+    // And can again once the list does too.
+    expect(live(restarted, 10, lineage({ 4: 10 }))).toEqual([true]);
+  });
+
+  it("cannot, for a task that was given a tab of its own", () => {
+    const shown = switchTabTo(twoSessions(), 4, askedBy);
+    const both = openTab(shown, 4);
+    expect(live(both, 1, askedBy)).toEqual([false]);
   });
 });
 

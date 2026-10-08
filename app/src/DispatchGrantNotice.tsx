@@ -117,7 +117,12 @@ export function DispatchGrantNotice({ plane, session }: { plane: PlaneId; sessio
         if (done.status === "error") {
           setSaid(done.error);
           read();
-        } else setAllowed({ target: first.target, said: done.data.said });
+        } else {
+          setAllowed({ target: first.target, said: done.data.said });
+          // Read again at once: the tab's hand reads the same list (#1486), and it must not
+          // stay up for a dispatch that has been answered.
+          read();
+        }
       })
       .catch((err: unknown) => setSaid(`purlis could not allow it: ${String(err)}`))
       .finally(() => setBusy(false));

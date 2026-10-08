@@ -1,7 +1,7 @@
 import { memo, useState } from "react";
 import { ChevronDown, ChevronRight, SquareTerminal } from "lucide-react";
 import type { FinishedTask } from "./bindings";
-import { firstLine, foldedOf, shownOf } from "./finished";
+import { firstLine, foldedOf, qualifierOf, shownOf } from "./finished";
 import { PersonaMark } from "./PersonaMark";
 import { StateShown } from "./StateShown";
 
@@ -94,6 +94,7 @@ function FinishedRow({
   const [refused, setRefused] = useState<string>();
   const [busy, setBusy] = useState(false);
   const state = shownOf(task);
+  const more = qualifierOf(task);
   const reopen = () => {
     setBusy(true);
     setRefused(undefined);
@@ -122,7 +123,7 @@ function FinishedRow({
             wears (#1484). The core's own word follows where it says more than that word
             does (blocked, closed by the person), so no end is said less exactly here. */}
           {state !== undefined && <StateShown shown={state} />}
-          {task.outcome !== state?.word && <span className="outcome">{task.outcome}</span>}
+          {more !== undefined && <span className="outcome">{more}</span>}
         </button>
         <button
           type="button"

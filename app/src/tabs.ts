@@ -1074,9 +1074,10 @@ export function closeChat(
   const found = tabs.order
     .flatMap((id) => panesOf(tabs, id).map((one) => ({ id, ...one })))
     .find((one) => one.session === session);
-  // **A task that was shown in its session's tab** (#1486): the tab shows the session's own
-  // chat again, and stays. A chat is one or the other, so this is the whole of it.
-  if (found === undefined) return keepShown(tabs, (shown) => shown !== session);
+  // **A task shown in its session's tab is not taken off the screen by its end** (#1486,
+  // V100-37): a pane never changes what it shows by itself. The tab keeps showing it, as
+  // ended ({@link shownLive}), until the person leaves it.
+  if (found === undefined) return tabs;
   const { id, pane } = found;
   const tab = tabs.byId[id];
   const left = without(tab.layout, pane);
@@ -1154,10 +1155,7 @@ export function homeOf(
   chat: number,
   askedBy: AskedBy,
 ): { tab: number; pane: number; own: number } | undefined {
-  const owned = new Map<number, { tab: number; pane: number }>();
-  for (const tab of tabs.order)
-    for (const { pane, session } of panesOf(tabs, tab))
-      if (!owned.has(session)) owned.set(session, { tab, pane });
+  const owned = ownedIn(tabs);
   // A lineage that loops back on itself is walked once and no further.
   const seen = new Set<number>();
   for (let at: number | undefined = chat; at !== undefined && !seen.has(at); at = askedBy(at)) {
@@ -1166,6 +1164,58 @@ export function homeOf(
     if (home !== undefined) return { ...home, own: at };
   }
   return undefined;
+}
+
+/** Each chat that has a pane of its own, by number: built once for each value of the tabs,
+ *  since every row of a list and every tab's menu asks for a chat's home. */
+const OWNED = new WeakMap<Tabs, Map<number, { tab: number; pane: number }>>();
+
+function ownedIn(tabs: Tabs): Map<number, { tab: number; pane: number }> {
+  const held = OWNED.get(tabs);
+  if (held !== undefined) return held;
+  const owned = new Map<number, { tab: number; pane: number }>();
+  for (const tab of tabs.order)
+    for (const { pane, session } of panesOf(tabs, tab))
+      if (!owned.has(session)) owned.set(session, { tab, pane });
+  OWNED.set(tabs, owned);
+  return owned;
+}
+
+/**
+ * **What each chat pane of a tab shows, and whether that chat is there to be shown** (#1486).
+ *
+ * `live` is the one invariant a pane's drawing rests on: **a pane draws another chat's
+ * terminal only while that chat is open and at home in that very pane** ({@link homeOf}). A
+ * pane's own chat is always live. A shown task is not when it has ended, when a chat between
+ * it and the session has ended, when the session was started again and the lineage has not
+ * caught up, or when it was given a tab of its own. Then the pane still shows it, as the
+ * person left it, and draws no terminal for it: nothing typed can reach a chat the pane cannot
+ * say the path to.
+ */
+export function shownLive(
+  tabs: Tabs,
+  id: number,
+  askedBy: AskedBy,
+  open: (session: number) => boolean,
+): { pane: number; own: number; session: number; live: boolean }[] {
+  return shownIn(tabs, id).map((one) => {
+    if (one.session === one.own) return { ...one, live: true };
+    const home = open(one.session) ? homeOf(tabs, one.session, askedBy) : undefined;
+    return { ...one, live: home !== undefined && home.tab === id && home.pane === one.pane };
+  });
+}
+
+/**
+ * **Pane `pane` of tab `id` shows its own chat again** (#1486): the way out of a task that has
+ * ended. Answers `tabs` itself when it showed its own already.
+ */
+export function showOwnIn(tabs: Tabs, id: number, pane: number): Tabs {
+  const tab = tabs.byId[id];
+  if (tab?.shows?.[pane] === undefined) return tabs;
+  const rest = Object.fromEntries(
+    Object.entries(tab.shows).filter(([at]) => Number(at) !== pane),
+  ) as Record<number, number>;
+  return { ...tabs, byId: { ...tabs.byId, [id]: showing(tab, rest) } };
 }
 
 /**

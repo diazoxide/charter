@@ -444,8 +444,10 @@ each carry a note of this.
 §1 and §7 open a `task` dispatch headless. That stays, with its meaning fixed: **headless
 means "has no tab yet", and never "hidden"**.
 
-- A task chat is listed under its asking chat, with its persona's icon and its state. It gets
-  an ordinary tab when the person clicks it. A handoff opens as a tab, as before.
+- A task chat is listed under its asking chat, with its persona's icon and its state. Pressing
+  it shows it inside the tab of the session that asked for it, and adds no tab (amended
+  2026-10-08, V100-31, #1486: it used to become an ordinary tab, whose close read as ending
+  the session). A handoff opens as a tab, as before.
 - Listing ships with dispatch itself, so §7's "not before AC-12" no longer holds a task chat
   back.
 - A persona chat stays open after it reports, marked as reported, until the person or its asking

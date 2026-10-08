@@ -68,6 +68,7 @@ export function EndingChat({
   running = [],
   closing = [],
   keeps = false,
+  shows,
   onEnd,
   onSmartClose,
   onCancel,
@@ -89,6 +90,9 @@ export function EndingChat({
   /** For a close of several chats at once, which asks nothing about them: whether any has
    *  chats at work below it. They keep running, and the dialog says so. */
   keeps?: boolean;
+  /** The task the tab shows in place of its session's own chat, where it shows one (#1486):
+   *  the dialog says the close is the session's, since the task is what is on screen. */
+  shows?: { task: string; session: string };
   /** `stop` is the answer about the running persona chats: stop them, or keep them running. */
   onEnd: (stop: boolean) => void;
   onSmartClose: (stop: boolean) => void;
@@ -139,6 +143,13 @@ export function EndingChat({
           {smart?.why && (
             <p className="honest" id="smart-close-why">
               {smart.why}
+            </p>
+          )}
+          {/* The tab shows a task: what ends is the session, not what is on screen. */}
+          {shows !== undefined && (
+            <p className="honest">
+              This tab is showing {shows.task}, a task of {shows.session}. Closing the tab ends{" "}
+              {shows.session}, not {shows.task}.
             </p>
           )}
           {/* What else this close closes, said before it is answered. */}

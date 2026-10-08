@@ -141,6 +141,9 @@ pub struct Open {
     pub from: Option<purlis_core::reopen::HandedFrom>,
     /// Whether the window draws it as a tab: [`purlis_core::reopen::Chat::has_tab`].
     pub tab: bool,
+    /// The chat its tab shows in place of it, where the person switched the tab to one
+    /// (#1486): [`purlis_core::reopen::Chat::shows`].
+    pub shows: Option<u32>,
 }
 
 /// Who an open chat is beyond this launch, and the directory it works in.
@@ -1925,6 +1928,30 @@ impl Chats {
         Ok(())
     }
 
+    /// Chat `session`'s tab shows chat `shown` in place of it, or its own chat again with
+    /// `None` (#1486): the record keeps it, so a reloaded window and the next launch put each
+    /// tab back on the chat it showed. Written only when it changes, for [`Self::pin`]'s reason.
+    ///
+    /// **What is kept is the window's word and nothing is decided by it**: the core starts,
+    /// ends and allows nothing by this number, and the window shows it only where the chat it
+    /// names is open and below this one. A chat is never said to show itself.
+    pub fn tab_shows(&self, session: u32, shown: Option<u32>) -> Result<(), String> {
+        let shown = shown.filter(|other| *other != session);
+        let mut open = lock(&self.open);
+        let Some(one) = open.get_mut(&session) else {
+            return Err(format!(
+                "purlis has no chat {session} open to show another in."
+            ));
+        };
+        if one.chat.shows == shown {
+            return Ok(());
+        }
+        one.chat.shows = shown;
+        drop(open);
+        self.write_it_down();
+        Ok(())
+    }
+
     /// Gives a chat the name `raw`, or takes the one it was given off when `raw` is blank —
     /// and answers the name it now has (charter-app#254).
     ///
@@ -2218,6 +2245,11 @@ impl Chats {
                 from.chat = started;
                 moved = true;
             }
+            // And a tab that showed it shows it still, under its new number (#1486).
+            if one.chat.shows == Some(session) {
+                one.chat.shows = Some(started);
+                moved = true;
+            }
         }
         for starting in lock(&self.reserved).values_mut() {
             if let Some(from) = starting.from.as_mut()
@@ -2454,6 +2486,7 @@ impl Chats {
                     label: chat.label.clone(),
                     from: chat.from.clone(),
                     tab: chat.has_tab(),
+                    shows: chat.shows,
                 })
             })
             .collect()
@@ -6086,6 +6119,76 @@ pub(crate) mod tests {
         chats.pin(session, false).unwrap();
 
         assert!(!chats.record().chats[0].pinned);
+        let _ = chats.close(session);
+    }
+
+    // ----- what a session's tab shows (#1486) -----
+
+    #[test]
+    fn what_a_tab_shows_is_written_into_the_record_and_taken_out_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        chats
+            .tab_shows(session, Some(41))
+            .expect("the chat is open");
+        assert_eq!(chats.record().chats[0].shows, Some(41));
+        assert_eq!(chats.open_now()[0].shows, Some(41));
+
+        chats.tab_shows(session, None).unwrap();
+        assert_eq!(chats.record().chats[0].shows, None);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_tab_is_never_said_to_show_its_own_chat_and_a_chat_not_open_shows_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        chats.tab_shows(session, Some(session)).unwrap();
+        assert_eq!(chats.record().chats[0].shows, None);
+        assert!(chats.tab_shows(session + 100, Some(3)).is_err());
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_tab_follows_the_chat_it_shows_when_that_chat_is_started_again_under_a_new_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        chats.tab_shows(session, Some(41)).unwrap();
+
+        chats.followed(41, 52);
+
+        assert_eq!(chats.record().chats[0].shows, Some(52));
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn showing_what_a_tab_already_shows_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counting = std::sync::Arc::clone(&written);
+        let chats = Chats::recorded_by(Box::new(move |_| {
+            counting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        chats.tab_shows(session, Some(41)).unwrap();
+        let before = written.load(std::sync::atomic::Ordering::SeqCst);
+
+        chats.tab_shows(session, Some(41)).unwrap();
+
+        assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), before);
         let _ = chats.close(session);
     }
 

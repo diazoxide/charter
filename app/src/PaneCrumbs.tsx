@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import { ChatShownState } from "./ChatRows";
 import type { Crumbs } from "./tabChats";
 
@@ -6,28 +6,38 @@ import type { Crumbs } from "./tabChats";
  * **A pane's breadcrumb, while its tab shows a task** (#1486, V100-34): `steward 4 › talk ·
  * working`, in the pane's existing top line beside the gauge and the harness's name. It is why
  * a person never types into the wrong chat: the session the tab is, the task on screen, and
- * what that task is doing.
+ * what that task is doing. **A pane never shows a task without it.**
  *
  * **Each name before the last goes to that chat**, the session's own chat first: pressing it
  * switches the tab, as pressing the task's row did. The last is where the person is, and is a
- * name and no button. A task of a task shows its whole path (V100-41).
+ * name and no button. A task of a task shows its whole path (V100-41). A chat on the path that
+ * has ended is a name and no button: there is nowhere to go.
  *
  * **A task that works in another workspace says so** (V100-40), `in <workspace>`, beside its
  * name: its tab is on the strip of the session that asked.
  *
- * **The state is the one its row says** (#1484), from the one function, and it never gives
- * way: at a narrow pane the names in the middle of the path shrink first, then the two ends,
- * and the state word stays whole (`App.css`, `.pane-crumbs`).
+ * **The state is the one its row says** (#1484), from the one function. In a narrow pane the
+ * names give way before it does (`App.css`, `.pane-crumbs`, which says how far that holds).
+ *
+ * **To a screen reader it is a list called "Chat path"**: each name is read once, as the button
+ * or the text it is, and the one on screen is `aria-current`. The whole path is the tooltip.
  *
  * Drawn only while a pane shows a task. A session with no tasks has the top line it had.
  */
 export function PaneCrumbs({
   crumbs,
   onShow,
+  state,
+  gone,
 }: {
   crumbs: Crumbs;
   /** Switches the tab to that chat. */
   onShow: (session: number) => void;
+  /** The state said after the path, where it is not the live one of the chat shown: a task
+   *  that has ended says how it ended. */
+  state?: ReactNode;
+  /** The chats of the path that are not open any more: each is a name and no way. */
+  gone?: (session: number) => boolean;
 }) {
   const last = crumbs.path.length - 1;
   const shown = crumbs.path[last];
@@ -35,7 +45,7 @@ export function PaneCrumbs({
   return (
     <nav
       className="pane-crumbs"
-      aria-label={`Where this pane is: ${said}`}
+      aria-label="Chat path"
       // The whole path, for a pane too narrow to draw it.
       title={crumbs.elsewhere === null ? said : `${said} in ${crumbs.elsewhere}`}
     >
@@ -46,14 +56,14 @@ export function PaneCrumbs({
               <span className="crumb shown" aria-current="page">
                 {chat.name}
               </span>
+            ) : gone?.(chat.session) ? (
+              <span className={at === 0 ? "crumb own" : "crumb between"}>{chat.name}</span>
             ) : (
               <button
                 type="button"
                 className={at === 0 ? "crumb own" : "crumb between"}
                 // In the tab sequence, said out loud (`docs/ui-primitives.md`).
                 tabIndex={0}
-                aria-label={chat.name}
-                title={`Show ${chat.name}`}
                 onClick={() => onShow(chat.session)}
               >
                 {chat.name}
@@ -71,14 +81,16 @@ export function PaneCrumbs({
       <span className="crumb-sep" aria-hidden="true">
         {" · "}
       </span>
-      <ChatShownState
-        session={shown.session}
-        shell={shown.shell}
-        report={shown.report}
-        outcome={shown.outcome}
-        asking={shown.asking}
-        harness={shown.harness}
-      />
+      {state ?? (
+        <ChatShownState
+          session={shown.session}
+          shell={shown.shell}
+          report={shown.report}
+          outcome={shown.outcome}
+          asking={shown.asking}
+          harness={shown.harness}
+        />
+      )}
     </nav>
   );
 }

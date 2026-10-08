@@ -116,11 +116,59 @@ async function draw(
   );
 }
 
-/** Takes away everything this file drew. */
+/** Takes away everything this file drew, and puts back every control it took away. */
 async function erase(): Promise<void> {
   await browser.execute(() => {
     for (const one of document.querySelectorAll('[data-drawn="pane-crumbs.e2e"]')) one.remove();
+    for (const one of document.querySelectorAll<HTMLElement>('[data-taken="pane-crumbs.e2e"]')) {
+      one.style.display = "";
+      delete one.dataset.taken;
+    }
   });
+}
+
+/**
+ * Makes pane `pane`'s own controls what a pane showing a task draws: the two splits, and no
+ * close (`PaneDoing`, `task`). Then waits until the pane has said the width they now have
+ * (`--pane-controls`), which is what its top line reserves. Answers how many are drawn.
+ */
+async function asATaskPane(pane: number): Promise<number> {
+  const drawn = await browser.execute((at: number) => {
+    const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
+      frame.querySelector('[data-testid="pane"]'),
+    );
+    const controls = frames[at]?.querySelector(".pane-corner.at-end > .pane-doing");
+    const close = [...(controls?.querySelectorAll<HTMLElement>("button") ?? [])].find((button) =>
+      (button.getAttribute("aria-label") ?? "").startsWith("End this pane"),
+    );
+    if (close) {
+      close.style.display = "none";
+      close.dataset.taken = "pane-crumbs.e2e";
+    }
+    return [...(controls?.querySelectorAll<HTMLElement>("button") ?? [])].filter(
+      (button) => button.style.display !== "none",
+    ).length;
+  }, pane);
+  await untilReserved(pane);
+  return drawn;
+}
+
+/** Waits until pane `pane`'s frame says the width its controls have now. */
+async function untilReserved(pane: number): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      browser.execute((at: number) => {
+        const frames = [...document.querySelectorAll<HTMLElement>(".pane-frame")].filter((frame) =>
+          frame.querySelector('[data-testid="pane"]'),
+        );
+        const frame = frames[at];
+        const controls = frame?.querySelector<HTMLElement>(".pane-corner.at-end > .pane-doing");
+        if (!frame || !controls) return false;
+        const said = Number.parseFloat(frame.style.getPropertyValue("--pane-controls"));
+        return Math.abs(said - controls.offsetWidth) <= 1;
+      }, pane),
+    { timeout: 10_000, interval: 100, timeoutMsg: `pane ${pane} never said its controls' width` },
+  );
 }
 
 /** Every box this file needs of pane `pane`, its top line and the breadcrumb drawn in it. */
@@ -152,6 +200,10 @@ async function measured(pane: number) {
         .filter((one) => one !== crumbs)
         .map((one) => ({ what: one.className, box: box(one) })),
       controls: box(frame?.querySelector(".pane-corner.at-end > .pane-doing")),
+      // The width the pane says its controls have, which its top line reserves.
+      reserved: Number.parseFloat(
+        (frame as HTMLElement | undefined)?.style.getPropertyValue("--pane-controls") ?? "",
+      ),
       crumbs: box(crumbs),
       names: [...(crumbs?.querySelectorAll(".crumb") ?? [])].map((name) => ({
         text: name.textContent ?? "",
@@ -284,11 +336,21 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
     expect(seen.wordCut).toBe(false);
   });
 
-  for (const pane of [0, 1]) {
-    it(`cuts the middle of a long path in narrow pane ${pane}, never the state, and overflows nothing`, async () => {
+  // Each narrow pane twice: with the controls a pane showing a task draws (the two splits),
+  // and with the three every other pane draws. The line reserves what is there, measured, so
+  // neither is a number this file or the stylesheet has to know.
+  for (const [pane, task] of [
+    [0, true],
+    [1, true],
+    [0, false],
+    [1, false],
+  ] as const) {
+    it(`cuts the middle of a long path in narrow pane ${pane} with ${task ? "a task pane's two" : "three"} controls, keeps the state whole, and overflows nothing`, async () => {
       // 1024 px is the narrowest window purlis supports (ADR 0054), and with two panes side by
       // side each is a few hundred pixels.
       await windowIs(1024, 768);
+      if (task) expect(await asATaskPane(pane)).toBe(2);
+      else await untilReserved(pane);
       expect(
         await draw(pane, { path: LONG_PATH, state: LONGEST_STATE, elsewhere: "release-train" }),
       ).toBe(true);
@@ -343,7 +405,21 @@ describe("a pane's breadcrumb, while its tab shows a task", () => {
           "is",
           false,
         );
+      // The pane's controls are there, and the room the line keeps is their width.
+      check("the pane draws no controls", seen.controls !== null, "is", true);
       if (seen.controls !== null) {
+        check(
+          "the line reserves less than the controls' width",
+          seen.reserved,
+          "atLeast",
+          seen.controls.width - 1,
+        );
+        check(
+          "the line ends under the controls",
+          (seen.line as Box).right,
+          "atMost",
+          seen.controls.left + 1,
+        );
         check(
           "the pane's controls are over the breadcrumb",
           overlap(seen.crumbs as Box, seen.controls),

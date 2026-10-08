@@ -92,10 +92,25 @@ export type NoticeProps = WayOut & {
   under?: ReactNode;
 };
 
+/**
+ * **Whose Notice this is, for a Notice of a chat that is not the one its pane shows** (#1486).
+ *
+ * A session's tab shows one of its chats at a time, and every chat that lives in the tab says
+ * what it has to say on that tab's pane: nothing that waits for the person may be off screen.
+ * So a Notice of a chat that is not on screen says whose it is before its sentence, `steward
+ * 4:` or `talk, a task of steward 4:`, and has **Go to it**, which switches the tab to that
+ * chat. Its ways out act on its own chat, as they always did: the Notice is that chat's, drawn
+ * here. Nothing is provided for the chat on screen, whose Notices read as they always have.
+ */
+export const NoticeOf = createContext<{ whose: string; onGo: () => void } | null>(null);
+
 export function Notice(props: NoticeProps) {
   const { cause, tone = "news", at = "band", label, persona, children, under } = props;
   const { fixes, link, copy, onDismiss } = props as Ways;
   const band = useContext(Band);
+  const provided = useContext(NoticeOf);
+  // Only on a pane: a Notice a pane's chat sends to the band is the window's.
+  const of = at === "pane" ? provided : null;
   const stacked = band !== null && at === "band";
   const id = useId();
   // Where this Notice is drawn when a band stacks it: an element of its own, which the band
@@ -109,14 +124,26 @@ export function Notice(props: NoticeProps) {
     .filter(Boolean)
     .join(" ");
   const line = (
-    <div className={classes} role="status" aria-label={label} data-cause={cause}>
+    <div
+      className={classes}
+      role="status"
+      aria-label={of === null || label === undefined ? label : `${of.whose}: ${label}`}
+      data-cause={cause}
+    >
       {/* In a pane the mark is the sentence's first word, so it is never left alone on a row
           above a sentence that takes the next one whole (#1481). */}
       {persona != null && at !== "pane" && <PersonaMark persona={persona} />}
       <div className="notice-says">
         {persona != null && at === "pane" && <PersonaMark persona={persona} />}
+        {of !== null && <strong className="notice-whose">{of.whose}: </strong>}
         {children}
       </div>
+      {/* The way to the chat it is about, first: its other ways out answer for that chat. */}
+      {of !== null && (
+        <button type="button" className="notice-link notice-go" tabIndex={0} onClick={of.onGo}>
+          Go to it
+        </button>
+      )}
       {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#186). */}
       {fixes?.map((fix) => (
         <button
