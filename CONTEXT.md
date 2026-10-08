@@ -521,7 +521,8 @@ _Avoid_: permission (that is the harness's), approval (that answers an ask)
 **Refused while you were away**:
 A dispatch a chat nobody was at was refused for lack of a standing grant, kept so the person
 reads of it in the needs-you list afterwards and can allow the pair from then on. One item a
-pair and workspace, attached to no chat; it is not a question and holds no dispatch.
+pair and workspace, attached to no chat; it is not a question and holds no dispatch. Dismissed,
+it stays put away while the chat asks on.
 _Avoid_: pending dispatch, queued dispatch (nothing is waiting to start)
 
 **Headless chat**:

@@ -3,9 +3,10 @@
  * bar's needs-you list to show and answer.
  *
  * The core says a project's whole list each time a refusal is kept (`dispatch-away-changed`),
- * and the window asks once per project for what was kept before it listened, and again each
- * time the list is opened: a pair the person said never to in the meantime is gone by the time
- * they look. Each answer comes back with the list as it then stands.
+ * and the window asks once per project for what was kept before it listened, and again as
+ * the person comes to the list and leaves it: a pair they said never to in the meantime is
+ * gone by the time they look. Each answer comes back with the list as it then stands. The
+ * order is the core's, by first refusal, and is kept as it is given.
  */
 import { useCallback, useEffect, useState } from "react";
 import { commands, type AwayRefusal } from "./bindings";
@@ -29,8 +30,10 @@ export function useAwayRefusals(planes: readonly string[]): {
   read: () => void;
   /** Allow from now on, for the one pair the item names. */
   allow: (plane: string, item: AwayRefusal) => Promise<AwayAnswer>;
-  /** Dismiss: the item goes and nothing is granted. */
+  /** Dismiss: the item is put away and nothing is granted. */
   dismiss: (plane: string, item: AwayRefusal) => Promise<AwayAnswer>;
+  /** Never for this pair: the person's never on this machine. */
+  never: (plane: string, item: AwayRefusal) => Promise<AwayAnswer>;
 } {
   const [held, setHeld] = useState<AwayHeld>({});
   useEffect(() => {
@@ -60,13 +63,18 @@ export function useAwayRefusals(planes: readonly string[]): {
   const read = useCallback(() => {
     for (const plane of key === "" ? [] : key.split("\n")) readOne(plane);
   }, [key, readOne]);
-  const allow = useCallback(
-    async (plane: string, item: AwayRefusal): Promise<AwayAnswer> => {
-      const answer = await commands
-        .allowDispatchAway(plane, item.asking, item.target, item.workspace)
-        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+  /** One of the two answers that say a sentence: the grant, or the never. */
+  const answered = useCallback(
+    async (
+      plane: string,
+      item: AwayRefusal,
+      how: "allowDispatchAway" | "neverDispatchAway",
+    ): Promise<AwayAnswer> => {
+      const answer = await commands[how](plane, item.asking, item.target, item.workspace).catch(
+        (err: unknown) => ({ status: "error" as const, error: String(err) }),
+      );
       if (answer.status !== "ok") {
-        // Refused: the pair is no longer one to allow. What is listed now is read again.
+        // Refused: the pair is no longer one to answer. What is listed now is read again.
         readOne(plane);
         return { words: answer.error, refused: true };
       }
@@ -74,6 +82,14 @@ export function useAwayRefusals(planes: readonly string[]): {
       return { words: answer.data.said, refused: false };
     },
     [readOne],
+  );
+  const allow = useCallback(
+    (plane: string, item: AwayRefusal) => answered(plane, item, "allowDispatchAway"),
+    [answered],
+  );
+  const never = useCallback(
+    (plane: string, item: AwayRefusal) => answered(plane, item, "neverDispatchAway"),
+    [answered],
   );
   const dismiss = useCallback(
     async (plane: string, item: AwayRefusal): Promise<AwayAnswer> => {
@@ -89,5 +105,5 @@ export function useAwayRefusals(planes: readonly string[]): {
     },
     [readOne],
   );
-  return { held, read, allow, dismiss };
+  return { held, read, allow, dismiss, never };
 }

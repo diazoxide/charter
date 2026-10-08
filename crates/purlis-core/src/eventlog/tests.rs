@@ -1698,6 +1698,46 @@ fn every_dispatch_grant_and_revoke_is_a_trust_event_naming_the_pair() {
     assert_eq!(read(dir.path()).unwrap().last(), Some(&revoked), "written");
 }
 
+#[test]
+fn a_grant_made_on_a_refusal_kept_while_nobody_was_there_says_where_it_came_from() {
+    // #1507: the same trust event as any grant of the person's, with `from` beside the pair,
+    // so it can be told from one made in Settings.
+    use crate::dispatchgrant::Audited;
+    use crate::sandbox::grant::Level;
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/planes/one");
+    let mut host = recorder(dir.path());
+
+    let granted = host
+        .dispatch_grant_from(
+            plane,
+            None,
+            &Audited {
+                act: crate::dispatchgrant::Act::Grant,
+                asking: Some("steward"),
+                target: "devops",
+                level: Level::You,
+            },
+            crate::dispatchaway::AUDITED_FROM,
+        )
+        .unwrap();
+    assert_eq!(granted.kind, "trust.dispatch.grant");
+    assert_eq!(granted.chat, None);
+    assert_eq!(
+        granted.body,
+        serde_json::json!({
+            "actor_kind": "human",
+            "actor": "operator",
+            "scope": "local-ui",
+            "level": "you",
+            "asking": "steward",
+            "target": "devops",
+            "from": "away",
+        })
+    );
+    assert_eq!(read(dir.path()).unwrap().last(), Some(&granted), "written");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn a_segment_the_filesystem_refuses_to_open_names_the_segment() {

@@ -135,6 +135,7 @@ export function TitleBar({
     away?: readonly AwayItem[];
     onAllowAway?: (item: AwayItem) => void;
     onDismissAway?: (item: AwayItem) => void;
+    onNeverAway?: (item: AwayItem) => void;
     onLook?: () => void;
   };
   /**

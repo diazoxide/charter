@@ -1602,7 +1602,8 @@ function App() {
   /**
    * **Every project's dispatches refused while nobody was there** (#1507): items of the same
    * list, attached to no chat. Allow from now on grants the one pair for the person on this
-   * machine and the core's sentence is said; Dismiss says nothing.
+   * machine, Never for this pair is their never, and the core's sentence is said for each;
+   * Dismiss says nothing.
    */
   const awayRefusals = useAwayRefusals(planes);
   const away = useMemo<AwayItem[]>(
@@ -1617,7 +1618,7 @@ function App() {
     [planes, awayRefusals.held],
   );
   const answerAway = useCallback(
-    (item: AwayItem, how: "allow" | "dismiss") => {
+    (item: AwayItem, how: "allow" | "dismiss" | "never") => {
       void awayRefusals[how](item.plane, item).then((answer) => {
         if (answer !== undefined) setReport({ from: `needs.away.${how}`, ...answer });
       });
@@ -1875,6 +1876,7 @@ function App() {
           away,
           onAllowAway: (item: AwayItem) => answerAway(item, "allow"),
           onDismissAway: (item: AwayItem) => answerAway(item, "dismiss"),
+          onNeverAway: (item: AwayItem) => answerAway(item, "never"),
           onLook: awayRefusals.read,
           onOpen: (ask: PermissionAsk) =>
             pressNeeding(ask.plane, {

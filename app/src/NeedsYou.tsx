@@ -5,7 +5,7 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Offer } from "./actions";
 import { backSaid, type State } from "./chatState";
 import { PersonaMark, type PersonaMarkData } from "./PersonaMark";
-import { AwayRows, type AwayItem } from "./AwayRefusals";
+import { AwayRows, awayKey, type AwayItem } from "./AwayRefusals";
 import { useArrived } from "./lib/arrived";
 import { moveAlong } from "./tabSequence";
 import { deletes } from "./tabKeys";
@@ -242,6 +242,7 @@ export function NeedsYouMenu({
   away = [],
   onAllowAway,
   onDismissAway,
+  onNeverAway,
   onLook,
 }: {
   items: readonly Needing[];
@@ -262,9 +263,11 @@ export function NeedsYouMenu({
   away?: readonly AwayItem[];
   /** Allow from now on: the standing grant for the one pair the item names. */
   onAllowAway?: (item: AwayItem) => void;
-  /** Dismiss: the item goes and nothing is granted. */
+  /** Dismiss: the item is put away and nothing is granted. */
   onDismissAway?: (item: AwayItem) => void;
-  /** The list is being opened: what it shows is read again, so it is as things stand. */
+  /** Never for this pair: the person's never, on this machine. */
+  onNeverAway?: (item: AwayItem) => void;
+  /** The person is coming to the list, or leaving it: what it holds is read again. */
   onLook?: () => void;
 }) {
   /**
@@ -316,10 +319,23 @@ export function NeedsYouMenu({
       : chats === 0
         ? `${count} ${count === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
         : `${count} things need you`;
+  /**
+   * **The refusals as they were when the list was opened** (#1507). A refused chat can ask
+   * again at any moment, and the core then says the list anew; drawn at once, that would
+   * change what is under the pointer on a row whose last answer is a standing grant. So the
+   * rows drawn are the ones the list opened on, in their places, until it closes: one that
+   * went meanwhile is marked and its answers are off, and one that came is drawn at the next
+   * opening. The hand's number is not held still.
+   */
+  const [frozen, setFrozen] = useState<readonly AwayItem[] | null>(null);
   const show = (up: boolean) => {
-    if (up) onLook?.();
+    setFrozen(up ? away : null);
+    onLook?.();
     setOpen(up);
   };
+  if (!open && frozen !== null) setFrozen(null);
+  const drawnAway = open && frozen !== null ? frozen : away;
+  const listedNow = new Set(away.map(awayKey));
   return (
     // `display: contents`: a place to be next to, not a box in the bar's row.
     <span
@@ -347,6 +363,9 @@ export function NeedsYouMenu({
               aria-label={said}
               title={said}
               onPointerDown={(event) => event.preventDefault()}
+              // Read before the list is drawn, so what it opens on is as things stand.
+              onPointerEnter={() => onLook?.()}
+              onFocus={() => onLook?.()}
               onClick={() => show(!open)}
             >
               <Hand aria-hidden="true" />
@@ -448,7 +467,13 @@ export function NeedsYouMenu({
                   </Menu.Item>
                 </Menu.Group>
               ))}
-              <AwayRows items={away} onAllow={onAllowAway} onDismiss={onDismissAway} />
+              <AwayRows
+                items={drawnAway}
+                gone={(item) => !listedNow.has(awayKey(item))}
+                onAllow={onAllowAway}
+                onDismiss={onDismissAway}
+                onNever={onNeverAway}
+              />
               {quiet.length > 0 && (
                 <Menu.Group className="needs-you-quiet" aria-label="Can't say they're waiting">
                   {quiet.map((one) => (

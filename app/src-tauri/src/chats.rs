@@ -2791,6 +2791,15 @@ impl Chats {
         Ok(started)
     }
 
+    /// Records chat `session` as one this app started inside a sandbox: for a test of what a
+    /// confined chat is answered, where no stand-in goes through a real sandboxed start.
+    #[cfg(test)]
+    pub fn recorded_as_confined(&self, session: u32) {
+        if let Some(running) = lock(&self.open).get_mut(&session) {
+            running.confines = Some(purlis_core::sandbox::Confines::default());
+        }
+    }
+
     /// How many chats are remembered, which is not the same as how many are running: this
     /// is what a chat that closed has to stop costing. Only the tests ask.
     #[cfg(test)]

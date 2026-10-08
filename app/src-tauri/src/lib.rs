@@ -3500,6 +3500,27 @@ mod tests {
         assert!(!ui_rpc_client().contains("(\"answer_ask\""));
     }
 
+    #[test]
+    fn a_refusal_kept_while_nobody_was_there_is_the_window_s_alone_to_read_and_answer() {
+        // #1507: a standing grant in one press, offered on a refused chat's word. The window's
+        // Tauri IPC reads the list and answers it; the link's client carries none of the four.
+        let bindings = std::fs::read_to_string(BINDINGS).unwrap();
+        let client = ui_rpc_client();
+        for command in [
+            "dispatch_away",
+            "allow_dispatch_away",
+            "dismiss_dispatch_away",
+            "never_dispatch_away",
+        ] {
+            assert!(bindings.contains(&format!("(\"{command}\"")), "{command}");
+            assert!(!client.contains(&format!("(\"{command}\"")), "{command}");
+            assert!(
+                purlis_session_protocol::ui::WINDOW_ONLY.contains(&command),
+                "{command}"
+            );
+        }
+    }
+
     /// The window's commands that take a channel: `watch_session`, the one that streams a
     /// terminal to a pane.
     const TAKES_A_CHANNEL: &[&str] = &["watch_session"];

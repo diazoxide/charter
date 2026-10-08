@@ -996,6 +996,31 @@ impl Hooks {
             .map_err(|why| format!("the event log refused it ({why}), so nothing was changed"))
     }
 
+    /// [`Hooks::record_dispatch_grant`] for one the person made on a refusal kept while nobody
+    /// was there (#1507): the same event with no chat, whose body says `from: "away"`.
+    pub fn record_dispatch_grant_from_away(
+        &self,
+        root: &Path,
+        audited: &purlis_core::dispatchgrant::Audited<'_>,
+    ) -> Result<(), String> {
+        let Some(events) = self
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        else {
+            return Err(
+                "purlis's event log is not open on this machine, so nothing was changed: every \
+                 dispatch grant is recorded"
+                    .to_owned(),
+            );
+        };
+        let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+        log.dispatch_grant_from(root, None, audited, purlis_core::dispatchaway::AUDITED_FROM)
+            .map(|_| ())
+            .map_err(|why| format!("the event log refused it ({why}), so nothing was changed"))
+    }
+
     /// **Audits a dispatch grant or revoke** (#1437) in the host's event log, under chat
     /// `number` where it was allowed from one, and made durable before it answers. Refused
     /// where this machine has no event log open: a grant nobody recorded is never made.

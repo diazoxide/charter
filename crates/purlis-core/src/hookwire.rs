@@ -5052,8 +5052,9 @@ mod tests {
             r#"{"allow_dispatch_away":{"chat":4,"asking":"steward","target":"devops"}}"#,
             r#"{"chat":4,"allow_dispatch_away":{"asking":"steward","target":"devops"},"token":"t"}"#,
             r#"{"dismiss_dispatch_away":{"chat":4,"asking":"steward","target":"devops"}}"#,
+            r#"{"never_dispatch_away":{"chat":4,"asking":"steward","target":"devops"}}"#,
             r#"{"dispatch_away":{"chat":4}}"#,
-            r#"{"refused":[{"asking":"steward","target":"devops","latest":1,"times":1}]}"#,
+            r#"{"refused":[{"asking":"steward","target":"devops","first":1,"latest":1,"times":1}]}"#,
             r#"{"grant":{"chat":4,"what":"dispatch","target":"steward -> devops","level":"project"}}"#,
         ];
         for line in forged {

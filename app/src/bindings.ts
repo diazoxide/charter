@@ -491,19 +491,31 @@ export const commands = {
 	/**  The whole list now: what the Notice sends back once it is read. */
 	now: string[],
 } | null, string>(__TAURI_INVOKE("acknowledge_dispatch_grants", { plane, shown })),
-	/**  What was refused in this project while nobody was there, for the needs-you list. */
+	/**
+	 *  What was refused in this project while nobody was there, for the needs-you list: in the
+	 *  order pairs were first refused, which no later refusal moves.
+	 */
 	dispatchAway: (plane: PlaneId) => typedError<AwayRefusal[], string>(__TAURI_INVOKE("dispatch_away", { plane })),
 	/**
 	 *  **Allow from now on** on a needs-you item: chats running as `asking` may dispatch to
-	 *  `target`, for you on this machine. One named pair the list holds, audited as yours before
-	 *  it is kept; it starts nothing. Answers the sentence to say and the list as it is now.
+	 *  `target`, for you on this machine, in every workspace of the project. One named pair the
+	 *  list holds, audited as yours before it is kept; it starts nothing. Answers the sentence to
+	 *  say and the list as it is now.
 	 */
-	allowDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null) => typedError<AwayAllowed, string>(__TAURI_INVOKE("allow_dispatch_away", { plane, asking, target, workspace })),
+	allowDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null) => typedError<AwayAnswered, string>(__TAURI_INVOKE("allow_dispatch_away", { plane, asking, target, workspace })),
 	/**
-	 *  **Dismiss** on a needs-you item: the entry is taken away and nothing is granted. Answers
-	 *  the list as it is now.
+	 *  **Dismiss** on a needs-you item: it is put away and nothing is granted. Further refusals
+	 *  for it are counted and not listed, until one comes a week or more later. Answers the list
+	 *  as it is now.
 	 */
 	dismissDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null) => typedError<AwayRefusal[], string>(__TAURI_INVOKE("dismiss_dispatch_away", { plane, asking, target, workspace })),
+	/**
+	 *  **Never for this pair** on a needs-you item: no chat running as `asking` is asked or
+	 *  allowed to dispatch to `target` on this machine until you lift it in Settings, and nothing
+	 *  more is listed for the pair. Audited as yours before it is kept. Answers the sentence to
+	 *  say and the list as it is now.
+	 */
+	neverDispatchAway: (plane: PlaneId, asking: string, target: string, workspace: string | null) => typedError<AwayAnswered, string>(__TAURI_INVOKE("never_dispatch_away", { plane, asking, target, workspace })),
 	/**
 	 *  Opens `path`, a repo, into this machine's local plane: the plane is made when there is
 	 *  none, laid out from the project template `template` names (FR-17), the repo is cloned into
@@ -2189,13 +2201,19 @@ export type AtRisk = {
 	said: string,
 };
 
-/**  What **Allow from now on** answered: the sentence the window says, and the list as it is. */
-export type AwayAllowed = {
+/**
+ *  What **Allow from now on** and **Never for this pair** answered: the sentence the window
+ *  says, and the list as it is.
+ */
+export type AwayAnswered = {
 	said: string,
 	refused: AwayRefusal[],
 };
 
-/**  One pair refused while nobody was there, as the needs-you list draws it. */
+/**
+ *  One pair refused while nobody was there, as the needs-you list draws it. **Every field is
+ *  the app's own**: nothing here is a chat's text.
+ */
 export type AwayRefusal = {
 	/**  The persona the asking chat ran with. */
 	asking: string,
@@ -2203,13 +2221,11 @@ export type AwayRefusal = {
 	target: string,
 	/**  The workspace the asking chat worked in; null for the project's root. */
 	workspace: string | null,
-	/**  The name of the task last refused, where it had one. */
-	task: string | null,
 	/**  When it was last refused, in seconds since 1970. */
 	latest: number,
 	/**  How many times it was refused. */
 	times: number,
-	/**  Exactly what **Allow from now on** allows, and for whom. */
+	/**  Exactly what **Allow from now on** allows, for whom, and what it makes reachable. */
 	allows: string,
 };
 

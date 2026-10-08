@@ -4,19 +4,26 @@
   its permission prompts off dispatches only under a grant that already stands, as before, and
   is refused at once where there is none. That refusal is now kept, and the hand in the title
   bar lists it: "steward wanted devops while you were away", how many times and when, with
-  **Allow from now on** and **Dismiss**. Allow from now on makes the grant for you on this
-  machine for that one pair, so the next run works; it starts nothing. Dismiss takes the item
-  away. The chat is told its refusal as before, and that you will see it. The item belongs to
-  no chat: no tab shows a hand for it (#1507).
+  three answers. **Allow from now on** makes the grant for you on this machine for that one
+  pair, so the next run works; it starts nothing. **Never for this pair** is your never for it.
+  **Dismiss** puts the item away, and it stays away while the chat asks on: it is shown again
+  only if the pair is refused a week or more later. The chat is told its refusal as before,
+  and that you will see it. The item belongs to no chat: no tab shows a hand for it (#1507).
 
 ### Security
 
 - **What that item can and cannot do.** Nothing is asked of a chat nobody is at, and what
   such a chat may do at the time is unchanged. Allow from now on grants one named pair, for
-  you, on this machine, and says so before you press; it never offers a grant for everyone in
-  the project or for any persona. It is checked again when you press: a pair you said never
-  to, or one a policy locks, is not granted, and such an item is gone by the time you look.
-  The grant is recorded in purlis's event log as yours. Only a refusal a grant would mend is
-  kept: not one for a never, a policy lock, a limit or a loop. A chat asking over and over
-  raises one item's count, the list has a cap, and items go after 30 days. The brief is not
-  kept, and the item's words are purlis's own, apart from the task's name (#1507).
+  you, on this machine. Before you press, the item says what that reaches: every workspace of
+  the project, a chat nobody is at, and whom the other persona's own chats may dispatch to.
+  It never offers a grant for everyone in the project or for any persona. It is checked again
+  when you press: a pair you said never to, or one a policy locks, is not granted, and such an
+  item is gone by the time you look. The grant is recorded in purlis's event log as yours,
+  with where it came from. Only a refusal a grant would mend is kept: not one for a never, a
+  policy lock, a limit or a loop.
+- **A refused chat cannot steer it.** The item shows nothing a chat wrote: two personas, a
+  workspace, a count and a time, and neither the brief nor the task's name is kept. A chat
+  asking over and over raises one item's count and moves no row: the list is in the order
+  pairs were first refused, and it holds still while it is open. The keyboard arrives on
+  Dismiss, never on the grant. The list has a cap, items go after 30 days, and its commands
+  are the window's alone (#1507).
