@@ -152,6 +152,14 @@ impl<'a> Linter<'a> {
                  charter, then drop the line",
             ));
         }
+        // What of `wants:` is not offered (#1502): said, so nobody takes a name there for one
+        // the dispatch question shows. The line grants nothing either way.
+        issues.extend(
+            crate::dispatchwants::of(root, name)
+                .ignored
+                .iter()
+                .map(|ignored| Issue::warn(ignored.said())),
+        );
         // A key purlis does not read does nothing — a warning, because a harness's own field
         // is a legitimate thing to carry. A key that is a known one in another case is the
         // error `structural_errors` names, and is not said twice.

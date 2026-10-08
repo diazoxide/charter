@@ -515,7 +515,9 @@ The person's rule that one persona may dispatch to another: for this chat, for m
 machine, or for everyone in this project. Dispatching to the same persona needs none, and
 nothing a chat sends can make one. It is one-way. **Any persona** is a grant with no named
 target, made only in Settings; **never for this pair** is the person's refusal on their
-machine, which no grant covers until they lift it.
+machine, which no grant covers until they lift it. What a persona **wants** (the `wants` line
+of its definition) is not a grant and makes none: it only puts unticked boxes under the
+question, so the person can allow several pairs in one answer.
 _Avoid_: permission (that is the harness's), approval (that answers an ask)
 
 **Headless chat**:

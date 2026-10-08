@@ -180,6 +180,22 @@ describe("the pane Notice's rules", () => {
     expect(draft).toMatch(/overflow:\s*auto/);
   });
 
+  it("keeps a dispatch's boxes and access line at the Notice's width, breaking a host anywhere", () => {
+    // #1502: a persona's hosts are long unbroken words. Without these the list of boxes, or
+    // the sentence of what the target works with, widens the Notice past a narrow pane.
+    const also = rule("\\.dispatch-also");
+    expect(also).toMatch(/min-width:\s*0/);
+    expect(also).toMatch(/overflow-wrap:\s*anywhere/);
+    // A box's name and what it works with shrink with the Notice, in the grid the set draws.
+    const parts = rule(
+      "\\.dispatch-also \\.ui-choice-option label,\\s*\\.dispatch-also \\.ui-choice-says",
+    );
+    expect(parts).toMatch(/min-width:\s*0/);
+    expect(rule("\\.ui-choice-option")).toMatch(/grid-template-columns:\s*auto 1fr/);
+    // It is drawn under the line, so the rules for what a way out opened hold it too.
+    expect(rule("\\.notice-under-pane > \\*")).toMatch(/max-width:\s*100%/);
+  });
+
   it("is opaque, and over all of the terminal", () => {
     expect(rule("\\.notice-pane-box")).toMatch(/background:\s*var\(--surface-raised\)/);
     expect(rule("\\.pane")).toMatch(/isolation:\s*isolate/);

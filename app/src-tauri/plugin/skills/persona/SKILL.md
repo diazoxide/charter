@@ -70,6 +70,20 @@ shows who exists.
   helper.
 - **Only dispatch to personas that exist.** Never invent a name.
 
+**The first dispatch to another persona asks the person.** Nothing starts until they answer,
+and you cannot answer for them. A persona's definition may say which personas it usually
+works with:
+
+```yaml
+wants: [devops, qa]
+```
+
+`wants` grants nothing. It only adds an unticked box per persona under that question, so the
+person can allow several pairs in one answer. Writing a name there, or `*`, does not let a
+chat dispatch to anyone: the grants are the person's, kept where no chat writes them. Names
+that are not finished personas of this project, the persona itself and `*` are ignored, and
+`purlis persona lint` says so.
+
 **A persona is never a sub-agent.** Do not start one with your harness's agent tool: a
 sub-agent runs inside this chat, with this chat's vault and hosts, so it could not do that
 persona's work anyway. A sub-agent call named for a persona is refused and names the
@@ -138,7 +152,7 @@ A persona earns its place by carrying something a general-purpose agent cannot h
 credential, a tool, or a domain narrow enough to name.
 
 ```bash
-purlis persona lint               # dangling uses:/extends:, missing role/vault/delegate-when, keys nothing reads
+purlis persona lint               # dangling uses:/extends:, missing role/vault/delegate-when, keys nothing reads, wants: names not offered
 purlis persona remove <name>      # refused while another persona extends or uses it
 ```
 

@@ -38,6 +38,7 @@ pub mod dispatchplace;
 pub mod dispatchrecord;
 pub mod dispatchtalk;
 pub mod dispatchunattended;
+pub mod dispatchwants;
 pub mod docsrc;
 pub mod doctor;
 pub mod engine;

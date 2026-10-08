@@ -1310,6 +1310,25 @@ button.show-more:focus-visible {
   gap: 0.5rem;
 }
 
+/* What a dispatch's answer covers besides the asked pair (`DispatchGrantNotice`, #1502): a box
+   for each persona the asking one wants, and what the target works with. Under the answers
+   and above the brief, at the Notice's width: a persona's hosts are long words, so they break
+   anywhere and never widen a narrow pane. */
+.dispatch-also {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dispatch-also .ui-choice-option {
+  padding: 0.1rem 0;
+}
+
+.dispatch-also .ui-choice-option label,
+.dispatch-also .ui-choice-says {
+  min-width: 0;
+  font-size: inherit;
+}
+
 /* A sandbox block's Allow (#1342), under its Notice: what it would allow, whole, and the two
    Always buttons. */
 .block-allow-target {

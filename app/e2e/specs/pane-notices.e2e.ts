@@ -38,6 +38,23 @@ const FIVE_WAYS = [
   "Keep blocked",
   "Never for this pair",
 ];
+/**
+ * What a dispatch's question says under its answers (#1502): a box for each persona the asking
+ * one wants, as many as purlis ever offers, each with what it works with, and what the target
+ * works with. The hosts are the long unbroken words a real project declares.
+ */
+const ALSO = {
+  label: "Also let steward dispatch to:",
+  boxes: ["qa", "docs", "legal", "release-engineering", "ops", "observability"].map((name) => ({
+    name,
+    says: `vault ${name}; hosts ${name}.a-rather-long-internal-zone.corp.example:6443, *.${name}.internal.example and 14 more`,
+  })),
+  access:
+    "devops works with its own access: vaults deploy, prod-cluster, registry and 2 more; hosts 10.100.39.145:6443, *.a-rather-long-internal-zone.corp.example, registry.internal.example:5000 and 37 more.",
+  secret: "Allowing a dispatch does not allow the use of a secret: that is asked as before.",
+};
+type Also = typeof ALSO;
+
 /** A brief of 46 lines, some of them far longer than any pane is wide. */
 const BRIEF = Array.from({ length: 46 }, (_, line) =>
   line % 5 === 0
@@ -84,10 +101,10 @@ async function untilShows(index: number, text: string): Promise<void> {
  */
 async function raise(
   pane: number,
-  notice: { sentence: string; ways: string[]; opened?: string },
+  notice: { sentence: string; ways: string[]; opened?: string; also?: Also },
 ): Promise<boolean> {
   return browser.execute(
-    (at: number, sentence: string, ways: string[], opened: string | null) => {
+    (at: number, sentence: string, ways: string[], opened: string | null, also: Also | null) => {
       const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
         frame.querySelector('[data-testid="pane"]'),
       );
@@ -113,6 +130,33 @@ async function raise(
       box.append(line);
       if (opened !== null) {
         const under = el("div", "notice-under notice-under-pane");
+        if (also !== null) {
+          // As `DispatchGrantNotice` draws it, above the brief: the house `Choice` of checks,
+          // then the access line and the line about secrets.
+          const besides = el("div", "dispatch-also");
+          const checks = el("div", "ui-choice-checks");
+          checks.setAttribute("role", "group");
+          for (const [index, one] of also.boxes.entries()) {
+            const option = el("div", "ui-choice-option");
+            const box = el("button", "box");
+            box.setAttribute("type", "button");
+            box.setAttribute("role", "checkbox");
+            box.setAttribute("aria-checked", "false");
+            box.id = `pane-notices-e2e-also-${index}`;
+            box.tabIndex = 0;
+            const label = el("label", "", one.name);
+            label.setAttribute("for", box.id);
+            option.append(box, label, el("div", "ui-choice-says", one.says));
+            checks.append(option);
+          }
+          besides.append(
+            el("p", "", also.label),
+            checks,
+            el("p", "dispatch-works-with", also.access),
+            el("p", "", also.secret),
+          );
+          under.append(besides);
+        }
         const report = el("div", "block-report");
         report.append(
           el("p", "", "The brief, as the chat wrote it. purlis did not write it."),
@@ -129,6 +173,7 @@ async function raise(
     notice.sentence,
     notice.ways,
     notice.opened ?? null,
+    notice.also ?? null,
   );
 }
 
@@ -178,6 +223,17 @@ async function measured(pane: number) {
             };
           }),
           under: box(raised.querySelector(".notice-under-pane")),
+          also: box(raised.querySelector(".dispatch-also")),
+          options: [...raised.querySelectorAll(".dispatch-also .ui-choice-option")].map(
+            (option) => ({
+              option: box(option),
+              box: box(option.querySelector(".box")),
+              label: box(option.querySelector("label")),
+              says: box(option.querySelector(".ui-choice-says")),
+            }),
+          ),
+          access: box(raised.querySelector(".dispatch-works-with")),
+          report: box(raised.querySelector(".block-report")),
           pre: box(pre),
           preScrolls: pre ? pre.scrollHeight > pre.clientHeight + 1 : false,
           background: getComputedStyle(raised).backgroundColor,
@@ -435,6 +491,114 @@ describe("a Notice in a pane's corner", () => {
     expect(under.top).toBeGreaterThanOrEqual(line.bottom - 1);
     inside(notice.pre, under, "the brief's box under the line");
   });
+
+  for (const pane of [0, 1]) {
+    it(`keeps a dispatch's boxes and access line in pane ${pane} of a narrow split: under the answers, above the brief, no wider than the Notice`, async () => {
+      // #1502: the question grew a list of boxes and a sentence of hosts. In the operator's
+      // narrow split they must wrap inside the Notice, and reach nothing sideways.
+      await windowIs(1024, 768);
+      expect(await raise(pane, { sentence: SENTENCE, ways: WAYS, opened: BRIEF, also: ALSO })).toBe(
+        true,
+      );
+
+      const seen = await measured(pane);
+      const [notice] = seen.notices;
+      const frame = seen.frame as Box;
+      check("the pane is not a narrow one", frame.width, "below", 40 * seen.rem);
+      const [box, line, also, report] = [
+        notice.box as Box,
+        notice.line as Box,
+        notice.also as Box,
+        notice.report as Box,
+      ];
+
+      // The Notice is as wide as it was without them: a host is never what widens it.
+      check("the Notice runs past its pane", box.right, "atMost", frame.right + 1);
+      check("the Notice starts left of its pane", box.left, "atLeast", frame.left - 1);
+      for (const neighbour of seen.neighbours)
+        check("it is over the pane beside it", overlap(box, neighbour as Box), "is", false);
+
+      // The order it is answered in: the sentence and the answers, then the boxes and the
+      // access line, then the brief.
+      for (const button of notice.buttons)
+        check(
+          `"${button.label}" is not above the boxes`,
+          (button.box as Box).bottom,
+          "atMost",
+          also.top + 1,
+        );
+      check("the boxes are beside the line", also.top, "atLeast", line.bottom - 1);
+      check("the brief is above the boxes", report.top, "atLeast", also.bottom - 1);
+      check("the boxes are wider than the Notice", also.right, "atMost", box.right + 1);
+      check("the boxes start left of the Notice", also.left, "atLeast", box.left - 1);
+
+      // Every box: its mark, its name and what it works with, inside the Notice's width, one
+      // under another and never on top of each other.
+      expect(notice.options).toHaveLength(ALSO.boxes.length);
+      for (const [index, one] of notice.options.entries()) {
+        const name = ALSO.boxes[index].name;
+        for (const [what, part] of [
+          ["its box", one.box],
+          ["its name", one.label],
+          ["what it works with", one.says],
+        ] as const) {
+          check(`${name}: ${what} was not drawn`, part !== null, "is", true);
+          check(`${name}: ${what} has no width`, (part as Box).width, "above", 0);
+          check(
+            `${name}: ${what} runs past the Notice`,
+            (part as Box).right,
+            "atMost",
+            box.right + 1,
+          );
+          check(`${name}: ${what} starts left of it`, (part as Box).left, "atLeast", box.left - 1);
+        }
+        // The mark is a target, and the name is beside it, not under it.
+        check(`${name}: its box is too small to press`, (one.box as Box).width, "atLeast", 10);
+        check(
+          `${name}: its name is not beside its box`,
+          (one.label as Box).left,
+          "atLeast",
+          (one.box as Box).right - 1,
+        );
+        const next = notice.options[index + 1];
+        if (next !== undefined)
+          check(
+            `${name} is on top of the next box`,
+            (next.option as Box).top,
+            "atLeast",
+            (one.option as Box).bottom - 1,
+          );
+      }
+
+      // The access line wraps at the Notice's width, under the boxes.
+      const access = notice.access as Box;
+      check("the access line runs past the Notice", access.right, "atMost", box.right + 1);
+      check("the access line starts left of it", access.left, "atLeast", box.left - 1);
+      check(
+        "the access line is above the boxes",
+        access.top,
+        "atLeast",
+        (notice.options[notice.options.length - 1].option as Box).bottom - 1,
+      );
+      check("the access line did not wrap", access.height, "above", notice.buttons[0].line * 1.5);
+
+      // Taller than the pane, it scrolls inside the pane: the last box and the brief are
+      // reached, and nothing is scrolled sideways to show a host.
+      inside(seen.stack, frame, "the stack of Notices");
+      const reached = await browser.execute(() => {
+        const boxes = document.querySelectorAll<HTMLElement>(
+          '[data-raised="pane-notices.e2e"] .dispatch-also .box',
+        );
+        const last = boxes[boxes.length - 1];
+        last?.focus();
+        last?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        const { left, right, top, bottom, width, height } = last.getBoundingClientRect();
+        return { left, right, top, bottom, width, height };
+      });
+      inside(reached, frame, "the last box, scrolled to");
+      expect((await scrolledSideways(pane)).filter((by) => by !== 0)).toEqual([]);
+    });
+  }
 
   it("stacks several in one pane, and scrolls them inside the pane when they are taller than it", async () => {
     await windowIs(1024, 768);

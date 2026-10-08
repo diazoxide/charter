@@ -115,6 +115,9 @@ const HELD: DispatchPending = {
   levels: ["chat", "you", "project"],
   locked: null,
   never_unread: null,
+  works_with: "devops works with its own access: no vault; no hosts beyond the project's.",
+  also: [],
+  shown: "s0",
 };
 
 function core(now: Core) {
