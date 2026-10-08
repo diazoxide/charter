@@ -2494,7 +2494,10 @@ fn without_channel_commands(bindings: &str) -> String {
             let name_end = rest
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
                 .unwrap_or(0);
-            name_end > 0 && rest[name_end..].starts_with(": (") && rest.contains(") => ")
+            // The name and the opening of its arguments: a command whose arguments run over
+            // several lines begins here too, and is not part of the command before it (which
+            // would be left out with it where it is the window's alone).
+            name_end > 0 && rest[name_end..].starts_with(": (")
         })
     };
     let is_doc = |line: &str| {
@@ -3687,9 +3690,7 @@ mod tests {
     fn ending_a_chat_is_the_window_s_alone_and_never_in_the_link_s_client() {
         // #1488: ending a task writes a sentence in the person's name to the chat that asked,
         // so it is the window's over Tauri's IPC, as answering an ask is; and so is every
-        // other command that acts on the person's word for a chat: the question an end asks
-        // first, a chat's stop and its close, a close that stops what is below, the end of a
-        // task that did not start, a start as the person, and a restart outside the sandbox.
+        // other command that ends, starts or restarts a chat on the person's word.
         let bindings = std::fs::read_to_string(BINDINGS).unwrap();
         let client = ui_rpc_client();
         for command in [
@@ -3699,8 +3700,28 @@ mod tests {
             "close_session",
             "close_chat_stopping",
             "end_task_that_did_not_start",
+            "smart_close",
+            "stop_every_agent",
+            "forget_chat_that_did_not_start",
+            "close_plane",
+            "forget_project",
+            "restart_on_the_session_bus",
+            "restart_to_update",
             "ask_persona_chat",
+            "start_chat",
+            "start_chat_here",
+            "open_session",
+            "open_shell_in_branch",
+            "first_task_run",
+            "resume_session",
+            "retry_chat_that_did_not_start",
+            "reopen_finished_task",
+            "curate",
+            "relaunch",
             "restart_chat_without_sandbox",
+            "restart_chat",
+            "start_chat_fresh",
+            "ask_chat_restart",
         ] {
             let called = format!("(\"{command}\"");
             assert!(bindings.contains(&called), "the window's: {command}");

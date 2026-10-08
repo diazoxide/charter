@@ -15,7 +15,7 @@ use tokio::io::duplex;
 mod common;
 use common::HELD;
 
-/// The app's commands, as the host answers them: `rename_chat` succeeds, `close_plane` fails
+/// The app's commands, as the host answers them: `rename_chat` succeeds, `opened_chats` fails
 /// with the command's own error, and every call is kept.
 #[derive(Default, Clone)]
 struct Commands {
@@ -53,7 +53,7 @@ async fn linked(scope: Scope, commands: Option<Commands>) -> Client {
         link::connect(a, session::speaks(), scope, HELD.of(scope)),
         link::serve_any(b, session::speaks(), &HELD)
     );
-    let ui = commands.map(|c| ui::Server::new(BUILD, ["rename_chat", "close_plane"], c));
+    let ui = commands.map(|c| ui::Server::new(BUILD, ["rename_chat", "opened_chats"], c));
     tokio::spawn(session::serve(served.unwrap(), Sessions, ui));
     Client::new(client.unwrap()).0
 }
@@ -69,7 +69,7 @@ async fn the_window_of_the_same_build_calls_the_apps_commands_on_the_link() {
         .await
         .unwrap();
     assert_eq!(renamed, Ok(json!({"renamed": "login"})));
-    let failed = ui.call("close_plane", json!({"plane": 2})).await.unwrap();
+    let failed = ui.call("opened_chats", json!({"plane": 2})).await.unwrap();
     assert_eq!(failed, Err(json!("that plane is not open")));
     assert_eq!(
         commands.asked.lock().unwrap().clone(),
@@ -78,7 +78,7 @@ async fn the_window_of_the_same_build_calls_the_apps_commands_on_the_link() {
                 "rename_chat".to_owned(),
                 json!({"chat": 5, "name": "login"})
             ),
-            ("close_plane".to_owned(), json!({"plane": 2})),
+            ("opened_chats".to_owned(), json!({"plane": 2})),
         ]
     );
     // And the session protocol, beside it on the same lane.
@@ -126,9 +126,8 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     assert!(refused.is_err(), "{refused:?}");
     assert!(commands.asked.lock().unwrap().is_empty());
     assert!(ui::WINDOW_ONLY.contains(&"answer_ask"));
-    // Every command that acts on the person's word for a chat is the window's too (#1488):
-    // ending one, starting one as the person, and starting one again outside the sandbox.
-    // None of these is served on a link.
+    // Every command that ends, starts or restarts a chat on the person's word is the window's
+    // too (#1488). None of these is served on a link.
     for command in [
         "end_task",
         "task_ending",
@@ -136,13 +135,33 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         "close_session",
         "close_chat_stopping",
         "end_task_that_did_not_start",
+        "smart_close",
+        "stop_every_agent",
+        "forget_chat_that_did_not_start",
+        "close_plane",
+        "forget_project",
+        "restart_on_the_session_bus",
+        "restart_to_update",
         "ask_persona_chat",
+        "start_chat",
+        "start_chat_here",
+        "open_session",
+        "open_shell_in_branch",
+        "first_task_run",
+        "resume_session",
+        "retry_chat_that_did_not_start",
+        "reopen_finished_task",
+        "curate",
+        "relaunch",
         "restart_chat_without_sandbox",
+        "restart_chat",
+        "start_chat_fresh",
+        "ask_chat_restart",
     ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
     // And the list is exactly that rule's: nothing else is kept from a link by it.
-    assert_eq!(ui::WINDOW_ONLY.len(), 9);
+    assert_eq!(ui::WINDOW_ONLY.len(), 29);
 }
 
 #[tokio::test]

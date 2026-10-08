@@ -638,11 +638,14 @@ report.
   its close are one step under the lock a report is taken under. A report in flight for a task
   the person closed is the stop's report, never an ordinary one, and no task of a stop starts
   a chat.
-- **Every command that acts on the person's word for a chat is the window's alone**, over
-  its own channel to the app, and none is served on a link: ending a task and the question it
-  asks first, stopping a chat, closing one, a close that also stops what is below it, ending
-  a task that did not start, starting a chat as the person, and starting one again outside
-  the sandbox. The rule is what a command does; the list is `ui::WINDOW_ONLY`.
+- **Every command that ends, starts or restarts a chat on the person's word is the
+  window's alone**, over its own channel to the app, and none is served on a link: ending a
+  task and the question it asks first, stopping a chat or every chat, closing a chat or a
+  project, starting a chat or a shell as the person, and starting one again. The rule is what
+  a command does, it fails closed, and the list is `ui::WINDOW_ONLY`. The other commands that
+  act as the person (an answer to a question other than a chat's ask, typing into a chat,
+  saying what is on screen) are not under this rule: they are served to a local window of the
+  same build, and whether they join the list awaits a ruling.
 - **What "a task cannot forge them" means.** A task cannot produce any of the three ends or
   the fixed sentence through the report channel. The folder reports wait in is writable from
   outside a sandbox, and that exposure stays with issue 1457.

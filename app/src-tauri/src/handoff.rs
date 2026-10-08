@@ -7350,7 +7350,14 @@ mod tests {
             "{:?}",
             records[0]
         );
+        // And it names no worktree: none was cut, so there is none to find or to discard.
+        assert!(records[0].place.worktree.is_none(), "{:?}", records[0]);
         assert!(!held.root().join("workspaces/alpha/.worktrees").exists());
+        // No branch was made for it either: the clone has the one it had.
+        assert_eq!(
+            git(&clone, &["branch", "--format=%(refname:short)"]).trim(),
+            "main"
+        );
         // The slot it held is let go: the asking chat has nothing running.
         assert_eq!(held.chats().lineage(asking, None, &|_| true).running, 0);
     }

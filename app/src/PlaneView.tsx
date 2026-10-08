@@ -1651,6 +1651,10 @@ export const PlaneView = memo(function PlaneView({
    * Where purlis may not type into the task, either says why and offers Close alone. The
    * standard close dialog is never part of this.
    */
+  /** Whether a pane of tab `tab` draws a breadcrumb ending in task `session`: the one place
+   *  a second step is drawn in place (`TaskEnds`). Held here for what is declared before the
+   *  list is read. */
+  const drawsCrumbFor = useRef<(tab: number, session: number) => boolean>(() => false);
   const askToEndTask = useCallback(
     async (session: number, way: TaskEndWay, from: TaskEndFrom) => {
       const read = await commands
@@ -1665,11 +1669,12 @@ export const PlaneView = memo(function PlaneView({
       if (ending === null || typeof ending !== "object") return;
       // Being stopped already: it has its one short turn, and is not asked a second time.
       if (ending.stopping && way === "report") return;
-      // On screen: a pane of the tab in front shows it. A tab behind that was left on the
-      // task draws no breadcrumb, so a question set there would be asked where nobody looks.
+      // On screen: a pane of the tab in front draws a breadcrumb that ends in it, which is
+      // where the second step is drawn. A tab behind draws none, and neither does a task's own
+      // tab with no path to say (its asker is not listed), nor a task's pane switched to a
+      // task of its own: a question set there would be asked where nothing draws it.
       const front = now.current.inFront;
-      const shown =
-        front !== undefined && shownIn(now.current, front).some((one) => one.session === session);
+      const shown = front !== undefined && drawsCrumbFor.current(front, session);
       const where = from === "elsewhere" ? (shown ? "crumb" : undefined) : from;
       if (asksInAModal(ending) || where === undefined) {
         setTaskEndInline(undefined);
@@ -4440,6 +4445,8 @@ export const PlaneView = memo(function PlaneView({
   useEffect(() => {
     restartNow.current = (session) => void askRestart(session);
   }, [askRestart]);
+  /** A task whose Restart chat is asked about in a dialog: its tab draws no breadcrumb. */
+  const [restartingTask, setRestartingTask] = useState<{ session: number; name: string }>();
   const restartTab = useCallback(
     (tab: number) => {
       const session = chatOf(now.current, tab);
@@ -4451,6 +4458,12 @@ export const PlaneView = memo(function PlaneView({
       if (askedByNow(session) !== undefined) {
         const name = now.current.byId[tab].name;
         bringToFront(tab);
+        // Where its tab draws no breadcrumb for it, there is no line to ask on: a dialog.
+        if (!drawsCrumbFor.current(tab, session)) {
+          setTaskEndInline(undefined);
+          setRestartingTask({ session, name });
+          return;
+        }
         setTaskEndInline({
           session,
           where: "crumb",
@@ -4464,7 +4477,7 @@ export const PlaneView = memo(function PlaneView({
       }
       void askRestart(session);
     },
-    [askRestart, askedByNow, bringToFront],
+    [askRestart, askedByNow, bringToFront, setRestartingTask],
   );
   /** Whether a chat has a Restart chat row: not a shell, which has no conversation. */
   const restartable = useCallback((session: number) => !shells.has(session), [shells]);
@@ -5203,6 +5216,19 @@ export const PlaneView = memo(function PlaneView({
     () => (tabs.inFront === undefined ? {} : placedCrumbsOf(tabs, tabs.inFront, listedChats)),
     [listedChats, tabs],
   );
+  useEffect(() => {
+    drawsCrumbFor.current = (tab, session) => {
+      const endsInIt = (crumbs: Crumbs) => {
+        const last = crumbs.path[crumbs.path.length - 1];
+        return last.session === session && last.mode === "task";
+      };
+      const at = now.current;
+      return (
+        Object.values(crumbsOf(at, tab, listedChats)).some(endsInIt) ||
+        Object.values(placedCrumbsOf(at, tab, listedChats)).some(endsInIt)
+      );
+    };
+  }, [listedChats]);
   // A pane that could not draw its task and can again (a restart caught up) gives the
   // keyboard back to the task's terminal, where the pane has the keyboard.
   const wasAway = useRef<ReadonlySet<number>>(new Set());
@@ -7450,6 +7476,20 @@ export const PlaneView = memo(function PlaneView({
           busy={freshening.busy}
           onAnswer={() => void startFresh()}
           onCancel={() => setFreshening(undefined)}
+        />
+      )}
+      {restartingTask && (
+        <ChatAsk
+          title={`Restart ${restartingTask.name}?`}
+          says="It is a task. Its program ends and starts again on the same conversation, once its turn has ended. It stays a task, and still owes its report."
+          answer="Restart it"
+          busy={false}
+          onAnswer={() => {
+            const { session } = restartingTask;
+            setRestartingTask(undefined);
+            restartNow.current(session);
+          }}
+          onCancel={() => setRestartingTask(undefined)}
         />
       )}
       {endingChat && (

@@ -287,7 +287,8 @@ export function TaskEndConfirm({
         Keep
       </button>
       {trouble && (
-        <span className="trouble" role="alert">
+        // Cut where the line is short, as the question is: the title says it whole.
+        <span className="trouble" role="alert" title={trouble}>
           {trouble}
         </span>
       )}

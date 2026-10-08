@@ -2829,7 +2829,7 @@ export const TASK_NOT_FRESH =
 
 /** What moving a task to its own tab does that its title cannot fit. */
 export const OWN_TAB_NOTE =
-  "It gets a tab on the strip with − in place of ×. − sends it back into its session's tab. Nothing on that tab ends it.";
+  "It gets a tab on the strip with − in place of ×. − sends it back into its session's tab. Its − ends nothing.";
 
 /** What opening a task beside its session does that its title cannot fit. */
 export const BESIDE_NOTE =
