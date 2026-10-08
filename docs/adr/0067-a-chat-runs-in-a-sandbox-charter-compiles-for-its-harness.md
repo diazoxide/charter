@@ -319,6 +319,17 @@ One command a chat can run did move a folder there: `purlis workspace rename` mo
 says so, and the app moves it when the project is next opened, from the rename's own journal.
 Where the project's sandbox is off, nothing here holds, as for every class.
 
+*Amended 2026-10-09 (#1458; amends classes 2 and 5):* **the person's harness approvals, and
+the harness declarations they approve, are held by the sandbox.** Class 2 also holds the two
+approval records under the state folder, `harness-profiles-launched.json` (a local profile's
+command) and `harness-declarations-approved.json` (a project's harness declaration), under
+every spelling of the state folder, denied for writing and readable. Class 5 also holds the
+`harnesses/` folder at the project root, from which the app later starts a declared harness's
+program outside any sandbox. Each is denied in what every harness is compiled, wherever the
+chat stands, the project root included. Only the app writes the records, when the person
+approves in the window, so nothing a chat needs is lost; a declaration is written by a person.
+So "approved" means a person approved it, which is what the approval dialog promises.
+
 *Amended 2026-10-03 (rulings V87d and V87f):*
 
 - **Linked folders, every harness.** No sandboxed chat starts in a folder reached through a
